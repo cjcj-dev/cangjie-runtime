@@ -5,19 +5,15 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "ZVerify.cpp"
     "VerifyRememberedSet.cpp"
     "VerifyRoots.cpp"
     "VerifyHeap.cpp"
-    "MarkCompleteVerify.cpp"
-    "VerifyMarkingStacks.cpp"
     "SurvNodeDiag.cpp"
-    "VerifyOption.cpp"
     "Zap.cpp"
-    "VerifyRegions.cpp"
     "MinorGCALot.cpp"
     "TraceClear.cpp"
     "DiagGate.cpp"
-    "VerifyPhase.cpp"
 
     "GarbRegionDiag.cpp"
     "HealPairDiag.cpp"

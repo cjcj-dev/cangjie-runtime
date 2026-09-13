@@ -9,10 +9,10 @@
 
 #include <cstdint>
 
-// Classifier for MarkCompleteVerify's deadInterior arm.
+// Classifier for the retired object census's deadInterior arm.
 //
 // deadInterior today means: the target failed PlausibleManagedObjectGate and
-// TryRecoverInteriorBase did not return a live base (MarkCompleteVerify.cpp).
+// TryRecoverInteriorBase did not return a live base (the retired object census).
 // That mixes four things the next reader cannot tell apart:
 //   - the verifier walked a non-ref word as if it were a reference
 //   - a real interior whose live host the 8/16/24/32 heuristic missed

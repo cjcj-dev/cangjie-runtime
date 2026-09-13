@@ -1,237 +1,129 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-#include "Heap/Verify/VerifyRememberedSet.h"
-
-#include <array>
-#include <atomic>
+#include "Heap/Verify/ZVerify.h"
+#include "Heap/Collector/CollectorResources.h"
 #include <unordered_set>
-
-#include "Base/Log.h"
-#include "Base/LogFile.h"
-#include "Base/TimeUtils.h"
-#include "Common/BaseObject.h"
+#include <vector>
 #include "Heap/Allocator/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Collector/HeapIterator.h"
+#include "Heap/Collector/ZForwarding.h"
 #include "Heap/Heap.h"
-#include "ObjectModel/MClass.h"
-#include "ObjectModel/RefField.h"
-#include "Heap/Verify/VerifyPhase.h"
+#include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
+// zForwarding.cpp:369-409. Inspect the real table, including the port's
+// overflow entries; never reconstruct mappings from object headers.
+void ZForwarding::verify() const
+{
+    CHECK_DETAIL(_ref_count.load(std::memory_order_acquire) != 0, "Invalid forwarding reference count");
+    CHECK_DETAIL(_page != nullptr, "Invalid forwarding page");
+    std::vector<MAddress> sources;
+    for_each_from([&](MAddress from) { sources.push_back(from); });
+    std::unordered_set<MAddress> uniqueSources;
+    std::unordered_set<MAddress> destinations;
+    size_t bytes = 0;
+    for (MAddress from : sources) {
+        CHECK_DETAIL(from >= start() && from - start() < size(), "Invalid forwarding source");
+        CHECK_DETAIL(uniqueSources.insert(from).second, "Duplicate forwarding source");
+        const MAddress to = find(from);
+        CHECK_DETAIL(to != 0 && destinations.insert(to).second, "Duplicate or null forwarding destination");
+        BaseObject* object = reinterpret_cast<BaseObject*>(to);
+        ZVerify::Object(object, nullptr);
+        bytes += RegionSpace::GetAllocSize(*object);
+    }
+    // The source incarnation's livemap is retained by FromPageView even for
+    // in-place relocation, where reusable page metadata already names to-space.
+    const FromPageView* from = from_page_snapshot();
+    CHECK_DETAIL(from != nullptr && from->liveInfo != nullptr, "Missing forwarding source livemap");
+    RegionBitmap* bitmap = _page->GetOwnerMarkBitmap(from->liveInfo);
+    CHECK_DETAIL(bitmap != nullptr && sources.size() == bitmap->GetLiveObjects() &&
+                 bytes == bitmap->GetLiveBytes(), "Invalid forwarding live objects or bytes");
+}
+
 namespace {
-constexpr size_t kSampleLimit = 8;
-
-struct RemsetVerifyStats {
-    size_t holdersScanned = 0;
-    size_t oldToYoungEdges = 0;
-    size_t missing = 0;
-    size_t missingRootReachable = 0;
-    size_t missingArrayHolder = 0;
-    size_t missingNonArray = 0;
-    size_t stale = 0;
-    size_t dangling = 0;
-    size_t remsetCovered = 0; // remset slots that matched a live non-young field address
-    size_t remsetSize = 0;
-    uint64_t costNs = 0;
-    std::array<MAddress, kSampleLimit> missingSamples{};
-    std::array<MAddress, kSampleLimit> missingRootReachableSamples{};
-    std::array<MAddress, kSampleLimit> staleSamples{};
-    std::array<MAddress, kSampleLimit> danglingSamples{};
-    size_t missingSampleCount = 0;
-    size_t missingRootReachableSampleCount = 0;
-    size_t staleSampleCount = 0;
-    size_t danglingSampleCount = 0;
-};
-
-void PushSample(std::array<MAddress, kSampleLimit>& samples, size_t& count, MAddress slot)
+// zVerify.cpp:521-523. Replaced only at a color-flip safepoint.
+std::unordered_set<MAddress> bufferedStores;
+bool IntentionallyUnremembered(zpointer value)
 {
-    if (count < kSampleLimit) {
-        samples[count++] = slot;
-    }
+    // The upstream exemption is both remembered bits, not just the current bit.
+    return (raw(value) & REMEMBERED_MASK) == REMEMBERED_MASK;
+}
+}
+void ZVerify::OnColorFlip()
+{
+    if (!ZVerifyRemembered || !kBufferStoreBarriers) { return; }
+    bufferedStores.clear();
+    MutatorManager::Instance().VisitStoreBarrierBuffers([](MAddress slot) { bufferedStores.insert(slot); });
 }
 
-// Build field-address index of every ref slot on valid allocated non-young holders.
-// Independence: enumeration is full-heap VisitAllObjects, not minor closure / remset.
-void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetVerifyStats& stats,
-                               const std::unordered_set<MAddress>& remsetSnapshot,
-                               const std::unordered_set<BaseObject*>* rootReachableHolders, const char* point,
-                               size_t invoke, size_t maxFailures)
+// zVerify.cpp:531-609. Source-page verification is old-to-old only.
+void ZVerify::BeforeRelocation(ZForwarding* forwarding)
 {
-    Heap::GetHeap().ForEachObj(
-        [&fieldSlots, &stats, &remsetSnapshot, rootReachableHolders, point, invoke, maxFailures](BaseObject* holder) {
-            if (holder == nullptr || !holder->IsValidObject() || !holder->HasRefField()) {
-                return;
-            }
-            RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-            if (holderRegion == nullptr || holderRegion->IsYoungRegion() || holderRegion->IsGarbageRegion() ||
-                holderRegion->IsFreeRegion()) {
-                return;
-            }
-            ++stats.holdersScanned;
-            holder->ForEachRefField([&fieldSlots, &stats, &remsetSnapshot, rootReachableHolders, holder, holderRegion,
-                                     point, invoke, maxFailures](RefField<>& field) {
-                MAddress slot = reinterpret_cast<MAddress>(&field);
-                fieldSlots.insert(slot);
-
-                BaseObject* target = to_object(field.GetTargetObject());
-                if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                    if (remsetSnapshot.count(slot) != 0) {
-                        ++stats.stale;
-                        PushSample(stats.staleSamples, stats.staleSampleCount, slot);
-                    }
-                    return;
-                }
-                RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                if (targetRegion == nullptr || !targetRegion->IsYoungRegion()) {
-                    if (remsetSnapshot.count(slot) != 0) {
-                        ++stats.stale;
-                        PushSample(stats.staleSamples, stats.staleSampleCount, slot);
-                    }
-                    return;
-                }
-
-                // Direct old→young edge (field-level; no cascade).
-                ++stats.oldToYoungEdges;
-                if (remsetSnapshot.count(slot) == 0) {
-                    ++stats.missing;
-                    bool rootReachabilityKnown = rootReachableHolders != nullptr;
-                    bool correctnessRelevant = !rootReachabilityKnown || rootReachableHolders->count(holder) != 0;
-                    if (rootReachabilityKnown && correctnessRelevant) {
-                        ++stats.missingRootReachable;
-                        PushSample(stats.missingRootReachableSamples, stats.missingRootReachableSampleCount, slot);
-                    }
-                    TypeInfo* typeInfo = holder->GetTypeInfo();
-                    if (typeInfo != nullptr && typeInfo->IsArrayType()) {
-                        ++stats.missingArrayHolder;
-                    } else {
-                        ++stats.missingNonArray;
-                    }
-                    PushSample(stats.missingSamples, stats.missingSampleCount, slot);
-                    size_t correctnessFailure = rootReachabilityKnown ? stats.missingRootReachable : stats.missing;
-                    if (correctnessRelevant && correctnessFailure <= maxFailures) {
-                        bool targetValid = target->IsValidObject();
-                        TypeInfo* targetTypeInfo = targetValid ? target->GetTypeInfo() : nullptr;
-                        VLOG(REPORT,
-                             "[GCV2][verify][remset][MISSING_EDGE] point=%s invoke=%zu failure=%zu max=%zu "
-                             "holder=%p holderType=%s holderRegion=%p holderRegionType=%u holderYoungAge=%u "
-                             "holderRouteState=%u holderMarkBitmap=%p holderMarked=%u holderResurrected=%u "
-                             "holderRegionStart=%p holderRegionOffset=0x%zx "
-                             "slot=%p fieldOffset=0x%zx slotRegionOffset=0x%zx "
-                             "target=%p targetValid=%u targetType=%s targetRegion=%p targetRegionType=%u "
-                             "targetYoungAge=%u targetRouteState=%u targetRegionStart=%p targetRegionOffset=0x%zx",
-                             point == nullptr ? "?" : point, invoke, correctnessFailure, maxFailures, holder,
-                             typeInfo == nullptr || typeInfo->GetName() == nullptr ? "?" : typeInfo->GetName(),
-                             holderRegion,
-                             static_cast<unsigned int>(holderRegion->GetRegionType()),
-                             static_cast<unsigned int>(holderRegion->GetYoungAge()),
-                             static_cast<unsigned int>(holderRegion->RelocateObserve()),
-                             holderRegion->GetMarkBitmap(holderRegion->GetMarkView<Generation::Old>()),
-                             static_cast<unsigned int>(holderRegion->IsMarkedObject(
-                                 holderRegion->GetMarkView<Generation::Old>(), holder)),
-                             static_cast<unsigned int>(holderRegion->IsResurrectedObject(holder)),
-                             reinterpret_cast<void*>(holderRegion->GetRegionStart()),
-                             static_cast<size_t>(reinterpret_cast<MAddress>(holder) - holderRegion->GetRegionStart()),
-                             reinterpret_cast<void*>(slot), static_cast<size_t>(BaseObject::FieldOffset(holder, &field)),
-                             static_cast<size_t>(slot - holderRegion->GetRegionStart()), target,
-                             static_cast<unsigned int>(targetValid),
-                             targetTypeInfo == nullptr || targetTypeInfo->GetName() == nullptr ? "?" :
-                                                                                               targetTypeInfo->GetName(),
-                             targetRegion, static_cast<unsigned int>(targetRegion->GetRegionType()),
-                             static_cast<unsigned int>(targetRegion->GetYoungAge()),
-                             static_cast<unsigned int>(targetRegion->RelocateObserve()),
-                             reinterpret_cast<void*>(targetRegion->GetRegionStart()),
-                             static_cast<size_t>(reinterpret_cast<MAddress>(target) - targetRegion->GetRegionStart()));
-                    }
-                }
-            });
-        },
-        false);
+    if (!ZVerifyRemembered || forwarding == nullptr ||
+        forwarding->table_generation() != static_cast<uint8_t>(Generation::Old)) { return; }
+    RegionInfo* page = forwarding->page();
+    if (page == nullptr) { return; }
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    const bool activeCurrent = Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent();
+    CHECK_DETAIL(remset.IsClearInRange(forwarding->start(), forwarding->size(), !activeCurrent),
+                 "Inactive remembered set is not empty for %p", page);
+    page->VisitLiveObjectsUntilFalse([&](BaseObject* object) {
+        const MAddress from = reinterpret_cast<MAddress>(object);
+        HeapIterator::Fields(object, true, [&](BaseObject*, RefField<>& field) {
+            const MAddress slot = reinterpret_cast<MAddress>(&field);
+            if (IntentionallyUnremembered(field.GetFieldValue()) || bufferedStores.count(slot) != 0 ||
+                forwarding->find(from) != 0) { return; }
+            CHECK_DETAIL(activeCurrent ? remset.Contains(slot) : remset.ContainsPrevious(slot),
+                         "Missing remembered field %p in source %p", &field, object);
+        });
+        return true;
+    });
 }
 
-void ClassifyRemsetOnlySlots(const std::unordered_set<MAddress>& remsetSnapshot,
-                             const std::unordered_set<MAddress>& fieldSlots, RemsetVerifyStats& stats)
+// zVerify.cpp:610-738. Recheck the pointer after reading both bitmap faces;
+// a concurrent scanner may have self-healed the pointer and cleared the bit.
+void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
 {
-    for (MAddress slot : remsetSnapshot) {
-        if (fieldSlots.count(slot) != 0) {
-            ++stats.remsetCovered;
-            continue;
-        }
-        // Slot address is not a ref field of any live non-young holder we walked.
-        ++stats.dangling;
-        PushSample(stats.danglingSamples, stats.danglingSampleCount, slot);
+    std::vector<MAddress> fromAddresses;
+    forwarding->for_each_from([&](MAddress from) { fromAddresses.push_back(from); });
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    for (MAddress from : fromAddresses) {
+        BaseObject* object = reinterpret_cast<BaseObject*>(forwarding->find(from));
+        Object(object, nullptr);
+        // Destination age is represented by the destination page in this port.
+        if (RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) { continue; }
+        HeapIterator::Fields(object, true, [&](BaseObject*, RefField<>& field) {
+            const MAddress slot = reinterpret_cast<MAddress>(&field);
+            const zpointer value = field.GetFieldValue(std::memory_order_acquire);
+            std::atomic_thread_fence(std::memory_order_acquire);
+            RefField<> preloaded(value);
+            if (IntentionallyUnremembered(value) || Heap::GetHeap().GetCollector().is_store_good(preloaded) ||
+                bufferedStores.count(slot) != 0 ||
+                bufferedStores.count(from + slot - reinterpret_cast<MAddress>(object)) != 0) { return; }
+            if (remset.Contains(slot) || remset.ContainsPrevious(slot)) { return; }
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (field.GetFieldValue(std::memory_order_acquire) != value) { return; }
+            CHECK_DETAIL(ZForwarding::young_marking(), "Missing remembered field outside young marking: %p", &field);
+            CHECK_DETAIL(forwarding->relocated_remembered_fields_published_contains(slot),
+                         "Missing published remembered field %p in destination %p", &field, object);
+        });
     }
 }
-} // namespace
-
-void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot,
-                                  const std::unordered_set<BaseObject*>* rootReachableHolders)
+void ZVerify::AfterRelocation(ZForwarding* forwarding)
 {
-    if (!VerifyPhaseEnter(VerifyFace::Remembered, point)) {
-        return;
-    }
-
-    static std::atomic<size_t> invokeCount{0};
-    size_t invoke = invokeCount.fetch_add(1, std::memory_order_relaxed) + 1;
-    constexpr size_t startAt = 0;
-    if (startAt != 0 && invoke < startAt) {
-        return;
-    }
-    constexpr size_t every = 1;
-    if (startAt != 0) {
-        if ((invoke - startAt) % every != 0) {
-            return;
-        }
-    } else if ((invoke - 1) % every != 0) {
-        return;
-    }
-
-    uint64_t startNs = TimeUtil::NanoSeconds();
-    RemsetVerifyStats stats;
-    stats.remsetSize = remsetSnapshot.size();
-    constexpr size_t maxFailures = 20;
-
-    std::unordered_set<MAddress> fieldSlots;
-    CollectNonYoungFieldSlots(fieldSlots, stats, remsetSnapshot, rootReachableHolders, point, invoke, maxFailures);
-    ClassifyRemsetOnlySlots(remsetSnapshot, fieldSlots, stats);
-    stats.costNs = TimeUtil::NanoSeconds() - startNs;
-
-    // MISSING = correctness-relevant subset. When the independent root closure was
-     // not supplied (POST_EVAC path, or remembered verify unset), that subset is
-    // the full inventory — do not print missingRootReachable (stays 0) as MISSING.
-    size_t correctnessMissing = rootReachableHolders == nullptr ? stats.missing : stats.missingRootReachable;
-
-    VLOG(REPORT,
-         "[GCV2][verify][remset] point=%s invoke=%zu token=remembered "
-         "remsetSize=%zu holdersScanned=%zu oldToYoungEdges=%zu "
-         "MISSING=%zu MISSING_TOTAL=%zu MISSING_ROOT_REACHABLE=%zu rootReachabilityKnown=%d "
-         "(totalArrayHolder=%zu totalNonArray=%zu) STALE=%zu DANGLING=%zu "
-         "remsetCovered=%zu costNs=%llu directOnly=1 "
-         "totalMissingSamples=[%p,%p,%p,%p] rootReachableMissingSamples=[%p,%p,%p,%p] "
-         "staleSamples=[%p,%p,%p,%p] danglingSamples=[%p,%p,%p,%p]",
-         point == nullptr ? "?" : point, invoke, stats.remsetSize, stats.holdersScanned, stats.oldToYoungEdges,
-         correctnessMissing, stats.missing, stats.missingRootReachable,
-         rootReachableHolders == nullptr ? 0 : 1, stats.missingArrayHolder, stats.missingNonArray, stats.stale,
-         stats.dangling, stats.remsetCovered, static_cast<unsigned long long>(stats.costNs),
-         reinterpret_cast<void*>(stats.missingSamples[0]), reinterpret_cast<void*>(stats.missingSamples[1]),
-         reinterpret_cast<void*>(stats.missingSamples[2]), reinterpret_cast<void*>(stats.missingSamples[3]),
-         reinterpret_cast<void*>(stats.missingRootReachableSamples[0]),
-         reinterpret_cast<void*>(stats.missingRootReachableSamples[1]),
-         reinterpret_cast<void*>(stats.missingRootReachableSamples[2]),
-         reinterpret_cast<void*>(stats.missingRootReachableSamples[3]),
-         reinterpret_cast<void*>(stats.staleSamples[0]), reinterpret_cast<void*>(stats.staleSamples[1]),
-         reinterpret_cast<void*>(stats.staleSamples[2]), reinterpret_cast<void*>(stats.staleSamples[3]),
-         reinterpret_cast<void*>(stats.danglingSamples[0]), reinterpret_cast<void*>(stats.danglingSamples[1]),
-         reinterpret_cast<void*>(stats.danglingSamples[2]), reinterpret_cast<void*>(stats.danglingSamples[3]));
-
-    // MISSING is the correctness receipt.  STALE and DANGLING remain useful
-    // diagnostics but are not the invariant-R failure defined by this verifier.
-    const size_t totalFailures = correctnessMissing;
-    CHECK_DETAIL(totalFailures == 0,
-                 "[GCV2][verify][remset] scene failed point=%s total=%zu",
-                 point == nullptr ? "?" : point, totalFailures);
+    if (!ZVerifyRemembered || forwarding == nullptr) { return; }
+    if (ZForwarding::young_marking() && forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }
+    AfterRelocationInternal(forwarding);
+}
+void ZVerify::AfterScan(ZForwarding* forwarding)
+{
+    if (!ZVerifyRemembered || forwarding == nullptr ||
+        Heap::GetHeap().GetCollectorResources().GetYoungDriverPort().Abort().IsRequested()) { return; }
+    const auto phase = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD).phase;
+    if ((phase != GC_PHASE_FORWARD && phase != GC_PHASE_PREFORWARD) ||
+        !forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }
+    AfterRelocationInternal(forwarding);
 }
 } // namespace MapleRuntime

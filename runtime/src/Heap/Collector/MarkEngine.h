@@ -18,7 +18,7 @@
 
 #include "Heap/Collector/MarkStripe.h"
 #include "Heap/Collector/ZAbort.hpp"
-#include "Heap/Verify/VerifyMarkingStacks.h"
+#include "Heap/Collector/MarkingStacks.h"
 
 namespace MapleRuntime {
 
@@ -28,8 +28,7 @@ class GCWorkers;
 // ZGC zMarkTerminate.inline.hpp:43-125.
 class MarkTerminate {
 public:
-    void Reset(size_t workers,
-               VerifyMarkingStacks::MarkingGeneration generation = VerifyMarkingStacks::MarkingGeneration::YOUNG);
+    void Reset(size_t workers);
     void Leave();
     bool TryTerminate(MarkStripeSet& stripes, size_t usedNStripes);
     void Wake();
@@ -40,7 +39,6 @@ public:
 private:
     void MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStripes);
 
-    VerifyMarkingStacks::MarkingGeneration generation = VerifyMarkingStacks::MarkingGeneration::YOUNG;
     size_t workerCount = 0;
     size_t working = 0;
     size_t awakening = 0;
@@ -66,7 +64,7 @@ public:
 // Per-generation mark ownership (zMark.cpp:80, zGeneration.hpp:70, zThreadLocalData.hpp:43).
 class MarkDomain {
 public:
-    explicit MarkDomain(size_t capacity, VerifyMarkingStacks::MarkingGeneration generation);
+    explicit MarkDomain(size_t capacity, MarkingStacks::MarkingGeneration generation);
     void PrepareWork(size_t nworkers);
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
@@ -83,14 +81,14 @@ public:
     bool TryTerminateFlush();
     bool TryProactiveFlush(size_t workerId);
     bool TryEnd();
-    VerifyMarkingStacks::MarkingGeneration Generation() const { return generation; }
+    MarkingStacks::MarkingGeneration Generation() const { return generation; }
 
 private:
     void EnsureWorkers(size_t nworkers);
 
     size_t nworkers = 0;
     size_t targetNStripes = 0;
-    VerifyMarkingStacks::MarkingGeneration generation;
+    MarkingStacks::MarkingGeneration generation;
     MarkStripeSet stripes;
     MarkTerminate terminate;
     std::unique_ptr<MarkingSMR> smr;

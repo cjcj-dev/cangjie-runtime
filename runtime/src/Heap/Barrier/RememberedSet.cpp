@@ -441,6 +441,26 @@ bool RememberedSet::Contains(MAddress fieldAddress) const
     return (word & (static_cast<uint64_t>(1) << (bit % kBitsPerWord))) != 0;
 }
 
+// zRememberedSet::was_remembered and verify_remset_cleared_{current,previous}.
+bool RememberedSet::ContainsPrevious(MAddress fieldAddress) const
+{
+    CheckInitialized();
+    if (fieldAddress < heapStart || fieldAddress >= heapStart + heapSize) { return false; }
+    const size_t bit = AddressToBit(fieldAddress);
+    const size_t previous = activeBuffer.load(std::memory_order_acquire) ^ 1U;
+    const uint64_t word = bitmaps[previous][bit / kBitsPerWord].load(std::memory_order_relaxed);
+    return (word & (uint64_t(1) << (bit % kBitsPerWord))) != 0;
+}
+
+bool RememberedSet::IsClearInRange(MAddress start, size_t size, bool current) const
+{
+    CheckInitialized();
+    for (MAddress field = start; field < start + size; field += kFieldBytes) {
+        if (current ? Contains(field) : ContainsPrevious(field)) { return false; }
+    }
+    return true;
+}
+
 size_t RememberedSet::Size() const
 {
     CheckInitialized();

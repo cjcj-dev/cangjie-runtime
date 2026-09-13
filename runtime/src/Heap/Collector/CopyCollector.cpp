@@ -16,8 +16,6 @@
 #include "Allocator/RegionSpace.h"
 #include "Heap/Collector/GcTrigger.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
-#include "Heap/Verify/VerifyRoots.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -40,10 +38,7 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     uintptr_t to = reinterpret_cast<uintptr_t>(&toObj);
     const bool overlap = to < from && to + size > from;
     const bool restoreLocked = overlap && fromObj.GetStateWord().IsLockedWord();
-    if (UNLIKELY(MarkCompleteVerify::Enabled())) {
-        MarkCompleteVerify::NoteHolderCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to),
-                                           size, 0);
-    }
+
     CHECK_E(memmove_s(reinterpret_cast<void*>(to), size, reinterpret_cast<void*>(from), size) != EOK,
             "memmove_s fail");
     // A conjoint relocation can overwrite the source header while the copier
@@ -55,10 +50,7 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
-    if (UNLIKELY(MarkCompleteVerify::Enabled())) {
-        MarkCompleteVerify::NoteHolderCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to),
-                                           size, 1);
-    }
+
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
@@ -84,9 +76,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // One GC cycle is the roots verification scene: it covers both the minor
     // and major root visitors, including concurrent stack enumeration.  Close
     // after the collector has joined all root work (zVerify.cpp:363-384).
-    VerifyRoots::BeginScene("gc-cycle");
     DoGarbageCollection();
-    VerifyRoots::EndScene("gc-cycle");
 
     if (reason == GC_REASON_OOM) {
         Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(true);

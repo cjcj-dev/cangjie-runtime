@@ -1104,11 +1104,9 @@ EXPORTS
     _ZN12MapleRuntime10WCollector15ResurrectObjectEPNS_10BaseObjectEyPNS_10RegionInfoE @1111
     _ZN12MapleRuntime10WCollector15VisitMinorRootsERKNSt3__18functionIFvPNS_10BaseObjectEEEEy @1112
     _ZN12MapleRuntime10WCollector16TryForwardObjectEPNS_10BaseObjectE @1113
-    _ZN12MapleRuntime10WCollector16VerifyRegionSetsEPKc @1114
     _ZN12MapleRuntime10WCollector17CollectSmallSpaceEv @1115
     _ZN12MapleRuntime10WCollector17FixMinorRootSlotsEv @1116
     _ZN12MapleRuntime10WCollector17ForwardObjectImplEPNS_10BaseObjectEPNS_10RegionInfoE @1117
-    _ZN12MapleRuntime10WCollector17ProbeUnmarkedLiveERKNSt3__113unordered_setIPNS_10BaseObjectENS1_4hashIS4_EENS1_8equal_toIS4_EENS1_9allocatorIS4_EEEERKNS2_IyNS5_IyEENS7_IyEENS9_IyEEEE @1118
     _ZN12MapleRuntime10WCollector17ProcessFinalizersEv @1119
     _ZN12MapleRuntime10WCollector17TraceYoungClosureERNS_9MarkStackIPNS_10BaseObjectEEEbRNSt3__113unordered_setIS3_NS6_4hashIS3_EENS6_8equal_toIS3_EENS6_9allocatorIS3_EEEERNS6_6vectorIS3_SD_EERNS7_IyNS8_IyEENSA_IyEENSC_IyEEEESN_b @1120
     _ZN12MapleRuntime10WCollector18GetCrossRefHandlerEPNS_10BaseObjectE @1121
@@ -1123,7 +1121,6 @@ EXPORTS
     _ZN12MapleRuntime10WCollector20EvacuateYoungRegionsERKNSt3__16vectorIPNS_10BaseObjectENS1_9allocatorIS4_EEEERKNS1_13unordered_setIyNS1_4hashIyEENS1_8equal_toIyEENS5_IyEEEE @1131
     _ZN12MapleRuntime10WCollector20PostResolveCycleTaskEv @1133
     _ZN12MapleRuntime10WCollector20TraceObjectRefFieldsEPNS_10BaseObjectERNS_9MarkStackIS2_EE @1134
-    _ZN12MapleRuntime10WCollector20ValidateYoungMarkingERKNSt3__16vectorIPNS_10BaseObjectENS1_9allocatorIS4_EEEERKNS1_13unordered_setIS4_NS1_4hashIS4_EENS1_8equal_toIS4_EES6_EE @1135
     _ZN12MapleRuntime10WCollector20VisitMinorValueRootsERKNSt3__18functionIFvPNS_10BaseObjectEEEE @1136
     _ZN12MapleRuntime10WCollector22FlushAllocationRegionsEv @1138
     _ZN12MapleRuntime10WCollector22ForwardObjectExclusiveEPNS_10BaseObjectE @1139
@@ -1214,18 +1211,6 @@ EXPORTS
     _ZN12MapleRuntime11ThreadLocal12tlEnableLockE @1237 DATA
     _ZN12MapleRuntime11ThreadLocal17InitializeCleanerEv @1238
     _ZN12MapleRuntime11ThreadLocal18GetThreadLocalDataEv @1239
-    _ZN12MapleRuntime11VerifyRoots10RegionNameENS_10AddrRegionE @1240
-    _ZN12MapleRuntime11VerifyRoots10ResetStatsEv @1241
-    _ZN12MapleRuntime11VerifyRoots12BadRootCountEv @1242
-    _ZN12MapleRuntime11VerifyRoots12IsZapPatternEy @1243
-    _ZN12MapleRuntime11VerifyRoots13InfoRootCountEv @1244
-    _ZN12MapleRuntime11VerifyRoots15ClassifyAddressEy @1245
-    _ZN12MapleRuntime11VerifyRoots17VerifyRootPayloadERKNS_17RootVerifyContextEPvPNS_10BaseObjectE @1246
-    _ZN12MapleRuntime11VerifyRoots18BeforeCheckAndPushEPNS_10BaseObjectE @1247
-    _ZN12MapleRuntime11VerifyRoots19MakeRegDebugVisitorERKNS_17RootVerifyContextE @1248
-    _ZN12MapleRuntime11VerifyRoots20MakeSlotDebugVisitorERKNS_17RootVerifyContextE @1249
-    _ZN12MapleRuntime11VerifyRoots7EnabledEv @1250
-    _ZN12MapleRuntime11VerifyRoots8KindNameENS_8RootKindE @1251
     _ZN12MapleRuntime12CJFileLoader10GetTypeExtEPv @1252
     _ZN12MapleRuntime12CJFileLoader12GetInterfaceEPNS_8TypeInfoEj @1253
     _ZN12MapleRuntime12CJFileLoader13FileHasLoadedEPKc @1254
@@ -1464,12 +1449,6 @@ EXPORTS
     _ZN12MapleRuntime13UnwindContext17GoIntoManagedCodeEv @1520
     _ZN12MapleRuntime13UnwindContextD0Ev @1521
     _ZN12MapleRuntime13UnwindContextD2Ev @1522
-    _ZN12MapleRuntime13VerifyRegions11ShouldRunAtEy @1523
-    _ZN12MapleRuntime13VerifyRegions19ReportAndMaybeAbortEbPKc @1524
-    _ZN12MapleRuntime13VerifyRegions20VerifyAfterYoungMarkERNS_13RegionManagerERKNSt3__113unordered_setIPNS_10RegionInfoENS3_4hashIS6_EENS3_8equal_toIS6_EENS3_9allocatorIS6_EEEEyPKc @1525
-    _ZN12MapleRuntime13VerifyRegions23VerifyAfterPrepareYoungERNS_13RegionManagerERKNSt3__113unordered_setIPNS_10RegionInfoENS3_4hashIS6_EENS3_8equal_toIS6_EENS3_9allocatorIS6_EEEEyPKc @1526
-    _ZN12MapleRuntime13VerifyRegions7IsFatalEv @1527
-    _ZN12MapleRuntime13VerifyRegions9IsEnabledEv @1528
     _ZN12MapleRuntime13g_initializedE @1531 DATA
     _ZN12MapleRuntime13g_injectStateE @1532 DATA
     _ZN12MapleRuntime14ATraceEndAsyncEPKci @1533
@@ -1749,7 +1728,6 @@ EXPORTS
     _ZN12MapleRuntime17StackExposureHook26ObserveCrossWithoutProcessERKNS_14StackWatermarkEy @1846
     _ZN12MapleRuntime17StackExposureHook9FireCountEv @1847
     _ZN12MapleRuntime17TYPEINFO_PTR_SIZEE @1848 DATA
-    _ZN12MapleRuntime17VerifyHeapObjectsEPKcb @1849
     _ZN12MapleRuntime18AggregateAllocator10DeallocateEPvy @1850
     _ZN12MapleRuntime18AggregateAllocator8InstanceENS_13AllocationTagE @1851
     _ZN12MapleRuntime18AllocBufferManager17RemoveAllocBufferERNS_11AllocBufferE @1852
@@ -1824,11 +1802,9 @@ EXPORTS
     _ZN12MapleRuntime20PrintSignalStackInfoC2EPKNS_13UnwindContextE @1935
     _ZN12MapleRuntime20PrintSignalStackInfoD0Ev @1936
     _ZN12MapleRuntime20PrintSignalStackInfoD2Ev @1937
-    _ZN12MapleRuntime20VerifyMarkSourceNameENS_16VerifyMarkSourceE @1947
     _ZN12MapleRuntime20g_installDomainGrantE @1948 DATA
     _ZN12MapleRuntime21ConcurrentMarkingWorkD0Ev @1951
     _ZN12MapleRuntime21ConcurrentMarkingWorkD2Ev @1952
-    _ZN12MapleRuntime21ParseVerifyMarkSourceEv @1953
     _ZN12MapleRuntime21ScopedEnterSaferegionC2Eb @1954
     _ZN12MapleRuntime22CompressedStackMapHead15GetStackMapHeadEyRKNSt3__18functionIFvNS_23PrologueRegisterClosure4TypeEjEEEPy @1955
     _ZN12MapleRuntime22IsHaveCommandInjectionERKNS_7CStringE @1960
@@ -1843,7 +1819,6 @@ EXPORTS
     _ZN12MapleRuntime25RestoreInjectedPlainIfAnyEv @1970
     _ZN12MapleRuntime26g_forwardRaceStillBadCountE @1971 DATA
     _ZN12MapleRuntime28AssertColouredWriteIfEnabledEPKvy @1973
-    _ZN12MapleRuntime28VerifyRememberedSetInvariantEPKcRKNSt3__113unordered_setIyNS2_4hashIyEENS2_8equal_toIyEENS2_9allocatorIyEEEEbPKNS3_IPNS_10BaseObjectENS4_ISE_EENS6_ISE_EENS8_ISE_EEEE @1974
     _ZN12MapleRuntime29ORDERS_OF_MAGNITUDE_FROM_NANOE @1975 DATA
     _ZN12MapleRuntime2Os4Path11GetBaseNameEPKc @1976
     _ZN12MapleRuntime2Os4Path11GetRealPathEPKcPc @1977

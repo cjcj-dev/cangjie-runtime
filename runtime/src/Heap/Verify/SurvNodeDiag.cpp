@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/Verify/ZVerify.h"
 
 #include "Base/ZStat.h"
 #include <atomic>
@@ -19,7 +20,6 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
 
 namespace MapleRuntime {
 namespace SurvNodeDiag {
@@ -152,7 +152,7 @@ bool PhaseAfterTrace(uint8_t phase)
 
 } // namespace
 
-bool Enabled() { return MarkCompleteVerify::Enabled(); }
+bool Enabled() { return ZVerifyObjects; }
 
 void NoteStore(const void* slot, BaseObject* pre, BaseObject* neu, uint8_t site)
 {

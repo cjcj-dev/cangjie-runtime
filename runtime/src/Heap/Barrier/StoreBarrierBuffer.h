@@ -8,6 +8,7 @@
 #define MRT_STORE_BARRIER_BUFFER_H
 
 #include <cstddef>
+#include <functional>
 
 #include "Common/TypeDef.h"
 
@@ -53,6 +54,12 @@ public:
     bool IsEmpty() const { return current == kStoreBarrierBufferLength; }
     size_t Pending() const { return kStoreBarrierBufferLength - current; }
     size_t Current() const { return current; }
+    // zVerify.cpp:576-596; caller holds the safepoint excluding buffer writers.
+    void VisitEntries(const std::function<void(const StoreBarrierEntry&)>& visitor) const
+    {
+        for (size_t i = current; i < kStoreBarrierBufferLength; ++i) { visitor(buffer[i]); }
+    }
+
     static constexpr size_t Capacity() { return kStoreBarrierBufferLength; }
 
     void Add(MAddress fieldAddress, BaseObject* fieldBase, RememberedSet& rs);

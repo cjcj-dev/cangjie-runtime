@@ -77,8 +77,16 @@ constexpr zaddress_unsafe uncolor_bits(zpointer p)
 // Input must already be zaddress (load-good or proven).
 // ⭐ This is the ONLY production site allowed to write reinterpret_cast<BaseObject*>.
 // All other paths must go through a named constructor below (or this).
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+extern const bool ZVerifyOops;
+void VerifyAccessedOop(zaddress address);
+#endif
 inline BaseObject* to_object(zaddress a)
 {
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    // zAddress.inline.hpp:505-522: verify the actual accessed oop.
+    if (ZVerifyOops && a != zaddress::null) { VerifyAccessedOop(a); }
+#endif
     return reinterpret_cast<BaseObject*>(raw(a));
 }
 

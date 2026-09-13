@@ -1,98 +1,85 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-#include "Common/ColourMask.h"
-#include "Common/ColourTypes.h"
-#include "Heap/Verify/VerifyRoots.h"
+#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-
-#include <cstdlib>
-#include <cstring>
-#include <csignal>
-#include <sys/wait.h>
-#include <unistd.h>
-
+#include "Heap/Verify/ZVerify.h"
+#include "Mutator/Mutator.h"
+#include "ObjectModel/RefField.inline.h"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
-
 namespace {
-
-constexpr Uptr kFakeHeapAddress = Uptr(0x00007f12'34567000ULL);
-
-size_t RunColouredRootArm(bool enabled, bool closeScene)
+// Plant the raw stack-map word, including deliberately invalid test inputs.
+void SetRootWord(RootSlot& slot, uintptr_t word) { std::memcpy(&slot, &word, sizeof(word)); }
+}
+// zVerify.cpp:119-128: positive counterpart to the invalid-address cases.
+GC_OTHER_VM_TEST(ZVerify, AcceptsActualObjectAddress)
 {
-    if (enabled) {
-        setenv("MRT_GCV2_VERIFY_ROOTS", "1", 1);
-    } else {
-        unsetenv("MRT_GCV2_VERIFY_ROOTS");
-    }
-
-    VerifyRoots::ResetStats();
-    VerifyRoots::BeginScene("gc-unit-coloured-root");
-    RootVerifyContext ctx;
-    ctx.phase = "gc_unit-coloured-root";
-    ctx.kind = RootKind::RUNTIME_ROOT;
-    const Uptr corrupt = kFakeHeapAddress | ZPointerRemapped00;
-    // Deliberate corruption: copy a coloured HeapSlot word into actual
-    // RootSlot storage, bypassing the typed writer that forbids this.
-    RootSlot badRoot;
-    static_assert(sizeof(badRoot) == sizeof(corrupt), "root slot is one word");
-    std::memcpy(&badRoot, &corrupt, sizeof(corrupt));
-    ctx.rawValue = raw(badRoot.LoadPlain());
-    ctx.hasRawValue = true;
-    VerifyRoots::VerifyRootPayload(ctx, &badRoot, nullptr);
-    if (closeScene) {
-        VerifyRoots::EndScene("gc-unit-coloured-root");
-    }
-    return VerifyRoots::BadRootCount();
+    GcHeapFixture fixture;
+    ZVerify::Object(fixture.obj0, &fixture.obj0);
+    GC_EXPECT_TRUE(fixture.obj0->IsValidObject());
 }
 
-} // namespace
-
-GC_OTHER_VM_TEST(VerifyRoots, DefaultOffLeavesCorruptRootUnobserved)
+// zVerify.cpp:247,323 and zHeapIterator.cpp:145 consume heap-oop slots.
+// Cangjie stack maps also name stack objects and headerless ABI records.
+GC_OTHER_VM_TEST(ZVerify, StackRootExpandsToActualHeapSlot)
 {
-#if defined(__linux__)
-    GC_EXPECT_EQ(RunColouredRootArm(false, true), 0u);
-#else
-    GC_EXPECT_TRUE(true);
-#endif
+    GcHeapFixture fixture;
+    alignas(16) uintptr_t storage[8] {};
+    auto* object = reinterpret_cast<BaseObject*>(&storage[2]);
+    object->SetClassInfo(fixture.typeInfo);
+    RootSlot& record = RootSlotAt(static_cast<void*>(&storage[6]));
+    StorePlain(record, from_object(fixture.obj0));
+    SetRootWord(RootSlotAt(static_cast<void*>(&storage[3])), reinterpret_cast<uintptr_t>(&storage[6]));
+    Mutator mutator;
+    mutator.SetStackTopAddr(reinterpret_cast<uintptr_t>(storage));
+    mutator.SetStackSize(sizeof(storage));
+    RootSlot root;
+    SetRootWord(root, reinterpret_cast<uintptr_t>(object));
+    size_t visits = 0;
+    mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
+        ++visits;
+        GC_EXPECT_TRUE(&slot == &record);
+        GC_EXPECT_EQ(raw(slot.LoadPlain()), reinterpret_cast<uintptr_t>(fixture.obj0));
+        ZVerify::Object(reinterpret_cast<BaseObject*>(raw(slot.LoadPlain())), &slot);
+    });
+    GC_EXPECT_EQ(visits, size_t(1));
 }
 
-GC_OTHER_VM_TEST(VerifyRoots, EnabledClosesColouredRootScene)
+GC_OTHER_VM_TEST(ZVerify, StackRootCycleTerminatesWithoutEmittingStackObject)
 {
-#if defined(__linux__)
-    int childStderr[2];
-    GC_EXPECT_EQ(pipe(childStderr), 0);
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        close(childStderr[0]);
-        GC_EXPECT_TRUE(dup2(childStderr[1], STDERR_FILENO) >= 0);
-        close(childStderr[1]);
-        (void)signal(SIGABRT, SIG_DFL);
-        (void)RunColouredRootArm(true, true);
-        _exit(0);
-    }
-    close(childStderr[1]);
-    std::string transcript;
-    char buffer[512];
-    for (;;) {
-        const ssize_t count = read(childStderr[0], buffer, sizeof(buffer));
-        if (count <= 0) {
-            break;
-        }
-        transcript.append(buffer, static_cast<size_t>(count));
-    }
-    close(childStderr[0]);
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-    GC_EXPECT_TRUE(transcript.find("[GCV2][verify][roots] scene failed") != std::string::npos);
-#else
-    GC_EXPECT_TRUE(true);
-#endif
+    GcHeapFixture fixture;
+    alignas(16) uintptr_t storage[6] {};
+    auto* object = reinterpret_cast<BaseObject*>(&storage[2]);
+    object->SetClassInfo(fixture.typeInfo);
+    SetRootWord(RootSlotAt(static_cast<void*>(&storage[3])), reinterpret_cast<uintptr_t>(object));
+    Mutator mutator;
+    mutator.SetStackTopAddr(reinterpret_cast<uintptr_t>(storage));
+    mutator.SetStackSize(sizeof(storage));
+    RootSlot root;
+    SetRootWord(root, reinterpret_cast<uintptr_t>(object));
+    size_t visits = 0;
+    mutator.VisitHeapRootSlots(root, [&](ObjectRef&) { ++visits; });
+    GC_EXPECT_EQ(visits, size_t(0));
+    // The same adapter must still deliver a real heap root.
+    StorePlain(root, from_object(fixture.obj0));
+    mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
+        ++visits;
+        GC_EXPECT_TRUE(&slot == &root);
+    });
+    GC_EXPECT_EQ(visits, size_t(1));
+}
+
+GC_OTHER_VM_TEST(ZVerify, RootAdapterPreservesInvalidNonStackAddress)
+{
+    Mutator mutator;
+    RootSlot root;
+    SetRootWord(root, 0x1000);
+    size_t visits = 0;
+    mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
+        ++visits;
+        GC_EXPECT_TRUE(&slot == &root);
+        GC_EXPECT_EQ(raw(slot.LoadPlain()), uintptr_t(0x1000));
+    });
+    GC_EXPECT_EQ(visits, size_t(1));
 }

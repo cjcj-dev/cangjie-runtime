@@ -40,12 +40,7 @@
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
-#include "Heap/Verify/VerifyHeap.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
-#include "Heap/Verify/VerifyOption.h"
-#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
@@ -59,7 +54,6 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Verify/VerifyRegions.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "securec.h"
 #endif

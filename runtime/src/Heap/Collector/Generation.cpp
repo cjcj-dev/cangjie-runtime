@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Verify/ZVerify.h"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
 
@@ -32,13 +33,8 @@
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
-#include "Heap/Verify/VerifyHeap.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
-#include "Heap/Verify/VerifyOption.h"
-#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/VerifyRoots.h"
-#include "Heap/Verify/VerifyMarkingStacks.h"
+#include "Heap/Collector/MarkingStacks.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
@@ -51,7 +47,6 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Verify/VerifyRegions.h"
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
@@ -336,440 +331,6 @@ ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt()
 }
 
 #endif
-namespace {
-bool VerifyStackRootPostconditionEnabled()
-{
-    static const bool on = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return on;
-}
-} // namespace
-
-namespace WCollectorInternal {
-void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source)
-{
-    if (!VerifyStackRootPostconditionEnabled()) {
-        return;
-    }
-
-    size_t checked = 0;
-    size_t incomplete = 0;
-    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
-        ++checked;
-        StackWatermark& watermark = mutator.GetStackWatermark();
-        if (watermark.IsDone(stackScanEpoch)) {
-            return;
-        }
-        ++incomplete;
-        LOG(RTLOG_ERROR,
-            "[GCV2][verify][stack-roots-complete] INCOMPLETE source=%s epoch=%llu mutator=%p tid=%u cjthread=%p "
-            "managed=%d saferegion=%d wm_epoch=%llu phase=%u owner=%u cursor=%zu frames=%zu "
-            "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
-            source, static_cast<unsigned long long>(stackScanEpoch), &mutator, mutator.GetTid(),
-            mutator.GetCjthreadPtr(), mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
-            static_cast<unsigned long long>(watermark.GetEpoch()), static_cast<unsigned>(watermark.GetPhase()),
-            static_cast<unsigned>(watermark.GetOwner()), watermark.GetCursorIndex(), watermark.GetFrameCount());
-    });
-    LOG(RTLOG_ERROR,
-        "[GCV2][verify][stack-roots-complete] SUMMARY source=%s epoch=%llu checked=%zu incomplete=%zu "
-        "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
-        source, static_cast<unsigned long long>(stackScanEpoch), checked, incomplete);
-}
-} // namespace WCollectorInternal
-
-void WCollector::VerifyRegionSets(const char* point)
-{
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    RegionManager& manager = space.GetRegionManager();
-    size_t youngRunIndex = minorTotalRuns + 1;
-    if (std::strcmp(point, "after-young-mark") == 0) {
-        VerifyRegions::VerifyAfterYoungMark(manager, minorCandidateRegions, youngRunIndex, point);
-    } else {
-        VerifyRegions::VerifyAfterPrepareYoung(manager, minorCandidateRegions, youngRunIndex, point);
-    }
-}
-
-void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const MinorSlotSet& rememberedSlots)
-{
-    // Default off. When on: independent full-heap retrace from roots (no remset filter),
-    // collect young objs reachable that way, compare to region mark bitmap after young-only mark.
-    // For each unmarked-but-full-reachable young object, scan non-young holders for incoming
-    // old→young edges and report whether that field is in the minor-acquired remset.
-    // This probe is what located the mark gap: with MRT_GCV2_MINOR_GC_ALOT forcing young
-    // collections, run 69 reported UNMARKED_LIVE=832 with edgeInRemset=0 edgeNotInRemset=28 --
-    // every unmarked-live object that had an incoming old->young edge had that edge missing from
-    // the remembered set, which is what sent the fix to RecordCrossGenEdge's target-generation
-    // test rather than to the consumption side.
-    // Off by default -- it retraces the whole heap from roots on every minor, so it is a
-    // verification instrument, not something to ship on.  But "off" here used to mean *unreachable*:
-    // the env read was pinned to nullptr, so nothing could turn it on without editing this file, and
-    // the one measurement that decides whether an old->young edge is being lost simply could not be
-    // taken.  A compile-time constant says the same thing while leaving the switch where a reader
-    // can find it.  (No new MRT_GCV2_ env var: those were cut 190 -> 3 on purpose.)
-    //
-    // Flip to true, rebuild, and read [GCV2][markgap] UNMARKED_LIVE / edgeInRemset /
-    // edgeNotInRemset.  That is the acceptance criterion for anything touching remembered-set
-    // recording -- not remembered-set size, which is a side effect and has already sent this
-    // campaign down one wrong path.
-    constexpr bool kMarkGapProbe = false;
-    if (!kMarkGapProbe) {
-        return;
-    }
-
-    MinorObjectSet fullReachable;
-    MinorObjectSet fullYoung;
-    WorkStack pending = NewWorkStack();
-    VisitMinorRoots([&pending](BaseObject* object) {
-        if (Heap::IsHeapAddress(object)) {
-            pending.push_back(object);
-        }
-    }, [&pending](BaseObject* object) {
-        if (Heap::IsHeapAddress(object)) {
-            pending.push_back(MarkStackEntry::MarkOnly(object));
-        }
-    });
-    for (BaseObject* object : allocationRoots) {
-        pending.push_back(object);
-    }
-    auto pushField = [this, &pending](RefField<>& field) {
-        BaseObject* target = ResolveMinorReference(field);
-        if (Heap::IsHeapAddress(target)) {
-            pending.push_back(target);
-        }
-    };
-    while (!pending.empty()) {
-        const MarkStackEntry entry = pending.back();
-        BaseObject* object = entry.object();
-        pending.pop_back();
-        if (!Heap::IsHeapAddress(object) || !fullReachable.insert(object).second) {
-            continue;
-        }
-        if (!object->IsValidObject()) {
-            continue;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (region == nullptr) {
-            continue;
-        }
-        if (region->IsYoungRegion()) {
-            fullYoung.insert(object);
-        }
-        if (!entry.follow() || !object->HasRefField()) {
-            continue;
-        }
-        if (UNLIKELY(object->IsWeakRef())) {
-            HeapSlot<>& referentField =
-                HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            BaseObject* referent = ResolveMinorReference(referentField);
-            if (Heap::IsHeapAddress(referent)) {
-                referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
-            }
-            continue;
-        }
-        object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
-    }
-
-    size_t unmarkedLive = 0;
-    size_t markedYoung = 0;
-    size_t missingEdgeHolders = 0;
-    size_t edgeInRemset = 0;
-    size_t edgeNotInRemset = 0;
-    size_t noIncomingOldFound = 0;
-    size_t sampleLimit = 8;
-    size_t samples = 0;
-
-    for (BaseObject* object : fullYoung) {
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (region == nullptr) {
-            continue;
-        }
-        if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
-            ++markedYoung;
-            continue;
-        }
-        ++unmarkedLive;
-
-        // Find old→young incoming edges by independent non-young holder walk.
-        size_t incomingOld = 0;
-        size_t incomingMissing = 0;
-        MAddress sampleField = 0;
-        BaseObject* sampleHolder = nullptr;
-        Heap::GetHeap().ForEachObj(
-            [&](BaseObject* holder) {
-                if (holder == nullptr || !holder->IsValidObject() || !holder->HasRefField()) {
-                    return;
-                }
-                RegionInfo* hReg = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-                if (hReg == nullptr || hReg->IsYoungRegion() || hReg->IsGarbageRegion() || hReg->IsFreeRegion()) {
-                    return;
-                }
-                holder->ForEachRefField([&](RefField<>& field) {
-                    BaseObject* target = to_object(field.GetTargetObject());
-                    if (target != object) {
-                        return;
-                    }
-                    ++incomingOld;
-                    MAddress slot = reinterpret_cast<MAddress>(&field);
-                    bool inRemset = rememberedSlots.count(slot) != 0;
-                    if (inRemset) {
-                        ++edgeInRemset;
-                    } else {
-                        ++edgeNotInRemset;
-                        ++incomingMissing;
-                        if (sampleField == 0) {
-                            sampleField = slot;
-                            sampleHolder = holder;
-                        }
-                    }
-                });
-            },
-            false);
-
-        if (incomingMissing > 0) {
-            ++missingEdgeHolders;
-        }
-        if (incomingOld == 0) {
-            ++noIncomingOldFound;
-        }
-
-        if (samples < sampleLimit) {
-            ++samples;
-            TypeInfo* ti = object->IsValidObject() ? object->GetTypeInfo() : nullptr;
-            TypeInfo* hti = (sampleHolder != nullptr && sampleHolder->IsValidObject()) ? sampleHolder->GetTypeInfo()
-                                                                                      : nullptr;
-            VLOG(REPORT,
-                 "[GCMARKGAP][unmarked-live] run=%zu obj=%p region=%p start=%#zx marked=0 "
-                 "fullReachable=1 incomingOld=%zu incomingMissing=%zu sampleField=%p sampleHolder=%p "
-                 "objTi=%p holderTi=%p inRemsetSample=%u",
-                 minorTotalRuns + 1, object, region, region->GetRegionStart(), incomingOld, incomingMissing,
-                 reinterpret_cast<void*>(sampleField), sampleHolder, ti, hti,
-                 static_cast<unsigned>(sampleField != 0 && rememberedSlots.count(sampleField) != 0));
-        }
-    }
-
-    // Also count residual unmarked valid objs on candidates (may be truly dead).
-    size_t residualUnmarkedValid = 0;
-    size_t residualUnmarkedAndFullReachable = 0;
-    size_t neverExaminedCandidates = 0;
-    for (RegionInfo* region : minorCandidateRegions) {
-        if (region->GetMarkBitmap(region->GetMarkView<Generation::Young>()) == nullptr &&
-            region->GetRegionAllocPtr() > region->GetRegionStart()) {
-            ++neverExaminedCandidates;
-        }
-        region->VisitAllObjects([&](BaseObject* object) {
-            if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
-                return;
-            }
-            if (!object->IsValidObject()) {
-                return;
-            }
-            ++residualUnmarkedValid;
-            if (fullYoung.count(object) != 0) {
-                ++residualUnmarkedAndFullReachable;
-            }
-        });
-    }
-
-    VLOG(REPORT,
-         "[GCMARKGAP][summary] run=%zu fullYoung=%zu markedYoung=%zu UNMARKED_LIVE=%zu "
-         "missingEdgeHolders=%zu edgeInRemset=%zu edgeNotInRemset=%zu noIncomingOld=%zu "
-         "residualUnmarkedValid=%zu residualUnmarkedAndFullReachable=%zu neverExaminedCandidates=%zu "
-         "remsetSize=%zu env=MRT_GCMARKGAP_PROBE=1",
-         minorTotalRuns + 1, fullYoung.size(), markedYoung, unmarkedLive, missingEdgeHolders, edgeInRemset,
-         edgeNotInRemset, noIncomingOldFound, residualUnmarkedValid, residualUnmarkedAndFullReachable,
-         neverExaminedCandidates, rememberedSlots.size());
-}
-
-void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableVec,
-                                      const MinorObjectSet& allocationRoots)
-{
-    // Default OFF — product path must not abort.
-    // Flip kVerifyYoungMarking / kVerifyMarkSource in VerifyOption.h and rebuild.
-    // IndependentVsBitmap does NOT require MinorClosure membership, so fullYoungScan
-    // is not tautological (gcvheap / HotSpot inventory #22).
-    if (!kVerifyYoungMarking) {
-        return;
-    }
-
-    VerifyMarkSource markSource = ParseVerifyMarkSource();
-    const bool useIndependent = markSource == VerifyMarkSource::IndependentVsBitmap ||
-                                markSource == VerifyMarkSource::IndependentRetrace ||
-                                markSource == VerifyMarkSource::MinorClosure;
-    const bool useBitmap = markSource == VerifyMarkSource::IndependentVsBitmap ||
-                           markSource == VerifyMarkSource::RegionMarkBitmap ||
-                           markSource == VerifyMarkSource::MinorClosure;
-    const bool requireMinorClosure = markSource == VerifyMarkSource::MinorClosure;
-
-    MinorObjectSet reachable;
-    MinorObjectSet expectedYoung;
-    MinorObjectSet minorClosureSet;
-    if (requireMinorClosure || (useIndependent && useBitmap)) {
-        for (BaseObject* object : reachableVec) {
-            minorClosureSet.insert(object);
-        }
-    }
-    if (useIndependent) {
-        WorkStack pending = NewWorkStack();
-        VisitMinorRoots([&pending](BaseObject* object) {
-            if (Heap::IsHeapAddress(object)) {
-                pending.push_back(object);
-            }
-        }, [&pending](BaseObject* object) {
-            if (Heap::IsHeapAddress(object)) {
-                pending.push_back(MarkStackEntry::MarkOnly(object));
-            }
-        });
-        for (BaseObject* object : allocationRoots) {
-            pending.push_back(object);
-        }
-        auto pushField = [this, &pending](RefField<>& field) {
-            BaseObject* target = ResolveMinorReference(field);
-            if (Heap::IsHeapAddress(target)) {
-                pending.push_back(target);
-            }
-        };
-        while (!pending.empty()) {
-            const MarkStackEntry entry = pending.back();
-            BaseObject* object = entry.object();
-            pending.pop_back();
-            if (!reachable.insert(object).second) {
-                continue;
-            }
-            CHECK_DETAIL(object->IsValidObject(), "minor marking validator reached invalid object %p", object);
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            if (region->IsYoungRegion()) {
-                expectedYoung.insert(object);
-            }
-            if (!entry.follow() || !object->HasRefField()) {
-                continue;
-            }
-            if (UNLIKELY(object->IsWeakRef())) {
-                HeapSlot<>& referentField = HeapSlotAt<>(
-                    reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-                BaseObject* referent = ResolveMinorReference(referentField);
-                if (Heap::IsHeapAddress(referent)) {
-                    referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
-                }
-                continue;
-            }
-            object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
-        }
-    }
-
-    size_t actualYoung = 0;
-    size_t unexpectedYoung = 0;
-    if (useBitmap) {
-        for (RegionInfo* region : minorCandidateRegions) {
-            region->VisitAllObjects([&](BaseObject* object) {
-                if (!region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
-                    return;
-                }
-                ++actualYoung;
-                bool bad = false;
-                if (useIndependent && expectedYoung.count(object) == 0) {
-                    bad = true;
-                }
-                if (requireMinorClosure && minorClosureSet.count(object) == 0) {
-                    bad = true;
-                }
-                if (bad) {
-                    ++unexpectedYoung;
-                }
-            });
-        }
-    }
-
-    size_t missingYoung = 0;
-    size_t expectedCandidateYoung = 0;
-    size_t expectedOffCandidateYoung = 0;
-    size_t offCandidateMarked = 0;
-    size_t offCandidateMinorClosure = 0;
-    size_t offCandidateAllocationRoot = 0;
-    size_t offCandidateRouteDestHeld = 0;
-    constexpr size_t diffSampleLimitPerClass = 4;
-    size_t diffSamples = 0;
-    size_t diffRouteHeldSamples = 0;
-    size_t diffOtherSamples = 0;
-    if (useIndependent) {
-        for (BaseObject* object : expectedYoung) {
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            const bool inCandidate = minorCandidateRegions.count(region) != 0;
-            if (inCandidate) {
-                ++expectedCandidateYoung;
-            } else {
-                ++expectedOffCandidateYoung;
-                const bool marked = region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object);
-                const bool inMinorClosure = minorClosureSet.count(object) != 0;
-                const bool allocationRoot = allocationRoots.count(object) != 0;
-                const bool routeDestHeld = region->IsRouteDestHeld();
-                offCandidateMarked += static_cast<size_t>(marked);
-                offCandidateMinorClosure += static_cast<size_t>(inMinorClosure);
-                offCandidateAllocationRoot += static_cast<size_t>(allocationRoot);
-                offCandidateRouteDestHeld += static_cast<size_t>(routeDestHeld);
-                size_t& classSamples = routeDestHeld ? diffRouteHeldSamples : diffOtherSamples;
-                if (classSamples < diffSampleLimitPerClass) {
-                    TypeInfo* ti = object->GetTypeInfo();
-                    VLOG(REPORT,
-                         "[GCV2][verify][young-marking-diff-sample] run=%zu obj=%p typeInfo=%p typeName=%s "
-                         "region=%p regionStart=%#zx regionType=%u reachable=1 young=%u marked=%u candidate=0 "
-                         "inMinorClosure=%u allocationRoot=%u routeDestHeld=%u markOrigin=%s",
-                         minorTotalRuns + 1, object, ti, ti == nullptr ? "<null>" : ti->GetName(), region,
-                         region->GetRegionStart(), static_cast<unsigned>(region->GetRegionType()),
-                         static_cast<unsigned>(region->IsYoungRegion()), static_cast<unsigned>(marked),
-                         static_cast<unsigned>(inMinorClosure), static_cast<unsigned>(allocationRoot),
-                         static_cast<unsigned>(routeDestHeld),
-                         inMinorClosure ? "minor-closure" : (marked ? "bitmap-preexisting-or-nonclosure" : "none"));
-                    ++diffSamples;
-                    ++classSamples;
-                }
-            }
-            bool missing = false;
-            if (useBitmap &&
-                !region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
-                missing = true;
-            }
-            if (requireMinorClosure && minorClosureSet.count(object) == 0) {
-                missing = true;
-            }
-            if (missing) {
-                ++missingYoung;
-            }
-        }
-    }
-
-    if (useIndependent && useBitmap) {
-        VLOG(REPORT,
-             "[GCV2][verify][young-marking-domain] run=%zu expectedAll=%zu expectedCandidate=%zu "
-             "expectedOffCandidate=%zu offCandidateMarked=%zu offCandidateMinorClosure=%zu "
-             "offCandidateAllocationRoot=%zu offCandidateRouteDestHeld=%zu samples=%zu",
-             minorTotalRuns + 1, expectedYoung.size(), expectedCandidateYoung, expectedOffCandidateYoung,
-             offCandidateMarked, offCandidateMinorClosure, offCandidateAllocationRoot,
-             offCandidateRouteDestHeld, diffSamples);
-    }
-
-    size_t matchCount = (actualYoung >= unexpectedYoung) ? (actualYoung - unexpectedYoung) : 0;
-    size_t expectedSize = useIndependent ? (useBitmap ? expectedCandidateYoung : expectedYoung.size()) : actualYoung;
-    VLOG(REPORT,
-         "[GCV2][verify][young-marking] run=%zu phase=post-trace kVerifyYoungMarking=1 "
-         "markSource=%s mark-equivalence=%zu/%zu missing=%zu unexpected=%zu "
-         "expectedAll=%zu expectedOffCandidate=%zu requireMinorClosure=%u",
-         minorTotalRuns + 1, VerifyMarkSourceName(markSource), matchCount, expectedSize, missingYoung,
-         unexpectedYoung, expectedYoung.size(), expectedOffCandidateYoung,
-         static_cast<unsigned>(requireMinorClosure));
-    if (markSource == VerifyMarkSource::IndependentRetrace || markSource == VerifyMarkSource::RegionMarkBitmap) {
-        // Single-source modes only report; cross-check needs two sides.
-        return;
-    }
-    CHECK_DETAIL(missingYoung == 0 && unexpectedYoung == 0 &&
-                     (!useIndependent || !useBitmap || actualYoung == expectedCandidateYoung),
-                 "minor marking differs from full marking: actualCandidate=%zu expectedCandidate=%zu "
-                 "expectedAll=%zu expectedOffCandidate=%zu missing=%zu unexpected=%zu markSource=%s",
-                 actualYoung, expectedCandidateYoung, expectedYoung.size(), expectedOffCandidateYoung,
-                 missingYoung, unexpectedYoung, VerifyMarkSourceName(markSource));
-}
-
 void WCollector::FlushAllocationRegions()
 {
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
@@ -780,24 +341,16 @@ void WCollector::DoYoungGarbageCollection()
     uint64_t start = TimeUtil::NanoSeconds();
     std::unique_ptr<ScopedStopTheWorld> stw =
         std::make_unique<ScopedStopTheWorld>("young prepare", false);
+    ZVerify::BeforeZOperation();
     // Full-colour gate: reject any plain HeapSlot before young mark mutates colours.
     // VM_ZMarkStartYoungAndOld / VM_ZMarkStartYoung (zGeneration.cpp:583-659).
     // A major starts old exactly once in this young pause. An independent
     // minor leaves the old cycle identity and mark color untouched.
     collectorResources.NoteYoungMarkStart();
     flip_young_mark_start();
+    ZVerify::OnColorFlip();
     StartYoungMarkWork();
 
-    // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
-    // ("young collection stw time N us"). Body timers below exclude that wait.
-    // Timeline probe (gcdirty): earliest STW point = mutator just handed control.
-    // force via POST_EVAC so we do not need global VERIFY_HEAP (avoids pre-evac side effects).
-    if (kVerifyPostEvac) {
-        VLOG(REPORT, "[GCV2][verify][post-evac] enter point=stw-enter run=%zu priorMinors=%zu",
-             minorTotalRuns + 1, minorTotalRuns);
-        VerifyHeapObjects("stw-enter");
-        VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
-    }
     {
         // minortime: ① FlushAllocationRegions
         MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
@@ -810,6 +363,7 @@ void WCollector::DoYoungGarbageCollection()
         oldCycle.Begin(request->asynchronous ? GCTask::ASYNC_TASK_INDEX : request->sequence);
         StartOldMarkWork();
         flip_old_mark_start();
+        ZVerify::OnColorFlip();
         // Reset the old mark face before young roots can publish old work.
         // ZGenerationOld::mark_start -> ZMark::start (zGeneration.cpp:1212-1237).
         reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
@@ -865,15 +419,6 @@ void WCollector::DoYoungGarbageCollection()
          static_cast<unsigned long long>(stats.recentFullNs), static_cast<unsigned long long>(stats.holdCheckNs),
          static_cast<unsigned long long>(stats.clearLiveNs), static_cast<unsigned long long>(stats.visitorNs),
          static_cast<unsigned long long>(stats.listMoveNs));
-    // HotSpot g1HeapVerifier.cpp:424 verify_region_sets placement: after region accounting is stable.
-    VerifyRegionSets("after-prepare-young");
-    // Region-set verify after candidate construction (HotSpot verify_region_sets placement intent).
-    if (kVerifyPostEvac) {
-        VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-prepare-young run=%zu",
-             minorTotalRuns + 1);
-        VerifyHeapObjects("post-prepare-young");
-        VLOG(REPORT, "[GCV2][verify][post-evac] point=post-prepare-young run=%zu", minorTotalRuns + 1);
-    }
     // Even an empty candidate set completes remembered scanning and clearing.
     // Otherwise the mark-start flip would leave previous unconsumed when the
     // next young collection reuses that bitmap (zRemembered.cpp:561-576).
@@ -912,6 +457,7 @@ void WCollector::DoYoungGarbageCollection()
         // CLEAR is the closing edge for ENUM writes: it flushes every mutator's
         // store buffer before the root pass follows published mark work.
         stw = std::make_unique<ScopedStopTheWorld>("young collection", false);
+        ZVerify::BeforeZOperation();
         TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
 
         // finish_processing semantics: under the closing STW first ask the GC
@@ -926,19 +472,13 @@ void WCollector::DoYoungGarbageCollection()
                 (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, true);
             }
         });
-        VerifyStackRootPostcondition(stackScanEpoch, "minor");
 
     }
 
     constexpr bool fullYoungScan = false;
     WorkStack workStack = NewWorkStack();
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                     VerifyMarkingStacks::MarkingBoundary::START,
-                                     VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size(), 0);
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                     VerifyMarkingStacks::MarkingBoundary::START,
-                                     VerifyMarkingStacks::MarkingContainer::POOL,
-                                     GetWorkers().GetSnapshot().remainingWorkers, 0);
+    MarkingStacks::VerifyEmpty(workStack.size());
+    MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
@@ -1128,6 +668,7 @@ void WCollector::DoYoungGarbageCollection()
 #endif
         stw = std::make_unique<ScopedStopTheWorld>("young mark terminate", true,
                                                    GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+        ZVerify::BeforeZOperation();
 #if defined(MRT_TESTABLE_INTERNALS)
         const size_t y2yBatchAtMarkEnd = pendingY2yDirtyWorkCount();
 #endif
@@ -1150,14 +691,8 @@ void WCollector::DoYoungGarbageCollection()
         NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
 #endif
         if (workersTerminated && markEndSucceeded) {
-            VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                             VerifyMarkingStacks::MarkingBoundary::END,
-                                             VerifyMarkingStacks::MarkingContainer::OWNER,
-                                             workStack.size(), 0);
-            VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                             VerifyMarkingStacks::MarkingBoundary::END,
-                                             VerifyMarkingStacks::MarkingContainer::POOL,
-                                             GetWorkers().GetSnapshot().remainingWorkers, 0);
+            MarkingStacks::VerifyEmpty(workStack.size());
+            MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteExportRootPublicationAtT2TestReceipt();
 #endif
@@ -1207,23 +742,6 @@ void WCollector::DoYoungGarbageCollection()
          static_cast<unsigned long long>(concWindow.windowNs), concWindow.MarkedInWindow(),
          concWindow.closureCalls, concWindow.remsetSlots,
          concWindow.reenters, concWindow.markedAtEntry, reachableVec.size());
-    // No independent full-root closure is available after deleting the empty
-    // explainer. nullptr means "not measured"; an empty set must mean a closure
-    // actually ran and found no holders.
-    VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, nullptr);
-
-    // Full-heap object invariant H (HotSpot G1HeapVerifier::verify inventory #10).
-    // Independent ForEachObj walk; gated by MRT_GCV2_VERIFY_HEAP (default off).
-    // Timeline (gcdirty): also force as post-mark under POST_EVAC so first-dirty bracketing
-    // does not require global VERIFY_HEAP.
-    if (kVerifyPostEvac) {
-        VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-        VerifyHeapObjects("post-mark", nullptr);
-        VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
-    } else {
-        VerifyHeapObjects("pre-evacuate", nullptr);
-    }
-
     size_t liveBytes = 0;
     TenuringInputs tenuringIn;
     tenuringIn.softMaxCapacity = Heap::GetHeap().GetMaxCapacity();
@@ -1245,17 +763,6 @@ void WCollector::DoYoungGarbageCollection()
         gcStats.liveByAge[i] = tenuringIn.liveByAge[i];
     }
     gcStats.tenuringThreshold = ComputeTenuringThreshold(tenuringIn);
-    if (fullYoungScan) {
-        // Run structural verify before mark-equivalence CHECK (may abort).
-        VerifyRegionSets("after-young-mark");
-    }
-    // Self-gated by kVerifyYoungMarking. Do not hide it behind fullYoungScan:
-    // FYS is compile-time false, and IndependentVsBitmap does not need FYS.
-    ValidateYoungMarking(reachableVec, allocationRoots);
-    // Always-available (gated) probe: full-heap independent reachability vs young-only bitmap.
-    // Runs with FULL_YOUNG_SCAN=0 so B2 path is exercised. Default off.
-    ProbeUnmarkedLive(allocationRoots, rememberedSlots);
-
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
@@ -1313,21 +820,6 @@ void WCollector::DoYoungGarbageCollection()
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;
-
-    // Post-evacuate invariant P (HotSpot VerifyAfterGC analog for young): after
-    // fix+forward+remset rebuild inside EvacuateYoungRegions, every live ref must
-    // still be a legal object (VerifyHeap H) and remset must cover old→young (R).
-    // Gate default off: kVerifyPostEvac. force=true so this does not
-    // require MRT_GCV2_VERIFY_HEAP/REMSET (avoids pre-evacuate side effects).
-    if (kVerifyPostEvac) {
-        VerifyHeapObjects("post-evacuate");
-        std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
-        VerifyRememberedSetInvariant("post-evacuate", remsetSnap);
-        VLOG(REPORT,
-             "[GCV2][verify][post-evac] point=post-evacuate run=%zu "
-             "kVerifyPostEvac=1 remsetSnap=%zu",
-             minorTotalRuns + 1, remsetSnap.size());
-    }
 
     // Residual Register and the remset walk now both complete in STW3, before
     // EvacuateYoungRegions retires the forwarding receipts. Then enter IDLE.

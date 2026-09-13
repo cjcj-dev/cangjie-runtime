@@ -15,9 +15,7 @@
 #include <unordered_set>
 
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Verify/VerifyHeap.h"
-#include "Heap/Verify/VerifyRegions.h"
-#include "Heap/Verify/VerifyRememberedSet.h"
+#include "Heap/Verify/ZVerify.h"
 #include "ObjectModel/RefField.inline.h"
 
 using namespace MapleRuntime;
@@ -62,63 +60,136 @@ void ExpectSceneAbort(const char* expectedDiagnostic, Fn&& fn)
     GC_EXPECT_TRUE(transcript.find(expectedDiagnostic) != std::string::npos);
 }
 
-RegionManager& InstallFixtureWalk(GcHeapFixture& fixture)
-{
-    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    manager.regionHeapStart = fixture.heapStart;
-    manager.inactiveZone = fixture.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE;
-
-    fixture.obj0 = fixture.PlaceObject(fixture.region0->GetRegionStart());
-    fixture.obj1 = fixture.PlaceObject(fixture.region1->GetRegionStart());
-    fixture.region0->SetRegionAllocPtr(fixture.region0->GetRegionStart() + fixture.obj0->GetSize());
-    fixture.region1->SetRegionAllocPtr(fixture.region1->GetRegionStart() + fixture.obj1->GetSize());
-    return manager;
-}
-
-HeapSlot<>& ObjectField(BaseObject* object)
-{
-    return HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-}
-
-GC_OTHER_VM_TEST(VerifyFailClose, HeapBadTargetReachesSceneAssertion)
-{
-    ExpectSceneAbort("[GCV2][verify][heap] scene failed", [] {
-        (void)setenv("MRT_GCV2_VERIFY_HEAP", "1", 1);
-        GcHeapFixture fixture;
-        (void)InstallFixtureWalk(fixture);
-        BaseObject* invalidTarget = reinterpret_cast<BaseObject*>(
-            fixture.heapStart + 2 * RegionInfo::UNIT_SIZE + 64);
-        ObjectField(fixture.obj0).StoreColoured(StoreGoodPointer(invalidTarget));
-        VerifyHeapObjects("gc-unit-bad-target");
-    });
-}
-
-GC_OTHER_VM_TEST(VerifyFailClose, MissingRemsetReachesSceneAssertion)
-{
-    ExpectSceneAbort("[GCV2][verify][remset] scene failed", [] {
-        (void)setenv("MRT_GCV2_DIAG", "remembered", 1);
-        GcHeapFixture fixture;
-        (void)InstallFixtureWalk(fixture);
-        fixture.region0->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
-        fixture.region1->SetYoungRegionFlag(1);
-        ObjectField(fixture.obj0).StoreColoured(StoreGoodPointer(fixture.obj1));
-        const std::unordered_set<MAddress> emptyRemset;
-        VerifyRememberedSetInvariant("gc-unit-missing-remset", emptyRemset);
-    });
-}
-
-GC_OTHER_VM_TEST(VerifyFailClose, MissingRegionCandidateReachesSceneAssertion)
-{
-    ExpectSceneAbort("[GCV2][verify][regions] scene failed", [] {
-        (void)setenv("MRT_GCV2_VERIFY_REGIONS", "1", 1);
-        GcHeapFixture fixture;
-        RegionManager& manager = InstallFixtureWalk(fixture);
-        fixture.region0->SetYoungRegionFlag(1);
-        manager.fromRegionList.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-        const VerifyRegions::CandidateSet emptyCandidates;
-        VerifyRegions::VerifyAfterPrepareYoung(
-            manager, emptyCandidates, 1, "gc-unit-missing-candidate");
-    });
-}
-
 } // namespace
+
+// zVerify.cpp:119-128 / zAddress.inline.hpp:505-522: illegal addresses are
+// rejected before metadata access; no region inventory or scene counters.
+GC_OTHER_VM_TEST(ZVerify, RejectsColoredAddressWithoutUncoloring)
+{
+    GcHeapFixture fixture;
+    const uintptr_t colored = reinterpret_cast<uintptr_t>(fixture.obj0) | ZPointerRemapped00;
+    ExpectSceneAbort("Bad object", [&] {
+        ZVerify::Object(reinterpret_cast<BaseObject*>(colored), &colored);
+    });
+    ZVerify::Object(fixture.obj0, &fixture.obj0);
+}
+
+GC_OTHER_VM_TEST(ZVerify, RejectsUnmanagedAddress)
+{
+    GcHeapFixture fixture;
+    ExpectSceneAbort("Bad object", [&] {
+        ZVerify::Object(reinterpret_cast<BaseObject*>(0x1000), nullptr);
+    });
+    ZVerify::Object(fixture.obj0, &fixture.obj0);
+}
+
+GC_OTHER_VM_TEST(ZVerify, RememberedCurrentAndPreviousFaces)
+{
+    GcHeapFixture fixture;
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    remset.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
+    remset.Record(slot);
+    GC_EXPECT_TRUE(remset.Contains(slot));
+    GC_EXPECT_FALSE(remset.ContainsPrevious(slot));
+    GC_EXPECT_FALSE(remset.IsClearInRange(fixture.heapStart, RegionInfo::UNIT_SIZE, true));
+    remset.FlipForMinor();
+    GC_EXPECT_FALSE(remset.Contains(slot));
+    GC_EXPECT_TRUE(remset.ContainsPrevious(slot));
+    GC_EXPECT_TRUE(remset.IsClearInRange(fixture.heapStart, RegionInfo::UNIT_SIZE, true));
+}
+
+// test_zForwarding.cpp:ZForwardingTest.find_full plus zForwarding.cpp:369-409.
+GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
+{
+    GcHeapFixture fixture;
+    fixture.region0->SetYoungRegionFlag(0);
+    fixture.region1->SetYoungRegionFlag(0);
+    LiveInfo* live = fixture.PlantLiveInfo(fixture.region0);
+    (void)fixture.PlantMarkBitmap<Generation::Old>(live, fixture.region0->GetRegionSize());
+    (void)RegionSpace::MarkObject<Generation::Old>(fixture.obj0);
+    fixture.region0->PrepareForwardableRegion(fixture.region0->GetMarkView<Generation::Old>());
+    auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
+        fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication,
+        reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
+        reinterpret_cast<MAddress>(fixture.obj1));
+    auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
+    GC_EXPECT_TRUE(static_cast<bool>(owner));
+    owner->verify();
+    ExpectSceneAbort("Invalid forwarding live objects or bytes", [&] {
+        fixture.region0->AddLiveCounts(1, RegionSpace::GetAllocSize(*fixture.obj0));
+        owner->verify();
+    });
+    owner->verify();
+}
+
+// zVerify.cpp:531-609: the source field must be represented in the active
+// remembered face. This exercises the actual verifier, not just bitmap reads.
+GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
+{
+    if (!ZVerifyRemembered) {
+        GC_EXPECT_EQ(setenv("ZVerifyRemembered", "1", 1), 0);
+        RunInOtherVm("ZVerify.BeforeRelocationRejectsMissingRememberedField");
+        return;
+    }
+    GcHeapFixture fixture;
+    fixture.region0->SetYoungRegionFlag(0);
+    fixture.region1->SetYoungRegionFlag(0);
+    LiveInfo* live = fixture.PlantLiveInfo(fixture.region0);
+    (void)fixture.PlantMarkBitmap<Generation::Old>(live, fixture.region0->GetRegionSize());
+    (void)RegionSpace::MarkObject<Generation::Old>(fixture.obj0);
+    fixture.region0->PrepareForwardableRegion(fixture.region0->GetMarkView<Generation::Old>());
+    auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
+        fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
+    GC_EXPECT_TRUE(static_cast<bool>(owner));
+    const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
+    HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    remset.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner.get()); });
+    remset.Record(slot);
+    if (!Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
+    ZVerify::BeforeRelocation(owner.get());
+}
+
+// zVerify.cpp:131-138 distinguishes raw null from metadata-bearing null.
+GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
+{
+    GcHeapFixture fixture;
+    auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
+    cycle.PublishPhase(GC_PHASE_TRACE);
+    RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(zpointer::null);
+    ExpectSceneAbort("Raw null requires young mark complete", [&] {
+        ZVerify::Oop(fixture.obj0, field, false);
+    });
+    // Weak-inclusive nulls have no raw-null restriction in zVerify.
+    ZVerify::Oop(fixture.obj0, field, true);
+    field.StoreColoured(to_zpointer(::g_cjStoreGoodMask));
+    ZVerify::Oop(fixture.obj0, field, false);
+}
+
+GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
+{
+    GcHeapFixture fixture;
+    auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
+    cycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+    RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(zpointer::null);
+    // Capture a watermark after this holder was allocated.
+    fixture.region0->ClearLiveInfo(fixture.region0->GetMarkView<Generation::Old>());
+    ExpectSceneAbort("Raw null requires allocating holder", [&] {
+        ZVerify::Oop(fixture.obj0, field, false);
+    });
+    // An object at the captured watermark is allocated after mark start.
+    const MAddress next = fixture.region0->GetMarkStartAllocPtr();
+    BaseObject* fresh = fixture.PlaceObject(next);
+    fixture.region0->SetRegionAllocPtr(next + 64);
+    RefField<>& freshField = HeapSlotAt<>(next + TYPEINFO_PTR_SIZE);
+    freshField.StoreColoured(zpointer::null);
+    ZVerify::Oop(fresh, freshField, false);
+}

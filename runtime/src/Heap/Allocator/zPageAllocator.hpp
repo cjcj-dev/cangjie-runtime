@@ -40,7 +40,6 @@
 namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
-class VerifyRegions;
 class WCollector;
 template<Generation G>
 class ForwardTask;
@@ -138,7 +137,6 @@ public:
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 class RegionManager {
-    friend class VerifyRegions;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
     friend struct IsFromRegTestAccess;
