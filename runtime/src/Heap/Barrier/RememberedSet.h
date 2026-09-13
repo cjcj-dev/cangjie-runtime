@@ -138,7 +138,7 @@ private:
     // the from range — CollectRegion → ClearRegion scrubs the whole from region.
     // Returns the number of bits recorded at to-addresses (0 if fromBase==toBase).
     size_t TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size,
-                               ZForwarding* forwarding = nullptr, bool youngMarking = false);
+                               ZForwarding* forwarding = nullptr);
     size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
     uint8_t BeginFullClear();
     size_t FinishFullClear(uint8_t scanBuffer);

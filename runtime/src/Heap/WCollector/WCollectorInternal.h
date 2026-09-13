@@ -19,7 +19,6 @@
 namespace MapleRuntime {
 namespace WCollectorInternal {
 
-WCOLLECTOR_INTERNAL_HIDDEN bool NullslotProbeEnabled();
 WCOLLECTOR_INTERNAL_HIDDEN void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source);
 WCOLLECTOR_INTERNAL_HIDDEN void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStack,
                                                   const char* origin, const void* slot = nullptr,
@@ -31,30 +30,8 @@ WCOLLECTOR_INTERNAL_HIDDEN void PushAdmittedYoung(const MarkStackEntry& entry,
 WCOLLECTOR_INTERNAL_HIDDEN bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix,
                                                     bool holderIsCurrentMinorRoot = false);
 
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_nullslotF3;
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_nullslotResolve;
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_nullslotRemset;
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_nullslotResolveRoot;
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_resolveRootEntry;
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_resolveRootOld;
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_resolveRootHealNull;
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_fixMinorRootSlotsCalls;
-// Post-lifecycle forwarding observation on concurrent soft-resolve paths: the
-// carrier retired between slot observation and FindToVersion. Counted, never
-// dereferenced, never CAS-null (zGeneration.cpp:1341-1353 unlink/handshake pair
-// has no equivalent handshake on these paths).
-extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_findtoPostLifecycleSoft;
-
 WCOLLECTOR_INTERNAL_HIDDEN bool HolderObjectIsLive(BaseObject* holder);
 WCOLLECTOR_INTERNAL_HIDDEN bool SlotHeldByLiveObject(const void* slot);
-WCOLLECTOR_INTERNAL_HIDDEN void NoteNullslotWrite(const char* path, BaseObject* holder, void* field,
-                                                 BaseObject* from, BaseObject* latest,
-                                                 std::atomic<size_t>* pathCount);
-WCOLLECTOR_INTERNAL_HIDDEN const char* ClassifyRootLiveFail(BaseObject* obj, RegionInfo* region);
-WCOLLECTOR_INTERNAL_HIDDEN void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to,
-                                                   RegionInfo* fromRegion, RegionInfo* toRegion,
-                                                   const char* toWhy, const char* fromWhy);
-
 template <typename SetT, typename KeyT>
 bool LedgerInsert(SetT& set, const KeyT& key)
 {
