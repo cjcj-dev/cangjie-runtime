@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
 
 #include <array>
@@ -1287,6 +1288,10 @@ void WCollector::DoYoungGarbageCollection()
         space.GetRegionManager().HandleTraceRegions();
         // zGeneration.cpp:563 / :699-701: after this young mark_end, reset
         // the previous young relocation set. Independent of old remap.
+        StringDedup::Instance().Clean([this](BaseObject* object) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            return !region->IsYoungRegion() || IsMarkedObject<Generation::Young>(object);
+        });
         ForwardingTable::ResetRelocationSet(Generation::Young);
     }
 

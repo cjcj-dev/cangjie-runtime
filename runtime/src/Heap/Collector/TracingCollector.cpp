@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Heap/Collector/StringDedup.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/MarkStripe.h"
 #include "TracingCollector.h"
@@ -853,6 +854,10 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     // Process the discovered references after the finalizable closure, before
     // relocation-set processing (zGeneration.cpp:1330-1335).
     ProcessFinalizers();
+    StringDedup::Instance().Clean([this](BaseObject* object) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        return region->IsYoungRegion() || IsMarkedObject<Generation::Old>(object);
+    });
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     // A serial driver and synchronous GCWorkers::Run have already joined GC
     // work here; mutators (including the finalizer thread) need a rendezvous.

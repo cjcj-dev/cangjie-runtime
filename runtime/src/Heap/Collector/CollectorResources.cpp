@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Collector/StringDedup.h"
 #include "CollectorResources.h"
 
 #include <algorithm>
@@ -115,6 +116,7 @@ void CollectorResources::Init()
     statistics.Start();
     StartGCThreads();
     finalizerProcessor.Start();
+    StringDedup::Instance().Start();
     if (Uncommitter::Enabled()) {
         LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus",
             static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND));
@@ -149,6 +151,7 @@ void CollectorResources::StopGCWork()
     majorDriverPort.Stop();
     TerminateGCTask();
     StopGCThreads();
+    StringDedup::Instance().Stop();
     statistics.Stop();
 }
 
@@ -402,6 +405,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     }
     MRT_ASSERT(!driverRequestActive, "nested driver request lifecycle");
     driverRequestActive = true;
+    StringDedup::GCScope suspendDedup;
     const uint64_t collectionStart = TimeUtil::NanoSeconds();
 
     // Set the request's generation budgets before mark-start can consume

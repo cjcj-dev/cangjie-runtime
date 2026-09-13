@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 
@@ -657,6 +658,7 @@ void WCollector::Preforward()
         std::atomic<unsigned>& next;
     } roots(static_cast<WCollector&>(*this), next);
     workers.Run(roots);
+    StringDedup::Instance().Remap();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-preforward");
@@ -1631,6 +1633,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             manager.FinishIncompleteFromRegions();
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
+        StringDedup::Instance().Remap();
         postEvacPoint("post-forward-pre-reclaim", true);
         {
             MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
@@ -1733,6 +1736,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
 
     }
+
+        // zRelocate.cpp:1272: also request backing on flip/in-place promotion.
+        for (BaseObject* from : reachableVec) {
+            const MAddress mapped = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from), Generation::Young);
+            BaseObject* object = mapped == 0 ? from : reinterpret_cast<BaseObject*>(mapped);
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (!region->IsYoungRegion()) StringDedup::Instance().Request(object);
+        }
 
     // ZRelocateAddRemsetForFlipPromoted runs after STW3 release, still in FORWARD.
     // Keep the forwarding receipts alive across this concurrent walk: a short retire
@@ -2457,6 +2468,10 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
         rememberedSet.TransferObjectSlots(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to), sz,
                                           forwarding);
         return;
+    }
+    // zRelocate.cpp:817: only newly promoted backing becomes a request.
+    if (fromRegion != nullptr && fromRegion->IsYoungRegion()) {
+        StringDedup::Instance().Request(to);
     }
     if (!to->HasRefField()) {
         return;
