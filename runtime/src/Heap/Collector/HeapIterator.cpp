@@ -8,9 +8,12 @@
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
-void HeapIterator::Push(BaseObject* object)
+void HeapIterator::Push(BaseObject* object, const ObjectVisitor& objectVisitor)
 {
     if (object != nullptr && visited.insert(object).second) {
+        // zHeapIterator.cpp:329-339,421-428: verify at discovery so the
+        // field visitor still describes the edge which reached this object.
+        if (forVerify) { objectVisitor(object); }
         stack.push_back(object);
     }
 }
@@ -29,7 +32,7 @@ void HeapIterator::Fields(BaseObject* object, bool visitReferents, const FieldVi
     });
 }
 
-void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const FieldVisitor& fieldVisitor)
+void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
@@ -37,13 +40,16 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const FieldVisito
     stack.clear();
     auto& collector = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
     NativeSlotVisitor colored = [&](NativeSlot& root) {
-        if (fieldVisitor) { fieldVisitor(nullptr, root); }
+        if (fieldVisitor) { fieldVisitor(nullptr, &root, raw(root.GetFieldValue())); }
         // Strong loads only remap/heal: no keepalive marking during inspection.
-        Push(Heap::GetBarrier().ReadStaticRef(root));
+        Push(Heap::GetBarrier().ReadStaticRef(root), objectVisitor);
     };
     collector.VisitStrongColoredRoots(colored);
     if (visitWeaks) { collector.VisitWeakColoredRoots(colored); }
-    RootVisitor plain = [&](ObjectRef& root) { Push(Heap::GetBarrier().ReadPlainRoot(root)); };
+    RootVisitor plain = [&](ObjectRef& root) {
+        if (fieldVisitor) { fieldVisitor(nullptr, &root, raw(root.LoadPlain())); }
+        Push(Heap::GetBarrier().ReadPlainRoot(root), objectVisitor);
+    };
     collector.VisitStrongPlainRoots(plain, [&](Mutator& mutator) {
         // Complete root processing for graph traversal, after ZVerify's raw-root
         // checks. VisitMutatorRoots enumerates the complete stack and non-frame roots.
@@ -53,10 +59,12 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const FieldVisito
         BaseObject* object = stack.back();
         stack.pop_back();
         DCHECK(object->IsValidObject());
-        objectVisitor(object);
+        // Inspection callbacks run after root enumeration, avoiding lock
+        // ordering between root registries and the inspecting consumer.
+        if (!forVerify) { objectVisitor(object); }
         Fields(object, visitWeaks, [&](BaseObject* base, RefField<>& field) {
-            if (fieldVisitor) { fieldVisitor(base, field); }
-            Push(Heap::GetBarrier().ReadReference(base, field));
+            if (fieldVisitor) { fieldVisitor(base, &field, raw(field.GetFieldValue())); }
+            Push(Heap::GetBarrier().ReadReference(base, field), objectVisitor);
         });
     }
 }

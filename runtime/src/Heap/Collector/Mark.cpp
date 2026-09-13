@@ -645,7 +645,6 @@ void WCollector::TraceHeap()
             // not started; this is the last point at which an incomplete stack-root
             // receipt can be reported before any mark-closure work consumes the roots.
             DoEnumeration(workStack, foreignStack);
-            VerifyStackRootPostcondition(stackScanEpoch, "major");
 
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {

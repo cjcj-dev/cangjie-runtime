@@ -98,3 +98,29 @@ GC_OTHER_VM_TEST(ZVerify, RememberedCurrentAndPreviousFaces)
     GC_EXPECT_TRUE(remset.ContainsPrevious(slot));
     GC_EXPECT_TRUE(remset.IsClearInRange(fixture.heapStart, RegionInfo::UNIT_SIZE, true));
 }
+
+// test_zForwarding.cpp:ZForwardingTest.find_full plus zForwarding.cpp:369-409.
+GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
+{
+    GcHeapFixture fixture;
+    fixture.region0->SetYoungRegionFlag(0);
+    fixture.region1->SetYoungRegionFlag(0);
+    LiveInfo* live = fixture.PlantLiveInfo(fixture.region0);
+    (void)fixture.PlantMarkBitmap<Generation::Old>(live, fixture.region0->GetRegionSize());
+    (void)RegionSpace::MarkObject<Generation::Old>(fixture.obj0);
+    fixture.region0->PrepareForwardableRegion(fixture.region0->GetMarkView<Generation::Old>());
+    auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
+        fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication,
+        reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
+        reinterpret_cast<MAddress>(fixture.obj1));
+    auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
+    GC_EXPECT_TRUE(static_cast<bool>(owner));
+    owner->verify();
+    ExpectSceneAbort("Invalid forwarding live objects or bytes", [&] {
+        fixture.region0->AddLiveCounts(1, RegionSpace::GetAllocSize(*fixture.obj0));
+        owner->verify();
+    });
+    owner->verify();
+}

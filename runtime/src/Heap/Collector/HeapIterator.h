@@ -16,12 +16,14 @@ class HeapIterator {
 public:
     using ObjectVisitor = std::function<void(BaseObject*)>;
     using FieldVisitor = std::function<void(BaseObject*, RefField<>&)>;
-    explicit HeapIterator(bool visitWeaks) : visitWeaks(visitWeaks) {}
-    void Iterate(const ObjectVisitor& objectVisitor, const FieldVisitor& fieldVisitor = {});
+    using EdgeVisitor = std::function<void(BaseObject*, const void*, uintptr_t)>;
+    explicit HeapIterator(bool visitWeaks, bool forVerify = false) : visitWeaks(visitWeaks), forVerify(forVerify) {}
+    void Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor = {});
     static void Fields(BaseObject* object, bool visitReferents, const FieldVisitor& visitor);
 private:
-    void Push(BaseObject* object);
+    void Push(BaseObject* object, const ObjectVisitor& objectVisitor);
     const bool visitWeaks;
+    const bool forVerify;
     std::unordered_set<BaseObject*> visited;
     std::vector<BaseObject*> stack;
 };

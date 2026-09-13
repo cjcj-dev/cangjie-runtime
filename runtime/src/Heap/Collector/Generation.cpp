@@ -331,49 +331,6 @@ ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt()
 }
 
 #endif
-namespace {
-bool VerifyStackRootPostconditionEnabled()
-{
-    static const bool on = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return on;
-}
-} // namespace
-
-namespace WCollectorInternal {
-void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source)
-{
-    if (!VerifyStackRootPostconditionEnabled()) {
-        return;
-    }
-
-    size_t checked = 0;
-    size_t incomplete = 0;
-    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
-        ++checked;
-        StackWatermark& watermark = mutator.GetStackWatermark();
-        if (watermark.IsDone(stackScanEpoch)) {
-            return;
-        }
-        ++incomplete;
-        LOG(RTLOG_ERROR,
-            "[GCV2][verify][stack-roots-complete] INCOMPLETE source=%s epoch=%llu mutator=%p tid=%u cjthread=%p "
-            "managed=%d saferegion=%d wm_epoch=%llu phase=%u owner=%u cursor=%zu frames=%zu "
-            "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
-            source, static_cast<unsigned long long>(stackScanEpoch), &mutator, mutator.GetTid(),
-            mutator.GetCjthreadPtr(), mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
-            static_cast<unsigned long long>(watermark.GetEpoch()), static_cast<unsigned>(watermark.GetPhase()),
-            static_cast<unsigned>(watermark.GetOwner()), watermark.GetCursorIndex(), watermark.GetFrameCount());
-    });
-    LOG(RTLOG_ERROR,
-        "[GCV2][verify][stack-roots-complete] SUMMARY source=%s epoch=%llu checked=%zu incomplete=%zu "
-        "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
-        source, static_cast<unsigned long long>(stackScanEpoch), checked, incomplete);
-}
-} // namespace WCollectorInternal
-
 void WCollector::FlushAllocationRegions()
 {
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
@@ -515,7 +472,6 @@ void WCollector::DoYoungGarbageCollection()
                 (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, true);
             }
         });
-        VerifyStackRootPostcondition(stackScanEpoch, "minor");
 
     }
 

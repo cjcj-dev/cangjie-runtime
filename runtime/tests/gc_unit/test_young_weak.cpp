@@ -756,6 +756,15 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
         ScopedStopTheWorld stw("heap iterator test", false);
         HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
         HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
+        const void* edge = nullptr;
+        bool visitedReferent = false;
+        HeapIterator(true, true).Iterate([&](BaseObject* object) {
+            if (object == graph.referent) {
+                GC_EXPECT_TRUE(edge == &WeakGraph::Field(graph.weak));
+                visitedReferent = true;
+            }
+        }, [&](BaseObject*, const void* slot, uintptr_t) { edge = slot; });
+        GC_EXPECT_TRUE(visitedReferent);
     }
     Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);

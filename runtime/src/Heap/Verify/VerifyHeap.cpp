@@ -13,6 +13,7 @@
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
+namespace { BaseObject* brokenObject = nullptr; }
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
 void VerifyAccessedOop(zaddress address)
 {
@@ -88,23 +89,30 @@ void ZVerify::Objects(bool verifyWeaks)
     const auto young = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const auto old = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
     DCHECK(young.phase == GC_PHASE_MARK_COMPLETE || old.phase == GC_PHASE_MARK_COMPLETE);
-    bool broken = false;
-    HeapIterator iterator(verifyWeaks);
+    BaseObject* visitedBase = nullptr;
+    const void* visitedSlot = nullptr;
+    uintptr_t visitedValue = 0;
+    HeapIterator iterator(verifyWeaks, true);
     iterator.Iterate([&](BaseObject* object) {
         Object(object, nullptr);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (region->IsYoungRegion()) { return; }
         if (!RegionSpace::IsMarkedObject<Generation::Old>(object) && !RegionSpace::IsResurrectedObject(object)) {
-            LOG(RTLOG_ERROR, "ZVerify found non-live object: %p", object);
-            broken = true;
+            LOG(RTLOG_ERROR, "ZVerify found non-live object: %p at %p value=%#zx from=%p",
+                object, visitedSlot, visitedValue, visitedBase);
+            if (brokenObject == nullptr) { brokenObject = object; }
             return;
         }
         HeapIterator::Fields(object, verifyWeaks, [&](BaseObject* base, RefField<>& field) {
             Oop(base, field, verifyWeaks);
         });
+    }, [&](BaseObject* base, const void* slot, uintptr_t value) {
+        visitedBase = base;
+        visitedSlot = slot;
+        visitedValue = value;
     });
     // zVerify.cpp:504 asserts the accumulated old-mark result; the later weak
     // verification logs any non-live reachable objects without this assertion.
-    if (!verifyWeaks) { CHECK_DETAIL(!broken, "Object verification failed"); }
+    if (!verifyWeaks) { CHECK_DETAIL(brokenObject == nullptr, "Object verification failed"); }
 }
 } // namespace MapleRuntime
