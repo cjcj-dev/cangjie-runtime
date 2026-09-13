@@ -77,26 +77,7 @@ public:
         SNAPSHOT_LOST,
     };
 
-    // holderlive (F2): the only object-level holder-liveness filter we have reads
-    // GetRetainedLiveInfoState() at WCollector.cpp:3579 and measured NEVER_EXAMINED for
-    // 100% of holders (never=2787/originFound=2787 per minor). NEVER_EXAMINED has three
-    // distinct producers and the state word cannot tell them apart:
-    //   - nobody ever called Preserve* on this region during its current life,
-    //   - Preserve* ran but had no live info to keep (it writes NEVER_EXAMINED itself),
-    //   - Preserve* ran and stored a snapshot, then a clear path wiped it
-    //     (SNAPSHOT_LOST, which is now distinguishable from NEVER_EXAMINED).
-    // These counters name which one happened. Maintained unconditionally (three stores on
-    // cold region-lifecycle paths); read only under MRT_GCV2_RETLIVE_PROBE.
-    enum RetainedOp : uint8_t {
-        RETAINED_OP_NONE = 0,
-        RETAINED_OP_PRESERVE_VALID = 1,
-        RETAINED_OP_PRESERVE_EMPTY = 2,
-        RETAINED_OP_PRESERVE_NEVER = 3,
-        RETAINED_OP_CLEAR_CHECKED = 4,
-        RETAINED_OP_CLEAR_ALL = 5,       // ClearLiveInfo (RegionInfo.h:1297)
-        RETAINED_OP_CLEAR_RANGE = 6,
-        RETAINED_OP_COUNT = 7,
-    };
+
 
     unsigned RelocateObserve() const;
 
@@ -305,11 +286,8 @@ public:
 
     void FreeRetainedMarkWords();
 
-    uint32_t GetRetainedPreserveCount() const;
 
-    uint32_t GetRetainedClearCount() const { return metadata.retainedClearCnt; }
 
-    uint8_t GetRetainedLastOp() const { return metadata.retainedLastOp; }
 
     // A Preserve attempt replaces the previous publication.  Keep the
     // monotonic history armed, but invalidate the carrier until this attempt
@@ -338,8 +316,6 @@ public:
     // successful publication arms the monotonic bit and carrier stamp.
     ALWAYS_INLINE void NoteRetainedPreserve(bool succeeded);
 
-    // holderlive (F2): a clear only destroys information if there was a snapshot to destroy.
-    ALWAYS_INLINE void NoteRetainedClear(RetainedOp op);
 
     bool IsRetainedSnapshotValid() const;
 
@@ -372,21 +348,14 @@ public:
         return GetOwnerGeneration() == G;
     }
 
-    static bool PageOwnerVerifyCountOnly();
 
-    static std::atomic<size_t>& PageOwnerMismatchAttempts();
 
-    static std::atomic<size_t>& PageOwnerMismatchFirstPaints();
 
-    static void ReportPageOwnerVerifyCounts();
 
-    static void EnsurePageOwnerVerifyAtexit();
 
     template<Generation G>
     void VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const;
 
-    template<Generation G>
-    void NotePageOwnerFirstPaint() const;
 
     // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
     // MarkBits returns true if already marked; false on first paint. AddLive only then.
@@ -424,12 +393,6 @@ public:
 
     bool IsResurrectedObject(size_t offset);
 
-    // markepoch: count reads of a LiveInfo whose markEpoch != region snapshotEpoch.
-    // Default product still returns false (same as "no bit"); MRT_GCV2_MARK_EPOCH_ASSERT=1 aborts.
-    // Design: ops/design/MARK_EPOCH_DISCIPLINE.md §5 (ZGC zLiveMap.inline.hpp:41-43).
-    // Hot path: epoch match is load+cmp only (no atomic). Stale path always counts.
-    static std::atomic<size_t> markEpochStaleReadCount;
-    static std::atomic<bool> markEpochAtexitInstalled;
 
 
     // cjpmnull2: ZGC empty = this-cycle marked ∧ live==0. Epoch mismatch / no face
@@ -441,9 +404,7 @@ public:
     static std::atomic<size_t> ikeEpochKeep;
     static std::atomic<bool> ikeAtexitInstalled;
 
-    static void ReportMarkEpochCounts(const char* point);
 
-    static void EnsureMarkEpochAtexit();
 
     // Returns false if face is stale (counts as unmarked). true ⇒ epoch matches; caller checks bits.
     template<Generation G>
@@ -717,8 +678,6 @@ public:
         return dispelGhostCount.load(std::memory_order_relaxed);
     }
 
-    // Positive control only (MRT_GCV2_REFFIX_INJECT_DISPEL=1): bump without real dispel.
-    static void InjectDispelCountForTest();
 
     void ClearGhostFromRegionBits();
 
@@ -1044,15 +1003,9 @@ private:
     ALWAYS_INLINE void CheckObjectSize(
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const;
 
-    // Cold path for tip ∈ heap. Reuses Heap::IsHeapAddress (CheckTypeInfoRegion rule 3 body);
-    // does not reimplement the full VERIFY_HEAP channel (stats / misaligned / ContainsAddress).
-    ATTR_COLD ATTR_NO_INLINE void ReportTypeInfoInHeap(const BaseObject* obj, TypeInfo* tip, size_t objSize,
-                                                       MAddress regionStart, MAddress regionEnd) const;
-
     NO_RETURN ATTR_COLD ATTR_NO_INLINE void ReportInvalidObjectSize(
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const;
 
-    static std::atomic<size_t> tipInHeapHits;
 
     static std::atomic<size_t> youngRegionCount;
     static std::mutex youngRegionFlagMutex;
@@ -1105,18 +1058,15 @@ private:
         uint64_t retainedLiveInfoEpoch = 0;
         MAddress retainedLiveInfoCoveredUpTo = 0;
         RegionLifeId retainedLifeId = 0;
-        // holderlive (F2): per-region-life history of the three fields above. Reset by
-        // InitRegionInfo so "preserve count 0" means "never preserved in this life", not
-        // "never preserved since boot".
+        // First-paint publication state; reset by InitRegionInfo.
+        // Only FORWARDING_FACE_RESET_BIT is used.
         uint32_t retainedPreserveCnt = 0;
-        uint32_t retainedClearCnt = 0;
-        uint8_t retainedLastOp = RETAINED_OP_NONE;
         uint8_t regionLifeSequence = 0;
         // Borrow the immutable forwarding identity. Its owner reference is
         // released at the page lifecycle boundary, never reset in place.
         std::atomic<ZForwarding*> fwdOwner{ nullptr };
-        // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
-        // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
+        // Owned retained mark bits (mark | resurrect).
+        // Freed by ClearLiveInfo / InitRegionInfo.
         uint64_t* retainedMarkWords = nullptr;
         uint32_t retainedMarkWordCnt = 0;
         // In-flight copiers that hold LOCKED (TryLock success → Unlock). Fills the

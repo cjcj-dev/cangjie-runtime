@@ -381,21 +381,5 @@ private:
     uint8_t unavailableGcPhase;
 };
 
-// c4unify MASKEQUIV: dual-run the published bad masks against a verbatim copy of the literal
-// expressions WCollector::set_good_masks carried before the formula was lifted into
-// ColourMask.h::ComputeBadMasks, and count divergences. Same three-piece shape as GATEEQUIV
-// (Collector.cpp:109-146), deliberately: MRT_GCV2_MASKEQUIV=1 arms it, and
-// MRT_GCV2_MASKEQUIV_INJECT=1 forces exactly one synthetic divergence so that "the probe never
-// ran" is distinguishable from "there was no divergence". Default off; the entry point returns
-// immediately when unarmed, so the product path publishes the same words it always did
-// (storegood2 adds StoreGood next to StoreBad; the check covers that pair too).
-//
-// What this covers that the compile-time table cannot: which value each flip actually publishes,
-// and in what order. What neither covers: a flip that forgets to call set_good_masks at all.
-bool MaskEquivOn();
-bool MaskEquivInjectOn();
-void MaskEquivCheck(const EpochColours& e, const BadMasks& m);
-void MaskEquivAtexitReport();
-
 // Central garbage identification algorithm.
 }

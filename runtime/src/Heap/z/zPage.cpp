@@ -66,8 +66,6 @@ std::atomic<size_t> youngRegionBytes{ 0 };
 }
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 
-std::atomic<size_t> RegionInfo::markEpochStaleReadCount { 0 };
-std::atomic<bool> RegionInfo::markEpochAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::ikeTrueEmpty { 0 };
 std::atomic<size_t> RegionInfo::ikeConservativeKeep { 0 };
 std::atomic<size_t> RegionInfo::ikeConservativeKeepBytes { 0 };
@@ -77,7 +75,6 @@ std::atomic<bool> RegionInfo::ikeAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::liveCrossMismatchCount { 0 };
 std::atomic<size_t> RegionInfo::liveCrossCheckCount { 0 };
 std::atomic<bool> RegionInfo::liveCrossAtexitInstalled { false };
-std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
 
 std::mutex RegionInfo::youngRegionFlagMutex;
 void RegionInfo::SetYoungRegionFlag(uint8_t flag)

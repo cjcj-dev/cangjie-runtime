@@ -446,11 +446,7 @@ inline void RegionInfo::FreeRetainedMarkWords()
         metadata.retainedMarkWordCnt = 0;
     }
 
-inline uint32_t RegionInfo::GetRetainedPreserveCount() const
-    {
-        return __atomic_load_n(&metadata.retainedPreserveCnt, __ATOMIC_ACQUIRE) &
-            ~FORWARDING_FACE_RESET_BIT;
-    }
+
 
 inline void RegionInfo::PreserveRetainedLiveInfo()
     {
@@ -559,37 +555,16 @@ inline ALWAYS_INLINE void RegionInfo::PreserveRetainedLiveInfo(MAddress coveredU
 
 inline ALWAYS_INLINE void RegionInfo::NoteRetainedPreserve(bool succeeded)
     {
-        // The high bits share this word with first-paint publication. Marking
-        // may publish from multiple workers, so keep the counter increment in
-        // the same atomic modification order instead of losing either flag.
-        (void)__atomic_fetch_add(&metadata.retainedPreserveCnt, 1U, __ATOMIC_ACQ_REL);
         if (succeeded) {
             metadata.retainedEverPreserved = 1;
             // Publish last: an acquiring reader that accepts this life also
             // observes the retained pointer/owned words and covered boundary.
             StampRetainedSnapshot();
         }
-        switch (GetRetainedLiveInfoState()) {
-            case RetainedLiveInfoState::SNAPSHOT_VALID:
-                metadata.retainedLastOp = RETAINED_OP_PRESERVE_VALID;
-                break;
-            case RetainedLiveInfoState::SNAPSHOT_EMPTY:
-                metadata.retainedLastOp = RETAINED_OP_PRESERVE_EMPTY;
-                break;
-            default:
-                metadata.retainedLastOp = RETAINED_OP_PRESERVE_NEVER;
-                break;
-        }
+
     }
 
-inline ALWAYS_INLINE void RegionInfo::NoteRetainedClear(RetainedOp op)
-    {
-        if (GetRetainedLiveInfoState() == RetainedLiveInfoState::NEVER_EXAMINED) {
-            return;
-        }
-        ++metadata.retainedClearCnt;
-        metadata.retainedLastOp = static_cast<uint8_t>(op);
-    }
+
 
 inline bool RegionInfo::IsRetainedSnapshotValid() const
     {
@@ -755,20 +730,7 @@ inline void RegionInfo::ResetMarkBit(MarkView<Generation::Old> view)
     template<Generation G>
 inline void RegionInfo::VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const
     {
-        EnsurePageOwnerVerifyAtexit();
         if (LIKELY(MarkFaceMatchesOwner<G>())) {
-            return;
-        }
-        const size_t mismatch = PageOwnerMismatchAttempts().fetch_add(1, std::memory_order_relaxed) + 1;
-        if (PageOwnerVerifyCountOnly()) {
-            if (mismatch <= 8) {
-                std::fprintf(stderr,
-                             "[GCV2][page-owner] mismatch n=%zu site=%s object=%p region=%p owner=%s face=%s\n",
-                             mismatch, site, obj, this,
-                             GetOwnerGeneration() == Generation::Young ? "young" : "old",
-                             G == Generation::Young ? "young" : "old");
-                std::fflush(stderr);
-            }
             return;
         }
         CHECK_DETAIL(false, "mark face does not match page owner site=%s object=%p region=%p owner=%s face=%s",
@@ -794,7 +756,6 @@ inline bool RegionInfo::MarkLargeObject(MarkView<G> view, const BaseObject* obj,
             if (accountLive) {
                 AddLiveCounts(1, size);
             }
-            NotePageOwnerFirstPaint<G>();
         }
         return already;
     }
@@ -827,7 +788,6 @@ inline bool RegionInfo::MarkObject(MarkView<G> view, const BaseObject* obj)
         bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
         if (incLive) {
             AddLiveCounts(1, objSize);
-            NotePageOwnerFirstPaint<G>();
         }
         CHECK(IsMarkedObject(view, offset));
         return already;
@@ -865,7 +825,6 @@ inline bool RegionInfo::MarkObjectWithLiveClaim(MarkView<G> view, const BaseObje
             if (accountLive) {
                 AddLiveCounts(1, objSize);
             }
-            NotePageOwnerFirstPaint<G>();
         }
         CHECK(IsMarkedObject(view, offset));
         return already;
@@ -1004,16 +963,6 @@ inline bool RegionInfo::NoteMarkEpochOnRead(MarkView<G> view, LiveInfo* liveInfo
             (from != nullptr && from->owner == static_cast<uint8_t>(G) && from->epoch == view.GetEpoch());
         if (currentOrFrom && face == view.GetEpoch()) {
             return true;
-        }
-        EnsureMarkEpochAtexit();
-        size_t n = markEpochStaleReadCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 8) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][mark-epoch] stale_read generation=%s region=%p "
-                "viewEpoch=%llu faceEpoch=%llu regionEpoch=%llu n=%zu",
-                G == Generation::Young ? "young" : "old", this,
-                static_cast<unsigned long long>(view.GetEpoch()), static_cast<unsigned long long>(face),
-                static_cast<unsigned long long>(now), n);
         }
         return false;
     }
@@ -1670,7 +1619,6 @@ inline void RegionInfo::ClearLiveInfo(MarkView<G> view)
         // Ordinary livemap metadata and segments reset lazily on the first mark,
         // including the single-object large-page map.
         if (G == Generation::Old) {
-            NoteRetainedClear(RETAINED_OP_CLEAR_ALL);
             // A new major mark supersedes the retained major snapshot.  Young
             // clears deliberately leave this old/major authority intact.
             FreeRetainedMarkWords();
@@ -2228,13 +2176,6 @@ inline void RegionInfo::RemoveFromList()
 inline ALWAYS_INLINE void RegionInfo::CheckObjectSize(
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
     {
-        // Always-on TypeInfo range check: same predicate as CheckTypeInfoRegion rule 3
-        // (VerifyHeap.cpp:105-108) — tip ∈ heap address range is a defect.
-        // Default: count + one-shot dump (no abort). Fatal: MRT_GCV2_TIPINHEAP_FATAL=1.
-        TypeInfo* tip = obj->GetTypeInfo();
-        if (UNLIKELY(Heap::IsHeapAddress(tip))) {
-            ReportTypeInfoInHeap(obj, tip, objSize, regionStart, regionEnd);
-        }
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
         // kMarkedBytesPerBit is 8, matching Allocator::ALLOC_ALIGN (Allocator.h:19).
         if (UNLIKELY(objSize == 0 || (objSize % kMarkedBytesPerBit) != 0 || objSize > regionEnd - objAddr)) {
@@ -2315,8 +2256,6 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass)
         // holderlive (F2): new region life — its predecessor's snapshot history does not
         // describe the objects that are about to be allocated here.
         metadata.retainedPreserveCnt = 0;
-        metadata.retainedClearCnt = 0;
-        metadata.retainedLastOp = RETAINED_OP_NONE;
         // routedest: this is the reuse edge named in the defect. TakeRegion has already run
         // ClearUnits over this payload; if a published route still names this region, the
         // route now answers into zeroed (or freshly re-allocated) memory. Count it here
