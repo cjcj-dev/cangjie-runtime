@@ -232,17 +232,6 @@ else
 fi
 echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
 
-# Compile the publication TU with the same testability shape as the linked
-# product SO. The default (OFF) SO has no retain hook, so it must not silently
-# register a test that can only skip; the ON arm keeps the explicit precondition
-# assertion in clear_entries_product_unit.cpp.
-PUBLICATION_TESTABLE_FLAGS=()
-if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null |
-    c++filt | /usr/bin/grep 'ForwardingTable::SetLookupRetainHook' >/dev/null; then
-  PUBLICATION_TESTABLE_FLAGS=(-DMRT_FINDTO_RETAIN_TEST=1)
-fi
-echo "PUBLICATION_TESTABLE=$((${#PUBLICATION_TESTABLE_FLAGS[@]} != 0))"
-
 # These three deterministic publication tests require both ends of their
 # scheduling fixture.  Derive that product shape from the linked SO, not from
 # the test translation unit's unconditional MRT_TESTABLE_INTERNALS definition.
@@ -410,7 +399,6 @@ PUBLICATION_COMPILE_FLAGS=(
   "${TEST_DEFINES[@]}"
   -DMRT_TESTABLE_INTERNALS=1
   "${TESTABLE_FLAGS[@]}"
-  "${PUBLICATION_TESTABLE_FLAGS[@]}"
   "${PUBLICATION_HOOK_FLAGS[@]}"
   "${REMAP_RECEIPT_FLAGS[@]}"
   "${INC_FLAGS[@]}"

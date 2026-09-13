@@ -128,26 +128,6 @@ struct RelocationReceiptTestAccess {
         return collector.TryUpdateRefField(obj, field, newRef);
     }
 
-    static BaseObject* ProductGetForwardPointer(
-        WCollector& collector, BaseObject* from, RegionInfo* forwarding)
-    {
-        using ProductFn = BaseObject* (*)(const WCollector*, BaseObject*, RegionInfo*);
-        void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-        GC_EXPECT_TRUE(handle != nullptr);
-        void* symbol = handle == nullptr ? nullptr : dlsym(
-            handle, "_ZNK12MapleRuntime10WCollector17GetForwardPointerEPNS_10BaseObjectEPNS_10RegionInfoE");
-        GC_EXPECT_TRUE(symbol != nullptr);
-        Dl_info info {};
-        GC_EXPECT_TRUE(symbol != nullptr && dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&
-                       std::strstr(info.dli_fname, "libcangjie-runtime.so") != nullptr);
-        BaseObject* result = symbol == nullptr ? nullptr :
-            reinterpret_cast<ProductFn>(symbol)(&collector, from, forwarding);
-        if (handle != nullptr) {
-            (void)dlclose(handle);
-        }
-        return result;
-    }
-
     static FindToVersionResult ProductFindToVersion(WCollector& collector, BaseObject* from, Generation generation)
     {
         using ProductFn = FindToVersionResult (*)(const WCollector*, BaseObject*, Generation);
@@ -330,52 +310,6 @@ struct LoadHealDeliveryTestAccess {
 
 namespace {
 
-struct CopyAdmissionBarrier {
-    static void Reset(BaseObject* object = nullptr)
-    {
-        std::lock_guard<std::mutex> guard(mu);
-        target = object;
-        entered = false;
-        released = false;
-    }
-
-    static void Hook(RegionInfo*, BaseObject* object)
-    {
-        std::unique_lock<std::mutex> lock(mu);
-        if (target != nullptr && object != target) {
-            return;
-        }
-        entered = true;
-        cv.notify_all();
-        cv.wait(lock, []() { return released; });
-    }
-
-    static void WaitEntered()
-    {
-        std::unique_lock<std::mutex> lock(mu);
-        cv.wait(lock, []() { return entered; });
-    }
-
-    static void Release()
-    {
-        std::lock_guard<std::mutex> guard(mu);
-        released = true;
-        cv.notify_all();
-    }
-
-    static std::mutex mu;
-    static std::condition_variable cv;
-    static BaseObject* target;
-    static bool entered;
-    static bool released;
-};
-
-std::mutex CopyAdmissionBarrier::mu;
-std::condition_variable CopyAdmissionBarrier::cv;
-BaseObject* CopyAdmissionBarrier::target = nullptr;
-bool CopyAdmissionBarrier::entered = false;
-bool CopyAdmissionBarrier::released = false;
-
 struct PageWaitEnterBarrier {
     static void Reset()
     {
@@ -402,70 +336,6 @@ struct PageWaitEnterBarrier {
 std::mutex PageWaitEnterBarrier::mu;
 std::condition_variable PageWaitEnterBarrier::cv;
 bool PageWaitEnterBarrier::entered = false;
-
-struct CopyCompletionBarrier {
-    std::mutex mu;
-    std::condition_variable cv;
-    bool entered = false;
-    bool released = false;
-
-    static void Hook(void* context)
-    {
-        auto& barrier = *static_cast<CopyCompletionBarrier*>(context);
-        std::unique_lock<std::mutex> lock(barrier.mu);
-        barrier.entered = true;
-        barrier.cv.notify_all();
-        barrier.cv.wait(lock, [&barrier]() { return barrier.released; });
-    }
-
-    void WaitEntered()
-    {
-        std::unique_lock<std::mutex> lock(mu);
-        cv.wait(lock, [this]() { return entered; });
-    }
-
-    void Release()
-    {
-        std::lock_guard<std::mutex> guard(mu);
-        released = true;
-        cv.notify_all();
-    }
-};
-
-struct CopyAdmissionWitness {
-    static void Reset() { hits.store(0, std::memory_order_relaxed); }
-
-    static void Hook(RegionInfo*, BaseObject*) { hits.fetch_add(1, std::memory_order_relaxed); }
-
-    static uint32_t Hits() { return hits.load(std::memory_order_relaxed); }
-
-    static std::atomic<uint32_t> hits;
-};
-
-std::atomic<uint32_t> CopyAdmissionWitness::hits { 0 };
-
-using ProductSetCopyAdmissionTestHook = void (*)(void (*)(RegionInfo*, BaseObject*));
-using ProductForcePublicationClosedForTest = void (*)(MAddress);
-
-ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
-{
-    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    if (handle == nullptr) {
-        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
-    }
-    return handle == nullptr ? nullptr : reinterpret_cast<ProductSetCopyAdmissionTestHook>(
-        dlsym(handle, "MRT_SetCopyAdmissionTestHook"));
-}
-
-ProductForcePublicationClosedForTest ProductForcePublicationClosedForTestFn()
-{
-    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    if (handle == nullptr) {
-        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
-    }
-    return handle == nullptr ? nullptr : reinterpret_cast<ProductForcePublicationClosedForTest>(
-        dlsym(handle, "_ZN12MapleRuntime15ForwardingTable29ForcePublicationClosedForTestEm"));
-}
 
 class ResolveBarrier final : public Barrier {
 public:
@@ -568,11 +438,25 @@ LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liv
 {
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    const Generation generation = region->GetOwnerGeneration();
+    RegionBitmap* bitmap = generation == Generation::Young
+        ? fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize())
+        : fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     const size_t offset = region->GetAddressOffset(liveObject);
     BaseObject* object = reinterpret_cast<BaseObject*>(liveObject);
     (void)bitmap->MarkBits(offset, object->GetSize(), region->GetRegionSize());
-    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    // The product freezes the selected set before publishing any page view.
+    if (ForwardingTable::GetEntries(region->GetRegionStart(), generation) == nullptr) {
+        RegionList selected("publication-fixture");
+        selected.PrependRegion(region, region->GetRegionType());
+        GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(generation, selected));
+        (void)selected.TakeHeadRegion();
+    }
+    if (generation == Generation::Young) {
+        region->PrepareForwardableRegion(region->GetMarkView<Generation::Young>());
+    } else {
+        region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    }
     // This synthetic fixture leaves an unmaterialized allocation prefix.
     // Record the known object start explicitly; production freezes a dense
     // allocation walk inside PrepareForwardableRegion.
@@ -633,17 +517,6 @@ void CleanupLateBackfill(GcHeapFixture& fx, LateBackfillState& state)
     ForwardingTable::ResetRelocationSet(state.region->GetOwnerGeneration());
     state.region->metadata.liveInfo = nullptr;
     fx.FreePlanted(state.live);
-}
-
-
-
-size_t CountSubstring(const std::string& text, const std::string& needle)
-{
-    size_t count = 0;
-    for (size_t pos = 0; (pos = text.find(needle, pos)) != std::string::npos; pos += needle.size()) {
-        ++count;
-    }
-    return count;
 }
 
 struct PartialCompactState {
@@ -906,7 +779,6 @@ GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollect
 // ResolveBarrier's completed-route case above returns at WCollector.h:448-454;
 // call the exported product entry here so that this arm cannot borrow that fast
 // return or a test-ELF inline definition.
-#if defined(MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE)
 GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -961,7 +833,6 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     GC_EXPECT_EQ(receipt, reinterpret_cast<MAddress>(expected));
     GC_EXPECT_EQ(copyCount, 0);
 }
-#endif
 
 GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
 {
@@ -1011,12 +882,6 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     GC_EXPECT_TRUE(forwarded);
 }
 
-
-
-
-
-
-
 GC_OTHER_VM_TEST(FindToPublicState, NotManagedIsObservable)
 {
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -1049,13 +914,10 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
     fx.FreePlanted(live);
 }
 
-
-
 // A single product-linked construction exercises two distinct Unavailable producers.  It proves
 // the route witness is not a constant formatter: one arm closes an installed publication while
 // keeping its ghost region, and the other uses an unarmed, non-ghost region with a FORWARDED
 // header. Both answers come from WCollector::FindToVersion in libcangjie-runtime.so.
-
 
 // LookupTo returns the decision record itself.  Change both metadata faces only
 // after the product lookup returns, then prove the record still describes the
@@ -1081,51 +943,6 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
     GC_EXPECT_TRUE(ForwardingTable::LookupTo(from, generation).answer == ForwardingTable::ToAnswer::Unarmed);
     fixture.obj0->SetStateCode(ObjectState::NORMAL);
 }
-
-#if defined(MRT_TESTABLE_INTERNALS) && defined(MRT_FINDTO_RETAIN_TEST)
-struct RetainWindowState {
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool lookupRetained = false;
-    bool releaseLookup = false;
-    bool clearStarted = false;
-    bool clearDone = false;
-};
-
-void HoldRetainedLookup(void* context)
-{
-    auto& state = *static_cast<RetainWindowState*>(context);
-    std::unique_lock<std::mutex> lock(state.mutex);
-    state.lookupRetained = true;
-    state.cv.notify_all();
-    state.cv.wait(lock, [&state]() { return state.releaseLookup; });
-}
-
-// The hook setter is a testability export that only exists when the product SO
-// itself was compiled with MRT_TESTABLE_INTERNALS. Bind it at runtime (same
-// pattern as test_live_map.cpp) so this TU keeps linking against the default
-// OFF product, where the guarded block below is compiled out anyway.
-using ProductSetLookupRetainHook = void (*)(void (*)(void*), void*);
-
-static ProductSetLookupRetainHook ProductSetLookupRetainHookFn()
-{
-    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    if (handle == nullptr) {
-        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
-    }
-    GC_EXPECT_TRUE(handle != nullptr);
-    auto fn = reinterpret_cast<ProductSetLookupRetainHook>(
-        dlsym(handle, "_ZN12MapleRuntime15ForwardingTable19SetLookupRetainHookEPFvPvES1_"));
-    // This test is the positive retain-window arm.  A product built without
-    // the test hook is not a passing observation; it is a missing precondition.
-    GC_EXPECT_TRUE(fn != nullptr);
-    return fn;
-}
-
-
-#endif
-
-
 
 GC_TEST(ForwardingPublicationProduct, KeptInPlacePublishesIdentityBeforeRetire)
 {
@@ -1158,8 +975,6 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlacePublishesIdentityBeforeRetire)
     fx.FreePlanted(live);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
-
-
 
 GC_TEST(ForwardingPublicationProduct, KeptInPlaceLivemapStartsSurviveOverwrittenPrefix)
 {
@@ -1202,19 +1017,14 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlaceLivemapStartsSurviveOverwritten
 // forwarding generation and installing the next one must not leave an object
 // header claiming FORWARDED after the receipt that justified it is gone.
 
-
 // Second family-8 path: a ROUTED page can retain a prior from->to receipt after
 // raw-pin clears ghost and the next generation installs an empty active table.
 // Retirement must preserve that receipt; active miss is not identity evidence.
-
 
 // zGeneration.cpp:276-285 resets the old relocation set only after remap has
 // consumed every source reference. A residual FORWARDED source proves that the
 // port has not reached that state: keep its old receipt until a newer active
 // generation publishes a successor instead of inferring identity at retirement.
-
-
-
 
 GC_TEST(ForwardingPublicationProduct, FinishIncompleteUnmovablePublishesIdentityBeforeDone)
 {
@@ -1481,8 +1291,6 @@ void ExpectDiagnosticLookupIdentity(const std::string& output, const LookupWitne
     GC_EXPECT_TRUE(fromPageLifeIdMatches);
 }
 
-enum class LookupWitnessConsumer { Lookup, LoadDiagnostic, StoreDiagnostic, StoreResolutionDiagnostic };
-
 void CheckLookupWitness(bool publishReceipt)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -1514,24 +1322,10 @@ GC_OTHER_VM_TEST(ForwardingLookupWitness, ActiveHitIdentifiesPublisher)
     CheckLookupWitness(true);
 }
 
-
-
-
-
 GC_OTHER_VM_TEST(ForwardingLookupWitness, ActiveMissKeepsCandidateIdentity)
 {
     CheckLookupWitness(false);
 }
-
-
-
-
-
-
-
-
-
-
 
 RefField<>* gIncomingDestination = nullptr;
 uintptr_t gIncomingDestinationExpected = 0;
@@ -1994,8 +1788,6 @@ GC_TEST(ForwardingPublicationProduct, DeadOrUnselectedFromStillFailsClosed)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
-
-
 // zStackWatermark.cpp:159-186: process the head before phase completion.
 GC_TEST(ForwardingPublicationProduct, WatermarkRemapsInvisibleAndNativeHeadBeforeCompletion)
 {
@@ -2055,7 +1847,6 @@ GC_TEST(ForwardingPublicationProduct, DerivedClosurePreservesSharedBaseOffsets)
     GC_EXPECT_EQ(raw(second.LoadDerived()), uintptr_t(0x20018));
     GC_EXPECT_EQ(visits, size_t(3));
 }
-
 
 // A managed frame is input data to the real mutator phase entry. Keep the
 // descriptor in the loaded test image so the product metadata lifetime check
@@ -2244,10 +2035,6 @@ GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWi
     CleanupLateBackfill(fx, state);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
-
-
-
-
 
 // A non-LookupUnavailable route may carry lookup-shaped fields from a caller,
 // but with the snapshot validity bit cleared they must never be rendered as
@@ -3099,10 +2886,6 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     fx.FreePlanted(live);
 }
 
-
-
-
-
 GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysInstalledSet)
 {
     GcHeapFixture fixture;
@@ -3124,16 +2907,6 @@ GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysInstalledSet)
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, Generation::Young) == nullptr);
     GC_EXPECT_TRUE(ForwardingTable::LookupTo(from, Generation::Young).answer == ForwardingTable::ToAnswer::Unarmed);
 }
-
-
-
-
-
-
-
-
-
-
 
 GC_TEST(ForwardingPublicationProduct, ResolveStoreValueNoForwardingAfterGhostDispelLogs)
 {
@@ -3208,11 +2981,9 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueNoForwardingAfterGhostDis
 // that crossed the copy boundary.  The owner inserts while clear is waiting;
 // only after the owner releases may clear unlink and retire the table.
 
-
 // zRelocationSet.cpp:191-197: clearing the table waits for outstanding table
 // users independently of the source-page count. Observe drain admission and
 // the held publication token before allowing the publisher to complete.
-
 
 // zRelocate.cpp:362-372: Exclusive owns the before-copy Publication through
 // CopyObject, receipt installation, queue publication and FORWARDED state.  Use
@@ -3258,7 +3029,6 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
-
 
 // ZGC zRelocate.cpp:1256-1279: the promoted page keeps the relocation-set
 // livemap selected at registration, and discharge walks only that live set.
