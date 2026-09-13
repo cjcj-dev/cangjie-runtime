@@ -2113,42 +2113,6 @@ inline void RegionInfo::ResetLiveMapAfterForward(MarkView<G> view)
         }
     }
 
-    template<Generation G>
-inline void RegionInfo::VerifyLiveBooks(MarkView<G> view, const char* where)
-    {
-        CHECK(view.GetRegion() == this);
-        liveCrossCheckCount.fetch_add(1, std::memory_order_relaxed);
-        if (!IsLiveCountAuthoritative()) {
-            return;
-        }
-        const uint64_t liveBytes = GetLiveByteCount();
-        const bool emptyByMark = G == Generation::Young
-            ? IsKnownYoungEmpty(MarkView<Generation::Young>(this, view.GetEpoch(), view.GetLifeId()))
-            : IsKnownEmpty(MarkView<Generation::Old>(this, view.GetEpoch(), view.GetLifeId()));
-        // Homology only when this cycle marked the page. Unmarked ∧ live==0 is
-        // conservative-keep (cjpmnull2), not a book error (zPage.inline.hpp:223-225).
-        const bool emptyByLive = (liveBytes == 0);
-        if (emptyByMark == emptyByLive || (!emptyByMark && emptyByLive)) {
-            return;
-        }
-        size_t n = liveCrossMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (!liveCrossAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
-            std::atexit([]() {
-                std::fprintf(stderr, "[GCV2][livesame][crosscheck] atexit checks=%zu mismatch=%zu\n",
-                             liveCrossCheckCount.load(std::memory_order_relaxed),
-                             liveCrossMismatchCount.load(std::memory_order_relaxed));
-                std::fflush(stderr);
-            });
-        }
-        if (n <= 32) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][livesame][crosscheck] where=%s region=%p liveBytes=%llu emptyByMark=%u "
-                "emptyByLive=%u n=%zu",
-                where != nullptr ? where : "?", this, static_cast<unsigned long long>(liveBytes),
-                static_cast<unsigned>(emptyByMark), static_cast<unsigned>(emptyByLive), n);
-        }
-    }
-
 inline void RegionInfo::RemoveFromList()
     {
         RegionInfo* prev = GetPrevRegion();

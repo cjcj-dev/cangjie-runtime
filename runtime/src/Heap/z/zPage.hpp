@@ -948,11 +948,6 @@ public:
 
     bool IsValidRegion() const;
 
-    // livesame crosscheck (ZGC ZPage::verify_live): live book vs mark face.
-    static std::atomic<size_t> liveCrossMismatchCount;
-    static std::atomic<size_t> liveCrossCheckCount;
-    static std::atomic<bool> liveCrossAtexitInstalled;
-
     // ZPage::live_bytes/live_objects use the page's single livemap. A page
     // not touched in this generation sequence has no published marking data.
     RegionBitmap* GetCurrentLiveMap() const;
@@ -989,11 +984,6 @@ public:
     // livemap. The next first mark resets counts before publishing its seqnum.
     template<Generation G>
     void ResetLiveMapAfterForward(MarkView<G> view);
-
-    // ZGC ZPage::verify_live — live_objects/bytes must match livemap. Always-on counter;
-    // MRT_GCV2_LIVE_CROSSCHECK=1 aborts on mismatch.
-    template<Generation G>
-    void VerifyLiveBooks(MarkView<G> view, const char* where);
 
     void RemoveFromList();
 
