@@ -108,7 +108,7 @@ public:
     // Bytes reserved by both exact bitmap backings.
     size_t MemoryOverhead() const
     {
-        return (wordCount + dirtyWordCount) * sizeof(uint64_t) * kBufferCount;
+        return (wordCount + pageMapWordCount) * sizeof(uint64_t) * kBufferCount;
     }
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
@@ -146,16 +146,18 @@ private:
     size_t AddressToBit(MAddress fieldAddress) const;
     size_t ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords);
     size_t ClearBuffer(size_t buffer);
-    void MarkWordDirty(size_t buffer, size_t word);
-    void ClearWordDirty(size_t buffer, size_t word);
+    void RememberPage(size_t buffer, size_t word);
     void CheckInitialized() const;
     MAddress heapStart = 0;
     size_t heapSize = 0;
     size_t bitCount = 0;
     size_t wordCount = 0;
-    size_t dirtyWordCount = 0;
+    size_t pageMapWordCount = 0;
+    // zRemembered.cpp:347-420: sparse page index, with the same two faces
+    // as the remset. Stale page bits are harmless and removed by consumption.
+    std::unique_ptr<std::atomic<uint64_t>[]> rememberedPages[kBufferCount];
+    void VisitRememberedPages(size_t buffer, const std::function<void(size_t)>& visitor) const;
     std::unique_ptr<std::atomic<uint64_t>[]> bitmaps[kBufferCount];
-    std::unique_ptr<std::atomic<uint64_t>[]> dirtyMaps[kBufferCount];
     std::atomic<size_t> recordCounts[kBufferCount];
     std::atomic<uint8_t> activeBuffer{ 0 };
     bool initialized = false;

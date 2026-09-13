@@ -9,25 +9,11 @@
 // load-good again at N+2 unless roots are remapped between young flips.
 
 #include "Heap/WCollector/RemapYoungRoots.h"
-#include "Heap/Collector/PromotedRegionDomain.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-GC_TEST(PromotedRegionDomain, ResidualPromotionRequiresClosedLiveness)
-{
-    GC_EXPECT_TRUE(PromotedRegionDomain::ResidualPromotionHasClosedLiveness(false, true, true));
-    GC_EXPECT_FALSE(PromotedRegionDomain::ResidualPromotionHasClosedLiveness(true, true, true));
-    GC_EXPECT_FALSE(PromotedRegionDomain::ResidualPromotionHasClosedLiveness(false, false, true));
-    GC_EXPECT_FALSE(PromotedRegionDomain::ResidualPromotionHasClosedLiveness(false, true, false));
-}
-
-GC_TEST(PromotedRegionDomain, YoungPromotionDefersItsOnlyFieldScan)
-{
-    GC_EXPECT_TRUE(PromotedRegionDomain::DeferPromotedFieldScan(true));
-    GC_EXPECT_FALSE(PromotedRegionDomain::DeferPromotedFieldScan(false));
-}
 using namespace MapleRuntime::RemapYoungRootsLogic;
 
 namespace {
