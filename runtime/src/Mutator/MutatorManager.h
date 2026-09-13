@@ -400,6 +400,8 @@ public:
 
     std::atomic<uint64_t> epochHandshakeSequence = { 0 };
     std::atomic<uint64_t> epochHandshakeActive = { 0 };
+    // Generation of the current root operation, guarded by the ledger mutex.
+    GCCycleGeneration epochHandshakeGeneration = GCCycleGeneration::OLD;
     std::atomic<size_t> epochHandshakeAcked = { 0 };
     std::atomic<size_t> epochHandshakeAckedTwice = { 0 };
     std::atomic<size_t> epochHandshakeSelfAck = { 0 };

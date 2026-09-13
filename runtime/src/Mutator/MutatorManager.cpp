@@ -378,6 +378,8 @@ void MutatorManager::ExcludeNewMutatorFromActiveEpoch(Mutator& mutator)
     if (mutator.FinishedEpochHandshake(active)) {
         return;
     }
+    mutator.SetEnumYoung(epochHandshakeGeneration == GCCycleGeneration::YOUNG);
+    mutator.SetMutatorPhase(Heap::GetHeap().GetGCPhase(epochHandshakeGeneration));
     mutator.MarkBornCleanForEpoch(active);
     epochHandshakeBornCleanJoins.fetch_add(1, std::memory_order_relaxed);
 }
@@ -396,6 +398,7 @@ uint64_t MutatorManager::BeginEpochHandshakeLifecycleTest()
     const uint64_t epoch = epochHandshakeSequence.fetch_add(1, std::memory_order_relaxed) + 1;
     {
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+        epochHandshakeGeneration = GCCycleGeneration::YOUNG;
         epochHandshakeParticipants.clear();
         epochHandshakeAckedMutators.clear();
     }
@@ -461,6 +464,7 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool y
     uint64_t residualLockStart = TimeUtil::NanoSeconds();
     {
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+        epochHandshakeGeneration = young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
         epochHandshakeAckedMutators.clear();
         epochHandshakeParticipants.clear();
     }

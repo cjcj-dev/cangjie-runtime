@@ -41,10 +41,11 @@ extern "C" uintptr_t MRT_GetThreadLocalData()
     uintptr_t tlDataAddr = reinterpret_cast<uintptr_t>(ThreadLocal::GetThreadLocalData());
 #if defined(__aarch64__)
     if (Heap::GetHeap().IsGcStarted()) {
+        const Mutator* mutator = Mutator::GetMutator();
         // Since the TBI(top bit ignore) feature in Aarch64,
         // set gc phase to high 8-bit of ThreadLocalData Address for gc barrier fast path.
         // 56: make gcphase value shift left 56 bit to set the high 8-bit
-        tlDataAddr = tlDataAddr | (static_cast<uint64_t>(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)) << 56);
+        tlDataAddr = tlDataAddr | (static_cast<uint64_t>(Heap::GetHeap().GetGCPhase(mutator != nullptr && mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)) << 56);
     }
 #endif
     return tlDataAddr;
