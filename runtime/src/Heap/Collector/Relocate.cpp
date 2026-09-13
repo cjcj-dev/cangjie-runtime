@@ -1944,8 +1944,8 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainSc
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return nullptr;
     }
-    // retain_page. A try-lock, so a losing mutator falls back instead of blocking -- ZGC's
-    // retain_page also gives up (returns false) when the page is claimed or released.
+    // zForwarding.cpp:86-108: a claimed page waits for its task before
+    // retain_page returns false; no source access follows a failed retain.
     if (!lease.ok()) {
         return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
@@ -2463,9 +2463,9 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
         fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(from));
     }
     if (fromRegion != nullptr && !fromRegion->IsYoungRegion()) {
-        const size_t sz = RegionSpace::GetAllocSize(*from);
+        const size_t sz = RegionSpace::GetAllocSize(*to);
         ZForwarding* forwarding = ForwardingTable::get(reinterpret_cast<MAddress>(from), Generation::Old);
-        const bool youngMarking = Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_TRACE;
+        const bool youngMarking = ZForwarding::young_marking();
         rememberedSet.TransferObjectSlots(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to), sz,
                                           forwarding, youngMarking);
         return;

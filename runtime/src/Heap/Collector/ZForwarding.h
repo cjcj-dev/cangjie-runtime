@@ -400,6 +400,12 @@ public:
             Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence);
     }
 
+    static bool young_marking()
+    {
+        const auto young = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
+        return young.phase == GCPhase::GC_PHASE_TRACE;
+    }
+
     void relocated_remembered_fields_register(MAddress field)
     {
         const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_relaxed);
@@ -418,7 +424,7 @@ public:
     void relocated_remembered_fields_after_relocate()
     {
         _relocated_remembered_fields_publish_young_seqnum = young_seqnum();
-        if (!relocated_remembered_fields_is_concurrently_scanned()) {
+        if (young_marking()) {
             relocated_remembered_fields_publish();
         }
     }
@@ -473,7 +479,10 @@ public:
     bool is_claimed() const { return _claimed.load(std::memory_order_acquire); }
     bool in_place() const { return _in_place.load(std::memory_order_acquire); }
     void set_in_place() { _in_place.store(true, std::memory_order_release); }
-    bool retain_page() { return ZForwardingLife::retain_page(_ref_count, _done); }
+    bool retain_page()
+    {
+        return ZForwardingLife::retain_page(_ref_count, [this] { ZForwardingLife::WaitPageDone(this); });
+    }
     void release_page()
     {
         int32_t count = _ref_count.load(std::memory_order_relaxed);
