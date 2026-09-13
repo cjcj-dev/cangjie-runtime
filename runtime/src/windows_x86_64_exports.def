@@ -1416,9 +1416,7 @@ EXPORTS
     _ZN12MapleRuntime13RememberedSet11ClearBufferEy @1462
     _ZN12MapleRuntime13RememberedSet11ClearRegionEyyPy @1463
     _ZN12MapleRuntime13RememberedSet13DrainForMinorERNSt3__113unordered_setIyNS1_4hashIyEENS1_8equal_toIyEENS1_9allocatorIyEEEE @1464
-    _ZN12MapleRuntime13RememberedSet13MarkWordDirtyEyy @1465
     _ZN12MapleRuntime13RememberedSet14BeginFullClearEv @1466
-    _ZN12MapleRuntime13RememberedSet14ClearWordDirtyEyy @1467
     _ZN12MapleRuntime13RememberedSet15FinishFullClearEh @1469
     _ZN12MapleRuntime13RememberedSet18ClearRangeInBufferEyyyPy @1470
     _ZN12MapleRuntime13RememberedSet6RecordEy @1471
