@@ -56,19 +56,20 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
-// ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
-// young sequence once for the whole old relocation, not once per forwarding.
-void GenerationCycle::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
+// ZGenerationOld::relocate_start (zGeneration.cpp:1395) snapshots remset parity.
+// Our young Begin() can return without flipping, so use the bitmap face itself
+// rather than deriving its identity from the collection sequence number.
+void GenerationCycle::RecordRemsetAtRelocateStart(uint8_t currentBuffer)
 {
     CHECK(generation == GCCycleGeneration::OLD);
-    youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
+    remsetAtRelocateStart.store(currentBuffer, std::memory_order_release);
 }
 
-bool GenerationCycle::ActiveRemsetIsCurrent(uint64_t youngSequence) const
+bool GenerationCycle::ActiveRemsetIsCurrent(uint8_t currentBuffer) const
 {
     CHECK(generation == GCCycleGeneration::OLD);
-    // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
-    return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
+    // zGeneration.inline.hpp:174-182: select the face active at relocate start.
+    return currentBuffer == remsetAtRelocateStart.load(std::memory_order_acquire);
 }
 
 void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
@@ -78,7 +79,7 @@ void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase val
     if (generation == GCCycleGeneration::OLD &&
         (value == GCPhase::GC_PHASE_PREFORWARD || value == GCPhase::GC_PHASE_FORWARD) &&
         before != GCPhase::GC_PHASE_PREFORWARD && before != GCPhase::GC_PHASE_FORWARD) {
-        oldCycle.RecordYoungSequenceAtRelocateStart(youngCycle.Sequence());
+        oldCycle.RecordRemsetAtRelocateStart(Heap::GetHeap().GetRememberedSet().CurrentBuffer());
     }
     cycle.PublishPhase(value);
 }

@@ -1041,27 +1041,67 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
 }
 #endif
 
-// zGeneration.inline.hpp:174-182: old relocation tracks face parity across
-// arbitrary young cycles, independently of whether young marking is active.
-GC_TEST(Remset, OldRelocationTracksYoungFaceParity)
+// zGeneration.inline.hpp:174-182 and zGeneration.cpp:871-880: face identity
+// changes with FlipForMinor, including when Begin() has no following flip.
+GC_TEST(Remset, OldRelocationTracksActualRemsetFace)
 {
+    alignas(8) uint64_t storage[16] {};
+    RememberedSet rs;
+    rs.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
+    GenerationCycle young(GCCycleGeneration::YOUNG);
     GenerationCycle old(GCCycleGeneration::OLD);
-    old.RecordYoungSequenceAtRelocateStart(17);
-    GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(17));
-    GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(18));
-    GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(19));
-    GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(20));
+    for (uint8_t initial = 0; initial != 2; ++initial) {
+        old.RecordRemsetAtRelocateStart(rs.CurrentBuffer());
+        const uint64_t sequence = young.Sequence();
+        young.Begin(initial + 1);
+        GC_EXPECT_EQ(young.Sequence(), sequence + 1);
+        GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(rs.CurrentBuffer()));
+        young.End(); // Empty collection: no remembered-set flip.
+        GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(rs.CurrentBuffer()));
+        rs.FlipForMinor();
+        GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(rs.CurrentBuffer()));
+        rs.FlipForMinor();
+        GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(rs.CurrentBuffer()));
+        rs.FlipForMinor(); // Next relocation starts from the other face.
+    }
+}
+
+// zRelocate.cpp:698-725: the real relocation entry captures a face and the
+// product transfer reads that face, then remembers the relocated field in current.
+GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
+{
+    GcHeapFixture heap;
+    auto& collector = Heap::GetHeap().GetCollector();
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    const MAddress from = heap.heapStart + 256;
+    const MAddress to = heap.heapStart + 128;
+    collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
+    for (uint8_t initial = 0; initial != 2; ++initial) {
+        for (size_t flips = 0; flips != 4; ++flips) {
+            rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+            if (initial != 0) rs.FlipForMinor();
+            collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+            collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+            rs.Record(from + sizeof(void*));
+            for (size_t flip = 0; flip != flips; ++flip) rs.FlipForMinor();
+            // FORWARD is the same relocation: it must not replace the snapshot.
+            collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
+            GC_EXPECT_EQ(collector.OldActiveRemsetIsCurrent(rs.CurrentBuffer()), flips % 2 == 0);
+            GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
+            GC_EXPECT_TRUE(rs.Contains(to + sizeof(void*)));
+        }
+    }
 }
 
 GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
 {
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
-    RememberedSet rs;
-    rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;
     rs.Record(from + sizeof(void*));
@@ -1076,10 +1116,10 @@ GC_OTHER_VM_TEST(Remset, InPlacePreviousFieldsPublishDuringYoungMark)
 {
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_TRACE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
-    RememberedSet rs;
-    rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;
     rs.Record(from + sizeof(void*));

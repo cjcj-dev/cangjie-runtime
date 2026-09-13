@@ -66,16 +66,17 @@ public:
     void SelectReason(GCReason value);
     void Begin(uint64_t index);
     void PublishPhase(GCPhase value);
-    void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
-    bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
+    void RecordRemsetAtRelocateStart(uint8_t currentBuffer);
+    bool ActiveRemsetIsCurrent(uint8_t currentBuffer) const;
     void End();
 private:
     const GCCycleGeneration generation;
     mutable std::mutex mutex;
     uint64_t sequence = 0;
     uint64_t requestIndex = 0;
-    // ZGenerationOld::_young_seqnum_at_reloc_start (zGeneration.hpp:278).
-    std::atomic<uint64_t> youngSequenceAtRelocateStart{ 0 };
+    // ZGenerationOld::_young_seqnum_at_reloc_start (zGeneration.hpp:278):
+    // store the actual face because Begin() can precede a no-flip empty cycle.
+    std::atomic<uint8_t> remsetAtRelocateStart{ 0 };
     std::atomic<GCReason> reason { GC_REASON_USER };
     std::atomic<GCPhase> phase { GC_PHASE_IDLE };
     bool active = false;
@@ -494,9 +495,9 @@ public:
         return (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Snapshot();
     }
     void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value);
-    bool OldActiveRemsetIsCurrent() const
+    bool OldActiveRemsetIsCurrent(uint8_t currentBuffer) const
     {
-        return oldCycle.ActiveRemsetIsCurrent(youngCycle.Sequence());
+        return oldCycle.ActiveRemsetIsCurrent(currentBuffer);
     }
     GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
     virtual Generation ActiveForwardingGeneration() const;
