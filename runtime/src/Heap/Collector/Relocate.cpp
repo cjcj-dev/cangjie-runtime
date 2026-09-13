@@ -2218,15 +2218,12 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
     const size_t size = RegionSpace::GetAllocSize(*obj);
     bool allocatedHere = false;
     if (toObj == nullptr) {
-        AllocBuffer* buf = AllocBuffer::GetOrCreateAllocBuffer();
-        RegionInfo* tl = buf->GetRegion();
-        if (tl != nullptr && tl != RegionInfo::NullRegion()) {
-            toObj = reinterpret_cast<BaseObject*>(tl->Alloc(size));
-        }
-        if (toObj == nullptr) {
-            toObj = reinterpret_cast<BaseObject*>(
-                buf->Allocate(size, AllocType::MOVEABLE_OBJECT));
-        }
+        // ZHeap::alloc_object_for_relocation / ZObjectAllocator::alloc_for_relocation:
+        // destination age owns the shared allocator; relocation never refills a TLAB.
+        const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
+        const PageAge toAge = ComputeToAge(fromAge, GetGCStats().tenuringThreshold);
+        auto& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+        toObj = reinterpret_cast<BaseObject*>(manager.AllocSharedObject(size, toAge, true));
         if (toObj == nullptr) {
             return nullptr;
         }

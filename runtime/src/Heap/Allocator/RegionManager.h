@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <list>
+#include <memory>
 #include <map>
 #include <set>
 #include <thread>
@@ -26,6 +27,7 @@
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "RangeRegistry.h"
+#include "PageAge.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/Collector/RelocationRequestQueue.h"
 #include "RegionList.h"
@@ -213,6 +215,9 @@ public:
           oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
           largeTraceRegions("large trace regions")
     {
+        for (PageAge age : kPageAgeRangeAll) {
+            objectAllocators[untype(age)] = std::make_unique<PerAgeObjectAllocator>(age);
+        }
         tlabAllocatingThreads.Sample(1);
         tlabRequestedFraction.Sample(0.1);
     }
@@ -224,6 +229,11 @@ public:
     // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
     RegionInfo* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
                                           bool allowSaferegion = true);
+
+    // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
+    // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
+    uintptr_t AllocSharedObject(size_t size, PageAge age, bool nonBlocking = false);
+    void RetireSharedPages(PageAgeRange ages);
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.
@@ -393,8 +403,6 @@ public:
         return addr;
     }
 
-    // note: AllocSmall() is always performed by region owned by mutator thread
-    // thus no need to do in RegionManager
     // caller assures size is truely large (> region size)
     uintptr_t AllocLarge(size_t size, bool clearPayload = true)
     {
@@ -1025,7 +1033,7 @@ private:
     void ReclaimRetiredRegion(RegionInfo* region);
     void ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region);
     void ReleaseRetiredRegion(RegionInfo* region);
-    void ReturnRetiredPageMemory(const PageMemory& memory);
+    void ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion = true);
 
     BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
@@ -1161,6 +1169,23 @@ private:
             region->ClearLiveInfo(view);
         });
     }
+
+    // ZObjectAllocator::PerAge and ZPerCPU<ZPage*>. Contended slots have
+    // independent cache lines; CPU migration selects a fresh index per call.
+    struct SharedSmallPage {
+        std::atomic<RegionInfo*> page{nullptr};
+        char padding[64 - sizeof(std::atomic<RegionInfo*>)];
+    };
+    struct PerAgeObjectAllocator {
+        explicit PerAgeObjectAllocator(PageAge pageAge);
+        const PageAge age;
+        std::unique_ptr<SharedSmallPage[]> smallPages;
+    };
+    static size_t SharedPageCPUCount();
+    static size_t CurrentSharedPageCPU();
+    RegionInfo* AllocateSharedPage(size_t units, RegionInfo::UnitRole role, PageAge age, bool nonBlocking);
+    void UndoSharedPage(RegionInfo* page);
+    std::unique_ptr<PerAgeObjectAllocator> objectAllocators[kPageAgeCount];
 
     FreeRegionManager freeRegionManager;
 

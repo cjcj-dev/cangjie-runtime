@@ -318,12 +318,8 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // gcvroot Z3: poison new object bytes before header install (MRT_GCV2_ZAP_ALLOC=1).
     if (addr != 0) {
         HeapZap::ZapAllocated(addr, totalSize);
-        RegionInfo* reg = nullptr;
-        if (tlRegion != nullptr && tlRegion != RegionInfo::NullRegion()) {
-            reg = tlRegion;
-        } else {
-            reg = RegionInfo::TryGetRegionInfoAt(addr);
-        }
+        // The slow path can allocate outside the TLAB in a shared CPU page.
+        RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(addr);
         // twoflags: POST_TRACE+ allocs have no mark/isTrace coverage — stamp CSet exclusion.
         // TRACE-phase new regions already get isTraceRegion (implicit black). Do not stamp
         // TRACE (would exclude most young regions until next major → minor starvation).
@@ -422,6 +418,13 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = theAllocator.GetRegionManager();
 
+    // MemAllocator::mem_allocate_inside_tlab_slow / outside_tlab: an
+    // unrepresentable TLAB request belongs to the object allocator (eden).
+    const size_t tlabSize = ComputeTLABSize(totalSize, manager.GetThreadLocalRegionSize());
+    if (tlabSize == 0) {
+        return manager.AllocSharedObject(totalSize, PageAge::eden);
+    }
+
     // allocate from thread local region
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
         if (UNLIKELY(RegionIsInRelocationSet(tlRegion))) {
@@ -473,10 +476,10 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     // AllocateThreadLocalRegion is a safepoint, in which cj thread rescheule may happen.
     // tlRegion is bound to specific thread, so we need to forbid reschedule.
     CJThreadPreemptOffCntAdd();
-    r = manager.AllocateThreadLocalRegion(ComputeTLABSize(totalSize, manager.GetThreadLocalRegionSize()));
+    r = manager.AllocateThreadLocalRegion(tlabSize);
     CJThreadPreemptOffCntSub();
     if (UNLIKELY(r == nullptr)) {
-        return 0;
+        return manager.AllocSharedObject(totalSize, PageAge::eden);
     }
     // tlRegion may be set in PreforwardPhase handler while allocating region.
     // Null region means tlRegion is not set.
