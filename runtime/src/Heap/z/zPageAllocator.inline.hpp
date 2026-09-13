@@ -550,54 +550,7 @@ private:
 
 
 
-inline bool RegionManager::RouteRegion(RegionInfo* fromRegionInfo, bool mayWait)
-    {
-        // fysfixb / 352ed4e8: non-ghost is a defined negative answer, not invariant break.
-        // Producers that clear ghost: DispelGhostFromRegion (PrepareFromRegionList),
-        // ClearGhostRegionBit (raw-pin POST_TRACE), TakeRegion reuse. Consumers
-        // (ForwardRegion / TryForwardObject) may still hold a region* after the
-        // carrier retired or after liveBytes==0 skipped install (pre-a2e7ee37).
-        // Soft-null matches RouteObject's GetGhostFromRegionAt==null path.
-        if (UNLIKELY(!fromRegionInfo->IsGhostFromRegion())) {
-            VLOG(REPORT,
-                 "[GCV2][ghost-softnull] region=%p start=%#zx live=%zu route=%u young=%u "
-                 "auth=%u — RouteRegion soft-miss (ghost cleared or never installed)",
-                 fromRegionInfo, fromRegionInfo->GetRegionStart(), fromRegionInfo->GetLiveByteCount(),
-                 static_cast<unsigned>(fromRegionInfo->RelocateObserve()),
-                 static_cast<unsigned>(fromRegionInfo->IsYoungRegion()),
-                 static_cast<unsigned>(fromRegionInfo->IsLiveCountAuthoritative()));
-            return false;
-        }
-        // zRelocate.cpp:1155-1158 claimant runs page work; consumers wait (zRelocate.cpp:403-409).
-        auto owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
-        if (owner && owner->is_done()) {
-            return !owner->in_place();
-        }
-        if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
-            if (RelocateClaimedPage(fromRegionInfo)) {
-                return true;
-            }
-            owner->set_in_place();
-            return false;
-        }
-        if (!mayWait) {
-            return false;
-        }
-        while (true) {
-            owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
-            if (owner && owner->is_done()) {
-                return !owner->in_place();
-            }
-            if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
-                if (RelocateClaimedPage(fromRegionInfo)) {
-                    return true;
-                }
-                owner->set_in_place();
-                return false;
-            }
-            sched_yield();
-        }
-    }
+
 
 
 

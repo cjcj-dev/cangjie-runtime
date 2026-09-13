@@ -1346,10 +1346,8 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager10InitializeEyy @1409
     _ZN12MapleRuntime13RegionManager10TakeRegionEyNS_10RegionInfo8UnitRoleEb @1410
     _ZN12MapleRuntime13RegionManager11AllocPinnedEy @1411
-    _ZN12MapleRuntime13RegionManager11RouteRegionEPNS_10RegionInfoE @1412
     _ZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoE @1413
     _ZN12MapleRuntime13RegionManager13CompactRegionEPNS_10RegionInfoE @1414
-    _ZN12MapleRuntime13RegionManager13CompactRegionEPNS_10RegionInfoES2_ @1415
     _ZN12MapleRuntime13RegionManager13ForwardRegionEPNS_10RegionInfoE @1416
     _ZN12MapleRuntime13RegionManager13ReclaimRegionEPNS_10RegionInfoE @1417
     _ZN12MapleRuntime13RegionManager13ReleaseRegionEPNS_10RegionInfoE @1418

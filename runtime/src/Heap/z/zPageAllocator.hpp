@@ -575,7 +575,6 @@ public:
     // will find it; CompactRegion leaves it on tlRegionList, which no builder walks.
     void RehomeCompactedInPlaceRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region);
-    void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
     void ExemptFromRegion(RegionInfo* region);
     // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
@@ -760,7 +759,6 @@ public:
 
 
 
-    bool RouteRegion(RegionInfo* fromRegionInfo, bool mayWait = true);
 
     template<Generation G>
     void PrepareFromRegionList();

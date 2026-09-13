@@ -14,10 +14,9 @@
 
 namespace MapleRuntime {
 
-// zForwardingEntry.hpp:32-47 was populated:1 | to_offset:45 | from_index:18 (2 MiB pages).
-// Our regions exceed 2 MiB; 18-bit from_index sends those inserts to the exact-key overflow receipt.
-// while the copy still stamped FORWARDED. D7-a: to_offset 45→40 (1 TiB heap),
-// from_index 18→23 (64 MiB region). kMax* still refuse rather than truncate.
+// ZForwardingEntry packs a populated bit and the from/to indices in one CAS word.
+// This port uses 23 from-index bits for its 64 MiB regions and 40 heap-offset
+// bits for the supported heap address range; there is no parallel mapping.
 class ForwardingEntry {
 public:
     static constexpr size_t kPopulatedBits = 1;

@@ -142,7 +142,6 @@ public:
     explicit ForwardTable(RegionSpace& space) : theSpace(space) {}
 
     // if region is compacted, return false.
-    bool RouteRegion(RegionInfo* region) { return theSpace.GetRegionManager().RouteRegion(region); }
 
     template<Generation G>
     void PrepareForwardTable()

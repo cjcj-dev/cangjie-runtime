@@ -3212,7 +3212,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartRejectsNonU
 
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, state.region);
-    manager.CompactRegion(state.region, state.destination);
+    manager.CompactRegion(state.region);
     state.region->MarkForwardingDone();
 
     BaseObject* compactedStart = from_region_addr(state.region->GetRegionStart());
@@ -3236,7 +3236,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartWithUsableT
 
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, state.region);
-    manager.CompactRegion(state.region, state.destination);
+    manager.CompactRegion(state.region);
     state.region->MarkForwardingDone();
 
     BaseObject* compactedStart = from_region_addr(state.region->GetRegionStart());
@@ -3760,7 +3760,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt
     const auto request = queue.Add(state.region, from);
     GC_EXPECT_TRUE(request.accepted);
 
-    manager.CompactRegion(state.region, state.destination);
+    manager.CompactRegion(state.region);
 
     (void)queue.Wait(request.request);
     const MAddress receipt = request.request->page_forwarding()->find(from);
@@ -3789,7 +3789,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
     const auto request = queue.Add(state.region, from);
     GC_EXPECT_TRUE(request.accepted);
 
-    manager.CompactRegion(state.region, state.destination);
+    manager.CompactRegion(state.region);
     state.region->MarkForwardingDone();
 
     (void)queue.Wait(request.request);
@@ -3921,7 +3921,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     buffer->SetRegion(routeDestination);
-    GC_EXPECT_TRUE(manager.RouteRegion(region));
+    GC_EXPECT_TRUE(manager.RelocateClaimedPage(region));
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
