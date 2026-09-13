@@ -5,11 +5,6 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #pragma once
-#include "Heap/z/zGranuleMap.hpp"
-#include "Heap/z/zIndexDistributor.hpp"
-namespace MapleRuntime {
-// zPageTable.inline.hpp:79-99. The map includes reservation holes. A page
-#pragma once
 #include "Heap/z/zPageTable.hpp"
 
 namespace MapleRuntime {
