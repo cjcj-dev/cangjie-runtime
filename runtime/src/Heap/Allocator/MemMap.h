@@ -98,6 +98,13 @@ public:
     virtual bool Protect(void* addr, size_t size, int prot) = 0;
     virtual size_t Release(void* addr, size_t size, uint32_t numaNode) = 0;
     virtual bool Unreserve(void* addr, size_t size) = 0;
+    // zPhysicalMemoryManager separates committing backing from mapping it.
+    virtual size_t CommitBacking(void* backing, size_t size, int prot, uint32_t node, bool bind)
+    { return Commit(backing, size, prot, node, bind); }
+    virtual bool MapBacking(void* addr, void* backing, size_t, int) { return addr == backing; }
+    virtual bool UnmapBacking(void*, size_t) { return true; }
+    virtual bool CanRemapBacking() const { return false; }
+
 };
 
 class MemMap {
@@ -149,6 +156,14 @@ public:
     size_t ReleaseMemory(void* addr, size_t size);
     size_t ReleaseMemory(void* addr, size_t size, uint32_t numaNode);
     bool ProtectMemory(void* addr, size_t size, int prot);
+    struct BackingSegment {
+        uintptr_t backing;
+        size_t size;
+        uint32_t node;
+    };
+    // Detached segments remain in committedRanges and count towards capacity.
+    bool StashSegments(const std::vector<MemoryRange>& ranges, std::vector<BackingSegment>& stash);
+    void RestoreSegments(const std::vector<MemoryRange>& ranges, const std::vector<BackingSegment>& stash);
     size_t GetCommittedSize() const;
     size_t GetCommittedSize(uintptr_t start, size_t size) const;
 
@@ -181,8 +196,17 @@ private:
     MemMapBackend* backend{ nullptr };
     bool bindNuma{ false };
     mutable std::mutex backingMutex;
-    std::vector<MemoryRange> committedRanges;
-    void RecordBacking(uintptr_t start, size_t size, bool release);
+    struct CommittedRange {
+        uintptr_t start;
+        size_t size;
+        uintptr_t backing;
+        uint32_t node;
+        bool mapped;
+        uintptr_t End() const { return start + size; }
+    };
+    std::vector<CommittedRange> committedRanges;
+    void SplitBackingAt(uintptr_t address);
+    MemoryRange FindFreeBacking(uintptr_t preferred, size_t size, uint32_t node) const;
 
     MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, ReservationRegistry&& registry,
            NumaPartitionRegistry&& partitions, MemMapBackend& osBackend, bool shouldBindNuma);

@@ -108,6 +108,13 @@ public:
 
     size_t Commit(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) override
     {
+        const size_t committed = CommitBacking(addr, size, prot, numaNode, bindNuma);
+        if (committed != 0) { CHECK(MapBacking(addr, addr, committed, prot)); }
+        return committed;
+    }
+
+    size_t CommitBacking(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) override
+    {
 #ifdef _WIN64
         (void)prot;
         (void)numaNode;
@@ -133,15 +140,48 @@ public:
                 LOG(RTLOG_WARNING, "backing NUMA preference reset failed: %d", errno);
             }
         }
-        if (committed != 0) {
-            void* mapped = mmap(addr, committed, prot, MAP_SHARED | MAP_FIXED, file->fd, offset);
-            CHECK_DETAIL(mapped == addr, "failed to map committed backing: %d", errno);
-        }
+        (void)prot;
         return committed;
 #else
         (void)numaNode;
         (void)bindNuma;
         return mprotect(addr, size, prot) == 0 ? size : 0;
+#endif
+    }
+
+    bool CanRemapBacking() const override
+    {
+#if defined(__linux__)
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    bool MapBacking(void* addr, void* backing, size_t size, int prot) override
+    {
+#if defined(__linux__)
+        std::lock_guard<std::mutex> lock(filesMutex);
+        const BackingFile* file = FindFile(backing, size);
+        if (file == nullptr) { return false; }
+        const size_t offset = reinterpret_cast<uintptr_t>(backing) - file->start;
+        return mmap(addr, size, prot, MAP_SHARED | MAP_FIXED, file->fd, offset) == addr;
+#else
+        (void)size;
+        (void)prot;
+        return addr == backing;
+#endif
+    }
+
+    bool UnmapBacking(void* addr, size_t size) override
+    {
+#if defined(__linux__)
+        return mmap(addr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_NORESERVE,
+                    -1, 0) == addr;
+#else
+        (void)addr;
+        (void)size;
+        return true;
 #endif
     }
 
@@ -602,92 +642,180 @@ MemMap::MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, Res
     memMappedEndAddr = reinterpret_cast<void*>(reservationRegistry.Ranges().back().End());
 }
 
+MemoryRange MemMap::FindFreeBacking(uintptr_t preferred, size_t size, uint32_t node) const
+{
+    // zPhysicalMemoryManager::alloc: backing indices are independent of the
+    // mapped virtual address. The committed segment ledger is authoritative.
+    std::vector<MemoryRange> occupied;
+    for (const auto& range : committedRanges) { occupied.push_back({range.backing, range.size}); }
+    std::sort(occupied.begin(), occupied.end(), [](const MemoryRange& a, const MemoryRange& b) {
+        return a.start < b.start;
+    });
+    for (const auto& partition : numaPartitions.Ranges()) {
+        if (partition.node != node) { continue; }
+        uintptr_t cursor = partition.range.start;
+        if (!backend->CanRemapBacking()) {
+            if (preferred < cursor || preferred >= partition.range.End()) { continue; }
+            cursor = preferred;
+        }
+        for (const auto& used : occupied) {
+            if (used.End() <= cursor) { continue; }
+            if (used.start >= partition.range.End()) { break; }
+            if (used.start > cursor) { return {cursor, std::min(size, used.start - cursor)}; }
+            cursor = used.End();
+        }
+        if (cursor < partition.range.End()) {
+            return {cursor, std::min(size, partition.range.End() - cursor)};
+        }
+    }
+    return {};
+}
+
+void MemMap::SplitBackingAt(uintptr_t address)
+{
+    for (size_t i = 0; i < committedRanges.size(); ++i) {
+        auto& range = committedRanges[i];
+        if (!range.mapped || address <= range.start || address >= range.End()) { continue; }
+        const size_t prefix = address - range.start;
+        const CommittedRange tail{address, range.size - prefix, range.backing + prefix, range.node, true};
+        range.size = prefix;
+        committedRanges.push_back(tail);
+        return;
+    }
+}
+
 size_t MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release)
 {
     std::lock_guard<std::mutex> lock(backingMutex);
     const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
-    if (!IsValidRange(start, size) || !reservationRegistry.Contains(start, size)) {
-        return 0;
-    }
-    // Validate an explicit owner before the first backend call.  A cross-node
-    // free must be rejected atomically, not after partially releasing one side.
-    if (requiredNode != nullptr && !numaPartitions.Owns(start, size, *requiredNode)) {
-        return 0;
-    }
-    const uintptr_t end = start + size;
+    if (!IsValidRange(start, size) || !reservationRegistry.Contains(start, size) ||
+        (requiredNode != nullptr && !numaPartitions.Owns(start, size, *requiredNode))) { return 0; }
     uintptr_t cursor = start;
-    for (const NumaPartitionRange& partition : numaPartitions.Ranges()) {
+    const uintptr_t end = start + size;
+    for (const auto& partition : numaPartitions.Ranges()) {
         const uintptr_t partStart = std::max(cursor, partition.range.start);
         const uintptr_t partEnd = std::min(end, partition.range.End());
-        if (partStart >= partEnd) {
-            continue;
-        }
-        if (partStart != cursor || (requiredNode != nullptr && *requiredNode != partition.node)) {
-            return static_cast<size_t>(cursor - start);
-        }
+        if (partStart >= partEnd) { continue; }
+        if (partStart != cursor) { break; }
         while (cursor < partEnd) {
-            uintptr_t operationEnd = partEnd;
-            if (!release) {
-                // zPageAllocator.cpp:1880: harvested backing participates in
-                // the successful prefix but must not be committed again.
-                bool harvested = false;
-                for (const auto& range : committedRanges) {
-                    if (range.End() <= cursor) { continue; }
-                    if (range.start <= cursor) {
-                        cursor = std::min(partEnd, range.End());
-                        harvested = true;
-                    } else {
-                        operationEnd = std::min(partEnd, range.start);
+            SplitBackingAt(cursor);
+            SplitBackingAt(partEnd);
+            auto found = std::find_if(committedRanges.begin(), committedRanges.end(), [cursor](const CommittedRange& r) {
+                return r.mapped && r.start == cursor;
+            });
+            if (release) {
+                if (found == committedRanges.end()) {
+                    uintptr_t next = partEnd;
+                    for (const auto& r : committedRanges) {
+                        if (r.mapped && r.start > cursor) { next = std::min(next, r.start); }
                     }
-                    break;
+                    cursor = next;
+                    continue;
                 }
-                if (harvested) { continue; }
-            }
-            const size_t requested = operationEnd - cursor;
-            const size_t completed = release
-                ? backend->Release(reinterpret_cast<void*>(cursor), requested, partition.node)
-                : backend->Commit(reinterpret_cast<void*>(cursor), requested, commitProt, partition.node, bindNuma);
-            CHECK(completed <= requested);
-            RecordBacking(cursor, completed, release);
-            cursor += completed;
-            if (completed != requested) {
-                return static_cast<size_t>(cursor - start);
+                const size_t requested = found->size;
+                const size_t done = backend->Release(reinterpret_cast<void*>(found->backing), requested, found->node);
+                CHECK(done <= requested);
+                if (done != 0) { CHECK(backend->UnmapBacking(reinterpret_cast<void*>(cursor), done)); }
+                found->start += done;
+                found->backing += done;
+                found->size -= done;
+                if (found->size == 0) { committedRanges.erase(found); }
+                cursor += done;
+                if (done != requested) { return cursor - start; }
+            } else {
+                if (found != committedRanges.end()) { cursor += found->size; continue; }
+                uintptr_t next = partEnd;
+                for (const auto& r : committedRanges) {
+                    if (r.mapped && r.start > cursor) { next = std::min(next, r.start); }
+                }
+                const MemoryRange physical = FindFreeBacking(cursor, next - cursor, partition.node);
+                if (physical.IsNull()) { return cursor - start; }
+                const size_t done = backend->CommitBacking(reinterpret_cast<void*>(physical.start), physical.size,
+                                                           commitProt, partition.node, bindNuma);
+                CHECK(done <= physical.size);
+                if (done != 0) {
+                    CHECK(backend->MapBacking(reinterpret_cast<void*>(cursor), reinterpret_cast<void*>(physical.start),
+                                              done, commitProt));
+                    committedRanges.push_back({cursor, done, physical.start, partition.node, true});
+                }
+                cursor += done;
+                if (done != physical.size) { return cursor - start; }
             }
         }
-        if (cursor == end) {
-            return size;
-        }
+        if (cursor == end) { return size; }
     }
-    return static_cast<size_t>(cursor - start);
+    return cursor - start;
 }
 
-// zNMT.cpp:60-65: register exactly the completed backing range. This is
-// also the page allocator's capacity source, including retained prefixes.
-void MemMap::RecordBacking(uintptr_t start, size_t size, bool release)
+bool MemMap::StashSegments(const std::vector<MemoryRange>& ranges, std::vector<BackingSegment>& stash)
 {
-    if (size == 0) { return; }
-    const uintptr_t end = start + size;
-    std::vector<MemoryRange> updated;
-    for (const auto& range : committedRanges) {
-        if (range.End() <= start || range.start >= end) {
-            updated.push_back(range);
-            continue;
+    std::lock_guard<std::mutex> lock(backingMutex);
+    CHECK(stash.empty());
+    if (!backend->CanRemapBacking()) { return false; }
+    // Validate the entire claim before the first unmap.
+    for (const auto& source : ranges) {
+        size_t present = 0;
+        for (const auto& range : committedRanges) {
+            if (!range.mapped) { continue; }
+            const uintptr_t lo = std::max(source.start, range.start);
+            const uintptr_t hi = std::min(source.End(), range.End());
+            if (hi > lo) { present += hi - lo; }
         }
-        if (range.start < start) { updated.push_back({ range.start, start - range.start }); }
-        if (range.End() > end) { updated.push_back({ end, range.End() - end }); }
+        CHECK(present == source.size);
     }
-    if (!release) { updated.push_back({ start, size }); }
-    std::sort(updated.begin(), updated.end(), [](const MemoryRange& a, const MemoryRange& b) {
-        return a.start < b.start;
+    for (const auto& source : ranges) {
+        SplitBackingAt(source.start);
+        SplitBackingAt(source.End());
+        CHECK(backend->UnmapBacking(reinterpret_cast<void*>(source.start), source.size));
+        for (auto& range : committedRanges) {
+            if (!range.mapped || range.start < source.start || range.End() > source.End()) { continue; }
+            stash.push_back({range.backing, range.size, range.node});
+            range.mapped = false;
+        }
+    }
+    // ZPhysicalMemoryManager::stash_segments sorts indices to coalesce maps.
+    std::sort(stash.begin(), stash.end(), [](const BackingSegment& a, const BackingSegment& b) {
+        return a.backing < b.backing;
     });
-    committedRanges.clear();
-    for (const auto& range : updated) {
-        if (!committedRanges.empty() && committedRanges.back().End() == range.start) {
-            committedRanges.back().size += range.size;
-        } else {
-            committedRanges.push_back(range);
+    return true;
+}
+
+void MemMap::RestoreSegments(const std::vector<MemoryRange>& ranges, const std::vector<BackingSegment>& stash)
+{
+    std::lock_guard<std::mutex> lock(backingMutex);
+    size_t total = 0;
+    for (const auto& range : ranges) { total += range.size; }
+    size_t stashed = 0;
+    for (const auto& segment : stash) { stashed += segment.size; }
+    CHECK(total == stashed);
+    // Each token names exactly one detached entry, which remains capacity-owned
+    // throughout the virtual registry shuffle (zPhysicalMemoryManager.cpp:384).
+    for (const auto& segment : stash) {
+        auto entry = std::find_if(committedRanges.begin(), committedRanges.end(), [&](const CommittedRange& r) {
+            return !r.mapped && r.backing == segment.backing && r.size == segment.size;
+        });
+        CHECK(entry != committedRanges.end());
+        committedRanges.erase(entry);
+    }
+    size_t token = 0;
+    size_t offset = 0;
+    for (const auto& range : ranges) {
+        uintptr_t cursor = range.start;
+        while (cursor < range.End()) {
+            CHECK(token < stash.size());
+            const auto& segment = stash[token];
+            const size_t amount = std::min(range.End() - cursor, segment.size - offset);
+            CHECK(reservationRegistry.Contains(cursor, amount));
+            CHECK(numaPartitions.Owns(cursor, amount, segment.node));
+            CHECK(backend->MapBacking(reinterpret_cast<void*>(cursor),
+                                      reinterpret_cast<void*>(segment.backing + offset), amount, commitProt));
+            committedRanges.push_back({cursor, amount, segment.backing + offset, segment.node, true});
+            cursor += amount;
+            offset += amount;
+            if (offset == segment.size) { ++token; offset = 0; }
         }
     }
+    CHECK(token == stash.size() && offset == 0);
 }
 
 size_t MemMap::GetCommittedSize() const
@@ -704,6 +832,7 @@ size_t MemMap::GetCommittedSize(uintptr_t start, size_t size) const
     if (AddOverflows(start, size)) { return 0; }
     size_t committed = 0;
     for (const auto& range : committedRanges) {
+        if (!range.mapped) { continue; }
         const uintptr_t lo = std::max(start, range.start);
         const uintptr_t hi = std::min(start + size, range.End());
         if (hi > lo) { committed += hi - lo; }
