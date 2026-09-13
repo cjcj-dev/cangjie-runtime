@@ -2112,20 +2112,24 @@ public:
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 
-    static void CommitUnits(size_t idx, size_t cnt)
+    static size_t CommitUnits(size_t idx, size_t cnt)
     {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
-        size_t size = cnt * RegionInfo::UNIT_SIZE;
-        const size_t committed = UnitInfo::memoryOwner == nullptr ? 0 :
-                                 UnitInfo::memoryOwner->CommitMemory(unitAddress, size);
-        if (committed != size && committed != 0 && UnitInfo::memoryOwner != nullptr) {
-            const size_t cleaned = UnitInfo::memoryOwner->ReleaseMemory(unitAddress, committed);
-            CHECK_DETAIL(cleaned == committed,
-                         "partial commit cleanup failed idx=%zu units=%zu committed=%zu cleaned=%zu", idx, cnt,
-                         committed, cleaned);
-        }
-        CHECK_DETAIL(committed == size,
-                     "commit outside heap reservation idx=%zu units=%zu", idx, cnt);
+        const size_t size = cnt * RegionInfo::UNIT_SIZE;
+        // zPhysicalMemoryManager.cpp:230: retain and report the prefix.
+        return UnitInfo::memoryOwner == nullptr ? 0 :
+               UnitInfo::memoryOwner->CommitMemory(unitAddress, size);
+    }
+
+    static size_t GetCommittedCapacity()
+    {
+        return UnitInfo::memoryOwner == nullptr ? 0 : UnitInfo::memoryOwner->GetCommittedSize();
+    }
+
+    static size_t GetCommittedUnitBytes(size_t idx, size_t cnt)
+    {
+        return UnitInfo::memoryOwner == nullptr ? 0 :
+               UnitInfo::memoryOwner->GetCommittedSize(GetUnitAddress(idx), cnt * UNIT_SIZE);
     }
 
     static void ReleaseUnits(size_t idx, size_t cnt)

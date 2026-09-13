@@ -122,14 +122,21 @@ public:
     // zPageAllocator.cpp:1470-1515: consume the already-owned vmem outside
     // the allocator lock. A02p owns partial-commit results and suffix cleanup.
     RegionInfo* MaterializePageMemory(PageMemory& memory, RegionInfo::UnitRole role,
-                                     bool expectPhysicalMem, bool clearPayload)
+                                     bool expectPhysicalMem, bool clearPayload, size_t& committedUnits)
     {
+        (void)expectPhysicalMem;
         const size_t idx = memory.index;
         const size_t num = memory.units;
+        committedUnits = memory.committed ? num : 0;
         const bool wasCommitted = memory.committed;
         FromPageDetach::ReusePermitScope reusePermit;
         if (!wasCommitted) {
-            RegionInfo::CommitUnits(idx, num);
+            const size_t committed = RegionInfo::CommitUnits(idx, num);
+            CHECK(committed <= num * RegionInfo::UNIT_SIZE && committed % RegionInfo::UNIT_SIZE == 0);
+            committedUnits = committed / RegionInfo::UNIT_SIZE;
+            if (committedUnits != num) {
+                return nullptr;
+            }
             memory.committed = true;
         }
         if (wasCommitted && clearPayload) {
@@ -137,7 +144,7 @@ public:
         }
         RegionInfo* region = RegionInfo::InitRegion(idx, num, role);
         if (!wasCommitted) {
-            PrehandleReleasedUnit(expectPhysicalMem && clearPayload, idx, num);
+            PrehandleReleasedUnit(clearPayload, idx, num);
         }
         return region;
     }
