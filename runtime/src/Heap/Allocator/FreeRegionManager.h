@@ -65,7 +65,7 @@ public:
         return region;
     }
 
-    void AddGarbageUnits(UnitIndex idx, UnitCount num);
+    void AddGarbageUnits(UnitIndex idx, UnitCount num, bool allowSaferegion = true);
 
     // mark-epoch quarantine: units reclaimed after DispelGhost must not enter the dirty
     // tree (mutator TakeRegion → ClearUnits) until the next major concurrent mark ends.
@@ -100,7 +100,7 @@ public:
         return true;
     }
 
-    void AddReleaseUnits(UnitIndex idx, UnitCount num);
+    void AddReleaseUnits(UnitIndex idx, UnitCount num, bool allowSaferegion = true);
     UnitCount GetDirtyUnitCount() const;
     UnitCount GetVirtualUnitCount() const;
     UnitCount GetVirtualMaxBlock() const;

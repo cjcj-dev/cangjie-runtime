@@ -1,0 +1,182 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+
+// ZObjectAllocator::PerAge::alloc_object_in_shared_page / retire_pages and
+// ZPage::alloc_object_atomic. OpenJDK has no dedicated object-allocator or
+// ZPerCPU gtest; these deterministic cases cover those product invariants,
+// with age enumeration corresponding to test_zPageAge.cpp.
+#include <algorithm>
+#include <atomic>
+#include <limits>
+#include <thread>
+#include <vector>
+#include "gc_heap_fixture.hpp"
+#include "gc_unittest.hpp"
+#if defined(__linux__)
+#include <sched.h>
+#include <unistd.h>
+#endif
+
+using namespace MapleRuntime;
+using namespace MapleRuntime::GcUnit;
+
+GC_OTHER_VM_TEST(SharedSmallPage, AtomicBoundsPreserveTop)
+{
+    GcHeapFixture fixture;
+    RegionInfo* page = fixture.region0;
+    const uintptr_t start = page->GetRegionStart();
+    page->SetRegionAllocPtr(start);
+    const size_t capacity = page->GetRegionSize();
+    GC_EXPECT_EQ(page->AtomicAlloc(capacity - 16), start);
+    const uintptr_t top = page->GetRegionAllocPtr();
+    GC_EXPECT_EQ(page->AtomicAlloc(32), uintptr_t{0});
+    GC_EXPECT_EQ(page->GetRegionAllocPtr(), top);
+    GC_EXPECT_EQ(page->AtomicAlloc(std::numeric_limits<size_t>::max()), uintptr_t{0});
+    GC_EXPECT_EQ(page->GetRegionAllocPtr(), top);
+    GC_EXPECT_EQ(page->AtomicAlloc(16), top);
+    GC_EXPECT_EQ(page->GetRegionAllocPtr(), page->GetRegionEnd());
+}
+
+GC_OTHER_VM_TEST(SharedSmallPage, AtomicReservationsDoNotOverlap)
+{
+    GcHeapFixture fixture;
+    RegionInfo* page = fixture.region0;
+    page->SetRegionAllocPtr(page->GetRegionStart());
+    constexpr size_t threads = 4;
+    constexpr size_t perThread = 8;
+    constexpr size_t bytes = 16;
+    uintptr_t addresses[threads][perThread]{};
+    std::atomic<size_t> ready{0};
+    std::vector<std::thread> workers;
+    for (size_t worker = 0; worker < threads; ++worker) {
+        workers.emplace_back([&, worker] {
+            ready.fetch_add(1);
+            while (ready.load() != threads) { std::this_thread::yield(); }
+            for (size_t index = 0; index < perThread; ++index) {
+                addresses[worker][index] = page->AtomicAlloc(bytes);
+            }
+        });
+    }
+    for (auto& worker : workers) { worker.join(); }
+    std::vector<uintptr_t> sorted;
+    for (const auto& arm : addresses) {
+        sorted.insert(sorted.end(), std::begin(arm), std::end(arm));
+    }
+    std::sort(sorted.begin(), sorted.end());
+    for (size_t index = 0; index < sorted.size(); ++index) {
+        GC_EXPECT_EQ(sorted[index], page->GetRegionStart() + index * bytes);
+    }
+}
+
+#if defined(__linux__)
+namespace {
+// A synthetic, single-caller heap, using the product page allocator and page
+// table. There are no registered mutators; retire_pages has a quiescent world.
+struct SharedPageFixture {
+    MemMap* map;
+    RegionManager manager;
+    SharedPageFixture()
+    {
+        constexpr size_t units = 64;
+        const size_t metadata = RegionManager::GetMetadataSize(units);
+        map = MemMap::MapMemory(metadata + units * RegionInfo::UNIT_SIZE, metadata);
+        GC_EXPECT_TRUE(map != nullptr);
+        HeapParam params{};
+        params.regionSize = RegionInfo::UNIT_SIZE / KB;
+        params.exemptionThreshold = 0.8;
+        manager.Initialize(units, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, params, 0.5);
+    }
+    ~SharedPageFixture() { MemMap::DestroyMemMap(map); }
+};
+
+class CPUAffinity {
+public:
+    CPUAffinity() : count(static_cast<size_t>(sysconf(_SC_NPROCESSORS_CONF))),
+                    bytes(CPU_ALLOC_SIZE(count)), saved(CPU_ALLOC(count)), selected(CPU_ALLOC(count))
+    {
+        GC_EXPECT_TRUE(saved != nullptr && selected != nullptr);
+        GC_EXPECT_EQ(sched_getaffinity(0, bytes, saved), 0);
+        for (size_t cpu = 0; cpu < count; ++cpu) {
+            if (CPU_ISSET_S(cpu, bytes, saved)) { available.push_back(cpu); }
+        }
+        GC_EXPECT_TRUE(!available.empty());
+        Select(available.front());
+    }
+    ~CPUAffinity()
+    {
+        (void)sched_setaffinity(0, bytes, saved);
+        CPU_FREE(selected);
+        CPU_FREE(saved);
+    }
+    void Select(size_t cpu)
+    {
+        CPU_ZERO_S(bytes, selected);
+        CPU_SET_S(cpu, bytes, selected);
+        GC_EXPECT_EQ(sched_setaffinity(0, bytes, selected), 0);
+    }
+    std::vector<size_t> available;
+private:
+    size_t count;
+    size_t bytes;
+    cpu_set_t* saved;
+    cpu_set_t* selected;
+};
+}
+
+GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
+{
+    CPUAffinity affinity;
+    SharedPageFixture fixture;
+    auto& manager = fixture.manager;
+    RegionInfo* pages[kPageAgeCount]{};
+    for (PageAge age : kPageAgeRangeAll) {
+        const uintptr_t address = manager.AllocSharedObject(16, age, true);
+        GC_EXPECT_TRUE(address != 0);
+        RegionInfo* page = RegionInfo::GetRegionInfoAt(address);
+        pages[untype(age)] = page;
+        GC_EXPECT_EQ(page->IsYoungRegion(), age != PageAge::old);
+        GC_EXPECT_EQ(page->GetYoungAge(), age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(age)));
+        GC_EXPECT_TRUE(!page->IsThreadLocalRegion());
+        GC_EXPECT_EQ(manager.AllocSharedObject(16, age, true), address + 16);
+        for (uint32_t previous = 0; previous < untype(age); ++previous) {
+            GC_EXPECT_TRUE(pages[previous] != page);
+        }
+    }
+    RegionInfo* eden = pages[untype(PageAge::eden)];
+    const size_t remaining = eden->GetRegionSize() - 32;
+    GC_EXPECT_EQ(manager.AllocSharedObject(remaining, PageAge::eden, true), eden->GetRegionStart() + 32);
+    const uintptr_t refilled = manager.AllocSharedObject(16, PageAge::eden, true);
+    GC_EXPECT_TRUE(refilled != 0);
+    GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(refilled) != eden);
+    manager.RetireSharedPages(kPageAgeRangeYoung);
+    const uintptr_t retired = manager.AllocSharedObject(16, PageAge::eden, true);
+    GC_EXPECT_TRUE(retired != 0);
+    GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(retired) != RegionInfo::GetRegionInfoAt(refilled));
+    RegionInfo* old = pages[untype(PageAge::old)];
+    GC_EXPECT_EQ(manager.AllocSharedObject(16, PageAge::old, true), old->GetRegionStart() + 32);
+    manager.RetireSharedPages(kPageAgeRangeOld);
+    const uintptr_t newOld = manager.AllocSharedObject(16, PageAge::old, true);
+    GC_EXPECT_TRUE(newOld != 0);
+    GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(newOld) != old);
+}
+
+GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
+{
+    CPUAffinity affinity;
+    SharedPageFixture fixture;
+    auto& manager = fixture.manager;
+    const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
+    GC_EXPECT_TRUE(first != 0);
+    if (affinity.available.size() < 2) {
+        std::fprintf(stderr, "SharedSmallPage: migration arm unavailable: one allowed CPU\n");
+        return;
+    }
+    affinity.Select(affinity.available.back());
+    const uintptr_t second = manager.AllocSharedObject(16, PageAge::eden, true);
+    GC_EXPECT_TRUE(second != 0);
+    GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(first) != RegionInfo::GetRegionInfoAt(second));
+    affinity.Select(affinity.available.front());
+    GC_EXPECT_EQ(manager.AllocSharedObject(16, PageAge::eden, true), first + 16);
+}
+#endif

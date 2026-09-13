@@ -36,6 +36,7 @@ set(GC_UNIT_SOURCES
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
     test_tlab_usage.cpp
+    test_shared_small_page.cpp
     test_young_weak.cpp
     test_relocation_set_selector.cpp
     test_store_barrier_buffer.cpp
