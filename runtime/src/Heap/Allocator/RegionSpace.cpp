@@ -131,14 +131,16 @@ size_t RegionSpace::UncommitIdleMemory()
         }
         size_t usedBytes = regionManager.GetUsedRegionSize();
         size_t dirtyBytes = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
-        size_t releasedBytes = regionManager.GetReleasedUnitCount() * RegionInfo::UNIT_SIZE;
+        size_t committedBytes = regionManager.GetCommittedCapacity();
         size_t garbageBytes = regionManager.GetGarbageUnitCount() * RegionInfo::UNIT_SIZE;
         size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
         size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
-        size_t flush = Uncommitter::FlushBytes(usedBytes, releasedBytes, minCapacity, chunk);
+        // zUncommitter.cpp:233: uncommit uses the same committed capacity that
+        // commit publishes, never the virtual size of a mixed-state cache.
+        size_t flush = committedBytes > minCapacity ? std::min(committedBytes - minCapacity, chunk) : 0;
         LOG(RTLOG_INFO,
-            "Uncommit: tick used=%zu dirty=%zu released=%zu garbage=%zu min=%zu flush=%zu",
-            usedBytes, dirtyBytes, releasedBytes, garbageBytes, minCapacity, flush);
+            "Uncommit: tick used=%zu dirty=%zu committed=%zu garbage=%zu min=%zu flush=%zu",
+            usedBytes, dirtyBytes, committedBytes, garbageBytes, minCapacity, flush);
         if (flush == 0) {
             break;
         }

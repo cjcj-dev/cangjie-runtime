@@ -14,7 +14,11 @@
 #if defined(__linux__)
 #include <sys/resource.h>
 #include <sys/syscall.h>
+#include <sys/vfs.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <linux/falloc.h>
+#include <cerrno>
 #elif !defined(_WIN64)
 #include <sys/resource.h>
 #endif
@@ -38,7 +42,7 @@ namespace {
 
 constexpr size_t kDefaultSafeFraction = 2;
 constexpr unsigned long kMaxNumaNodes = sizeof(unsigned long) * 8;
-constexpr int kMpolBind = 2;
+constexpr int kMpolPreferred = 1;
 constexpr int kMpolMemsAllowed = 2;
 
 bool AddOverflows(uintptr_t start, size_t size)
@@ -83,34 +87,61 @@ public:
         (void)madvise(result, size, MADV_NOHUGEPAGE);
         MRT_PRCTL(result, size, tag);
 #endif
+#if defined(__linux__)
+        // zPhysicalMemoryBacking_linux.cpp: create_fd/fallocate/map. Each
+        // reservation owns its backing file; offsets survive decommit.
+        const int fd = static_cast<int>(syscall(SYS_memfd_create, "cangjie-heap", 1U));
+        struct statfs backingStat {};
+        if (fd < 0 || ftruncate(fd, static_cast<off_t>(size)) != 0 || fstatfs(fd, &backingStat) != 0 ||
+            backingStat.f_bsize <= 0 || ALLOC_UTIL_PAGE_SIZE % backingStat.f_bsize != 0) {
+            if (fd >= 0) { close(fd); }
+            munmap(result, size);
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> lock(filesMutex);
+        files.push_back(BackingFile{ reinterpret_cast<uintptr_t>(result), size, fd,
+                                     static_cast<size_t>(backingStat.f_bsize) });
+#endif
         return result;
 #endif
     }
 
-    bool Commit(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) override
+    size_t Commit(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) override
     {
 #ifdef _WIN64
         (void)prot;
         (void)numaNode;
         (void)bindNuma;
-        return VirtualAlloc(addr, size, MEM_COMMIT, PAGE_READWRITE) != nullptr;
-#else
-#if defined(__linux__) && defined(SYS_mbind)
-        if (bindNuma) {
-            if (numaNode >= kMaxNumaNodes) {
-                return false;
-            }
+        return VirtualAlloc(addr, size, MEM_COMMIT, PAGE_READWRITE) != nullptr ? size : 0;
+#elif defined(__linux__)
+        std::lock_guard<std::mutex> lock(filesMutex);
+        const BackingFile* file = FindFile(addr, size);
+        if (file == nullptr) { return 0; }
+        // zPhysicalMemoryBacking_linux.cpp:627: policy applies while allocating
+        // backing, and is restored afterwards. NUMA preference is not a strict
+        // binding requirement: an unavailable preferred node can fall back.
+        if (bindNuma && numaNode < kMaxNumaNodes) {
             unsigned long mask = 1UL << numaNode;
-            const long rc = syscall(SYS_mbind, addr, size, kMpolBind, &mask, kMaxNumaNodes, 0UL);
-            if (rc != 0) {
-                return false;
+            if (syscall(SYS_set_mempolicy, kMpolPreferred, &mask, kMaxNumaNodes) != 0) {
+                LOG(RTLOG_WARNING, "backing NUMA preference failed: %d", errno);
             }
         }
+        const size_t offset = reinterpret_cast<uintptr_t>(addr) - file->start;
+        const size_t committed = CommitFile(*file, offset, size);
+        if (bindNuma) {
+            if (syscall(SYS_set_mempolicy, kMpolPreferred, nullptr, 0UL) != 0) {
+                LOG(RTLOG_WARNING, "backing NUMA preference reset failed: %d", errno);
+            }
+        }
+        if (committed != 0) {
+            void* mapped = mmap(addr, committed, prot, MAP_SHARED | MAP_FIXED, file->fd, offset);
+            CHECK_DETAIL(mapped == addr, "failed to map committed backing: %d", errno);
+        }
+        return committed;
 #else
         (void)numaNode;
         (void)bindNuma;
-#endif
-        return mprotect(addr, size, prot) == 0;
+        return mprotect(addr, size, prot) == 0 ? size : 0;
 #endif
     }
 
@@ -132,15 +163,26 @@ public:
 #endif
     }
 
-    bool Release(void* addr, size_t size, uint32_t numaNode) override
+    size_t Release(void* addr, size_t size, uint32_t numaNode) override
     {
         (void)numaNode;
 #ifdef _WIN64
-        return VirtualFree(addr, size, MEM_DECOMMIT) != 0;
+        return VirtualFree(addr, size, MEM_DECOMMIT) != 0 ? size : 0;
 #elif defined(__APPLE__)
-        return madvise(addr, size, MADV_FREE) == 0;
+        return madvise(addr, size, MADV_FREE) == 0 ? size : 0;
+#elif defined(__linux__)
+        std::lock_guard<std::mutex> lock(filesMutex);
+        const BackingFile* file = FindFile(addr, size);
+        if (file == nullptr) { return 0; }
+        const size_t offset = reinterpret_cast<uintptr_t>(addr) - file->start;
+        const int error = Fallocate(*file, true, offset, size);
+        if (error != 0) {
+            LOG(RTLOG_ERROR, "failed to uncommit backing: %d", error);
+            return 0;
+        }
+        return size;
 #else
-        return madvise(addr, size, MADV_DONTNEED) == 0;
+        return madvise(addr, size, MADV_DONTNEED) == 0 ? size : 0;
 #endif
     }
 
@@ -150,9 +192,121 @@ public:
         (void)size;
         return VirtualFree(addr, 0, MEM_RELEASE) != 0;
 #else
-        return munmap(addr, size) == 0;
+        if (munmap(addr, size) != 0) { return false; }
+#if defined(__linux__)
+        std::lock_guard<std::mutex> lock(filesMutex);
+        for (auto it = files.begin(); it != files.end(); ++it) {
+            if (it->start == reinterpret_cast<uintptr_t>(addr) && it->size == size) {
+                close(it->fd);
+                files.erase(it);
+                break;
+            }
+        }
+#endif
+        return true;
 #endif
     }
+
+private:
+#if defined(__linux__)
+    struct BackingFile { uintptr_t start; size_t size; int fd; size_t blockSize; };
+    std::mutex filesMutex;
+    std::vector<BackingFile> files;
+    // z_fallocate_supported: capability cached under filesMutex, not an option.
+    bool fallocateSupported{ true };
+
+    const BackingFile* FindFile(void* addr, size_t size) const
+    {
+        const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
+        for (const auto& file : files) {
+            if (start >= file.start && start - file.start <= file.size &&
+                size <= file.size - (start - file.start)) { return &file; }
+        }
+        return nullptr;
+    }
+
+    static int FillHoleCompat(const BackingFile& file, size_t offset, size_t size)
+    {
+        // zPhysicalMemoryBacking_linux.cpp:468: ordinary memfd pages use pwrite
+        // to allocate each backing block without relying on madvise or touching
+        // a mapping whose backing allocation has not yet succeeded.
+        const uint8_t data = 0;
+        for (size_t pos = offset; pos < offset + size; pos += file.blockSize) {
+            const ssize_t written = pwrite(file.fd, &data, sizeof(data), static_cast<off_t>(pos));
+            if (written == -1) { return errno; }
+            if (written != static_cast<ssize_t>(sizeof(data))) { return EIO; }
+        }
+        return 0;
+    }
+
+    int FillHole(const BackingFile& file, size_t offset, size_t size)
+    {
+        // zPhysicalMemoryBacking_linux.cpp:509: only unsupported fallocate
+        // selects compatibility allocation; other errors reach the caller.
+        if (fallocateSupported) {
+            if (fallocate(file.fd, 0, static_cast<off_t>(offset), static_cast<off_t>(size)) == 0) {
+                return 0;
+            }
+            const int error = errno;
+            if (error != ENOSYS && error != EOPNOTSUPP) { return error; }
+            fallocateSupported = false;
+        }
+        return FillHoleCompat(file, offset, size);
+    }
+
+    int Fallocate(const BackingFile& file, bool punchHole, size_t offset, size_t size)
+    {
+        int error;
+        if (punchHole) {
+            const int mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
+            error = fallocate(file.fd, mode, static_cast<off_t>(offset), static_cast<off_t>(size)) == 0
+                ? 0 : errno;
+        } else {
+            error = FillHole(file, offset, size);
+        }
+        // zPhysicalMemoryBacking_linux.cpp:559-592: split interrupted ranges
+        // at backing block boundaries, for both commit and uncommit.
+        if (error == EINTR && size > file.blockSize) {
+            const size_t firstSize = AllocUtilRndUp(size / 2, file.blockSize);
+            const int firstError = Fallocate(file, punchHole, offset, firstSize);
+            if (firstError != 0) { return firstError; }
+            return Fallocate(file, punchHole, offset + firstSize, size - firstSize);
+        }
+        return error;
+    }
+
+    bool CommitFileRange(const BackingFile& file, size_t offset, size_t size)
+    {
+        // zPhysicalMemoryBacking_linux.cpp:598: ordinary-page errors are
+        // reported to commit_default, which can retain a successful prefix.
+        const int error = Fallocate(file, false, offset, size);
+        if (error != 0) {
+            LOG(RTLOG_ERROR, "failed to commit backing: %d", error);
+            return false;
+        }
+        return true;
+    }
+
+    size_t CommitFile(const BackingFile& file, size_t offset, size_t size)
+    {
+        // zPhysicalMemoryBacking_linux.cpp:639: whole range, then binary
+        // subdivision retaining every successful granule-aligned prefix.
+        if (CommitFileRange(file, offset, size)) { return size; }
+        size_t start = 0;
+        size_t end = size;
+        for (;;) {
+            const size_t length = AllocUtilRndDown((end - start) / 2,
+                                                  static_cast<size_t>(ALLOC_UTIL_PAGE_SIZE));
+            if (length == 0) { return start; }
+            if (CommitFileRange(file, offset + start, length)) {
+                start += length;
+            } else {
+                end -= length;
+            }
+        }
+    }
+
+#endif
 };
 
 NativeMemMapBackend& NativeBackend()
@@ -450,6 +604,7 @@ MemMap::MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, Res
 
 size_t MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release)
 {
+    std::lock_guard<std::mutex> lock(backingMutex);
     const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
     if (!IsValidRange(start, size) || !reservationRegistry.Contains(start, size)) {
         return 0;
@@ -470,19 +625,90 @@ size_t MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode,
         if (partStart != cursor || (requiredNode != nullptr && *requiredNode != partition.node)) {
             return static_cast<size_t>(cursor - start);
         }
-        const bool ok = release ? backend->Release(reinterpret_cast<void*>(partStart), partEnd - partStart,
-                                                   partition.node)
-                                : backend->Commit(reinterpret_cast<void*>(partStart), partEnd - partStart, commitProt,
-                                                  partition.node, bindNuma);
-        if (!ok) {
-            return static_cast<size_t>(cursor - start);
+        while (cursor < partEnd) {
+            uintptr_t operationEnd = partEnd;
+            if (!release) {
+                // zPageAllocator.cpp:1880: harvested backing participates in
+                // the successful prefix but must not be committed again.
+                bool harvested = false;
+                for (const auto& range : committedRanges) {
+                    if (range.End() <= cursor) { continue; }
+                    if (range.start <= cursor) {
+                        cursor = std::min(partEnd, range.End());
+                        harvested = true;
+                    } else {
+                        operationEnd = std::min(partEnd, range.start);
+                    }
+                    break;
+                }
+                if (harvested) { continue; }
+            }
+            const size_t requested = operationEnd - cursor;
+            const size_t completed = release
+                ? backend->Release(reinterpret_cast<void*>(cursor), requested, partition.node)
+                : backend->Commit(reinterpret_cast<void*>(cursor), requested, commitProt, partition.node, bindNuma);
+            CHECK(completed <= requested);
+            RecordBacking(cursor, completed, release);
+            cursor += completed;
+            if (completed != requested) {
+                return static_cast<size_t>(cursor - start);
+            }
         }
-        cursor = partEnd;
         if (cursor == end) {
             return size;
         }
     }
     return static_cast<size_t>(cursor - start);
+}
+
+// zNMT.cpp:60-65: register exactly the completed backing range. This is
+// also the page allocator's capacity source, including retained prefixes.
+void MemMap::RecordBacking(uintptr_t start, size_t size, bool release)
+{
+    if (size == 0) { return; }
+    const uintptr_t end = start + size;
+    std::vector<MemoryRange> updated;
+    for (const auto& range : committedRanges) {
+        if (range.End() <= start || range.start >= end) {
+            updated.push_back(range);
+            continue;
+        }
+        if (range.start < start) { updated.push_back({ range.start, start - range.start }); }
+        if (range.End() > end) { updated.push_back({ end, range.End() - end }); }
+    }
+    if (!release) { updated.push_back({ start, size }); }
+    std::sort(updated.begin(), updated.end(), [](const MemoryRange& a, const MemoryRange& b) {
+        return a.start < b.start;
+    });
+    committedRanges.clear();
+    for (const auto& range : updated) {
+        if (!committedRanges.empty() && committedRanges.back().End() == range.start) {
+            committedRanges.back().size += range.size;
+        } else {
+            committedRanges.push_back(range);
+        }
+    }
+}
+
+size_t MemMap::GetCommittedSize() const
+{
+    std::lock_guard<std::mutex> lock(backingMutex);
+    size_t size = 0;
+    for (const auto& range : committedRanges) { size += range.size; }
+    return size;
+}
+
+size_t MemMap::GetCommittedSize(uintptr_t start, size_t size) const
+{
+    std::lock_guard<std::mutex> lock(backingMutex);
+    if (AddOverflows(start, size)) { return 0; }
+    size_t committed = 0;
+    for (const auto& range : committedRanges) {
+        const uintptr_t lo = std::max(start, range.start);
+        const uintptr_t hi = std::min(start + size, range.End());
+        if (hi > lo) { committed += hi - lo; }
+    }
+    return committed;
 }
 
 size_t MemMap::CommitMemory(void* addr, size_t size)

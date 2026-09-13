@@ -14,6 +14,16 @@
 #include <unistd.h>
 #endif
 
+#if defined(__linux__) && defined(__LP64__)
+#include <cerrno>
+#include <cstddef>
+#include <linux/falloc.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#endif
+
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Allocator/RegionManager.h"
 
@@ -32,6 +42,8 @@ struct FakeMemMapBackend final : MemMapBackend {
     size_t successfulReserveLimit{ std::numeric_limits<size_t>::max() };
     size_t failCommitCall{ 0 };
     size_t failReleaseCall{ 0 };
+    size_t commitLimit{ std::numeric_limits<size_t>::max() };
+    size_t releaseLimit{ std::numeric_limits<size_t>::max() };
     size_t commitCalls{ 0 };
     size_t releaseCalls{ 0 };
     uintptr_t nextBase{ 0x10000000U };
@@ -57,11 +69,11 @@ struct FakeMemMapBackend final : MemMapBackend {
         return reinterpret_cast<void*>(start);
     }
 
-    bool Commit(void* addr, size_t size, int, uint32_t node, bool bindNuma) override
+    size_t Commit(void* addr, size_t size, int, uint32_t node, bool bindNuma) override
     {
         ++commitCalls;
         commits.push_back(Op{ reinterpret_cast<uintptr_t>(addr), size, node, bindNuma });
-        return failCommitCall == 0 || commitCalls != failCommitCall;
+        return failCommitCall == 0 || commitCalls != failCommitCall ? std::min(size, commitLimit) : 0;
     }
 
     bool Protect(void* addr, size_t size, int) override
@@ -70,11 +82,11 @@ struct FakeMemMapBackend final : MemMapBackend {
         return true;
     }
 
-    bool Release(void* addr, size_t size, uint32_t node) override
+    size_t Release(void* addr, size_t size, uint32_t node) override
     {
         ++releaseCalls;
         releases.push_back(Op{ reinterpret_cast<uintptr_t>(addr), size, node, false });
-        return failReleaseCall == 0 || releaseCalls != failReleaseCall;
+        return failReleaseCall == 0 || releaseCalls != failReleaseCall ? std::min(size, releaseLimit) : 0;
     }
 
     bool Unreserve(void* addr, size_t size) override
@@ -259,7 +271,7 @@ GC_TEST(MemMapContract, TwoNodeOwnershipRejectsCrossNodeFree)
     MemMap::DestroyMemMap(map);
 }
 
-GC_TEST(MemMapContract, PartitionCommitReportsPrefixAndCallerCleansIt)
+GC_TEST(MemMapContract, PartitionCommitRegistersPrefixAndExplicitRelease)
 {
     FakeMemMapBackend backend;
     const size_t total = 2U * ALLOC_UTIL_PAGE_SIZE;
@@ -274,10 +286,41 @@ GC_TEST(MemMapContract, PartitionCommitReportsPrefixAndCallerCleansIt)
     GC_EXPECT_EQ(backend.commits.size(), 2U);
     GC_EXPECT_EQ(backend.commits[0].size, committed);
 
+    GC_EXPECT_EQ(map->GetCommittedSize(), committed);
     const size_t cleaned = map->ReleaseMemory(reinterpret_cast<void*>(base), committed);
+    GC_EXPECT_EQ(map->GetCommittedSize(), 0U);
     GC_EXPECT_EQ(cleaned, committed);
     GC_EXPECT_EQ(backend.releases.size(), 1U);
     GC_EXPECT_EQ(backend.releases[0].size, cleaned);
+    MemMap::DestroyMemMap(map);
+}
+
+// zPhysicalMemoryManager::commit/uncommit and zNMT::commit/uncommit:
+// byte-count backend results include partial success within one partition.
+GC_TEST(MemMapContract, BackingCapacityTracksOnlyCompletedRanges)
+{
+    FakeMemMapBackend backend;
+    const size_t page = ALLOC_UTIL_PAGE_SIZE;
+    MemMap* map = MemMap::TryMapMemory(4 * page, 0, MemMap::DEFAULT_OPTIONS,
+                                     LargeBudget(), OneNode(), backend);
+    GC_EXPECT_TRUE(map != nullptr);
+    void* base = map->GetBaseAddr();
+    backend.commitLimit = 2 * page;
+    GC_EXPECT_EQ(map->CommitMemory(base, 4 * page), 2 * page);
+    GC_EXPECT_EQ(map->GetCommittedSize(), 2 * page);
+    GC_EXPECT_EQ(map->CommitMemory(base, 2 * page), 2 * page);
+    GC_EXPECT_EQ(map->GetCommittedSize(), 2 * page);
+    backend.commitLimit = 4 * page;
+    GC_EXPECT_EQ(map->CommitMemory(base, 4 * page), 4 * page);
+    GC_EXPECT_EQ(map->GetCommittedSize(), 4 * page);
+    backend.releaseLimit = page;
+    GC_EXPECT_EQ(map->ReleaseMemory(base, 4 * page), page);
+    GC_EXPECT_EQ(map->GetCommittedSize(), 3 * page);
+    GC_EXPECT_EQ(map->ReleaseMemory(base, page), page);
+    GC_EXPECT_EQ(map->GetCommittedSize(), 3 * page);
+    backend.releaseLimit = 4 * page;
+    GC_EXPECT_EQ(map->ReleaseMemory(base, 4 * page), 4 * page);
+    GC_EXPECT_EQ(map->GetCommittedSize(), 0U);
     MemMap::DestroyMemMap(map);
 }
 
@@ -365,14 +408,14 @@ struct ProductWiringBackend final : MemMapBackend {
         return result;
     }
 
-    bool Commit(void*, size_t, int, uint32_t, bool) override
+    size_t Commit(void*, size_t size, int, uint32_t, bool) override
     {
         ++commitCalls;
-        return failCommitCall == 0 || commitCalls != failCommitCall;
+        return failCommitCall == 0 || commitCalls != failCommitCall ? size : 0;
     }
 
     bool Protect(void*, size_t, int) override { return true; }
-    bool Release(void*, size_t size, uint32_t) override
+    size_t Release(void*, size_t size, uint32_t) override
     {
         if (releaseEventFd >= 0) {
             const ssize_t written = write(releaseEventFd, &size, sizeof(size));
@@ -380,7 +423,7 @@ struct ProductWiringBackend final : MemMapBackend {
                 return false;
             }
         }
-        return true;
+        return size;
     }
     bool Unreserve(void* addr, size_t size) override { return munmap(addr, size) == 0; }
 };
@@ -419,16 +462,16 @@ struct SegmentedProductBackend final : MemMapBackend {
         }
         return reinterpret_cast<void*>(arena + reserved++ * 3 * RegionInfo::UNIT_SIZE);
     }
-    bool Commit(void* addr, size_t size, int prot, uint32_t, bool) override
+    size_t Commit(void* addr, size_t size, int prot, uint32_t, bool) override
     {
         commits.push_back({ reinterpret_cast<uintptr_t>(addr), size });
-        return mprotect(addr, size, prot) == 0;
+        return mprotect(addr, size, prot) == 0 ? size : 0;
     }
     bool Protect(void* addr, size_t size, int prot) override { return mprotect(addr, size, prot) == 0; }
-    bool Release(void* addr, size_t size, uint32_t) override
+    size_t Release(void* addr, size_t size, uint32_t) override
     {
         releases.push_back({ reinterpret_cast<uintptr_t>(addr), size });
-        return madvise(addr, size, MADV_DONTNEED) == 0;
+        return madvise(addr, size, MADV_DONTNEED) == 0 ? size : 0;
     }
     bool Unreserve(void*, size_t) override
     {
@@ -725,52 +768,180 @@ GC_TEST(MemMapContract, RegionManagerInactiveAllocationUsesMemMapOwner)
     GC_EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
-int ExerciseRegionPartialCommitCleanup(int releaseEventFd)
+// Behavioral port of gc/z/TestCommitFailure.java (Normal and ZFakeNUMA):
+// a failed large allocation leaves its successfully committed memory reusable.
+int ExerciseRegionPartialCommit(size_t failureCall)
 {
-    constexpr size_t units = 2;
-    const size_t metadataSize = RegionManager::GetMetadataSize(units);
-    const size_t totalSize = metadataSize + units * RegionInfo::UNIT_SIZE;
+    const size_t unit = RegionInfo::UNIT_SIZE;
     ProductWiringBackend backend;
-    backend.releaseEventFd = releaseEventFd;
-    MemMap* map = MemMap::TryMapMemory(totalSize, metadataSize, MemMap::DEFAULT_OPTIONS,
+    MemMap* map = MemMap::TryMapMemory(2 * unit, 0, MemMap::DEFAULT_OPTIONS,
                                        LargeBudget(), NumaTopology::Seal({ 3, 7 }), backend);
-    if (map == nullptr) {
-        return 2;
+    if (map == nullptr) { return 2; }
+    const auto& ranges = map->GetReservationRegistry().Ranges();
+    const size_t metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(ranges));
+    MemMap* metadata = MemMap::MapMemory(metadataSize, metadataSize);
+    {
+        RegionManager manager;
+        HeapParam heapParam{};
+        heapParam.regionSize = 64;
+        heapParam.exemptionThreshold = 0.8;
+        manager.InitializeSegments(reinterpret_cast<uintptr_t>(metadata->GetBaseAddr()), ranges,
+                                   *map, heapParam, 0.5);
+        backend.failCommitCall = failureCall;
+        const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+        RegionInfo* large = manager.TakeRegion(2, role, false, false, false);
+        const size_t expected = failureCall == 0 ? 2 : failureCall - 1;
+        if ((large != nullptr) != (failureCall == 0)) { return 3; }
+        if (manager.GetCommittedCapacity() != expected * unit ||
+            map->GetCommittedSize() != manager.GetCommittedCapacity()) { return 4; }
+        if (failureCall != 0) {
+            if (manager.GetDirtyUnitCount() != expected ||
+                manager.GetReleasedUnitCount() != 2 - expected) { return 5; }
+            const size_t before = backend.commitCalls;
+            backend.failCommitCall = 0;
+            RegionInfo* small = manager.TakeRegion(1, role, false, false, false);
+            if (small == nullptr) { return 6; }
+            // A retained prefix is harvested without re-committing it.
+            if (expected != 0 && backend.commitCalls != before) { return 7; }
+            if (manager.GetCommittedCapacity() != unit) { return 8; }
+            manager.ReturnPageMemory({ small->GetUnitIdx(), 1, 0, true });
+        } else {
+            manager.ReturnPageMemory({ large->GetUnitIdx(), 2, 0, true });
+        }
     }
-    RegionManager manager;
-    HeapParam heapParam{};
-    heapParam.regionSize = 64;
-    heapParam.exemptionThreshold = 0.8;
-    manager.Initialize(units, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, heapParam, 0.5);
-    backend.failCommitCall = backend.commitCalls + 2;
-
-    // The two-unit inactive allocation crosses the two product MemMap NUMA
-    // partitions.  Its second backend commit fails after one committed unit;
-    // RegionInfo::CommitUnits must release that prefix before its fatal CHECK.
-    (void)manager.TakeRegion(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
-    return 3;
+    MemMap::DestroyMemMap(metadata);
+    MemMap::DestroyMemMap(map);
+    return 0;
 }
 
-GC_TEST(MemMapContract, RegionManagerPartialCommitCleansPrefixBeforeFailure)
+GC_TEST(MemMapContract, RegionManagerCommitResultsPreserveCapacityAndCache)
 {
-    int releaseEvents[2];
-    GC_EXPECT_EQ(pipe(releaseEvents), 0);
+    for (size_t failureCall : { 0U, 1U, 2U }) {
+        const pid_t child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child == 0) { _exit(ExerciseRegionPartialCommit(failureCall)); }
+        int status = 0;
+        GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+        GC_EXPECT_TRUE(WIFEXITED(status));
+        GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+    }
+}
+
+#endif
+
+#if defined(__linux__) && defined(__LP64__)
+// Extend gc/z/TestCommitFailure.java's graceful-failure scenario to the native
+// backing error branches in zPhysicalMemoryBacking_linux.cpp:509-690. The
+// filter is confined to a child and changes kernel results, not product code.
+void FilterFallocateError(bool punchHole, int error, uint32_t allowedLength)
+{
+    const uint32_t mode = punchHole ? FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE : 0;
+    struct sock_filter instructions[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_fallocate, 0, 5),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[1])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, mode, 0, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[3])),
+        BPF_JUMP(BPF_JMP | BPF_JGT | BPF_K, allowedLength, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | static_cast<uint32_t>(error)),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog program { static_cast<unsigned short>(sizeof(instructions) / sizeof(instructions[0])),
+                               instructions };
+    GC_EXPECT_EQ(prctl(PR_SET_NO_NEW_PRIVS, 1UL, 0UL, 0UL, 0UL), 0);
+    GC_EXPECT_EQ(prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program), 0);
+}
+
+void CheckNativeBackingErrors(int commitError, uint32_t commitLimitPages,
+                              int releaseError, uint32_t releaseLimitPages,
+                              size_t committedPages, size_t releasedPages)
+{
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
-        (void)close(releaseEvents[0]);
-        _exit(ExerciseRegionPartialCommitCleanup(releaseEvents[1]));
+        try {
+            const size_t page = ALLOC_UTIL_PAGE_SIZE;
+            MemMap* map = MemMap::MapMemory(4 * page, 0, MemMap::DEFAULT_OPTIONS,
+                                            LargeBudget(), OneNode());
+            if (commitError != 0) {
+                FilterFallocateError(false, commitError, commitLimitPages * page);
+            }
+            if (releaseError != 0) {
+                FilterFallocateError(true, releaseError, releaseLimitPages * page);
+            }
+            const size_t committed = map->CommitMemory(map->GetBaseAddr(), 4 * page);
+            GC_EXPECT_EQ(committed, committedPages * page);
+            GC_EXPECT_EQ(map->GetCommittedSize(), committed);
+            // Observe that the returned backing really is mapped, and that
+            // retained ranges are reused without changing capacity.
+            auto* base = static_cast<volatile uint8_t*>(map->GetBaseAddr());
+            for (size_t offset = 0; offset < committed; offset += page) {
+                GC_EXPECT_EQ(base[offset], 0U);
+                base[offset] = 0x5a;
+            }
+            if (committed != 0) {
+                GC_EXPECT_EQ(map->CommitMemory(map->GetBaseAddr(), committed), committed);
+                GC_EXPECT_EQ(base[committed - page], 0x5aU);
+                const size_t released = map->ReleaseMemory(map->GetBaseAddr(), committed);
+                GC_EXPECT_EQ(released, releasedPages * page);
+                GC_EXPECT_EQ(map->GetCommittedSize(), committed - released);
+            }
+            MemMap::DestroyMemMap(map);
+            _exit(0);
+        } catch (const std::exception& failure) {
+            std::fprintf(stderr, "native backing assertion: %s\n", failure.what());
+            _exit(1);
+        }
     }
-    (void)close(releaseEvents[1]);
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFEXITED(status));
+    GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+}
 
-    size_t cleaned = 0;
-    const ssize_t eventBytes = read(releaseEvents[0], &cleaned, sizeof(cleaned));
-    (void)close(releaseEvents[0]);
-    GC_EXPECT_TRUE(WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0));
-    GC_EXPECT_EQ(eventBytes, static_cast<ssize_t>(sizeof(cleaned)));
-    GC_EXPECT_EQ(cleaned, RegionInfo::UNIT_SIZE);
+GC_TEST(MemMapContract, NativeBackingCommitAndUncommit)
+{
+    CheckNativeBackingErrors(0, 0, 0, 0, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingEnosysUsesCompat)
+{
+    CheckNativeBackingErrors(ENOSYS, 0, 0, 0, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingEopnotsuppUsesCompat)
+{
+    CheckNativeBackingErrors(EOPNOTSUPP, 0, 0, 0, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingEintrSplitsCommit)
+{
+    CheckNativeBackingErrors(EINTR, 1, 0, 0, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingBlockEintrReturnsZero)
+{
+    CheckNativeBackingErrors(EINTR, 0, 0, 0, 0, 0);
+}
+
+GC_TEST(MemMapContract, NativeBackingFailureRetainsPrefixDespitePunchError)
+{
+    CheckNativeBackingErrors(ENOSPC, 1, EIO, 0, 1, 0);
+}
+
+GC_TEST(MemMapContract, NativeBackingCommitFailureReturnsZero)
+{
+    CheckNativeBackingErrors(ENOSPC, 0, EIO, 0, 0, 0);
+}
+
+GC_TEST(MemMapContract, NativeBackingEintrSplitsUncommit)
+{
+    CheckNativeBackingErrors(0, 0, EINTR, 1, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingUncommitErrorRetainsCapacity)
+{
+    CheckNativeBackingErrors(0, 0, EIO, 0, 4, 0);
 }
 #endif
 
