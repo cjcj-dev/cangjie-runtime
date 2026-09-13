@@ -134,8 +134,6 @@ public:
     // address and faults non-canonically: SIGSEGV si_code=128 SI_KERNEL si_addr=(nil), no CR2.
     //
     // Measured on cjcj::cjc --package packages/basic/src, N=5: the read barrier hands the mutator
-    // >=2^15 such targets per run, and of the samples taken in BarrierPhase::TRACE every single one
-    // (15/15) has *no* to-version, while the 12 samples in BarrierPhase::FORWARD do have one.
     //
     // ⛔ Inheriting the bits was the first reading of that TRACE population and it is FALSIFIED:
     // all four object-creation sites go through the static SetClassInfo(MAddress, TypeInfo*) below,

@@ -390,14 +390,14 @@ int IsSubType(struct DYN_TypeInfo* typeInfo, struct DYN_TypeInfo* superTypeInfo)
 DYN_ObjRef ReadStaticField(DYN_FieldRef source)
 {
     DLOG(INTERPRETER, "ReadStaticField %p", source);
-    BaseObject* res = Heap::GetBarrier().ReadStaticRef(RootSlotAt(source));
+    BaseObject* res = Heap::GetBarrier().ReadStaticRef(NativeSlotAt(source));
     return static_cast<DYN_ObjRef>(res);
 }
 
 void WriteStaticField(DYN_FieldRef destination, DYN_ObjRef new_value)
 {
     DLOG(INTERPRETER, "WriteStaticField %p %p", destination, new_value);
-    Heap::GetBarrier().WriteStaticRef(RootSlotAt(destination), static_cast<BaseObject*>(new_value));
+    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(destination), static_cast<BaseObject*>(new_value));
 }
 
 DYN_ObjRef ReadInstanceField(DYN_ObjRef source, DYN_FieldRef field)

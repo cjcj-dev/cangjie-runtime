@@ -16,7 +16,7 @@
 #undef private
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
-#include "Heap/WCollector/IdleBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "ObjectModel/MArray.inline.h"
 #include "gc_unittest.hpp"
 
@@ -51,15 +51,14 @@ public:
 
 class InstalledBarrierScope {
 public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
     {
-        Heap::currentBarrierPtr = &installed;
+        Heap::barrierPtr = &barrier;
     }
-    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
 
 private:
-    Barrier** previous;
-    Barrier* installed;
+    Barrier* previous;
 };
 
 struct PayloadFixture {
@@ -77,7 +76,7 @@ struct PayloadFixture {
     GcHeapFixture heap;
     NoAnswerCollector collector;
     RememberedSet rememberedSet;
-    IdleBarrier barrier;
+    Barrier barrier;
     InstalledBarrierScope installed;
 };
 

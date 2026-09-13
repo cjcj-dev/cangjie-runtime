@@ -29,7 +29,7 @@ FinalizerProcessor::BeforeFinalizableIdleCheck g_beforeFinalizableIdleCheckForTe
 }
 #endif
 
-static BaseObject* LoadFinalizerGood(RootSlot& slot)
+static BaseObject* LoadFinalizerGood(NativeSlot& slot)
 {
     // FinalizerProcessor is part of the mutator set. Route this retained root through the public
     // runtime load exit so resolution, root healing and the fail-closed postcondition stay one path.
@@ -376,8 +376,8 @@ void FinalizerProcessor::SetBeforeFinalizableIdleCheckForTest(BeforeFinalizableI
 
 void FinalizerProcessor::EnqueueFinalizableForTest(BaseObject* obj)
 {
-    RootSlot root;
-    StorePlain(root, from_object(obj));
+    NativeSlot root(zpointer::null);
+    Heap::GetBarrier().WriteStaticRef(root, obj);
     {
         std::lock_guard<std::mutex> l(listLock);
         finalizables.push_back(root);
@@ -435,8 +435,8 @@ void FinalizerProcessor::LogAfterProcess()
 
 void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
 {
-    RootSlot root;
-    StorePlain(root, from_object(obj));
+    NativeSlot root(zpointer::null);
+    Heap::GetBarrier().WriteStaticRef(root, obj);
     std::lock_guard<std::mutex> l(listLock);
     finalizers.push_back(root);
 }
@@ -447,7 +447,12 @@ void FinalizerProcessor::RegisterFinalizers(ManagedList<RootSlot>& objs)
         return;
     }
     std::lock_guard<std::mutex> l(listLock);
-    finalizers.splice(finalizers.end(), objs);
+    for (RootSlot& source : objs) {
+        NativeSlot root(zpointer::null);
+        Heap::GetBarrier().WriteStaticRef(root, Heap::GetBarrier().ReadPlainRoot(source));
+        finalizers.push_back(root);
+    }
+    objs.clear();
 }
 
 void FinalizerProcessor::ReclaimHeapGarbage()

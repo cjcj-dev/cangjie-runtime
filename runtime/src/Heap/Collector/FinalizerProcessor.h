@@ -30,11 +30,11 @@ public:
     ~FinalizerProcessor() = default;
 
     // mainly for resurrection.
-    U32 VisitFinalizers(const RootVisitor& visitor)
+    U32 VisitFinalizers(const NativeSlotVisitor& visitor)
     {
         U32 count = 0;
         std::lock_guard<std::mutex> l(listLock);
-        for (RootSlot& obj : finalizers) {
+        for (NativeSlot& obj : finalizers) {
             visitor(obj);
             ++count;
         }
@@ -43,28 +43,28 @@ public:
 
     // Registered finalizers are weak until DoResurrection selects them. Only
     // queued/running finalizables are ordinary liveness roots.
-    void VisitGCRoots(const RootVisitor& visitor)
+    void VisitGCRoots(const NativeSlotVisitor& visitor)
     {
         std::lock_guard<std::mutex> l(listLock);
-        for (RootSlot& obj : finalizables) {
+        for (NativeSlot& obj : finalizables) {
             visitor(obj);
         }
-        for (RootSlot& obj : workingFinalizables) {
+        for (NativeSlot& obj : workingFinalizables) {
             visitor(obj);
         }
     }
 
     // mainly for fixing old pointers
-    void VisitRawPointers(const RootVisitor& visitor)
+    void VisitNativePointers(const NativeSlotVisitor& visitor)
     {
         std::lock_guard<std::mutex> l(listLock);
-        for (RootSlot& obj : finalizables) {
+        for (NativeSlot& obj : finalizables) {
             visitor(obj);
         }
-        for (RootSlot& obj : workingFinalizables) {
+        for (NativeSlot& obj : workingFinalizables) {
             visitor(obj);
         }
-        for (RootSlot& obj : finalizers) {
+        for (NativeSlot& obj : finalizers) {
             visitor(obj);
         }
     }
@@ -135,12 +135,12 @@ private:
 
     // finalization
     std::mutex listLock;                 // lock for finalizers & finalizables & workingFinalizables
-    ManagedList<RootSlot> finalizers; // created finalizer record, accessed by mutator & GC
+    ManagedList<NativeSlot> finalizers; // created finalizer record, accessed by mutator & GC
 
     // a dead finalizer is moved into finalizable by GC, then run finalize method by FP thread
-    ManagedList<RootSlot> finalizables;
+    ManagedList<NativeSlot> finalizables;
 
-    ManagedList<RootSlot> workingFinalizables; // FP working list, swap from finalizables
+    ManagedList<NativeSlot> workingFinalizables; // FP working list, swap from finalizables
     ReferenceProcessor referenceProcessor;
 
     // Protected by listLock.  Queue non-emptiness and the cached predicate are

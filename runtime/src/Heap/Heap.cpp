@@ -11,12 +11,6 @@
 #include "Collector/CollectorResources.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/InterpreterSpecific.h"
-#include "WCollector/IdleBarrier.h"
-#include "WCollector/EnumBarrier.h"
-#include "WCollector/TraceBarrier.h"
-#include "WCollector/PostTraceBarrier.h"
-#include "WCollector/PreforwardBarrier.h"
-#include "WCollector/ForwardBarrier.h"
 #include "Mutator/MutatorManager.h"
 #if defined(_WIN64)
 #include <windows.h>
@@ -26,8 +20,7 @@
 #include <mach/mach.h>
 #endif
 namespace MapleRuntime {
-Barrier** Heap::currentBarrierPtr = nullptr;
-Barrier* Heap::stwBarrierPtr = nullptr;
+Barrier* Heap::barrierPtr = nullptr;
 MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
 std::vector<HeapSlotAddressRange> Heap::heapReservations;
@@ -65,14 +58,9 @@ class HeapImpl : public Heap {
 public:
     HeapImpl()
         : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
-          collectorProxy(*theSpace, collectorResources), stwBarrier(collectorProxy, rememberedSet),
-        idleBarrier(collectorProxy, rememberedSet), enumBarrier(collectorProxy, rememberedSet),
-        traceBarrier(collectorProxy, rememberedSet), postTraceBarrier(collectorProxy, rememberedSet),
-        preforwardBarrier(collectorProxy, rememberedSet), forwardBarrier(collectorProxy, rememberedSet)
+          collectorProxy(*theSpace, collectorResources), barrier(collectorProxy, rememberedSet)
     {
-        currentBarrier = &stwBarrier;
-        stwBarrierPtr = &stwBarrier;
-        Heap::currentBarrierPtr = &currentBarrier;
+        Heap::barrierPtr = &barrier;
         RunType::InitRunTypeMap();
     }
 
@@ -108,20 +96,19 @@ public:
     MAddress GetSpaceEndAddress() const override;
     void RegisterStaticRoots(Uptr addr, U32) override;
     void UnregisterStaticRoots(Uptr addr, U32) override;
-    void VisitStaticRoots(const RootSlotVisitor& visitor) override;
+    void VisitStaticRoots(const NativeSlotVisitor& visitor) override;
 #ifdef MRT_TESTABLE_INTERNALS
     size_t GetStaticRootCountForTesting() { return staticRootTable.RootCountForTesting(); }
 #endif
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
     ssize_t GetHeapPhysicalMemorySize() const override;
-    void InstallBarrier(const GCPhase phase) override;
     RememberedSet& GetRememberedSet() override { return rememberedSet; }
     FinalizerProcessor& GetFinalizerProcessor() override;
     CollectorResources& GetCollectorResources() override;
     void RegisterAllocBuffer(AllocBuffer& buffer) override;
     void RemoveAllocBuffer(AllocBuffer& buffer) override;
     U64 RegisterExportRoot(BaseObject* obj) override;
-    void VisitAllExportRoots(const RootVisitor& visitor) override;
+    void VisitAllExportRoots(const NativeSlotVisitor& visitor) override;
     BaseObject* GetExportObject(U64 id) override;
     void RemoveExportObject(U64 id) override;
     void StopGCWork() override;
@@ -156,14 +143,7 @@ private:
 
     ExportRootTable exportRootsTable;
     RememberedSet rememberedSet;
-    Barrier stwBarrier;
-    IdleBarrier idleBarrier;
-    EnumBarrier enumBarrier;
-    TraceBarrier traceBarrier;
-    PostTraceBarrier postTraceBarrier;
-    PreforwardBarrier preforwardBarrier;
-    ForwardBarrier forwardBarrier;
-    Barrier* currentBarrier = nullptr;
+    Barrier barrier;
 
     // manage gc roots entry
     StaticRootTable staticRootTable;
@@ -204,24 +184,6 @@ Collector& HeapImpl::GetCollector() { return collectorProxy.GetCurrentCollector(
 
 Allocator& HeapImpl::GetAllocator() { return *theSpace; }
 
-void HeapImpl::InstallBarrier(const GCPhase phase)
-{
-    if (phase == GCPhase::GC_PHASE_ENUM) {
-        currentBarrier = &enumBarrier;
-    } else if (phase == GCPhase::GC_PHASE_TRACE || phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-        currentBarrier = &traceBarrier;
-    } else if (phase == GCPhase::GC_PHASE_PREFORWARD) {
-        currentBarrier = &preforwardBarrier;
-    } else if (phase == GCPhase::GC_PHASE_FORWARD) {
-        currentBarrier = &forwardBarrier;
-    } else if (phase == GCPhase::GC_PHASE_IDLE) {
-        currentBarrier = &idleBarrier;
-    } else if (phase == GCPhase::GC_PHASE_POST_TRACE) {
-        currentBarrier = &postTraceBarrier;
-    }
-    DLOG(GCPHASE, "install barrier for gc phase %u", phase);
-}
-
 GCPhase HeapImpl::GetGCPhase() const { return collectorProxy.GetGCPhase(); }
 
 void HeapImpl::SetGCPhase(const GCPhase phase) { collectorProxy.SetGCPhase(phase); }
@@ -257,7 +219,7 @@ void HeapImpl::UnregisterStaticRoots(Uptr addr, U32 size)
     staticRootTable.UnregisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
 }
 
-void HeapImpl::VisitStaticRoots(const RootSlotVisitor& visitor)
+void HeapImpl::VisitStaticRoots(const NativeSlotVisitor& visitor)
 {
     staticRootTable.VisitRoots(visitor);
 #ifdef INTERPRETER_ENABLED
@@ -356,7 +318,7 @@ void HeapImpl::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().Registe
 
 void HeapImpl::RemoveAllocBuffer(AllocBuffer &buffer) { GetAllocator().RemoveAllocBuffer(buffer); }
 
-void HeapImpl::VisitAllExportRoots(const RootVisitor &visitor)
+void HeapImpl::VisitAllExportRoots(const NativeSlotVisitor &visitor)
 {
     exportRootsTable.VisitGCRoots(visitor);
 }

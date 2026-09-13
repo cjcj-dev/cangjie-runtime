@@ -180,7 +180,7 @@ void* StaticFieldInfo::GetValue()
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(addr));
+        return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(addr));
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MSize fieldSize = fieldTi->GetInstanceSize();
@@ -188,8 +188,8 @@ void* StaticFieldInfo::GetValue()
         if (fieldSize == 0) {
             return obj;
         }
-        Heap::GetBarrier().WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
-            fieldSize, addr, fieldSize);
+        Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
+            addr, fieldSize, fieldTi->GetGCTib());
         return obj;
     } else if (fieldTi->IsPrimitiveType()) {
         MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
@@ -211,7 +211,7 @@ void* StaticFieldInfo::GetValue()
         }
         MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
         if (fieldTi->HasRefField()) {
-            Heap::GetBarrier().WriteStruct(obj, dst, vArraySize, addr, vArraySize);
+            Heap::GetBarrier().ReadStaticStruct(dst, addr, vArraySize, fieldTi->GetGCTib());
         } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
                             reinterpret_cast<void*>(addr), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
@@ -227,7 +227,7 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        Heap::GetBarrier().WriteStaticRef(RootSlotAt(addr), newValue);
+        Heap::GetBarrier().WriteStaticRef(NativeSlotAt(addr), newValue);
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize fieldSize = fieldTi->GetInstanceSize();
         if (fieldSize == 0) {
@@ -242,15 +242,15 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
             LOG(RTLOG_ERROR, "SetValue memcpy_s fail");
         }
     } else if (fieldTi->IsVArray()) {
-        // Static VArray is a root slot (not heap remset holder); still route
-        // ref-bearing payload through WriteStruct so colour/heal stays consistent.
+        // Native reference slots need old-value processing and store-good
+        // publication, just like the other static aggregate payloads.
         MSize vArraySize = fieldTi->GetInstanceSize();
         if (vArraySize == 0) {
             return;
         }
         MAddress src = reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE;
         if (fieldTi->HasRefField()) {
-            Heap::GetBarrier().WriteStruct(nullptr, addr, vArraySize, src, vArraySize);
+            Heap::GetBarrier().WriteStaticStruct(addr, vArraySize, src, vArraySize, fieldTi->GetGCTib());
         } else if (memcpy_s(reinterpret_cast<void*>(addr), vArraySize,
                             reinterpret_cast<void*>(src), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");

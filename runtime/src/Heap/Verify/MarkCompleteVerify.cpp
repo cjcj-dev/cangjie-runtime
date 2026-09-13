@@ -411,8 +411,8 @@ void CheckRoot(Stats& stats, const char* point, const char* kind, void* slot, za
 // stacks -- the root set most likely to disagree with the mark face -- unlooked at.
 void CheckStrongRoots(Stats& stats, const char* point)
 {
-    RootSlotVisitor staticVisitor = [&stats, point](RootSlot& root) {
-        CheckRoot(stats, point, "static", &root, root.LoadPlain());
+    NativeSlotVisitor staticVisitor = [&stats, point](NativeSlot& root) {
+        CheckRoot(stats, point, "static", &root, uncolor_bits(root.GetFieldValue()));
     };
     Heap::GetHeap().VisitStaticRoots(staticVisitor);
 
@@ -424,8 +424,8 @@ void CheckStrongRoots(Stats& stats, const char* point)
     MutatorManager::Instance().VisitAllMutators(
         [&stackVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(stackVisitor); });
 
-    RootVisitor exportVisitor = [&stats, point](ObjectRef& root) {
-        CheckRoot(stats, point, "export", &root, root.LoadPlain());
+    NativeSlotVisitor exportVisitor = [&stats, point](NativeSlot& root) {
+        CheckRoot(stats, point, "export", &root, uncolor_bits(root.GetFieldValue()));
     };
     Heap::GetHeap().VisitAllExportRoots(exportVisitor);
 }

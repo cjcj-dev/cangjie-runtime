@@ -354,8 +354,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     space.GetRegionManager().AddRawPointerObject(children.back());
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     const size_t rootCount = commonRoot && helpers != 0 ? 17 * 64 : 1;
-    std::unique_ptr<RootSlot[]> rootSlots(new RootSlot[rootCount]);
-    std::vector<RootSlot*> roots(rootCount);
+    std::vector<NativeSlot> rootSlots(rootCount, NativeSlot(zpointer::null));
+    std::vector<NativeSlot*> roots(rootCount);
     U64 handle = 0;
     AllocBuffer* invisibleBuffer = nullptr;
     bool ownsInvisibleBuffer = false;
@@ -381,7 +381,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
         }
     } else if (commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {
-            StorePlain(rootSlots[i], from_object(array));
+            rootSlots[i].StoreColoured(StoreGoodPointer(array));
             roots[i] = &rootSlots[i];
         }
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
@@ -421,8 +421,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     const size_t expectedBytes = arrayBytes + expectedChildren * children[0]->GetSize() +
         (finalizable ? finalizerRoot->GetSize() : 0);
     if (finalizable) {
-        resources.GetFinalizerProcessor().VisitRawPointers([](ObjectRef& root) {
-            StorePlain(root, zaddress::null);
+        resources.GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
+            root.StoreColoured(StoreGoodPointer(nullptr));
         });
     } else if (markOnly || duplicateRootOrder != 0) {
         if (ownsInvisibleBuffer) {
