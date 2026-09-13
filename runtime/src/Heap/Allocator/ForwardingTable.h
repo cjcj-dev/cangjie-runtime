@@ -31,11 +31,11 @@ public:
     class Owner {
     public:
         Owner() = default;
+        explicit Owner(ZForwarding* value) : forwarding(value) {}
         explicit operator bool() const { return forwarding != nullptr; }
         ZForwarding* get() const { return forwarding; }
         ZForwarding* operator->() const { return forwarding; }
     private:
-        explicit Owner(ZForwarding* value) : forwarding(value) {}
         ZForwarding* forwarding{ nullptr };
         friend class ForwardingTable;
     };

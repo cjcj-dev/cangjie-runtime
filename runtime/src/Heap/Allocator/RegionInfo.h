@@ -2794,9 +2794,12 @@ public:
     // released or claimed — the late reader must not touch from-side state.
     class RetainScope {
     public:
-        explicit RetainScope(RegionInfo* region)
-            : owner(ForwardingTable::RetainPageOwner(region)), region(region), retained(owner && owner->retain_page())
+        explicit RetainScope(RegionInfo* region) : RetainScope(ForwardingTable::RetainPageOwner(region)) {}
+        explicit RetainScope(ForwardingTable::Owner forwarding)
+            : owner(std::move(forwarding)), region(owner ? owner->page() : nullptr),
+              retained(owner && owner->retain_page())
         {
+            CHECK(!retained || owner->page_life_current());
         }
         ~RetainScope() { Release(); }
         void Release()

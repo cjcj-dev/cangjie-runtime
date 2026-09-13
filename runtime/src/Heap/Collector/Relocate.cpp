@@ -1936,7 +1936,7 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ForwardingTable::
     return reinterpret_cast<BaseObject*>(owner->find(from));
 }
 
-BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwarding) const
+BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainScope& lease) const
 {
     // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
     // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
@@ -1946,7 +1946,6 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     }
     // retain_page. A try-lock, so a losing mutator falls back instead of blocking -- ZGC's
     // retain_page also gives up (returns false) when the page is claimed or released.
-    RegionInfo::RetainScope lease(forwarding);
     if (!lease.ok()) {
         return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
@@ -1963,7 +1962,8 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     // terminated. Admit it before copying; a next-minor remset entry is too late.
     // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
     EnsureRouteDomainMembership(const_cast<WCollector*>(this), obj);
-    BaseObject* toVersion = const_cast<WCollector*>(this)->RelocateObjectInner(obj, nullptr, forwarding);
+    BaseObject* toVersion = const_cast<WCollector*>(this)->RelocateObjectInner(
+        obj, nullptr, lease.forwarding()->page());
     lease.Release(); // release_page
     if (toVersion == nullptr) {
         return WaitForPageForwarding(obj, lease.HoldForwarding());

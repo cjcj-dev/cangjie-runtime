@@ -246,3 +246,36 @@ GC_TEST(ZForwardingTable, SameAddressHasIndependentGenerationMaps)
     ForwardingTable::ResetRelocationSet(Generation::Old);
     (void)selected.TakeHeadRegion();
 }
+
+// A table selected from the old map must not retain a newer page facade at
+// the same address (zRelocate.cpp:393-400 retains the selected forwarding).
+GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
+{
+    GcHeapFixture fixture;
+    fixture.InstallPageOwner(fixture.region0);
+    auto* old = ForwardingTable::get(fixture.heapStart, Generation::Old);
+    GC_EXPECT_TRUE(old != nullptr);
+    old->release_page();
+    old->mark_done();
+
+    fixture.region0->SetYoungRegionFlag(1);
+    RegionList selected("replacement-page-forwarding");
+    selected.PrependRegion(fixture.region0, fixture.region0->GetRegionType());
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
+    auto* young = ForwardingTable::get(fixture.heapStart, Generation::Young);
+    GC_EXPECT_TRUE(young != nullptr && young != old);
+    GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
+        fixture.region0, fixture.region0->GetLiveInfo(), fixture.region0->GetSnapshotEpoch(),
+        fixture.region0->GetRegionAllocPtr(), 0, 0, static_cast<uint8_t>(Generation::Young),
+        0, fixture.region0->GetRegionLifeId()));
+    RegionInfo::RetainScope oldSource{ForwardingTable::Owner(old)};
+    RegionInfo::RetainScope newSource{fixture.region0};
+    GC_EXPECT_FALSE(oldSource.ok());
+    GC_EXPECT_TRUE(oldSource.forwarding() == old);
+    GC_EXPECT_TRUE(newSource.ok());
+    GC_EXPECT_TRUE(newSource.forwarding() == young);
+    newSource.Release();
+    young->release_page();
+    young->mark_done();
+    (void)selected.TakeHeadRegion();
+}
