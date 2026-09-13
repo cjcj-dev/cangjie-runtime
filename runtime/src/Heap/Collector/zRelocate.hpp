@@ -7,7 +7,7 @@
 #ifndef MRT_RELOCATE_H
 #define MRT_RELOCATE_H
 
-#include "Heap/Allocator/PageAllocator.h"
+#include "Heap/Allocator/zPageAllocator.hpp"
 
 namespace MapleRuntime {
 namespace detail {

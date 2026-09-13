@@ -8,7 +8,7 @@
 #ifndef MRT_REGION_LIST_H
 #define MRT_REGION_LIST_H
 
-#include "Page.h"
+#include "zPage.hpp"
 
 namespace MapleRuntime {
 class RegionList {

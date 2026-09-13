@@ -29,7 +29,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/Barrier/Barrier.h"
-#include "Heap/Allocator/Page.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"

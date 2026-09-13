@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-#include "Heap/Allocator/Page.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

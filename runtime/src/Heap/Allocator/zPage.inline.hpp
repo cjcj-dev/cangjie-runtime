@@ -7,7 +7,7 @@
 #ifndef MRT_REGIONINFO_INLINE_H
 #define MRT_REGIONINFO_INLINE_H
 
-#include "Page.h"
+#include "zPage.hpp"
 
 namespace MapleRuntime {
 

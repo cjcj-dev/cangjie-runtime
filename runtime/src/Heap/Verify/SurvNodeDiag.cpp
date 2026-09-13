@@ -13,7 +13,7 @@
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/Page.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/Collector.h"

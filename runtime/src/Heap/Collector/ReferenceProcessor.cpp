@@ -7,7 +7,7 @@
 #include <new>
 
 #include "Base/Panic.h"
-#include "Heap/Allocator/Page.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/RefField.inline.h"

@@ -7,7 +7,7 @@
 // Invariant: region in the forward set, object not copied → LookupTo is null.
 // Geometry GetRoute may still invent a to; the table must not.
 
-#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
 #include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/WCollector/WCollector.h"

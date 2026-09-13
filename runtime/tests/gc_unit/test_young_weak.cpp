@@ -16,7 +16,7 @@
 
 #include "Concurrency/Concurrency.h"
 #include "Base/Log.h"
-#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/CollectorProxy.h"

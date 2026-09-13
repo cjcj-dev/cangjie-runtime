@@ -7,7 +7,7 @@
 #ifndef MRT_OBJECT_ALLOCATOR_H
 #define MRT_OBJECT_ALLOCATOR_H
 
-#include "PageAllocator.h"
+#include "zPageAllocator.hpp"
 
 namespace MapleRuntime {
     struct RegionManager::SharedSmallPage {

@@ -7,7 +7,7 @@
 // Stay-young in-place must retire from-space identity (zRelocate.cpp:1346-1352 flip_survived).
 
 #include "gc_heap_fixture.hpp"
-#include "Allocator/PageAllocator.h"
+#include "Allocator/zPageAllocator.hpp"
 #include "Collector/TenuringThreshold.h"
 #include "gc_unittest.hpp"
 

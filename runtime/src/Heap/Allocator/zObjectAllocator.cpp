@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Allocator/ObjectAllocator.h"
+#include "Allocator/zObjectAllocator.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -43,8 +43,8 @@
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
-#include "Heap/Allocator/ForwardingTable.h"
-#include "Heap/Collector/RelocationSetSelector.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/Collector/zRelocationSetSelector.hpp"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"

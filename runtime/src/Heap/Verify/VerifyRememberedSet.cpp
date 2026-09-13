@@ -14,7 +14,7 @@
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/Page.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/MClass.h"

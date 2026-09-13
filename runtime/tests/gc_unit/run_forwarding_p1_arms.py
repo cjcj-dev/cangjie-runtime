@@ -29,20 +29,20 @@ PREFIX = 'runtime/src/'
 CUTS = {
     'entry': (PREFIX+'Heap/WCollector/WCollector.cpp',
               '        DoYoungGarbageCollection();', '        (void)0;'),
-    'arena_begin': (PREFIX+'Heap/Collector/RelocationSet.inline.h',
+    'arena_begin': (PREFIX+'Heap/Collector/zRelocationSet.inline.hpp',
         '        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(fromRegionList),\n'
         '                     "forwarding arena budget allocation failed");',
         '        (void)fromRegionList;'),
     'arena_storage': (PREFIX+'Heap/Collector/ZForwarding.h',
         'void* const addr = arena ? arena->allocate(size) : AttachedArray::alloc(n);',
         'void* const addr = AttachedArray::alloc(n);'),
-    'copy': (PREFIX+'Heap/Collector/Relocate.cpp',
+    'copy': (PREFIX+'Heap/Collector/zRelocate.cpp',
         '    CopyObject(*obj, *toObj, size);',
         '    CopyObject(*obj, *toObj, TYPEINFO_PTR_SIZE);'),
-    'existing_winner': (PREFIX+'Heap/Allocator/ForwardingTable.cpp',
+    'existing_winner': (PREFIX+'Heap/Allocator/zForwardingTable.cpp',
         'return Receipt{ existingBeforeLock, false, Receipt::Status::EXISTING };',
         'return Receipt{ to, false, Receipt::Status::EXISTING };'),
-    'locked_winner': (PREFIX+'Heap/Allocator/ForwardingTable.cpp',
+    'locked_winner': (PREFIX+'Heap/Allocator/zForwardingTable.cpp',
         '    const MAddress existing = find(from);\n    if (existing != 0) {\n'
         '        return Receipt{ existing, false, Receipt::Status::EXISTING };',
         '    const MAddress existing = find(from);\n    if (existing != 0) {\n'

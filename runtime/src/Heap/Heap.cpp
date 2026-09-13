@@ -19,7 +19,7 @@
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #endif
-#include "Allocator/PageAllocator.h"
+#include "Allocator/zPageAllocator.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -57,8 +57,8 @@
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
-#include "Heap/Allocator/ForwardingTable.h"
-#include "Heap/Collector/RelocationSetSelector.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/Collector/zRelocationSetSelector.hpp"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"

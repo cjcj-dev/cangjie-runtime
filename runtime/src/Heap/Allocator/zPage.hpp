@@ -47,7 +47,7 @@
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Allocator/RouteDestHold.h"
-#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Allocator/ZGranuleMap.h"
 
@@ -1498,5 +1498,5 @@ private:
 };
 } // namespace MapleRuntime
 
-#include "Page.inline.h"
+#include "zPage.inline.hpp"
 #endif // MRT_REGION_INFO_H

@@ -22,7 +22,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Common/ColourEncoding.h"
 #include "Heap.h"
-#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/MinorGCALot.h"
 #include "Heap/Verify/Zap.h"

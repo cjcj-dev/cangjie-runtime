@@ -13,7 +13,7 @@
 #include <cstddef>
 #include <unordered_set>
 
-#include "Allocator/Page.h"
+#include "Allocator/zPage.hpp"
 
 namespace MapleRuntime {
 class RegionManager;

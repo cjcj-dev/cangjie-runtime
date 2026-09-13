@@ -13,7 +13,7 @@
 #include "CangjieRuntime.h"
 #include "Heap/Heap.h"
 #include "Heap/GcThreadPool.h"
-#include "Heap/Allocator/PageAllocator.h"
+#include "Heap/Allocator/zPageAllocator.hpp"
 #include "Heap/Collector/GcTrigger.h"
 
 namespace MapleRuntime {
@@ -422,7 +422,7 @@ const ZStatPhase MajorCollection("Major Collection", "Major Collection");
 
 #include "Base/AtomicSpinLock.h"
 #include "Heap/Collector/TruncatedSeq.h"
-#include "Heap/Allocator/Page.h"
+#include "Heap/Allocator/zPage.hpp"
 
 namespace MapleRuntime {
 namespace {

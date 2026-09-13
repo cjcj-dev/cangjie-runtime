@@ -10,7 +10,7 @@ OUT="${GC_UNIT_OUT:-$TEST/build_standalone}"
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR}"
 export GCV2_RUNTIME_LIB_DIR
 export GC_UNIT_OUT="$OUT"
-REGION_H="$SRC_ROOT/Heap/Allocator/Page.inline.h"
+REGION_H="$SRC_ROOT/Heap/Allocator/zPage.inline.hpp"
 
 backup_and_break() {
   local file="$1"

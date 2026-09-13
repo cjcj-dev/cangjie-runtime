@@ -15,7 +15,7 @@
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/Allocator/PageAllocator.h"
+#include "Heap/Allocator/zPageAllocator.hpp"
 #include "Heap/WCollector/WCollector.h"
 
 using namespace MapleRuntime;

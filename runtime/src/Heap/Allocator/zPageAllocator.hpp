@@ -599,8 +599,8 @@ private:
 
 } // namespace MapleRuntime
 
-#include "ObjectAllocator.h"
-#include "PageAllocator.inline.h"
-#include "Heap/Collector/Relocate.h"
-#include "Heap/Collector/RelocationSet.inline.h"
+#include "zObjectAllocator.hpp"
+#include "zPageAllocator.inline.hpp"
+#include "Heap/Collector/zRelocate.hpp"
+#include "Heap/Collector/zRelocationSet.inline.hpp"
 #endif // MRT_REGION_MANAGER_H
