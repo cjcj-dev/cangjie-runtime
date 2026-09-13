@@ -183,19 +183,7 @@ public:
 
     // Controlled test wrapper for the copier route consumer. It keeps the
     // consumer's preconditions visible (heap address, relocation phase and
-    struct RouteLookupTestResult {
-        bool phaseAllowed = false;
-        bool heapAddress = false;
-        bool retained = false;
-        bool gatePassed = false;
-        bool receiptChecked = false;
-        bool compactedChecked = false;
-        bool routeRegionCalled = false;
-        bool routeRegion = false;
-        bool retainedPhaseAllowed = false;
-        bool hookReached = false;
-    };
-    MRT_EXPORT RouteLookupTestResult RouteLookupForTest(BaseObject* fromObj);
+
 #endif
 
     void MarkNewObject(BaseObject* obj) override;
@@ -647,9 +635,8 @@ protected:
                                   const RegionInfo::RetainScope& lease);
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
-    BaseObject* RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage);
+    BaseObject* RelocateObjectInner(BaseObject* obj, RegionInfo* copyPage);
     void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
-    BaseObject* ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage);
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
     // retain the from-region, relocate the object on this thread, release. Returns the

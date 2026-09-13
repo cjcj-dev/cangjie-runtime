@@ -401,11 +401,9 @@ struct YoungCollectionStats {
     size_t unmovableVisited = 0;
     size_t unmovableVisitedUnits = 0;
     size_t unmovableYoung = 0;
-    size_t unmovableHeld = 0;
     size_t recentFullVisited = 0;
     size_t recentFullVisitedUnits = 0;
     size_t recentFullYoung = 0;
-    size_t recentFullHeld = 0;
     size_t clearLiveRegions = 0;
     size_t clearLiveUnits = 0;
     size_t objectVisits = 0;
@@ -413,7 +411,6 @@ struct YoungCollectionStats {
     uint64_t reparkNs = 0;
     uint64_t unmovableNs = 0;
     uint64_t recentFullNs = 0;
-    uint64_t holdCheckNs = 0;
     uint64_t clearLiveNs = 0;
     uint64_t visitorNs = 0;
     uint64_t listMoveNs = 0;
@@ -557,7 +554,8 @@ public:
     MRT_EXPORT size_t FailedStalledAllocations() const;
 #endif
     template<Generation G>
-    void ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed = false);
+    void ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed = false,
+                            bool inPlace = false);
     template<Generation G>
     void StartForwardFromRegions(GCWorkers& workers);
     template<Generation G>

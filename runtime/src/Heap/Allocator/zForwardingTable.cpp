@@ -143,19 +143,14 @@ const ForwardingAllocator* ForwardingTable::ArenaForTest(Generation gen)
 
 size_t ForwardingTable::ObjectCountUpperBound(RegionInfo* region, size_t regionSize)
 {
-    // zForwarding.inline.hpp:43-50 sizes from live *object* count. GetLiveByteCount
-    // is bytes; liveBytes>>3 counts 8-byte words. Before marking has made zero
-    // authoritative, take the region's capacity so the table cannot fill and spin
-    // (REPORT-fwdentries). A closed zero-live face needs only the minimum table.
-    const uint64_t liveBytes = region->GetLiveByteCount();
-    uint64_t estimate = liveBytes >> ZForwarding::kAlignShift;
-    if (estimate == 0 && !region->IsLiveCountAuthoritative()) {
-        estimate = regionSize >> ZForwarding::kAlignShift;
+    // ZForwarding::nentries sizes the attached array from live object count.
+    // Before a mark count is authoritative (standalone setup), retain the
+    // existing capacity upper bound; selected product pages use their livemap.
+    if (!region->IsLiveCountAuthoritative()) {
+        return regionSize >> ZForwarding::kAlignShift;
     }
-    if (estimate == 0) {
-        estimate = 1;
-    }
-    return static_cast<size_t>(estimate);
+    if (region->IsLargeRegion()) return region->GetLiveByteCount() != 0 ? 1 : 0;
+    return region->GetLiveObjectCount();
 }
 
 void ForwardingTable::insert(ZForwarding* forwarding)

@@ -166,16 +166,16 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT,
          "[GCV2][candfix] prepare_candidates candidate_regions=%zu candidate_bytes=%zu "
          "from_visited=%zu from_units=%zu unmovable_visited=%zu unmovable_units=%zu "
-         "unmovable_young=%zu unmovable_held=%zu recent_visited=%zu recent_units=%zu "
-         "recent_young=%zu recent_held=%zu clear_live_regions=%zu clear_live_units=%zu "
+         "unmovable_young=%zu recent_visited=%zu recent_units=%zu "
+         "recent_young=%zu clear_live_regions=%zu clear_live_units=%zu "
          "objects_visited=%zu slots_visited=%zu repark_ns=%llu unmovable_ns=%llu recent_ns=%llu "
-         "hold_ns=%llu clear_live_ns=%llu visitor_ns=%llu list_move_ns=%llu",
+         "clear_live_ns=%llu visitor_ns=%llu list_move_ns=%llu",
          stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedUnits,
-         stats.unmovableVisited, stats.unmovableVisitedUnits, stats.unmovableYoung, stats.unmovableHeld,
-         stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung, stats.recentFullHeld,
+         stats.unmovableVisited, stats.unmovableVisitedUnits, stats.unmovableYoung,
+         stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung,
          stats.clearLiveRegions, stats.clearLiveUnits, stats.objectVisits, stats.slotVisits,
          static_cast<unsigned long long>(stats.reparkNs), static_cast<unsigned long long>(stats.unmovableNs),
-         static_cast<unsigned long long>(stats.recentFullNs), static_cast<unsigned long long>(stats.holdCheckNs),
+         static_cast<unsigned long long>(stats.recentFullNs),
          static_cast<unsigned long long>(stats.clearLiveNs), static_cast<unsigned long long>(stats.visitorNs),
          static_cast<unsigned long long>(stats.listMoveNs));
     // Even an empty candidate set completes remembered scanning and clearing.
