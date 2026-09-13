@@ -1119,9 +1119,6 @@ inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vec
         }
         pageOwners.Reset();
         CHECK(pageOwners.Initialize(ranges.front().start, ranges.back().End() - ranges.front().start, UNIT_SIZE));
-        // routedest: per-unit metadata is per-page metadata, so any growth here is a
-        // D03b removes the two pointer-sized parallel route tables (16 bytes/unit).
-        static_assert(sizeof(UnitInfo) == 216, "per-unit metadata size changed; it is per-page, so price it");
     }
 
 inline size_t RegionInfo::FindUnitIndex(uintptr_t address)

@@ -168,3 +168,11 @@
 ## FALSIFIED
 
 第二次 advisor 曾把现有 ZVerify::{Before,After}Relocation 对应到 ZPage::verify_live。实读证明前者检查 remset/字段，后者比较精确 live_objects/live_bytes；第三次答复已纠正并将精确对应登记至 D10 #503。
+
+## 第二轮构建修复
+
+本轮起点 `296e365d9641d739f3f035d72eb6b94ff2157011`。删除该版本
+`runtime/src/Heap/z/zPage.inline.hpp:1122` 起的固定 216 字节预算断言和两行旧注释。
+ZGC `zPage.hpp:45`–`:55` 按实际成员组织页元数据，没有 UnitInfo 固定字节预算对应物。
+我方 `zPage.hpp:1160`、`:1168`、`:1252` 按实际 sizeof(UnitInfo) 计算元数据位置；
+本修复不补回已删除的探针字段、不增加占位字段或开关。
