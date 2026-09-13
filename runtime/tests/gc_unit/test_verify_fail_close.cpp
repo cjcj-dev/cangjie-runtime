@@ -155,3 +155,41 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     if (!Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
     ZVerify::BeforeRelocation(owner.get());
 }
+
+// zVerify.cpp:131-138 distinguishes raw null from metadata-bearing null.
+GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
+{
+    GcHeapFixture fixture;
+    auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
+    cycle.PublishPhase(GC_PHASE_TRACE);
+    RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(zpointer::null);
+    ExpectSceneAbort("Raw null requires young mark complete", [&] {
+        ZVerify::Oop(fixture.obj0, field, false);
+    });
+    // Weak-inclusive nulls have no raw-null restriction in zVerify.
+    ZVerify::Oop(fixture.obj0, field, true);
+    field.StoreColoured(to_zpointer(::g_cjStoreGoodMask));
+    ZVerify::Oop(fixture.obj0, field, false);
+}
+
+GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
+{
+    GcHeapFixture fixture;
+    auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
+    cycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+    RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(zpointer::null);
+    // Capture a watermark after this holder was allocated.
+    fixture.region0->ClearLiveInfo(fixture.region0->GetMarkView<Generation::Old>());
+    ExpectSceneAbort("Raw null requires allocating holder", [&] {
+        ZVerify::Oop(fixture.obj0, field, false);
+    });
+    // An object at the captured watermark is allocated after mark start.
+    const MAddress next = fixture.region0->GetMarkStartAllocPtr();
+    BaseObject* fresh = fixture.PlaceObject(next);
+    fixture.region0->SetRegionAllocPtr(next + 64);
+    RefField<>& freshField = HeapSlotAt<>(next + TYPEINFO_PTR_SIZE);
+    freshField.StoreColoured(zpointer::null);
+    ZVerify::Oop(fresh, freshField, false);
+}

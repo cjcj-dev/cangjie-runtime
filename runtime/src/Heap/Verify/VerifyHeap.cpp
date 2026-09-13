@@ -44,8 +44,19 @@ void ZVerify::Object(BaseObject* object, const void* slot)
 void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
 {
     const zpointer value = field.GetFieldValue(std::memory_order_acquire);
-    if (!ColourPredicates::has_address(raw(value))) { return; }
     auto& collector = Heap::GetHeap().GetCollector();
+    if (!verifyWeaks && value == zpointer::null) {
+        // zVerify.cpp:133-136: raw null is only possible when flip promoting.
+        CHECK_DETAIL(collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).phase == GC_PHASE_MARK_COMPLETE,
+                     "Raw null requires young mark complete at %p", &field);
+        RegionInfo* holder = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(base));
+        // ZGC retires allocation pages at mark start; Cangjie can keep allocating
+        // in a region and represents allocate-black with the holder watermark.
+        CHECK_DETAIL(holder->AllocatedAfterMarkStart(
+                         reinterpret_cast<MAddress>(base) - holder->GetRegionStart()),
+                     "Raw null requires allocating holder at %p", &field);
+    }
+    if (!ColourPredicates::has_address(raw(value))) { return; }
     RefField<> preloaded(value);
     if (!verifyWeaks && collector.is_mark_good(preloaded)) {
         Object(to_object(preloaded.GetTargetObject()), &field);
