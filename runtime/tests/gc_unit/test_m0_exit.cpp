@@ -156,10 +156,6 @@ public:
     {
         return answer == nullptr ? FindToVersionResult::NotForwarded() : FindToVersionResult::Found(answer);
     }
-    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& = {}) const override
-    {
-        return answer == nullptr ? ref : answer;
-    }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
     bool IsFromObject(BaseObject*) const override { return false; }
@@ -171,7 +167,8 @@ public:
         return RefField<>(GcUnit::ColouredPointer(object, remap));
     }
     ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
-    BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
+    BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override
+    { return answer == nullptr ? object : answer; }
 };
 
 class InstalledBarrierScope {
@@ -287,7 +284,7 @@ struct RootEntryFixture {
                 heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0));
         }
         registeredRoot->StoreColoured(ColouredPointer(heap.obj0,
-            (::g_cjStoreGoodMask ^ ZPointerRemappedYoungMask) & REMAP_COLOUR_MASK));
+            (::g_cjStoreGoodMask ^ collector.current_epoch_colours().remappedYoungMask) & REMAP_COLOUR_MASK));
         registeredRoots[0] = registeredRoot;
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(registeredRoots), 1);
     }

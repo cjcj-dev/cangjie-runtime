@@ -73,10 +73,6 @@ public:
         return object == from && to != nullptr ? FindToVersionResult::Found(to) :
                                                 FindToVersionResult::NotForwarded();
     }
-    BaseObject* ResolveStoreValue(BaseObject* object, const ForwardingProvenance& = {}) const override
-    {
-        return object == from && to != nullptr ? to : object;
-    }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>& field) const override { return IsLoadBad(field); }
     bool IsCurrentPointer(RefField<>& field) const override { return is_load_good(field); }
@@ -92,8 +88,7 @@ public:
             hookCv.notify_all();
             hookCv.wait(lock, [this]() { return winnerStored; });
         }
-        return ResolveStoreValue(object, ForwardingProvenance{
-            ForwardingHolderKind::HeapRef, object, &object });
+        return object == from && to != nullptr ? to : object;
     }
     RefField<> GetAndTryTagRefField(BaseObject* object) const override
     {
