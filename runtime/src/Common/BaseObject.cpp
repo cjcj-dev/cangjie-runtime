@@ -205,4 +205,3 @@ bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> old
     return false;
 }
 } // namespace MapleRuntime
-

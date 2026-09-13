@@ -373,4 +373,3 @@ constexpr unsigned ZGC_PREDICATE_COUNT = 17u;
 
 } // namespace ColourPredicates
 } // namespace MapleRuntime
-
