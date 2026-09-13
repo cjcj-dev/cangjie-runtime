@@ -994,7 +994,6 @@ void WCollector::DoGarbageCollection(GCCycleGeneration generation)
     TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     MergeResurrectExportObjects(Generation::Old);
     PostResolveCycleTask();
-    FlipTagID();
 
     CollectSmallSpace();
     // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
@@ -1015,10 +1014,9 @@ void TracingCollector::PreGarbageCollection(GCCycleGeneration generation, bool i
         GetGenerationCycle(generation).Begin(gcIndex);
     }
     ResetSkippedStackMapCounts();
-    VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
+    VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s",
          g_gcRequests[GetCycleSnapshot(generation).reason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
-         Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(),
-         static_cast<unsigned>(GetCurrentTagID()));
+         Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str());
 
     // zDriver.cpp:183,399-400: generation workers use their concurrent
     // budget for both pause and concurrent work. Parallel workers are separate.

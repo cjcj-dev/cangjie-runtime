@@ -224,13 +224,6 @@ public:
             resurrectedExportObjectesForwardPhase.end());
         resurrectedExportObjectesForwardPhase.clear();
     }
-    void FlipTagID() { currentTagID = static_cast<uint16_t>((currentTagID + 1) % TAG_ID_COUNT); }
-    uint16_t GetCurrentTagID() override { return currentTagID; }
-    uint16_t GetPreviousTagID() const
-    {
-        return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
-    }
-
     // Phase A of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
     //
     // Today a reference carries no colour unless it is being evacuated, so "needs the barrier"
@@ -981,7 +974,6 @@ private:
     std::unique_ptr<MarkDomain> youngMarkDomain;
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
-    uint16_t currentTagID = 0;
     uint64_t minorTotalRuns = 0;
     MinorRegionSet minorCandidateRegions;
 };

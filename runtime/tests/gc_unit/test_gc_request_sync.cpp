@@ -78,8 +78,9 @@ public:
 
     static bool ExecuteDriverRequest(CollectorResources& resources, const GCDriverRequest& request)
     {
-        DriverLocker locker(resources);
-        return resources.ExecuteDriverRequest(request);
+        GCDriverPort& port = request.reason == GC_REASON_YOUNG
+            ? resources.GetMinorDriverPort() : resources.GetMajorDriverPort();
+        return resources.ProcessDriverRequest(port, request);
     }
 
     static bool ProcessDriverRequest(CollectorResources& resources, GCDriverPort& port,

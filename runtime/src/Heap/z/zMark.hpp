@@ -410,10 +410,6 @@ public:
     }
 
     virtual void UpdateGCStats();
-    virtual uint16_t GetCurrentTagID()
-    {
-        Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
-    }
 
 
 protected:
