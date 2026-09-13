@@ -25,7 +25,6 @@ FAIR_OBSERVER_ENV = {
     "env.MRT_LOG_PATH": "UNSET",
     "env.MRT_REPORT": "UNSET",
     "env.MRT_GC_LOG": "UNSET",
-    "env.MRT_GCV2_*": "UNSET",
 }
 
 

@@ -515,7 +515,6 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungMarkConsumer)
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RuntimeWorkers threadPool(1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
 
     RememberedSet rememberedSet;
     rememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
@@ -554,7 +553,6 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungMarkConsumer)
 GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
 
@@ -633,7 +631,6 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
 GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -731,7 +728,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
 GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -789,7 +785,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
 GC_OTHER_VM_TEST(YoungConc, YoungAllocBlackVisibleBeforePauseMarkEnd)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -842,7 +837,6 @@ GC_OTHER_VM_TEST(YoungConc, YoungAllocBlackVisibleBeforePauseMarkEnd)
 GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -896,7 +890,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
 GC_OTHER_VM_TEST(YoungConc, LeftoverAllocBlackAndY2yAfterWorkerForcesContinue)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -956,7 +949,6 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverAllocBlackAndY2yAfterWorkerForcesContinue)
 GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -1003,7 +995,6 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
 GC_OTHER_VM_TEST(YoungConc, ExportRootRegisteredAfterT1ReachesT2Closure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -1447,28 +1438,20 @@ GC_TEST(YoungConc, IdleStoreDoesNotMarkNewYoungTarget)
     fx.FreePlanted(live);
 }
 
-// The three retired runtime switches are not alternate configurations. These
-// guards pin the required predicates even when a parent process still exports
-// a stale value.
-GC_TEST(YoungConc, LegacyMarkEnvCannotDisableRequiredEpochHandshake)
+// Pin the required epoch handshake and stack scan predicates.
+GC_TEST(YoungConc, MarkRequiresEpochHandshake)
 {
-    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_MARK", "0", 1), 0);
     GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
-    GC_EXPECT_EQ(unsetenv("MRT_GCV2_YOUNG_CONC_MARK"), 0);
 }
 
-GC_TEST(YoungConc, LegacyFollowEnvCannotDisableRequiredEpochHandshake)
+GC_TEST(YoungConc, FollowRequiresEpochHandshake)
 {
-    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "0", 1), 0);
     GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
-    GC_EXPECT_EQ(unsetenv("MRT_GCV2_YOUNG_CONC_FOLLOW"), 0);
 }
 
-GC_TEST(YoungConc, LegacyStackScanEnvCannotDisableRequiredStackScan)
+GC_TEST(YoungConc, StackScanIsRequired)
 {
-    GC_EXPECT_EQ(setenv("MRT_GCV2_CONCURRENT_STACK_SCAN", "0", 1), 0);
     GC_EXPECT_TRUE(MutatorManager::ConcurrentStackScanEnabled());
-    GC_EXPECT_EQ(unsetenv("MRT_GCV2_CONCURRENT_STACK_SCAN"), 0);
 }
 
 // RegionSpace publishes allocate-black work with the Follow receipt consumed by
