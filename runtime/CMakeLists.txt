@@ -112,10 +112,6 @@ if (MRT_GCV2_UNTAG_BREADCRUMB)
     add_compile_definitions(MRT_GCV2_UNTAG_BREADCRUMB)
 endif()
 
-if (MRT_ZSTAT)
-    add_compile_definitions(MRT_ZSTAT_COMPILED=1)
-endif()
-
 # Test-only access remains absent from the default product.  When the explicit
 # GC unit configuration is selected, both the product library and its tests see
 # the same compile-time contract.

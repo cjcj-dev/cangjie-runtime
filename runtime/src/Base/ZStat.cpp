@@ -15,7 +15,6 @@
 #include "Heap/GcThreadPool.h"
 #include "Heap/Allocator/RegionManager.h"
 #include "Heap/Collector/GcTrigger.h"
-#include "Base/ZStat.h"
 
 namespace MapleRuntime {
 void ZStatCycle::Sequence::Add(double value)
