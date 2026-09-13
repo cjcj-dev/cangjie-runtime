@@ -20,7 +20,9 @@ public:
     static StringDedup& Instance();
     void Start();
     void Stop();
-    void Request(BaseObject* object);
+    // Only the explicit String ABI supplies immutable content, pinned for this call.
+    // RawArray type alone is insufficient: ordinary byte arrays are mutable.
+    void RequestString(const uint8_t* data, size_t length);
     void Clean(const std::function<bool(BaseObject*)>& isAlive);
     void Remap();
 
@@ -42,7 +44,6 @@ private:
         zpointer value;
     };
     using Table = std::unordered_multimap<size_t, WeakSlot>;
-    static bool IsByteArray(BaseObject* object);
     static BaseObject* Resolve(WeakSlot& slot);
     size_t Hash(BaseObject* object) const;
     void Run();

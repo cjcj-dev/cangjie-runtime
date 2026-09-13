@@ -1721,14 +1721,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     stw->reset();
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungConcPromoteWalk);
-        // zRelocate.cpp:1272: also request backing on flip/in-place promotion.
-        for (BaseObject* from : reachableVec) {
-            const MAddress mapped = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from), Generation::Young);
-            BaseObject* object = mapped == 0 ? from : reinterpret_cast<BaseObject*>(mapped);
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            if (!region->IsYoungRegion()) StringDedup::Instance().Request(object);
-        }
-
         manager.RememberFlipPromotedPages(workers);
 
     }
@@ -2544,10 +2536,6 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
         rememberedSet.TransferObjectSlots(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to), sz,
                                           forwarding);
         return;
-    }
-    // zRelocate.cpp:817: only newly promoted backing becomes a request.
-    if (fromRegion != nullptr && fromRegion->IsYoungRegion()) {
-        StringDedup::Instance().Request(to);
     }
     RegionManager::RememberPromotedObject(to);
 

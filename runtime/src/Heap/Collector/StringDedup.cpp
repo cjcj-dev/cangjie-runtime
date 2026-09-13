@@ -21,12 +21,6 @@ StringDedup& StringDedup::Instance()
     return instance;
 }
 
-bool StringDedup::IsByteArray(BaseObject* object)
-{
-    return object != nullptr && Heap::IsHeapAddress(object) && object->IsRawArray() &&
-        object->GetComponentTypeInfo()->GetType() == TypeKind::TYPE_KIND_UINT8;
-}
-
 void StringDedup::Start()
 {
     std::lock_guard<std::recursive_mutex> guard(mutex);
@@ -64,10 +58,16 @@ StringDedup::GCScope::~GCScope()
     dedup.condition.notify_all();
 }
 
-void StringDedup::Request(BaseObject* object)
+void StringDedup::RequestString(const uint8_t* data, size_t length)
 {
-    // zStringDedup.inline.hpp:32: L01s substitutes UInt8 backing for String oop.
-    if (!IsByteArray(object)) return;
+    // zStringDedup.inline.hpp:38 requires String identity, not byte-array type.
+    // String is a value type here, so only its explicit pinned-input ABI can
+    // establish that contract. GC promotion cannot identify String backing.
+    if (data == nullptr || length == 0) return;
+    auto* object = reinterpret_cast<MArray*>(reinterpret_cast<uintptr_t>(data) - MArray::GetContentOffset());
+    if (!Heap::IsHeapAddress(object) || !object->IsRawArray() ||
+        object->GetComponentTypeInfo()->GetType() != TypeKind::TYPE_KIND_UINT8 ||
+        object->GetLength() != length) return;
     std::lock_guard<std::recursive_mutex> guard(mutex);
     requests.push_back({to_zpointer(reinterpret_cast<uintptr_t>(object) | ::g_cjStoreGoodMask)});
     condition.notify_all();
@@ -164,7 +164,7 @@ void StringDedup::Process(WeakSlot slot)
         auto* known = static_cast<MArray*>(Resolve(it->second));
         if (known != nullptr && known->GetLength() == candidate->GetLength() &&
             std::memcmp(known->ConvertToCArray(), candidate->ConvertToCArray(), candidate->GetLength()) == 0) {
-            // L01s: ordinary mutable byte arrays must never be redirected.
+            // L01s: this String backing is known; registration is complete.
             // Returning canonical managed backing needs a compiler intrinsic.
             return;
         }
@@ -196,10 +196,6 @@ void StringDedup::Run()
 // stored reference is weak; it never retains that pin beyond registration.
 extern "C" MRT_EXPORT void CJ_MRT_RequestStringDedup(const uint8_t* data, size_t length)
 {
-    if (data == nullptr || length == 0) return;
-    auto* object = reinterpret_cast<MArray*>(reinterpret_cast<uintptr_t>(data) - MArray::GetContentOffset());
-    if (!Heap::IsHeapAddress(object)) return;
-    if (object->GetLength() != length) return;
-    StringDedup::Instance().Request(object);
+    StringDedup::Instance().RequestString(data, length);
 }
 } // namespace MapleRuntime

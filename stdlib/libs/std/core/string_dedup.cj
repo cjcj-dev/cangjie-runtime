@@ -8,6 +8,8 @@
 
 package std.core
 
+// Only String supplies this ABI: promotion cannot distinguish immutable String
+// backing from mutable byte arrays. The pin protects the input during registration.
 // L01s: register through the existing pinned-input C ABI. A managed return
 // of the canonical RawArray requires a compiler intrinsic (tracked separately).
 foreign func CJ_MRT_RequestStringDedup(data: CPointer<UInt8>, length: UIntNative): Unit
