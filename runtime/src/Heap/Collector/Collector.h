@@ -23,6 +23,7 @@
 #include "GcStats.h"
 
 namespace MapleRuntime {
+enum class Generation : uint8_t;
 // GCPhase describes phases for stw/concurrent gc.
 enum GCPhase : uint8_t {
     GC_PHASE_UNDEF = 0,
@@ -253,8 +254,6 @@ public:
         const char* lookupCause{ "n/a" };
         bool lookupActiveCandidate{ false };
         const char* lookupActiveAnswer{ "n/a" };
-        const char* lookupRetiredAnswer{ "n/a" };
-        bool lookupPublicationClosed{ false };
         uintptr_t from{ 0 };
         uintptr_t fromRegion{ 0 };
         bool regionSnapshotValid{ false };
@@ -262,7 +261,6 @@ public:
         uint8_t generation{ 0 };
         bool inCurrentRelocationSet{ false };
         uintptr_t tableId{ 0 };
-        uint64_t publicationGeneration{ 0 };
         uint64_t fromPageEpoch{ 0 };
         uint64_t fromPageLifeId{ 0 };
         bool forwardingSnapshotValid{ false };
@@ -299,8 +297,6 @@ public:
     const char* unavailable_lookup_cause() const { return unavailableLookupCause; }
     bool unavailable_lookup_active_candidate() const { return unavailableLookupActiveCandidate; }
     const char* unavailable_lookup_active_answer() const { return unavailableLookupActiveAnswer; }
-    const char* unavailable_lookup_retired_answer() const { return unavailableLookupRetiredAnswer; }
-    bool unavailable_lookup_publication_closed() const { return unavailableLookupPublicationClosed; }
     uintptr_t unavailable_from() const { return unavailableFrom; }
     uintptr_t unavailable_from_region() const { return unavailableFromRegion; }
     bool unavailable_region_snapshot_valid() const { return unavailableRegionSnapshotValid; }
@@ -308,7 +304,6 @@ public:
     uint8_t unavailable_generation() const { return unavailableGeneration; }
     bool unavailable_in_current_relocation_set() const { return unavailableInCurrentRelocationSet; }
     uintptr_t unavailable_table_id() const { return unavailableTableId; }
-    uint64_t unavailable_publication_generation() const { return unavailablePublicationGeneration; }
     uint64_t unavailable_from_page_epoch() const { return unavailableFromPageEpoch; }
     uint64_t unavailable_from_page_life_id() const { return unavailableFromPageLifeId; }
     bool unavailable_forwarding_snapshot_valid() const { return unavailableForwardingSnapshotValid; }
@@ -345,9 +340,6 @@ public:
         const char* activeCandidate = unavailableLookupSnapshotValid
             ? (unavailableLookupActiveCandidate ? "1" : "0") : "n/a";
         const char* activeLookup = unavailableLookupSnapshotValid ? unavailableLookupActiveAnswer : "n/a";
-        const char* retiredLookup = unavailableLookupSnapshotValid ? unavailableLookupRetiredAnswer : "n/a";
-        const char* publicationClosed = unavailableLookupSnapshotValid
-            ? (unavailableLookupPublicationClosed ? "1" : "0") : "n/a";
         const char* regionType = unavailableRegionSnapshotValid ? "present" : "n/a";
         CHECK_DETAIL(lookupState != State::Unavailable,
                      "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable "
@@ -355,10 +347,10 @@ public:
                      "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
                      "field_type=%s field_offset=%zu from=%p from_region=%p "
                      "region_type=%s(%u) generation=%u in_current_relocation_set=%u table_id=%#zx "
-                     "publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
+                     "from_page_epoch=%llu lifeId=%llu "
                      "lookup_state=%s route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
                      "lookup_snapshot_valid=%u cause=%s active_candidate=%s active_lookup=%s "
-                      "retired_lookup=%s publication_closed=%s never_installed_event=%llu gc_phase=%u",
+                      "never_installed_event=%llu gc_phase=%u",
                      consumer == nullptr ? "unknown" : consumer,
                      ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
                      ForwardingProvenance::StageName(provenance.stage),
@@ -371,14 +363,13 @@ public:
                      static_cast<unsigned>(unavailableGeneration),
                      unavailableInCurrentRelocationSet ? 1u : 0u,
                      static_cast<size_t>(unavailableTableId),
-                     static_cast<unsigned long long>(unavailablePublicationGeneration),
                      static_cast<unsigned long long>(unavailableFromPageEpoch),
                      static_cast<unsigned long long>(unavailableFromPageLifeId),
                      lookup,
                      unavailable_route_name(),
                      forwarded, fromRegionInfoNull, lookup,
                      static_cast<unsigned>(unavailableLookupSnapshotValid), lookupCause,
-                      activeCandidate, activeLookup, retiredLookup, publicationClosed,
+                      activeCandidate, activeLookup,
                       static_cast<unsigned long long>(unavailableNeverInstalledEvent),
                      static_cast<unsigned>(unavailableGcPhase));
         return found();
@@ -391,11 +382,11 @@ private:
           unavailableFromRegionInfoNullValid(false), unavailableFromRegionInfoNull(false),
           unavailableLookupAnswer("not_queried"), unavailableLookupSnapshotValid(false),
           unavailableLookupCause("n/a"), unavailableLookupActiveCandidate(false),
-          unavailableLookupActiveAnswer("n/a"), unavailableLookupRetiredAnswer("n/a"),
-          unavailableLookupPublicationClosed(false), unavailableFrom(0), unavailableFromRegion(0),
+          unavailableLookupActiveAnswer("n/a"),
+          unavailableFrom(0), unavailableFromRegion(0),
           unavailableRegionSnapshotValid(false), unavailableRegionType(0), unavailableGeneration(0),
           unavailableInCurrentRelocationSet(false), unavailableTableId(0),
-          unavailablePublicationGeneration(0), unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
+          unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
           unavailableForwardingSnapshotValid(false), unavailableNeverInstalledEvent(0),
           unavailableGcPhase(GC_PHASE_UNDEF)
     {
@@ -412,16 +403,12 @@ private:
           unavailableLookupActiveCandidate(witness.lookupActiveCandidate),
           unavailableLookupActiveAnswer(witness.lookupActiveAnswer == nullptr ? "unknown"
                                                                               : witness.lookupActiveAnswer),
-          unavailableLookupRetiredAnswer(witness.lookupRetiredAnswer == nullptr ? "unknown"
-                                                                                : witness.lookupRetiredAnswer),
-          unavailableLookupPublicationClosed(witness.lookupPublicationClosed),
           unavailableFrom(witness.from),
           unavailableFromRegion(witness.fromRegion),
           unavailableRegionSnapshotValid(witness.regionSnapshotValid),
           unavailableRegionType(witness.regionType), unavailableGeneration(witness.generation),
           unavailableInCurrentRelocationSet(witness.inCurrentRelocationSet),
           unavailableTableId(witness.tableId),
-          unavailablePublicationGeneration(witness.publicationGeneration),
           unavailableFromPageEpoch(witness.fromPageEpoch),
           unavailableFromPageLifeId(witness.fromPageLifeId),
           unavailableForwardingSnapshotValid(witness.forwardingSnapshotValid),
@@ -442,8 +429,6 @@ private:
     const char* unavailableLookupCause;
     bool unavailableLookupActiveCandidate;
     const char* unavailableLookupActiveAnswer;
-    const char* unavailableLookupRetiredAnswer;
-    bool unavailableLookupPublicationClosed;
     uintptr_t unavailableFrom;
     uintptr_t unavailableFromRegion;
     bool unavailableRegionSnapshotValid;
@@ -451,7 +436,6 @@ private:
     uint8_t unavailableGeneration;
     bool unavailableInCurrentRelocationSet;
     uintptr_t unavailableTableId;
-    uint64_t unavailablePublicationGeneration;
     uint64_t unavailableFromPageEpoch;
     uint64_t unavailableFromPageLifeId;
     bool unavailableForwardingSnapshotValid;
@@ -507,6 +491,7 @@ public:
         (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).PublishPhase(value);
     }
     GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
+    virtual Generation ActiveForwardingGeneration() const;
 
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
@@ -543,7 +528,7 @@ public:
 
     virtual GCStats& GetGCStats() { AbortUnimplemented("Collector::GetGCStats"); }
 
-    virtual BaseObject* ForwardObject(BaseObject*) { AbortUnimplemented("Collector::ForwardObject"); }
+    virtual BaseObject* ForwardObject(BaseObject*, Generation) { AbortUnimplemented("Collector::ForwardObject"); }
 
     virtual bool ShouldIgnoreRequest(GCRequest& quest) = 0;
     virtual bool IsFromObject(BaseObject*) const { AbortUnimplemented("Collector::IsFromObject"); }
@@ -555,16 +540,17 @@ public:
     // Every miss has a public state. Consumers may treat NotManaged and
     // NotForwarded as their existing soft misses; Unavailable must never fall
     // through to object-field access.
-    virtual FindToVersionResult FindToVersion(BaseObject* obj) const = 0;
+    virtual FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const = 0;
 
     // OpenJDK zBarrier.inline.hpp:695-716 store_barrier / color_store_good:
     // a stored reference must already be the current version (remap included).
-    // Default identity so gc_unit Collector stubs do not abort.
-    virtual BaseObject* ResolveStoreValue(BaseObject* ref,
-                                          const ForwardingProvenance& provenance) const
+    // New raw values are already current; validate without selecting a forwarding map.
+    BaseObject* ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const;
+
+    virtual BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+                                          Generation generation) const
     {
-        (void)provenance;
-        return ref;
+        return relocate_or_remap_object(ref, static_cast<ZGenerationId>(generation), provenance);
     }
 
     virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const
@@ -772,7 +758,7 @@ public:
     // F5: to==nullptr must not silently return a dead/zeroed from (REPORT-tagaba F5).
     // Implementation in Collector.cpp — needs complete BaseObject + CHECK_DETAIL.
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
-    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance) const;
+    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const;
 
 protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }

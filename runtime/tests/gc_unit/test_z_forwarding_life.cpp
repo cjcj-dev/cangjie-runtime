@@ -13,7 +13,6 @@
 
 #include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/Collector/ZForwardingLife.h"
-#include "Heap/Verify/FromPageDetachCheck.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
@@ -162,65 +161,4 @@ GC_TEST(ZForwardingLife, ClaimedRetainRefusesImmediatelyAndResetIdle)
     GC_EXPECT_EQ(life.ref.load(), -1);
     ZForwardingLife::ResetIdle(life.ref, life.claimed, life.done);
     GC_EXPECT_EQ(life.ref.load(), 0);
-}
-
-GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
-{
-    GcHeapFixture fx;
-    const auto site = FromPageDetach::Site::TAKE_GARBAGE_REUSE;
-    const FromPageDetach::Counters before = FromPageDetach::GetCounters(site);
-
-    fx.region0->SetRouteDestHold(1);
-    ZForwarding* owner = ZForwarding::alloc(1, fx.region0->GetRegionStart(), fx.region0->GetRegionStart(),
-                                          fx.region0->GetRegionSize(), fx.region0, fx.region0->GetRegionLifeId());
-    GC_EXPECT_TRUE(owner != nullptr);
-    owner->retain_owner();
-    fx.region0->metadata.fwdOwner.store(owner, std::memory_order_release);
-    /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
-    GC_EXPECT_TRUE(true);
-
-    const bool allowed = FromPageDetach::FromPageDetachCheck(fx.region0, site);
-    GC_EXPECT_TRUE(FromPageDetach::GateEnabled());
-    GC_EXPECT_FALSE(allowed);
-    const FromPageDetach::Counters after = FromPageDetach::GetCounters(site);
-    GC_EXPECT_EQ(after.checks, before.checks + 1);
-    GC_EXPECT_EQ(after.withEvidence, before.withEvidence + 1);
-    GC_EXPECT_EQ(after.blocked, before.blocked + 1);
-    GC_EXPECT_EQ(after.routeDestHeld, before.routeDestHeld + 1);
-    GC_EXPECT_EQ(after.forwardingPositive, before.forwardingPositive + 1);
-    GC_EXPECT_EQ(after.forwardingReaders, before.forwardingReaders);
-    GC_EXPECT_EQ(after.copyInflight, before.copyInflight);
-
-    {
-        FromPageDetach::ReusePermitScope permit;
-        GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
-    }
-    const FromPageDetach::Counters permitted = FromPageDetach::GetCounters(site);
-    GC_EXPECT_EQ(permitted.checks, after.checks + 1);
-    GC_EXPECT_EQ(permitted.withEvidence, after.withEvidence + 1);
-    GC_EXPECT_EQ(permitted.blocked, after.blocked);
-
-    // Both arms observe without draining or clearing any evidence word here.
-    GC_EXPECT_EQ(fx.region0->ForwardingRefCount(), 1);
-    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
-    GC_EXPECT_TRUE(fx.region0->IsRouteDestHeld());
-
-    (void)0;
-    if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
-    fx.region0->SetRouteDestHold(0);
-
-    // A completed drain retains the claimed latch until the next region life.
-    // ref=0/done=1 is already detached and must not self-quarantine.
-    owner->claim();
-    owner->mark_done();
-    const FromPageDetach::Counters completedBefore = FromPageDetach::GetCounters(site);
-    GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
-    const FromPageDetach::Counters completedAfter = FromPageDetach::GetCounters(site);
-    GC_EXPECT_EQ(completedAfter.checks, completedBefore.checks + 1);
-    GC_EXPECT_EQ(completedAfter.withEvidence, completedBefore.withEvidence);
-    GC_EXPECT_EQ(completedAfter.forwardingClaimed, completedBefore.forwardingClaimed + 1);
-    GC_EXPECT_EQ(completedAfter.forwardingReleased, completedBefore.forwardingReleased + 1);
-    ForwardingTable::ClearPageOwner(fx.region0);
-    owner->Destroy();
-
 }

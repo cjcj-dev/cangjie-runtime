@@ -76,17 +76,6 @@ struct GcHeapFixture {
         region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         ForwardingTable::Initialize(heapStart, kUnits * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
-        // InitRegionInfo closes any previous incarnation at a reused mmap
-        // address. A fixture is a new relocation generation, so reopen it
-        // explicitly before a test changes the page to FROM.
-        (void)ForwardingTable::PreparePublicationGeneration(
-            region0->GetRegionStart(), region0->GetRegionSize());
-        (void)ForwardingTable::PreparePublicationGeneration(
-            region1->GetRegionStart(), region1->GetRegionSize());
-        region0->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        Heap::OnHeapCreated(heapStart);
-        Heap::OnHeapExtended(heapStart + kUnits * RegionInfo::UNIT_SIZE);
         EnsureForwardData(heapStart);
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
@@ -116,16 +105,9 @@ struct GcHeapFixture {
         // RegionInfo's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
         if (RegionInfo::UnitInfo::heapStartAddress == heapStart) {
-            if (region0 != nullptr) {
-                ForwardingTable::ClearEntries(region0->GetRegionStart(), region0->GetRegionSize());
-                ForwardingTable::Remove(region0->GetRegionStart(), region0->GetRegionSize());
-            }
-            if (region1 != nullptr) {
-                ForwardingTable::ClearEntries(region1->GetRegionStart(), region1->GetRegionSize());
-                ForwardingTable::Remove(region1->GetRegionStart(), region1->GetRegionSize());
-            }
+            ForwardingTable::ResetRelocationSet(Generation::Young);
+            ForwardingTable::ResetRelocationSet(Generation::Old);
         }
-        ForwardingTable::ReclaimRetired("gc-unit-fixture-coverage-complete");
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
         // are mapped per test, so leaving their flags set before munmap makes
         // later tests observe young regions that no longer exist.
@@ -179,9 +161,19 @@ struct GcHeapFixture {
     void InstallPageOwner(RegionInfo* region)
     {
         if (region->metadata.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
-        ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-        CHECK(ForwardingTable::PreparePublicationGeneration(region->GetRegionStart(), region->GetRegionSize()));
-        CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region));
+        if (ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration()) == nullptr) {
+            RegionList selected("fixture-forwardings");
+            const Generation generation = region->GetOwnerGeneration();
+            if (region0->GetOwnerGeneration() == generation) {
+                selected.PrependRegion(region0, region0->GetRegionType());
+            }
+            if (region1->GetOwnerGeneration() == generation) {
+                selected.PrependRegion(region1, region1->GetRegionType());
+            }
+            CHECK(ForwardingTable::BeginForwardingArena(generation, selected));
+            while (selected.TakeHeadRegion() != nullptr) {}
+        }
+        CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region, region->GetOwnerGeneration()));
         CHECK(ForwardingTable::PublishFromPageView(region, region->GetLiveInfo(), region->GetSnapshotEpoch(),
             region->GetRegionAllocPtr(), region->metadata.markStartAllocPtr, region->GetLiveByteCount(),
             static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
