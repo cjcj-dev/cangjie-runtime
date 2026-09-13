@@ -55,7 +55,7 @@ public:
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*) const override { return FindToVersionResult::NotForwarded(); }
+    FindToVersionResult FindToVersion(BaseObject*, Generation) const override { return FindToVersionResult::NotForwarded(); }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
     bool IsFromObject(BaseObject*) const override { return false; }

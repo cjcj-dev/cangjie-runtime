@@ -61,11 +61,11 @@ public:
 
     void RecordMajorGCFinish(uint64_t timestamp)
     {
-        RecordMajorGCFinish(timestamp, 0, 0, 0, 0);
+        RecordMajorGCFinish(timestamp, 0, 0, 0);
     }
 
     void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter,
-                             size_t collectedBytes, uint32_t totalCollections);
+                             size_t collectedBytes);
 
     static const char* YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision);
 
@@ -105,13 +105,12 @@ public:
 
     std::atomic<size_t> heapThreshold{ 0 };
 
-    // L1: last minor feeds the young watermark (CopyCollector.cpp skipped UpdateGCStats).
+    // Last completed minor collection statistics.
     std::atomic<size_t> lastYoungCandidateBytes{ 0 };
     std::atomic<size_t> lastYoungPromotedBytes{ 0 };
     std::atomic<size_t> lastYoungCollectedBytes{ 0 };
     std::atomic<uint64_t> lastYoungDurationNs{ 0 };
     std::atomic<bool> hasYoungSample{ false };
-    std::atomic<size_t> youngTriggerBytes{ 32 * MB };
 
     std::atomic<uint32_t> warmupCyclesDone{ 0 };
     std::atomic<bool> isWarm{ false };
@@ -122,7 +121,6 @@ public:
     // GcStats.cpp and only publish these atomics at cycle end.
     static std::atomic<uint64_t> lastOldDurationNs;
     static std::atomic<uint64_t> lastMajorFinishNs;
-    static std::atomic<uint32_t> collectionsAtLastMajor;
     static std::atomic<size_t> usedAtLastMajorEnd;
     static std::atomic<size_t> oldLiveAtMarkEnd;
     static std::atomic<double> reclaimedPerYoungAvg;
@@ -139,7 +137,6 @@ private:
     // starved by a stream of young collections.
     bool youngHeuDeferralUsed = false;
 };
-extern std::atomic<size_t> g_gcCount;
 extern std::atomic<uint64_t> g_gcTotalTimeUs;
 extern std::atomic<size_t> g_gcCollectedTotalBytes;
 } // namespace MapleRuntime

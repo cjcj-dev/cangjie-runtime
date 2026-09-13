@@ -371,7 +371,7 @@ void WCollector::DoGarbageCollection()
     // young current face. ClearRegion/TransferObjectSlots remain the authorities
     // for reclaimed or moved holders (zRelocate.cpp:652-731).
     TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
-    MergeResurrectExportObjects();
+    MergeResurrectExportObjects(Generation::Old);
     PostResolveCycleTask();
     FlipTagID();
     if (HealCoverage::kHealCoverageCensus) {
@@ -401,7 +401,7 @@ BaseObject* ProbeFindToVersion(BaseObject* obj)
     Collector& c = Heap::GetHeap().GetCollector();
     // This diagnostic observer does not consume the object. Keep Unavailable
     // observable without taking the product consumers' fail-closed exit.
-    const FindToVersionResult observed = c.FindToVersion(obj);
+    const FindToVersionResult observed = c.FindToVersion(obj, c.ActiveForwardingGeneration());
     return observed.found();
 }
 } // namespace ZgcInvariants

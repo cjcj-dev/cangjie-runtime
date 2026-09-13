@@ -746,6 +746,7 @@ void WCollector::DoYoungGarbageCollection()
     // VM_ZMarkStartYoungAndOld / VM_ZMarkStartYoung (zGeneration.cpp:583-659).
     // A major starts old exactly once in this young pause. An independent
     // minor leaves the old cycle identity and mark color untouched.
+    collectorResources.NoteYoungMarkStart();
     flip_young_mark_start();
     StartYoungMarkWork();
 
@@ -762,6 +763,7 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ① FlushAllocationRegions
         MRT_PHASE_TIMER("young.flush_alloc");
+        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ResetTLABUsage();
         FlushAllocationRegions();
     }
 
@@ -1311,7 +1313,7 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ⑧ post-evac finish
         MRT_PHASE_TIMER("young.post_evac_finish");
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
-        MergeResurrectExportObjects();
+        MergeResurrectExportObjects(Generation::Young);
     }
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;

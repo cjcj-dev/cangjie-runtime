@@ -73,6 +73,9 @@ public:
 
     // Wait for the canonical forwarding completion. Always returns zero;
     // callers resolve their own object through the forwarding table afterward.
+    // Preserve the caller's non-safepoint barrier context until that lookup
+    // finishes: Request borrows forwarding storage owned by the relocation set.
+    // GC worker callers are instead bounded by the joined relocation task.
     MAddress WaitUntil(const Handle& request, size_t maxSpins = 0, bool* timedOut = nullptr);
 
     size_t Complete(ZForwarding* forwarding);

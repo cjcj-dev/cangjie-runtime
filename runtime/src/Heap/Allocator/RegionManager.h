@@ -212,15 +212,30 @@ public:
           oldPinnedRegionList("old pinned regions"), rawPointerPinnedRegionList("raw pointer pinned regions"),
           oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
           largeTraceRegions("large trace regions")
-    {}
+    {
+        tlabAllocatingThreads.Sample(1);
+        tlabRequestedFraction.Sample(0.1);
+    }
 
     RegionManager(const RegionManager&) = delete;
 
     RegionManager& operator=(const RegionManager&) = delete;
 
     // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
-    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false, bool youngRegion = true,
+    RegionInfo* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
                                           bool allowSaferegion = true);
+
+    // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
+    // independent of the thread-local requested bytes and retirement waste.
+    void UndoThreadLocalRegionAllocation(RegionInfo* region);
+    // Stable cycle history: read under the statistics lock, at a safepoint,
+    // or with managed access preventing the next young pause.
+    size_t GetTLABUsed() const { return lastTLABUsed; }
+    size_t GetTLABCapacity() const { return static_cast<size_t>(tlabCapacity); }
+    void InitializeTLAB(AllocBuffer& buffer);
+    void ResetTLABUsage();
+    void PublishTLABStatistics();
+    void RetireTLABStatistics(AllocBuffer& buffer);
 
     template<Generation G>
     void ForwardFromRegions(GCWorkers& workers);
@@ -233,6 +248,7 @@ public:
     bool ClaimAllocationLocked(AllocationStallRequest& request);
     void ReturnPageMemory(const PageMemory& memory);
     void SatisfyStalledAllocations();
+    bool IsAllocationStalling() const { return allocationStallQueue.IsStalling(); }
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     using AllocationStallTestHook = std::function<void(RegionManager&)>;
     MRT_EXPORT void SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
@@ -457,10 +473,7 @@ public:
         return maxUnitCountPerRegion * RegionInfo::UNIT_SIZE;
     }
 
-    size_t GetYoungAllocatedSize() const
-    {
-        return RegionInfo::GetYoungRegionCount() * GetThreadLocalRegionSize();
-    }
+    size_t GetYoungAllocatedSize() const;
 
     static bool IsKnownEmptyForView(RegionInfo* region, MarkView<Generation::Young> view)
     {
@@ -928,7 +941,23 @@ public:
         // left from-copies). zGeneration.cpp:211-213, zPage.inline.hpp:180-185.
         (void)ExemptMarkStartAllocatingFromCSet();
 
-        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(fromRegionList),
+        // zGeneration.cpp:205-215: selection visits only this generation's pages.
+        // The shared candidate list can contain young pages during an old cycle;
+        // return them to the existing allocation list without installing forwarding.
+        if constexpr (G == Generation::Old) {
+            RegionInfo* region = fromRegionList.GetHeadRegion();
+            while (region != nullptr) {
+                RegionInfo* next = region->GetNextRegion();
+                if (region->IsYoungRegion()) {
+                    fromRegionList.DeleteRegion(region);
+                    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+                    RecentFullAccounting::Enqueue(1, region->GetUnitCount());
+                }
+                region = next;
+            }
+        }
+
+        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(G, fromRegionList),
                      "forwarding arena budget allocation failed");
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
@@ -944,7 +973,6 @@ public:
                          region, static_cast<unsigned>(G));
         });
 
-        ForwardingTable::EndForwardingArena();
         fromRegionList.CopyListTo(ghostFromRegionList);
     }
 
@@ -965,9 +993,6 @@ public:
         // Cost metric same family as ghostorder: peak retained bytes under mark-epoch gate.
         VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", heldBefore,
              heldBefore * RegionInfo::UNIT_SIZE);
-        const size_t detachReleased = freeRegionManager.ReleaseDetachQuarantineAfterMajor();
-        VLOG(REPORT, "[GCV2][detach-quarantine] major_released_units=%zu major_released_bytes=%zu",
-             detachReleased, detachReleased * RegionInfo::UNIT_SIZE);
         SatisfyStalledAllocations();
     }
 
@@ -1061,10 +1086,6 @@ private:
         }
         if (candidate != nullptr) {
             RemoveRegionLocked(&garbageRegionList, candidate);
-            if (!FromPageDetach::FromPageDetachCheck(candidate, FromPageDetach::Site::TAKE_GARBAGE)) {
-                freeRegionManager.AddDetachQuarantineRegion(candidate);
-                candidate = nullptr;
-            }
         }
         if (gatedBytes != nullptr) {
             *gatedBytes = bytes;
@@ -1091,10 +1112,6 @@ private:
                     return false;
                 }
                 RemoveRegionLocked(&garbageRegionList, region);
-                if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::TAKE_AFTER_DISPEL)) {
-                    freeRegionManager.AddDetachQuarantineRegion(region);
-                    return false;
-                }
                 return true;
             }
         }
@@ -1231,6 +1248,14 @@ private:
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
     size_t heapUnitCount = 0;
+    std::atomic<size_t> tlabUsed{ 0 };
+    size_t lastTLABUsed = 0;
+    double tlabCapacity = 0;
+    TLABAllocationAverage tlabAllocatingThreads;
+    TLABAllocationAverage tlabRequestedFraction;
+    std::mutex tlabStatisticsLock;
+    TLABStatistics retiredTLABStatistics;
+
     size_t maxUnitCountPerRegion = MAX_UNIT_COUNT_PER_REGION;   // max units count for threadLocal buffer.
     size_t maxUnitCountPerPinnedRegion = maxUnitCountPerRegion; // max units count for pinned region.
     size_t largeObjectThreshold;

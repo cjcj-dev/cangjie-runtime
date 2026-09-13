@@ -74,7 +74,7 @@ public:
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*) const override
+    FindToVersionResult FindToVersion(BaseObject*, Generation) const override
     {
         return FindToVersionResult::NotForwarded();
     }

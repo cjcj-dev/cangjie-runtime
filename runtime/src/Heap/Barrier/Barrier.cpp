@@ -627,7 +627,7 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     provenance.fieldKind = ForwardingFieldKind::RefField;
     provenance.fieldOffset =
         obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
-    ref = theCollector.ResolveStoreValue(ref, provenance);
+    ref = theCollector.ValidateCurrentValue(ref, provenance);
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
     NoteW1GhostFromStore(theCollector, ref);
     NoteW1HolderStore(theCollector, obj);
@@ -717,7 +717,7 @@ void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
     // ZBarrier::native_store_slow_path (zBarrier.cpp:272-278).
     theCollector.MarkObjectIfActive(ReadStaticRef(field));
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
-    ref = theCollector.ResolveStoreValue(ref, provenance);
+    ref = theCollector.ValidateCurrentValue(ref, provenance);
     if (phase != BarrierPhase::STW) {
         DispatchPhase(phase, *this, [&](const auto& barrier) { return barrier.WriteStaticRef(field, ref); });
         SurvNodeDiag::NoteStore(&field, nullptr, ref, SurvNodeDiag::STORE_WRITE_STATIC);
@@ -863,7 +863,10 @@ static inline void NoteHandedOut(BaseObject* target, BaseObject* holder, const R
     // This is a diagnostic observer, not a product consumer. It must not turn
     // an Unavailable observation into process termination; the read-barrier
     // consumer below owns the fail-closed decision.
-    const FindToVersionResult observed = collector.FindToVersion(target);
+    RefField<> observedField(field.GetFieldValue());
+    const FindToVersionResult observed = collector.is_load_good(observedField)
+        ? FindToVersionResult::NotForwarded()
+        : collector.FindToVersion(target, static_cast<Generation>(collector.remap_generation(observedField)));
     const bool hasTo = observed.found() != nullptr;
     // Attributes the hand-out to a code path. ForwardBarrier's unmovable arm hands
     // `oldTarget` back and self-heals the slot load-good without resolving it.
@@ -990,7 +993,7 @@ BaseObject* Barrier::ResolveFromCopyForMutator(
     if (JudgeTarget(target) == TargetVerdict::Usable) {
         return target;
     }
-    BaseObject* to = theCollector.ResolveStoreValue(target, provenance);
+    BaseObject* to = theCollector.ValidateCurrentValue(target, provenance);
     if (to != nullptr && JudgeTarget(to) == TargetVerdict::Usable) {
         return to;
     }
@@ -1012,7 +1015,7 @@ BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* hold
     if (verdict == TargetVerdict::Usable) {
         return handed;
     }
-    BaseObject* resolved = theCollector.ResolveStoreValue(handed, provenance);
+    BaseObject* resolved = theCollector.ValidateCurrentValue(handed, provenance);
     ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
                                        holder, field);
     if (resolved != nullptr && JudgeTarget(resolved) == TargetVerdict::Usable) {
@@ -1127,7 +1130,7 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
         target != nullptr && Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target);
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     if (ghost) {
-        target = theCollector.FindLatestVersion(target, provenance);
+        target = theCollector.FindLatestVersion(target, provenance, theCollector.ActiveForwardingGeneration());
     }
     // loadfc: static roots share the same hand-out postcondition; a cleared/re-used static target
     // must resolve or stop, never be handed back (zBarrier.inline.hpp:294-344).
@@ -1155,7 +1158,7 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     provenance.fieldKind = ForwardingFieldKind::AtomicRefField;
     provenance.fieldOffset =
         obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
-    ref = theCollector.ResolveStoreValue(ref, provenance);
+    ref = theCollector.ValidateCurrentValue(ref, provenance);
     NoteW1GhostFromStore(theCollector, ref);
     NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
@@ -1205,7 +1208,7 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     provenance.fieldKind = ForwardingFieldKind::AtomicRefField;
     provenance.fieldOffset =
         obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
-    newRef = theCollector.ResolveStoreValue(newRef, provenance);
+    newRef = theCollector.ValidateCurrentValue(newRef, provenance);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
@@ -1303,7 +1306,7 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     provenance.fieldKind = ForwardingFieldKind::AtomicRefField;
     provenance.fieldOffset =
         obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
-    newRef = theCollector.ResolveStoreValue(newRef, provenance);
+    newRef = theCollector.ValidateCurrentValue(newRef, provenance);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(std::memory_order_relaxed));

@@ -29,7 +29,7 @@ void NotifyFlushObserver(StoreBarrierFlushEvent event, const StoreBarrierEntry& 
 }
 #endif
 
-MAddress RemapPendingField(const StoreBarrierEntry& entry)
+MAddress RemapPendingField(const StoreBarrierEntry& entry, uintptr_t color)
 {
     if (entry.pBase == nullptr) {
         return entry.p;
@@ -47,8 +47,9 @@ MAddress RemapPendingField(const StoreBarrierEntry& entry)
         entry.pBase,
         reinterpret_cast<const void*>(entry.p)
     };
+    RefField<> coloredBase(to_zpointer(reinterpret_cast<uintptr_t>(entry.pBase) | color));
     BaseObject* const remappedBase =
-        Heap::GetHeap().GetCollector().ResolveStoreValue(entry.pBase, provenance);
+        Heap::GetHeap().GetCollector().make_load_good(coloredBase, provenance);
     CHECK_DETAIL(remappedBase != nullptr && Heap::IsHeapAddress(remappedBase),
                  "store-buffer holder did not resolve base=%p slot=%#zx phase=%u",
                  entry.pBase, entry.p, static_cast<unsigned>(phase));
@@ -95,7 +96,7 @@ void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, Remembe
                                          Collector& collector, bool phaseChanged)
 {
     StoreBarrierEntry remapped = entry;
-    remapped.p = RemapPendingField(entry);
+    remapped.p = RemapPendingField(entry, lastProcessedColor);
     const bool oldSlot = Heap::IsHeapAddress(remapped.p) &&
         !RegionInfo::GetRegionInfoAt(remapped.p)->IsYoungRegion();
     const GCCycleSnapshot old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);

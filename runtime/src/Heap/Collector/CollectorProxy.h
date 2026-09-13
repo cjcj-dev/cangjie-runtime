@@ -63,13 +63,18 @@ public:
 
     TracingCollector& GetCurrentCollector() const { return *currentCollector; }
 
-    FindToVersionResult FindToVersion(BaseObject* obj) const override
+    Generation ActiveForwardingGeneration() const override
     {
-        return currentCollector->FindToVersion(obj);
+        return currentCollector->ActiveForwardingGeneration();
     }
-    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance) const override
+    FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {
-        return currentCollector->ResolveStoreValue(ref, provenance);
+        return currentCollector->FindToVersion(obj, generation);
+    }
+    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+                                  Generation generation) const override
+    {
+        return currentCollector->ResolveStoreValue(ref, provenance, generation);
     }
 
     bool IsOldPointer(RefField<>& ref) const override { return currentCollector->IsOldPointer(ref); }
@@ -96,7 +101,10 @@ public:
     void AddRawPointerObject(BaseObject* obj) override { return currentCollector->AddRawPointerObject(obj); }
     void RemoveRawPointerObject(BaseObject* obj) override { return currentCollector->RemoveRawPointerObject(obj); }
 
-    BaseObject* ForwardObject(BaseObject* obj) override { return currentCollector->ForwardObject(obj); }
+    BaseObject* ForwardObject(BaseObject* obj, Generation generation) override
+    {
+        return currentCollector->ForwardObject(obj, generation);
+    }
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& toVersion) const override
     {

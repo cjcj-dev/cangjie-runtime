@@ -46,7 +46,6 @@ public:
         const size_t num = memory.units;
         committedUnits = memory.committed ? num : 0;
         const bool wasCommitted = memory.committed;
-        FromPageDetach::ReusePermitScope reusePermit;
         if (!wasCommitted) {
             const size_t committed = RegionInfo::CommitUnits(idx, num);
             CHECK(committed <= num * RegionInfo::UNIT_SIZE && committed % RegionInfo::UNIT_SIZE == 0);
@@ -98,8 +97,7 @@ public:
         if (region->ForwardingRefCount() != 0) {
             return false;
         }
-        return !ForwardingTable::HasLiveCarrier(region->GetRegionStart(),
-                                                region->GetRegionSizeForDetachCheck());
+        return true;
     }
 
     void AddReleaseUnits(UnitIndex idx, UnitCount num);
@@ -112,29 +110,8 @@ public:
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
     size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true);
 
-    // Phase-2 FROM_PAGE_DETACH_GATE. Entries are withheld from both allocator
-    // trees until a major mark closure rechecks the same central predicate.
-    void AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical = false);
-    void AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, bool released, bool needsInit,
-                                  bool releasePhysical = false);
-    size_t ReleaseDetachQuarantineAfterMajor();
-    bool HasDetachQuarantine() const
-    {
-        std::lock_guard<std::mutex> lock(detachQuarantineMutex);
-        return !detachQuarantine.empty();
-    }
-
 private:
     size_t UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel);
-
-    struct DetachQuarantineEntry {
-        UnitIndex idx;
-        UnitCount num;
-        uint8_t rechecks;
-        bool released;
-        bool needsInit;
-        bool releasePhysical;
-    };
 
     inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
     {
@@ -164,8 +141,6 @@ private:
     mutable std::mutex markQuarantineTreeMutex;
     CartesianTree markQuarantineTree;
 
-    mutable std::mutex detachQuarantineMutex;
-    std::vector<DetachQuarantineEntry> detachQuarantine;
 };
 } // namespace MapleRuntime
 #endif // MRT_FREE_REGION_MANAGER_H

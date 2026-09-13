@@ -111,6 +111,11 @@ size_t RegionInfo::pageIterationCount = 0;
 std::vector<std::function<void()>> RegionInfo::deferredPageRetirements;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
+namespace {
+// ZPageAllocator::used_generation (zPageAllocator.cpp:1311). TLAB extents
+// vary, so region counts cannot stand in for young-generation byte occupancy.
+std::atomic<size_t> youngRegionBytes{ 0 };
+}
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 #if defined(MRT_GC_UNIT_TESTS)
 std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
@@ -367,6 +372,7 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
     bool wasYoung = IsYoungRegion();
     bool makeYoung = flag != 0;
     if (!wasYoung && makeYoung) {
+        youngRegionBytes.fetch_add(GetRegionSize(), std::memory_order_release);
         youngRegionCount.fetch_add(1, std::memory_order_release);
     }
     metadata.regionStateBitField.SetAtomicValue(
@@ -375,12 +381,18 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
         size_t count = youngRegionCount.load(std::memory_order_relaxed);
         CHECK(count > 0);
         youngRegionCount.fetch_sub(1, std::memory_order_release);
+        youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
     }
 }
 
 size_t RegionInfo::GetYoungRegionCount()
 {
     return youngRegionCount.load(std::memory_order_acquire);
+}
+
+size_t RegionManager::GetYoungAllocatedSize() const
+{
+    return youngRegionBytes.load(std::memory_order_acquire);
 }
 
 bool RegionInfo::HasYoungRegions()
@@ -708,7 +720,6 @@ void FreeRegionManager::Initialize(UnitCount regionCnt, const std::vector<Memory
             partitions.emplace_back(new Partition(numa.node));
             found = std::prev(partitions.end());
             (*found)->cache.SetRefresh([](MappedCache::Extent extent) {
-                FromPageDetach::ReusePermitScope permit;
                 RegionInfo::InitFreeRegion(extent.index, extent.count);
             });
         }
@@ -804,14 +815,8 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
         Partition& partition = *partitions[selected];
         // zPartition::claim_from_cache_or_increase_capacity: a contiguous cache
         // hit precedes new capacity, which precedes discontiguous harvesting.
-        for (;;) {
-            const auto extent = partition.cache.RemoveContiguous(static_cast<UnitCount>(num));
-            if (extent.IsNull()) { break; }
-            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(extent.index));
-            if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::TAKE_DIRTY_REUSE)) {
-                AddDetachQuarantineUnits(extent.index, extent.count, false, false);
-                continue;
-            }
+        const auto extent = partition.cache.RemoveContiguous(static_cast<UnitCount>(num));
+        if (!extent.IsNull()) {
             memory = PageMemory{extent.index, num, static_cast<uint32_t>(selected), true};
             nextPartition = (selected + 1) % partitions.size();
             return true;
@@ -830,24 +835,9 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
         std::vector<MappedCache::Extent> extents;
         const UnitCount harvested = remaining == 0 ? 0 : partition.cache.RemoveDiscontiguous(remaining, extents);
         CHECK(harvested + increased == num);
-        bool eligible = true;
         for (const auto& extent : extents) {
-            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(extent.index));
-            if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::TAKE_DIRTY_REUSE)) {
-                eligible = false;
-                AddDetachQuarantineUnits(extent.index, extent.count, false, false);
-            } else {
-                memory.partialMappings.push_back({RegionInfo::GetUnitAddress(extent.index),
-                                                  extent.count * RegionInfo::UNIT_SIZE});
-            }
-        }
-        if (!eligible) {
-            for (const auto& range : memory.partialMappings) {
-                InsertCommitted(partition, RegionInfo::FindUnitIndex(range.start), range.size / RegionInfo::UNIT_SIZE);
-            }
-            memory.partialMappings.clear();
-            partition.pendingGrowth -= increased;
-            continue;
+            memory.partialMappings.push_back({RegionInfo::GetUnitAddress(extent.index),
+                                              extent.count * RegionInfo::UNIT_SIZE});
         }
         memory.index = 0;
         memory.units = num;
@@ -1015,87 +1005,7 @@ size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBe
     return released;
 }
 
-void FreeRegionManager::AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical)
-{
-    CHECK(region != nullptr);
-    AddDetachQuarantineUnits(region->GetUnitIdx(), region->GetUnitCount(), releasePhysical, true, releasePhysical);
-}
 
-void FreeRegionManager::AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, bool released, bool needsInit,
-                                                 bool releasePhysical)
-{
-    static constexpr size_t kMaxEntries = 65536;
-    std::lock_guard<std::mutex> lock(detachQuarantineMutex);
-    CHECK_DETAIL(detachQuarantine.size() < kMaxEntries,
-                 "CJRT_FROM_REUSE_GATE detach quarantine overflow entries=%zu max=%zu",
-                 detachQuarantine.size(), kMaxEntries);
-    detachQuarantine.push_back(DetachQuarantineEntry{ idx, num, 0, released, needsInit, releasePhysical });
-    FromPageDetach::NoteQuarantineAdmitted(detachQuarantine.size());
-}
-
-size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
-{
-    static constexpr uint8_t kMaxRechecks = 8;
-    std::vector<DetachQuarantineEntry> pending;
-    {
-        std::lock_guard<std::mutex> lock(detachQuarantineMutex);
-        pending.swap(detachQuarantine);
-    }
-
-    size_t releasedUnits = 0;
-    std::vector<DetachQuarantineEntry> held;
-    held.reserve(pending.size());
-    for (DetachQuarantineEntry entry : pending) {
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(entry.idx));
-        // Quarantined regions are deliberately on no managed list, so the
-        // ordinary ClearRouteDestHoldFlags list walk cannot see them. This
-        // post-PrepareForwardTable major closure retired the only route
-        // generation that could have stamped the withheld address.
-        region->SetRouteDestHold(0);
-        if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
-                                                 FromPageDetach::Action::MAJOR_CLOSE)) {
-            ++entry.rechecks;
-            FromPageDetach::NoteQuarantineRecheckHeld();
-            CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
-                         "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
-                         entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
-                         static_cast<unsigned>(kMaxRechecks));
-            held.push_back(entry);
-            continue;
-        }
-
-        if (entry.needsInit) {
-            // Re-enter the original funnel after its evidence has healed so
-            // path-specific scrub/zap/huge-page work is not skipped. That
-            // funnel drains and performs a second central check after
-            // ClearEntries; a newly retired table is re-admitted as a
-            // needsInit=false quarantine entry rather than reaching a tree.
-            if (entry.releasePhysical) {
-                (void)regionManager.ReleaseRegion(region);
-            } else {
-                regionManager.ReclaimRegion(region);
-            }
-            FromPageDetach::NoteQuarantineReleased();
-            continue;
-        }
-        if (entry.released) {
-            AddReleaseUnits(entry.idx, entry.num);
-        } else {
-            AddGarbageUnits(entry.idx, entry.num);
-        }
-        releasedUnits += entry.num;
-        FromPageDetach::NoteQuarantineReleased();
-    }
-
-    if (!held.empty()) {
-        std::lock_guard<std::mutex> lock(detachQuarantineMutex);
-        CHECK_DETAIL(detachQuarantine.size() + held.size() <= 65536,
-                     "CJRT_FROM_REUSE_GATE detach quarantine overflow on recheck current=%zu held=%zu max=65536",
-                     detachQuarantine.size(), held.size());
-        detachQuarantine.insert(detachQuarantine.end(), held.begin(), held.end());
-    }
-    return releasedUnits;
-}
 
 void RegionManager::SetMaxUnitCountForRegion(size_t regionSize)
 {
@@ -1234,10 +1144,6 @@ void RegionManager::DumpScrubCostAndReset(const char* point)
 
 void RegionManager::ReclaimRegion(RegionInfo* region)
 {
-    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_DIRTY)) {
-        freeRegionManager.AddDetachQuarantineRegion(region);
-        return;
-    }
     RegionInfo::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
 }
 
@@ -1384,10 +1290,6 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
 
 void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
 {
-    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_MARK_QUARANTINE)) {
-        freeRegionManager.AddDetachQuarantineRegion(region);
-        return;
-    }
     RegionInfo::RetirePage(region, [this, region] { ReclaimRetiredRegionToMarkQuarantine(region); });
 }
 
@@ -1415,11 +1317,6 @@ void RegionManager::ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region)
 
 size_t RegionManager::ReleaseRegion(RegionInfo* region)
 {
-    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION)) {
-        const size_t heldBytes = region->GetRegionSize();
-        freeRegionManager.AddDetachQuarantineRegion(region, true);
-        return heldBytes;
-    }
     const size_t size = region->GetRegionSize();
     RegionInfo::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
     return size;
@@ -1448,7 +1345,6 @@ void RegionManager::ReleaseRetiredRegion(RegionInfo* region)
     }
     region->InitFreeUnits();
     {
-        FromPageDetach::ReusePermitScope reusePermit;
         RegionInfo::ReleaseUnits(unitIndex, num);
     }
     ReturnPageMemory(PageMemory{ unitIndex, num, 0, false });
@@ -1583,8 +1479,65 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
 }
 
+// ThreadLocalAllocBuffer::initial_desired_size (cpp:265): a new thread
+// starts with the published allocation fraction instead of a fixed extent.
+void RegionManager::InitializeTLAB(AllocBuffer& buffer)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads,
+                      GetThreadLocalRegionSize());
+}
+
+// ZTLABUsage::reset (zTLABUsage.cpp:41), called before retiring allocating
+// regions in young mark-start (zGeneration.cpp:862).
+void RegionManager::ResetTLABUsage()
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
+    if (used != 0) {
+        // TruncatedSeq::davg uses AbsSeq's exponential average, alpha=0.3;
+        // its last value and average are stable throughout the next cycle.
+        tlabCapacity = lastTLABUsed == 0 ? used : tlabCapacity + 0.3 * (used - tlabCapacity);
+        lastTLABUsed = used;
+    }
+}
+
+// ZThreadLocalAllocBuffer::publish_statistics (zThreadLocalAllocBuffer.cpp:52).
+// Thread retirement statistics consume the already published backing history.
+void RegionManager::PublishTLABStatistics()
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t capacity = GetTLABCapacity();
+    TLABStatistics total = retiredTLABStatistics;
+    retiredTLABStatistics = TLABStatistics{};
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    const double fallback = tlabRequestedFraction.Average() / threads;
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
+        buffer.AccumulateTLABStatistics(total, GetTLABUsed(), capacity);
+        buffer.ResizeTLAB(capacity, fallback, GetThreadLocalRegionSize());
+    });
+    if (total.Used() != 0) {
+        tlabAllocatingThreads.Sample(total.allocatingThreads);
+        if (lastTLABUsed > 0.5 * capacity) {
+            tlabRequestedFraction.Sample(std::min(static_cast<double>(total.Used()) /
+                                                 std::max(capacity, size_t{1}), 1.0));
+        }
+    }
+    VLOG(REPORT, "TLAB totals: used=%zu capacity=%zu allocated=%zu refills=%zu refill-waste=%zu gc-waste=%zu threads=%zu",
+         lastTLABUsed, capacity, total.allocatedSize, total.refills, total.refillWaste, total.gcWaste,
+         total.allocatingThreads);
+}
+
+void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    buffer.AccumulateTLABStatistics(retiredTLABStatistics, GetTLABUsed(), GetTLABCapacity());
+}
+
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
+    PublishTLABStatistics();
     YoungCollectionStats stats;
     uint64_t subStart = TimeUtil::NanoSeconds();
     RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
@@ -2053,109 +2006,6 @@ void RegionManager::PromoteAllRegions()
 RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem,
                                       bool allowSaferegion, bool clearPayload)
 {
-    // a chance to invoke heuristic gc.
-    // routefix: under ROUTING, skip RequestGC — PostIgnoredGcRequest may ScopedEnterSaferegion.
-    if (allowSaferegion && !Heap::GetHeap().IsGcStarted()) {
-        Collector& collector = Heap::GetHeap().GetCollector();
-        GCStats& gcStats = collector.GetGCStats();
-        size_t heapThreshold = gcStats.GetThreshold();
-        size_t youngRegionTriggerBytes = kGcTriggerYoungFixedBytes;
-        if (kGcTriggerAllocRateEnabled && !kGcTriggerPinYoung32MB) {
-            youngRegionTriggerBytes = gcStats.youngTriggerBytes.load(std::memory_order_acquire);
-        }
-        size_t youngAllocated = GetYoungAllocatedSize();
-        size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
-        // Occupancy young stays on the latched line (survival). Director uses the
-        // 32MB now-gate so a new wave after a high-survival latch still minors
-        // (12-wave NW). zDirector.cpp:296-306 / :331-381.
-        const size_t directorMinorBytes = kGcTriggerYoungFixedBytes;
-        bool requested = false;
-        if (kGcTriggerAllocRateEnabled) {
-            MutatorAllocRateStats rate = MutatorAllocRate::stats();
-            const uint64_t nowNs = TimeUtil::NanoSeconds();
-            const uint64_t prevFinish = GCStats::GetPrevGCFinishTime();
-            const uint64_t sinceNs = nowNs > prevFinish ? nowNs - prevFinish : 0;
-            GcTriggerInputs in;
-            in.allocRateAvgBps = rate.avg;
-            in.allocRatePredictBps = rate.predict;
-            in.allocRateSdBps = rate.sd;
-            in.usedBytes = allocated;
-            in.youngUsedBytes = youngAllocated;
-            in.capacityBytes = Heap::GetHeap().GetMaxCapacity();
-            in.softMaxBytes = MutatorAllocRate::soft_max_heap_size();
-            in.lastGcDurationSec =
-                static_cast<double>(gcStats.lastGcDurationNs.load(std::memory_order_relaxed)) /
-                static_cast<double>(SECOND_TO_NANO_SECOND);
-            in.timeSinceLastGcSec = static_cast<double>(sinceNs) / static_cast<double>(SECOND_TO_NANO_SECOND);
-            in.collectionIntervalSec = 0.0;
-            in.warmupCyclesDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
-            in.isWarm = gcStats.isWarm.load(std::memory_order_relaxed);
-            in.isTimeTrustable = gcStats.isTimeTrustable.load(std::memory_order_relaxed);
-            if constexpr (kGcTriggerProactiveEnabled || kGcTriggerDynamicWorkersEnabled) {
-                in.lastYoungGcDurationSec = GCStats::lastYoungGcDurationAvgSec.load(std::memory_order_relaxed);
-                in.lastOldGcDurationSec = GCStats::lastOldGcDurationAvgSec.load(std::memory_order_relaxed);
-            }
-            if constexpr (kGcTriggerProactiveEnabled) {
-                const uint64_t lastMajorNs = GCStats::lastMajorFinishNs.load(std::memory_order_relaxed);
-                const uint64_t sinceMajorNs =
-                    (lastMajorNs == 0 || nowNs <= lastMajorNs) ? sinceNs : nowNs - lastMajorNs;
-                in.timeSinceLastMajorSec =
-                    static_cast<double>(sinceMajorNs) / static_cast<double>(SECOND_TO_NANO_SECOND);
-                in.usedAtLastMajorEnd = GCStats::usedAtLastMajorEnd.load(std::memory_order_relaxed);
-            }
-            if constexpr (kGcTriggerMajorAllocRateEnabled) {
-                in.oldUsedBytes = allocated > youngAllocated ? allocated - youngAllocated : 0;
-                in.lastYoungGcDurationSec = GCStats::lastYoungGcDurationAvgSec.load(std::memory_order_relaxed);
-                in.lastOldGcDurationSec = GCStats::lastOldGcDurationAvgSec.load(std::memory_order_relaxed);
-                in.totalCollections = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
-                in.collectionsAtLastMajor = GCStats::collectionsAtLastMajor.load(std::memory_order_relaxed);
-                in.oldLiveAtMarkEnd = GCStats::oldLiveAtMarkEnd.load(std::memory_order_relaxed);
-                in.reclaimedPerYoungAvg = GCStats::reclaimedPerYoungAvg.load(std::memory_order_relaxed);
-                in.reclaimedPerOldAvg = GCStats::reclaimedPerOldAvg.load(std::memory_order_relaxed);
-            }
-            const GcTriggerDecision d = DecideGcTrigger(in);
-            if constexpr (kGcTriggerDynamicWorkersEnabled) {
-                const uint32_t poolCap = static_cast<uint32_t>(
-                    std::max(Heap::GetHeap().GetCollectorResources().GetGCThreadCount(false), 1));
-                const double lastWorkers =
-                    static_cast<double>(g_gcTriggerYoungWorkers.load(std::memory_order_relaxed));
-                const GcWorkerSelection workers = SelectGcWorkers(in, poolCap, lastWorkers);
-                g_gcTriggerYoungWorkers.store(workers.youngWorkers, std::memory_order_relaxed);
-                g_gcTriggerOldWorkers.store(workers.oldWorkers, std::memory_order_relaxed);
-            }
-            g_gcTriggerArmed.fetch_add(1, std::memory_order_relaxed);
-            if (d.kind == GcTriggerKind::MAJOR) {
-                g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
-                NoteGcTriggerRule(d.rule);
-                DLOG(ALLOC, "request heu gc via DecideGcTrigger rule=%d used=%zu cap=%zu",
-                     static_cast<int>(d.rule), allocated, in.capacityBytes);
-                collector.RequestGC(GC_REASON_HEU, true);
-                requested = true;
-            } else if (ShouldRequestDirectorMinor(d.kind, youngAllocated, directorMinorBytes)) {
-                // zDirector.cpp:331-381 — alloc-rate / high-usage keep evaluating after
-                // the occupancy watermark has been raised. Occupancy young still uses
-                // the latched line; director uses the 5%/32MB now-gate so a new young
-                // wave is collected (12-wave NW). is_young_small is already inside
-                // RuleAllocRate / RuleHighUsage (zDirector.cpp:342-343, :371-372).
-                g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
-                NoteGcTriggerRule(d.rule);
-                DLOG(ALLOC, "request young gc via DecideGcTrigger rule=%d young=%zu trigger=%zu",
-                     static_cast<int>(d.rule), youngAllocated, youngRegionTriggerBytes);
-                collector.RequestGC(GC_REASON_YOUNG, true);
-                requested = true;
-            }
-        }
-        if (!requested && youngAllocated >= youngRegionTriggerBytes) {
-            DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
-            collector.RequestGC(GC_REASON_YOUNG, true);
-            requested = true;
-        }
-        if (!requested && allocated >= heapThreshold) {
-            DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, heapThreshold);
-            collector.RequestGC(GC_REASON_HEU, true);
-        }
-    }
-
     // check for allocation since we do not want gc threads and mutators do any harm to each other.
     size_t size = num * RegionInfo::UNIT_SIZE;
     // routefix: RequestForRegion may sleep; under ROUTING keep the critical section short.
@@ -2228,16 +2078,6 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if ((n & (n - 1)) == 0) {
             VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
         }
-    }
-    // A detach quarantine is released only by the next major PostTrace
-    // closure. If a minor filled it and allocation has exhausted every other
-    // source, waiting for organic allocation progress can deadlock the grace
-    // condition: no page means no progress towards the next major. Request
-    // that closure here; GC threads and ROUTING critical sections must not
-    // synchronously request a collection from inside their own operation.
-    if (allowSaferegion && !IsGcThread() &&
-        freeRegionManager.HasDetachQuarantine()) {
-        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_HEU, true);
     }
     return nullptr;
 }
@@ -2353,7 +2193,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
     }
     const MAddress start = region->GetRegionStart();
     const MAddress regionEnd = region->GetRegionEnd();
-    ZForwarding* active = ForwardingTable::GetEntries(start);
+    ZForwarding* active = ForwardingTable::RetainPageOwner(region).get();
     const ZForwarding::FromPageView* fromPage = active == nullptr ? nullptr : active->from_page_snapshot();
     const MAddress frozenTop = fromPage == nullptr ? regionEnd : fromPage->topAtStart;
     size_t survivors = 0;
@@ -2369,14 +2209,12 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
         }
         ++survivors;
         const MAddress from = start + offset;
-        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
+        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupForwarding(from, ForwardingTable::RetainPageOwner(region).get());
         const bool hit = lookup.to != 0 &&
-            (lookup.answer == ForwardingTable::ToAnswer::ArmedHit ||
-             lookup.retiredAnswer == ForwardingTable::ToAnswer::ArmedHit);
+            lookup.answer == ForwardingTable::ToAnswer::ArmedHit;
         CHECK_DETAIL(hit,
-                     "%s receipt gap region=%p exactStart=%#zx answer=%u cause=%u route=%u fwdDone=%u refs=%d copy=%d",
+                     "%s receipt gap region=%p exactStart=%#zx answer=%u route=%u fwdDone=%u refs=%d copy=%d",
                      site, region, static_cast<size_t>(from), static_cast<unsigned>(lookup.answer),
-                     static_cast<unsigned>(lookup.unavailableCause),
                      static_cast<unsigned>(region->RelocateObserve()),
                      static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
                       region->CopyInflightWord());
@@ -2421,7 +2259,7 @@ bool IncompleteRouteUnpublished(RegionInfo* region)
     if (region->IsForwardingDone()) {
         return false;
     }
-    return ForwardingTable::GetEntries(region->GetRegionStart()) != nullptr;
+    return ForwardingTable::RetainPageOwner(region).get() != nullptr;
 }
 } // namespace
 
@@ -2538,11 +2376,6 @@ void RegionManager::CollectFromSpaceGarbage()
             }
             ExemptFromRegion(region);
         } else {
-            if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::COLLECT_FROM_GARBAGE)) {
-                freeRegionManager.AddDetachQuarantineRegion(region);
-                region = fromRegionList.TakeHeadRegion();
-                continue;
-            }
 #if defined(__OHOS__)
             if (region->IsGhostFromRegion()) {
                 garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
@@ -2909,13 +2742,25 @@ void RegionManager::DumpRegionStats(const char* msg) const
     TRACE_COUNT("CJRT_GC_unitCapacity", static_cast<size_t>(unitCapacity * decimalPrecision));
 }
 
-RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, bool youngRegion, bool allowSaferegion)
+RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem, bool youngRegion,
+                                                   bool allowSaferegion)
 {
-    RegionInfo* region = TakeRegion(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
+    // ZHeap::max_tlab_size / unsafe_max_tlab_alloc (zHeap.cpp:144-160):
+    // the caller computes the refill size; the allocator enforces its extent.
+    if (size == 0 || size > GetThreadLocalRegionSize()) {
+        return nullptr;
+    }
+    const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
+    RegionInfo* region = TakeRegion(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
                                     allowSaferegion);
     if (region != nullptr) {
         {
             region->SetYoungRegionFlag(youngRegion ? 1 : 0);
+            if (youngRegion) {
+                // zHeap.cpp:233: charge the backing extent even before a
+                // prepared region is installed as a thread's current TLAB.
+                tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
+            }
             region->SetYoungAge(0);
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
@@ -2935,6 +2780,21 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
     }
 
     return region;
+}
+
+// ZHeap::undo_alloc_page (zHeap.cpp:270): only a failed publication of
+// a newly allocated, unused backing region cancels its allocation charge.
+// GC retirement/reclamation is not an undo and must retain that cycle's usage.
+void RegionManager::UndoThreadLocalRegionAllocation(RegionInfo* region)
+{
+    CHECK(region != nullptr && region->IsEmpty() && region->IsThreadLocalRegion());
+    if (region->IsYoungRegion()) {
+        const size_t size = region->GetRegionSize();
+        const size_t previous = tlabUsed.fetch_sub(size, std::memory_order_relaxed);
+        CHECK(previous >= size);
+    }
+    RemoveThreadLocalRegion(region);
+    ReclaimRegion(region);
 }
 
 void RegionManager::RequestForRegion(size_t size)
@@ -2978,7 +2838,8 @@ bool RegionManager::RelocateClaimedPage(RegionInfo* region)
         if (allocFailed) {
             return;
         }
-        if (ForwardingTable::FindTo(reinterpret_cast<MAddress>(currentObj))) {
+        if (ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(currentObj),
+                ForwardingTable::RetainPageOwner(region).get()).to) {
             return;
         }
         if (collector.ForwardObjectExclusive(currentObj) == nullptr) {
@@ -3027,7 +2888,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
-        if (ForwardingTable::FindTo(currentPtr)) {
+        if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {
             return;
         }
         size_t size = currentObj->GetSize();
@@ -3178,7 +3039,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
-        if (ForwardingTable::FindTo(currentPtr)) {
+        if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {
             return;
         }
         size_t size = currentObj->GetSize();
@@ -3476,9 +3337,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     size_t o2yOnToForOld = 0;
     size_t recordedOnToForOld = 0;
     bool forwarded = region->VisitLiveObjectsUntilFalse(
-        [&collector, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded,
+        [&collector, region, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded,
          &o2yOnToForOld, &recordedOnToForOld](BaseObject* obj) {
-            BaseObject* toObj = collector.ForwardObject(obj);
+            BaseObject* toObj = collector.ForwardObject(obj,
+                static_cast<Generation>(ForwardingTable::RetainPageOwner(region)->table_generation()));
             // Remset slots must address the surviving (to-space) holder, not the from copy
             // that CollectRegion is about to reclaim.
             //
@@ -3512,7 +3374,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 size_t sz = RegionSpace::GetAllocSize(*obj);
                 MAddress fromBase = reinterpret_cast<MAddress>(obj);
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);
-                ZForwarding* forwarding = ForwardingTable::GetCovering(fromBase);
+                ZForwarding* forwarding = ForwardingTable::GetCovering(fromBase, Generation::Old);
                 const bool youngMarking = Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_TRACE;
                 size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz, forwarding, youngMarking);
                 recordedOnToForOld += moved;
@@ -3523,7 +3385,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             return obj->IsForwarded();
         });
     if (!youngRegion) {
-        if (ZForwarding* forwarding = ForwardingTable::GetCovering(region->GetRegionStart())) {
+        if (ZForwarding* forwarding = ForwardingTable::GetCovering(region->GetRegionStart(), Generation::Old)) {
             forwarding->relocated_remembered_fields_after_relocate();
         }
     }
@@ -3609,11 +3471,12 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     };
 
     if (!forwarded || !allLiveBitsHaveReceipt()) {
-        forwarded = region->VisitLiveObjectsUntilFalse([&collector](BaseObject* obj) {
+        forwarded = region->VisitLiveObjectsUntilFalse([&collector, region](BaseObject* obj) {
             if (obj->IsForwarded()) {
                 return true;
             }
-            (void)collector.ForwardObject(obj);
+            (void)collector.ForwardObject(obj,
+                static_cast<Generation>(ForwardingTable::RetainPageOwner(region)->table_generation()));
             return obj->IsForwarded();
         });
     }

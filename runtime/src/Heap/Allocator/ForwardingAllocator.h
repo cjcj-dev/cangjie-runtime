@@ -17,9 +17,7 @@ namespace MapleRuntime {
 
 // zForwardingAllocator.cpp:36-46 / zForwardingAllocator.inline.hpp:32-42.
 // One budgeted allocation, stable addresses, monotonic parallel allocation.
-// Unlike ZGC's set-wide reset, old carriers can retire independently in the
-// transitional collector. Their owners keep this arena alive until the last
-// carrier is destroyed; the arena is never resized under a reader.
+// The generation relocation set owns the arena through its reset boundary.
 class ForwardingAllocator {
 public:
     explicit ForwardingAllocator(size_t capacity)

@@ -942,7 +942,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
         collector.IsUnmovableFromObject(oldObj)) {
         return;
     }
-    BaseObject* toObj = collector.ForwardObject(oldObj);
+    BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
     CHECK_DETAIL(toObj != nullptr, "preforward headerless missing winner oldObj=%p", oldObj);
     if (oldObj != toObj) {
         HealRoot(field, from_object(toObj), HealSite::MutatorPreForwardHeaderlessRecord);
@@ -963,7 +963,7 @@ void VisitTaggedOopSlot(ObjectRef& root, bool young)
             }
             Collector& collector = Heap::GetHeap().GetCollector();
             if (collector.IsGhostFromObject(obj) && !collector.IsUnmovableFromObject(obj)) {
-                BaseObject* toObj = collector.ForwardObject(obj);
+                BaseObject* toObj = collector.ForwardObject(obj, collector.ActiveForwardingGeneration());
                 CHECK_DETAIL(toObj != nullptr, "preforward tagged oop missing winner obj=%p", obj);
                 if (obj != toObj) {
                     HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
@@ -1170,7 +1170,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
 inline void Mutator::ForwardLocalFinalizers(Collector& collector)
 {
     WCollector& wcollector = reinterpret_cast<WCollector&>(collector);
-    RootVisitor visitor = [&wcollector](ObjectRef& root) { wcollector.ForwardUpdateRawRef(root); };
+    RootVisitor visitor = [&wcollector](ObjectRef& root) { wcollector.ForwardUpdateRawRef(root, wcollector.ActiveForwardingGeneration()); };
     for (RootSlot& root : localFinalizers) {
         visitor(root);
     }
@@ -1194,7 +1194,8 @@ DerivedPtrVisitor Mutator::MakePreForwardDerivedVisitor(const PreForwardBaseReso
 
         BaseObject* currentBase = resolveBase(oldBase);
         if (currentBase == nullptr) {
-            currentBase = Heap::GetHeap().GetCollector().ForwardObject(oldBase);
+            currentBase = Heap::GetHeap().GetCollector().ForwardObject(
+                oldBase, Heap::GetHeap().GetCollector().ActiveForwardingGeneration());
         }
         CHECK_DETAIL(currentBase != nullptr, "preforward derived missing winner oldBase=%p", oldBase);
         RootSlot fixedBase;
@@ -1218,7 +1219,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
-            BaseObject* toObj = collector.ForwardObject(oldObj);
+            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
             CHECK_DETAIL(toObj != nullptr, "preforward stack field missing winner oldObj=%p", oldObj);
             HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
@@ -1243,7 +1244,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             if (host != nullptr && collector.IsGhostFromObject(host) &&
                 !collector.IsUnmovableFromObject(host)) {
                 if (rootFieldSet.insert((void*)(&root)).second) {
-                    BaseObject* toHost = collector.ForwardObject(host);
+                    BaseObject* toHost = collector.ForwardObject(host, collector.ActiveForwardingGeneration());
                     CHECK_DETAIL(toHost != nullptr, "preforward interior missing winner host=%p", host);
                     HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
                         (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
@@ -1272,7 +1273,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             // and the refusal below is the honest report of that.  ZGC's counterpart assert
             // (zRelocate.cpp:412-416) encodes the same invariant: an address a root names is a
             // live object start, or the collector is already wrong.
-            BaseObject* toObj = collector.ForwardObject(oldObj);
+            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
             CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
             HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
             remappedBases[oldObj] = toObj;

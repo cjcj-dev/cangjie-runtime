@@ -34,8 +34,8 @@ class LiveInfo;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.
 // _entries is a ZAttachedArray sitting after this object (zAttachedArray.inline.hpp:44-54).
-// Lifetime: _ref_count / _ref_lock / _done (zForwarding.cpp:34-194). Product retain/release
-// still runs on RegionInfo's copies (step ③); these fields are dual-inited at alloc.
+// Source-page retention: _ref_count / _ref_lock / _done (zForwarding.cpp:34-194).
+// Forwarding storage belongs to the generation relocation set.
 class ZForwarding {
 public:
     using AttachedArray = ZAttachedArray<ZForwarding, std::atomic<uint64_t>>;
@@ -85,8 +85,8 @@ public:
     }
 
     static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              RegionInfo* page, RegionLifeId pageLifeId = 0, bool provisional = false,
-                              const std::shared_ptr<ForwardingAllocator>& arena = {})
+                              RegionInfo* page, RegionLifeId pageLifeId = 0,
+                              ForwardingAllocator* arena = nullptr)
     {
         const size_t n = nentries(liveObjects);
         if (n == 0) {
@@ -103,12 +103,11 @@ public:
         if (arena) {
             AttachedArray::initialize(addr, n);
         }
-        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId, provisional);
-        forwarding->_arena = arena;
+        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId);
         return forwarding;
     }
 
-    // Kept name so existing tests / ClearEntries continue to compile.
+    // Standalone storage for focused forwarding tests. Product objects use the set arena.
     static ZForwarding* Create(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize = 0)
     {
         return alloc(liveObjects, start, heapBase, regionSize, nullptr);
@@ -116,37 +115,19 @@ public:
 
     void Destroy()
     {
-        // Hold the arena across destruction of its last embedded carrier.
-        auto arena = _arena;
         this->~ZForwarding();
-        if (!arena) {
-            AttachedArray::free(this);
-        }
+        AttachedArray::free(this);
     }
-
-#if defined(MRT_TESTABLE_INTERNALS)
-    const ForwardingAllocator* arena_for_test() const { return _arena.get(); }
-#endif
 
     MAddress start() const { return _start; }
     size_t size() const { return _size; }
     size_t regionSize() const { return _size; }
     RegionInfo* page() const { return _page; }
     RegionLifeId page_life_id() const { return _page_life_id; }
-    uint64_t publication_generation() const { return _publication_generation; }
-    void set_publication_generation(uint64_t generation) { _publication_generation = generation; }
     uint8_t table_generation() const { return _table_generation; }
-    uint64_t birth_flip() const { return _birth_flip; }
-    uint64_t required_mark_epoch() const { return _required_mark_epoch; }
-    void note_table_epoch(uint8_t generation, uint64_t birthFlip, uint64_t requiredMarkEpoch)
-    {
-        _table_generation = generation;
-        _birth_flip = birthFlip;
-        _required_mark_epoch = requiredMarkEpoch;
-    }
+    void set_table_generation(uint8_t generation) { _table_generation = generation; }
     bool page_life_current() const;
     size_t length() const { return _entries.length(); }
-    bool is_provisional() const { return _provisional; }
 
     void publish_from_page_view(LiveInfo* liveInfo, uint64_t epoch, MAddress topAtStart,
                                 MAddress markStartAllocPtr, uint64_t liveByteCount,
@@ -180,12 +161,7 @@ public:
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
     static bool DestUsable(MAddress to);
-    MAddress resolve_live(MAddress to) const;
-    bool receipt_live(MAddress to) const;
 
-    void note_retired_required() { _retired_required.store(true, std::memory_order_release); }
-    bool retired_required() const { return _retired_required.load(std::memory_order_acquire); }
-    static std::atomic<uint64_t>& StaleToLifeCount();
 
     bool covers(MAddress addr) const { return _size != 0 && addr >= _start && addr < _start + _size; }
 
@@ -411,32 +387,6 @@ public:
         return insert_receipt(from, to).address;
     }
 
-    // Table users are protected separately from source-page users. A released
-    // page must not prevent remap from finding its immutable entries
-    // (zForwarding.cpp:171-185; zRelocationSet.cpp:191-197).
-    // Acquisition is serialized with unlink by ForwardingTable's install lock.
-    bool retain_table()
-    {
-        _table_readers.fetch_add(1, std::memory_order_acquire);
-        return true;
-    }
-    void release_table() { _table_readers.fetch_sub(1, std::memory_order_release); }
-    void drain_table_readers()
-    {
-        _table_draining.store(true, std::memory_order_release);
-        while (_table_readers.load(std::memory_order_acquire) != 0) {
-            std::this_thread::yield();
-        }
-    }
-    size_t table_readers() const { return _table_readers.load(std::memory_order_acquire); }
-    bool table_draining() const { return _table_draining.load(std::memory_order_acquire); }
-
-    // The region facade and queued page work may outlive map membership. They
-    // hold the carrier, not a payload retain or an open publication token.
-    void retain_owner() { _external_owners.fetch_add(1, std::memory_order_relaxed); }
-    void release_owner() { _external_owners.fetch_sub(1, std::memory_order_release); }
-    size_t external_owners() const { return _external_owners.load(std::memory_order_acquire); }
-
     enum class ZPublishState : int8_t {
         none,
         published,
@@ -566,17 +516,14 @@ public:
 private:
     // zForwarding.inline.hpp:59-76
     ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId, bool provisional)
+                RegionLifeId pageLifeId)
         : _start(start),
           _size(regionSize),
           _heapBase(heapBase),
           _entries(nentries),
           _page(page),
           _page_life_id(pageLifeId),
-          _publication_generation(0),
           _table_generation(0),
-          _birth_flip(0),
-          _required_mark_epoch(0),
           _claimed(false),
           _in_place(false),
           _ref_lock(),
@@ -585,14 +532,11 @@ private:
           _overflowLock(),
           _overflow(),
           _receiptInstallLock(),
-          _retired_required(false),
-          _provisional(provisional),
           _from_page(),
           _relocated_remembered_fields_state(ZPublishState::none),
           _relocated_remembered_fields_publish_young_seqnum(0)
     {}
 
-    std::shared_ptr<ForwardingAllocator> _arena;
     const MAddress _start;
     const size_t _size;
     const MAddress _heapBase;
@@ -601,24 +545,16 @@ private:
     const RegionLifeId _page_life_id;
     // Monotonic per-region-span generation. Written before the table pointer is
     // published, then immutable for the table's lifetime.
-    uint64_t _publication_generation;
     uint8_t _table_generation;
-    uint64_t _birth_flip;
-    uint64_t _required_mark_epoch;
     std::atomic<bool> _claimed;
     std::atomic<bool> _in_place;
     mutable std::mutex _ref_lock;
     std::condition_variable _ref_changed;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
-    std::atomic<size_t> _table_readers{ 0 };
-    std::atomic<bool> _table_draining{ false };
-    std::atomic<size_t> _external_owners{ 0 };
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
     mutable std::mutex _receiptInstallLock;
-    std::atomic<bool> _retired_required;
-    const bool _provisional;
     FromPageView _from_page;
     std::atomic<ZPublishState> _relocated_remembered_fields_state;
     std::vector<MAddress> _relocated_remembered_fields_array;
@@ -626,7 +562,7 @@ private:
     mutable std::mutex _relocated_fields_lock;
 };
 
-// Existing tests and ClearEntries still spell this name.
+// Attached-entry spelling used by existing consumers.
 using ForwardingEntries = ZForwarding;
 
 } // namespace MapleRuntime

@@ -2218,7 +2218,6 @@ EXPORTS
     _ZN12MapleRuntime9TaskQueueINS_10GCExecutorEE12EnqueueAsyncERKS1_ @2305
     _ZN12MapleRuntime9TaskQueueINS_10GCExecutorEE4FiniEv @2306
     _ZN12MapleRuntime9TaskQueueINS_10GCExecutorEE7DequeueEv @2307
-    _ZN12MapleRuntime9g_gcCountE @2308 DATA
     _ZN7Cangjie12DemangleInfoIN12MapleRuntime7CStringEEC1ERKS2_NS_8TypeKindE @2309
     _ZN7Cangjie12DemangleInfoIN12MapleRuntime7CStringEEC1ERKS2_NS_8TypeKindEb @2310
     _ZN7Cangjie12DemangleInfoIN12MapleRuntime7CStringEEC2ERKS2_NS_8TypeKindE @2311

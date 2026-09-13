@@ -35,6 +35,7 @@ set(GC_UNIT_SOURCES
     test_z_forwarding_table.cpp
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
+    test_tlab_usage.cpp
     test_young_weak.cpp
     test_relocation_set_selector.cpp
     test_store_barrier_buffer.cpp
@@ -44,6 +45,7 @@ set(GC_UNIT_SOURCES
     test_mapped_cache.cpp
     test_stay_young.cpp
     test_gc_trigger.cpp
+    test_gc_director.cpp
     test_gc_request_sync.cpp
     test_allocation_stall_queue.cpp
 
