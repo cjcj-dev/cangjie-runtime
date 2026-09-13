@@ -2138,11 +2138,22 @@ public:
 
     static size_t ReleaseUnitsPartial(size_t idx, size_t cnt)
     {
-#if defined(MRT_GC_UNIT_TESTS)
-        if (Uncommitter::CutReleaseBackend()) {
-            return 0;
-        }
-#endif
+        return ReleaseUnitsPartialImpl(idx, cnt, false);
+    }
+
+    static size_t ReleaseUnitsDeferred(size_t idx, size_t cnt)
+    {
+        return ReleaseUnitsPartialImpl(idx, cnt, true);
+    }
+
+    static size_t PublishUnitsRelease(size_t idx, size_t completed)
+    {
+        return UnitInfo::memoryOwner == nullptr ? 0 : UnitInfo::memoryOwner->PublishMemoryRelease(
+            reinterpret_cast<void*>(GetUnitAddress(idx)), completed);
+    }
+
+    static size_t ReleaseUnitsPartialImpl(size_t idx, size_t cnt, bool deferred)
+    {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
         CHECK(ContainsUnitRange(reinterpret_cast<uintptr_t>(unitAddress), size));
@@ -2152,7 +2163,8 @@ public:
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
              unitAddress, size, reinterpret_cast<uintptr_t>(unitAddress) + size);
         const size_t released = UnitInfo::memoryOwner == nullptr ? 0 :
-                                UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size);
+                                (deferred ? UnitInfo::memoryOwner->ReleaseMemoryDeferred(unitAddress, size) :
+                                            UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size));
 #ifdef CANGJIE_ASAN_SUPPORT
         if (released != 0) {
             Sanitizer::OnHeapMadvise(unitAddress, released);

@@ -734,78 +734,43 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
     return releasedBytes;
 }
 
-size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
-{
-    ScopedEnterSaferegion enterSaferegion(true);
-    return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
-}
-
-size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
+bool FreeRegionManager::TakeUncommitMemory(size_t maxBytes, uint64_t idleBeforeNs, PageMemory& memory)
 {
     if (maxBytes < RegionInfo::UNIT_SIZE) {
-        return 0;
+        return false;
     }
-    size_t uncommittedBytes = 0;
-    while (uncommittedBytes + RegionInfo::UNIT_SIZE <= maxBytes) {
-        UnitIndex idx = 0;
-        UnitCount num = 0;
-        {
-            std::lock_guard<std::mutex> lock1(releasedUnitTreeMutex);
-            UnitCount remain = static_cast<UnitCount>((maxBytes - uncommittedBytes) / RegionInfo::UNIT_SIZE);
-            if (remain == 0 || !releasedUnitTree.TakeIdleUnits(idleBeforeNs, remain, idx, num)) {
-                break;
-            }
-        }
-        if (honorCancel && Uncommitter::ShouldStopUncommit()) {
-            std::lock_guard<std::mutex> lockCancel(releasedUnitTreeMutex);
-            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
-                         "tid %d: failed to restore canceled uncommit units[%u+%u, %u)", GetTid(), idx, num,
-                         idx + num);
-            break;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
-        bool inRelocate = false;
-        if (Heap::GetHeap().IsGcStarted()) {
-            const GCPhase phase = Heap::GetHeap().GetGCPhase();
-            inRelocate = phase == GCPhase::GC_PHASE_POST_TRACE ||
-                         phase == GCPhase::GC_PHASE_PREFORWARD ||
-                         phase == GCPhase::GC_PHASE_FORWARD;
-        }
-        if (inRelocate || !ExtentReadyForReleasedCache(region)) {
-            std::lock_guard<std::mutex> lockHold(releasedUnitTreeMutex);
-            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
-                         "tid %d: failed to restore uncommit units under live forwarding [%u+%u, %u)",
-                         GetTid(), idx, num, idx + num);
-            break;
-        }
-        const size_t requestedBytes = static_cast<size_t>(num) * RegionInfo::UNIT_SIZE;
-        const size_t before = RegionInfo::GetCommittedUnitBytes(idx, num);
-        const size_t backendReleased = RegionInfo::ReleaseUnitsPartial(idx, num);
-        const size_t after = RegionInfo::GetCommittedUnitBytes(idx, num);
-        // zNMT.cpp:65: capacity is the backing owner's actual range delta,
-        // including retries of already uncommitted cache extents.
-        CHECK(after <= before);
-        const size_t released = before - after;
-        {
-            std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
-            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
-                         "tid %d: failed to retain uncommit units[%u+%u, %u)", GetTid(), idx, num,
-                         idx + num);
-        }
-        if (released != 0) {
-            uncommittedBytes += released;
-        }
-        if (Uncommitter::ShouldRetryPartial(requestedBytes, backendReleased)) {
-            break;
-        }
+    UnitIndex idx = 0;
+    UnitCount num = 0;
+    std::lock_guard<std::mutex> cacheLock(releasedUnitTreeMutex);
+    const UnitCount limit = static_cast<UnitCount>(maxBytes / RegionInfo::UNIT_SIZE);
+    if (!releasedUnitTree.TakeIdleUnits(idleBeforeNs, limit, idx, num)) {
+        return false;
     }
-    if (uncommittedBytes > 0) {
-        VLOG(REPORT, "uncommit idle heap memory %zu bytes", uncommittedBytes);
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
+    bool inRelocate = false;
+    if (Heap::GetHeap().IsGcStarted()) {
+        const GCPhase phase = Heap::GetHeap().GetGCPhase();
+        inRelocate = phase == GCPhase::GC_PHASE_POST_TRACE ||
+                     phase == GCPhase::GC_PHASE_PREFORWARD ||
+                     phase == GCPhase::GC_PHASE_FORWARD;
     }
-    return uncommittedBytes;
+    if (inRelocate || !ExtentReadyForReleasedCache(region)) {
+        CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                     "tid %d: failed to restore uncommit units under live forwarding [%u+%u, %u)",
+                     GetTid(), idx, num, idx + num);
+        return false;
+    }
+    memory = PageMemory{idx, num, 0, false};
+    return true;
 }
 
-
+void FreeRegionManager::ReturnUncommitMemory(const PageMemory& memory)
+{
+    std::lock_guard<std::mutex> cacheLock(releasedUnitTreeMutex);
+    CHECK_DETAIL(releasedUnitTree.MergeInsert(memory.index, memory.units, true),
+                 "tid %d: failed to retain uncommit units[%zu+%zu)", GetTid(),
+                 static_cast<size_t>(memory.index), static_cast<size_t>(memory.units));
+}
 
 void RegionManager::SetMaxUnitCountForRegion(size_t regionSize)
 {
@@ -1099,7 +1064,7 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
         memory = PageMemory{ index, num, partition, false };
     }
     if (!memory.committed) {
-        Uncommitter::CancelCycle();
+        Uncommitter::CancelCycleLocked();
     }
     pageAllocatorUsed += size;
     return true;

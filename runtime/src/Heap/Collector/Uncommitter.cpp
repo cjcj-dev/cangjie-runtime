@@ -8,23 +8,18 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <cstring>
+#include <chrono>
+
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Collector/GcTrigger.h"
+#include "Common/ScopedObjectAccess.h"
+#include "Mutator/MutatorManager.h"
 
 #include "Base/CString.h"
 #include "Base/Log.h"
 #include "Base/TimeUtils.h"
 
 namespace MapleRuntime {
-namespace {
-std::atomic<bool> g_cycleCanceled{ false };
-
-bool EnvIsSet(const char* name)
-{
-    const char* v = std::getenv(name);
-    return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
-}
-} // namespace
-
 uint64_t Uncommitter::ParseDelayNs(const char* env)
 {
     if (env == nullptr) {
@@ -58,30 +53,6 @@ uint64_t Uncommitter::DelayNs()
     return delayNs;
 }
 
-uint64_t Uncommitter::ComputeTickNs(uint64_t delayNs)
-{
-    if (delayNs == 0) {
-        return 0;
-    }
-    uint64_t tenth = delayNs / 10;
-    return tenth == 0 ? delayNs : std::min(tenth, kMaxTickNs);
-}
-
-uint64_t Uncommitter::TickNs()
-{
-    return ComputeTickNs(DelayNs());
-}
-
-uint32_t Uncommitter::TickMs()
-{
-    uint64_t tickNs = TickNs();
-    if (tickNs == 0) {
-        return 0;
-    }
-    uint64_t tickMs = tickNs / MILLI_SECOND_TO_NANO_SECOND;
-    return tickMs == 0 ? 1 : static_cast<uint32_t>(tickMs);
-}
-
 size_t Uncommitter::ChunkLimit(size_t maxCapacity)
 {
     size_t granule = MRT_PAGE_SIZE == 0 ? 4096 : MRT_PAGE_SIZE;
@@ -103,94 +74,186 @@ size_t Uncommitter::MinCapacity(size_t liveBytes, size_t youngReserve)
     return sum;
 }
 
-size_t Uncommitter::FlushBytes(size_t usedBytes, size_t dirtyBytes, size_t minCapacity, size_t chunkLimit)
+Uncommitter& Uncommitter::Current()
 {
-    if (dirtyBytes == 0 || chunkLimit == 0) {
-        return 0;
+    // Allocation currently selects logical partition 0. The worker itself is
+    // owned by that allocator, and receives its partition at construction.
+    return Heap::GetHeap().GetAllocator().GetUncommitter();
+}
+
+void Uncommitter::Start()
+{
+    CHECK(!worker.joinable());
+    stopped.store(false, std::memory_order_release);
+    worker = std::thread([this] { Run(); });
+}
+
+void Uncommitter::Stop()
+{
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        stopped.store(true, std::memory_order_release);
+        condition.notify_all();
     }
-    size_t committed = usedBytes + dirtyBytes;
-    if (committed < usedBytes) {
-        return 0;
+    if (worker.joinable()) {
+        ScopedEnterSaferegion safeRegion(false);
+        worker.join();
     }
-    if (committed <= minCapacity) {
-        return 0;
+}
+
+bool Uncommitter::WaitUntil(uint64_t deadline)
+{
+    std::unique_lock<std::mutex> guard(lock);
+    while (!stopped.load(std::memory_order_acquire)) {
+        if (!Enabled()) {
+            condition.wait(guard);
+            continue;
+        }
+        const uint64_t now = TimeUtil::NanoSeconds();
+        if (now >= deadline) {
+            return true;
+        }
+        condition.wait_for(guard, std::chrono::nanoseconds(deadline - now));
     }
-    size_t release = committed - minCapacity;
-    return std::min({ release, dirtyBytes, chunkLimit });
-}
-
-void Uncommitter::ActivateCycle()
-{
-    g_cycleCanceled.store(false, std::memory_order_release);
-}
-
-void Uncommitter::CancelCycle()
-{
-    g_cycleCanceled.store(true, std::memory_order_release);
-}
-
-bool Uncommitter::CycleCanceled()
-{
-    return g_cycleCanceled.load(std::memory_order_acquire);
-}
-
-bool Uncommitter::CutCancelWake()
-{
-#if defined(MRT_GC_UNIT_TESTS)
-    return EnvIsSet("MRT_UNCOMMIT_CUT_CANCEL");
-#else
     return false;
-#endif
 }
 
-bool Uncommitter::CutCacheOwnership()
+bool Uncommitter::Activate()
 {
-#if defined(MRT_GC_UNIT_TESTS)
-    return EnvIsSet("MRT_UNCOMMIT_CUT_OWNERSHIP");
-#else
-    return false;
-#endif
-}
-
-bool Uncommitter::CutPartialPropagation()
-{
-#if defined(MRT_GC_UNIT_TESTS)
-    return EnvIsSet("MRT_UNCOMMIT_CUT_PARTIAL");
-#else
-    return false;
-#endif
-}
-
-bool Uncommitter::CutReleaseBackend()
-{
-#if defined(MRT_GC_UNIT_TESTS)
-    return EnvIsSet("MRT_UNCOMMIT_CUT_RELEASE");
-#else
-    return false;
-#endif
-}
-
-bool Uncommitter::ShouldStopUncommit()
-{
-    if (CutCancelWake()) {
+    RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+    ScopedObjectAccess participation;
+    std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+    const uint64_t now = TimeUtil::NanoSeconds();
+    if (canceled) {
         return false;
     }
-    return CycleCanceled();
+    canceled = false;
+    cycleStart = now;
+    nextUncommitNs = 0;
+    uncommitted = 0;
+    const size_t committed = regions.GetCommittedCapacity();
+    const size_t retain = MinCapacity(regions.pageAllocatorUsed, kGcTriggerYoungFixedBytes);
+    toUncommit = committed > retain ? committed - retain : 0;
+    return true;
 }
 
-size_t Uncommitter::AccountReleased(size_t requestedBytes, size_t releasedBytes)
+size_t Uncommitter::Uncommit()
 {
-    if (CutPartialPropagation()) {
-        return requestedBytes;
+    RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+    PageMemory memory;
+    {
+        // zUncommitter.cpp:367: join before taking the allocation owner.
+        // Allocation/cancel and cache claim must not observe separate owners.
+        ScopedObjectAccess participation;
+        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        if (stopped.load(std::memory_order_acquire) || canceled) {
+            return 0;
+        }
+        const size_t committed = regions.GetCommittedCapacity();
+        const size_t retain = MinCapacity(regions.pageAllocatorUsed, kGcTriggerYoungFixedBytes);
+        const size_t release = committed > retain ? committed - retain : 0;
+        const size_t flush = std::min({release, toUncommit, ChunkLimit(partition.GetMaxCapacity())});
+        // Cache age selection belongs to A02c; capacity is A02p's backing ledger.
+        const uint64_t idleBefore = cycleStart > DelayNs() ? cycleStart - DelayNs() : 0;
+        if (!regions.freeRegionManager.TakeUncommitMemory(flush, idleBefore, memory)) {
+            Cancel();
+            return 0;
+        }
     }
-    return releasedBytes;
+
+    // zUncommitter.cpp:409: system operations run outside the allocator owner
+    // and safepoint participation; the claimed extent is not allocatable.
+    const size_t completed = RegionInfo::ReleaseUnitsDeferred(memory.index, memory.units);
+
+    {
+        // zUncommitter.cpp:415: rejoin, then publish the actual backing prefix
+        // and return the extent under the same owner that performed the claim.
+        ScopedObjectAccess participation;
+        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        const size_t released = RegionInfo::PublishUnitsRelease(memory.index, completed);
+        regions.freeRegionManager.ReturnUncommitMemory(memory);
+        if (released != 0) {
+            RegisterUncommit(released);
+        } else if (!canceled) {
+            Cancel();
+        }
+        return released;
+    }
 }
 
-bool Uncommitter::ShouldRetryPartial(size_t requestedBytes, size_t releasedBytes)
+void Uncommitter::RegisterUncommit(size_t size)
 {
-    if (CutPartialPropagation()) {
-        return false;
+    CHECK(size <= toUncommit);
+    toUncommit -= size;
+    uncommitted += size;
+    nextUncommitNs = 0;
+    if (toUncommit == 0 || canceled) {
+        return;
     }
-    return releasedBytes < requestedBytes;
+    const uint64_t elapsed = TimeUtil::NanoSeconds() - cycleStart;
+    if (elapsed == 0 || elapsed >= DelayNs()) {
+        return;
+    }
+    const double rate = static_cast<double>(uncommitted) / elapsed;
+    const double timeToComplete = toUncommit / rate;
+    const uint64_t left = DelayNs() - elapsed;
+    if (left < timeToComplete) {
+        return;
+    }
+    const size_t remaining = toUncommit / size + 1;
+    const uint64_t millisLeft = left / MILLI_SECOND_TO_NANO_SECOND;
+    if (remaining < millisLeft) {
+        nextUncommitNs = (millisLeft / remaining) * MILLI_SECOND_TO_NANO_SECOND;
+    } else {
+        const double extra = left - timeToComplete;
+        const double random = static_cast<double>(std::rand()) / RAND_MAX;
+        nextUncommitNs = random < extra / left ? MILLI_SECOND_TO_NANO_SECOND : 0;
+    }
+}
+
+void Uncommitter::RunCycle()
+{
+    while (!stopped.load(std::memory_order_acquire) && toUncommit != 0) {
+        if (Uncommit() == 0) {
+            break;
+        }
+        if (toUncommit != 0 && nextUncommitNs != 0 &&
+            !WaitUntil(TimeUtil::NanoSeconds() + nextUncommitNs)) {
+            break;
+        }
+    }
+}
+
+void Uncommitter::Run()
+{
+    MutatorManager& mutators = MutatorManager::Instance();
+    mutators.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    uint64_t deadline = TimeUtil::NanoSeconds() + DelayNs();
+    while (WaitUntil(deadline)) {
+        if (Activate()) {
+            RunCycle();
+        }
+        ScopedObjectAccess participation;
+        RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
+        std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
+        deadline = (canceled ? cancelTime : cycleStart) + DelayNs();
+        toUncommit = 0;
+        uncommitted = 0;
+        cycleStart = 0;
+        canceled = false;
+    }
+    mutators.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
+
+void Uncommitter::Cancel()
+{
+    // Caller holds this partition's pageAllocatorMutex (ZPartition::reset).
+    cancelTime = TimeUtil::NanoSeconds();
+    canceled = true;
+}
+
+void Uncommitter::CancelCycleLocked()
+{
+    Current().Cancel();
 }
 } // namespace MapleRuntime
