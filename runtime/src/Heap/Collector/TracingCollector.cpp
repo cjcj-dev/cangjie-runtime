@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Heap/Verify/ZVerify.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/MarkStripe.h"
 #include "TracingCollector.h"
@@ -16,11 +17,9 @@
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/M0ExitDiagnostics.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/VerifyRoots.h"
-#include "Heap/Verify/VerifyMarkingStacks.h"
+#include "Heap/Collector/MarkingStacks.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
@@ -342,10 +341,7 @@ public:
         (void)local.Stacks().Flush(shared.Stripes(), true);
         local.Cache().Flush();
         shared.newlyMarked.fetch_add(nNewlyMarked, std::memory_order_relaxed);
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
-                                         VerifyMarkingStacks::MarkingContainer::LOCAL,
-                                         local.Stacks().Population(), 0, workerId);
+        MarkingStacks::VerifyEmpty(local.Stacks().Population());
     }
 
 private:
@@ -436,45 +432,7 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
 #endif
-    // gcvroot: optional rich root diagnostics (MRT_GCV2_VERIFY_ROOTS=1). Does not replace CHECKs.
-    if (VerifyRoots::Enabled()) {
-        RootVerifyContext vctx;
-        vctx.phase = "VisitStackRoots";
-        vctx.kind = RootKind::SLOT_STACK;
-        vctx.startIP = startIP;
-        vctx.frameIP = frameIP;
-        vctx.frameFA = frameAddress;
-        vctx.ownerMutator = &mutator;
-        static thread_local char gcvrootNameBuf[256];
-        gcvrootNameBuf[0] = '\0';
-        CString fname = frame.GetFuncName();
-        if (fname.Str() != nullptr) {
-            std::strncpy(gcvrootNameBuf, fname.Str(), sizeof(gcvrootNameBuf) - 1);
-            gcvrootNameBuf[sizeof(gcvrootNameBuf) - 1] = '\0';
-            vctx.funcName = gcvrootNameBuf;
-        }
-        SlotDebugVisitor verifySlot = VerifyRoots::MakeSlotDebugVisitor(vctx);
-        RegDebugVisitor verifyReg = VerifyRoots::MakeRegDebugVisitor(vctx);
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-        auto prevSlot = slotDebugFunc;
-        auto prevReg = regDebugFunc;
-        slotDebugFunc = [prevSlot, verifySlot](SlotBias off, BaseObject* root) {
-            verifySlot(off, root);
-            if (prevSlot) {
-                prevSlot(off, root);
-            }
-        };
-        regDebugFunc = [prevReg, verifyReg](RegisterNum i, const BaseObject* root) {
-            verifyReg(i, root);
-            if (prevReg) {
-                prevReg(i, root);
-            }
-        };
-#else
-        slotDebugFunc = verifySlot;
-        regDebugFunc = verifyReg;
-#endif
-    }
+
     // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
     // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
@@ -620,14 +578,7 @@ void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
     VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
-        if (VerifyRoots::Enabled()) {
-            RootVerifyContext ctx;
-            ctx.phase = "EnumAllExportRoots";
-            ctx.kind = RootKind::RUNTIME_ROOT;
-            ctx.rawValue = raw(root.GetFieldValue());
-            ctx.hasRawValue = true;
-            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
-        }
+
         EnumRefFieldRoot(root, foreignRootsSet);
     });
 }
@@ -643,7 +594,7 @@ void TracingCollector::StartOldMarkWork()
     // ZGenerationOld::mark_start -> ZMark::start. Initialize the existing M3
     // domain before publishing old's mark phase to mutators and young workers.
     if (majorMarkDomain == nullptr) {
-        majorMarkDomain = std::make_unique<MarkDomain>(64, VerifyMarkingStacks::MarkingGeneration::MAJOR);
+        majorMarkDomain = std::make_unique<MarkDomain>(64, MarkingStacks::MarkingGeneration::MAJOR);
     }
     GCWorkers& workers = collectorResources.GetWorkers(GCCycleGeneration::OLD);
     majorMarkDomain->BindWorkers(&workers);
@@ -679,7 +630,7 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, 
     GCWorkers& workersSet = GetWorkers();
     const uint32_t workers = workersSet.ActiveWorkers();
     if (majorMarkDomain == nullptr) {
-        majorMarkDomain = std::make_unique<MarkDomain>(64, VerifyMarkingStacks::MarkingGeneration::MAJOR);
+        majorMarkDomain = std::make_unique<MarkDomain>(64, MarkingStacks::MarkingGeneration::MAJOR);
     }
     majorMarkDomain->BindWorkers(&workersSet);
     majorMarkDomain->BindAbort(&collectorResources.GetMajorDriverPort().Abort());
@@ -698,8 +649,7 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, 
         seed.Push(shared.Stripes(), shared.StripeFor(entry), entry, true);
     }
     (void)seed.Flush(shared.Stripes(), true);
-    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                      VerifyMarkingStacks::MarkingContainer::TASK, shared.Stripes().Population());
+
 
     ConcurrentMarkingWork task(shared);
     workersSet.Run(task);
@@ -713,27 +663,17 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, 
 
 void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
-    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                      VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size());
-    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                      VerifyMarkingStacks::MarkingContainer::FOREIGN, foreignRootsSet.size());
+
+
     if (workStack.empty() && foreignRootsSet.empty() && majorMarkDomain->Stripes().IsEmpty()) {
         return;
     }
 
     if (!workStack.empty() || !majorMarkDomain->Stripes().IsEmpty()) {
         markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::JOIN,
-                                         VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                         0, VerifyMarkingStacks::NO_MARKING_INDEX,
-                                         VerifyMarkingStacks::NO_MARKING_INDEX,
-                                         VerifyMarkingStacks::NO_MARKING_INDEX);
+        MarkingStacks::VerifyEmpty(0);
     }
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                     VerifyMarkingStacks::MarkingBoundary::JOIN,
-                                     VerifyMarkingStacks::MarkingContainer::POOL,
-                                     GetWorkers().GetSnapshot().remainingWorkers, 0);
+    MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
 }
 
 void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
@@ -814,6 +754,13 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     MutatorManager::Instance().RunEpochHandshake("old non-strong references", false);
     collectorResources.UnblockResurrection();
     collectorResources.GetFinalizerProcessor().EnqueueReferences();
+    // zGeneration.cpp:1147-1168: the serial driver excludes young collections
+    // while this verification safepoint observes the weak-inclusive graph.
+    if (ZVerifyRoots || ZVerifyObjects) {
+        ScopedStopTheWorld stw("verify after weak processing", false);
+        ZVerify::BeforeZOperation();
+        ZVerify::AfterWeakProcessing();
+    }
 }
 
 bool TracingCollector::FinishOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
@@ -838,6 +785,7 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack, WorkStack& foreignRoo
         bool terminated;
         {
             ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
+            ZVerify::BeforeZOperation();
             NoteMarkTerminatePause();
             const size_t before = stripes.Population();
             (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
@@ -847,6 +795,7 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack, WorkStack& foreignRoo
             if (terminated) {
                 ProcessExportRoots(foreignRootsSet);
                 oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+                ZVerify::AfterMark();
                 collectorResources.BlockResurrection();
             }
         }
@@ -1111,7 +1060,6 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // completed GC cycles. Both probes self-gate and remain default off.
     // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.
 
-    MarkCompleteVerify::ReportHolderTraces("gc_end");
     // loadgood: same reason -- the workload under measurement ends in SIGSEGV, so the
     // cross-table has to be on stderr before the crash, not only at exit.
 

@@ -126,6 +126,7 @@ public:
     uint8_t table_generation() const { return _table_generation; }
     void set_table_generation(uint8_t generation) { _table_generation = generation; }
     bool page_life_current() const;
+    void verify() const;
     size_t length() const { return _entries.length(); }
 
     void publish_from_page_view(LiveInfo* liveInfo, uint64_t epoch, MAddress topAtStart,
@@ -417,6 +418,17 @@ public:
     bool relocated_remembered_fields_is_concurrently_scanned() const
     {
         return _relocated_remembered_fields_state.load(std::memory_order_relaxed) == ZPublishState::reject;
+    }
+
+    // zForwarding.cpp:relocated_remembered_fields_published_contains.
+    // Verification is observational; unlike apply_to_published it never clears.
+    bool relocated_remembered_fields_published_contains(MAddress field)
+    {
+        std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+        for (MAddress entry : _relocated_remembered_fields_array) {
+            if (entry == field) { return true; }
+        }
+        return false;
     }
 
     void relocated_remembered_fields_after_relocate()

@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Verify/ZVerify.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 
@@ -41,13 +42,8 @@
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
-#include "Heap/Verify/VerifyHeap.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/VerifyOption.h"
-#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
@@ -61,7 +57,6 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Verify/VerifyRegions.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "securec.h"
 #endif
@@ -444,6 +439,7 @@ void WCollector::Preforward()
         // concurrent root-preforward work below. ScopedLightSync emits its matching
         // rec=stw record, including rendezvous and held time.
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
+        ZVerify::BeforeZOperation();
         // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
@@ -458,6 +454,7 @@ void WCollector::Preforward()
         // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
         CsetEmptyWho::ClassifyCycle();
         flip_old_relocate_start();
+        ZVerify::OnColorFlip();
         StartRelocationTasks();
     }
 
@@ -1143,17 +1140,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                                        std::unique_ptr<ScopedStopTheWorld>* stw)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
-    auto postEvacPoint = [this](const char* point, bool runHeap = true) {
-        if (!kVerifyPostEvac) {
-            return;
-        }
-        // Breadcrumb first (survives if VerifyHeap SEGV); force=true skips VERIFY_HEAP env.
-        VLOG(REPORT, "[GCV2][verify][post-evac] enter point=%s run=%zu", point, minorTotalRuns + 1);
-        if (runHeap) {
-            VerifyHeapObjects(point);
-            VLOG(REPORT, "[GCV2][verify][post-evac] point=%s run=%zu", point, minorTotalRuns + 1);
-        }
-    };
     (void)reachableVec;
     (void)refFixSlotsCoveredByReachable;
     // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
@@ -1205,7 +1191,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     };
 
     // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
-    postEvacPoint("evac-enter", true);
 
     {
         // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
@@ -1244,6 +1229,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
                 flip_young_relocate_start();
+                ZVerify::OnColorFlip();
             }
 #if defined(MRT_TESTABLE_INTERNALS)
             // Prepared and flipped, still POST_TRACE: a test driver can enter
@@ -1262,7 +1248,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // may WaitForPageForwarding, so workers must already be running.
             manager.DrainForwardFromRegions<Generation::Young>();
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-            postEvacPoint("pre-fix-forwarded", false);
         }
 
         // pass1 root fix after the domain snapshot.
@@ -1272,7 +1257,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             FixMinorRootSlots(liveStw());
             PreforwardDiscoveredExternObjects(Generation::Young);
             PreforwardAllResurrectExportFromObjects(Generation::Young);
-            postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
         }
 
         // Reset CAS counters for this fix window (positive-control visibility).
@@ -1294,10 +1278,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 #endif
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
+            ZVerify::BeforeZOperation();
             manager.FinishIncompleteFromRegions();
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
-        postEvacPoint("post-forward-pre-reclaim", true);
         {
             MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
             g_minorRefCasFail.store(0, std::memory_order_relaxed);
@@ -1390,6 +1374,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     *stw = std::make_unique<ScopedStopTheWorld>("young retire forwarding", true,
                                                 GCPhase::GC_PHASE_FORWARD);
+    ZVerify::BeforeZOperation();
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungEvacRetire);
         // zGeneration.cpp:563: keep this set until the next young mark-end reset.

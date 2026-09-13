@@ -732,6 +732,27 @@ bool FlushTlsMarkProducersDetach(ThreadLocalData* tls)
 
 } // namespace
 
+// zVerify.cpp:576-596 and zStoreBarrierBuffer.cpp:is_in. The registry is
+// OS-thread-owned; coroutine/mutator enumeration is not a buffer inventory.
+void MutatorManager::VisitStoreBarrierBuffers(const std::function<void(MAddress)>& visitor)
+{
+    DCHECK(WorldStopped());
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    for (const auto& entry : markFlushThreads) {
+        ThreadLocalData* tls = entry.first;
+        if (tls == nullptr || entry.second->bufferLive.load(std::memory_order_acquire) == 0 ||
+            tls->gcData == nullptr) { continue; }
+        tls->gcData->storeBarrierBuffer.VisitEntries([&](const StoreBarrierEntry& store) { visitor(store.p); });
+    }
+}
+
+bool MutatorManager::StoreBarrierBufferContains(MAddress slot)
+{
+    bool found = false;
+    VisitStoreBarrierBuffers([&](MAddress p) { found = found || p == slot; });
+    return found;
+}
+
 HandshakeState* MutatorManager::HandshakeStateForTls(ThreadLocalData* tls)
 {
     if (tls == nullptr) {

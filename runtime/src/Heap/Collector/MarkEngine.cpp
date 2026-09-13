@@ -9,15 +9,14 @@
 #include "Base/Log.h"
 #include "Heap/GcThreadPool.h"
 #include "Mutator/MutatorManager.h"
-#include "Heap/Verify/VerifyMarkingStacks.h"
+#include "Heap/Collector/MarkingStacks.h"
 
 namespace MapleRuntime {
 
-void MarkTerminate::Reset(size_t workers, VerifyMarkingStacks::MarkingGeneration gen)
+void MarkTerminate::Reset(size_t workers)
 {
     CHECK_DETAIL(workers != 0, "mark termination needs a worker");
     std::lock_guard<std::mutex> lock(mutex);
-    generation = gen;
     workerCount = workers;
     working = workers;
     awakening = 0;
@@ -48,10 +47,7 @@ bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
     CHECK_DETAIL(working != 0, "mark worker left termination twice");
     --working;
     if (working == 0) {
-        VerifyMarkingStacks::VerifyEmpty(generation, VerifyMarkingStacks::MarkingBoundary::TERMINATION,
-                                         VerifyMarkingStacks::MarkingContainer::STRIPE, stripes.Population(),
-                                         VerifyMarkingStacks::NO_MARKING_INDEX,
-                                         VerifyMarkingStacks::NO_MARKING_INDEX, stripes.FirstNonEmptyStripe());
+        MarkingStacks::VerifyEmpty(stripes.Population());
         terminated = true;
         condition.notify_all();
         return true;
@@ -207,7 +203,7 @@ MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr,
     }
 }
 
-MarkDomain::MarkDomain(size_t capacity, VerifyMarkingStacks::MarkingGeneration generation)
+MarkDomain::MarkDomain(size_t capacity, MarkingStacks::MarkingGeneration generation)
     : generation(generation), stripes(capacity)
 {
     stripes.SetTerminate(&terminate);
@@ -227,7 +223,7 @@ void MarkDomain::PrepareWork(size_t workers)
     targetNStripes = stripes.CalculateNStripes(workers);
     stripes.SetNStripes(targetNStripes);
     EnsureWorkers(workers);
-    terminate.Reset(workers, generation);
+    terminate.Reset(workers);
     proactiveFlushes = 0;
 }
 
@@ -239,7 +235,7 @@ void MarkDomain::ResizeWorkers(size_t workers)
     targetNStripes = stripes.CalculateNStripes(workers);
     stripes.SetNStripes(targetNStripes);
     EnsureWorkers(workers);
-    terminate.Reset(workers, generation);
+    terminate.Reset(workers);
 }
 
 void MarkDomain::FinishWork() {}

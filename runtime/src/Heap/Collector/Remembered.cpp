@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Verify/ZVerify.h"
 #include "Heap/WCollector/WCollector.h"
 
 #include <array>
@@ -31,12 +32,7 @@
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
-#include "Heap/Verify/VerifyHeap.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
-#include "Heap/Verify/VerifyOption.h"
-#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
@@ -54,7 +50,6 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Verify/VerifyRegions.h"
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
@@ -252,6 +247,7 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
                 rememberedSlots.insert(field);
             });
         }
+        ZVerify::AfterScan(forwarding);
     });
 }
 

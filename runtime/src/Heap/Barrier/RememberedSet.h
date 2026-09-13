@@ -103,6 +103,8 @@ public:
     // Non-destructive view of the active (next-cycle) records for verification.
     std::unordered_set<MAddress> Snapshot() const;
     bool Contains(MAddress fieldAddress) const;
+    bool ContainsPrevious(MAddress fieldAddress) const;
+    bool IsClearInRange(MAddress start, size_t size, bool current) const;
     size_t Size() const;
 
     // Bytes reserved by both exact bitmap backings.

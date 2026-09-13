@@ -226,7 +226,7 @@ GC_TEST(MarkPort203Engine, TrySetNStripesIsAtomicSnapshot)
 
 GC_TEST(MarkPort203Engine, DomainPrepareResizeKeepsCapacity)
 {
-    MarkDomain domain(8, VerifyMarkingStacks::MarkingGeneration::YOUNG);
+    MarkDomain domain(8, MarkingStacks::MarkingGeneration::YOUNG);
     domain.PrepareWork(2);
     GC_EXPECT_EQ(domain.Stripes().Count(), 8u);
     GC_EXPECT_TRUE(domain.Stripes().NStripes() <= 8u);
@@ -255,7 +255,7 @@ GC_TEST(MarkPort203Engine, CrowdedRestoresNStripes)
 GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 {
     ZAbort abort;
-    MarkDomain domain(4, VerifyMarkingStacks::MarkingGeneration::YOUNG);
+    MarkDomain domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     domain.BindAbort(&abort);
     domain.PrepareWork(1);
     GC_EXPECT_TRUE(!domain.PollStop());

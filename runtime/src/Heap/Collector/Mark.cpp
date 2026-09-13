@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Verify/ZVerify.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 
@@ -35,19 +36,13 @@
 #include "Heap/Collector/MarkStripe.h"
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
-#include "Heap/Verify/VerifyHeap.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
-#include "Heap/Verify/VerifyOption.h"
-#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/VerifyRoots.h"
-#include "Heap/Verify/VerifyMarkingStacks.h"
+#include "Heap/Collector/MarkingStacks.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
@@ -56,7 +51,6 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Verify/VerifyRegions.h"
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
@@ -212,12 +206,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     if (!Collector::PlausibleManagedObjectGate("EnumRefFieldRoot.slow", latest)) {
         return;
     }
-    if (VerifyRoots::Enabled()) {
-        RootVerifyContext vctx;
-        vctx.phase = "EnumRefFieldRoot";
-        vctx.kind = RootKind::STATIC_ROOT;
-        VerifyRoots::VerifyRootPayload(vctx, &field, latest);
-    }
+
     CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
     // static roots stay Phase-C coloured (writable statics need colour; rostatic skips non-heap CAS).
     // plainroots only applies to stack/reg ObjectRef slots (RootSlotWriteback via !IsHeapAddress).
@@ -514,9 +503,7 @@ void WCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& work
 
 void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable)
 {
-    if (UNLIKELY(MarkCompleteVerify::Enabled())) {
-        MarkCompleteVerify::NoteHolderTrace(obj);
-    }
+
     auto visitor = [this, obj, &workStack, finalizable](RefField<>& field) {
         TraceRefField(obj, field, workStack, finalizable);
     };
@@ -598,16 +585,9 @@ void WCollector::TraceHeap()
 {
     WorkStack workStack = NewWorkStack();
     WorkStack foreignStack = NewWorkStack();
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                     VerifyMarkingStacks::MarkingBoundary::START,
-                                     VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size(), 0);
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                     VerifyMarkingStacks::MarkingBoundary::START,
-                                     VerifyMarkingStacks::MarkingContainer::FOREIGN, foreignStack.size(), 0);
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                     VerifyMarkingStacks::MarkingBoundary::START,
-                                     VerifyMarkingStacks::MarkingContainer::POOL,
-                                     GetWorkers().GetSnapshot().remainingWorkers, 0);
+    MarkingStacks::VerifyEmpty(workStack.size());
+    MarkingStacks::VerifyEmpty(foreignStack.size());
+    MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
     uint64_t stackScanEpoch = 0;
 
@@ -615,6 +595,7 @@ void WCollector::TraceHeap()
     // begins with concurrent roots/follow (zGeneration.cpp:1015-1020).
     if (concurrentStackScan) {
         ScopedStopTheWorld stw("major stack scan prepare", false);
+        ZVerify::BeforeZOperation();
         Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
     }
 
@@ -639,6 +620,7 @@ void WCollector::TraceHeap()
             // the report-only postcondition below must observe that residual state.
             {
                 ScopedStopTheWorld stw("major stack scan close", false);
+                ZVerify::BeforeZOperation();
                 TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
                 MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
                     if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
@@ -681,24 +663,12 @@ void WCollector::TraceHeap()
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         DoTracing(workStack, foreignStack);
 
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::END,
-                                         VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size(), 0);
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::END,
-                                         VerifyMarkingStacks::MarkingContainer::FOREIGN, foreignStack.size(), 0);
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::END,
-                                         VerifyMarkingStacks::MarkingContainer::POOL,
-                                         GetWorkers().GetSnapshot().remainingWorkers, 0);
+        MarkingStacks::VerifyEmpty(workStack.size());
+        MarkingStacks::VerifyEmpty(foreignStack.size());
+        MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
 
     }
 
-    // ZVerify::after_mark (zVerify.cpp:496-506) runs here, between mark completing and
-    // anything acting on the mark face.  PostTrace -> HandleTraceRegions is the first
-    // consumer, so this is the last instant at which "mark says X is dead" can still be
-    // contradicted by a live holder rather than by a crash three phases later.
-    MarkCompleteVerify::RunAtMarkEnd("major-mark-end");
 }
 namespace {
 // gcbadroot: tag which root family is currently being walked so PushYoungObject
@@ -1117,10 +1087,7 @@ public:
         (void)local.Stacks().Flush(shared.Stripes(), true);
         local.Cache().Flush();
         shared.outputs[workerId]->objectsMarked += nMarked;
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                         VerifyMarkingStacks::MarkingBoundary::WORKER_EXIT,
-                                         VerifyMarkingStacks::MarkingContainer::LOCAL,
-                                         local.Stacks().Population(), 0, workerId);
+        MarkingStacks::VerifyEmpty(local.Stacks().Population());
     }
 
 private:
@@ -1293,16 +1260,13 @@ private:
 void WCollector::StartYoungMarkWork()
 {
     if (youngMarkDomain == nullptr) {
-        youngMarkDomain = std::make_unique<MarkDomain>(kMarkStripeMax, VerifyMarkingStacks::MarkingGeneration::YOUNG);
+        youngMarkDomain = std::make_unique<MarkDomain>(kMarkStripeMax, MarkingStacks::MarkingGeneration::YOUNG);
     }
     GCWorkers& workers = GetWorkers();
     youngMarkDomain->BindWorkers(&workers);
     youngMarkDomain->BindAbort(&collectorResources.GetYoungDriverPort().Abort());
     youngMarkDomain->PrepareWork(workers.ActiveWorkers());
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                     VerifyMarkingStacks::MarkingBoundary::START,
-                                     VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                     youngMarkDomain->Stripes().Population(), 0);
+    MarkingStacks::VerifyEmpty(youngMarkDomain->Stripes().Population());
 }
 
 void WCollector::MarkYoungObjectIfActive(BaseObject* object, bool followOnly) const
@@ -1354,9 +1318,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
 
     MarkThreadLocalStacks& seed = youngMarkDomain->Stacks();
     (void)seed.Flush(shared.Stripes(), true);
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                     VerifyMarkingStacks::MarkingBoundary::START,
-                                     VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
+    MarkingStacks::VerifyEmpty(seed.Population());
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
@@ -1370,25 +1332,15 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
         seed.Push(shared.Stripes(), shared.StripeFor(reinterpret_cast<BaseObject*>(address)), entry, true);
     }
     // Roots and concurrently published stripes are independent sources of work.
-    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                      VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population());
+
     (void)seed.Flush(shared.Stripes(), true);
-    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                      VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                      shared.Stripes().Population());
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                     VerifyMarkingStacks::MarkingBoundary::SEED_PUBLISH,
-                                     VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
+
+    MarkingStacks::VerifyEmpty(seed.Population());
 
     YoungStripedMarkingWork task(shared);
     workersSet.Run(task);
     youngMarkDomain->FinishWork();
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                     VerifyMarkingStacks::MarkingBoundary::JOIN,
-                                     VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                     shared.Stripes().Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
-                                     VerifyMarkingStacks::NO_MARKING_INDEX,
-                                     shared.Stripes().FirstNonEmptyStripe());
+    MarkingStacks::VerifyEmpty(shared.Stripes().Population());
     if (!collectorResources.GetYoungDriverPort().Abort().Poll()) {
         CHECK_DETAIL(shared.Terminate().Terminated(),
                      "young striped closure returned without coordinated worker termination");
@@ -1449,8 +1401,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
     if (workStack.empty() && (youngMarkDomain == nullptr || youngMarkDomain->Stripes().IsEmpty())) {
         return;
     }
-    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                      VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size());
+
     TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
                              reachableSlotDomain);
 }
@@ -1579,7 +1530,7 @@ bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* doma
         return false;
     }
     WorkStack work;
-    const bool young = domain->Generation() == VerifyMarkingStacks::MarkingGeneration::YOUNG;
+    const bool young = domain->Generation() == MarkingStacks::MarkingGeneration::YOUNG;
     DrainAllocBufferMarkProducers(tls->buffer, work, young);
     const bool published = PublishHandshakeMarkWork(work, domain);
     return ThreadLocal::FlushMarkStacks(tls, *domain) || published;

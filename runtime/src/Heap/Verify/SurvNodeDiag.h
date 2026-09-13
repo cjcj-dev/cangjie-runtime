@@ -15,7 +15,7 @@
 //
 // Holder follow vs skip-follow (zMark.cpp:392-400 mark_and_follow) is recorded
 // separately so a DEAD_EDGE names whether the array was scanned this cycle.
-// Gated with MarkCompleteVerify. Default off. No new MRT_GCV2_ env.
+// Uses the existing ZVerifyObjects admission until D06b removes this diagnostic. Default off. No new MRT_GCV2_ env.
 
 #ifndef MRT_SURV_NODE_DIAG_H
 #define MRT_SURV_NODE_DIAG_H

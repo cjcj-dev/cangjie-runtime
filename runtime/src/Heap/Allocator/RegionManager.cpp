@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Verify/ZVerify.h"
 #include "Allocator/RegionManager.h"
 
 #include <algorithm>
@@ -1748,6 +1749,7 @@ void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visit
 {
     ScopedEnterSaferegion enterSaferegion(false);
     ScopedStopTheWorld stw("visit all objects");
+    ZVerify::BeforeZOperation();
     ForEachObjUnsafe(visitor);
 }
 
@@ -2953,6 +2955,19 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region, bool advanceAge)
 template<Generation G>
 void RegionManager::ForwardRegion(RegionInfo* region)
 {
+    // zRelocate.cpp:993-1003. The owner outlives source-page retirement, so
+    // the after check reads the forwarding table and destination objects only.
+    auto verifyForwarding = ForwardingTable::RetainPageOwner(region);
+    ZVerify::BeforeRelocation(verifyForwarding.get());
+    struct VerifyAfterRelocation {
+        ZForwarding* forwarding;
+        ~VerifyAfterRelocation()
+        {
+            ZVerify::AfterRelocation(forwarding);
+            if (ZVerifyForwarding && forwarding != nullptr) { forwarding->verify(); }
+        }
+    } verifyAfterRelocation { verifyForwarding.get() };
+
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
 

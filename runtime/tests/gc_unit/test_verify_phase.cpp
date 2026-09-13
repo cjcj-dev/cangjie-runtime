@@ -1,135 +1,30 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
-
-#include "Heap/Verify/VerifyPhase.h"
+#include "Heap/Verify/ZVerify.h"
 #include "gc_unittest.hpp"
-
-#include <cstdio>
 #include <cstdlib>
-
+#include <cstring>
 using namespace MapleRuntime;
-using namespace MapleRuntime::GcUnit;
-
 namespace {
-struct FaceCase {
-    VerifyFace face;
-    const char* legacy;
-    const char* alias;
-};
-
-const FaceCase kFaces[] = {{VerifyFace::Roots, "MRT_GCV2_VERIFY_ROOTS", "MRT_GCV2_VERIFY_ROOTS"},
-                           {VerifyFace::Objects, "MRT_GCV2_VERIFY_HEAP", "MRT_GCV2_VERIFY_OBJECTS"},
-                           {VerifyFace::Marking, "MRT_GCV2_VERIFY_MARKING", "MRT_GCV2_VERIFY_MARKING"},
-                            {VerifyFace::Remembered, nullptr, nullptr},
-                           {VerifyFace::Oops, "MRT_GCV2_VERIFY_REGIONS", "MRT_GCV2_VERIFY_OOPS"}};
-
-void ClearFaceEnvironment()
+bool StartupValue(const char* name, bool fallback)
 {
-    for (const auto& item : kFaces) {
-        if (item.legacy != nullptr) {
-            unsetenv(item.legacy);
-        }
-        if (item.alias != nullptr) {
-            unsetenv(item.alias);
-        }
-    }
-    unsetenv("MRT_GCV2_MARKCOMPLETE");
-    unsetenv("MRT_GCV2_DIAG");
+    const char* value = std::getenv(name);
+    return value == nullptr ? fallback : std::strcmp(value, "1") == 0;
 }
-
-void ExpectAllFaces(bool enabled)
-{
-    for (const auto& item : kFaces) {
-        GC_EXPECT_EQ(VerifyFaceEnabled(item.face), enabled);
-    }
 }
-} // namespace
-
-GC_OTHER_VM_TEST(VerifyPhase, FiveFaceBuildDefaultMatrix)
+// z_globals.hpp:78-119 and HotSpot runtime/CommandLine flag-default tests.
+GC_TEST(ZVerify, StartupFlagsMatchZgcDefaults)
 {
-#if defined(__linux__)
-    ClearFaceEnvironment();
-    const bool roots = VerifyFaceEnabled(VerifyFace::Roots);
-    const bool objects = VerifyFaceEnabled(VerifyFace::Objects);
-    const bool marking = VerifyFaceEnabled(VerifyFace::Marking);
-    const bool remembered = VerifyFaceEnabled(VerifyFace::Remembered);
-    const bool oops = VerifyFaceEnabled(VerifyFace::Oops);
-    std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX roots=%d objects=%d marking=%d remembered=%d oops=%d\n",
-                 roots, objects, marking, remembered, oops);
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    GC_EXPECT_FALSE(objects);
-    // Marking remains opt-in until #65 supplies a marking-stack verifier.
-    GC_EXPECT_FALSE(marking);
-    GC_EXPECT_TRUE(remembered);
-    GC_EXPECT_FALSE(oops);
-    std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_PRIOR_ASSERTIONS_EXECUTED count=4\n");
-    GC_EXPECT_TRUE(roots);
-    std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_ASSERTIONS_EXECUTED mode=debug\n");
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
+    constexpr bool debug = true;
 #else
-    GC_EXPECT_FALSE(roots);
-    GC_EXPECT_FALSE(objects);
-    GC_EXPECT_FALSE(marking);
-    GC_EXPECT_FALSE(remembered);
-    GC_EXPECT_FALSE(oops);
-    std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_ASSERTIONS_EXECUTED mode=release\n");
+    constexpr bool debug = false;
 #endif
-#else
-    GC_EXPECT_TRUE(true);
-#endif
-}
-
-GC_OTHER_VM_TEST(VerifyPhase, FiveFaceLegacyArm)
-{
-    ClearFaceEnvironment();
-    for (const auto& item : kFaces) {
-        if (item.legacy != nullptr) {
-            setenv(item.legacy, "1", 1);
-        }
-    }
-    setenv("MRT_GCV2_DIAG", "remembered", 1);
-    ExpectAllFaces(true);
-}
-
-GC_OTHER_VM_TEST(VerifyPhase, FiveFaceAliasArm)
-{
-    ClearFaceEnvironment();
-    for (const auto& item : kFaces) {
-        if (item.alias != nullptr) {
-            setenv(item.alias, "1", 1);
-        }
-    }
-    setenv("MRT_GCV2_DIAG", "remembered", 1);
-    ExpectAllFaces(true);
-}
-
-GC_OTHER_VM_TEST(VerifyPhase, FiveFaceTokenArm)
-{
-    ClearFaceEnvironment();
-    setenv("MRT_GCV2_DIAG", "roots,objects,marking,remembered,oops", 1);
-    ExpectAllFaces(true);
-}
-
-GC_OTHER_VM_TEST(VerifyPhase, MarkCompleteLegacyAliasBelongsOnlyToObjects)
-{
-    ClearFaceEnvironment();
-    setenv("MRT_GCV2_MARKCOMPLETE", "1", 1);
-    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Objects));
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Marking));
-}
-
-GC_OTHER_VM_TEST(VerifyPhase, QueryingOneFaceDoesNotFreezeAnother)
-{
-    ClearFaceEnvironment();
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
-    setenv("MRT_GCV2_VERIFY_OOPS", "1", 1);
-    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Oops));
-}
-
-GC_OTHER_VM_TEST(VerifyPhase, LateSetenvDoesNotRetuneInitializedFace)
-{
-    ClearFaceEnvironment();
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
-    setenv("MRT_GCV2_VERIFY_OBJECTS", "1", 1);
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
+    GC_EXPECT_EQ(ZVerifyRoots, StartupValue("ZVerifyRoots", debug));
+    GC_EXPECT_EQ(ZVerifyObjects, StartupValue("ZVerifyObjects", false));
+    GC_EXPECT_EQ(ZVerifyMarking, StartupValue("ZVerifyMarking", debug));
+    GC_EXPECT_EQ(ZVerifyRemembered, StartupValue("ZVerifyRemembered", debug));
+    GC_EXPECT_EQ(ZVerifyForwarding, StartupValue("ZVerifyForwarding", false));
+    GC_EXPECT_EQ(ZVerifyOops, debug && StartupValue("ZVerifyOops", false));
 }

@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Collector/HeapIterator.h"
 #include "CjHeapData.h"
 #include <cerrno>
 #include <cstdint>
@@ -80,8 +81,7 @@ void CjHeapData::ProcessHeap()
     (void)LookupStringId("ValueField");
     //  dump object contents
     auto dumpVisitor = [this](BaseObject* obj) { ProcessHeapObject(obj); };
-    bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
-    CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj() in DumpHeap() return false.");
+    HeapIterator(true).Iterate(dumpVisitor);
 }
 
 void CjHeapData::InitSerializedIdWrapper()
