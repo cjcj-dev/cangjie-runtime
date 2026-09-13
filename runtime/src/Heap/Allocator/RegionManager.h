@@ -212,15 +212,30 @@ public:
           oldPinnedRegionList("old pinned regions"), rawPointerPinnedRegionList("raw pointer pinned regions"),
           oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
           largeTraceRegions("large trace regions")
-    {}
+    {
+        tlabAllocatingThreads.Sample(1);
+        tlabRequestedFraction.Sample(0.1);
+    }
 
     RegionManager(const RegionManager&) = delete;
 
     RegionManager& operator=(const RegionManager&) = delete;
 
     // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
-    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false, bool youngRegion = true,
+    RegionInfo* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
                                           bool allowSaferegion = true);
+
+    // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
+    // independent of the thread-local requested bytes and retirement waste.
+    void UndoThreadLocalRegionAllocation(RegionInfo* region);
+    // Stable cycle history: read under the statistics lock, at a safepoint,
+    // or with managed access preventing the next young pause.
+    size_t GetTLABUsed() const { return lastTLABUsed; }
+    size_t GetTLABCapacity() const { return static_cast<size_t>(tlabCapacity); }
+    void InitializeTLAB(AllocBuffer& buffer);
+    void ResetTLABUsage();
+    void PublishTLABStatistics();
+    void RetireTLABStatistics(AllocBuffer& buffer);
 
     template<Generation G>
     void ForwardFromRegions(GCWorkers& workers);
@@ -233,6 +248,7 @@ public:
     bool ClaimAllocationLocked(AllocationStallRequest& request);
     void ReturnPageMemory(const PageMemory& memory);
     void SatisfyStalledAllocations();
+    bool IsAllocationStalling() const { return allocationStallQueue.IsStalling(); }
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     using AllocationStallTestHook = std::function<void(RegionManager&)>;
     MRT_EXPORT void SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
@@ -457,10 +473,7 @@ public:
         return maxUnitCountPerRegion * RegionInfo::UNIT_SIZE;
     }
 
-    size_t GetYoungAllocatedSize() const
-    {
-        return RegionInfo::GetYoungRegionCount() * GetThreadLocalRegionSize();
-    }
+    size_t GetYoungAllocatedSize() const;
 
     static bool IsKnownEmptyForView(RegionInfo* region, MarkView<Generation::Young> view)
     {
@@ -693,16 +706,15 @@ public:
     }
 
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
-    size_t GetReleasedUnitCount() const { return freeRegionManager.GetReleasedUnitCount(); }
     size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
     size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true)
     {
         return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
     }
 
-    size_t GetInactiveUnitCount() const { return heapUnitCount - activeUnitCount.load(std::memory_order_acquire); }
+    size_t GetInactiveUnitCount() const { return freeRegionManager.GetVirtualUnitCount(); }
 
-    size_t GetActiveUnitCount() const { return activeUnitCount.load(std::memory_order_acquire); }
+    size_t GetActiveUnitCount() const { return heapUnitCount - GetInactiveUnitCount(); }
 
     inline size_t GetLargeObjectSize() const
     {
@@ -1235,9 +1247,15 @@ private:
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
-    RangeRegistry inactiveRanges;
     size_t heapUnitCount = 0;
-    std::atomic<size_t> activeUnitCount{ 0 };
+    std::atomic<size_t> tlabUsed{ 0 };
+    size_t lastTLABUsed = 0;
+    double tlabCapacity = 0;
+    TLABAllocationAverage tlabAllocatingThreads;
+    TLABAllocationAverage tlabRequestedFraction;
+    std::mutex tlabStatisticsLock;
+    TLABStatistics retiredTLABStatistics;
+
     size_t maxUnitCountPerRegion = MAX_UNIT_COUNT_PER_REGION;   // max units count for threadLocal buffer.
     size_t maxUnitCountPerPinnedRegion = maxUnitCountPerRegion; // max units count for pinned region.
     size_t largeObjectThreshold;

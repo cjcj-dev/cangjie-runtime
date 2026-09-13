@@ -21,7 +21,8 @@
 
 #include "Base/MemUtils.h"
 #include "Common/ScopedObjectAccess.h"
-#include "Heap/Collector/GcStats.h"
+#include "Heap/Collector/Collector.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
@@ -130,7 +131,11 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
     // deliberately leaves a reused extent dirty for this path.
     const size_t contentSize = static_cast<size_t>(arraySize) - contentOffset;
     const bool isRefArray = arrayClass.GetComponentTypeInfo()->IsRef();
-    const size_t epochBefore = g_gcCount.load(std::memory_order_acquire);
+    // zObjArrayAllocator.cpp:132-141: a safepoint may change either
+    // generation sequence before its collection has completed.
+    Collector& collector = Heap::GetHeap().GetCollector();
+    const uint64_t youngSequenceBefore = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence;
+    const uint64_t oldSequenceBefore = collector.GetCycleSnapshot(GCCycleGeneration::OLD).sequence;
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
     bool seenGcSafepoint = false;
     // ZObjArrayAllocator::initialize (zObjArrayAllocator.cpp:140-200):
@@ -159,20 +164,23 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                     managedTestRequested = true;
                     CHECK_DETAIL(mutator->IsManagedContext(),
                                  "language-level segmented-array test must retain managed context");
-                    const size_t gcCountBefore = g_gcCount.load(std::memory_order_acquire);
+                    const GCCycleGeneration generation = managedTestGc == ManagedSegmentedGc::YOUNG
+                        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+                    const uint64_t sequenceBefore = collector.GetCycleSnapshot(generation).sequence;
                     if (managedTestGc == ManagedSegmentedGc::YOUNG) {
                         Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
                     } else {
                         Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
                     }
-                    CHECK_DETAIL(g_gcCount.load(std::memory_order_acquire) > gcCountBefore,
+                    CHECK_DETAIL(collector.GetCycleSnapshot(generation).sequence != sequenceBefore,
                                  "language-level segmented-array GC did not advance the epoch");
                 }
 #endif
             }
 
             if (isRefArray && !seenGcSafepoint &&
-                (g_gcCount.load(std::memory_order_acquire) != epochBefore ||
+                (collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence != youngSequenceBefore ||
+                 collector.GetCycleSnapshot(GCCycleGeneration::OLD).sequence != oldSequenceBefore ||
                  static_cast<uintptr_t>(::g_cjStoreGoodMask) != colorBefore)) {
                 seenGcSafepoint = true;
                 return false;

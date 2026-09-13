@@ -8,6 +8,7 @@
 #ifndef MRT_ALLOC_BUFFER_H
 #define MRT_ALLOC_BUFFER_H
 
+#include <algorithm>
 #include <functional>
 #include <mutex>
 #include <unordered_set>
@@ -17,6 +18,41 @@
 #include "RegionList.h"
 
 namespace MapleRuntime {
+// HotSpot gcUtil.cpp:29-56, TLABAllocationWeight=35. Startup samples
+// use 1/n until the configured weight dominates.
+class TLABAllocationAverage {
+public:
+    void Sample(double value)
+    {
+        samples = std::min(samples + 1, 100u);
+        const unsigned weight = std::max(35u, 100u / samples);
+        average = ((100 - weight) * average + weight * value) / 100.0;
+    }
+    double Average() const { return average; }
+private:
+    unsigned samples = 0;
+    double average = 0;
+};
+
+// ThreadLocalAllocStats (threadLocalAllocBuffer.cpp:346-412), in bytes.
+struct TLABStatistics {
+    size_t allocatedSize = 0;
+    size_t refillWaste = 0;
+    size_t gcWaste = 0;
+    size_t refills = 0;
+    size_t allocatingThreads = 0;
+
+    size_t Used() const { return allocatedSize - refillWaste - gcWaste; }
+    void Update(const TLABStatistics& other)
+    {
+        allocatedSize += other.allocatedSize;
+        refillWaste += other.refillWaste;
+        gcWaste += other.gcWaste;
+        refills += other.refills;
+        allocatingThreads += other.allocatingThreads;
+    }
+};
+
 // thread-local data structure
 class AllocBuffer {
 public:
@@ -33,16 +69,12 @@ public:
     RegionList& GetTlRawPointerRegions() { return tlRawPointerRegions; }
     RegionList& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
     RegionInfo* GetPreparedRegion() { return preparedRegion.load(std::memory_order_relaxed); }
-    void SetRegion(RegionInfo* newRegion) { tlRegion = newRegion; }
-    inline void ClearRegion()
-    {
-        if (tlRegion == RegionInfo::NullRegion()) {
-            return;
-        }
-        DLOG(REGION, "alloc buffer clear tlRegion %p@[0x%zx, 0x%zx)", tlRegion, tlRegion->GetRegionStart(),
-             tlRegion->GetRegionEnd());
-        tlRegion = RegionInfo::NullRegion();
-    }
+    void SetRegion(RegionInfo* newRegion);
+    void ClearRegion();
+
+    size_t ComputeTLABSize(size_t objectSize, size_t maxSize) const;
+    void AccumulateTLABStatistics(TLABStatistics& total, size_t used, size_t capacity);
+    void ResizeTLAB(size_t capacity, double fallbackFraction, size_t maxSize);
 
     bool SetPreparedRegion(RegionInfo* newPreparedRegion)
     {
@@ -219,9 +251,18 @@ private:
     MAddress AllocateImpl(size_t totalSize, AllocType allocType);
     MAddress AllocateRawPointerObject(size_t totalSize);
 
+    void RetireTLAB(bool gcWaste);
+
     // tlRegion in AllocBuffer is a shortcut for fast allocation.
     // we should handle failure in RegionManager
     RegionInfo* tlRegion = RegionInfo::NullRegion();
+
+    // HotSpot ThreadLocalAllocBuffer: thread-owned statistics survive refills
+    // and reset only at a young-cycle boundary. Async refill reads atomics only.
+    TLABStatistics tlabStatistics;
+    TLABAllocationAverage tlabAllocationFraction;
+    std::atomic<size_t> desiredTLABSize{ RegionInfo::UNIT_SIZE };
+    std::atomic<size_t> tlabRefills{ 0 };
 
     // Allocation work is handed to marking as an atomic batch.
     mutable std::mutex handoffLock;

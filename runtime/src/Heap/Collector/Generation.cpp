@@ -56,6 +56,45 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
+// ZGenerationYoung::mark_start (zGeneration.cpp:871-880). Called under the
+// young mark-start safepoint; sequence readers cannot observe half this event.
+void GenerationCycle::StartYoungMark(RememberedSet& rememberedSet)
+{
+    CHECK(generation == GCCycleGeneration::YOUNG);
+    std::lock_guard<std::mutex> lock(mutex);
+    CHECK(active);
+    CHECK(sequence != UINT64_MAX);
+    ++sequence;
+    rememberedSet.FlipForMinor();
+}
+
+// ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
+// young sequence once for the whole old relocation, not once per forwarding.
+void GenerationCycle::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
+{
+    CHECK(generation == GCCycleGeneration::OLD);
+    youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
+}
+
+bool GenerationCycle::ActiveRemsetIsCurrent(uint64_t youngSequence) const
+{
+    CHECK(generation == GCCycleGeneration::OLD);
+    // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
+    return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
+}
+
+void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
+{
+    GenerationCycle& cycle = generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
+    const GCPhase before = cycle.Phase();
+    if (generation == GCCycleGeneration::OLD &&
+        (value == GCPhase::GC_PHASE_PREFORWARD || value == GCPhase::GC_PHASE_FORWARD) &&
+        before != GCPhase::GC_PHASE_PREFORWARD && before != GCPhase::GC_PHASE_FORWARD) {
+        oldCycle.RecordYoungSequenceAtRelocateStart(youngCycle.Sequence());
+    }
+    cycle.PublishPhase(value);
+}
+
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
 struct Y2yHandoffReceiptState {
@@ -746,6 +785,7 @@ void WCollector::DoYoungGarbageCollection()
     // VM_ZMarkStartYoungAndOld / VM_ZMarkStartYoung (zGeneration.cpp:583-659).
     // A major starts old exactly once in this young pause. An independent
     // minor leaves the old cycle identity and mark color untouched.
+    collectorResources.NoteYoungMarkStart();
     flip_young_mark_start();
     StartYoungMarkWork();
 
@@ -762,6 +802,7 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ① FlushAllocationRegions
         MRT_PHASE_TIMER("young.flush_alloc");
+        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ResetTLABUsage();
         FlushAllocationRegions();
     }
 
@@ -787,6 +828,28 @@ void WCollector::DoYoungGarbageCollection()
         stats = manager.PrepareYoungGarbageCandidates(
             [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     }
+    // Complete the mark-start sequence/flip event after flushing pre-flip
+    // producers and before publishing the young mark phase (zGeneration.cpp:871-880).
+    MinorSlotSet rememberedSlots;
+    {
+        // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
+        MRT_PHASE_TIMER("young.remset_drain");
+        RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+        size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
+        if (pinnedRemsetRecords != 0) {
+            VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
+        }
+        // d1producer: D1 counts misses against the *mutator* remset at :5204, but the pinned walk
+        // above drains into this same minor. Ask here, before the drain, how many D1 edges the
+        // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
+
+        (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
+        // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
+        // world-release with mark_follow (zRemembered.cpp:561-576).
+        youngCycle.StartYoungMark(rememberedSet);
+
+    }
+
     // Publish the reset young mark face before phase-change store-buffer
     // scanning can enqueue targets (zGeneration.cpp:855-881).
     youngCycle.PublishPhase(GC_PHASE_ENUM);
@@ -820,14 +883,9 @@ void WCollector::DoYoungGarbageCollection()
         VerifyHeapObjects("post-prepare-young");
         VLOG(REPORT, "[GCV2][verify][post-evac] point=post-prepare-young run=%zu", minorTotalRuns + 1);
     }
-    if (stats.candidateRegions == 0) {
-        manager.ReassembleFromSpace();
-        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
-        ++minorTotalRuns;
-        VLOG(REPORT, "[GCV2Minor] run=%zu candidates=0 candidateBytes=0 live=0 reclaimedBytes=0",
-             minorTotalRuns);
-        return;
-    }
+    // Even an empty candidate set completes remembered scanning and clearing.
+    // Otherwise the mark-start flip would leave previous unconsumed when the
+    // next young collection reuses that bitmap (zRemembered.cpp:561-576).
 
     // Pinned holders (Future/Mutex/Monitor): AllocPinned never sets young; IDLE write
     // fast-path (phase < ENUM) is a bare store — old→young edges never hit remset.
@@ -843,29 +901,6 @@ void WCollector::DoYoungGarbageCollection()
     // Corresponds to ZGC reset_relocation_set before the new young collection.
     PromotedRegionDomain::ResetForNextMinor(minorTotalRuns + 1);
     // flippromo: open broad-vs-product window for regions demoted last minor.
-
-    // ZGC zGeneration.cpp:541-555 has one young sequence: pause-mark-start,
-    // concurrent mark/follow, then pause-mark-end.  Flip the previous remset
-    // face here; there is no STW young-mark configuration or rollback branch.
-    MinorSlotSet rememberedSlots;
-    {
-        // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
-        MRT_PHASE_TIMER("young.remset_drain");
-        RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-        size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
-        if (pinnedRemsetRecords != 0) {
-            VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
-        }
-        // d1producer: D1 counts misses against the *mutator* remset at :5204, but the pinned walk
-        // above drains into this same minor. Ask here, before the drain, how many D1 edges the
-        // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
-
-        (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
-        // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
-        // world-release with mark_follow (zRemembered.cpp:561-576).
-        rememberedSet.FlipForMinor();
-
-    }
 
     uint64_t stackScanEpoch = 0;
     {

@@ -111,6 +111,11 @@ size_t RegionInfo::pageIterationCount = 0;
 std::vector<std::function<void()>> RegionInfo::deferredPageRetirements;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
+namespace {
+// ZPageAllocator::used_generation (zPageAllocator.cpp:1311). TLAB extents
+// vary, so region counts cannot stand in for young-generation byte occupancy.
+std::atomic<size_t> youngRegionBytes{ 0 };
+}
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 #if defined(MRT_GC_UNIT_TESTS)
 std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
@@ -367,6 +372,7 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
     bool wasYoung = IsYoungRegion();
     bool makeYoung = flag != 0;
     if (!wasYoung && makeYoung) {
+        youngRegionBytes.fetch_add(GetRegionSize(), std::memory_order_release);
         youngRegionCount.fetch_add(1, std::memory_order_release);
     }
     metadata.regionStateBitField.SetAtomicValue(
@@ -375,12 +381,18 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
         size_t count = youngRegionCount.load(std::memory_order_relaxed);
         CHECK(count > 0);
         youngRegionCount.fetch_sub(1, std::memory_order_release);
+        youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
     }
 }
 
 size_t RegionInfo::GetYoungRegionCount()
 {
     return youngRegionCount.load(std::memory_order_acquire);
+}
+
+size_t RegionManager::GetYoungAllocatedSize() const
+{
+    return youngRegionBytes.load(std::memory_order_acquire);
 }
 
 bool RegionInfo::HasYoungRegions()
@@ -694,103 +706,303 @@ inline void RegionManager::UntagHugePage(RegionInfo* region, size_t num) const
 #endif
 }
 
+void FreeRegionManager::Initialize(UnitCount regionCnt, const std::vector<MemoryRange>& reservations, MemMap& owner)
+{
+    markQuarantineTree.Init(regionCnt);
+    partitions.clear();
+    nextPartition = 0;
+    backingOwner = &owner;
+    for (const auto& numa : owner.GetNumaPartitionRegistry().Ranges()) {
+        auto found = std::find_if(partitions.begin(), partitions.end(), [&](const std::unique_ptr<Partition>& p) {
+            return p->node == numa.node;
+        });
+        if (found == partitions.end()) {
+            partitions.emplace_back(new Partition(numa.node));
+            found = std::prev(partitions.end());
+            (*found)->cache.SetRefresh([](MappedCache::Extent extent) {
+                RegionInfo::InitFreeRegion(extent.index, extent.count);
+            });
+        }
+        for (const auto& reservation : reservations) {
+            const uintptr_t start = std::max(reservation.start, numa.range.start);
+            const uintptr_t end = std::min(reservation.End(), numa.range.End());
+            if (start >= end) { continue; }
+            CHECK((end - start) % RegionInfo::UNIT_SIZE == 0);
+            (*found)->reservations.push_back({start, end - start});
+            CHECK((*found)->virtualMemory.RegisterRange(Range(start, end - start)));
+        }
+    }
+}
+
+FreeRegionManager::Partition& FreeRegionManager::PartitionFor(uintptr_t address)
+{
+    for (auto& partition : partitions) {
+        for (const auto& range : partition->reservations) {
+            if (address >= range.start && address < range.End()) { return *partition; }
+        }
+    }
+    LOG(RTLOG_FATAL, "cache address outside partition reservation: %#zx", address);
+    std::abort();
+}
+
+void FreeRegionManager::InsertCommitted(Partition& partition, UnitIndex index, UnitCount count)
+{
+    CHECK(backingOwner->GetCommittedSize(RegionInfo::GetUnitAddress(index), count * RegionInfo::UNIT_SIZE) ==
+          count * RegionInfo::UNIT_SIZE);
+    partition.cache.Insert({index, count});
+}
+
+void FreeRegionManager::ReturnMemory(UnitIndex index, UnitCount count)
+{
+    // Returned prefixes and uncommitted suffixes enter their respective single
+    // owners: mapped cache or virtual registry, never a released cache ledger.
+    while (count != 0) {
+        const uintptr_t start = RegionInfo::GetUnitAddress(index);
+        Partition& partition = PartitionFor(start);
+        const bool committed = backingOwner->GetCommittedSize(start, RegionInfo::UNIT_SIZE) == RegionInfo::UNIT_SIZE;
+        UnitCount length = 1;
+        while (length < count) {
+            const uintptr_t next = RegionInfo::GetUnitAddress(index + length);
+            if (&PartitionFor(next) != &partition ||
+                (backingOwner->GetCommittedSize(next, RegionInfo::UNIT_SIZE) == RegionInfo::UNIT_SIZE) != committed) {
+                break;
+            }
+            ++length;
+        }
+        if (committed) { InsertCommitted(partition, index, length); }
+        else { CHECK(partition.virtualMemory.Insert(Range(start, length * RegionInfo::UNIT_SIZE))); }
+        index += length;
+        count -= length;
+    }
+}
+
+void FreeRegionManager::AddGarbageUnits(UnitIndex index, UnitCount count)
+{
+    ScopedEnterSaferegion saferegion(true);
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    ReturnMemory(index, count);
+}
+
+void FreeRegionManager::AddReleaseUnits(UnitIndex index, UnitCount count)
+{
+    ScopedEnterSaferegion saferegion(true);
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    ReturnMemory(index, count);
+}
+
+size_t FreeRegionManager::ReleaseMarkQuarantineToDirty()
+{
+    ScopedEnterSaferegion saferegion(true);
+    std::lock_guard<std::mutex> quarantineLock(markQuarantineTreeMutex);
+    std::lock_guard<std::mutex> cacheLock(cacheMutex);
+    size_t count = 0;
+    while (const auto* node = markQuarantineTree.RootNode()) {
+        const UnitIndex index = node->GetIndex();
+        const UnitCount units = node->GetCount();
+        markQuarantineTree.ReleaseRootNode();
+        ReturnMemory(index, units);
+        count += units;
+    }
+    return count;
+}
+
+bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
+{
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    CHECK(num != 0 && num <= UINT32_MAX);
+    for (size_t visited = 0; visited < partitions.size(); ++visited) {
+        const size_t selected = (nextPartition + visited) % partitions.size();
+        Partition& partition = *partitions[selected];
+        // zPartition::claim_from_cache_or_increase_capacity: a contiguous cache
+        // hit precedes new capacity, which precedes discontiguous harvesting.
+        const auto extent = partition.cache.RemoveContiguous(static_cast<UnitCount>(num));
+        if (!extent.IsNull()) {
+            memory = PageMemory{extent.index, num, static_cast<uint32_t>(selected), true};
+            nextPartition = (selected + 1) % partitions.size();
+            return true;
+        }
+        const size_t virtualUnits = partition.virtualMemory.TotalSize() / RegionInfo::UNIT_SIZE;
+        CHECK(virtualUnits >= partition.pendingGrowth);
+        const size_t growthAvailable = virtualUnits - partition.pendingGrowth;
+        if (partition.cache.Size() + growthAvailable < num) { continue; }
+
+        // zPageAllocator.cpp:723-743: claim all available growth first, then
+        // harvest only the remaining capacity. Neither claim selects a new
+        // virtual range; PreparePageMemory performs that step later.
+        const size_t increased = std::min(num, growthAvailable);
+        partition.pendingGrowth += increased;
+        const UnitCount remaining = static_cast<UnitCount>(num - increased);
+        std::vector<MappedCache::Extent> extents;
+        const UnitCount harvested = remaining == 0 ? 0 : partition.cache.RemoveDiscontiguous(remaining, extents);
+        CHECK(harvested + increased == num);
+        for (const auto& extent : extents) {
+            memory.partialMappings.push_back({RegionInfo::GetUnitAddress(extent.index),
+                                              extent.count * RegionInfo::UNIT_SIZE});
+        }
+        memory.index = 0;
+        memory.units = num;
+        memory.partition = selected;
+        memory.committed = harvested == num;
+        memory.virtualClaimed = false;
+        memory.harvestedUnits = harvested;
+        nextPartition = (selected + 1) % partitions.size();
+        return true;
+    }
+    return false;
+}
+
+bool FreeRegionManager::PreparePageMemory(PageMemory& memory)
+{
+    if (memory.virtualClaimed) { return true; }
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    Partition& partition = *partitions.at(memory.partition);
+    std::vector<MemMap::BackingSegment> stash;
+    const size_t growth = memory.units - memory.harvestedUnits;
+    CHECK(partition.pendingGrowth >= growth);
+    partition.pendingGrowth -= growth;
+    if (memory.harvestedUnits == 0) {
+        // Full capacity increase needs only a virtual claim, not remapping.
+        const Range result = partition.virtualMemory.ClaimLow(memory.units * RegionInfo::UNIT_SIZE);
+        if (result.IsNull()) { return false; }
+        memory.index = RegionInfo::FindUnitIndex(result.Start());
+        memory.virtualClaimed = true;
+        return true;
+    }
+    if (!backingOwner->StashSegments(memory.partialMappings, stash)) {
+        for (const auto& range : memory.partialMappings) {
+            InsertCommitted(partition, RegionInfo::FindUnitIndex(range.start), range.size / RegionInfo::UNIT_SIZE);
+        }
+        memory.partialMappings.clear();
+        return false;
+    }
+    // zRangeRegistry::insert_and_remove_from_low_exact_or_many. This cache
+    // owner serializes the complete shuffle, including failure restoration.
+    for (const auto& range : memory.partialMappings) {
+        CHECK(partition.virtualMemory.Insert(Range(range.start, range.size)));
+    }
+    memory.partialMappings.clear();
+    const Range result = partition.virtualMemory.ClaimLow(memory.units * RegionInfo::UNIT_SIZE);
+    if (result.IsNull()) {
+        size_t remaining = memory.harvestedUnits * RegionInfo::UNIT_SIZE;
+        for (const Range& range : partition.virtualMemory.Snapshot()) {
+            if (remaining == 0) { break; }
+            const size_t amount = std::min(remaining, range.Size());
+            const Range claimed = partition.virtualMemory.ClaimLow(amount);
+            CHECK(!claimed.IsNull());
+            memory.partialMappings.push_back({claimed.Start(), amount});
+            remaining -= amount;
+        }
+        CHECK(remaining == 0);
+        backingOwner->RestoreSegments(memory.partialMappings, stash);
+        for (const auto& range : memory.partialMappings) {
+            InsertCommitted(partition, RegionInfo::FindUnitIndex(range.start), range.size / RegionInfo::UNIT_SIZE);
+        }
+        memory.partialMappings.clear();
+        return false;
+    }
+    backingOwner->RestoreSegments({MemoryRange{result.Start(), memory.harvestedUnits * RegionInfo::UNIT_SIZE}}, stash);
+    memory.index = RegionInfo::FindUnitIndex(result.Start());
+    memory.virtualClaimed = true;
+    return true;
+}
+
+FreeRegionManager::UnitCount FreeRegionManager::GetDirtyUnitCount() const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    UnitCount count = 0;
+    for (const auto& partition : partitions) { count += partition->cache.Size(); }
+    return count;
+}
+
+FreeRegionManager::UnitCount FreeRegionManager::GetVirtualUnitCount() const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    size_t bytes = 0;
+    for (const auto& partition : partitions) { bytes += partition->virtualMemory.TotalSize(); }
+    return bytes / RegionInfo::UNIT_SIZE;
+}
+
+FreeRegionManager::UnitCount FreeRegionManager::GetDirtyMaxBlock() const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    UnitCount maximum = 0;
+    for (const auto& partition : partitions) { maximum = std::max(maximum, partition->cache.MaxExtent()); }
+    return maximum;
+}
+
+FreeRegionManager::UnitCount FreeRegionManager::GetVirtualMaxBlock() const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    size_t maximum = 0;
+    for (const auto& partition : partitions) {
+        for (const Range& range : partition->virtualMemory.Snapshot()) { maximum = std::max(maximum, range.Size()); }
+    }
+    return maximum / RegionInfo::UNIT_SIZE;
+}
+
+size_t FreeRegionManager::GetDirtyNodeCount() const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    size_t count = 0;
+    for (const auto& partition : partitions) { count += partition->cache.EntryCount(); }
+    return count;
+}
+
+size_t FreeRegionManager::GetVirtualNodeCount() const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    size_t count = 0;
+    for (const auto& partition : partitions) { count += partition->virtualMemory.Snapshot().size(); }
+    return count;
+}
+
 size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
 {
-    size_t dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
-    if (dirtyBytes <= targetCachedSize) {
-        VLOG(REPORT, "release heap garbage memory 0 bytes, cache %zu(%zu) bytes", dirtyBytes, targetCachedSize);
-        return 0;
-    }
-
-    size_t releasedBytes = 0;
-    while (dirtyBytes > targetCachedSize) {
-        std::lock_guard<std::mutex> lock1(dirtyUnitTreeMutex);
-        auto node = dirtyUnitTree.RootNode();
-        if (node == nullptr) { break; }
-        Index idx = node->GetIndex();
-        UnitCount num = node->GetCount();
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
-        dirtyUnitTree.ReleaseRootNode();
-        std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
-        CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true), "tid %d: failed to release garbage units[%u+%u, %u)",
-                     GetTid(), idx, num, idx + num);
-        releasedBytes += (num * RegionInfo::UNIT_SIZE);
-        dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
-    }
-    VLOG(REPORT, "release heap garbage memory %zu bytes, cache %zu(%zu) bytes",
-         releasedBytes, dirtyBytes, targetCachedSize);
-    return releasedBytes;
+    const size_t cached = GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+    return cached > targetCachedSize ? UncommitIdleUnits(cached - targetCachedSize, UINT64_MAX, false) : 0;
 }
 
 size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
 {
-    ScopedEnterSaferegion enterSaferegion(true);
+    ScopedEnterSaferegion saferegion(true);
     return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
 }
 
 size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
 {
-    if (maxBytes < RegionInfo::UNIT_SIZE) {
-        return 0;
-    }
-    size_t uncommittedBytes = 0;
-    while (uncommittedBytes + RegionInfo::UNIT_SIZE <= maxBytes) {
-        UnitIndex idx = 0;
-        UnitCount num = 0;
-        {
-            std::lock_guard<std::mutex> lock1(releasedUnitTreeMutex);
-            UnitCount remain = static_cast<UnitCount>((maxBytes - uncommittedBytes) / RegionInfo::UNIT_SIZE);
-            if (remain == 0 || !releasedUnitTree.TakeIdleUnits(idleBeforeNs, remain, idx, num)) {
-                break;
-            }
-        }
-        if (honorCancel && Uncommitter::ShouldStopUncommit()) {
-            std::lock_guard<std::mutex> lockCancel(releasedUnitTreeMutex);
-            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
-                         "tid %d: failed to restore canceled uncommit units[%u+%u, %u)", GetTid(), idx, num,
-                         idx + num);
-            break;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
-        bool inRelocate = false;
-        if (Heap::GetHeap().IsGcStarted()) {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    size_t released = 0;
+    for (auto& partition : partitions) {
+        if (partition->cache.LastUsedNs() > idleBeforeNs) { continue; }
+        std::vector<MappedCache::Extent> extents;
+        partition->cache.RemoveForUncommit((maxBytes - released) / RegionInfo::UNIT_SIZE, extents);
+        bool stop = false;
+        for (const auto& extent : extents) {
+            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(extent.index));
             const GCPhase phase = Heap::GetHeap().GetGCPhase();
-            inRelocate = phase == GCPhase::GC_PHASE_POST_TRACE ||
-                         phase == GCPhase::GC_PHASE_PREFORWARD ||
-                         phase == GCPhase::GC_PHASE_FORWARD;
+            const bool inRelocate = Heap::GetHeap().IsGcStarted() &&
+                (phase == GCPhase::GC_PHASE_POST_TRACE || phase == GCPhase::GC_PHASE_PREFORWARD ||
+                 phase == GCPhase::GC_PHASE_FORWARD);
+            if (stop || (honorCancel && Uncommitter::ShouldStopUncommit()) || inRelocate ||
+                !ExtentReadyForReleasedCache(region)) {
+                InsertCommitted(*partition, extent.index, extent.count);
+                stop = true;
+                continue;
+            }
+            const size_t requested = extent.count * RegionInfo::UNIT_SIZE;
+            const size_t done = RegionInfo::ReleaseUnitsPartial(extent.index, extent.count);
+            CHECK(done <= requested && done % RegionInfo::UNIT_SIZE == 0);
+            const UnitCount units = done / RegionInfo::UNIT_SIZE;
+            if (units != 0) {
+                CHECK(partition->virtualMemory.Insert(Range(RegionInfo::GetUnitAddress(extent.index), done)));
+                released += done;
+            }
+            if (units != extent.count) { InsertCommitted(*partition, extent.index + units, extent.count - units); }
+            stop = Uncommitter::ShouldRetryPartial(requested, done);
         }
-        if (inRelocate || !ExtentReadyForReleasedCache(region)) {
-            std::lock_guard<std::mutex> lockHold(releasedUnitTreeMutex);
-            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
-                         "tid %d: failed to restore uncommit units under live forwarding [%u+%u, %u)",
-                         GetTid(), idx, num, idx + num);
-            break;
-        }
-        const size_t requestedBytes = static_cast<size_t>(num) * RegionInfo::UNIT_SIZE;
-        const size_t before = RegionInfo::GetCommittedUnitBytes(idx, num);
-        const size_t backendReleased = RegionInfo::ReleaseUnitsPartial(idx, num);
-        const size_t after = RegionInfo::GetCommittedUnitBytes(idx, num);
-        // zNMT.cpp:65: capacity is the backing owner's actual range delta,
-        // including retries of already uncommitted cache extents.
-        CHECK(after <= before);
-        const size_t released = before - after;
-        {
-            std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
-            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
-                         "tid %d: failed to retain uncommit units[%u+%u, %u)", GetTid(), idx, num,
-                         idx + num);
-        }
-        if (released != 0) {
-            uncommittedBytes += released;
-        }
-        if (Uncommitter::ShouldRetryPartial(requestedBytes, backendReleased)) {
-            break;
-        }
+        if (stop || released + RegionInfo::UNIT_SIZE > maxBytes) { break; }
     }
-    if (uncommittedBytes > 0) {
-        VLOG(REPORT, "uncommit idle heap memory %zu bytes", uncommittedBytes);
-    }
-    return uncommittedBytes;
+    return released;
 }
 
 
@@ -894,14 +1106,12 @@ void RegionManager::InitializeSegments(uintptr_t regionInfoAddr, const std::vect
     heapUnitCount = 0;
     for (const auto& range : reservations) {
         CHECK(memoryOwner.GetReservationRegistry().Contains(range.start, range.size));
-        CHECK(inactiveRanges.RegisterRange(Range(range.start, range.size)));
         heapUnitCount += range.size / RegionInfo::UNIT_SIZE;
     }
     // zPageTable.cpp:37-52: address tables cover the highest available end,
     // while only the reservation registry supplies allocatable ranges.
     CHECK(ForwardingTable::Initialize(regionHeapStart, regionHeapEnd - regionHeapStart, RegionInfo::UNIT_SIZE));
     this->inactiveZone = regionHeapStart;
-    activeUnitCount.store(0, std::memory_order_relaxed);
     SetMaxUnitCountForRegion(heapParam.regionSize);
     SetMaxUnitCountForPinnedRegion(heapParam.regionSize);
     SetLargeObjectThreshold(heapParam.regionSize);
@@ -911,7 +1121,7 @@ void RegionManager::InitializeSegments(uintptr_t regionInfoAddr, const std::vect
 #endif
     // propagate region heap layout
     RegionInfo::InitializeSegments(regionInfoAddr + metadataSize, reservations, &memoryOwner);
-    freeRegionManager.Initialize(nUnit);
+    freeRegionManager.Initialize(nUnit, reservations, memoryOwner);
     this->exemptedRegionThreshold = heapParam.exemptionThreshold;
     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
          regionHeapStart, regionHeapEnd, nUnit);
@@ -1026,7 +1236,6 @@ void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory)
     // saferegion before the owner, including nested cache hand-back calls.
     ScopedEnterSaferegion enterSaferegion(true);
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
-    CHECK(memory.partition == 0);
     if (memory.committed) {
         freeRegionManager.AddGarbageUnits(memory.index, memory.units);
     } else {
@@ -1071,21 +1280,7 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     const size_t size = request.GetSize();
     const size_t num = size / RegionInfo::UNIT_SIZE;
     PageMemory& memory = request.Memory();
-    // Single logical partition for the current cache. A02c owns round-robin
-    // selection and harvested multi-partition vmems (advisor 0913 03:4x).
-    constexpr uint32_t partition = 0;
-    if (!freeRegionManager.ClaimPageMemory(num, partition, memory)) {
-        const Range range = inactiveRanges.ClaimLow(size);
-        if (range.IsNull()) {
-            return false;
-        }
-        const size_t index = RegionInfo::FindUnitIndex(range.Start());
-        CHECK(index != std::numeric_limits<uint32_t>::max());
-        inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), range.End()),
-                           std::memory_order_release);
-        activeUnitCount.fetch_add(num, std::memory_order_release);
-        memory = PageMemory{ index, num, partition, false };
-    }
+    if (!freeRegionManager.ClaimPageMemory(num, memory)) { return false; }
     if (!memory.committed) {
         Uncommitter::CancelCycle();
     }
@@ -1284,8 +1479,65 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
 }
 
+// ThreadLocalAllocBuffer::initial_desired_size (cpp:265): a new thread
+// starts with the published allocation fraction instead of a fixed extent.
+void RegionManager::InitializeTLAB(AllocBuffer& buffer)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads,
+                      GetThreadLocalRegionSize());
+}
+
+// ZTLABUsage::reset (zTLABUsage.cpp:41), called before retiring allocating
+// regions in young mark-start (zGeneration.cpp:862).
+void RegionManager::ResetTLABUsage()
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
+    if (used != 0) {
+        // TruncatedSeq::davg uses AbsSeq's exponential average, alpha=0.3;
+        // its last value and average are stable throughout the next cycle.
+        tlabCapacity = lastTLABUsed == 0 ? used : tlabCapacity + 0.3 * (used - tlabCapacity);
+        lastTLABUsed = used;
+    }
+}
+
+// ZThreadLocalAllocBuffer::publish_statistics (zThreadLocalAllocBuffer.cpp:52).
+// Thread retirement statistics consume the already published backing history.
+void RegionManager::PublishTLABStatistics()
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t capacity = GetTLABCapacity();
+    TLABStatistics total = retiredTLABStatistics;
+    retiredTLABStatistics = TLABStatistics{};
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    const double fallback = tlabRequestedFraction.Average() / threads;
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
+        buffer.AccumulateTLABStatistics(total, GetTLABUsed(), capacity);
+        buffer.ResizeTLAB(capacity, fallback, GetThreadLocalRegionSize());
+    });
+    if (total.Used() != 0) {
+        tlabAllocatingThreads.Sample(total.allocatingThreads);
+        if (lastTLABUsed > 0.5 * capacity) {
+            tlabRequestedFraction.Sample(std::min(static_cast<double>(total.Used()) /
+                                                 std::max(capacity, size_t{1}), 1.0));
+        }
+    }
+    VLOG(REPORT, "TLAB totals: used=%zu capacity=%zu allocated=%zu refills=%zu refill-waste=%zu gc-waste=%zu threads=%zu",
+         lastTLABUsed, capacity, total.allocatedSize, total.refills, total.refillWaste, total.gcWaste,
+         total.allocatingThreads);
+}
+
+void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    buffer.AccumulateTLABStatistics(retiredTLABStatistics, GetTLABUsed(), GetTLABCapacity());
+}
+
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
+    PublishTLABStatistics();
     YoungCollectionStats stats;
     uint64_t subStart = TimeUtil::NanoSeconds();
     RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
@@ -1754,109 +2006,6 @@ void RegionManager::PromoteAllRegions()
 RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem,
                                       bool allowSaferegion, bool clearPayload)
 {
-    // a chance to invoke heuristic gc.
-    // routefix: under ROUTING, skip RequestGC — PostIgnoredGcRequest may ScopedEnterSaferegion.
-    if (allowSaferegion && !Heap::GetHeap().IsGcStarted()) {
-        Collector& collector = Heap::GetHeap().GetCollector();
-        GCStats& gcStats = collector.GetGCStats();
-        size_t heapThreshold = gcStats.GetThreshold();
-        size_t youngRegionTriggerBytes = kGcTriggerYoungFixedBytes;
-        if (kGcTriggerAllocRateEnabled && !kGcTriggerPinYoung32MB) {
-            youngRegionTriggerBytes = gcStats.youngTriggerBytes.load(std::memory_order_acquire);
-        }
-        size_t youngAllocated = GetYoungAllocatedSize();
-        size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
-        // Occupancy young stays on the latched line (survival). Director uses the
-        // 32MB now-gate so a new wave after a high-survival latch still minors
-        // (12-wave NW). zDirector.cpp:296-306 / :331-381.
-        const size_t directorMinorBytes = kGcTriggerYoungFixedBytes;
-        bool requested = false;
-        if (kGcTriggerAllocRateEnabled) {
-            MutatorAllocRateStats rate = MutatorAllocRate::stats();
-            const uint64_t nowNs = TimeUtil::NanoSeconds();
-            const uint64_t prevFinish = GCStats::GetPrevGCFinishTime();
-            const uint64_t sinceNs = nowNs > prevFinish ? nowNs - prevFinish : 0;
-            GcTriggerInputs in;
-            in.allocRateAvgBps = rate.avg;
-            in.allocRatePredictBps = rate.predict;
-            in.allocRateSdBps = rate.sd;
-            in.usedBytes = allocated;
-            in.youngUsedBytes = youngAllocated;
-            in.capacityBytes = Heap::GetHeap().GetMaxCapacity();
-            in.softMaxBytes = MutatorAllocRate::soft_max_heap_size();
-            in.lastGcDurationSec =
-                static_cast<double>(gcStats.lastGcDurationNs.load(std::memory_order_relaxed)) /
-                static_cast<double>(SECOND_TO_NANO_SECOND);
-            in.timeSinceLastGcSec = static_cast<double>(sinceNs) / static_cast<double>(SECOND_TO_NANO_SECOND);
-            in.collectionIntervalSec = 0.0;
-            in.warmupCyclesDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
-            in.isWarm = gcStats.isWarm.load(std::memory_order_relaxed);
-            in.isTimeTrustable = gcStats.isTimeTrustable.load(std::memory_order_relaxed);
-            if constexpr (kGcTriggerProactiveEnabled || kGcTriggerDynamicWorkersEnabled) {
-                in.lastYoungGcDurationSec = GCStats::lastYoungGcDurationAvgSec.load(std::memory_order_relaxed);
-                in.lastOldGcDurationSec = GCStats::lastOldGcDurationAvgSec.load(std::memory_order_relaxed);
-            }
-            if constexpr (kGcTriggerProactiveEnabled) {
-                const uint64_t lastMajorNs = GCStats::lastMajorFinishNs.load(std::memory_order_relaxed);
-                const uint64_t sinceMajorNs =
-                    (lastMajorNs == 0 || nowNs <= lastMajorNs) ? sinceNs : nowNs - lastMajorNs;
-                in.timeSinceLastMajorSec =
-                    static_cast<double>(sinceMajorNs) / static_cast<double>(SECOND_TO_NANO_SECOND);
-                in.usedAtLastMajorEnd = GCStats::usedAtLastMajorEnd.load(std::memory_order_relaxed);
-            }
-            if constexpr (kGcTriggerMajorAllocRateEnabled) {
-                in.oldUsedBytes = allocated > youngAllocated ? allocated - youngAllocated : 0;
-                in.lastYoungGcDurationSec = GCStats::lastYoungGcDurationAvgSec.load(std::memory_order_relaxed);
-                in.lastOldGcDurationSec = GCStats::lastOldGcDurationAvgSec.load(std::memory_order_relaxed);
-                in.totalCollections = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
-                in.collectionsAtLastMajor = GCStats::collectionsAtLastMajor.load(std::memory_order_relaxed);
-                in.oldLiveAtMarkEnd = GCStats::oldLiveAtMarkEnd.load(std::memory_order_relaxed);
-                in.reclaimedPerYoungAvg = GCStats::reclaimedPerYoungAvg.load(std::memory_order_relaxed);
-                in.reclaimedPerOldAvg = GCStats::reclaimedPerOldAvg.load(std::memory_order_relaxed);
-            }
-            const GcTriggerDecision d = DecideGcTrigger(in);
-            if constexpr (kGcTriggerDynamicWorkersEnabled) {
-                const uint32_t poolCap = static_cast<uint32_t>(
-                    std::max(Heap::GetHeap().GetCollectorResources().GetGCThreadCount(false), 1));
-                const double lastWorkers =
-                    static_cast<double>(g_gcTriggerYoungWorkers.load(std::memory_order_relaxed));
-                const GcWorkerSelection workers = SelectGcWorkers(in, poolCap, lastWorkers);
-                g_gcTriggerYoungWorkers.store(workers.youngWorkers, std::memory_order_relaxed);
-                g_gcTriggerOldWorkers.store(workers.oldWorkers, std::memory_order_relaxed);
-            }
-            g_gcTriggerArmed.fetch_add(1, std::memory_order_relaxed);
-            if (d.kind == GcTriggerKind::MAJOR) {
-                g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
-                NoteGcTriggerRule(d.rule);
-                DLOG(ALLOC, "request heu gc via DecideGcTrigger rule=%d used=%zu cap=%zu",
-                     static_cast<int>(d.rule), allocated, in.capacityBytes);
-                collector.RequestGC(GC_REASON_HEU, true);
-                requested = true;
-            } else if (ShouldRequestDirectorMinor(d.kind, youngAllocated, directorMinorBytes)) {
-                // zDirector.cpp:331-381 — alloc-rate / high-usage keep evaluating after
-                // the occupancy watermark has been raised. Occupancy young still uses
-                // the latched line; director uses the 5%/32MB now-gate so a new young
-                // wave is collected (12-wave NW). is_young_small is already inside
-                // RuleAllocRate / RuleHighUsage (zDirector.cpp:342-343, :371-372).
-                g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
-                NoteGcTriggerRule(d.rule);
-                DLOG(ALLOC, "request young gc via DecideGcTrigger rule=%d young=%zu trigger=%zu",
-                     static_cast<int>(d.rule), youngAllocated, youngRegionTriggerBytes);
-                collector.RequestGC(GC_REASON_YOUNG, true);
-                requested = true;
-            }
-        }
-        if (!requested && youngAllocated >= youngRegionTriggerBytes) {
-            DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
-            collector.RequestGC(GC_REASON_YOUNG, true);
-            requested = true;
-        }
-        if (!requested && allocated >= heapThreshold) {
-            DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, heapThreshold);
-            collector.RequestGC(GC_REASON_HEU, true);
-        }
-    }
-
     // check for allocation since we do not want gc threads and mutators do any harm to each other.
     size_t size = num * RegionInfo::UNIT_SIZE;
     // routefix: RequestForRegion may sleep; under ROUTING keep the critical section short.
@@ -1891,6 +2040,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         size_t committedUnits = 0;
         RegionInfo* region = freeRegionManager.MaterializePageMemory(
             request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedUnits);
+        if (request.Memory().virtualClaimed) {
+            // The address is known only after materialization; keep the existing
+            // diagnostic envelope update under its allocator lock.
+            std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+            const uintptr_t end = RegionInfo::GetUnitAddress(request.Memory().index) + size;
+            inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), end), std::memory_order_release);
+        }
         if (region == nullptr) {
             // zPageAllocator.cpp:1906: preserve the succeeded prefix in the
             // committed cache and return only the failed suffix uncommitted.
@@ -1898,10 +2054,10 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             ScopedEnterSaferegion enterSaferegion(true);
             std::lock_guard<std::mutex> lock(pageAllocatorMutex);
             const size_t index = request.Memory().index;
-            if (committedUnits != 0) {
-                freeRegionManager.AddGarbageUnits(index, committedUnits);
+            if (request.Memory().virtualClaimed) {
+                if (committedUnits != 0) { freeRegionManager.AddGarbageUnits(index, committedUnits); }
+                if (committedUnits != num) { freeRegionManager.AddReleaseUnits(index + committedUnits, num - committedUnits); }
             }
-            freeRegionManager.AddReleaseUnits(index + committedUnits, num - committedUnits);
             CHECK(pageAllocatorUsed >= size);
             pageAllocatorUsed -= size;
             allocationStallQueue.SatisfyAvailableLocked([this](AllocationStallRequest& pending) {
@@ -2463,7 +2619,7 @@ void RegionManager::DumpRegionStats(const char* msg) const
 
     size_t usedUnitCount = GetUsedUnitCount();
     size_t usedObjSize = GetAllocatedSize();
-    size_t releasedUnits = freeRegionManager.GetReleasedUnitCount();
+    size_t virtualUnits = freeRegionManager.GetVirtualUnitCount();
     size_t dirtyUnits = freeRegionManager.GetDirtyUnitCount();
     size_t dirtySize = dirtyUnits * RegionInfo::UNIT_SIZE;
 
@@ -2512,14 +2668,14 @@ void RegionManager::DumpRegionStats(const char* msg) const
     DUMP_REGION_STATS_LOG("\tused summary: usedUnits %zu (%zu B), usedObjSize %zu B",
                           usedUnitCount, usedUnitCount * RegionInfo::UNIT_SIZE, usedObjSize);
 
-    size_t releasedMaxBlock = freeRegionManager.GetReleasedMaxBlock();
+    size_t virtualMaxBlock = freeRegionManager.GetVirtualMaxBlock();
     size_t dirtyMaxBlock = freeRegionManager.GetDirtyMaxBlock();
-    size_t releasedNodeCount = freeRegionManager.GetReleasedNodeCount();
+    size_t virtualNodeCount = freeRegionManager.GetVirtualNodeCount();
     size_t dirtyNodeCount = freeRegionManager.GetDirtyNodeCount();
-    DUMP_REGION_STATS_LOG("\treleased units: %zu (%zu B), nodes: %zu, maxBlock: %zu units (%zu B)",
-                          releasedUnits, releasedUnits * RegionInfo::UNIT_SIZE,
-                          releasedNodeCount,
-                          releasedMaxBlock, releasedMaxBlock * RegionInfo::UNIT_SIZE);
+    DUMP_REGION_STATS_LOG("\tfree virtual units: %zu (%zu B), nodes: %zu, maxBlock: %zu units (%zu B)",
+                          virtualUnits, virtualUnits * RegionInfo::UNIT_SIZE,
+                          virtualNodeCount,
+                          virtualMaxBlock, virtualMaxBlock * RegionInfo::UNIT_SIZE);
     DUMP_REGION_STATS_LOG("\tdirty units: %zu (%zu B), nodes: %zu, maxBlock: %zu units (%zu B)",
                           dirtyUnits, dirtyUnits * RegionInfo::UNIT_SIZE, dirtyNodeCount,
                           dirtyMaxBlock,
@@ -2586,13 +2742,25 @@ void RegionManager::DumpRegionStats(const char* msg) const
     TRACE_COUNT("CJRT_GC_unitCapacity", static_cast<size_t>(unitCapacity * decimalPrecision));
 }
 
-RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, bool youngRegion, bool allowSaferegion)
+RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem, bool youngRegion,
+                                                   bool allowSaferegion)
 {
-    RegionInfo* region = TakeRegion(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
+    // ZHeap::max_tlab_size / unsafe_max_tlab_alloc (zHeap.cpp:144-160):
+    // the caller computes the refill size; the allocator enforces its extent.
+    if (size == 0 || size > GetThreadLocalRegionSize()) {
+        return nullptr;
+    }
+    const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
+    RegionInfo* region = TakeRegion(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
                                     allowSaferegion);
     if (region != nullptr) {
         {
             region->SetYoungRegionFlag(youngRegion ? 1 : 0);
+            if (youngRegion) {
+                // zHeap.cpp:233: charge the backing extent even before a
+                // prepared region is installed as a thread's current TLAB.
+                tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
+            }
             region->SetYoungAge(0);
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
@@ -2612,6 +2780,21 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
     }
 
     return region;
+}
+
+// ZHeap::undo_alloc_page (zHeap.cpp:270): only a failed publication of
+// a newly allocated, unused backing region cancels its allocation charge.
+// GC retirement/reclamation is not an undo and must retain that cycle's usage.
+void RegionManager::UndoThreadLocalRegionAllocation(RegionInfo* region)
+{
+    CHECK(region != nullptr && region->IsEmpty() && region->IsThreadLocalRegion());
+    if (region->IsYoungRegion()) {
+        const size_t size = region->GetRegionSize();
+        const size_t previous = tlabUsed.fetch_sub(size, std::memory_order_relaxed);
+        CHECK(previous >= size);
+    }
+    RemoveThreadLocalRegion(region);
+    ReclaimRegion(region);
 }
 
 void RegionManager::RequestForRegion(size_t size)
@@ -3192,8 +3375,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 MAddress fromBase = reinterpret_cast<MAddress>(obj);
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);
                 ZForwarding* forwarding = ForwardingTable::GetCovering(fromBase, Generation::Old);
-                const bool youngMarking = Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_TRACE;
-                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz, forwarding, youngMarking);
+                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz, forwarding);
                 recordedOnToForOld += moved;
 
                 }

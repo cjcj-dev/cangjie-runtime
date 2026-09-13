@@ -4053,6 +4053,7 @@ private:
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
         LiveInfoArena::GetLiveInfoArena().RecycleOwnerBitmaps(GetLiveInfo());
+        SetYoungRegionFlag(0);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         // Unset until ClearLiveInfo starts a mark. 0 so idle / test regions do
@@ -4099,7 +4100,6 @@ private:
         SetOldMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
-        SetYoungRegionFlag(0);
         SetMarkFaceSealed(false);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         SetUnitRole(uClass);

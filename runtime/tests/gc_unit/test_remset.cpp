@@ -65,6 +65,11 @@ struct RemsetRearmTestAccess {
         RemsetScanStats stats;
     };
 
+    static GenerationCycle& YoungCycle(WCollector& collector)
+    {
+        return collector.youngCycle;
+    }
+
     static RefField<> Tag(WCollector& collector, BaseObject* object)
     {
         return collector.GetAndTryTagRefField(object);
@@ -1039,3 +1044,109 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
     }
 }
 #endif
+
+// zGeneration.cpp:871-880: preparing a request changes neither sequence nor
+// face; every mark-start advances both, even when the remembered set is empty.
+GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
+{
+    alignas(8) uint64_t storage[16] {};
+    RememberedSet rs;
+    rs.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
+    GenerationCycle young(GCCycleGeneration::YOUNG);
+    GenerationCycle old(GCCycleGeneration::OLD);
+    for (uint64_t cycle = 0; cycle != 4; ++cycle) {
+        const uint64_t sequence = young.Sequence();
+        const uint8_t face = rs.activeBuffer.load(std::memory_order_acquire);
+        old.RecordYoungSequenceAtRelocateStart(sequence);
+        young.Begin(cycle + 1);
+        GC_EXPECT_EQ(young.Sequence(), sequence);
+        GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face);
+        young.StartYoungMark(rs);
+        GC_EXPECT_EQ(young.Sequence(), sequence + 1);
+        GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face ^ 1U);
+        GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(young.Sequence()));
+        std::unordered_set<MAddress> previous;
+        rs.ScanPreviousForMinor(previous);
+        GC_EXPECT_TRUE(previous.empty());
+        young.End();
+    }
+}
+
+// zRelocate.cpp:698-725: the real relocation entry captures a face and the
+// product transfer reads that face, then remembers the relocated field in current.
+GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
+{
+    GcHeapFixture heap;
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    GenerationCycle& young = RemsetRearmTestAccess::YoungCycle(collector);
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    auto markStart = [&] {
+        young.Begin(young.Sequence() + 1);
+        young.StartYoungMark(rs);
+        young.End();
+    };
+    const MAddress from = heap.heapStart + 256;
+    const MAddress to = heap.heapStart + 128;
+    collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
+    for (uint8_t initial = 0; initial != 2; ++initial) {
+        for (size_t flips = 0; flips != 4; ++flips) {
+            rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+            if (initial != 0) markStart();
+            collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+            collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+            rs.Record(from + sizeof(void*));
+            for (size_t flip = 0; flip != flips; ++flip) markStart();
+            // FORWARD is the same relocation: it must not replace the snapshot.
+            collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
+            GC_EXPECT_EQ(collector.OldActiveRemsetIsCurrent(), flips % 2 == 0);
+            GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
+            GC_EXPECT_TRUE(rs.Contains(to + sizeof(void*)));
+        }
+    }
+}
+
+GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
+{
+    GcHeapFixture heap;
+    auto& collector = Heap::GetHeap().GetCollector();
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
+    collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+    const MAddress from = heap.heapStart + 256;
+    const MAddress to = heap.heapStart + 128;
+    rs.Record(from + sizeof(void*));
+    GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
+    rs.FlipForMinor();
+    std::unordered_set<MAddress> fields;
+    rs.ScanPreviousForMinor(fields);
+    GC_EXPECT_TRUE(fields.count(to + sizeof(void*)) == 1);
+}
+
+GC_OTHER_VM_TEST(Remset, InPlacePreviousFieldsPublishDuringYoungMark)
+{
+    GcHeapFixture heap;
+    auto& collector = Heap::GetHeap().GetCollector();
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_TRACE);
+    collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
+    const MAddress from = heap.heapStart + 256;
+    const MAddress to = heap.heapStart + 128;
+    rs.Record(from + sizeof(void*));
+    rs.FlipForMinor();
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    fwd->set_in_place();
+    const size_t moved = rs.TransferObjectSlots(from, to, 32, fwd);
+    fwd->relocated_remembered_fields_after_relocate();
+    fwd->release_page();
+    fwd->mark_done();
+    size_t visited = 0;
+    MAddress field = 0;
+    fwd->relocated_remembered_fields_apply_to_published([&](MAddress p) { ++visited; field = p; });
+    fwd->Destroy();
+    GC_EXPECT_EQ(moved, 1u);
+    GC_EXPECT_EQ(visited, 1u);
+    GC_EXPECT_EQ(field, to + sizeof(void*));
+}

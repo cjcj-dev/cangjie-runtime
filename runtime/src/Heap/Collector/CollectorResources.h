@@ -11,6 +11,7 @@
 #include <functional>
 
 #include "Base/Macros.h"
+#include "Base/ZStat.h"
 #include "FinalizerProcessor.h"
 #include "Heap/Collector/TaskQueue.h"
 #include "Heap/GcThreadPool.h"
@@ -33,6 +34,7 @@ class CollectorResources {
 public:
     // the collector thread entry routine.
     MRT_EXPORT static void* GCMainThreadEntry(void* arg);
+    static void* DirectorThreadEntry(void* arg);
     MRT_EXPORT static void* MinorDriverThreadEntry(void* arg);
     MRT_EXPORT static void* MajorDriverThreadEntry(void* arg);
 
@@ -64,6 +66,10 @@ public:
 
     // ZYoungType::major_full_roots selects the combined mark-start pause.
     const GCDriverRequest* YoungPreludeRequest() const { return youngPreludeRequest; }
+
+    // Called once in the young mark-start pause, for both minor and
+    // combined young/old starts (zGeneration.cpp:600-602,637).
+    void NoteYoungMarkStart() { ZStat::Collections().AtYoungMarkStart(youngPreludeRequest != nullptr); }
 
     // ZResurrection (zResurrection.cpp:35-47): shared by both generations.
     // Block only in the successful old mark-end pause; unblock after the
@@ -115,6 +121,12 @@ private:
     void TerminateGCTask();
     void StopGCThreads();
     void RunDriverLoop(GCDriverKind kind);
+    void RunDirectorLoop();
+    void EvaluateDirector(uint64_t now);
+    bool TakeDriverRequest(GCDriverPort& port, GCDriverRequest& request);
+    void CompleteDriverRequest(GCDriverPort& port);
+    void RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup);
+
     // Notify the GC thread to start GC, and doesn't wait.
     // Called by mutator.
     // reason: The reason for this GC.
@@ -177,6 +189,15 @@ private:
 #endif
 
     // the collector thread handle.
+    pthread_t directorThread = 0;
+    std::mutex directorMutex;
+    std::condition_variable directorCondition;
+    bool directorStopped = false;
+    bool directorReevaluate = false;
+    bool minorBusy = false;
+    bool majorBusy = false;
+    ZStatCycle youngCycle;
+    ZStatCycle oldCycle;
     pthread_t gcMainThread = 0;
     pthread_t minorDriverThread = 0;
     pthread_t majorDriverThread = 0;
