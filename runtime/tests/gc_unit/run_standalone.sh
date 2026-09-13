@@ -730,9 +730,9 @@ fi
 LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::ForwardingTable::PublishFromPageView('
   'MapleRuntime::ForwardingTable::GetFromPageView('
-  'MapleRuntime::PromotedRegionDomain::DischargeAll('
+  'MapleRuntime::RegionManager::RememberFlipPromotedPages('
   'MapleRuntime::RememberedSet::MoveInPlaceSlots('
-  'MapleRuntime::RegionManager::RecordPinnedCrossGenEdges('
+  'MapleRuntime::RegionManager::RememberPromotedObject('
   'MapleRuntime::WCollector::RemapYoungRoots('
   'MapleRuntime::RegionManager::FinishIncompleteFromRegions('
   'MapleRuntime::ForwardingTable::ReclaimRetired('

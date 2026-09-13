@@ -1399,10 +1399,8 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager24SetMaxUnitCountForRegionEv @1441
     _ZN12MapleRuntime13RegionManager25AllocateThreadLocalRegionEbb @1442
     _ZN12MapleRuntime13RegionManager25MAX_UNIT_COUNT_PER_REGIONE @1443 DATA
-    _ZN12MapleRuntime13RegionManager25RecordPinnedCrossGenEdgesEv @1445
     _ZN12MapleRuntime13RegionManager26LockRegionListInSaferegionERNSt3__15mutexE @1446
     _ZN12MapleRuntime13RegionManager27EnlistFullThreadLocalRegionEPNS_10RegionInfoE @1447
-    _ZN12MapleRuntime13RegionManager27RecordPromotedCrossGenEdgesEPNS_10RegionInfoE @1448
     _ZN12MapleRuntime13RegionManager27ScrubRememberedSetForRegionEPNS_10RegionInfoE @1449
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
     _ZN12MapleRuntime13RegionManager29PrepareYoungGarbageCandidatesERKNSt3__18functionIFvPNS_10RegionInfoEEEE @1451
@@ -1412,16 +1410,13 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager30SetMaxUnitCountForPinnedRegionEv @1455
     _ZN12MapleRuntime13RegionManager31AssemblePinnedGarbageCandidatesEb @1456
     _ZN12MapleRuntime13RegionManager31TryTakeGarbageRegionAfterDispelEPNS_10RegionInfoE @1457
-    _ZN12MapleRuntime13RegionManager32ConsumePromotedCrossGenEdgeCountEv @1458
     _ZN12MapleRuntime13RegionManager33ClearNotRelocatableThisCycleFlagsEv @1459
     _ZN12MapleRuntime13RegionManager9HUGE_PAGEE @1460 DATA
     _ZN12MapleRuntime13RememberedSet10InitializeEyy @1461
     _ZN12MapleRuntime13RememberedSet11ClearBufferEy @1462
     _ZN12MapleRuntime13RememberedSet11ClearRegionEyyPy @1463
     _ZN12MapleRuntime13RememberedSet13DrainForMinorERNSt3__113unordered_setIyNS1_4hashIyEENS1_8equal_toIyEENS1_9allocatorIyEEEE @1464
-    _ZN12MapleRuntime13RememberedSet13MarkWordDirtyEyy @1465
     _ZN12MapleRuntime13RememberedSet14BeginFullClearEv @1466
-    _ZN12MapleRuntime13RememberedSet14ClearWordDirtyEyy @1467
     _ZN12MapleRuntime13RememberedSet15FinishFullClearEh @1469
     _ZN12MapleRuntime13RememberedSet18ClearRangeInBufferEyyyPy @1470
     _ZN12MapleRuntime13RememberedSet6RecordEy @1471
@@ -1875,7 +1870,6 @@ EXPORTS
     _ZN12MapleRuntime24ReportRemsetConsumeStatsEyRKNS_19DiffPathRemsetStatsE @1969
     _ZN12MapleRuntime25RestoreInjectedPlainIfAnyEv @1970
     _ZN12MapleRuntime26g_forwardRaceStillBadCountE @1971 DATA
-    _ZN12MapleRuntime27g_promotedCrossGenEdgeCountE @1972 DATA
     _ZN12MapleRuntime28AssertColouredWriteIfEnabledEPKvy @1973
     _ZN12MapleRuntime28VerifyRememberedSetInvariantEPKcRKNSt3__113unordered_setIyNS2_4hashIyEENS2_8equal_toIyEENS2_9allocatorIyEEEEbPKNS3_IPNS_10BaseObjectENS4_ISE_EENS6_ISE_EENS8_ISE_EEEE @1974
     _ZN12MapleRuntime29ORDERS_OF_MAGNITUDE_FROM_NANOE @1975 DATA

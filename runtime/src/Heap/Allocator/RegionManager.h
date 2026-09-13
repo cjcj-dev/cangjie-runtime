@@ -277,14 +277,11 @@ public:
     template<Generation G>
     void DrainForwardFromRegions();
     bool RelocationStarted() const { return relocationStarted; }
-    // Before clearing the young flag on a promoted region, record every live
-    // old→young out-edge that mutators skipped while the source was still young.
-    static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
-    static size_t ConsumePromotedCrossGenEdgeCount();
-    // Non-young holders (pinned/large at birth, or post-promote old) + IDLE bare store:
-    // edges never enter RecordCrossGenEdge. Stamp remset before each minor.
-    // See ops/design/G1_WRITE_BARRIER_DESIGN.md (phase≤INIT fast path).
-    size_t RecordPinnedCrossGenEdges();
+    // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
+    static void RememberPromotedObject(BaseObject* object);
+    // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
+    void AddFlipPromotedPage(RegionInfo* region);
+    void RememberFlipPromotedPages(GCWorkers& workers);
     void StampCensusBoundaries();
     void PromoteAllRegions();
     // CompactRegion's list-ownership tail. A concurrent stay-young path may
@@ -1215,6 +1212,8 @@ private:
     bool relocationDrained{ false };
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
+    std::mutex flipPromotedMutex;
+    std::vector<RegionInfo*> flipPromotedPages;
     std::mutex pageAllocatorMutex;
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };

@@ -46,7 +46,6 @@
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/WCollector/RelocationSetSelector.h"
 #include "Heap/Verify/Zap.h"
-#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -160,169 +159,6 @@ std::atomic<bool> RegionInfo::liveCrossAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
 
 std::mutex RegionInfo::youngRegionFlagMutex;
-std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
-
-namespace {
-BaseObject* ScanFieldHealedTarget(Collector& collector, RefField<>& field)
-{
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-    return collector.make_load_good(field, provenance);
-}
-} // namespace
-
-size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
-{
-    if (region == nullptr || !region->IsYoungRegion()) {
-        return 0;
-    }
-    MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-    if (region->IsSafeKnownYoungEmpty(view)) {
-        return 0;
-    }
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    size_t recorded = 0;
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
-        region->GetResurrectBitmap() != nullptr;
-    bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
-    auto recordFromObject = [region, view, &rememberedSet, &recorded, hasObjectLiveness,
-                             useLiveOnly](BaseObject* object) {
-        if (object == nullptr || !object->HasRefField()) {
-            return;
-        }
-        bool survived = hasObjectLiveness &&
-            region->IsSurvivedObject(view, region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
-        if (useLiveOnly && !survived) {
-            return;
-        }
-        object->ForEachRefField([&rememberedSet, &recorded, object](RefField<>& field) {
-            BaseObject* target = ScanFieldHealedTarget(Heap::GetHeap().GetCollector(), field);
-            MAddress slot = reinterpret_cast<MAddress>(&field);
-            if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                return;
-            }
-            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                rememberedSet.Record(slot);
-                ++recorded;
-                PromotedRegionDomain::NoteOldProductRecord(slot);
-            }
-        });
-    };
-    region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
-    if (recorded != 0) {
-        g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
-    }
-
-    return recorded;
-}
-
-size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
-{
-    return g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
-}
-
-size_t RegionManager::RecordPinnedCrossGenEdges()
-{
-    MRT_PHASE_TIMER(ZStatPhases::PYoungPinnedScan);
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    std::atomic<size_t> recorded{ 0 };
-    auto skipPinnedScanRegion = [](RegionInfo* region) {
-        // Drain/rescan cost on sd256 was 59.8% of young.* because this walk stamped
-        // from-space / free / ghost slots; RescanRememberedSet then dropped them as
-        // deadHolder (fysgone: consumed/recorded = 3.3%). ZGC does not walk from-space
-        // into the remset (zRemembered.cpp:347-387 found-old; scan is previous face only).
-        return region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion() ||
-            region->IsFreeRegion() || region->IsFromRegion() || region->IsGhostFromRegion() ||
-            region->IsUnmovableFromRegion();
-    };
-    auto scanRegion = [&rememberedSet, &recorded, &skipPinnedScanRegion](RegionInfo* region) {
-        if (skipPinnedScanRegion(region)) {
-            return;
-        }
-        region->VisitAllObjects([&rememberedSet, &recorded, region](BaseObject* object) {
-            if (object == nullptr || !object->HasRefField()) {
-                return;
-            }
-            object->ForEachRefField([&rememberedSet, &recorded, region](RefField<>& field) {
-                BaseObject* target = to_object(field.GetTargetObject());
-                if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                    return;
-                }
-                const MAddress targetAddr = reinterpret_cast<MAddress>(target);
-                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(targetAddr);
-                if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                    // ZGC sets a remembered bit only for a value its barrier has just
-                    // resolved to a live young address: ZRemembered::scan_field calls
-                    // remember(p) on the result of remset_barrier_on_oop_field
-                    // (zRemembered.cpp:578-589), and remap_and_maybe_add_remset calls
-                    // ZRelocate::add_remset only after load_barrier_on_oop_field_preloaded
-                    // (zRelocate.cpp:1240-1255).  This walk has no such proof.  Qualifying
-                    // the *holder* is not available either -- measured, NW256/256MB: all
-                    // 1875-2761 regions it scans carry no liveness face, 0 of 3.68M objects
-                    // answer survived, so a holder filter here would delete 100% of the
-                    // 551,449 bits it produces rather than filter them.
-                    //
-                    // The *value* is qualifiable without any liveness face.  A young page's
-                    // allocated range is [start, allocPtr); this walk runs with every
-                    // mutator stopped (Generation.cpp:627,745) and allocation bumps that
-                    // same pointer (RegionInfo.h:3320,3330), so an address at or beyond it
-                    // designates no object in the page's current life.  Recording a bit for
-                    // one produces an edge no consumer can honour: the rescan hands it to
-                    // ResolveStoreValue, which fail-closes on the zero header.  Measured
-                    // 3/3 at page+0xbf80 with allocOff=10560, and before that at
-                    // page+0xd100 with allocOff=0, both from 48-byte holders with
-                    // survived=0 marked=0.
-                    if (targetAddr >= targetRegion->GetRegionAllocPtr()) {
-                        return;
-                    }
-                    MAddress slot = reinterpret_cast<MAddress>(&field);
-                    rememberedSet.Record(slot);
-                    recorded.fetch_add(1, std::memory_order_relaxed);
-
-                }
-            });
-        });
-    };
-    // zCollectedHeap.cpp:310-311: public safepoint work uses the heap's
-    // runtime workers, independently of either generation's GC workers.
-    RuntimeWorkers& workers = Heap::GetHeap().GetCollectorResources().GetRuntimeWorkers();
-    // Keep page descriptors stable for the entire worker gang, as for the
-    // serial page-table iterator. No page-pointer snapshot is needed.
-    RegionInfo::PageIterationScope iteration;
-    class PinnedScanTask : public GCWorkerTask {
-    public:
-        explicit PinnedScanTask(const std::function<void(RegionInfo*)>& scan)
-            : iterator(RegionInfo::pageOwners), scan(scan) {}
-
-        void Work(uint32_t) override
-        {
-            iterator.do_pages([&](RegionInfo* region) {
-                // Preserve the former pinned/large/full list domain. The trace
-                // caches use RECENT_LARGE_REGION and RECENT_FULL_REGION too.
-                switch (region->GetRegionType()) {
-                    case RegionInfo::RegionType::RECENT_PINNED_REGION:
-                    case RegionInfo::RegionType::FULL_PINNED_REGION:
-                    case RegionInfo::RegionType::RAW_POINTER_PINNED_REGION:
-                    case RegionInfo::RegionType::RECENT_LARGE_REGION:
-                    case RegionInfo::RegionType::LARGE_REGION:
-                    case RegionInfo::RegionType::RECENT_FULL_REGION:
-                        scan(region);
-                        break;
-                    default:
-                        break;
-                }
-                return true;
-            });
-        }
-
-    private:
-        ZPageTableParallelIterator<RegionInfo*> iterator;
-        const std::function<void(RegionInfo*)> scan;
-    } task(scanRegion);
-    workers.Run(task);
-    return recorded.load(std::memory_order_relaxed);
-}
-
 void RegionInfo::SetYoungRegionFlag(uint8_t flag)
 {
     std::lock_guard<std::mutex> lock(youngRegionFlagMutex);
@@ -3023,7 +2859,11 @@ void RegionManager::CompactRegion(RegionInfo* region)
         region->RecordCompactRoute(offset, toAddress);
         // ZGC zRelocate.cpp:652-731 update_remset_old_to_old: the bits covering the from copy
         // name field offsets inside this object, so they follow it to its new address.
-        rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+        if (region->IsYoungRegion()) {
+            RememberPromotedObject(toObj);
+        } else {
+            rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+        }
     });
 
     MAddress cur = region->GetRegionAllocPtr();
@@ -3178,7 +3018,11 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         // zRelocate.cpp:652-731, as in the whole-page arm above.  toAddress may be in toRegion1,
         // which is what ZGC means by "even with in-place relocation, the to_page could be another
         // page" (zRelocate.cpp:666-667).
-        rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+        if (region->IsYoungRegion()) {
+            RememberPromotedObject(toObj);
+        } else {
+            rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+        }
     });
 
     // clear unused space which is free after compaction.
@@ -3365,16 +3209,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         if (youngRegion) {
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             region->PreserveRetainedLiveInfo();
-            {
-                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
-                if (deferred) {
-                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
-                }
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, deferred);
-                size_t recEdges = deferred ? 0 : RecordPromotedCrossGenEdges(region);
-                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
-            }
+            AddFlipPromotedPage(region);
             (void)region->PromoteYoungRegion(promotionView);
         }
         ExemptFromRegion(region);
@@ -3430,18 +3265,12 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         }
         if (youngRegion) {
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            // ZRelocate::relocate registers flip-promoted pages and defers their
-            // field walk until after relocation (zRelocate.cpp:1289-1306).
-            region->PreserveRetainedLiveInfo();
-            {
-                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
-                if (deferred) {
-                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
-                }
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 0, deferred);
-                size_t recEdges = deferred ? 0 : RecordPromotedCrossGenEdges(region);
-                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 0, recEdges);
+            // In-place relocation already visited each destination object.
+            // Only a page promoted without compaction needs the later page task.
+            auto forwarding = ForwardingTable::RetainPageOwner(region);
+            if (!forwarding || !forwarding->in_place()) {
+                region->PreserveRetainedLiveInfo();
+                AddFlipPromotedPage(region);
             }
             (void)region->PromoteYoungRegion(promotionView);
         }
@@ -3452,12 +3281,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     CHECK(rawPointerCount == 0);
     Collector& collector = Heap::GetHeap().GetCollector();
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    size_t promotedRecords = 0;
     size_t oldObjForwarded = 0;
     size_t o2yOnToForOld = 0;
     size_t recordedOnToForOld = 0;
     bool forwarded = region->VisitLiveObjectsUntilFalse(
-        [&collector, region, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded,
+        [&collector, region, youngRegion, &rememberedSet, &oldObjForwarded,
          &o2yOnToForOld, &recordedOnToForOld](BaseObject* obj) {
             BaseObject* toObj = collector.ForwardObject(obj,
                 static_cast<Generation>(ForwardingTable::RetainPageOwner(region)->table_generation()));
@@ -3471,22 +3299,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // RouteObject always mints a distinct to address).
 
             if (youngRegion && toObj != nullptr) {
-                if (!Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
-                    NoteFwdToGateRefuse("young", toObj);
-                } else if (toObj->HasRefField()) {
-                toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj, &collector](RefField<>& field) {
-                    BaseObject* target = ScanFieldHealedTarget(collector, field);
-                    MAddress slot = reinterpret_cast<MAddress>(&field);
-                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                        return;
-                    }
-                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                    if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                        rememberedSet.Record(slot);
-                        ++promotedRecords;
-                    }
-                });
-                }
+                RememberPromotedObject(toObj);
             } else if (!youngRegion && toObj != nullptr && toObj != obj && obj->IsForwarded()) {
                 if (!Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
                     NoteFwdToGateRefuse("old", toObj);
@@ -3610,16 +3423,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // Flip-promoted pages are registered here and walked once by the
             // post-relocation discharge (zRelocate.cpp:1289-1306).
             region->PreserveRetainedLiveInfo();
-            {
-                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
-                if (deferred) {
-                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
-                }
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, deferred);
-                size_t recEdges = deferred ? 0 : RecordPromotedCrossGenEdges(region);
-                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
-            }
+            AddFlipPromotedPage(region);
             (void)region->PromoteYoungRegion(promotionView);
         }
         // Complete the ZGC in-place shape first: Exempt publishes an identity
@@ -3641,9 +3445,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->ResetLiveMapAfterForward(markView);
             region->VerifyLiveBooks(markView, "post-ResetLiveMapAfterForward");
             if (youngRegion) {
-                if (promotedRecords != 0) {
-                    g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
-                }
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 (void)region->PromoteYoungRegion(promotionView);
             }
