@@ -167,7 +167,7 @@ protected:
 class TestTraceBarrier final : public Barrier {
 public:
     TestTraceBarrier(Collector& collector, RememberedSet& rememberedSet)
-        : Barrier(collector, rememberedSet, BarrierPhase::TRACE) {}
+        : Barrier(collector, rememberedSet) {}
     void Record(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
     {
         RecordCrossGenEdge(obj, fieldAddress, ref);

@@ -38,7 +38,7 @@
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
-#include "Heap/WCollector/IdleBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "ObjectModel/RefField.inline.h"
@@ -183,16 +183,15 @@ GC_TEST(Remset, Wave8FilterReceiptPositiveControls)
 
 class InstalledBarrierScope {
 public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
     {
-        Heap::currentBarrierPtr = &installed;
+        Heap::barrierPtr = &barrier;
     }
 
-    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
 
 private:
-    Barrier** previous;
-    Barrier* installed;
+    Barrier* previous;
 };
 
 class TestCollector final : public Collector {
@@ -662,7 +661,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
     TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    IdleBarrier idle(collector, rs);
+    Barrier idle(collector, rs);
 
     field->StoreColoured(zpointer::null);
     idle.WriteReference(fx.obj0, *field, fx.obj1);
@@ -681,7 +680,7 @@ GC_TEST(Remset, StaticRootNotRecorded)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
-    RootSlot root;
+    NativeSlot root(zpointer::null);
 
     barrier.WriteStaticRef(root, fx.obj1);
     std::unordered_set<MAddress> records;

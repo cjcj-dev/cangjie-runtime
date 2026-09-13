@@ -266,16 +266,16 @@ USize StaticRootTable::RootCountForTesting()
 }
 #endif
 
-void StaticRootTable::VisitRoots(const RootSlotVisitor& visitor)
+void StaticRootTable::VisitRoots(const NativeSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
     U32 gcRootsSize = 0;
-    std::unordered_set<RootSlot*> visitedSet;
+    std::unordered_set<NativeSlot*> visitedSet;
     for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
         gcRootsSize = iter->second;
         StaticRootArray* array = iter->first;
         for (USize i = 0; i < gcRootsSize; i++) {
-            RootSlot* root = array->content[i];
+            NativeSlot* root = array->content[i];
             // make sure to visit each static root only once time.
             if (!visitedSet.insert(root).second) {
                 continue;
@@ -285,7 +285,7 @@ void StaticRootTable::VisitRoots(const RootSlotVisitor& visitor)
     }
 }
 
-void ExportRootTable::VisitGCRoots(const RootVisitor& visitor)
+void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(tableMutex);
     for (auto &rootInfo : exportRoots) {
@@ -642,16 +642,16 @@ void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
 
 void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
 {
-    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) {
+    const NativeSlotVisitor& visitor = [&rootSet, this](NativeSlot& root) {
         if (VerifyRoots::Enabled()) {
             RootVerifyContext ctx;
             ctx.phase = "EnumStaticRoots";
             ctx.kind = RootKind::STATIC_ROOT;
-            ctx.rawValue = raw(root.LoadPlain());
+            ctx.rawValue = raw(root.GetFieldValue());
             ctx.hasRawValue = true;
             VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
         }
-        EnumAndTagRawRoot(root, rootSet, Generation::Old);
+        EnumRefFieldRoot(root, rootSet);
     };
     VisitStaticRoots(visitor);
 }
@@ -664,16 +664,16 @@ void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 
 void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
-    Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet, this](ObjectRef& root) {
+    Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet, this](NativeSlot& root) {
         if (VerifyRoots::Enabled()) {
             RootVerifyContext ctx;
             ctx.phase = "EnumAllExportRoots";
             ctx.kind = RootKind::RUNTIME_ROOT;
-            ctx.rawValue = raw(root.LoadPlain());
+            ctx.rawValue = raw(root.GetFieldValue());
             ctx.hasRawValue = true;
             VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
         }
-        EnumAndTagRawRoot(root, foreignRootsSet, Generation::Old);
+        EnumRefFieldRoot(root, foreignRootsSet);
     });
 }
 void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
@@ -921,17 +921,12 @@ bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
 void TracingCollector::DoResurrection(WorkStack& workStack)
 {
     workStack.clear();
-    RootVisitor func = [&workStack, this](ObjectRef& ref) {
-        HeapSlot<> tmpField(to_zpointer(raw(ref.LoadPlain())));
-        BaseObject* finalizerObj = to_object(tmpField.GetTargetObject());
+    NativeSlotVisitor func = [&workStack, this](NativeSlot& ref) {
+        BaseObject* finalizerObj = Heap::GetBarrier().ReadStaticRef(ref);
         if (!IsMarkedObject<Generation::Old>(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             CHECK(DiscoverReference(finalizerObj, ReferenceType::FINAL) == ReferenceStatus::DISCOVERED);
             workStack.push_back(MarkStackEntry::MarkAndFollow(finalizerObj, true));
-        }
-        if (raw(ref.LoadPlain()) != reinterpret_cast<MAddress>(finalizerObj)) {
-            HealRoot(ref, from_object(finalizerObj), HealSite::TracingCollectorResurrectFinalizer);
-            DLOG(FIX, "heal finalizer %p@%p", finalizerObj, &ref);
         }
     };
     (void)collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
@@ -1019,19 +1014,19 @@ void TracingCollector::CurrentizeValueRootMap(
 }
 
 // Registered finalizers are discovered by DoResurrection and fixed by
-// VisitRawPointers. Only queued/running finalizables are strong mark roots.
+// VisitNativePointers. Only queued/running finalizables are strong mark roots.
 void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
 {
-    RootVisitor visitor = [this, &rootSet](ObjectRef& root) {
+    NativeSlotVisitor visitor = [this, &rootSet](NativeSlot& root) {
         if (VerifyRoots::Enabled()) {
             RootVerifyContext ctx;
             ctx.phase = "EnumFinalizerProcessorRoots";
             ctx.kind = RootKind::RUNTIME_ROOT;
-            ctx.rawValue = raw(root.LoadPlain());
+            ctx.rawValue = raw(root.GetFieldValue());
             ctx.hasRawValue = true;
             VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
         }
-        EnumAndTagRawRoot(root, rootSet, Generation::Old);
+        EnumRefFieldRoot(root, rootSet);
     };
     collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
 }
@@ -1112,15 +1107,14 @@ void TracingCollector::DumpRoots(LogType logType)
         [&rootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rootVisitor); });
 
     DLOG(logType, "finalizer processor roots");
-    VisitFinalizerRoots(rootVisitor);
 
-    RootSlotVisitor rootSlotVisitor = [this, logType](RootSlot& ref) {
-        zaddress_unsafe value = ref.LoadPlain();
+    NativeSlotVisitor rootSlotVisitor = [this, logType](NativeSlot& ref) {
+        zpointer value = ref.GetFieldValue();
         if (is_null(value)) {
             return;
         }
         // StaticRootTable keeps the referent live while DumpRoots inspects it.
-        auto obj = to_object(safe(value));
+        auto obj = Heap::GetBarrier().ReadStaticRef(ref);
         if (obj == nullptr) {
             return;
         }
@@ -1130,6 +1124,7 @@ void TracingCollector::DumpRoots(LogType logType)
     };
 
     DLOG(logType, "static fields");
+    VisitFinalizerRoots(rootSlotVisitor);
     VisitStaticRoots(rootSlotVisitor);
 
     DLOG(logType, "Dump GCRoots end");
@@ -1228,12 +1223,12 @@ void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
     VLOG(REPORT, "Total roots: %zu(exclude stack roots)", rootSet.size());
 }
 
-void TracingCollector::VisitStaticRoots(const RootSlotVisitor& visitor) const
+void TracingCollector::VisitStaticRoots(const NativeSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 
-void TracingCollector::VisitFinalizerRoots(const RootVisitor& visitor) const
+void TracingCollector::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
 {
     collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
 }

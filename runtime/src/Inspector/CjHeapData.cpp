@@ -359,7 +359,7 @@ void CjHeapData::ProcessRootLocal()
 
 void CjHeapData::ProcessRootGlobal()
 {
-    RootSlotVisitor visitor = [this](RootSlot& root) {
+    NativeSlotVisitor visitor = [this](NativeSlot& root) {
         BaseObject* obj = Heap::GetBarrier().ReadStaticRef(root);
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return;
@@ -387,13 +387,13 @@ void CjHeapData::ProcessRootConcurrencyModel()
 
 void CjHeapData::ProcessRootFinalizer()
 {
-    RootVisitor visitor = [this](ObjectRef& objRef) {
-        zaddress_unsafe value = objRef.LoadPlain();
+    NativeSlotVisitor visitor = [this](NativeSlot& objRef) {
+        zaddress_unsafe value = uncolor_bits(objRef.GetFieldValue());
         if (is_null(value) || !Heap::IsHeapAddress(reinterpret_cast<void*>(raw(value)))) {
             return;
         }
         // FinalizerProcessor holds listLock while exposing each retained root.
-        BaseObject* obj = to_object(safe(value));
+        BaseObject* obj = Heap::GetBarrier().ReadStaticRef(objRef);
         DumpObject dumpObject = { obj, TAG_ROOT_UNKNOWN, 0, 0 };
         dumpObjects.push_back(dumpObject);
     };

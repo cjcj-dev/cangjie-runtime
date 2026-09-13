@@ -63,7 +63,7 @@ GC_TEST(FwdReturn, IllegalTuplePositiveControlIncrementsBacking)
     const uintptr_t slotRaw = reinterpret_cast<uintptr_t>(fx.obj0) | goodMask;
     const uint64_t before = ZgcInvariants::IllegalHitCount();
     const uint64_t delta = ZgcInvariants::InjectIllegalTupleForTest(
-        slotRaw, goodMask, fx.obj0, static_cast<uint8_t>(BarrierPhase::FORWARD));
+        slotRaw, goodMask, fx.obj0, static_cast<uint8_t>(GCPhase::GC_PHASE_FORWARD));
     GC_EXPECT_EQ(delta, 1u);
     GC_EXPECT_EQ(ZgcInvariants::IllegalHitCount(), before + 1);
 }
@@ -73,7 +73,7 @@ GC_TEST(FwdReturn, HealAndReturnSameAddressPasses)
     GcHeapFixture fx;
     const uintptr_t healRaw = reinterpret_cast<uintptr_t>(fx.obj0) | CurrentGoodMask();
     ZgcInvariants::AssertHealMatchesReturn(
-        healRaw, fx.obj0, static_cast<uint16_t>(HealSite::ForwardReadReference));
+        healRaw, fx.obj0, static_cast<uint16_t>(HealSite::BarrierReadReference));
 }
 
 // Deliberately violate the invariant.  The child must die SIGABRT, proving the always-on CHECK can
@@ -87,7 +87,7 @@ GC_TEST(FwdReturn, HealAndReturnMismatchAborts)
     if (pid == 0) {
         EnterIsolatedChild();
         ZgcInvariants::AssertHealMatchesReturn(
-            healRaw, fx.obj1, static_cast<uint16_t>(HealSite::ForwardReadReference));
+            healRaw, fx.obj1, static_cast<uint16_t>(HealSite::BarrierReadReference));
         _exit(0);
     }
     GC_EXPECT_EQ(WaitChild(pid), SIGABRT);

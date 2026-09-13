@@ -367,12 +367,12 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
 }
 void WCollector::PreforwardAllExportFromRoots()
 {
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root, Generation::Old); };
+    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
     Heap::GetHeap().VisitAllExportRoots(visitor);
 }
 void WCollector::PreforwardStaticRoots()
 {
-    RootSlotVisitor visitor = [this](RootSlot& root) { ForwardUpdateRawRef(root, Generation::Old); };
+    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 
@@ -497,8 +497,14 @@ void WCollector::RemapYoungRoots()
         }
     };
 
-    RootSlotVisitor staticVisitor = [&](RootSlot& root) {
-        remapRoot(root, staticSeen, staticColoured, staticRemapped, staticDoubleBad);
+    NativeSlotVisitor staticVisitor = [&](NativeSlot& root) {
+        ++staticSeen;
+        const zpointer observed = root.GetFieldValue();
+        ++staticColoured;
+        (void)Heap::GetBarrier().ReadStaticRef(root);
+        if (root.GetFieldValue() != observed) {
+            ++staticRemapped;
+        }
     };
     Heap::GetHeap().VisitStaticRoots(staticVisitor);
 
@@ -519,8 +525,17 @@ void WCollector::RemapYoungRoots()
         remapRoot(root, otherSeen, otherColoured, otherRemapped, otherDoubleBad);
     };
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&otherVisitor);
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(otherVisitor);
-    Heap::GetHeap().VisitAllExportRoots(otherVisitor);
+    NativeSlotVisitor retainedVisitor = [&](NativeSlot& root) {
+        ++otherSeen;
+        ++otherColoured;
+        const zpointer observed = root.GetFieldValue();
+        (void)Heap::GetBarrier().ReadStaticRef(root);
+        if (root.GetFieldValue() != observed) {
+            ++otherRemapped;
+        }
+    };
+    collectorResources.GetFinalizerProcessor().VisitNativePointers(retainedVisitor);
+    Heap::GetHeap().VisitAllExportRoots(retainedVisitor);
 
     // ZGenerationOld::remap_young_roots completes colored roots, uncolored
     // roots, and the current remembered set before old relocate-start
@@ -540,8 +555,8 @@ void WCollector::RemapYoungRoots()
 }
 void WCollector::PreforwardFinalizerProcessorRoots()
 {
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root, Generation::Old); };
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(visitor);
+    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
+    collectorResources.GetFinalizerProcessor().VisitNativePointers(visitor);
 }
 
 void WCollector::PreforwardConcurrencyModelRoots()
@@ -1275,10 +1290,7 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
     };
     MutatorManager::Instance().VisitAllMutators(
         [&grantVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(grantVisitor); });
-    Heap::GetHeap().VisitStaticRoots(grantVisitor);
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&grantVisitor);
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(grantVisitor);
-    Heap::GetHeap().VisitAllExportRoots(grantVisitor);
 
     RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
 #if defined(MRT_GC_UNIT_TESTS)
@@ -1299,11 +1311,15 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
         [&rawRootVisitor, &derivedVisitor](Mutator& mutator) {
             mutator.VisitHeapReferences(rawRootVisitor, derivedVisitor);
         });
-    Heap::GetHeap().VisitStaticRoots(rawRootVisitor);
+    Heap::GetHeap().VisitStaticRoots([](NativeSlot& root) {
+        (void)Heap::GetBarrier().ReadStaticRef(root);
+    });
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
-    Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
-
+    NativeSlotVisitor retainedVisitor = [](NativeSlot& root) {
+        (void)Heap::GetBarrier().ReadStaticRef(root);
+    };
+    collectorResources.GetFinalizerProcessor().VisitNativePointers(retainedVisitor);
+    Heap::GetHeap().VisitAllExportRoots(retainedVisitor);
 }
 
 // fixinput: FixMinorObjectSlots reader-side accounting (default on, cheap atomics).
@@ -1546,7 +1562,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // ObjectState::FORWARDED still in its header -- and the compiler reads that header as one
         // 64-bit word, so (3 << 48) enters an address and faults non-canonically.
         //
-        // Measured: BarrierPhase::FORWARD hand-outs are 100% hasTo=1, unmov=0, slotGood=1, i.e. the
         // target really was forwarded, is not in an unmovable region, and the slot was load-good --
         // which after a flip can only mean it was written after that flip.
         //
@@ -1572,7 +1587,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Publish the relocate phase and submit page work while the
             // existing young pause still excludes mutator execution. Root
             // transition may now wait for a real page task on allocation failure.
-            Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_PREFORWARD);
             Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
             StartRelocationTasks();
             // zRelocate.cpp:1289-1300 generation workers run relocate_task before
@@ -1757,7 +1771,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 }
 // permhole receiptization (steer1): RouteObject is geometric (ROUTED before Copy fills
 // tip). A tip-valid to is a *receipt* (copy happened). A geometric to with tip==0 is only
-// a plan — never hand it to make_load_good / IdleBarrier self-heal (THIRD_mutator hang).
 //
 // Contract of this wait:
 //   ① return tip-valid to (receipt), or

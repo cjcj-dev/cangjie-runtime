@@ -189,16 +189,16 @@ void* RunKeepLive(void* rawTreatment)
     M0Correlation::TagNextAllocation(key);
     BaseObject* object = reinterpret_cast<BaseObject*>(MCC_NewObject(ProductClassInfo(), ProductObjectSize()));
     size_t hitsBefore = 0;
-    Heap::GetHeap().VisitAllExportRoots([&](ObjectRef& root) {
-        if (raw(root.LoadPlain()) == reinterpret_cast<uintptr_t>(object)) {
+    Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& root) {
+        if (raw(root.GetTargetObject()) == reinterpret_cast<uintptr_t>(object)) {
             ++hitsBefore;
         }
     });
     M0Correlation::TestSnapshot before = M0Correlation::SnapshotForTest();
     M0Correlation::Release(key);
     size_t hitsAfter = 0;
-    Heap::GetHeap().VisitAllExportRoots([&](ObjectRef& root) {
-        if (raw(root.LoadPlain()) == reinterpret_cast<uintptr_t>(object)) {
+    Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& root) {
+        if (raw(root.GetTargetObject()) == reinterpret_cast<uintptr_t>(object)) {
             ++hitsAfter;
         }
     });

@@ -317,10 +317,9 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
     }
 
     if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
-        // S1/S3/S5 publication order: the first short STW must publish the ENUM
-        // barrier before an ack can snapshot roots. The acquire phase read pairs
-        // with Collector::SetGCPhase's release store and therefore also observes
-        // the preceding InstallBarrier.
+        // S1/S3/S5 publication order: the first short STW publishes the shared
+        // ENUM phase and colour masks before an ack can snapshot roots. This
+        // acquire phase read pairs with Collector::SetGCPhase's release store.
         CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
                      "concurrent stack scan ack before ENUM barrier publication");
         size_t frames = 0;

@@ -37,6 +37,7 @@
 #include "Common/ColourEncoding.h"
 #include "Common/ColourPredicates.h"
 #include "gc_unittest.hpp"
+#include "ObjectModel/RefField.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -448,4 +449,56 @@ GC_TEST(ColourIsChecks, StoreGoodComplementAcrossAnIrregularFlipSchedule)
         advanceOld(1);
         advanceYoung(1);
     }
+}
+
+// Ported from OpenJDK test/hotspot/gtest/gc/z/test_zAddress.cpp (ZAddress.is_checks):
+// exercise the encodings produced by ZBarrier::self_heal, including null and
+// the double-remembered state, through the product encoding predicates.
+GC_TEST(ColourIsChecks, BarrierColouredNullAndDoubleRemembered)
+{
+    const EpochColours epoch{ ZPointerRemapped10 | ZPointerRemapped00,
+                              ZPointerRemapped01 | ZPointerRemapped00,
+                              MARKED_YOUNG_0, MARKED_OLD_0, REMEMBERED_0 };
+    const BadMasks masks = ComputeBadMasks(epoch);
+    const uintptr_t good = ZPointerRemapped00 | MARKED_YOUNG_0 | MARKED_OLD_0 | REMEMBERED_0;
+    const uintptr_t colouredNull = MakeStoreGoodSlotWord(0, good);
+    GC_EXPECT_EQ(ClassifySlotWord(colouredNull), SlotWordVerdict::kColoured);
+    GC_EXPECT_FALSE(ColourPredicates::has_address(colouredNull));
+    GC_EXPECT_TRUE(ColourPredicates::is_store_good(colouredNull, masks.loadBad, masks.storeBad));
+    GC_EXPECT_FALSE(ColourPredicates::is_store_good(0, masks.loadBad, masks.storeBad));
+
+    const uintptr_t loadHealed = MakeStoreGoodSlotWord(0x1000, good) | REMEMBERED_MASK;
+    GC_EXPECT_EQ(ClassifySlotWord(loadHealed), SlotWordVerdict::kColoured);
+    GC_EXPECT_TRUE(ColourPredicates::is_load_good(loadHealed, masks.loadBad));
+    GC_EXPECT_TRUE(ColourPredicates::is_mark_good(loadHealed, masks.loadBad, masks.markBad));
+    GC_EXPECT_FALSE(ColourPredicates::is_store_good(loadHealed, masks.loadBad, masks.storeBad));
+    GC_EXPECT_EQ(ClassifySlotWord(loadHealed & ~REMEMBERED_MASK), SlotWordVerdict::kIllegal);
+}
+
+// ZBarrier::self_heal CAS convergence and null policy (zBarrier.inline.hpp:72-110).
+// Uses the product template and its barrier-owned monotonicity assertion.
+GC_TEST(ColourIsChecks, BarrierSelfHealUpgradeAndCompetingStore)
+{
+    const uintptr_t good = ::g_cjStoreGoodMask;
+    const uintptr_t remapped = ::g_cjLoadGoodMask;
+    const uintptr_t staleRemap = (REMAP_COLOUR_MASK ^ remapped) &
+                                 (~(REMAP_COLOUR_MASK ^ remapped) + 1);
+    const zpointer old = to_zpointer(0x1000 | (good & ~REMAP_COLOUR_MASK) | staleRemap);
+    const zpointer healed = to_zpointer(0x1000 | good | REMEMBERED_MASK);
+    auto fast = [](zpointer word) {
+        return ColourPredicates::is_load_good_or_null(raw(word), ::g_cjLoadBadMask);
+    };
+    HeapSlot<> slot(old);
+    GC_EXPECT_TRUE(ZgcSelfHeal(slot, old, healed, fast, HealSite::BarrierReadReference));
+    GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(healed));
+
+    const zpointer writer = to_zpointer(0x2000 | good);
+    slot.StoreColoured(writer);
+    GC_EXPECT_FALSE(ZgcSelfHeal(slot, old, healed, fast, HealSite::BarrierReadReference));
+    GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(writer));
+
+    slot.StoreColoured(old);
+    const zpointer colouredNull = to_zpointer(good | REMEMBERED_MASK);
+    GC_EXPECT_FALSE(ZgcSelfHeal(slot, old, colouredNull, fast, HealSite::BarrierReadReference));
+    GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(old));
 }
