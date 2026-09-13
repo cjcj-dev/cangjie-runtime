@@ -33,7 +33,6 @@ class CollectorResources {
 #endif
 public:
     // the collector thread entry routine.
-    MRT_EXPORT static void* GCMainThreadEntry(void* arg);
     static void* DirectorThreadEntry(void* arg);
     MRT_EXPORT static void* MinorDriverThreadEntry(void* arg);
     MRT_EXPORT static void* MajorDriverThreadEntry(void* arg);
@@ -45,24 +44,21 @@ public:
     void Init();
     void Fini();
     void StopGCWork();
+    void LockDriver() { driverLock.lock(); }
+    void UnlockDriver() { driverLock.unlock(); }
     void RequestGC(GCReason reason, bool async);
     void WaitForGCFinish();
     // gc main loop
-    void RunTaskLoop();
     // Notify that GC has finished.
     // Must be called by gc thread only
     void NotifyGCFinished(uint64_t gcIndex);
     // A collector phase completes here. A driver-owned multi-phase request
     // suppresses this intermediate publication and publishes once at its end.
-    void NotifyGCPhaseFinished(uint64_t gcIndex);
     int32_t GetGCThreadCount(const bool isConcurrent) const;
 
     RuntimeWorkers& GetRuntimeWorkers() const { return *runtimeWorkers; }
 
-    GCWorkers& GetWorkers(GCCycleGeneration generation) const
-    {
-        return *(generation == GCCycleGeneration::YOUNG ? youngWorkers : oldWorkers);
-    }
+    GCWorkers& GetWorkers(GCCycleGeneration generation) const;
 
     // ZYoungType::major_full_roots selects the combined mark-start pause.
     const GCDriverRequest* YoungPreludeRequest() const { return youngPreludeRequest; }
@@ -82,16 +78,14 @@ public:
 
     void SetHeapMarked(bool value) { isHeapMarked = value; }
 
-    bool IsGcStarted() const { return isGcStarted.load(std::memory_order_acquire); }
-
-    void SetGcStarted(bool val) { isGcStarted.store(val, std::memory_order_release); }
+    bool IsGcStarted() const;
 
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled() && isGCActive.load(std::memory_order_relaxed); }
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
 
     void BroadcastGCCompletion();
-    GCStats& GetGCStats() { return gcStats; }
+    GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD);
     void RequestHeapDump(GCTask::TaskType gcTask);
 
     // ZGC-style per-generation request ports.  Requests on one port never
@@ -118,7 +112,6 @@ private:
 #endif
 
     void StartGCThreads();
-    void TerminateGCTask();
     void StopGCThreads();
     void RunDriverLoop(GCDriverKind kind);
     void RunDirectorLoop();
@@ -167,18 +160,12 @@ private:
 
     // zCollectedHeap.hpp: heap-owned safepoint workers, separate from both generations.
     RuntimeWorkers* runtimeWorkers = nullptr;
-    GCWorkers* youngWorkers = nullptr;
-    GCWorkers* oldWorkers = nullptr;
     int32_t gcThreadCount = 1;
     TaskQueue<GCExecutor>* taskQueue = nullptr;
     GCDriverPort minorDriverPort { GCDriverKind::MINOR };
     GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
-    // zDriver.cpp:59-72,201-224,463-487: the generation ports are
-    // independent, but one driver owns the complete collection lifecycle at a
-    // time. This also keeps the collector's phase, reason and forwarding
-    // retirement epochs single-writer.
+    // zDriver.cpp:59-72: held by young; old releases it for its body.
     std::mutex driverLock;
-    bool driverRequestActive = false;
     const GCDriverRequest* youngPreludeRequest = nullptr;
 #if defined(MRT_GC_UNIT_TESTS)
     // Deterministic unit builds can replace only the task executor.  The
@@ -213,10 +200,6 @@ private:
     // notified when GC finished, requires gcFinishedCondMutex
     std::condition_variable gcFinishedCondVar;
 
-    // Indicate whether GC is already started.
-    // NOTE: When GC finishes, it clears isGcStarted, must be over-written only by gc thread.
-    std::atomic<bool> isGcStarted = { false };
-
     // a switch to disable gc for hotupdate.
     std::atomic<bool> isGCActive = { true };
 
@@ -243,7 +226,26 @@ private:
 #endif
     CollectorProxy& collectorProxy;
     FinalizerProcessor finalizerProcessor;
-    GCStats gcStats;
+};
+// zDriver.cpp:85-107: lock scopes shared by both generation drivers.
+class DriverLocker {
+public:
+    explicit DriverLocker(CollectorResources& resources) : resources(resources) { resources.LockDriver(); }
+    ~DriverLocker() { resources.UnlockDriver(); }
+    DriverLocker(const DriverLocker&) = delete;
+    DriverLocker& operator=(const DriverLocker&) = delete;
+private:
+    CollectorResources& resources;
+};
+
+class DriverUnlocker {
+public:
+    explicit DriverUnlocker(CollectorResources& resources) : resources(resources) { resources.UnlockDriver(); }
+    ~DriverUnlocker() { resources.LockDriver(); }
+    DriverUnlocker(const DriverUnlocker&) = delete;
+    DriverUnlocker& operator=(const DriverUnlocker&) = delete;
+private:
+    CollectorResources& resources;
 };
 } // namespace MapleRuntime
 #endif // MRT_COLLECTOR_RESOURCES_H

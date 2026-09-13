@@ -391,7 +391,7 @@ void HeapImpl::CrossAccessBarrier(I64 id)
         auto& collector = GetCollector();
         if (collector.IsGhostFromObject(recordObj) &&
             !collector.IsUnmovableFromObject(recordObj)) {
-            recordObj = collector.ForwardObject(recordObj, collector.ActiveForwardingGeneration());
+            recordObj = collector.ForwardObject(recordObj, collector.ObjectGeneration(recordObj));
         }
     }
 

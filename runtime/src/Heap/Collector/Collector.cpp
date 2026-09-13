@@ -347,9 +347,9 @@ BaseObject* Collector::ValidateCurrentValue(BaseObject* ref, const ForwardingPro
     FailClosedLoad("current raw value required", ref, 0, provenance);
 }
 
-Generation Collector::ActiveForwardingGeneration() const
+Generation Collector::ObjectGeneration(BaseObject* object) const
 {
-    return ActiveCycle().Reason() == GC_REASON_YOUNG ? Generation::Young : Generation::Old;
+    return RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->GetOwnerGeneration();
 }
 
 BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const
@@ -497,7 +497,7 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         : nullptr;
     const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
     const ForwardingTable::LookupResult lookup = canLookup
-        ? ForwardingTable::LookupTo(from, Heap::GetHeap().GetCollector().ActiveForwardingGeneration())
+        ? ForwardingTable::LookupTo(from, Heap::GetHeap().GetCollector().ObjectGeneration(target))
         : ForwardingTable::LookupResult{};
     // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
     // gc_unit other-vm children, have CollectorResources but no CollectorProxy target to query.

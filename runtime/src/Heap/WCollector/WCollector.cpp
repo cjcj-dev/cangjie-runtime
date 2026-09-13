@@ -220,52 +220,6 @@ void WCollector::PostResolveCycleTask()
     CJ_MRT_RolveCycleRef();
 #endif
 }
-void WCollector::DoGarbageCollection()
-{
-    if (GetCycleReason() == GC_REASON_YOUNG) {
-        DoYoungGarbageCollection();
-        Collector::ReportMarkGoodHeapGateCounts();
-        return;
-    }
-    TraceHeap();
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
-        return;
-    }
-    PostTrace();
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
-        return;
-    }
 
-    if (!Preforward()) {
-        return;
-    }
-    // ZGenerationOld::collect: no abort boundary after relocate-start.
-    // Complete the remaining pages before returning to the request owner.
-
-    ForwardFromSpace();
-    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions();
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
-        return;
-    }
-
-    // Preserve young remembered-set faces across old/full collection. ZGC old
-    // relocation transfers remembered fields; it does not globally erase the
-    // young current face. ClearRegion/TransferObjectSlots remain the authorities
-    // for reclaimed or moved holders (zRelocate.cpp:652-731).
-    TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
-    MergeResurrectExportObjects(Generation::Old);
-    PostResolveCycleTask();
-    FlipTagID();
-
-    CollectSmallSpace();
-    // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
-    // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.
-    // Ablation D (both major STWs disabled) restores mid_alloc 5/5; any of
-    // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
-    // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
-    // in-place promote paths that already preserve page liveness.
-    Collector::ReportMarkGoodHeapGateCounts();
-
-}
 bool WCollector::ShouldIgnoreRequest(GCRequest& request) { return request.ShouldBeIgnored(); }
 } // namespace MapleRuntime

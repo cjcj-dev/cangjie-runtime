@@ -530,7 +530,7 @@ void WCollector::TraceHeap()
     WorkStack foreignStack = NewWorkStack();
     MarkingStacks::VerifyEmpty(workStack.size());
     MarkingStacks::VerifyEmpty(foreignStack.size());
-    MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
+    MarkingStacks::VerifyEmpty(GetWorkers(GCCycleGeneration::OLD).GetSnapshot().remainingWorkers);
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
     uint64_t stackScanEpoch = 0;
 
@@ -610,7 +610,7 @@ void WCollector::TraceHeap()
 
         MarkingStacks::VerifyEmpty(workStack.size());
         MarkingStacks::VerifyEmpty(foreignStack.size());
-        MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
+        MarkingStacks::VerifyEmpty(GetWorkers(GCCycleGeneration::OLD).GetSnapshot().remainingWorkers);
 
     }
 
@@ -1164,7 +1164,7 @@ void WCollector::StartYoungMarkWork()
     if (youngMarkDomain == nullptr) {
         youngMarkDomain = std::make_unique<MarkDomain>(kMarkStripeMax, MarkingStacks::MarkingGeneration::YOUNG);
     }
-    GCWorkers& workers = GetWorkers();
+    GCWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
     youngMarkDomain->BindWorkers(&workers);
     youngMarkDomain->BindAbort(&collectorResources.GetYoungDriverPort().Abort());
     youngMarkDomain->PrepareWork(workers.ActiveWorkers());
@@ -1196,7 +1196,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
 
-    GCWorkers& workersSet = GetWorkers();
+    GCWorkers& workersSet = GetWorkers(GCCycleGeneration::YOUNG);
     size_t workers = workersSet.ActiveWorkers();
     if (workers == 0) {
         workers = 1;
@@ -1643,7 +1643,7 @@ void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) 
 
 size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, BaseObject* exportOwner)
 {
-    GCWorkers& workersSet = GetWorkers();
+    GCWorkers& workersSet = GetWorkers(GCCycleGeneration::OLD);
     const uint32_t workers = workersSet.ActiveWorkers();
     if (majorMarkDomain == nullptr) {
         majorMarkDomain = std::make_unique<MarkDomain>(64, MarkingStacks::MarkingGeneration::MAJOR);
@@ -1689,7 +1689,7 @@ void TracingCollector::TracingImpl(WorkStack& workStack)
             return;
         }
     } while (FlushMarkProducers(majorMarkDomain.get()));
-    MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
+    MarkingStacks::VerifyEmpty(GetWorkers(GCCycleGeneration::OLD).GetSnapshot().remainingWorkers);
 }
 
 void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)

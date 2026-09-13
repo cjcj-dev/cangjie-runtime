@@ -51,37 +51,6 @@ extern "C" uintptr_t MRT_StopGCWork()
     return 0;
 }
 
-void* CollectorResources::GCMainThreadEntry(void* arg)
-{
-#ifdef __APPLE__
-    int ret = pthread_setname_np("gc-main-thread");
-    CHECK_E(UNLIKELY(ret != 0), "pthread setname in CollectorResources::StartGCThreads() return %d rather than 0",
-            ret);
-#elif defined(__linux__) || defined(hongmeng)
-    int ret = prctl(PR_SET_NAME, "gc-main-thread");
-    CHECK_E(UNLIKELY(ret != 0), "pthread setname in CollectorResources::StartGCThreads() return %d rather than 0",
-            ret);
-#endif
-    
-    MRT_ASSERT(arg != nullptr, "GCMainThreadEntry arg=nullptr");
-    // set current thread as a gc thread.
-    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
-
-    LOG(RTLOG_INFO, "[GC] CollectorResources Thread begin.");
-
-#if defined(__linux__) || defined(hongmeng)
-    // set thread priority.
-    RuntimeWorkers::SetThreadPriority(MapleRuntime::GetTid());
-#endif
-
-    // run event loop in this thread.
-    CollectorResources* collectorResources = reinterpret_cast<CollectorResources*>(arg);
-    collectorResources->RunTaskLoop();
-
-    LOG(RTLOG_INFO, "[GC] CollectorResources Thread end.");
-    return nullptr;
-}
-
 void* CollectorResources::MinorDriverThreadEntry(void* arg)
 {
     auto* resources = reinterpret_cast<CollectorResources*>(arg);
@@ -108,7 +77,8 @@ void CollectorResources::Init()
     taskQueue->Init();
     finishedGcIndex = GCTask::SYNC_TASK_MIN_INDEX;
     ZStat::Initialize();
-    gcStats.Init();
+    GetGCStats(GCCycleGeneration::YOUNG).Init();
+    GetGCStats(GCCycleGeneration::OLD).Init();
     ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();
     youngCycle.Initialize(now);
@@ -149,22 +119,9 @@ void CollectorResources::StopGCWork()
     // and returns immediately instead of enqueueing into an abandoned queue.
     minorDriverPort.Stop();
     majorDriverPort.Stop();
-    TerminateGCTask();
     StopGCThreads();
     StringDedup::Instance().Stop();
     statistics.Stop();
-}
-
-// Send terminate task to gc thread.
-void CollectorResources::TerminateGCTask()
-{
-    if (gcThreadRunning.load(std::memory_order_acquire) == false) {
-        return;
-    }
-
-    TaskQueue<GCExecutor>::TaskFilter filter = [](GCExecutor&, GCExecutor&) { return false; };
-    GCExecutor task(GCTask::TaskType::TASK_TYPE_TERMINATE_GC);
-    (void)taskQueue->EnqueueSync(task, filter); // enqueue to sync queue
 }
 
 // Usually called from main thread, wait for collector thread to exit.
@@ -182,52 +139,9 @@ void CollectorResources::StopGCThreads()
     // Drivers have joined; no new safepoint work can be submitted.
     delete runtimeWorkers;
     runtimeWorkers = nullptr;
-    delete youngWorkers;
-    youngWorkers = nullptr;
-    delete oldWorkers;
-    oldWorkers = nullptr;
+    collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).StopWorkers();
+    collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).StopWorkers();
     gcThreadRunning.store(false, std::memory_order_release);
-}
-
-void CollectorResources::RunTaskLoop()
-{
-    // Compatibility loop used by the deterministic gc_unit harness. Product
-    // startup uses two dedicated loops below; this loop retains the old
-    // single-consumer shape solely for tests that inject a fake Collector.
-    gcTid.store(MapleRuntime::GetTid(), std::memory_order_release);
-    // Keep the control queue (termination/heap dump) separate from the two
-    // generation ports.  Round-robin polling gives each driver progress even
-    // when the other generation is continuously requesting collections.
-    while (true) {
-        GCDriverRequest request {};
-        bool haveRequest = TakeDriverRequest(minorDriverPort, request);
-        GCDriverPort* port = &minorDriverPort;
-        if (!haveRequest) {
-            haveRequest = TakeDriverRequest(majorDriverPort, request);
-            port = &majorDriverPort;
-        }
-        if (haveRequest) {
-            (void)ProcessDriverRequest(*port, request);
-            continue;
-        }
-
-        GCExecutor controlTask;
-        if (taskQueue != nullptr && taskQueue->TryDequeue(controlTask)) {
-#if defined(MRT_GC_UNIT_TESTS)
-            void* owner = testCollector != nullptr ? static_cast<void*>(testCollector)
-                                                   : static_cast<void*>(&collectorProxy);
-#else
-            void* owner = static_cast<void*>(&collectorProxy);
-#endif
-            std::lock_guard<std::mutex> lock(driverLock);
-            if (!controlTask.Execute(owner)) {
-                break;
-            }
-            continue;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    NotifyGCFinished(GCTask::TASK_INDEX_FOR_EXIT);
 }
 
 void CollectorResources::RunDriverLoop(GCDriverKind kind)
@@ -293,7 +207,8 @@ void CollectorResources::CompleteDriverRequest(GCDriverPort& port)
 void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup)
 {
     const bool isYoung = reason == GC_REASON_YOUNG;
-    GCWorkers* workers = isYoung ? youngWorkers : oldWorkers;
+    GCWorkers* workers = collector.GetGenerationCycle(isYoung
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD).Workers();
 #if defined(MRT_GC_UNIT_TESTS)
     if (workers == nullptr) {
         collector.RunGarbageCollection(index, reason);
@@ -314,8 +229,7 @@ void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCR
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
 {
     CHECK(request.reason < GC_REASON_MAX);
-    // A keeps the whole request serialized. ZGC releases this lock around
-    // old concurrent phases (zGeneration.cpp:995-1016); that is package C.
+    // ZDriverLocker: old collection temporarily releases this lock.
     std::lock_guard<std::mutex> lock(driverLock);
 #if defined(MRT_GC_UNIT_TESTS)
     Collector* collector = testCollector != nullptr ? testCollector : static_cast<Collector*>(&collectorProxy);
@@ -326,8 +240,6 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     if (port.Abort().Poll()) {
         return false;
     }
-    MRT_ASSERT(!driverRequestActive, "nested driver request lifecycle");
-    driverRequestActive = true;
     StringDedup::GCScope suspendDedup;
     const uint64_t collectionStart = TimeUtil::NanoSeconds();
 
@@ -336,10 +248,10 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     const uint32_t youngCount = request.youngWorkers == 0 ? concurrentGcThreadCount : request.youngWorkers;
     const uint32_t oldCount = request.oldWorkers == 0 ? concurrentGcThreadCount : request.oldWorkers;
     const bool warmup = request.warmup;
-    if (youngWorkers != nullptr) {
-        youngWorkers->SetActiveWorkers(youngCount);
+    if (collector->GetGenerationCycle(GCCycleGeneration::YOUNG).Workers() != nullptr) {
+        GetWorkers(GCCycleGeneration::YOUNG).SetActiveWorkers(youngCount);
         if (request.reason != GC_REASON_YOUNG) {
-            oldWorkers->SetActiveWorkers(oldCount);
+            GetWorkers(GCCycleGeneration::OLD).SetActiveWorkers(oldCount);
         }
     }
 
@@ -358,7 +270,6 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         }
 #endif
         if (majorDriverPort.Abort().Poll()) {
-            driverRequestActive = false;
             CancelDriverRequestLifecycle();
             return false;
         }
@@ -370,7 +281,6 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
                   request.reason, warmup);
     (request.reason == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
         .RegisterEnd(TimeUtil::NanoSeconds() - collectionStart);
-    driverRequestActive = false;
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.
     if (port.Abort().Poll()) {
@@ -396,14 +306,13 @@ bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriver
 void CollectorResources::CancelDriverRequestLifecycle()
 {
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    isGcStarted.store(false, std::memory_order_release);
     gcFinishedCondVar.notify_all();
 }
 
 // For the ignored gc request, check whether need to wait for current gc finish
 void CollectorResources::PostIgnoredGcRequest(bool shouldWait)
 {
-    if (shouldWait && isGcStarted.load(std::memory_order_seq_cst)) {
+    if (shouldWait && IsGcStarted()) {
         ScopedEnterSaferegion safeRegion(false);
         WaitForGCFinish();
     }
@@ -487,19 +396,11 @@ void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
     testCompletionCount.fetch_add(1, std::memory_order_relaxed);
 #endif
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    isGcStarted.store(false, std::memory_order_release);
     if (gcIndex != GCTask::ASYNC_TASK_INDEX) { // sync gc, need set taskIndex
         finishedGcIndex.store(gcIndex, std::memory_order_release);
     }
     gcFinishedCondVar.notify_all();
     BroadcastGCCompletion();
-}
-
-void CollectorResources::NotifyGCPhaseFinished(uint64_t gcIndex)
-{
-    if (!driverRequestActive) {
-        NotifyGCFinished(gcIndex);
-    }
 }
 
 void CollectorResources::WaitForGCFinish()
@@ -569,8 +470,8 @@ void CollectorResources::StartGCThreads()
         // zArguments.cpp:67-99, zWorkers.cpp:45-64: each generation uses
         // the concurrent budget as its maximum and initial active count.
         // GCWorkers counts participants, excluding the coordinating driver.
-        youngWorkers = new GCWorkers(GCWorkers::Generation::YOUNG, concurrentGcThreadCount);
-        oldWorkers = new GCWorkers(GCWorkers::Generation::OLD, concurrentGcThreadCount);
+        collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(concurrentGcThreadCount);
+        collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(concurrentGcThreadCount);
 
     }
 
@@ -627,4 +528,99 @@ void CollectorResources::RequestHeapDump(GCTask::TaskType gcTask)
 
 namespace MapleRuntime {
 CollectorResources::CollectorResources(CollectorProxy& proxy) : collectorProxy(proxy) {}
+}
+
+namespace MapleRuntime {
+GCWorkers& CollectorResources::GetWorkers(GCCycleGeneration generation) const
+{
+    return *collectorProxy.GetGenerationCycle(generation).Workers();
+}
+
+GCStats& CollectorResources::GetGCStats(GCCycleGeneration generation)
+{
+    return collectorProxy.GetGenerationCycle(generation).Stats();
+}
+}
+
+namespace MapleRuntime {
+bool CollectorResources::IsGcStarted() const
+{
+    return collectorProxy.GetCycleSnapshot(GCCycleGeneration::YOUNG).active ||
+           collectorProxy.GetCycleSnapshot(GCCycleGeneration::OLD).active;
+}
+}
+
+namespace MapleRuntime {
+void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
+{
+    ScopedEntryTrace trace("CJRT_GC_START");
+    const uint64_t cycleSeq = GcLog::BeginCycle();
+
+    const GCCycleGeneration generation = reason == GC_REASON_YOUNG
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    GenerationCycle& cycle = GetGenerationCycle(generation);
+    if (!cycle.Snapshot().active) {
+        cycle.SelectReason(reason);
+    }
+    PreGarbageCollection(generation, reason != GC_REASON_YOUNG, gcIndex);
+    ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
+    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[reason].name, gcIndex);
+    GCStats& gcStats = GetGCStats(generation);
+    gcStats.collectedBytes = 0;
+    gcStats.youngCandidateBytes = 0;
+    gcStats.youngPromotedBytes = 0;
+    gcStats.tenuringThreshold = 0;
+    gcStats.gcStartTime = TimeUtil::NanoSeconds();
+
+    // One GC cycle is the roots verification scene: it covers both the minor
+    // and major root visitors, including concurrent stack enumeration.  Close
+    // after the collector has joined all root work (zVerify.cpp:363-384).
+    DoGarbageCollection(generation);
+
+    GCDriverPort& port = reason == GC_REASON_YOUNG ? collectorResources.GetYoungDriverPort() :
+                                                   collectorResources.GetMajorDriverPort();
+    if (port.Abort().Poll()) {
+        // The phase owner already joined any submitted work. Keep mark and
+        // forwarding storage alive for driver shutdown; skip normal reclaim.
+        GetWorkers(generation).SetInactive();
+        cycle.End();
+        GcLog::CompleteCycle(cycleSeq);
+        return;
+    }
+
+    if (reason == GC_REASON_OOM) {
+        Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(true);
+    }
+
+    PostGarbageCollection(generation, gcIndex);
+    gcStats.gcEndTime = TimeUtil::NanoSeconds();
+    // Emitted here rather than from GCStats::Dump, because UpdateGCStats below (and so Dump) is
+    // skipped for young collections: a minor would produce no cycle record and its phases would
+    // be attributed to the next major.
+    GcLog::CompleteCycle(cycleSeq);
+    GcLog::Cycle(cycleSeq, reason == GC_REASON_YOUNG ? "minor" : "major",
+                 g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
+                 gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,
+                 Heap::GetHeap().GetUsedPageSize(), gcStats.GetThreshold());
+    if (reason != GC_REASON_YOUNG) {
+        UpdateGCStats();
+    }
+    uint64_t gcTimeNs = gcStats.gcEndTime - gcStats.gcStartTime;
+    ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);
+    double rate = (static_cast<double>(gcStats.collectedBytes) / gcTimeNs) * (static_cast<double>(NS_PER_S) / MB);
+    VLOG(REPORT, "total gc time: %s us, collection rate %.3lf MB/s\n", Pretty(gcTimeNs / NS_PER_US).Str(), rate);
+    g_gcTotalTimeUs.fetch_add(gcTimeNs / NS_PER_US, std::memory_order_release);
+    g_gcCollectedTotalBytes.fetch_add(gcStats.collectedBytes, std::memory_order_release);
+    gcStats.collectionRate = rate;
+    // zStatHeap::at_relocate_end: publish only to the generation being collected.
+    const bool young = reason == GC_REASON_YOUNG;
+    const size_t usedAfter = Heap::GetHeap().GetAllocatedSize();
+    // A12a scope ruling: preserve the old-generation baseline scalar until
+    // A07's mark-end livemap aggregation replaces it. Do not infer live bytes
+    // from candidate minus reclaimed capacity. Young has an actual mark result.
+    const size_t liveBytes = young ? gcStats.youngPromotedBytes : usedAfter;
+    (young ? ZStat::YoungHeap() : ZStat::OldHeap()).AtRelocateEnd(
+        usedAfter, liveBytes, gcStats.collectedBytes);
+    cycle.End();
+}
 }

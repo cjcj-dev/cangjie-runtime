@@ -7,6 +7,9 @@
 #pragma once
 #include <atomic>
 #include <mutex>
+#include <memory>
+#include "Heap/z/zWorkers.hpp"
+#include "Heap/Collector/GcStats.h"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/Collector/GcRequest.h"
 namespace MapleRuntime {
@@ -27,6 +30,10 @@ class GenerationCycle {
 public:
     explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
     GCCycleSnapshot Snapshot() const;
+    void InitializeWorkers(uint32_t capacity);
+    void StopWorkers();
+    GCWorkers* Workers() const { return workers.get(); }
+    GCStats& Stats() { return stats; }
     GCPhase Phase() const { return phase.load(std::memory_order_acquire); }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
@@ -39,6 +46,8 @@ public:
     void End();
 private:
     const GCCycleGeneration generation;
+    std::unique_ptr<GCWorkers> workers;
+    GCStats stats;
     mutable std::mutex mutex;
     uint64_t sequence = 0;
     uint64_t requestIndex = 0;

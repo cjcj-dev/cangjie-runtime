@@ -869,7 +869,7 @@ protected:
 
     void CollectSmallSpace();
 
-    void DoGarbageCollection() override;
+    void DoGarbageCollection(GCCycleGeneration generation) override;
     void ProcessFinalizers() override;
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const override;
 
@@ -973,7 +973,7 @@ private:
     // two remap-bit errors.
     void RemapYoungRoots();
     bool Preforward();
-    void StartRelocationTasks();
+    void StartRelocationTasks(GCCycleGeneration generation);
     BaseObject* WaitForPageForwarding(BaseObject* obj, ForwardingTable::Owner owner) const;
     void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);

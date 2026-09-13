@@ -53,24 +53,28 @@ public:
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
     void RequestGC(GCReason reason, bool async);
 
-    virtual GCPhase GetGCPhase() const { return ActiveCycle().Phase(); }
+    virtual GCPhase GetGCPhase() const { return oldCycle.Phase(); }
 
     virtual void SetGCPhase(const GCPhase phase)
     {
-        PublishGenerationPhase(ActiveCycle().Snapshot().generation, phase);
+        PublishGenerationPhase(GCCycleGeneration::OLD, phase);
+    }
+
+    virtual GenerationCycle& GetGenerationCycle(GCCycleGeneration generation)
+    {
+        return generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
     }
 
     virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
     {
         return (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Snapshot();
     }
-    void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value);
+    virtual void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value);
     bool OldActiveRemsetIsCurrent() const
     {
         return oldCycle.ActiveRemsetIsCurrent(youngCycle.Sequence());
     }
-    GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
-    virtual Generation ActiveForwardingGeneration() const;
+    Generation ObjectGeneration(BaseObject* object) const;
 
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
@@ -105,7 +109,10 @@ public:
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
                                             const ForwardingProvenance& provenance);
 
-    virtual GCStats& GetGCStats() { AbortUnimplemented("Collector::GetGCStats"); }
+    virtual GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD)
+    {
+        return GetGenerationCycle(generation).Stats();
+    }
 
     virtual BaseObject* ForwardObject(BaseObject*, Generation) { AbortUnimplemented("Collector::ForwardObject"); }
 
@@ -343,22 +350,8 @@ protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
 
     CollectorType collectorType = CollectorType::NO_COLLECTOR;
-    // Serial bridge only: both drivers still hold driverLock for the full
-    // lifecycle. Workers observe the explicitly selected owner, never TLS.
-    GenerationCycle& ActiveCycle() const { return *activeCycle.load(std::memory_order_acquire); }
-    void SelectCycle(GCReason reason)
-    {
-        GenerationCycle* cycle = reason == GC_REASON_YOUNG ? &youngCycle : &oldCycle;
-        if (!cycle->Snapshot().active) {
-            cycle->SelectReason(reason);
-        } else {
-            CHECK(cycle->Reason() == reason);
-        }
-        activeCycle.store(cycle, std::memory_order_release);
-    }
     GenerationCycle youngCycle { GCCycleGeneration::YOUNG };
     GenerationCycle oldCycle { GCCycleGeneration::OLD };
-    std::atomic<GenerationCycle*> activeCycle { &oldCycle };
 };
 } // namespace MapleRuntime
 

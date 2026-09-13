@@ -1119,7 +1119,7 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
          Collector::GetGCPhaseName(phase), phase);
 
     // Set global gc phase in the scope of mutatorlist lock
-    Heap::GetHeap().SetGCPhase(phase);
+    Heap::GetHeap().SetGCPhase(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD, phase);
     lightSyncGCPhase = phase;
     undoneLightSyncMutators.clear();
     // Broadcast mutator phase transition signal to all mutators
@@ -1232,6 +1232,8 @@ void MutatorManager::EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &u
 
 void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
 {
+    // VM operations serialize pauses, not entire generation collections.
+    ScopedSTWLock operationLock;
     // Try to occupy mutatorListLock prevent some mutators from exiting
     bool worldStopped = WorldStopped();
     if (!worldStopped) {
@@ -1243,7 +1245,7 @@ void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
          Collector::GetGCPhaseName(phase), phase);
 
     // Set global gc phase in the scope of mutatorlist lock
-    Heap::GetHeap().SetGCPhase(phase);
+    Heap::GetHeap().SetGCPhase(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD, phase);
 
     std::list<Mutator*> undoneMutators;
     // Broadcast mutator phase transition signal to all mutators

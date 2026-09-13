@@ -92,6 +92,14 @@ public:
 
 
     virtual GCPhase GetGCPhase() const = 0;
+    GCPhase GetGCPhase(GCCycleGeneration generation)
+    {
+        return GetCollector().GetCycleSnapshot(generation).phase;
+    }
+    void SetGCPhase(GCCycleGeneration generation, GCPhase phase)
+    {
+        GetCollector().PublishGenerationPhase(generation, phase);
+    }
 
     virtual void SetGCPhase(const GCPhase phase) = 0;
 

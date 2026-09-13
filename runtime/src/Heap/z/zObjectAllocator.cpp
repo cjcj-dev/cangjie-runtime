@@ -181,7 +181,7 @@ RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole
     if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_add(page->GetRegionSize(), std::memory_order_relaxed);
     }
-    const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+    const GCPhase phase = Heap::GetHeap().GetGCPhase(page->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
         page->SetTraceRegionFlag(1);
     }
@@ -291,7 +291,7 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
                 tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             }
             region->SetYoungAge(0);
-            GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+            GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }

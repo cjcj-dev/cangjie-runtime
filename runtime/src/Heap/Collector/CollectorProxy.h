@@ -38,6 +38,11 @@ public:
         return currentCollector != nullptr ? currentCollector->GetGCPhase() : GCPhase::GC_PHASE_UNDEF;
     }
 
+    GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) override
+    {
+        return wCollector.GetGenerationCycle(generation);
+    }
+
     GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
     {
         return currentCollector != nullptr ? currentCollector->GetCycleSnapshot(generation)
@@ -54,6 +59,11 @@ public:
         currentCollector->MarkOldObjectIfActive(object, gcThread);
     }
 
+    void PublishGenerationPhase(GCCycleGeneration generation, GCPhase phase) override
+    {
+        wCollector.PublishGenerationPhase(generation, phase);
+    }
+
     void SetGCPhase(const GCPhase phase) override { currentCollector->SetGCPhase(phase); }
 
     // dispatch garbage collection to the right collector
@@ -63,10 +73,6 @@ public:
 
     TracingCollector& GetCurrentCollector() const { return *currentCollector; }
 
-    Generation ActiveForwardingGeneration() const override
-    {
-        return currentCollector->ActiveForwardingGeneration();
-    }
     FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {
         return currentCollector->FindToVersion(obj, generation);

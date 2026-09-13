@@ -194,7 +194,7 @@ void WCollector::DoYoungGarbageCollection()
         // Publish S1/S3/S5 while every mutator is stopped. SetGCPhase is the
         // release publication point; AcknowledgeEpochHandshake asserts ENUM
         // before it is allowed to snapshot a single frame.
-        Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+        Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
         stw.reset();
 
 
@@ -210,7 +210,7 @@ void WCollector::DoYoungGarbageCollection()
         // store buffer before the root pass follows published mark work.
         stw = std::make_unique<ScopedStopTheWorld>("young collection", false);
         ZVerify::BeforeZOperation();
-        TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+        TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true, true);
 
         // finish_processing semantics: under the closing STW first ask the GC
         // owner to complete every unfinished epoch cursor. If a cursor still
@@ -230,7 +230,7 @@ void WCollector::DoYoungGarbageCollection()
     constexpr bool fullYoungScan = false;
     WorkStack workStack = NewWorkStack();
     MarkingStacks::VerifyEmpty(workStack.size());
-    MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
+    MarkingStacks::VerifyEmpty(GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot().remainingWorkers);
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
@@ -311,7 +311,7 @@ void WCollector::DoYoungGarbageCollection()
         CHECK_DETAIL(stackScanEpoch != 0,
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         // wave8 y2y handoff (8d4253522 content): consume the pre-window batch
         // before reset releases mutators. New stores after reset remain owned
@@ -452,7 +452,7 @@ void WCollector::DoYoungGarbageCollection()
 #endif
         if (workersTerminated && markEndSucceeded) {
             MarkingStacks::VerifyEmpty(workStack.size());
-            MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
+            MarkingStacks::VerifyEmpty(GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot().remainingWorkers);
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteExportRootPublicationAtT2TestReceipt();
 #endif
@@ -461,7 +461,7 @@ void WCollector::DoYoungGarbageCollection()
         NoteMarkTerminateContinue(workStack.size());
         ++concWindow.reenters;
         stw.reset();
-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
     }
     ReportMarkTerminateContinue();
     if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
@@ -519,7 +519,7 @@ void WCollector::DoYoungGarbageCollection()
         tenuringIn.liveByAge[age] += live;
     }
     tenuringIn.youngGarbage = stats.candidateBytes > liveBytes ? (stats.candidateBytes - liveBytes) : 0;
-    GCStats& gcStats = GetGCStats();
+    GCStats& gcStats = GetGCStats(GCCycleGeneration::YOUNG);
     gcStats.youngCandidateBytes = stats.candidateBytes;
     gcStats.youngPromotedBytes = liveBytes;
     for (uint32_t i = 0; i < kPageAgeCount; ++i) {
@@ -529,7 +529,7 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
-        TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+        TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true, true);
         // tracecache: PrepareTrace above switched the TRACE-phase region caches on
         // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
         // same place WCollector::PostTrace drains them for a major (RelocationSet.cpp:73-78).
@@ -588,7 +588,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    GetGCStats().collectedBytes = stats.reclaimedBytes;
+    GetGCStats(GCCycleGeneration::YOUNG).collectedBytes = stats.reclaimedBytes;
 
     // Residual Register and the remset walk now both complete in STW3, before
     // EvacuateYoungRegions retires the forwarding receipts. Then enter IDLE.
@@ -599,7 +599,7 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ⑧ post-evac finish
         MRT_PHASE_TIMER(ZStatPhases::PYoungPostEvacFinish);
-        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true, true);
         MergeResurrectExportObjects(Generation::Young);
     }
     ++minorTotalRuns;
@@ -951,4 +951,129 @@ void GenerationCycle::End()
     active = false;
 }
 
+}
+
+namespace MapleRuntime {
+void GenerationCycle::InitializeWorkers(uint32_t capacity)
+{
+    CHECK(workers == nullptr);
+    workers = std::make_unique<GCWorkers>(generation == GCCycleGeneration::YOUNG
+        ? GCWorkers::Generation::YOUNG : GCWorkers::Generation::OLD, capacity);
+}
+
+void GenerationCycle::StopWorkers()
+{
+    workers.reset();
+}
+}
+
+namespace MapleRuntime {
+void WCollector::DoGarbageCollection(GCCycleGeneration generation)
+{
+    if (generation == GCCycleGeneration::YOUNG) {
+        DoYoungGarbageCollection();
+        Collector::ReportMarkGoodHeapGateCounts();
+        return;
+    }
+    // ZGenerationCollectionScopeOld: overlap young with the old body.
+    DriverUnlocker unlocker(collectorResources);
+    TraceHeap();
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
+    PostTrace();
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
+
+    if (!Preforward()) {
+        return;
+    }
+    // ZGenerationOld::collect: no abort boundary after relocate-start.
+    // Complete the remaining pages before returning to the request owner.
+
+    ForwardFromSpace(GCCycleGeneration::OLD);
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions(GCCycleGeneration::OLD);
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
+
+    // Preserve young remembered-set faces across old/full collection. ZGC old
+    // relocation transfers remembered fields; it does not globally erase the
+    // young current face. ClearRegion/TransferObjectSlots remain the authorities
+    // for reclaimed or moved holders (zRelocate.cpp:652-731).
+    TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+    MergeResurrectExportObjects(Generation::Old);
+    PostResolveCycleTask();
+    FlipTagID();
+
+    CollectSmallSpace();
+    // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
+    // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.
+    // Ablation D (both major STWs disabled) restores mid_alloc 5/5; any of
+    // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
+    // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
+    // in-place promote paths that already preserve page liveness.
+    Collector::ReportMarkGoodHeapGateCounts();
+
+}
+}
+
+namespace MapleRuntime {
+void TracingCollector::PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex)
+{
+    const bool continuingPrelude = GetGenerationCycle(generation).Snapshot().active;
+    if (!continuingPrelude) {
+        GetGenerationCycle(generation).Begin(gcIndex);
+    }
+    ResetSkippedStackMapCounts();
+    VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
+         g_gcRequests[GetCycleSnapshot(generation).reason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
+         Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(),
+         static_cast<unsigned>(GetCurrentTagID()));
+
+    // zDriver.cpp:183,399-400: generation workers use their concurrent
+    // budget for both pause and concurrent work. Parallel workers are separate.
+    const int32_t threadCount = static_cast<int32_t>(GetWorkers(generation).ActiveWorkers());
+    GetWorkers(generation).SetActive();
+    VLOG(REPORT, "GC generation active workers: %d", threadCount);
+
+    GetGCStats(generation).reason = GetCycleSnapshot(generation).reason;
+    GetGCStats(generation).async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
+    GetGCStats(generation).isConcurrentMark = isConcurrent;
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testCyclePrepared) {
+        testCyclePrepared();
+    }
+#endif
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    DumpBeforeGC();
+#endif
+    TRACE_COUNT("CJRT_pre_GC_HeapSize", Heap::GetHeap().GetAllocatedSize());
+}
+}
+
+namespace MapleRuntime {
+void TracingCollector::PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex)
+{
+    GetWorkers(generation).SetInactive();
+    // Periodic persistence: timeout/ABRT/SIGKILL cannot erase counters from
+    // completed GC cycles. Both probes self-gate and remain default off.
+    // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.
+
+    // loadgood: same reason -- the workload under measurement ends in SIGSEGV, so the
+    // cross-table has to be on stderr before the crash, not only at exit.
+
+    // portarray: positive control for large-array chunking; self-gates, default off.
+    MarkPartialArray::Report("gc_end");
+    ReportSkippedStackMapCounts();
+    // release pages in PagePool
+    TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true, generation == GCCycleGeneration::YOUNG);
+    PagePool::Instance().Trim();
+    (void)gcIndex;
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    DumpAfterGC();
+#endif
+}
 }

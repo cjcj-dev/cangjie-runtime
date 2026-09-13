@@ -365,7 +365,8 @@ public:
     static bool young_marking()
     {
         const auto young = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
-        return young.phase == GCPhase::GC_PHASE_TRACE;
+        return young.phase == GCPhase::GC_PHASE_ENUM || young.phase == GCPhase::GC_PHASE_TRACE ||
+               young.phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
     }
 
     void relocated_remembered_fields_register(MAddress field);

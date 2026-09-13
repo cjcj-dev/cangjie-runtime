@@ -44,7 +44,7 @@ extern "C" uintptr_t MRT_GetThreadLocalData()
         // Since the TBI(top bit ignore) feature in Aarch64,
         // set gc phase to high 8-bit of ThreadLocalData Address for gc barrier fast path.
         // 56: make gcphase value shift left 56 bit to set the high 8-bit
-        tlDataAddr = tlDataAddr | (static_cast<uint64_t>(Heap::GetHeap().GetGCPhase()) << 56);
+        tlDataAddr = tlDataAddr | (static_cast<uint64_t>(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)) << 56);
     }
 #endif
     return tlDataAddr;
@@ -281,7 +281,7 @@ void Mutator::MarkBornCleanForEpoch(uint64_t epoch)
 {
     CHECK_DETAIL(epoch != 0, "born-clean epoch must not use epoch zero");
     if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
-        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
+        CHECK_DETAIL(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD) == GCPhase::GC_PHASE_ENUM,
                      "concurrent stack-scan join before ENUM barrier publication");
         bool began = stackWatermark.TryBegin(epoch, StackWatermark::WM_OWNER_SELF, 0);
         CHECK_DETAIL(began, "born-clean mutator failed to close empty stack watermark");
@@ -315,7 +315,7 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
         // S1/S3/S5 publication order: the first short STW publishes the shared
         // ENUM phase and colour masks before an ack can snapshot roots. This
         // acquire phase read pairs with Collector::SetGCPhase's release store.
-        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
+        CHECK_DETAIL(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD) == GCPhase::GC_PHASE_ENUM,
                      "concurrent stack scan ack before ENUM barrier publication");
         size_t frames = 0;
         bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, EnumYoung(), epoch, bySelf, &frames);
@@ -915,7 +915,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
         collector.IsUnmovableFromObject(oldObj)) {
         return;
     }
-    BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
+    BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
     CHECK_DETAIL(toObj != nullptr, "preforward headerless missing winner oldObj=%p", oldObj);
     if (oldObj != toObj) {
         HealRoot(field, from_object(toObj), HealSite::MutatorPreForwardHeaderlessRecord);
@@ -1091,7 +1091,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
 inline void Mutator::ForwardLocalFinalizers(Collector& collector)
 {
     WCollector& wcollector = reinterpret_cast<WCollector&>(collector);
-    RootVisitor visitor = [&wcollector](ObjectRef& root) { wcollector.ForwardUpdateRawRef(root, wcollector.ActiveForwardingGeneration()); };
+    RootVisitor visitor = [this, &wcollector](ObjectRef& root) { wcollector.ForwardUpdateRawRef(root, EnumYoung() ? Generation::Young : Generation::Old); };
     for (RootSlot& root : localFinalizers) {
         visitor(root);
     }
@@ -1131,7 +1131,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
-            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
+            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward stack field missing winner oldObj=%p", oldObj);
             HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
@@ -1156,7 +1156,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             if (host != nullptr && collector.IsGhostFromObject(host) &&
                 !collector.IsUnmovableFromObject(host)) {
                 if (rootFieldSet.insert((void*)(&root)).second) {
-                    BaseObject* toHost = collector.ForwardObject(host, collector.ActiveForwardingGeneration());
+                    BaseObject* toHost = collector.ForwardObject(host, collector.ObjectGeneration(host));
                     CHECK_DETAIL(toHost != nullptr, "preforward interior missing winner host=%p", host);
                     HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
                         (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
@@ -1180,7 +1180,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             // and the refusal below is the honest report of that.  ZGC's counterpart assert
             // (zRelocate.cpp:412-416) encodes the same invariant: an address a root names is a
             // live object start, or the collector is already wrong.
-            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
+            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
             HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
         } else if (oldObj != nullptr) {
