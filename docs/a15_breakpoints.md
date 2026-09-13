@@ -17,6 +17,7 @@ ZGC 根为 `/root/cj_build/reference/jdk/src/hotspot/share/gc/`，我方根为 `
 | shared/concurrentGCBreakpoints.cpp:172; z/zBreakpoint.cpp:43 | z/zBreakpoint.cpp:18 | 同一锁下等待 startGC 并置 active |
 | z/zBreakpoint.cpp:35 | z/zBreakpoint.cpp:10 | 受控状态下发出一次 startGC |
 | z/zBreakpoint.cpp:53,57,61,65 | z/zBreakpoint.cpp:27,28,32,36 | 周期结束及三个原名通知 |
+| z/zDriver.cpp:270-299; z/zDriver.cpp:418-425 | z/zDriver.cpp:529; z/zDriver.cpp:228-237 | WB_BREAKPOINT 必做 major_full_preclean，再做 major_full_roots，不依赖 allocation stall |
 | z/zDriver.cpp:360 | z/zDriver.cpp:321 | wb_breakpoint 独立原因，startGC 后异步提交 major port |
 | z/zDriver.cpp:471,486 | z/zDriver.cpp:272,282 | 仅 major driver 通知周期边界，abort 不伪造正常完成 |
 | z/zGeneration.cpp:1088 | z/zMark.cpp:519 | 旧代 mark_roots 之前通知 AFTER MARKING STARTED |
@@ -31,7 +32,7 @@ ZGC 根为 `/root/cj_build/reference/jdk/src/hotspot/share/gc/`，我方根为 `
 | 控制 API / 测试 | 实际调用链 |
 |---|---|
 | AcquireControl / RunToIdle | RunToIdleImpl → 等待 major 的 AtAfterGC → NotifyActiveToIdle |
-| RunTo / SimpleCycle | RequestGC(WB_BREAKPOINT) → StartGC + major port → ProcessDriverRequest → ExecuteDriverRequest → combined young roots / old collection → TraceHeap → DoTracing → ProcessOldNonStrongReferences |
+| RunTo / SimpleCycle | RequestGC(WB_BREAKPOINT) → StartGC + major port → ProcessDriverRequest → ExecuteDriverRequest → major_full_preclean → major_full_roots → old collection → TraceHeap → DoTracing → ProcessOldNonStrongReferences |
 | ReleaseControl | ResetRequestState → condition.notify_all → At 的等待返回 |
 | EndBeforeBreakpoint / UnknownBreakpoint | RunTo 的请求未命中 → major 正常完成 → AtAfterGC → pending 转 wantIdle → false |
 
@@ -58,3 +59,7 @@ ZGC 根为 `/root/cj_build/reference/jdk/src/hotspot/share/gc/`，我方根为 `
 构建实测：default configure/build=0/0，wall=62s；testable=0/0，wall=61s。两臂并发，nproc=192。runtime SO 分别为 `60f6a040b66eeb4c9a8a16dc184ce25122df1ff723bca4098bf813521edc5031`、`62a20232621e61051719cd72d4d4c8c80e869a3b6d8fc90fa730e9a1559e2c1f`；boundscheck 两臂为 `f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883`。测试未构建运行，没有测试 ELF 或行为通过结论。
 
 交付前再次 fetch/merge 返回 Already up to date（rc=0）。主线 A10b 特征符号按同一 git grep -c 尺两侧累计：RunYoungCollection 5/5、SelectTenuringThreshold 3/3、GenerationCycle:: 13/13、DriverUnlocker 6/6、ShouldPrecleanYoung 3/3、GetYoungDriverPort 14/14；逐文件原文与 rc 在 source-evidence.json。
+
+## R1 返工
+
+上一轮候选 `c7ba8d459342a78a9b49a5e8d8dfeb524a160ba8` 错将 WB_BREAKPOINT 放入 stall 条件分支。将其移入直接 return true 的原因组，对应 ZGC zDriver.cpp:276；沿用 ExecuteDriverRequest:228-237 的两阶段 young 前奏。此项修复不新增控制点或开关；本轮构建及坐标证据见 evidence/a15-r2。上文 evidence/a15 的构建身份只属于前轮。

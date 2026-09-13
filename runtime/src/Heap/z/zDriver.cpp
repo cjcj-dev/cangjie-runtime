@@ -528,18 +528,18 @@ void CollectorResources::RunYoungCollection(Collector& collector, uint64_t index
 
 bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
 {
-    // zDriver.cpp:282-325: explicit full collections and allocation failure.
+    // ZGC zDriver.cpp:270-299: explicit full collections, including breakpoints.
     switch (reason) {
         case GC_REASON_USER:
         case GC_REASON_OOM:
         case GC_REASON_FORCE:
+        case GC_REASON_WB_BREAKPOINT:
             return true;
         case GC_REASON_BACKUP:
         case GC_REASON_HEU:
         case GC_REASON_HEU_SYNC:
         case GC_REASON_NATIVE:
         case GC_REASON_NATIVE_SYNC:
-        case GC_REASON_WB_BREAKPOINT:
             break;
         default:
             CHECK(false);
