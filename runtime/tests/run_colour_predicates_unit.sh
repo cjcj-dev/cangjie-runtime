@@ -12,5 +12,5 @@ trap 'rm -rf "${build_dir}"' EXIT
 
 compiler=${CXX:-c++}
 "${compiler}" -std=c++14 -Wall -Wextra -Werror -I"${runtime_dir}/src" \
-    "${script_dir}/colour_predicates_unit.cpp" -o "${build_dir}/colour_predicates_unit"
+    "${script_dir}/test_zAddress.cpp" -o "${build_dir}/colour_predicates_unit"
 "${build_dir}/colour_predicates_unit"

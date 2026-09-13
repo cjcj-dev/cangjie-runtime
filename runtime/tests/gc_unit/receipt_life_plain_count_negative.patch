@@ -1,12 +1,12 @@
-diff --git a/runtime/src/Heap/Collector/ZForwarding.h b/runtime/src/Heap/Collector/ZForwarding.h
---- a/runtime/src/Heap/Collector/ZForwarding.h
-+++ b/runtime/src/Heap/Collector/ZForwarding.h
+diff --git a/runtime/src/Heap/z/zForwarding.hpp b/runtime/src/Heap/z/zForwarding.hpp
+--- a/runtime/src/Heap/z/zForwarding.hpp
++++ b/runtime/src/Heap/z/zForwarding.hpp
 @@ -448 +448 @@
 -    std::atomic<uint8_t> _to_life_n;
 +    uint8_t _to_life_n;
-diff --git a/runtime/src/Heap/Allocator/ForwardingTable.cpp b/runtime/src/Heap/Allocator/ForwardingTable.cpp
---- a/runtime/src/Heap/Allocator/ForwardingTable.cpp
-+++ b/runtime/src/Heap/Allocator/ForwardingTable.cpp
+diff --git a/runtime/src/Heap/Allocator/zForwardingTable.cpp b/runtime/src/Heap/Allocator/zForwardingTable.cpp
+--- a/runtime/src/Heap/Allocator/zForwardingTable.cpp
++++ b/runtime/src/Heap/Allocator/zForwardingTable.cpp
 @@ -764 +764 @@
 -    const uint8_t optimisticCount = _to_life_n.load(std::memory_order_relaxed);
 +    const uint8_t optimisticCount = _to_life_n;

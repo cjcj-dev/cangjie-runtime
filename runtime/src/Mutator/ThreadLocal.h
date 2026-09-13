@@ -13,19 +13,14 @@
 #include "Base/RwLock.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
-#include "Heap/Barrier/StoreBarrierBuffer.h"
-#include "Heap/Collector/MarkStripe.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/z/zMarkStack.hpp"
 
+#include "Heap/z/zThreadLocalData.hpp"
 namespace MapleRuntime {
 class AllocBuffer;
 class Mutator;
 class MarkDomain;
-
-// ZThreadLocalData: one store buffer and two generation stacks per OS thread.
-struct ThreadGCData {
-    StoreBarrierBuffer storeBarrierBuffer;
-    std::unique_ptr<MarkThreadLocalStacks> markStacks[2];
-};
 
 enum class ThreadType { CJ_PROCESSOR = 0, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD, UNCOMMITTER_THREAD };
 

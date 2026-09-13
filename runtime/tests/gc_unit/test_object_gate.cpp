@@ -12,10 +12,10 @@
 #include <cstring>
 
 #include "Heap/Allocator/SlotList.h"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "gc_heap_fixture.hpp"
-#include "Heap/Allocator/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

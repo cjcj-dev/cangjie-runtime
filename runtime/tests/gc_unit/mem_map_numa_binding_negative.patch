@@ -1,6 +1,6 @@
-diff --git a/runtime/src/Heap/Allocator/MemMap.cpp b/runtime/src/Heap/Allocator/MemMap.cpp
---- a/runtime/src/Heap/Allocator/MemMap.cpp
-+++ b/runtime/src/Heap/Allocator/MemMap.cpp
+diff --git a/runtime/src/Heap/z/zVirtualMemoryManager.cpp b/runtime/src/Heap/z/zVirtualMemoryManager.cpp
+--- a/runtime/src/Heap/z/zVirtualMemoryManager.cpp
++++ b/runtime/src/Heap/z/zVirtualMemoryManager.cpp
 @@ -461,7 +461,7 @@ bool MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release)
          const bool ok = release ? backend->Release(reinterpret_cast<void*>(partStart), partEnd - partStart,
                                                     partition.node)

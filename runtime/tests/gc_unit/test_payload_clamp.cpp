@@ -9,14 +9,14 @@
 
 #include "gc_heap_fixture.hpp"
 
-#include "Common/ColourPredicates.h"
-#include "Heap/Barrier/Barrier.h"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.hpp"
 #define private public
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 #undef private
-#include "Heap/Collector/Collector.h"
-#include "Heap/Heap.h"
-#include "Heap/Barrier/Barrier.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrier.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "gc_unittest.hpp"
 

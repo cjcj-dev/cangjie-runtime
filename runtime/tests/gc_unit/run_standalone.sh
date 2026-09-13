@@ -355,8 +355,8 @@ MAIN_SOURCES=(
   "$SRC/gc_unit_main.cpp"
   "$SRC/gc_unit_stubs.cpp"
   "$SRC/test_colour_address.cpp"
-  "$SRC/test_z_bit_field.cpp"
-  "$SRC/test_z_list.cpp"
+  "$SRC/test_zBitField.cpp"
+  "$SRC/test_zList.cpp"
   "$SRC/test_zstat.cpp"
   "$SRC/test_trustp1_phase1.cpp"
 
@@ -365,7 +365,7 @@ MAIN_SOURCES=(
   "$SRC/test_object_gate.cpp"
   "$SRC/test_remset.cpp"
   "$SRC/test_defect_regressions.cpp"
-  "$SRC/test_region_bitmap.cpp"
+  "$SRC/test_zLiveMap.cpp"
   "$SRC/test_region_age.cpp"
   "$SRC/test_unwind_regressions.cpp"
   "$SRC/test_gctibzero.cpp"
@@ -374,7 +374,7 @@ MAIN_SOURCES=(
   "$SRC/test_z_forwarding_life.cpp"
   "$SRC/test_colour_is_checks.cpp"
   "$SRC/test_remap_young_roots.cpp"
-  "$SRC/test_forwarding_entries.cpp"
+  "$SRC/test_zForwarding.cpp"
   "$SRC/test_forwarding_no_geometry.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
@@ -386,7 +386,7 @@ MAIN_SOURCES=(
   "$SRC/test_relocation_set_selector.cpp"
   "$SRC/test_store_barrier_buffer.cpp"
   "$SRC/test_barrier_old_atomic.cpp"
-  "$SRC/test_page_age.cpp"
+  "$SRC/test_zPageAge.cpp"
   "${RANGE_REGISTRY_SOURCES[@]}"
   "$SRC/test_mapped_cache.cpp"
   "$SRC/test_stay_young.cpp"
@@ -605,7 +605,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_store_barrier_buffer.cpp"
   /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/CompilerCalls.cpp"
   /usr/bin/grep -F -q "$consumer" "$SRC/test_store_barrier_buffer.cpp"
-  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/Barrier/Barrier.cpp"
+  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/z/zBarrier.cpp"
   oldvalue_rows=$((oldvalue_rows + 1))
 done <"$OLDVALUE_MANIFEST"
 [[ "$oldvalue_rows" -eq "${#EXPECTED_OLDVALUE_TESTS[@]}" ]]
@@ -660,7 +660,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   [[ "$anchor" == "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm" ]]
   [[ "$carrier" == "product_so" ]]
   [[ "$consumer" == "ProductPreserveRetainedUpToFn" ]]
-  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/Allocator/zPage.inline.hpp"
+  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/z/zPage.inline.hpp"
   suite="${test_name%%.*}"
   name="${test_name#*.}"
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_live_map.cpp"

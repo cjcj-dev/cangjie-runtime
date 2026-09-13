@@ -10,7 +10,7 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Collector/TracingCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Common/StackType.h"
 #include "Common/TypeDef.h"
 #include "Exception/Exception.h"

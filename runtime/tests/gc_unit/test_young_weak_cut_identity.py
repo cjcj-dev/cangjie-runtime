@@ -39,7 +39,7 @@ def main():
     baseline.mkdir()
     for source in sources:
         shutil.copy2(source, baseline / source.name)
-    product_source = root / 'src/Heap/Collector/Mark.cpp'
+    product_source = root / 'src/Heap/z/zMark.cpp'
     record = dict(elf_sha256=sha(elf), source_before=sha(product_source),
                   baseline_sha256=[sha(baseline / s.name) for s in sources])
     import os

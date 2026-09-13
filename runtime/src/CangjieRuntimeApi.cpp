@@ -22,7 +22,7 @@
 #include "ExceptionManager.inline.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zDriver.hpp"
 #include "RuntimeConfig.h"
 #include "UnwindStack/MangleNameHelper.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"

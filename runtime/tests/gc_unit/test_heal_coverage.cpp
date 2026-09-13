@@ -10,7 +10,7 @@
 // OpenJDK zGeneration.cpp:1503-1508 remap_young_roots + zAddress.hpp:108-128
 // xor wrap: a colour published at beat N is load-good again at N+2.
 
-#include "Common/ColourMask.h"
+#include "Heap/z/zAddress.hpp"
 #include "Heap/Verify/HealCoverage.h"
 #include "gc_unittest.hpp"
 

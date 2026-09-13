@@ -5,9 +5,9 @@
 #include <cstdlib>
 
 #include "Common/BaseObject.h"
-#include "Common/ColourTypes.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Heap/Allocator/HeapFiller.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Collector/ManagedObjectGate.h"
 
 namespace MapleRuntime {

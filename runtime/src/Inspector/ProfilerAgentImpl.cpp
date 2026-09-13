@@ -5,14 +5,14 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/Collector/TaskQueue.h"
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
 #include "Inspector/FileStream.h"
 #include "Inspector/CjAllocData.h"
-#include "Heap/Allocator/zPage.hpp"
-#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Inspector/ProfilerAgentImpl.h"
 namespace MapleRuntime {
 int EnableAllocRecord(bool enable)

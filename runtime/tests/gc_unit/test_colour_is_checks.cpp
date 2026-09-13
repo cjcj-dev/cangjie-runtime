@@ -33,9 +33,9 @@
 
 #include <cstdint>
 
-#include "Common/ColourMask.h"
+#include "Heap/z/zAddress.hpp"
 #include "Common/ColourEncoding.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "gc_unittest.hpp"
 #include "ObjectModel/RefField.h"
 

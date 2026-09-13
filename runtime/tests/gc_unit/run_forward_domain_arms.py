@@ -17,7 +17,7 @@ import time
 from run_remap_window_arms import sha, replace_one, patch, HEADER, PRODUCER, ENTRY
 
 TABLE = 'runtime/src/Heap/Allocator/zForwardingTable.cpp'
-WAIT = 'runtime/src/Heap/Collector/zRelocate.cpp'
+WAIT = 'runtime/src/Heap/z/zRelocate.cpp'
 TESTS = ('Identity', 'NonIdentityCopy', 'RetiredHit', 'MissingEntry', 'Unavailable')
 ARMS = ('baseline', 'cut_identity', 'cut_copy_return', 'cut_retired',
         'cut_missing', 'cut_unavailable', 'cut_wait', 'cut_entry', 'restored')

@@ -4,13 +4,12 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "UnwindStack/StackWatermark.h"
+#include "Heap/z/zStackWatermark.hpp"
 
 #include <cstdlib>
 #include <cstring>
 
 namespace MapleRuntime {
-
 bool StackWatermark::VerifyEnabled()
 {
     static const bool on = []() {
@@ -20,4 +19,4 @@ bool StackWatermark::VerifyEnabled()
     return on;
 }
 
-} // namespace MapleRuntime
+}

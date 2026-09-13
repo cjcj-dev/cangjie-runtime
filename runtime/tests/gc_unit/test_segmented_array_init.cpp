@@ -18,10 +18,10 @@
 
 #include "Cangjie.h"
 #include "Common/ScopedObjectAccess.h"
-#include "Heap/Collector/Collector.h"
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.inline.h"

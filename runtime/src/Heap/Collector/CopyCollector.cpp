@@ -12,9 +12,9 @@
 #include <cstring>
 
 #include "Base/GcLog.h"
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include "Allocator/RegionSpace.h"
-#include "Heap/Collector/GcTrigger.h"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"

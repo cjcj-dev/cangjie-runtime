@@ -8,9 +8,9 @@
 #include <thread>
 #include <vector>
 
-#include "Heap/Collector/MarkEngine.h"
-#include "Heap/Collector/MarkStripe.h"
-#include "Heap/GcThreadPool.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

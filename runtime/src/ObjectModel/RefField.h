@@ -16,9 +16,9 @@
 #include <type_traits>
 
 #include "Base/Log.h"
-#include "Common/ColourMask.h"
+#include "Heap/z/zAddress.hpp"
 #include "Common/ColourEncoding.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Common/TypeDef.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"

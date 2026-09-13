@@ -13,7 +13,7 @@
 #endif
 
 #include "Common/MarkWorkStack.h"
-#include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/z/zMarkStackEntry.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

@@ -1,6 +1,6 @@
-diff --git a/runtime/src/Heap/Allocator/MemMap.cpp b/runtime/src/Heap/Allocator/MemMap.cpp
---- a/runtime/src/Heap/Allocator/MemMap.cpp
-+++ b/runtime/src/Heap/Allocator/MemMap.cpp
+diff --git a/runtime/src/Heap/z/zVirtualMemoryManager.cpp b/runtime/src/Heap/z/zVirtualMemoryManager.cpp
+--- a/runtime/src/Heap/z/zVirtualMemoryManager.cpp
++++ b/runtime/src/Heap/z/zVirtualMemoryManager.cpp
 @@ -372,7 +372,7 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
              void* segment = osBackend.Reserve(nullptr, currentSize, opt.flags, opt.tag, false);
              if (segment == nullptr ||

@@ -9,7 +9,7 @@
 #include <set>
 #include <linux/futex.h>
 #include <sys/syscall.h>
-#include "Heap/GcThreadPool.h"
+#include "Heap/z/zWorkers.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

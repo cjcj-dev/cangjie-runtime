@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "Heap/Allocator/RangeRegistry.h"
+#include "Heap/z/zRangeRegistry.hpp"
 
 namespace MapleRuntime {
 namespace GcUnit {

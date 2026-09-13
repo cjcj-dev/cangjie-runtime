@@ -6,7 +6,7 @@
 #include <thread>
 #include <vector>
 
-#include "Heap/Collector/ReferenceProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "ObjectModel/RefField.inline.h"

@@ -18,8 +18,8 @@
 #include "Base/SysCall.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
-#include "Heap/Collector/TracingCollector.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zHeap.hpp"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif

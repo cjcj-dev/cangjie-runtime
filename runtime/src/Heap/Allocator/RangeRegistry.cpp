@@ -8,5 +8,5 @@
 #error "RangeRegistry.cpp is only for the test-visible product configuration"
 #endif
 
-#include "Heap/Allocator/RangeRegistry.h"
-#include "Heap/Allocator/RangeRegistry.inline.h"
+#include "Heap/z/zRangeRegistry.hpp"
+#include "Heap/z/zRangeRegistry.inline.hpp"

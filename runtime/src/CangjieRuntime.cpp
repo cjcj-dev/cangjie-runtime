@@ -9,7 +9,7 @@
 
 #include "Base/Log.h"
 #include "ExceptionManager.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "HeapManager.h"
 #include "ObjectManager.h"
 #include "ObjectModel/MFuncdesc.inline.h"
@@ -24,7 +24,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Collector/FinalizerProcessor.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "LoaderManager.h"
 #include "LogManager.h"
 #include "Mutator/Mutator.h"

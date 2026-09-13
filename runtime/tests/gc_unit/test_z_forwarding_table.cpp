@@ -14,17 +14,17 @@
 // no-op, so these tests exercise ZGranuleMap locally and ZForwarding without
 // rebinding the product map.
 
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Allocator/ZAttachedArray.h"
-#include "Heap/Allocator/ZGranuleMap.h"
-#include "Heap/Collector/ZForwarding.h"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zAttachedArray.hpp"
+#include "Heap/z/zGranuleMap.hpp"
+#include "Heap/z/zForwarding.hpp"
 #include "gc_unittest.hpp"
 #include "gc_heap_fixture.hpp"
 
 #include <type_traits>
 #include <chrono>
 #include <thread>
-#include "Heap/Collector/RelocationRequestQueue.h"
+#include "Heap/z/zRelocate.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

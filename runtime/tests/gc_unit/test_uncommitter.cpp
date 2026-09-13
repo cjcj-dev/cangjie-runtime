@@ -11,15 +11,15 @@
 
 #include "Heap/Allocator/CartesianTree.h"
 #define private public
-#include "Heap/Allocator/FreeRegionManager.h"
-#include "Heap/Allocator/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 #undef private
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Allocator/MemMap.h"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/Uncommitter.h"
-#include "Heap/Collector/ZForwardingLife.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zUncommitter.hpp"
+#include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
 #include "CjScheduler.h"

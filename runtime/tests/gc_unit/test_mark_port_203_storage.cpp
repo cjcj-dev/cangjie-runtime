@@ -5,7 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
-#include "Heap/Collector/MarkStripe.h"
+#include "Heap/z/zMarkStack.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

@@ -11,7 +11,7 @@
 #include "Cangjie.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
 

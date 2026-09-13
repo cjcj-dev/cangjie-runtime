@@ -15,7 +15,7 @@
 #include <unordered_set>
 
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Verify/ZVerify.h"
+#include "Heap/z/zVerify.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 using namespace MapleRuntime;

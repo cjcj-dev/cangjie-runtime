@@ -9,8 +9,8 @@
 
 #include "Base/GcLog.h"
 #include "Base/LogFile.h"
-#include "Heap/Collector/GcTrigger.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zDirector.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };

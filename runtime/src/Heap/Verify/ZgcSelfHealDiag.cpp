@@ -12,8 +12,8 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "Common/ColourMask.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 
 namespace MapleRuntime {
 namespace ZgcSelfHealDiag {

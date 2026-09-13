@@ -27,10 +27,10 @@
 #include "Cangjie.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorProxy.h"
-#include "Heap/Collector/CollectorResources.h"
-#include "Heap/Collector/DriverPort.h"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/Collector/GcStats.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Inspector/ProfilerAgentImpl.h"
 #include "Mutator/ThreadLocal.h"
 

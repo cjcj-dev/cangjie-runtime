@@ -1,6 +1,6 @@
-diff --git a/runtime/src/Heap/Allocator/RegionManager.cpp b/runtime/src/Heap/Allocator/RegionManager.cpp
---- a/runtime/src/Heap/Allocator/RegionManager.cpp
-+++ b/runtime/src/Heap/Allocator/RegionManager.cpp
+diff --git a/runtime/src/Heap/z/zPageAllocator.cpp b/runtime/src/Heap/z/zPageAllocator.cpp
+--- a/runtime/src/Heap/z/zPageAllocator.cpp
++++ b/runtime/src/Heap/z/zPageAllocator.cpp
 @@ -1075,7 +1075,7 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& memoryOwner,
      SetCacheRatio(0.0, 1.0, 1.0);
  #endif

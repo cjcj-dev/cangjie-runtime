@@ -12,8 +12,8 @@
 #include <cstdint>
 #include <cstring>
 
-#include "Common/ColourMask.h"
-#include "Common/ColourTypes.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 
 using namespace MapleRuntime;
 

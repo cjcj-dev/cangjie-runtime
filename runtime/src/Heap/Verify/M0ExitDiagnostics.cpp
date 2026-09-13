@@ -10,10 +10,10 @@
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Allocator/zPage.hpp"
-#include "Heap/Collector/ZForwarding.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/Verify/M0Correlation.h"
 
 namespace MapleRuntime {

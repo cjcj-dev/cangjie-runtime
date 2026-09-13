@@ -5,11 +5,12 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "StackWatermark.cpp"
     "StackInfo.cpp"
     "EhStackInfo.cpp"
     "GcStackInfo.cpp"
     "StackFrameCursor.cpp"
-    "StackWatermark.cpp"
+    "../Heap/z/zStackWatermark.cpp"
     "StackExposureHook.cpp"
     "StackGrowStackInfo.cpp"
     "PrintStackInfo.cpp"

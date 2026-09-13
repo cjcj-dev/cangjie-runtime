@@ -12,11 +12,11 @@
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
-#include "Heap/Heap.h"
-#include "Heap/Allocator/zPage.hpp"
-#include "Heap/Barrier/RememberedSet.h"
-#include "Heap/Collector/Collector.h"
-#include "Common/ColourMask.h"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zAddress.hpp"
 #include "Heap/Verify/TraceClear.h"
 
 namespace MapleRuntime {

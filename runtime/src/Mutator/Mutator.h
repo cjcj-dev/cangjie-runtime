@@ -14,7 +14,7 @@
 
 #include "Exception/Exception.h"
 #include "Heap/Allocator/Allocator.h"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Collector/GcInfos.h"
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"
@@ -25,7 +25,7 @@
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
 #include "ObjectModel/RefField.h"
-#include "UnwindStack/StackWatermark.h"
+#include "Heap/z/zStackWatermark.hpp"
 
 
 namespace MapleRuntime {

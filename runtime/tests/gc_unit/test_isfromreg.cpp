@@ -12,7 +12,7 @@
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/Allocator/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

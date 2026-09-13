@@ -19,7 +19,7 @@
 #define MRT_TESTABLE_INTERNALS 1
 #endif
 #include "Heap/Collector/CollectorProxy.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {

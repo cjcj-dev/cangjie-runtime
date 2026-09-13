@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "Base/Log.h"
-#include "LiveInfo.h"
+#include "Heap/z/zLiveMap.hpp"
 
 namespace MapleRuntime {
 

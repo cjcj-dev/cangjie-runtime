@@ -12,7 +12,7 @@
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "ObjectModel/MArray.inline.h"
 
 using namespace MapleRuntime;

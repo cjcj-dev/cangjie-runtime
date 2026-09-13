@@ -14,9 +14,9 @@
 
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
-#include "Heap/Allocator/zPage.hpp"
-#include "Heap/Collector/Collector.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 namespace {

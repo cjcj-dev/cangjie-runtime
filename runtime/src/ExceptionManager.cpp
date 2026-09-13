@@ -14,7 +14,7 @@
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
 #include "UnwindStack/MangleNameHelper.h"
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
 #include "Inspector/CjHeapData.h"
 namespace MapleRuntime {

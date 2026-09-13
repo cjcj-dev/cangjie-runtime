@@ -41,13 +41,13 @@ for t in 'const RefField<>&' 'const RootSlot&'; do
   fi
 done
 # nullslot non-heap arm preserved
-nh=$(grep -c 'Non-heap targets' runtime/src/Heap/Collector/Remembered.cpp || true)
+nh=$(grep -c 'Non-heap targets' runtime/src/Heap/z/zRemembered.cpp || true)
 if [[ "$nh" == "1" ]]; then
   pass "② Non-heap targets comment/arm count == 1"
 else
   bad "② Non-heap targets count=$nh (want 1)"
 fi
-if grep -A20 'Non-heap targets' runtime/src/Heap/Collector/Remembered.cpp | grep -q 'never CAS null'; then
+if grep -A20 'Non-heap targets' runtime/src/Heap/z/zRemembered.cpp | grep -q 'never CAS null'; then
   pass "② non-heap arm still never CAS null"
 else
   bad "② non-heap arm lost never-CAS-null semantics"

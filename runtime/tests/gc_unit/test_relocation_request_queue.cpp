@@ -6,7 +6,7 @@
 
 #include <atomic>
 #include <thread>
-#include "Heap/Collector/RelocationRequestQueue.h"
+#include "Heap/z/zRelocate.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Mutator/Handshake.h"

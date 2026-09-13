@@ -10,7 +10,7 @@
 
 #include "Allocator/RegionSpace.h"
 #include "Common/StateWord.h"
-#include "TracingCollector.h"
+#include "Heap/z/zMark.hpp"
 
 namespace MapleRuntime {
 class CopyCollector : public TracingCollector {

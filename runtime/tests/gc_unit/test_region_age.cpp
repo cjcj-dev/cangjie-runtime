@@ -10,7 +10,7 @@
 
 #include <cstdint>
 
-#include "Common/ColourMask.h"
+#include "Heap/z/zAddress.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 

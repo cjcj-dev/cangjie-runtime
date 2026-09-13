@@ -18,7 +18,7 @@
 
 #include "Base/SysCall.h"
 #include "Common/Runtime.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"

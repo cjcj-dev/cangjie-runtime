@@ -13,8 +13,8 @@
 
 #include "Cangjie.h"
 #include "gc_heap_fixture.hpp"
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Allocator/zPageAllocator.hpp"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Verify/M0Correlation.h"

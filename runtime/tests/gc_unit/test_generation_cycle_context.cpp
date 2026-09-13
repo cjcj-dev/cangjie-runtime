@@ -10,12 +10,12 @@
 #include <set>
 #include <array>
 #include <cstring>
-#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Cangjie.h"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/Collector/CollectorProxy.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"

@@ -5,16 +5,27 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "../z/zLiveMap.cpp"
+    "zPage.cpp"
+    "zPageAllocator.cpp"
+
     "Allocator.cpp"
     "zForwardingTable.cpp"
-    "MemMap.cpp"
+    "../z/zForwardingAllocator.cpp"
+    "../z/zVirtualMemoryManager.cpp"
+    "../z/zAddressSpaceLimit.cpp"
+    "../z/zNUMA.cpp"
+    "../z/zPhysicalMemoryManager.cpp"
     "RegionSpace.cpp"
-    "zPageAllocator.cpp"
-    "zPage.cpp"
-    "zObjectAllocator.cpp"
-    "../Collector/zRelocationSetSelector.cpp"
+    "../z/zThreadLocalAllocBuffer.cpp"
+    "../z/zTLABUsage.cpp"
+    "../z/zPageAllocator.cpp"
+    "../z/zPage.cpp"
+    "../z/zObjectAllocator.cpp"
+    "../z/zRelocationSetSelector.cpp"
     "RouteDestHold.cpp"
     "CartesianTree.cpp"
+    "../z/zMappedCache.cpp"
     "HeapFiller.cpp"
 )
 
@@ -27,7 +38,7 @@ endif()
 if (MRT_GC_UNIT_TESTS)
     # Product claim-tree and page-table templates; use the runtime page size.
     add_executable(cj_z_index_distributor_unit
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/z_index_distributor_unit.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/test_zIndexDistributor.cpp)
     target_include_directories(cj_z_index_distributor_unit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
     target_link_libraries(cj_z_index_distributor_unit PRIVATE cangjie-runtime pthread)
     add_test(NAME cj_z_index_distributor_unit COMMAND cj_z_index_distributor_unit)

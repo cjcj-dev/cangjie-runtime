@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "Base/Globals.h"
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"

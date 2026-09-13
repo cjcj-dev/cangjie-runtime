@@ -12,7 +12,7 @@
 #include <cstdint>
 
 #include "Base/Panic.h"
-#include "MemMap.h"
+#include "Heap/z/zVirtualMemoryManager.hpp"
 
 #define DEBUG_DEQUE false
 #if DEBUG_DEQUE

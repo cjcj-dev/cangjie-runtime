@@ -9,8 +9,8 @@
 #define MRT_COLLECTOR_PROXY_H
 
 #include "Base/Macros.h"
-#include "Collector.h"
-#include "CollectorResources.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "WCollector/WCollector.h"
 
 namespace MapleRuntime {

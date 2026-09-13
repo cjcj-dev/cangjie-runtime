@@ -27,16 +27,16 @@
 #include "gc_unittest.hpp"
 
 #define private public
-#include "Heap/Barrier/RememberedSet.h"
-#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #undef private
 
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/CollectorProxy.h"
-#include "Heap/Collector/CollectorResources.h"
-#include "Heap/Barrier/Barrier.h"
-#include "Heap/Barrier/Barrier.h"
-#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Mutator/Mutator.h"
 #include "mark_publication_fixture.hpp"
 #include "Mutator/ThreadLocal.h"

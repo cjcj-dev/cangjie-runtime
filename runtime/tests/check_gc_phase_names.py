@@ -17,8 +17,8 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-HEADER = ROOT / "src/Heap/Collector/Collector.h"
-SOURCE = ROOT / "src/Heap/Collector/Collector.cpp"
+HEADER = ROOT / "src/Heap/z/zCollectedHeap.hpp"
+SOURCE = ROOT / "src/Heap/z/zCollectedHeap.cpp"
 
 
 def enumerators() -> dict[str, int]:

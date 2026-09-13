@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 
 #include <atomic>
 #include <cstdarg>
@@ -14,82 +14,22 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Collector/GcStats.h"
+#include "Heap/Collector/GcStats.h"
 #include "Common/BaseObject.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Common/StateWord.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/ManagedObjectGate.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
-GCCycleSnapshot GenerationCycle::Snapshot() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return { generation, sequence, requestIndex, reason.load(std::memory_order_relaxed),
-             phase.load(std::memory_order_relaxed), active };
-}
-
-void Collector::MarkObjectIfActive(BaseObject* object) const
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    if (!PlausibleManagedObjectGate("mark_object_if_active", object)) {
-        object = TryRecoverInteriorBase(object);
-        if (object == nullptr) {
-            return;
-        }
-    }
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-    if (region->IsYoungRegion()) {
-        MarkYoungObjectIfActive(object);
-    } else {
-        MarkOldObjectIfActive(object);
-    }
-}
-
-void GenerationCycle::SelectReason(GCReason value)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    CHECK(!active);
-    reason.store(value, std::memory_order_release);
-}
-
-void GenerationCycle::Begin(uint64_t index)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    CHECK(!active);
-    // Young sequence belongs to mark_start together with the remset flip
-    // (zGeneration.cpp:871-880), not to the earlier request preparation.
-    if (generation == GCCycleGeneration::OLD) {
-        CHECK(sequence != UINT64_MAX);
-        ++sequence;
-    }
-    requestIndex = index;
-    active = true;
-}
-
-void GenerationCycle::PublishPhase(GCPhase value)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    phase.store(value, std::memory_order_release);
-}
-
-void GenerationCycle::End()
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    active = false;
-}
-
 namespace {
-const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
-                                       "Smooth Collector" };
+
 
 // zc7fix: is_mark_good fast path may admit plain non-heap slots (g_cjMarkBadMask all-zero on
 // uncoloured non-null). Count rejects before IsValidObject/IsMarkedObject.
@@ -435,41 +375,6 @@ BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProven
     return obj;
 }
 
-// The positional table this replaced still carried names from an older phase
-// enum, so indices 12, 13 and 14 printed "forward phase", "enum fix phase" and
-// "trace fix phase" for POST_TRACE, PREFORWARD and FORWARD. Every crash report
-// naming a phase past CLEAR_SATB_BUFFER therefore named the wrong one, and a
-// reader comparing two reports could not tell. Switching on the enum keeps the
-// name attached to the value, so adding a phase is a compile error here rather
-// than a silent relabelling of the phases after it.
-const char* Collector::GetGCPhaseName(GCPhase phase)
-{
-    switch (phase) {
-        case GC_PHASE_UNDEF: return "undefined phase";
-        case GC_PHASE_IDLE: return "idle phase";
-        case GC_PHASE_FINISH: return "finish phase";
-        case GC_PHASE_RECLAIM_SATB_NODE: return "reclaim satb phase";
-        case GC_PHASE_INIT: return "init phase";
-        case GC_PHASE_ENUM: return "enum phase";
-        case GC_PHASE_TRACE: return "trace phase";
-        case GC_PHASE_CLEAR_SATB_BUFFER: return "clear satb phase";
-        case GC_PHASE_MARK_COMPLETE: return "mark complete phase";
-        case GC_PHASE_POST_TRACE: return "post trace phase";
-        case GC_PHASE_PREFORWARD: return "preforward phase";
-        case GC_PHASE_FORWARD: return "forward phase";
-    }
-    return "unknown phase";
-}
-
-Collector::Collector() {}
-
-const char* Collector::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
-
-void Collector::RequestGC(GCReason reason, bool async)
-{
-    RequestGCInternal(reason, async);
-}
-
 // loadfc: best-effort detection verdict. Same header-word shape as Barrier.cpp's former staleguard
 // judge (StateWord.h:215-228: bits 0-47 TypeInfo, bits 48-49 stateCode; FORWARDED=3). This one
 // relaxed read classifies the observed word; it does not establish object lifetime or happens-before.
@@ -642,4 +547,4 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
                                   method != nullptr ? method : "?");
     std::abort();
 }
-} // namespace MapleRuntime.
+}

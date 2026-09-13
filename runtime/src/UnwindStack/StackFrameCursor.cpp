@@ -6,7 +6,7 @@
 
 #include "UnwindStack/StackFrameCursor.h"
 
-#include "Collector/TracingCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {

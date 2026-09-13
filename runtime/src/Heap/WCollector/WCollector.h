@@ -7,7 +7,7 @@
 
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
-#include "Common/ColourMask.h"
+#include "Heap/z/zAddress.hpp"
 #include "Base/TimeUtils.h"
 #include "Base/SysCall.h"
 #include "Heap/Verify/HealCoverage.h"
@@ -23,9 +23,9 @@
 #include <unordered_set>
 
 #include "Allocator/RegionSpace.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 #include "Collector/CopyCollector.h"
-#include "Heap/Collector/MarkEngine.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/Collector/RemsetScanStats.h"
 
 #include "Mutator/MutatorManager.h"
