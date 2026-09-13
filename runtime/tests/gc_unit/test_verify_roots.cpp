@@ -8,6 +8,10 @@
 #include "ObjectModel/RefField.inline.h"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+namespace {
+// Plant the raw stack-map word, including deliberately invalid test inputs.
+void SetRootWord(RootSlot& slot, uintptr_t word) { std::memcpy(&slot, &word, sizeof(word)); }
+}
 // zVerify.cpp:119-128: positive counterpart to the invalid-address cases.
 GC_OTHER_VM_TEST(ZVerify, AcceptsActualObjectAddress)
 {
@@ -25,14 +29,13 @@ GC_OTHER_VM_TEST(ZVerify, StackRootExpandsToActualHeapSlot)
     auto* object = reinterpret_cast<BaseObject*>(&storage[2]);
     object->SetClassInfo(fixture.typeInfo);
     RootSlot& record = RootSlotAt(static_cast<void*>(&storage[6]));
-    record.StorePlain(from_object(fixture.obj0));
-    RootSlotAt(static_cast<void*>(&storage[3])).StorePlain(
-        to_zaddress_unsafe(reinterpret_cast<uintptr_t>(&storage[6])));
+    StorePlain(record, from_object(fixture.obj0));
+    SetRootWord(RootSlotAt(static_cast<void*>(&storage[3])), reinterpret_cast<uintptr_t>(&storage[6]));
     Mutator mutator;
     mutator.SetStackTopAddr(reinterpret_cast<uintptr_t>(storage));
     mutator.SetStackSize(sizeof(storage));
     RootSlot root;
-    root.StorePlain(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
+    SetRootWord(root, reinterpret_cast<uintptr_t>(object));
     size_t visits = 0;
     mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
         ++visits;
@@ -49,18 +52,17 @@ GC_OTHER_VM_TEST(ZVerify, StackRootCycleTerminatesWithoutEmittingStackObject)
     alignas(16) uintptr_t storage[6] {};
     auto* object = reinterpret_cast<BaseObject*>(&storage[2]);
     object->SetClassInfo(fixture.typeInfo);
-    RootSlotAt(static_cast<void*>(&storage[3])).StorePlain(
-        to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
+    SetRootWord(RootSlotAt(static_cast<void*>(&storage[3])), reinterpret_cast<uintptr_t>(object));
     Mutator mutator;
     mutator.SetStackTopAddr(reinterpret_cast<uintptr_t>(storage));
     mutator.SetStackSize(sizeof(storage));
     RootSlot root;
-    root.StorePlain(to_zaddress_unsafe(reinterpret_cast<uintptr_t>(object)));
+    SetRootWord(root, reinterpret_cast<uintptr_t>(object));
     size_t visits = 0;
     mutator.VisitHeapRootSlots(root, [&](ObjectRef&) { ++visits; });
     GC_EXPECT_EQ(visits, size_t(0));
     // The same adapter must still deliver a real heap root.
-    root.StorePlain(from_object(fixture.obj0));
+    StorePlain(root, from_object(fixture.obj0));
     mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
         ++visits;
         GC_EXPECT_TRUE(&slot == &root);
@@ -72,7 +74,7 @@ GC_OTHER_VM_TEST(ZVerify, RootAdapterPreservesInvalidNonStackAddress)
 {
     Mutator mutator;
     RootSlot root;
-    root.StorePlain(to_zaddress_unsafe(0x1000));
+    SetRootWord(root, 0x1000);
     size_t visits = 0;
     mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
         ++visits;
