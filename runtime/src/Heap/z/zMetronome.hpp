@@ -9,8 +9,7 @@
 namespace MapleRuntime {
 class GcMetronome {
 public:
-    explicit GcMetronome(uint64_t startNs, uint64_t intervalNs = 10000000)
-        : startNs(startNs), intervalNs(intervalNs) {}
+    explicit GcMetronome(uint64_t startNs, uint64_t intervalNs = 10000000);
 
     uint64_t DeadlineNs() const { return startNs + intervalNs * ticks; }
 

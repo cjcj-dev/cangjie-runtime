@@ -71,3 +71,7 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
     }
 }
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+HeapIterator::HeapIterator(bool visitWeaks, bool forVerify ) : visitWeaks(visitWeaks), forVerify(forVerify) {}
+}

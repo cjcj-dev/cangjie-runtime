@@ -32,3 +32,7 @@ void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, zpoin
 }
 
 }
+
+namespace MapleRuntime {
+size_t StoreBarrierBuffer::Current() const { return current; }
+}

@@ -606,3 +606,7 @@ void RememberedSet::CheckStaticCoverageForMinor()
 } // namespace MapleRuntime
 
 #include "Heap/z/zRememberedSet.inline.hpp"
+
+namespace MapleRuntime {
+bool RememberedSet::IsInitialized() const { return initialized; }
+}

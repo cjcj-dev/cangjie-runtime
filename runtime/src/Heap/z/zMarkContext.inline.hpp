@@ -13,3 +13,31 @@ MarkContext::MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& str
 
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+size_t MarkContext::StripeId() const { return stripeId; }
+}
+
+namespace MapleRuntime {
+size_t MarkContext::NStripes() const { return nstripes; }
+}
+
+namespace MapleRuntime {
+void MarkContext::SetNStripes(size_t value) { nstripes = value; }
+}
+
+namespace MapleRuntime {
+void MarkContext::SetStripeId(size_t value)
+    {
+        cache.Flush();
+        stripeId = value;
+    }
+}
+
+namespace MapleRuntime {
+MarkThreadLocalStacks& MarkContext::Stacks() { return *stacks; }
+}
+
+namespace MapleRuntime {
+MarkLiveCache& MarkContext::Cache() { return cache; }
+}

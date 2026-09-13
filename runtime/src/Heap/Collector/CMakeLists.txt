@@ -5,6 +5,10 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "../z/zAbort.cpp"
+    "../z/zMetronome.cpp"
+    "zRelocate.cpp"
+
     "../z/zHeapIterator.cpp"
     "GcRequest.cpp"
     "GcStats.cpp"

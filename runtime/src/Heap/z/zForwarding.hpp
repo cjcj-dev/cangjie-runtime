@@ -75,20 +75,12 @@ public:
     }
 
     // zForwarding.cpp:51-53
-    static bool claim(std::atomic<bool>& claimed)
-    {
-        bool expected = false;
-        return claimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
-    }
+    static bool claim(std::atomic<bool>& claimed);
 
     // zForwarding.cpp:188-194
-    static void mark_done(std::atomic<bool>& done)
-    {
-        done.store(true, std::memory_order_release);
-        NotifyAll();
-    }
+    static void mark_done(std::atomic<bool>& done);
 
-    static bool is_done(const std::atomic<bool>& done) { return done.load(std::memory_order_acquire); }
+    static bool is_done(const std::atomic<bool>& done);
 
     // zForwarding.cpp:86-108: the claimed arm must finish add_and_wait
     // before it reports that the source page cannot be retained.
@@ -112,54 +104,13 @@ public:
     }
 
     // zForwarding.cpp:134-169
-    static void release_page(std::atomic<int32_t>& refCount)
-    {
-        for (;;) {
-            int32_t n = refCount.load(std::memory_order_relaxed);
-            CHECK(n != 0);
-            if (n > 0) {
-                if (!refCount.compare_exchange_weak(n, n - 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                    continue;
-                }
-                if (n == 1) {
-                    NotifyAll();
-                }
-            } else {
-                if (!refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                    continue;
-                }
-                if (n == -2 || n == -1) {
-                    NotifyAll();
-                }
-            }
-            return;
-        }
-    }
+    static void release_page(std::atomic<int32_t>& refCount);
 
     // zForwarding.cpp:110-131 -- invert n → -n, then wait until -1.
-    static void in_place_relocation_claim_page(std::atomic<int32_t>& refCount)
-    {
-        for (;;) {
-            int32_t n = refCount.load(std::memory_order_relaxed);
-            CHECK(n > 0);
-            if (!refCount.compare_exchange_weak(n, -n, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                continue;
-            }
-            if (n != 1) {
-                WaitUntilRef(refCount, -1);
-            }
-            return;
-        }
-    }
+    static void in_place_relocation_claim_page(std::atomic<int32_t>& refCount);
 
     // zForwarding.cpp:171-181 -- block until the count is 0, then the page may be freed.
-    static void detach_page(std::atomic<int32_t>& refCount)
-    {
-        if (refCount.load(std::memory_order_acquire) == 0) {
-            return;
-        }
-        WaitUntilRef(refCount, 0);
-    }
+    static void detach_page(std::atomic<int32_t>& refCount);
 
     static void WaitPageDone(ZForwarding* forwarding);
 
@@ -261,44 +212,11 @@ public:
         RegionLifeId lifeId = 0;
     };
 
-    static size_t nentries(size_t objectCountUpperBound)
-    {
-        // zForwarding.inline.hpp:44-50: power-of-two capacity, at most half full.
-        // size_t arithmetic also covers counts above the old uint32_t doubling limit.
-        const size_t maxPowerOfTwo = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
-        if (objectCountUpperBound > maxPowerOfTwo / 2) {
-            return 0;
-        }
-        const size_t required = objectCountUpperBound == 0 ? 2 : objectCountUpperBound * 2;
-        size_t capacity = 2;
-        while (capacity < required) {
-            capacity <<= 1;
-        }
-        return capacity;
-    }
+    static size_t nentries(size_t objectCountUpperBound);
 
     static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
                               RegionInfo* page, RegionLifeId pageLifeId = 0,
-                              ForwardingAllocator* arena = nullptr)
-    {
-        const size_t n = nentries(liveObjects);
-        if (n == 0) {
-            return nullptr;
-        }
-        size_t size;
-        if (!AttachedArray::allocation_size(n, &size)) {
-            return nullptr;
-        }
-        void* const addr = arena ? arena->allocate(size) : AttachedArray::alloc(n);
-        if (addr == nullptr) {
-            return nullptr;
-        }
-        if (arena) {
-            AttachedArray::initialize(addr, n);
-        }
-        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId);
-        return forwarding;
-    }
+                              ForwardingAllocator* arena = nullptr);
 
     // Standalone storage for focused forwarding tests. Product objects use the set arena.
     static ZForwarding* Create(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize = 0)
@@ -312,10 +230,10 @@ public:
         AttachedArray::free(this);
     }
 
-    MAddress start() const { return _start; }
-    size_t size() const { return _size; }
+    MAddress start() const;
+    size_t size() const;
     size_t regionSize() const { return _size; }
-    RegionInfo* page() const { return _page; }
+    RegionInfo* page() const;
     RegionLifeId page_life_id() const { return _page_life_id; }
     uint8_t table_generation() const { return _table_generation; }
     void set_table_generation(uint8_t generation) { _table_generation = generation; }
@@ -358,43 +276,19 @@ public:
 
     bool covers(MAddress addr) const { return _size != 0 && addr >= _start && addr < _start + _size; }
 
-    uintptr_t index(MAddress from) const { return static_cast<uintptr_t>((from - _start) >> kAlignShift); }
+    uintptr_t index(MAddress from) const;
 
-    std::atomic<uint64_t>* entries() const { return _entries(this); }
+    std::atomic<uint64_t>* entries() const;
 
-    ForwardingEntry at(ForwardingCursor* cursor) const
-    {
-        // zForwarding.inline.hpp:207-211 load-acquire
-        return ForwardingEntry::FromRaw(entries()[*cursor].load(std::memory_order_acquire));
-    }
+    ForwardingEntry at(ForwardingCursor* cursor) const;
 
-    ForwardingEntry first(uintptr_t fromIndex, ForwardingCursor* cursor) const
-    {
-        const size_t mask = _entries.length() - 1;
-        *cursor = static_cast<size_t>(ZHashUint32(static_cast<uint32_t>(fromIndex))) & mask;
-        return at(cursor);
-    }
+    ForwardingEntry first(uintptr_t fromIndex, ForwardingCursor* cursor) const;
 
-    ForwardingEntry next(ForwardingCursor* cursor) const
-    {
-        const size_t mask = _entries.length() - 1;
-        *cursor = (*cursor + 1) & mask;
-        return at(cursor);
-    }
+    ForwardingEntry next(ForwardingCursor* cursor) const;
 
     // zForwarding.inline.hpp:230-245 plus a bound: our nentries estimate can undersize
     // (REPORT-fwdentries). A miss is a state every caller already handles.
-    ForwardingEntry find(uintptr_t fromIndex, ForwardingCursor* cursor) const
-    {
-        ForwardingEntry entry = first(fromIndex, cursor);
-        for (size_t probes = 0; probes < _entries.length() && entry.populated(); ++probes) {
-            if (entry.from_index() == fromIndex) {
-                return entry;
-            }
-            entry = next(cursor);
-        }
-        return entry.populated() ? ForwardingEntry() : entry;
-    }
+    ForwardingEntry find(uintptr_t fromIndex, ForwardingCursor* cursor) const;
 
     // In-place relocation reuses one page for both layouts.  ClassifyCompactedMiss
     // must therefore be able to establish that an address below the new top is a
@@ -428,20 +322,7 @@ public:
     }
 
     // zForwarding.inline.hpp:248-252 — miss is null, never geometry.
-    MAddress find(MAddress from) const
-    {
-        const uintptr_t fromIndex = index(from);
-        if (fromIndex <= ForwardingEntry::kMaxFromIndex) {
-            ForwardingCursor cursor = 0;
-            const ForwardingEntry entry = find(fromIndex, &cursor);
-            if (entry.populated()) {
-                return _heapBase + static_cast<MAddress>(entry.to_offset());
-            }
-        }
-        std::lock_guard<std::mutex> lock(_overflowLock);
-        auto found = _overflow.find(from);
-        return found == _overflow.end() ? 0 : found->second;
-    }
+    MAddress find(MAddress from) const;
 
     template<typename Fn>
     void for_each_from(Fn&& fn) const
@@ -459,49 +340,7 @@ public:
         }
     }
 
-    size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed = nullptr)
-    {
-        const ForwardingEntry neu(fromIndex, toOffset);
-        std::atomic_thread_fence(std::memory_order_release);
-        auto* words = entries();
-        for (size_t attempt = 0; attempt < _entries.length(); ++attempt) {
-            uint64_t expected = 0;
-            if (words[*cursor].compare_exchange_strong(expected, neu.raw(), std::memory_order_release,
-                                                       std::memory_order_relaxed)) {
-                if (installed != nullptr) {
-                    *installed = true;
-                }
-                return toOffset;
-            }
-            ForwardingEntry prev = ForwardingEntry::FromRaw(expected);
-            if (!prev.populated()) {
-                return toOffset;
-            }
-            ForwardingEntry entry = at(cursor);
-            bool full = true;
-            for (size_t probes = 0; probes < _entries.length() && entry.populated(); ++probes) {
-                if (entry.from_index() == fromIndex) {
-                    if (installed != nullptr) {
-                        *installed = false;
-                    }
-                    return entry.to_offset();
-                }
-                entry = next(cursor);
-            }
-            if (!entry.populated()) {
-                full = false;
-            }
-            if (full) {
-                break;
-            }
-        }
-        // Preserve the pre-existing attached-array refusal diagnostic while
-        // separately recording that the total receipt path fell back to the
-        // exact-key map.
-        FullRefusals().fetch_add(1, std::memory_order_relaxed);
-        FullFallbacks().fetch_add(1, std::memory_order_relaxed);
-        return kNotStored;
-    }
+    size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed = nullptr);
 
     static std::atomic<uint64_t>& FullFallbacks()
     {
@@ -575,10 +414,7 @@ public:
                         inserted.second ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
     }
 
-    MAddress insert(MAddress from, MAddress to)
-    {
-        return insert_receipt(from, to).address;
-    }
+    MAddress insert(MAddress from, MAddress to);
 
     enum class ZPublishState : int8_t {
         none,
@@ -599,84 +435,22 @@ public:
         return young.phase == GCPhase::GC_PHASE_TRACE;
     }
 
-    void relocated_remembered_fields_register(MAddress field)
-    {
-        const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_relaxed);
-        if (state == ZPublishState::reject) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(_relocated_fields_lock);
-        _relocated_remembered_fields_array.push_back(field);
-    }
+    void relocated_remembered_fields_register(MAddress field);
 
-    bool relocated_remembered_fields_is_concurrently_scanned() const
-    {
-        return _relocated_remembered_fields_state.load(std::memory_order_relaxed) == ZPublishState::reject;
-    }
+    bool relocated_remembered_fields_is_concurrently_scanned() const;
 
     // zForwarding.cpp:relocated_remembered_fields_published_contains.
     // Verification is observational; unlike apply_to_published it never clears.
-    bool relocated_remembered_fields_published_contains(MAddress field)
-    {
-        std::lock_guard<std::mutex> lock(_relocated_fields_lock);
-        for (MAddress entry : _relocated_remembered_fields_array) {
-            if (entry == field) { return true; }
-        }
-        return false;
-    }
+    bool relocated_remembered_fields_published_contains(MAddress field);
 
-    void relocated_remembered_fields_after_relocate()
-    {
-        _relocated_remembered_fields_publish_young_seqnum = young_seqnum();
-        if (young_marking()) {
-            relocated_remembered_fields_publish();
-        }
-    }
+    void relocated_remembered_fields_after_relocate();
 
-    void relocated_remembered_fields_publish()
-    {
-        ZPublishState expected = ZPublishState::none;
-        if (!_relocated_remembered_fields_state.compare_exchange_strong(
-                expected, ZPublishState::published, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-            std::lock_guard<std::mutex> lock(_relocated_fields_lock);
-            _relocated_remembered_fields_array.clear();
-        }
-    }
+    void relocated_remembered_fields_publish();
 
-    void relocated_remembered_fields_notify_concurrent_scan_of()
-    {
-        ZPublishState expected = ZPublishState::none;
-        if (_relocated_remembered_fields_state.compare_exchange_strong(
-                expected, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-            return;
-        }
-        if (expected == ZPublishState::published) {
-            ZPublishState published = ZPublishState::published;
-            if (_relocated_remembered_fields_state.compare_exchange_strong(
-                    published, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                std::lock_guard<std::mutex> lock(_relocated_fields_lock);
-                _relocated_remembered_fields_array.clear();
-            }
-        }
-    }
+    void relocated_remembered_fields_notify_concurrent_scan_of();
 
     template<typename Function>
-    void relocated_remembered_fields_apply_to_published(Function function)
-    {
-        const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_acquire);
-        if (state == ZPublishState::published) {
-            std::lock_guard<std::mutex> lock(_relocated_fields_lock);
-            for (MAddress field : _relocated_remembered_fields_array) {
-                function(field);
-            }
-            _relocated_remembered_fields_array.clear();
-        }
-        if (_relocated_remembered_fields_publish_young_seqnum == young_seqnum()) {
-            _relocated_remembered_fields_state.store(ZPublishState::reject, std::memory_order_relaxed);
-        } else {
-            _relocated_remembered_fields_state.store(ZPublishState::accept, std::memory_order_relaxed);
-        }
-    }
+    void relocated_remembered_fields_apply_to_published(Function function);
 
     // zForwarding.cpp:51-53 / :86-194. Source-page ownership only.
     bool claim();
@@ -698,26 +472,7 @@ public:
 private:
     // zForwarding.inline.hpp:59-76
     ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId)
-        : _start(start),
-          _size(regionSize),
-          _heapBase(heapBase),
-          _entries(nentries),
-          _page(page),
-          _page_life_id(pageLifeId),
-          _table_generation(0),
-          _claimed(false),
-          _in_place(false),
-          _ref_lock(),
-          _ref_count(1),
-          _done(false),
-          _overflowLock(),
-          _overflow(),
-          _receiptInstallLock(),
-          _from_page(),
-          _relocated_remembered_fields_state(ZPublishState::none),
-          _relocated_remembered_fields_publish_young_seqnum(0)
-    {}
+                RegionLifeId pageLifeId);
 
     const MAddress _start;
     const size_t _size;

@@ -15,7 +15,7 @@ public:
     static NumaTopology SealProcessTopology();
 
     bool IsSealed() const { return sealed; }
-    size_t Count() const { return nodes.size(); }
+    size_t Count() const;
     uint32_t NodeAt(size_t index) const { return nodes[index]; }
     bool Contains(uint32_t node) const;
 

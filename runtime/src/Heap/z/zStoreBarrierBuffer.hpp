@@ -51,9 +51,9 @@ class StoreBarrierBuffer {
 public:
     StoreBarrierBuffer();
 
-    bool IsEmpty() const { return current == kStoreBarrierBufferLength; }
+    bool IsEmpty() const;
     size_t Pending() const { return kStoreBarrierBufferLength - current; }
-    size_t Current() const { return current; }
+    size_t Current() const;
     // zVerify.cpp:576-596; caller holds the safepoint excluding buffer writers.
     void VisitEntries(const std::function<void(const StoreBarrierEntry&)>& visitor) const
     {

@@ -120,99 +120,20 @@ namespace MapleRuntime {
 struct CopierRouteMint {
     static CopierRouteToken Make() { return CopierRouteToken(); }
 };
-namespace {
-std::atomic<size_t> g_fwdToGateRefuse{ 0 };
-std::atomic<bool> g_fwdToGateAtexit{ false };
-
-void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
-{
-    const size_t n = g_fwdToGateRefuse.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (!g_fwdToGateAtexit.exchange(true, std::memory_order_relaxed)) {
-        std::atexit([]() {
-            std::fprintf(stderr, "[GCV2][fwd-to-gate] atexit refuse=%zu\n",
-                         g_fwdToGateRefuse.load(std::memory_order_relaxed));
-            std::fflush(stderr);
-        });
-    }
-    if (n <= 8 || (n & (n - 1)) == 0) {
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
-        LOG(RTLOG_ERROR, "[GCV2][fwd-to-gate] refuse n=%zu site=%s to=%p phase=%s", n, site,
-            static_cast<void*>(toObj), Collector::GetGCPhaseName(phase));
-    }
-}
-
-} // namespace
+void NoteFwdToGateRefuse(const char* site, BaseObject* toObj);
 #if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-std::atomic<uintptr_t> g_remapYoungRootsTargetSlot{ 0 };
-std::atomic<uintptr_t> g_remapYoungRootsBefore{ 0 };
-std::atomic<uintptr_t> g_remapYoungRootsAfter{ 0 };
-std::atomic<uintptr_t> g_remapYoungRootsResolvedAddress{ 0 };
-std::atomic<uint64_t> g_remapYoungRootsVisits{ 0 };
-std::atomic<uint64_t> g_remapYoungRootsHeals{ 0 };
-std::atomic<bool> g_remapYoungRootsStoreGoodAfter{ false };
-} // namespace
-
-void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot)
-{
-    g_remapYoungRootsTargetSlot.store(targetSlot, std::memory_order_relaxed);
-    g_remapYoungRootsBefore.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsAfter.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsResolvedAddress.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsVisits.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsHeals.store(0, std::memory_order_relaxed);
-    g_remapYoungRootsStoreGoodAfter.store(false, std::memory_order_relaxed);
-}
-
-RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt()
-{
-    return { g_remapYoungRootsTargetSlot.load(std::memory_order_relaxed),
-             g_remapYoungRootsBefore.load(std::memory_order_relaxed),
-             g_remapYoungRootsAfter.load(std::memory_order_relaxed),
-             g_remapYoungRootsResolvedAddress.load(std::memory_order_relaxed),
-             g_remapYoungRootsVisits.load(std::memory_order_relaxed),
-             g_remapYoungRootsHeals.load(std::memory_order_relaxed),
-             g_remapYoungRootsStoreGoodAfter.load(std::memory_order_relaxed) };
-}
-
-static void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
-                                           bool storeGoodAfter)
-{
-    const uintptr_t slot = reinterpret_cast<uintptr_t>(&field);
-    if (slot != g_remapYoungRootsTargetSlot.load(std::memory_order_relaxed)) {
-        return;
-    }
-    g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);
-    g_remapYoungRootsAfter.store(raw(field.GetFieldValue()), std::memory_order_relaxed);
-    g_remapYoungRootsResolvedAddress.store(
-        reinterpret_cast<uintptr_t>(to_object(field.GetTargetObject())), std::memory_order_relaxed);
-    g_remapYoungRootsVisits.fetch_add(1, std::memory_order_relaxed);
-    if (healed) {
-        g_remapYoungRootsHeals.fetch_add(1, std::memory_order_relaxed);
-    }
-    g_remapYoungRootsStoreGoodAfter.store(storeGoodAfter, std::memory_order_relaxed);
-}
+void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
+                                           bool storeGoodAfter);
 #endif
+
+
 #if defined(MRT_GC_UNIT_TESTS)
 static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext = nullptr;
 #endif
 #if defined(MRT_TESTABLE_INTERNALS)
-// Scheduling only: install a barrier after flip, at wait entry, and before
-// post-copy cleanup. The callback never supplies a forwarding answer.
-using RemapWindowTestHook = void (*)(unsigned, RegionInfo*, BaseObject*);
-static std::atomic<RemapWindowTestHook> g_remapWindowTestHook{ nullptr };
-extern "C" MRT_EXPORT void MRT_SetRemapWindowTestHook(RemapWindowTestHook hook)
-{
-    g_remapWindowTestHook.store(hook, std::memory_order_release);
-}
-void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object)
-{
-    auto hook = g_remapWindowTestHook.load(std::memory_order_acquire);
-    if (hook != nullptr) {
-        hook(point, region, object);
-    }
-}
+void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object);
 #endif
+
 namespace WCollectorInternal {
 } // namespace WCollectorInternal
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is

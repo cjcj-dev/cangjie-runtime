@@ -618,3 +618,7 @@ void CollectorResources::RequestHeapDump(GCTask::TaskType gcTask)
 }
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+CollectorResources::CollectorResources(CollectorProxy& proxy) : collectorProxy(proxy) {}
+}

@@ -5,6 +5,9 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "../Collector/Generation.cpp"
+    "../Collector/Mark.cpp"
+    "../Collector/Remembered.cpp"
     "WCollector.cpp"
     "../z/zGeneration.cpp"
     "../z/zMark.cpp"

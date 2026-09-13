@@ -39,7 +39,7 @@ public:
     MRT_EXPORT static void* MajorDriverThreadEntry(void* arg);
 
     // a collectorResources without a collector entity is functionless
-    explicit CollectorResources(CollectorProxy& proxy) : collectorProxy(proxy) {}
+    explicit CollectorResources(CollectorProxy& proxy);
     ATTR_NO_INLINE virtual ~CollectorResources() = default;
 
     void Init();

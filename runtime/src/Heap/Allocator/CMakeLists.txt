@@ -5,6 +5,10 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "../z/zLiveMap.cpp"
+    "zPage.cpp"
+    "zPageAllocator.cpp"
+
     "Allocator.cpp"
     "zForwardingTable.cpp"
     "../z/zForwardingAllocator.cpp"

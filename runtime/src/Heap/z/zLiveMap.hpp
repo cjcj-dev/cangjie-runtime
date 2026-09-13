@@ -92,11 +92,7 @@ struct RegionBitmap {
     }
 
     // ZLiveMap::inc_live: consumed by direct marking or the worker live cache.
-    void AddLiveCounts(size_t objects, size_t bytes)
-    {
-        liveObjects.fetch_add(objects, std::memory_order_relaxed);
-        liveBytes.fetch_add(bytes, std::memory_order_relaxed);
-    }
+    void AddLiveCounts(size_t objects, size_t bytes);
 
     explicit RegionBitmap(size_t regionSize)
         : liveBytes(0), liveObjects(0), segmentLiveBits(0), segmentClaimBits(0),
@@ -131,32 +127,10 @@ struct RegionBitmap {
         return std::max(size_t(1), (words + kNumSegments - 1) / kNumSegments) * kBitsPerWord;
     }
 
-    bool IsSegmentLive(size_t segment) const
-    {
-        return (segmentLiveBits.load(std::memory_order_acquire) & (uint64_t(1) << segment)) != 0;
-    }
+    bool IsSegmentLive(size_t segment) const;
 
     // ZLiveMap::reset_segment: claim -> clear range -> release live bit.
-    void EnsureSegmentLive(size_t pairBit)
-    {
-        const size_t segmentBits = SegmentBits();
-        const size_t segment = pairBit / segmentBits;
-        const uint64_t bit = uint64_t(1) << segment;
-        if (IsSegmentLive(segment)) {
-            return;
-        }
-        if ((segmentClaimBits.fetch_or(bit, std::memory_order_acq_rel) & bit) != 0) {
-            while (!IsSegmentLive(segment)) {}
-            return;
-        }
-        const size_t firstWord = segment * segmentBits / kBitsPerWord;
-        const size_t endWord = std::min(firstWord + segmentBits / kBitsPerWord,
-                                        wordCnt.load(std::memory_order_relaxed));
-        for (size_t word = firstWord; word < endWord; ++word) {
-            markWords[word].store(0, std::memory_order_relaxed);
-        }
-        segmentLiveBits.fetch_or(bit, std::memory_order_release);
-    }
+    void EnsureSegmentLive(size_t pairBit);
 
     // Iterators and snapshot consumers must skip segments not live this cycle.
     uint64_t GetLiveWord(size_t word) const
@@ -165,71 +139,24 @@ struct RegionBitmap {
             ? markWords[word].load(std::memory_order_relaxed) : 0;
     }
 
-    size_t GetLiveObjects() const { return liveObjects.load(std::memory_order_relaxed); }
+    size_t GetLiveObjects() const;
 
-    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
-    {
-        (void)regionSize;
-        (void)byteCnt;
-        BitMaskInfo maskInfo;
-        GetBitMaskInfo(start, maskInfo);
-        EnsureSegmentLive(2 * (start / kMarkedBytesPerBit));
-        // ZGC zBitMap.inline.hpp:60-83 / zLiveMap: only the object-start pair.
-        // find_base_bit finds last set bit then aligns to the pair (zLiveMap.inline.hpp:219-221).
-        const uint64_t startPair = maskInfo.liveStartBitMask | maskInfo.strongStartBitMask;
-        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(startPair);
-        const bool already = (old & maskInfo.strongStartBitMask) != 0;
-        incLive = !already && (old & maskInfo.liveStartBitMask) == 0;
-        return already;
-    }
+    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive);
 
-    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize)
-    {
-        bool incLive = false;
-        const bool already = MarkBits(start, byteCnt, regionSize, incLive);
-        if (incLive) {
-            AddLiveCounts(1, byteCnt);
-        }
-        return already;
-    }
+    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize);
 
-    bool MarkFinalizableBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
-    {
-        (void)regionSize;
-        (void)byteCnt;
-        BitMaskInfo maskInfo;
-        GetBitMaskInfo(start, maskInfo);
-        EnsureSegmentLive(2 * (start / kMarkedBytesPerBit));
-        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.liveStartBitMask);
-        const bool already = (old & maskInfo.liveStartBitMask) != 0;
-        incLive = !already;
-        return already;
-    }
+    bool MarkFinalizableBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive);
 
-    bool IsMarked(size_t start) const
-    {
-        const size_t pairBit = 2 * (start / kMarkedBytesPerBit);
-        const size_t wordIdx = pairBit / kBitsPerWord;
-        const uint64_t mask = static_cast<uint64_t>(2) << (pairBit % kBitsPerWord);
-        return IsSegmentLive(pairBit / SegmentBits()) &&
-            (markWords[wordIdx].load(std::memory_order_relaxed) & mask) != 0;
-    }
+    bool IsMarked(size_t start) const;
 
-    bool IsLive(size_t start) const
-    {
-        const size_t pairBit = 2 * (start / kMarkedBytesPerBit);
-        const size_t wordIdx = pairBit / kBitsPerWord;
-        const uint64_t mask = static_cast<uint64_t>(1) << (pairBit % kBitsPerWord);
-        return IsSegmentLive(pairBit / SegmentBits()) &&
-            (markWords[wordIdx].load(std::memory_order_relaxed) & mask) != 0;
-    }
+    bool IsLive(size_t start) const;
 
-    bool IsFinalizable(size_t start) const { return IsLive(start) && !IsMarked(start); }
+    bool IsFinalizable(size_t start) const;
 
     // zLiveMap.inline.hpp:219-221: pair with either strong or finalizable bit is an object start.
     bool IsObjectStart(size_t start) const { return IsLive(start) || IsMarked(start); }
 
-    size_t GetLiveBytes() const { return liveBytes.load(std::memory_order_acquire); }
+    size_t GetLiveBytes() const;
 
     size_t RecomputeLiveBytes() const { return GetLiveBytes(); }
 };

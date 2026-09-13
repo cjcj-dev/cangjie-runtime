@@ -36,10 +36,10 @@ public:
     MarkStripeStack(const MarkStripeStack&) = delete;
     MarkStripeStack& operator=(const MarkStripeStack&) = delete;
 
-    bool IsEmpty() const { return top == 0; }
-    bool IsFull() const { return top == entries.length(); }
-    size_t Size() const { return top; }
-    size_t Capacity() const { return entries.length(); }
+    bool IsEmpty() const;
+    bool IsFull() const;
+    size_t Size() const;
+    size_t Capacity() const;
     void Push(const MarkStackEntry& entry);
     MarkStackEntry Pop();
 
@@ -60,11 +60,11 @@ private:
 
 class MarkStripeStackListNode {
 public:
-    explicit MarkStripeStackListNode(MarkStripeStack* stack) : stack(stack) {}
+    explicit MarkStripeStackListNode(MarkStripeStack* stack);
 
-    MarkStripeStack* Stack() const { return stack; }
-    MarkStripeStackListNode* Next() const { return next; }
-    void SetNext(MarkStripeStackListNode* value) { next = value; }
+    MarkStripeStack* Stack() const;
+    MarkStripeStackListNode* Next() const;
+    void SetNext(MarkStripeStackListNode* value);
 
 private:
     MarkStripeStack* const stack;
@@ -82,7 +82,7 @@ public:
     MarkStripeStackList(const MarkStripeStackList&) = delete;
     MarkStripeStackList& operator=(const MarkStripeStackList&) = delete;
 
-    bool IsEmpty() const { return head.load(std::memory_order_acquire) == nullptr; }
+    bool IsEmpty() const;
     size_t Length() const;
     void Push(MarkStripeStack* stack);
     MarkStripeStack* Pop(MarkingSMR& smr, size_t workerId);
@@ -96,8 +96,8 @@ class MarkTerminate;
 
 class MarkStripe {
 public:
-    bool IsEmpty() const { return published.IsEmpty() && overflowed.IsEmpty(); }
-    size_t Population() const { return published.Length() + overflowed.Length(); }
+    bool IsEmpty() const;
+    size_t Population() const;
     void PublishStack(MarkStripeStack* stack, bool publish, MarkTerminate* terminate = nullptr);
     MarkStripeStack* StealStack(MarkingSMR& smr, size_t workerId);
 
@@ -115,7 +115,7 @@ public:
     MarkStripeSet& operator=(const MarkStripeSet&) = delete;
 
     size_t Count() const { return stripes.size(); }
-    size_t NStripes() const { return nstripesMask.load(std::memory_order_relaxed) + 1; }
+    size_t NStripes() const;
     size_t NStripesMask() const { return nstripesMask.load(std::memory_order_relaxed); }
     void SetNStripes(size_t value);
     bool TrySetNStripes(size_t oldNStripes, size_t newNStripes);
@@ -128,10 +128,10 @@ public:
     size_t FirstNonEmptyStripe() const;
     size_t StripeForAddress(uintptr_t address) const;
     size_t StripeForWorker(size_t workerCount, size_t workerId) const;
-    size_t Next(size_t stripeId) const { return (stripeId + 1) & capacityMask; }
-    size_t Next(size_t stripeId, size_t offset) const { return (stripeId + offset) & capacityMask; }
-    MarkStripe& At(size_t stripeId) { return *stripes[stripeId]; }
-    const MarkStripe& At(size_t stripeId) const { return *stripes[stripeId]; }
+    size_t Next(size_t stripeId) const;
+    size_t Next(size_t stripeId, size_t offset) const;
+    MarkStripe& At(size_t stripeId);
+    const MarkStripe& At(size_t stripeId) const;
 
 private:
     size_t capacityMask;

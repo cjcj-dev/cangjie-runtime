@@ -45,7 +45,7 @@ public:
     // Phase handshakes can reach a newly-created mutator before the heap's
     // remembered-set backing has been published. Callers that merely want to
     // defer a flush may inspect this state without tripping CheckInitialized().
-    bool IsInitialized() const { return initialized; }
+    bool IsInitialized() const;
 
     // One remembered-set bit lifted off a region that is about to be relocated in place,
     // together with the face it was found in.

@@ -28,8 +28,8 @@ public:
     Count RemoveDiscontiguous(Count count, std::vector<Extent>& out);
     Count RemoveForUncommit(Count count, std::vector<Extent>& out);
     Count Size() const { return size; }
-    Count MinSizeWatermark() const { return minSizeWatermark; }
-    void ResetMinSizeWatermark() { minSizeWatermark = size; }
+    Count MinSizeWatermark() const;
+    void ResetMinSizeWatermark();
     size_t EntryCount() const { return entries.size(); }
     Count MaxExtent() const;
     uint64_t LastUsedNs() const { return lastUsedNs; }

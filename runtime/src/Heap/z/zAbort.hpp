@@ -13,10 +13,10 @@ namespace MapleRuntime {
 // from worker code, while Request() is used by the peer driver or shutdown path.
 class ZAbort {
 public:
-    void Request() { requested.store(true, std::memory_order_release); }
+    void Request();
     void Reset() { requested.store(false, std::memory_order_release); }
-    bool IsRequested() const { return requested.load(std::memory_order_acquire); }
-    bool Poll() const { return IsRequested(); }
+    bool IsRequested() const;
+    bool Poll() const;
 
 private:
     std::atomic<bool> requested { false };

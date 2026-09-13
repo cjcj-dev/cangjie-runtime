@@ -5,6 +5,7 @@
 #ifndef MRT_ALLOCATION_STALL_QUEUE_H
 #define MRT_ALLOCATION_STALL_QUEUE_H
 
+#include "Heap/Allocator/RegionManager.h"
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -438,13 +439,6 @@ struct YoungCollectionStats {
     uint64_t listMoveNs = 0;
 };
 
-// recent-full is a lifecycle queue, not a liveness root. Account at ownership
-// transitions so retained inventory can be separated from ordinary heap growth.
-namespace RecentFullAccounting {
-void Enqueue(size_t regions, size_t units);
-void Dequeue(size_t regions, size_t units);
-void Report(size_t listRegions, size_t listBytes);
-}
 
 struct FreePinnedSlotLists {
     static constexpr size_t ATOMIC_OBJECT_SIZE = 16;

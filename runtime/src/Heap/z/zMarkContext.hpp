@@ -16,16 +16,12 @@ class MarkContext {
 public:
     MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes, MarkThreadLocalStacks& stacks);
 
-    size_t StripeId() const { return stripeId; }
-    size_t NStripes() const { return nstripes; }
-    void SetNStripes(size_t value) { nstripes = value; }
-    void SetStripeId(size_t value)
-    {
-        cache.Flush();
-        stripeId = value;
-    }
-    MarkThreadLocalStacks& Stacks() { return *stacks; }
-    MarkLiveCache& Cache() { return cache; }
+    size_t StripeId() const;
+    size_t NStripes() const;
+    void SetNStripes(size_t value);
+    void SetStripeId(size_t value);
+    MarkThreadLocalStacks& Stacks();
+    MarkLiveCache& Cache();
 
 private:
     size_t stripeId;

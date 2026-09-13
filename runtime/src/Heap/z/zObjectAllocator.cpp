@@ -468,3 +468,21 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 }
 
 }
+
+namespace MapleRuntime {
+RegionManager::RegionManager()
+        : freeRegionManager(*this), tlRegionList("thread local regions"), recentFullRegionList("recent full regions"),
+          fullTraceRegions("full trace regions"), fromRegionList("from regions"),
+          ghostFromRegionList("ghost from regions"), unmovableFromRegionList("escaped from regions"),
+          garbageRegionList("garbage regions"), recentPinnedRegionList("recent pinned regions"),
+          oldPinnedRegionList("old pinned regions"), rawPointerPinnedRegionList("raw pointer pinned regions"),
+          oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
+          largeTraceRegions("large trace regions")
+    {
+        for (PageAge age : kPageAgeRangeAll) {
+            objectAllocators[untype(age)] = std::make_unique<PerAgeObjectAllocator>(age);
+        }
+        tlabAllocatingThreads.Sample(1);
+        tlabRequestedFraction.Sample(0.1);
+    }
+}

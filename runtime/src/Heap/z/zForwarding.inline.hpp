@@ -48,3 +48,236 @@ namespace MapleRuntime {
 namespace MapleRuntime {
 
 }
+
+namespace MapleRuntime {
+inline size_t ZForwarding::nentries(size_t objectCountUpperBound)
+    {
+        // zForwarding.inline.hpp:44-50: power-of-two capacity, at most half full.
+        // size_t arithmetic also covers counts above the old uint32_t doubling limit.
+        const size_t maxPowerOfTwo = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
+        if (objectCountUpperBound > maxPowerOfTwo / 2) {
+            return 0;
+        }
+        const size_t required = objectCountUpperBound == 0 ? 2 : objectCountUpperBound * 2;
+        size_t capacity = 2;
+        while (capacity < required) {
+            capacity <<= 1;
+        }
+        return capacity;
+    }
+}
+
+namespace MapleRuntime {
+inline ZForwarding* ZForwarding::alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
+                              RegionInfo* page, RegionLifeId pageLifeId ,
+                              ForwardingAllocator* arena )
+    {
+        const size_t n = nentries(liveObjects);
+        if (n == 0) {
+            return nullptr;
+        }
+        size_t size;
+        if (!AttachedArray::allocation_size(n, &size)) {
+            return nullptr;
+        }
+        void* const addr = arena ? arena->allocate(size) : AttachedArray::alloc(n);
+        if (addr == nullptr) {
+            return nullptr;
+        }
+        if (arena) {
+            AttachedArray::initialize(addr, n);
+        }
+        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId);
+        return forwarding;
+    }
+}
+
+namespace MapleRuntime {
+inline MAddress ZForwarding::start() const { return _start; }
+}
+
+namespace MapleRuntime {
+inline size_t ZForwarding::size() const { return _size; }
+}
+
+namespace MapleRuntime {
+inline uintptr_t ZForwarding::index(MAddress from) const { return static_cast<uintptr_t>((from - _start) >> kAlignShift); }
+}
+
+namespace MapleRuntime {
+inline std::atomic<uint64_t>* ZForwarding::entries() const { return _entries(this); }
+}
+
+namespace MapleRuntime {
+inline ForwardingEntry ZForwarding::at(ForwardingCursor* cursor) const
+    {
+        // zForwarding.inline.hpp:207-211 load-acquire
+        return ForwardingEntry::FromRaw(entries()[*cursor].load(std::memory_order_acquire));
+    }
+}
+
+namespace MapleRuntime {
+inline ForwardingEntry ZForwarding::first(uintptr_t fromIndex, ForwardingCursor* cursor) const
+    {
+        const size_t mask = _entries.length() - 1;
+        *cursor = static_cast<size_t>(ZHashUint32(static_cast<uint32_t>(fromIndex))) & mask;
+        return at(cursor);
+    }
+}
+
+namespace MapleRuntime {
+inline ForwardingEntry ZForwarding::next(ForwardingCursor* cursor) const
+    {
+        const size_t mask = _entries.length() - 1;
+        *cursor = (*cursor + 1) & mask;
+        return at(cursor);
+    }
+}
+
+namespace MapleRuntime {
+inline ForwardingEntry ZForwarding::find(uintptr_t fromIndex, ForwardingCursor* cursor) const
+    {
+        ForwardingEntry entry = first(fromIndex, cursor);
+        for (size_t probes = 0; probes < _entries.length() && entry.populated(); ++probes) {
+            if (entry.from_index() == fromIndex) {
+                return entry;
+            }
+            entry = next(cursor);
+        }
+        return entry.populated() ? ForwardingEntry() : entry;
+    }
+}
+
+namespace MapleRuntime {
+inline MAddress ZForwarding::find(MAddress from) const
+    {
+        const uintptr_t fromIndex = index(from);
+        if (fromIndex <= ForwardingEntry::kMaxFromIndex) {
+            ForwardingCursor cursor = 0;
+            const ForwardingEntry entry = find(fromIndex, &cursor);
+            if (entry.populated()) {
+                return _heapBase + static_cast<MAddress>(entry.to_offset());
+            }
+        }
+        std::lock_guard<std::mutex> lock(_overflowLock);
+        auto found = _overflow.find(from);
+        return found == _overflow.end() ? 0 : found->second;
+    }
+}
+
+namespace MapleRuntime {
+inline size_t ZForwarding::insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed )
+    {
+        const ForwardingEntry neu(fromIndex, toOffset);
+        std::atomic_thread_fence(std::memory_order_release);
+        auto* words = entries();
+        for (size_t attempt = 0; attempt < _entries.length(); ++attempt) {
+            uint64_t expected = 0;
+            if (words[*cursor].compare_exchange_strong(expected, neu.raw(), std::memory_order_release,
+                                                       std::memory_order_relaxed)) {
+                if (installed != nullptr) {
+                    *installed = true;
+                }
+                return toOffset;
+            }
+            ForwardingEntry prev = ForwardingEntry::FromRaw(expected);
+            if (!prev.populated()) {
+                return toOffset;
+            }
+            ForwardingEntry entry = at(cursor);
+            bool full = true;
+            for (size_t probes = 0; probes < _entries.length() && entry.populated(); ++probes) {
+                if (entry.from_index() == fromIndex) {
+                    if (installed != nullptr) {
+                        *installed = false;
+                    }
+                    return entry.to_offset();
+                }
+                entry = next(cursor);
+            }
+            if (!entry.populated()) {
+                full = false;
+            }
+            if (full) {
+                break;
+            }
+        }
+        // Preserve the pre-existing attached-array refusal diagnostic while
+        // separately recording that the total receipt path fell back to the
+        // exact-key map.
+        FullRefusals().fetch_add(1, std::memory_order_relaxed);
+        FullFallbacks().fetch_add(1, std::memory_order_relaxed);
+        return kNotStored;
+    }
+}
+
+namespace MapleRuntime {
+inline MAddress ZForwarding::insert(MAddress from, MAddress to)
+    {
+        return insert_receipt(from, to).address;
+    }
+}
+
+namespace MapleRuntime {
+inline void ZForwarding::relocated_remembered_fields_register(MAddress field)
+    {
+        const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_relaxed);
+        if (state == ZPublishState::reject) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+        _relocated_remembered_fields_array.push_back(field);
+    }
+}
+
+namespace MapleRuntime {
+inline bool ZForwarding::relocated_remembered_fields_is_concurrently_scanned() const
+    {
+        return _relocated_remembered_fields_state.load(std::memory_order_relaxed) == ZPublishState::reject;
+    }
+}
+
+namespace MapleRuntime {
+template<typename Function>
+inline
+    void ZForwarding::relocated_remembered_fields_apply_to_published(Function function)
+    {
+        const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_acquire);
+        if (state == ZPublishState::published) {
+            std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+            for (MAddress field : _relocated_remembered_fields_array) {
+                function(field);
+            }
+            _relocated_remembered_fields_array.clear();
+        }
+        if (_relocated_remembered_fields_publish_young_seqnum == young_seqnum()) {
+            _relocated_remembered_fields_state.store(ZPublishState::reject, std::memory_order_relaxed);
+        } else {
+            _relocated_remembered_fields_state.store(ZPublishState::accept, std::memory_order_relaxed);
+        }
+    }
+}
+
+namespace MapleRuntime {
+inline ZForwarding::ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
+                RegionLifeId pageLifeId)
+        : _start(start),
+          _size(regionSize),
+          _heapBase(heapBase),
+          _entries(nentries),
+          _page(page),
+          _page_life_id(pageLifeId),
+          _table_generation(0),
+          _claimed(false),
+          _in_place(false),
+          _ref_lock(),
+          _ref_count(1),
+          _done(false),
+          _overflowLock(),
+          _overflow(),
+          _receiptInstallLock(),
+          _from_page(),
+          _relocated_remembered_fields_state(ZPublishState::none),
+          _relocated_remembered_fields_publish_young_seqnum(0)
+    {}
+}

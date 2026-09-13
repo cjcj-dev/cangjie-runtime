@@ -198,3 +198,110 @@ void TracingCollector::DumpRoots(LogType logType)
 #endif
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+namespace {
+struct SkippedStackMapCounts {
+    std::atomic<size_t> zeroEntries{ 0 };
+    std::atomic<size_t> pcMiss{ 0 };
+    std::atomic<size_t> zeroRootIndices{ 0 };
+};
+
+SkippedStackMapCounts g_skippedStackMapCounts;
+thread_local size_t g_currentThreadRootMapMissCount = 0;
+
+} // namespace
+
+const char* StackMapInvalidReasonName(StackMapInvalidReason reason)
+{
+    switch (reason) {
+        case StackMapInvalidReason::NONE:
+            return "none";
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            return "present-but-zero-entries";
+        case StackMapInvalidReason::PC_MISS:
+            return "pc-miss-exact";
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            return "zero-root-indices";
+    }
+    return "unknown";
+}
+
+void ResetSkippedStackMapCounts()
+{
+    g_skippedStackMapCounts.zeroEntries.store(0, std::memory_order_relaxed);
+    g_skippedStackMapCounts.pcMiss.store(0, std::memory_order_relaxed);
+    g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+}
+
+void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
+                       const Mutator& mutator)
+{
+    (void)reason;
+    (void)frame;
+    (void)startIP;
+    (void)frameIP;
+    (void)mutator;
+    ++g_currentThreadRootMapMissCount;
+}
+
+// Per-process sample cap for SKIPPED_WHO lines (HotSpot-style named frames).
+// Default 16 distinct (reason,symbol) pairs; override with MRT_GCV2_SKIPPED_WHO_MAX.
+namespace {
+std::atomic<size_t> g_skippedWhoPrinted{ 0 };
+}
+
+ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
+                                          uintptr_t frameIP)
+{
+    std::atomic<size_t>* skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+    switch (reason) {
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            skippedCount = &g_skippedStackMapCounts.zeroEntries;
+            break;
+        case StackMapInvalidReason::PC_MISS:
+            skippedCount = &g_skippedStackMapCounts.pcMiss;
+            break;
+        case StackMapInvalidReason::NONE:
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+            break;
+    }
+    skippedCount->fetch_add(1, std::memory_order_relaxed);
+
+    size_t printed = g_skippedWhoPrinted.load(std::memory_order_relaxed);
+    if (printed < 16) {
+        if (g_skippedWhoPrinted.compare_exchange_strong(printed, printed + 1, std::memory_order_relaxed)) {
+            CString symbol = frame.GetFuncName();
+            uintptr_t fa = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
+            U32 pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
+            LOG(RTLOG_ERROR,
+                "GC stack map SKIPPED_WHO reason=%s symbol=%s start_ip=%p frame_ip=%p pc_off=%u fa=%p "
+                "frameType=%u (PC_MISS=exact offset not in stackmap; ZERO_ENTRIES=RECORD_NUM=0)",
+                StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
+                reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
+                reinterpret_cast<void*>(fa), static_cast<unsigned>(frame.GetFrameType()));
+        }
+    }
+}
+
+void ReportSkippedStackMapCounts()
+{
+    size_t zeroEntries = g_skippedStackMapCounts.zeroEntries.load(std::memory_order_relaxed);
+    size_t pcMiss = g_skippedStackMapCounts.pcMiss.load(std::memory_order_relaxed);
+    size_t zeroRootIndices = g_skippedStackMapCounts.zeroRootIndices.load(std::memory_order_relaxed);
+    if (zeroEntries != 0 || pcMiss != 0 || zeroRootIndices != 0) {
+        LOG(RTLOG_ERROR,
+            "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
+            "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
+            zeroEntries, pcMiss, zeroRootIndices);
+    }
+}
+size_t TracingCollector::CurrentThreadRootMapMissCount()
+{
+    return g_currentThreadRootMapMissCount;
+}
+
+
+
+}

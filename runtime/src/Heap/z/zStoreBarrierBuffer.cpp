@@ -144,3 +144,7 @@ void StoreBarrierBuffer::Discard()
 } // namespace MapleRuntime
 
 #include "Heap/z/zStoreBarrierBuffer.inline.hpp"
+
+namespace MapleRuntime {
+bool StoreBarrierBuffer::IsEmpty() const { return current == kStoreBarrierBufferLength; }
+}

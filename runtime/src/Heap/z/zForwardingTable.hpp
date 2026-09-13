@@ -140,7 +140,7 @@ public:
     static void insert(ZForwarding* forwarding);
     static void remove(ZForwarding* forwarding);
 
-    static ZForwarding* Get(MAddress addr, Generation gen) { return get(addr, gen); }
+    static ZForwarding* Get(MAddress addr, Generation gen);
     static ZForwarding* GetEntries(MAddress addr, Generation gen);
     // All queries use the same map (zForwardingTable.inline.hpp:36-46).
     static ZForwarding* GetCovering(MAddress addr, Generation gen);

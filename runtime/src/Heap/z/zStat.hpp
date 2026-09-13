@@ -83,12 +83,7 @@ struct ZStatSamplerData {
     uint64_t nsamples = 0;
     uint64_t sum = 0;
     uint64_t max = 0;
-    void Add(const ZStatSamplerData& value)
-    {
-        nsamples += value.nsamples;
-        sum += value.sum;
-        max = std::max(max, value.max);
-    }
+    void Add(const ZStatSamplerData& value);
     uint64_t Average() const { return nsamples == 0 ? 0 : sum / nsamples; }
 };
 
@@ -126,12 +121,7 @@ private:
 
 class ZStatSamplerHistory {
 public:
-    void Add(const ZStatSamplerData& sample)
-    {
-        if (seconds.Add(sample) && minutes.Add(seconds.Total()) && hours.Add(minutes.Total())) {
-            total.Add(hours.Total());
-        }
-    }
+    void Add(const ZStatSamplerData& sample);
     std::array<ZStatSamplerData, 4> Windows() const
     {
         auto minute = minutes.Total();
@@ -157,9 +147,9 @@ enum class ZStatUnit { TIME, BYTES, THREADS, BYTES_PER_SECOND, OPS_PER_SECOND };
 // Identity and list membership are fixed by static construction, before startup.
 class ZStatValue {
 public:
-    const char* Group() const { return group; }
-    const char* Name() const { return name; }
-    uint32_t Id() const { return id; }
+    const char* Group() const;
+    const char* Name() const;
+    uint32_t Id() const;
     ZStatValue(const ZStatValue&) = delete;
     ZStatValue& operator=(const ZStatValue&) = delete;
 protected:
@@ -225,9 +215,9 @@ private:
 // static phase object; neither the observed name nor a cycle table owns it.
 class ZStatPhase {
 public:
-    ZStatPhase(const char* group, const char* name) : sampler(group, name, ZStatUnit::TIME) {}
-    const char* Name() const { return sampler.Name(); }
-    virtual void RegisterEnd(uint64_t duration) const { sampler.Sample(duration); }
+    ZStatPhase(const char* group, const char* name);
+    const char* Name() const;
+    virtual void RegisterEnd(uint64_t duration) const;
     virtual ~ZStatPhase() = default;
     const ZStatSampler& Sampler() const { return sampler; }
 private:
@@ -237,13 +227,8 @@ private:
 // zStat.cpp:848-875: critical phases register both duration and frequency.
 class ZStatCriticalPhase : public ZStatPhase {
 public:
-    explicit ZStatCriticalPhase(const char* name)
-        : ZStatPhase("Critical", name), counter("Critical", name, ZStatUnit::OPS_PER_SECOND) {}
-    void RegisterEnd(uint64_t duration) const override
-    {
-        ZStatPhase::RegisterEnd(duration);
-        counter.Increment();
-    }
+    explicit ZStatCriticalPhase(const char* name);
+    void RegisterEnd(uint64_t duration) const override;
 private:
     const ZStatCounter counter;
 };
@@ -322,7 +307,7 @@ struct ZStatHeapStats {
 };
 class ZStatHeap {
 public:
-    explicit ZStatHeap(const char* group) : reclaimed(group, "Reclaimed", ZStatUnit::BYTES) {}
+    explicit ZStatHeap(const char* group);
     void AtRelocateEnd(size_t used, size_t live, size_t reclaimedBytes);
     ZStatHeapStats Stats() const;
 private:

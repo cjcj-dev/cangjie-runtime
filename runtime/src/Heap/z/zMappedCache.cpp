@@ -137,3 +137,11 @@ MappedCache::Count MappedCache::MaxExtent() const
 }
 
 }
+
+namespace MapleRuntime {
+MappedCache::Count MappedCache::MinSizeWatermark() const { return minSizeWatermark; }
+}
+
+namespace MapleRuntime {
+void MappedCache::ResetMinSizeWatermark() { minSizeWatermark = size; }
+}

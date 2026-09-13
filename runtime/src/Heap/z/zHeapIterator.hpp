@@ -17,7 +17,7 @@ public:
     using ObjectVisitor = std::function<void(BaseObject*)>;
     using FieldVisitor = std::function<void(BaseObject*, RefField<>&)>;
     using EdgeVisitor = std::function<void(BaseObject*, const void*, uintptr_t)>;
-    explicit HeapIterator(bool visitWeaks, bool forVerify = false) : visitWeaks(visitWeaks), forVerify(forVerify) {}
+    explicit HeapIterator(bool visitWeaks, bool forVerify = false);
     void Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor = {});
     static void Fields(BaseObject* object, bool visitReferents, const FieldVisitor& visitor);
 private:

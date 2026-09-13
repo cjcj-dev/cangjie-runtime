@@ -170,11 +170,7 @@ public:
     static std::atomic<uint64_t>& EnrolAfterFlip();
     void NoteEnrolPhase();
 
-    RegionInfo()
-    {
-        metadata.allocPtr = reinterpret_cast<uintptr_t>(nullptr);
-        metadata.regionEnd = reinterpret_cast<uintptr_t>(nullptr);
-    }
+    RegionInfo();
     static inline RegionInfo* NullRegion();
 
     LiveInfo* GetLiveInfo();
@@ -378,10 +374,7 @@ public:
 
     void ResetMarkBit(MarkView<Generation::Old> view);
 
-    Generation GetOwnerGeneration() const
-    {
-        return IsYoungRegion() ? Generation::Young : Generation::Old;
-    }
+    Generation GetOwnerGeneration() const;
 
     template<Generation G>
     bool MarkFaceMatchesOwner() const
@@ -751,7 +744,7 @@ public:
 
 
 
-    ZGenerationId generation_id() const { return metadata._generation_id; }
+    ZGenerationId generation_id() const;
 
     template<Generation G>
     void PublishFromPageMetadata(MarkView<G> view);
@@ -966,10 +959,7 @@ public:
 
     void SetYoungRegionFlag(uint8_t flag);
 
-    bool IsYoungRegion() const
-    {
-        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
-    }
+    bool IsYoungRegion() const;
 
     static size_t GetYoungRegionCount();
 
@@ -989,13 +979,13 @@ public:
 
     size_t GetUnitIdx() const { return RegionInfo::UnitInfo::GetUnitIdx(reinterpret_cast<const UnitInfo*>(this)); }
 
-    MAddress GetRegionStart() const { return GetUnitAddress(GetUnitIdx()); }
+    MAddress GetRegionStart() const;
 
-    MAddress GetRegionEnd() const { return metadata.regionEnd; }
+    MAddress GetRegionEnd() const;
 
     void SetRegionAllocPtr(MAddress addr) { metadata.allocPtr = addr; }
 
-    MAddress GetRegionAllocPtr() const { return metadata.allocPtr; }
+    MAddress GetRegionAllocPtr() const;
 
     MAddress GetMarkStartAllocPtr() const { return metadata.markStartAllocPtr; }
 
@@ -1030,9 +1020,9 @@ public:
     bool IsTraceRegion() const { return metadata.isTraceRegion == 1; }
 
     // copyable during concurrent copying gc.
-    bool IsSmallRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS; }
+    bool IsSmallRegion() const;
 
-    bool IsLargeRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS; }
+    bool IsLargeRegion() const;
 
     bool IsThreadLocalRegion() const
     {

@@ -59,49 +59,7 @@ namespace MapleRuntime {
 void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object);
 #endif
 
-namespace RecentFullAccounting {
-namespace {
-std::atomic<size_t> enqueuedRegions{ 0 };
-std::atomic<size_t> dequeuedRegions{ 0 };
-std::atomic<size_t> currentBytes{ 0 };
-std::atomic<size_t> peakBytes{ 0 };
-}
 
-void Enqueue(size_t regions, size_t units)
-{
-    if (regions == 0) {
-        return;
-    }
-    enqueuedRegions.fetch_add(regions, std::memory_order_relaxed);
-    const size_t bytes = units * RegionInfo::UNIT_SIZE;
-    const size_t current = currentBytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
-    size_t peak = peakBytes.load(std::memory_order_relaxed);
-    while (peak < current &&
-           !peakBytes.compare_exchange_weak(peak, current, std::memory_order_relaxed)) {}
-}
-
-void Dequeue(size_t regions, size_t units)
-{
-    if (regions == 0) {
-        return;
-    }
-    dequeuedRegions.fetch_add(regions, std::memory_order_relaxed);
-    const size_t bytes = units * RegionInfo::UNIT_SIZE;
-    const size_t before = currentBytes.fetch_sub(bytes, std::memory_order_relaxed);
-    CHECK_DETAIL(before >= bytes, "recent-full accounting underflow: before=%zu remove=%zu", before, bytes);
-}
-
-void Report(size_t listRegions, size_t listBytes)
-{
-    const size_t in = enqueuedRegions.load(std::memory_order_relaxed);
-    const size_t out = dequeuedRegions.load(std::memory_order_relaxed);
-    VLOG(REPORT,
-         "[GCV2][recent-full-account] in=%zu out=%zu current_regions=%zu current_bytes=%zu "
-         "peak_bytes=%zu list_regions=%zu list_bytes=%zu",
-         in, out, in - out, currentBytes.load(std::memory_order_relaxed),
-         peakBytes.load(std::memory_order_relaxed), listRegions, listBytes);
-}
-} // namespace RecentFullAccounting
 
 
 #ifdef MRT_DEBUG

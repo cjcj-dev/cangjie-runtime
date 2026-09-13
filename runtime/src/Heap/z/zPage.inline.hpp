@@ -11,24 +11,7 @@
 
 namespace MapleRuntime {
 
-inline unsigned RegionInfo::RelocateObserve() const
-    {
-        auto owner = ForwardingTable::RetainPageOwner(const_cast<RegionInfo*>(this));
-        if (!owner) {
-            return 0;
-        }
-        unsigned v = 1;
-        if (owner->is_claimed()) {
-            v |= 2;
-        }
-        if (owner->is_done()) {
-            v |= 4;
-        }
-        if (owner->in_place()) {
-            v |= 8;
-        }
-        return v;
-    }
+
 
 inline void RegionInfo::SetMarkFaceSealed(bool v)
     {
@@ -78,17 +61,9 @@ inline bool RegionInfo::IsRoutingState()
         return owner && owner->is_claimed() && !owner->is_done();
     }
 
-inline std::atomic<uint64_t>& RegionInfo::EnrolBeforeFlip()
-    {
-        static std::atomic<uint64_t> n{ 0 };
-        return n;
-    }
 
-inline std::atomic<uint64_t>& RegionInfo::EnrolAfterFlip()
-    {
-        static std::atomic<uint64_t> n{ 0 };
-        return n;
-    }
+
+
 
 inline RegionInfo* RegionInfo::NullRegion()
     {
@@ -135,11 +110,7 @@ inline bool RegionInfo::HasFromPageMetadata() const
         return from != nullptr && (from->lifeId == GetRegionLifeId());
     }
 
-inline LiveInfo* RegionInfo::GetLiveInfo0ForProbe() const
-    {
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        return from == nullptr ? nullptr : from->liveInfo;
-    }
+
 
 inline Generation RegionInfo::GetRouteMarkGeneration() const
     {
@@ -772,44 +743,15 @@ inline void RegionInfo::ResetMarkBit(MarkView<Generation::Old> view)
         SetResurrectedRegionFlag(0);
     }
 
-inline bool RegionInfo::PageOwnerVerifyCountOnly()
-    {
-        static const bool countOnly = []() {
-            const char* value = std::getenv("MRT_GCV2_VERIFY_PAGE_OWNER");
-            return value != nullptr && std::strcmp(value, "count") == 0;
-        }();
-        return countOnly;
-    }
 
-inline std::atomic<size_t>& RegionInfo::PageOwnerMismatchAttempts()
-    {
-        static std::atomic<size_t> count{0};
-        return count;
-    }
 
-inline std::atomic<size_t>& RegionInfo::PageOwnerMismatchFirstPaints()
-    {
-        static std::atomic<size_t> count{0};
-        return count;
-    }
 
-inline void RegionInfo::ReportPageOwnerVerifyCounts()
-    {
-        std::fprintf(stderr, "[GCV2][page-owner] point=atexit mismatch_attempts=%zu first_paints=%zu mode=%s\n",
-                     PageOwnerMismatchAttempts().load(std::memory_order_relaxed),
-                     PageOwnerMismatchFirstPaints().load(std::memory_order_relaxed),
-                     PageOwnerVerifyCountOnly() ? "count" : "assert");
-        std::fflush(stderr);
-    }
 
-inline void RegionInfo::EnsurePageOwnerVerifyAtexit()
-    {
-        static const bool installed = []() {
-            std::atexit([]() { ReportPageOwnerVerifyCounts(); });
-            return true;
-        }();
-        (void)installed;
-    }
+
+
+
+
+
 
     template<Generation G>
 inline void RegionInfo::VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const
@@ -835,13 +777,6 @@ inline void RegionInfo::VerifyMarkFaceOwner(const BaseObject* obj, const char* s
                      G == Generation::Young ? "young" : "old");
     }
 
-    template<Generation G>
-inline void RegionInfo::NotePageOwnerFirstPaint() const
-    {
-        if (UNLIKELY(!MarkFaceMatchesOwner<G>())) {
-            PageOwnerMismatchFirstPaints().fetch_add(1, std::memory_order_relaxed);
-        }
-    }
 
     template<Generation G>
 inline bool RegionInfo::MarkLargeObject(MarkView<G> view, const BaseObject* obj, size_t size, bool accountLive, bool& firstLive)
@@ -1043,21 +978,9 @@ inline bool RegionInfo::IsResurrectedObject(size_t offset)
         return bitmap->IsFinalizable(offset);
     }
 
-inline void RegionInfo::ReportMarkEpochCounts(const char* point)
-    {
-        const size_t stale = markEpochStaleReadCount.load(std::memory_order_relaxed);
-        std::fprintf(stderr, "[GCV2][mark-epoch] point=%s stale_read=%zu\n",
-                     point != nullptr ? point : "?", stale);
-        std::fflush(stderr);
-    }
 
-inline void RegionInfo::EnsureMarkEpochAtexit()
-    {
-        bool expected = false;
-        if (markEpochAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-            std::atexit([]() { ReportMarkEpochCounts("atexit"); });
-        }
-    }
+
+
 
     template<Generation G>
 inline bool RegionInfo::NoteMarkEpochOnRead(MarkView<G> view, LiveInfo* liveInfo)
@@ -1717,14 +1640,7 @@ inline void RegionInfo::AdvanceCompactRouteTableGracePeriod()
         }
     }
 
-inline BaseObject* RegionInfo::GetRouteForProbe(BaseObject* fromObj)
-    {
-        OptionalRouteTicket ticket = AdmitForRoute(fromObj);
-        if (!ticket) {
-            return nullptr;
-        }
-        return GetRoute(ticket.value());
-    }
+
 
     template<Generation G>
 inline void RegionInfo::PublishFromPageMetadata(MarkView<G> view)
@@ -2530,40 +2446,8 @@ inline ALWAYS_INLINE void RegionInfo::CheckObjectSize(
         }
     }
 
-inline ATTR_COLD ATTR_NO_INLINE void RegionInfo::ReportTypeInfoInHeap(const BaseObject* obj, TypeInfo* tip, size_t objSize,
-                                                       MAddress regionStart, MAddress regionEnd) const
-    {
-        size_t n = tipInHeapHits.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n == 1) {
-            GCPhase phase = Heap::GetHeap().GetGCPhase();
-            LOG(RTLOG_ERROR,
-                "[GCV2][tipguard][TYPEINFO_IN_HEAP] obj=%p tip=%p objSize=%zu region=%p regionStart=%#zx "
-                "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u "
-                "(default=count; fatal=MRT_GCV2_TIPINHEAP_FATAL=1)",
-                obj, tip, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(),
-                static_cast<unsigned>(GetRegionType()), static_cast<unsigned>(IsYoungRegion()),
-                static_cast<unsigned>(phase));
-        } else if ((n & 0x3ffU) == 0) {
-            LOG(RTLOG_ERROR, "[GCV2][tipguard][TYPEINFO_IN_HEAP_COUNT] total=%zu", n);
-        }
-    }
 
-NO_RETURN inline ATTR_COLD ATTR_NO_INLINE void RegionInfo::ReportInvalidObjectSize(
-        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
-    {
-        MAddress objAddr = reinterpret_cast<MAddress>(obj);
-        size_t bitCapacity = (regionEnd - regionStart) / kMarkedBytesPerBit;
-        size_t bitIndex = objAddr >= regionStart ? (objAddr - regionStart) / kMarkedBytesPerBit :
-                                                   std::numeric_limits<size_t>::max();
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
-        LOG(RTLOG_FATAL,
-            "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
-            "regionEnd=%#zx allocPtr=%#zx regionType=%u unitRole=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
-            obj, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(), static_cast<unsigned>(GetRegionType()),
-            static_cast<unsigned>(GetUnitRole()), static_cast<unsigned>(IsYoungRegion()),
-            static_cast<unsigned>(phase), bitCapacity, bitIndex, kMarkedBytesPerBit);
-        std::abort();
-    }
+
 
 inline RegionInfo::UnitRole RegionInfo::LoadUnitRole0(UnitInfo* unit)
     {
@@ -2689,3 +2573,43 @@ inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass)
 
 } // namespace MapleRuntime
 #endif
+
+namespace MapleRuntime {
+inline ZGenerationId RegionInfo::generation_id() const { return metadata._generation_id; }
+}
+
+#include "Heap/Allocator/RegionInfo.h"
+
+namespace MapleRuntime {
+inline Generation RegionInfo::GetOwnerGeneration() const
+    {
+        return IsYoungRegion() ? Generation::Young : Generation::Old;
+    }
+}
+
+namespace MapleRuntime {
+inline bool RegionInfo::IsYoungRegion() const
+    {
+        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
+    }
+}
+
+namespace MapleRuntime {
+inline MAddress RegionInfo::GetRegionStart() const { return GetUnitAddress(GetUnitIdx()); }
+}
+
+namespace MapleRuntime {
+inline MAddress RegionInfo::GetRegionEnd() const { return metadata.regionEnd; }
+}
+
+namespace MapleRuntime {
+inline MAddress RegionInfo::GetRegionAllocPtr() const { return metadata.allocPtr; }
+}
+
+namespace MapleRuntime {
+inline bool RegionInfo::IsSmallRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS; }
+}
+
+namespace MapleRuntime {
+inline bool RegionInfo::IsLargeRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS; }
+}

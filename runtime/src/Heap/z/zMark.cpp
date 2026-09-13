@@ -62,42 +62,7 @@ template bool RegionInfo::MarkObject<Generation::Young>(
 template bool RegionInfo::MarkObject<Generation::Old>(
     MarkView<Generation::Old>, const BaseObject*, size_t, bool);
 
-#if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-std::atomic<uint64_t> g_youngWeakSerialDiscoveries{ 0 };
-std::atomic<uint64_t> g_youngWeakLegacyParallelDiscoveries{ 0 };
-std::atomic<uint64_t> g_youngWeakStripedDiscoveries{ 0 };
-} // namespace
 
-void ResetYoungWeakClosureTestReceipt()
-{
-    g_youngWeakSerialDiscoveries.store(0, std::memory_order_relaxed);
-    g_youngWeakLegacyParallelDiscoveries.store(0, std::memory_order_relaxed);
-    g_youngWeakStripedDiscoveries.store(0, std::memory_order_relaxed);
-}
-
-void NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant variant)
-{
-    switch (variant) {
-        case YoungWeakClosureVariant::SERIAL:
-            g_youngWeakSerialDiscoveries.fetch_add(1, std::memory_order_relaxed);
-            return;
-        case YoungWeakClosureVariant::LEGACY_PARALLEL:
-            g_youngWeakLegacyParallelDiscoveries.fetch_add(1, std::memory_order_relaxed);
-            return;
-        case YoungWeakClosureVariant::STRIPED:
-            g_youngWeakStripedDiscoveries.fetch_add(1, std::memory_order_relaxed);
-            return;
-    }
-}
-
-YoungWeakClosureTestReceipt ReadYoungWeakClosureTestReceipt()
-{
-    return { g_youngWeakSerialDiscoveries.load(std::memory_order_relaxed),
-             g_youngWeakLegacyParallelDiscoveries.load(std::memory_order_relaxed),
-             g_youngWeakStripedDiscoveries.load(std::memory_order_relaxed) };
-}
-#endif
 
 bool WCollector::MarkObject(BaseObject* obj) const
 {
@@ -2272,3 +2237,18 @@ void FollowPartialReferences(const MarkStackEntry& entry,
 
 }
 }
+
+namespace MapleRuntime {
+TracingCollector::TracingCollector(Allocator& allocator, CollectorResources& resources)
+        : Collector(), theAllocator(allocator), collectorResources(resources)
+    {}
+}
+
+namespace MapleRuntime {
+void TracingCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
+    {
+        Collector::AbortUnimplemented("TracingCollector::FollowPartialArray");
+    }
+}
+
+#include "Heap/z/zMark.inline.hpp"

@@ -253,9 +253,7 @@ public:
         WEAK_REFERENT,
     };
 
-    explicit TracingCollector(Allocator& allocator, CollectorResources& resources)
-        : Collector(), theAllocator(allocator), collectorResources(resources)
-    {}
+    explicit TracingCollector(Allocator& allocator, CollectorResources& resources);
 
     ~TracingCollector() override = default;
     MarkDomain* MajorMarkDomain() const { return majorMarkDomain.get(); }
@@ -377,24 +375,7 @@ public:
     }
     void StartOldMarkWork();
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override;
-    virtual bool MarkObject(BaseObject* obj) const
-    {
-        // getsize7: base path uses unsized RegionInfo::MarkObject → GetSize without gate.
-        // WCollector overrides this; keep the base arm safe for non-WCollector builds/tests.
-        if (!Collector::PlausibleManagedObjectGate("TracingCollector::MarkObject", obj)) {
-            return true;
-        }
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
-        bool marked = regionInfo->MarkObjectByOwner(obj);
-        if (!marked) {
-            size_t objSize = obj->GetSize();
-            if (!fixReferences && regionInfo->IsFromRegion()) {
-                DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
-            }
-        }
-        return marked;
-    }
+    virtual bool MarkObject(BaseObject* obj) const;
 
     // Consume one object entry. Partial arrays must be decoded before this
     // entry point; mark=false carries an already-owned accounting obligation.
@@ -409,10 +390,7 @@ public:
     // Follow one partial-array chunk popped off the work stack. Ported from
     // ZGC's ZMark::follow_partial_array (zMark.cpp:265-270). Only reachable
     // when MarkPartialArray::Enabled(), since nothing pushes chunks otherwise.
-    virtual void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
-    {
-        Collector::AbortUnimplemented("TracingCollector::FollowPartialArray");
-    }
+    virtual void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack);
     virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
     {
         Collector::AbortUnimplemented("TracingCollector::GetAndTryTagObj");

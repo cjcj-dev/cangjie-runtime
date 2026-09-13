@@ -30,9 +30,11 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
+extern std::atomic<size_t> g_allocIntoCSetRetired;
+void NoteAllocIntoCSet(RegionInfo* reg, const char* where);
+
 namespace {
-std::atomic<size_t> g_allocIntoCSetCount{ 0 };
-std::atomic<size_t> g_allocIntoCSetRetired{ 0 };
+
 
 bool RegionIsInRelocationSet(const RegionInfo* reg)
 {
@@ -45,23 +47,9 @@ bool RegionIsInRelocationSet(const RegionInfo* reg)
     return ForwardingTable::RetainPageOwner(reg).get() != nullptr && !reg->IsForwardingDone();
 }
 
-void NoteAllocIntoCSet(RegionInfo* reg, const char* where)
-{
-    (void)reg;
-    (void)where;
-    g_allocIntoCSetCount.fetch_add(1, std::memory_order_relaxed);
-}
 } // namespace
 
-size_t RegionSpace::AllocIntoCSetCount()
-{
-    return g_allocIntoCSetCount.load(std::memory_order_relaxed);
-}
 
-size_t RegionSpace::AllocIntoCSetRetiredCount()
-{
-    return g_allocIntoCSetRetired.load(std::memory_order_relaxed);
-}
 }
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.

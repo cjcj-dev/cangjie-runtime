@@ -21,7 +21,7 @@ class Allocator;
 
 class Uncommitter {
 public:
-    explicit Uncommitter(Allocator& partition) : partition(partition) {}
+    explicit Uncommitter(Allocator& partition);
     ~Uncommitter() { Stop(); }
     void Start();
     void Stop();

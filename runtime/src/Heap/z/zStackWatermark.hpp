@@ -55,7 +55,7 @@ public:
         WM_OWNER_GC = 2,
     };
 
-    StackWatermark() { Reset(); }
+    StackWatermark();
 
     void Reset()
     {
@@ -289,12 +289,8 @@ public:
 
     bool IsNotStarted() const { return GetPhase() == WM_NOT_STARTED; }
     bool IsScanning() const { return GetPhase() == WM_SCANNING; }
-    bool IsDone() const { return GetPhase() == WM_DONE; }
-    bool IsDone(uint64_t scanEpoch, ProcessingPhase workPhase = ProcessingPhase::MARK) const
-    {
-        return GetPhase() == WM_DONE && GetEpoch() == scanEpoch &&
-            processingPhase.load(std::memory_order_acquire) == workPhase && complete.load(std::memory_order_acquire);
-    }
+    bool IsDone() const;
+    bool IsDone(uint64_t scanEpoch, ProcessingPhase workPhase = ProcessingPhase::MARK) const;
 
     static bool VerifyEnabled();
 

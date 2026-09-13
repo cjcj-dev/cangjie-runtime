@@ -523,3 +523,5 @@ uint64_t ForwardingTable::UnarmedCount() { return g_unarmed.load(std::memory_ord
 
 
 } // namespace MapleRuntime
+
+#include "Heap/z/zForwardingTable.inline.hpp"

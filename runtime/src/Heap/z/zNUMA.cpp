@@ -73,3 +73,5 @@ bool NumaTopology::Contains(uint32_t node) const
 }
 
 }
+
+#include "Heap/z/zNUMA.inline.hpp"

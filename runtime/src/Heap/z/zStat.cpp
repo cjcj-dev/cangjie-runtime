@@ -663,3 +663,64 @@ void TracingCollector::UpdateGCStats()
 }
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+void ZStatSamplerData::Add(const ZStatSamplerData& value)
+    {
+        nsamples += value.nsamples;
+        sum += value.sum;
+        max = std::max(max, value.max);
+    }
+}
+
+namespace MapleRuntime {
+void ZStatSamplerHistory::Add(const ZStatSamplerData& sample)
+    {
+        if (seconds.Add(sample) && minutes.Add(seconds.Total()) && hours.Add(minutes.Total())) {
+            total.Add(hours.Total());
+        }
+    }
+}
+
+namespace MapleRuntime {
+const char* ZStatValue::Group() const { return group; }
+}
+
+namespace MapleRuntime {
+const char* ZStatValue::Name() const { return name; }
+}
+
+namespace MapleRuntime {
+uint32_t ZStatValue::Id() const { return id; }
+}
+
+
+
+
+namespace MapleRuntime {
+ZStatPhase::ZStatPhase(const char* group, const char* name) : sampler(group, name, ZStatUnit::TIME) {}
+}
+
+namespace MapleRuntime {
+const char* ZStatPhase::Name() const { return sampler.Name(); }
+}
+
+namespace MapleRuntime {
+void ZStatPhase::RegisterEnd(uint64_t duration) const { sampler.Sample(duration); }
+}
+
+namespace MapleRuntime {
+ZStatCriticalPhase::ZStatCriticalPhase(const char* name)
+        : ZStatPhase("Critical", name), counter("Critical", name, ZStatUnit::OPS_PER_SECOND) {}
+}
+
+namespace MapleRuntime {
+void ZStatCriticalPhase::RegisterEnd(uint64_t duration) const {
+        ZStatPhase::RegisterEnd(duration);
+        counter.Increment();
+    }
+}
+
+namespace MapleRuntime {
+ZStatHeap::ZStatHeap(const char* group) : reclaimed(group, "Reclaimed", ZStatUnit::BYTES) {}
+}

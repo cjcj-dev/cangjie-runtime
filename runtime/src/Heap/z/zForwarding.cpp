@@ -135,3 +135,132 @@ void ZForwarding::in_place_relocation_claim_page()
         _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
     }
 }
+
+namespace MapleRuntime {
+bool ZForwardingLife::claim(std::atomic<bool>& claimed)
+    {
+        bool expected = false;
+        return claimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+    }
+}
+
+namespace MapleRuntime {
+void ZForwardingLife::mark_done(std::atomic<bool>& done)
+    {
+        done.store(true, std::memory_order_release);
+        NotifyAll();
+    }
+}
+
+namespace MapleRuntime {
+bool ZForwardingLife::is_done(const std::atomic<bool>& done) { return done.load(std::memory_order_acquire); }
+}
+
+namespace MapleRuntime {
+void ZForwardingLife::release_page(std::atomic<int32_t>& refCount)
+    {
+        for (;;) {
+            int32_t n = refCount.load(std::memory_order_relaxed);
+            CHECK(n != 0);
+            if (n > 0) {
+                if (!refCount.compare_exchange_weak(n, n - 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    continue;
+                }
+                if (n == 1) {
+                    NotifyAll();
+                }
+            } else {
+                if (!refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    continue;
+                }
+                if (n == -2 || n == -1) {
+                    NotifyAll();
+                }
+            }
+            return;
+        }
+    }
+}
+
+namespace MapleRuntime {
+void ZForwardingLife::in_place_relocation_claim_page(std::atomic<int32_t>& refCount)
+    {
+        for (;;) {
+            int32_t n = refCount.load(std::memory_order_relaxed);
+            CHECK(n > 0);
+            if (!refCount.compare_exchange_weak(n, -n, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                continue;
+            }
+            if (n != 1) {
+                WaitUntilRef(refCount, -1);
+            }
+            return;
+        }
+    }
+}
+
+namespace MapleRuntime {
+void ZForwardingLife::detach_page(std::atomic<int32_t>& refCount)
+    {
+        if (refCount.load(std::memory_order_acquire) == 0) {
+            return;
+        }
+        WaitUntilRef(refCount, 0);
+    }
+}
+
+namespace MapleRuntime {
+RegionInfo* ZForwarding::page() const { return _page; }
+}
+
+namespace MapleRuntime {
+bool ZForwarding::relocated_remembered_fields_published_contains(MAddress field)
+    {
+        std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+        for (MAddress entry : _relocated_remembered_fields_array) {
+            if (entry == field) { return true; }
+        }
+        return false;
+    }
+}
+
+namespace MapleRuntime {
+void ZForwarding::relocated_remembered_fields_after_relocate()
+    {
+        _relocated_remembered_fields_publish_young_seqnum = young_seqnum();
+        if (young_marking()) {
+            relocated_remembered_fields_publish();
+        }
+    }
+}
+
+namespace MapleRuntime {
+void ZForwarding::relocated_remembered_fields_publish()
+    {
+        ZPublishState expected = ZPublishState::none;
+        if (!_relocated_remembered_fields_state.compare_exchange_strong(
+                expected, ZPublishState::published, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+            _relocated_remembered_fields_array.clear();
+        }
+    }
+}
+
+namespace MapleRuntime {
+void ZForwarding::relocated_remembered_fields_notify_concurrent_scan_of()
+    {
+        ZPublishState expected = ZPublishState::none;
+        if (_relocated_remembered_fields_state.compare_exchange_strong(
+                expected, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            return;
+        }
+        if (expected == ZPublishState::published) {
+            ZPublishState published = ZPublishState::published;
+            if (_relocated_remembered_fields_state.compare_exchange_strong(
+                    published, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+                _relocated_remembered_fields_array.clear();
+            }
+        }
+    }
+}

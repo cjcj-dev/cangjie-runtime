@@ -21,3 +21,19 @@ bool StackWatermark::VerifyEnabled()
 }
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+StackWatermark::StackWatermark() { Reset(); }
+}
+
+namespace MapleRuntime {
+bool StackWatermark::IsDone() const { return GetPhase() == WM_DONE; }
+}
+
+namespace MapleRuntime {
+bool StackWatermark::IsDone(uint64_t scanEpoch, ProcessingPhase workPhase ) const
+    {
+        return GetPhase() == WM_DONE && GetEpoch() == scanEpoch &&
+            processingPhase.load(std::memory_order_acquire) == workPhase && complete.load(std::memory_order_acquire);
+    }
+}
