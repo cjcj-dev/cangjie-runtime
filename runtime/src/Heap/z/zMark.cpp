@@ -1751,14 +1751,10 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, 
     return shared.newlyMarked.load(std::memory_order_relaxed);
 }
 
-void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet)
+void TracingCollector::TracingImpl(WorkStack& workStack)
 {
     // ZMark::mark_follow (zMark.cpp:944-952): join workers, check abort,
     // then flush producers. Stopped stripes never start another follow pass.
-    ProcessExportRoots(foreignRootsSet);
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
-        return;
-    }
     do {
         if (!workStack.empty() || !majorMarkDomain->Stripes().IsEmpty()) {
             markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
@@ -1808,7 +1804,7 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
 
     {
         MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
-        TracingImpl(workStack, foreignRootsSet);
+        TracingImpl(workStack);
     }
 
     // ZGenerationOld::collect (zGeneration.cpp:1020-1030): mark-follow
@@ -1816,13 +1812,13 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
         return;
     }
-    while (!TryEndOldMark(workStack)) {
+    while (!TryEndOldMark(workStack, foreignRootsSet)) {
         if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
             return;
         }
         MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
         TransitionToGCPhase(GC_PHASE_TRACE, true);
-        TracingImpl(workStack, foreignRootsSet);
+        TracingImpl(workStack);
         if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
             return;
         }

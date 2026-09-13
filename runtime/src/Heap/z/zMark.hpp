@@ -492,13 +492,13 @@ protected:
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool TryEndOldMark(WorkStack& workStack);
+    bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool FlushMarkProducers(MarkDomain* domain);
     void ProcessOldNonStrongReferences(WorkStack& workStack);
     void ProcessExportRoots(WorkStack& foreignRootsSet);
 
     // concurrent marking.
-    void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);
+    void TracingImpl(WorkStack& workStack);
 
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet, Generation generation) const
     {

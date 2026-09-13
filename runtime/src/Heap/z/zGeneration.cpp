@@ -697,7 +697,7 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     }
 }
 
-bool TracingCollector::TryEndOldMark(WorkStack& workStack)
+bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
     MarkStripeSet& stripes = majorMarkDomain->Stripes();
@@ -710,6 +710,14 @@ bool TracingCollector::TryEndOldMark(WorkStack& workStack)
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
     if (!workStack.empty() || !stripes.IsEmpty()) {
         NoteMarkTerminateContinue(workStack.size() + stripes.Population());
+        return false;
+    }
+    // Preserve export ownership discovery after the ordinary root closure,
+    // while the mark-end pause excludes new mutator publication.
+    ProcessExportRoots(foreignRootsSet);
+    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
+    // to the phase owner before verification or publishing mark completion.
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
         return false;
     }
     MarkingStacks::VerifyAllEmpty(*majorMarkDomain);
