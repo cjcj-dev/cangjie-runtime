@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 
 #include "Heap/Collector/GcTrigger.h"
+#include "Base/ZStat.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -117,4 +118,42 @@ GC_TEST(GcDirector, ActiveMarkPressureRequestsMoreWorkers)
     const auto relaxed = RuleDynamicAllocRate(in, 8, 1, false);
     GC_EXPECT_TRUE(!relaxed.trigger);
     GC_EXPECT_EQ(relaxed.workers, 1u);
+}
+
+// zStat.cpp:1242-1267: cycle wall time is split using actual worker
+// duration and accumulated worker time, never a fixed percentage.
+GC_TEST(GcDirector, CycleUsesWorkerAccountingAndControlledClock)
+{
+    ZStatCycle cycle;
+    cycle.Initialize(0);
+    cycle.AtStart(1000000000, 0, 0);
+    cycle.AtEnd(5000000000, 2000000000, 4000000000, true);
+    const auto first = cycle.Stats(6000000000);
+    GC_EXPECT_EQ(first.serialTime, 2.0);
+    GC_EXPECT_EQ(first.parallelTime, 4.0);
+    GC_EXPECT_EQ(first.lastActiveWorkers, 2.0);
+    GC_EXPECT_EQ(first.timeSinceLast, 1.0);
+    GC_EXPECT_EQ(first.warmupCycles, 1u);
+    cycle.AtStart(6000000000, 2000000000, 4000000000);
+    cycle.AtEnd(11000000000, 6000000000, 12000000000, false);
+    const auto next = cycle.Stats(12000000000);
+    GC_EXPECT_TRUE(std::fabs(next.serialTime - 1.3) < 0.000001);
+    GC_EXPECT_TRUE(std::fabs(next.parallelTime - 6.8) < 0.000001);
+    GC_EXPECT_TRUE(next.serialTimeSd > 0.0);
+    GC_EXPECT_TRUE(next.parallelTimeSd > 0.0);
+    GC_EXPECT_EQ(next.warmupCycles, 1u);
+}
+
+GC_TEST(GcDirector, WarmupCountsOnlyWarmupRequests)
+{
+    ZStatCycle cycle;
+    cycle.Initialize(0);
+    cycle.AtStart(1, 0, 0);
+    cycle.AtEnd(2, 0, 0, false);
+    GC_EXPECT_EQ(cycle.Stats(3).warmupCycles, 0u);
+    for (uint64_t i = 0; i < 4; ++i) {
+        cycle.AtStart(10 + 2 * i, 0, 0);
+        cycle.AtEnd(11 + 2 * i, 0, 0, true);
+    }
+    GC_EXPECT_EQ(cycle.Stats(20).warmupCycles, 3u);
 }
