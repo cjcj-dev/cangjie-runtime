@@ -354,7 +354,6 @@ MAIN_COMPILE_FLAGS=(
 MAIN_SOURCES=(
   "$SRC/gc_unit_main.cpp"
   "$SRC/gc_unit_stubs.cpp"
-  "$ROOT/runtime/src/Base/ZStat.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_z_bit_field.cpp"
   "$SRC/test_z_list.cpp"
