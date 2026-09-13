@@ -4,7 +4,7 @@
 
 本轮角色 implement；形态对齐，不含 gate/unit/切刀执行或并发运行验收。
 冻结基线 `3c3216a7293b28690411a6283c7fd74076bdcd1b`；已按内容合入主线 `78fc9ce028de705b3ea705b7069759c1036a2796`。
-R 根：`/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_494_implement_r5655389950/`；Z 根：`/root/cj_build/reference/jdk/src/hotspot/share/gc/z/`。
+R 根：`/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_494_implement_r5655968840/`；Z 根：`/root/cj_build/reference/jdk/src/hotspot/share/gc/z/`。
 表中是本包修改的机制或调用参数对应，不把未改的外层标记、搬移、互操作及诊断函数声明成逐指令移植。
 
 ## 函数对应表
@@ -164,3 +164,44 @@ FIFO 的请求方是 `RegionManager::StallAllocation`，只发 `GC_REASON_OOM`�
 `evidence/a10b/final-validated-build.log`：构建提交 `60df4f9512102c902c2b11ce84da1cc416127849`，default/testable 的 configure_rc/build_rc 都为 0，各 wall=48s，实际 -j192、并行臂数 2。
 完整源码包与 SO SHA256、CMake 提交 stamp、核域以及前后 uptime 见 `evidence/a10b/artifact-metadata.json`。构建前 load average 0.12/0.76/1.37，构建后 1.19/0.95/1.41；这里只记录构建条件。
 文档/证据提交不改变 runtime 树，交付时独立比较树哈希。参考测试清单见 `evidence/a10b/zgc-test-inventory.txt`，其中 test_zForwarding.cpp 为文件检索阳性对照。
+
+
+## R1 返工：分配 phase 的消费归属
+
+返工基线 `9418ed6f65cfc4f7202500c45634e4289d326d16`。以下覆盖上轮“owner 已闭合”的完成主张；前述构建记录只属于前轮候选。
+
+| 产品消费者 | ZGC owner 对应 | 返工 |
+|---|---|---|
+| zObjectAllocator.cpp:358 AllocPinnedFromFreeList | zGeneration.inline.hpp:38、zPage.inline.hpp:180/254 | 从 OLD snapshot 同时读取 phase/activity；删除线程最近操作 phase 和全堆 IsGcStarted 对旧代槽分配的决策影响 |
+| zMark.cpp:1343 WCollector::MarkNewObject | zGeneration.inline.hpp:74、zPage.inline.hpp:264 | 按 ObjectGeneration(obj) 选 generation phase；下游 MarkObjectImpl 仍按页 owner 标记 |
+
+本包迁移的是这些既有算法的 owner 消费，ZGC 没有 pinned freelist 同名算法；不声称这里完整移植 ZObjectAllocator 的分配算法。
+
+| producer → consumer | 顺序与归属 |
+|---|---|
+| MutatorManager.cpp:1241 分代 SetGCPhase → zGeneration.cpp:932 PublishPhase | phase 写入对应 generation；与线程操作完成状态分离 |
+| zPageAllocator.cpp:802 old MarkView → :814 freePinnedSlotLists.PushFront → zObjectAllocator.cpp:358 | 槽池归 old；PopFront 前以 old POST_TRACE 决定是否取槽；取槽后补标条件同样取 old phase |
+| CompilerCalls.cpp:279 / ObjectModel/MObject.cpp:51 / ObjectManager.inline.h:42 → BaseObject.cpp:182 → zMark.cpp:1343 | finalizer 创建调用 MarkNewObject，ObjectGeneration 在读取 phase 前确定；MarkObjectImpl:64 的页 owner 消费保持 |
+| MutatorManager.cpp:1213 GetMutatorPhase | 是当前串行握手的确认状态，不是分配或代 phase 判据，保留 |
+
+old TRACE × young IDLE/RECLAIM：pinned 补标条件只取 old TRACE。
+old POST_TRACE × young 任意 phase：空闲槽分配按 old POST_TRACE 返回 0。
+old IDLE/inactive × young active：初始槽位 census 条件只取 old activity，不再受 young 周期覆盖。
+以上是源码分支推导，不是运行测量或并发门结论。
+
+测试同批清单沿用上轮 GenerationState 与 GcRequestSync 移植用例；本返工不增删测试，不新增测试专用导出。不运行 gate/unit/切刀（alignment_mode）。
+
+
+InterpreterSpecific.cpp:499/513：IsActiveGCPhase 继续保持空 tld/mutator 返回 0，其他情况对两代 owner phase 的 >=ENUM 谓词取 OR。ZGC 解释器没有此回调（走屏障）；这是基础设施差异，按 advisor 仅迁移数据源，对应 generation 查询 zGeneration.inline.hpp:74。裁定原文归档 `evidence/a10b-r1/advisor.txt`。现存 GetMutatorPhase 仅声明与 MutatorManager 握手完成检测，检索及阳性对照见 source-evidence.json。
+
+
+### R1 最终构建身份
+
+构建提交 `006c9a908e451f59d08eb3a0c3910a2d40c0fb24`，runtime tree `adad2ecf6f3b5e37c458beec6e386620a39b81f2`。
+default/testable configure_rc=0、build_rc=0，各 wall=48s；-j192、并行臂数 2。原文 `evidence/a10b-r1/final-build.log`；SO 血缘、完整源码摘要、核域与前后 uptime 为 `artifact-metadata.json`；远端日志 `kkk2:/root/sym_cangjie_runtime_494_implement_r5655968840/`。
+主线特征 RecordMajorGCFinish 的调用从 CopyCollector.cpp 迁到 zDriver.cpp:496，整体计数均为 5；其余六组逐文件计数相同。命令、rc、原文见 source-evidence.json。本返工没有再次修改这些机制。
+28 项前轮删除符号重新运行：候选 rc=1，原冻结基线阳性对照 rc=0，原文与命令在 deletion-recheck.json。本轮四项 owner 旧读法在指定消费文件中候选 rc=1、返工基线 rc=0，保留的线程握手 GetMutatorPhase 不在删除范围。
+
+### R1 FALSIFIED
+
+审查将 MarkNewObject 称为“未调用定义”；源码存在 CompilerCalls.cpp:279 → BaseObject.cpp:182 → 虚方法调用，另外 ObjectModel/MObject.cpp:51 和 ObjectManager.inline.h:42 也调用 OnFinalizerCreated。这里纠正源码调用链描述，不声称运行覆盖。按 advisor 本轮一起修复，证据 finalizer_entry_chain 在 source-evidence.json。
