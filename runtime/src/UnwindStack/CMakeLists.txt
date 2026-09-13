@@ -11,7 +11,6 @@ set(SRC_LIST
     "GcStackInfo.cpp"
     "StackFrameCursor.cpp"
     "../Heap/z/zStackWatermark.cpp"
-    "StackExposureHook.cpp"
     "StackGrowStackInfo.cpp"
     "PrintStackInfo.cpp"
     "PrintSignalStackInfo.cpp"

@@ -731,7 +731,6 @@ inline void RegionInfo::SetMarkedRegionFlag(MarkView<G> view, uint8_t flag)
 
 inline void RegionInfo::ResetMarkBit(MarkView<Generation::Old> view)
     {
-        SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_RESET_MARK_BIT, false);
         // CollectLargeGarbage calls this for a live large page immediately
         // after mark. Preserve its one-object livemap before clearing the
         // current face, just as ZPage keeps its live bit through relocation.
@@ -1271,8 +1270,7 @@ inline void RegionInfo::WaitCopiedBeforePayloadWipe(RegionInfo* region, const ch
         ZForwardingLife::WaitPageDone(region->metadata.fwdOwner.load(std::memory_order_acquire));
     }
 
-inline void RegionInfo::ClearUnits(size_t idx, size_t cnt,
-                           FillerZeroDiag::Site site)
+inline void RegionInfo::ClearUnits(size_t idx, size_t cnt)
     {
         uintptr_t unitAddress = RegionInfo::GetUnitAddress(idx);
         size_t size = cnt * RegionInfo::UNIT_SIZE;
@@ -1282,10 +1280,7 @@ inline void RegionInfo::ClearUnits(size_t idx, size_t cnt,
 
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
              unitAddress + size);
-        // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
-        TraceClear::NoteRange(static_cast<MAddress>(unitAddress), size, "clear_units", nullptr, 0);
 
-        FillerZeroDiag::Note(site, unitAddress, size);
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 
@@ -1546,8 +1541,6 @@ inline void RegionInfo::PrepareForwardableRegion(MarkView<G> view)
         CHECK(IsFromRegion());
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(metadata.inGhostFromRegion == 0);
-        // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
-        AllocPhaseDiag::FreezeRegion(GetRegionStart());
         (void)IsForwardingDone();
         // The preceding generation reset removed its forwarding set.
         ClearRelocationResiduals();
@@ -1591,9 +1584,6 @@ inline void RegionInfo::ClearGhostRegionBit()
     {
         if (IsGhostFromRegion()) {
             size_t nUnit = GetUnitCount();
-            TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "clear_ghost", this,
-                                        GetLiveByteCount(), 1, static_cast<unsigned int>(GetRegionType()),
-                                        IsForwardingDone() ? 1u : 0u);
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
             UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
             for (size_t i = 0; i < nUnit; i++) {
@@ -1629,10 +1619,6 @@ inline void RegionInfo::DispelGhostFromRegion()
         ClearGhostFromRegionBits();
         LiveInfoArena::GetLiveInfoArena().RecycleOwnerBitmaps(GetLiveInfo());
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
-        TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
-                                    static_cast<unsigned int>(IsGhostFromRegion()),
-                                    static_cast<unsigned int>(GetRegionType()),
-                                    IsForwardingDone() ? 1u : 0u);
         // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
         VLOG(REPORT,
              "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
@@ -1676,7 +1662,6 @@ inline void RegionInfo::ClearLiveInfo(MarkView<G> view)
         }
         CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
                      "ClearLiveInfo must be called on a region head");
-        SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_LIVE_INFO, true);
         // ZGC mark-start allocation watermark (zPage is_allocating). Capture
         // before the epoch bump so VisitLive / IsKnownEmpty / IsMarkedObject
         // see objects bumped after this point as implicitly live.
@@ -1797,16 +1782,7 @@ inline void RegionInfo::SetRegionType(RegionType type)
 
 inline void RegionInfo::SetTraceRegionFlag(uint8_t flag)
     {
-        uint8_t prev = metadata.isTraceRegion;
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
-        // blackmark: track 1→0 clears (EnlistFullThreadLocalRegion / HandleTraceRegions).
-        if (AllocPhaseDiag::Enabled()) {
-            if (flag == 0 && prev != 0) {
-                AllocPhaseDiag::NoteTraceFlagCleared(GetRegionStart());
-            } else if (flag != 0) {
-                AllocPhaseDiag::NoteTraceFlagSet(GetRegionStart());
-            }
-        }
     }
 
 
@@ -2301,7 +2277,6 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass)
         CHECK(TryGetRegionInfoAt(GetRegionStart()) == nullptr);
         CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
 
-        M0Correlation::InvalidateRegionBindings(GetRegionStart(), GetRegionLifeId());
         SetUnitRole(UnitRole::FREE_UNITS);
         // Invalidate every old-life carrier before clearing any of its payload.
         // Readers either retain the old page (detachgate) or observe this bump and

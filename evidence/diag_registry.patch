@@ -1,0 +1,12 @@
+diff --git a/diag_registry.py b/diag_registry.py
+--- a/diag_registry.py
++++ b/diag_registry.py
+@@ -27,7 +27,7 @@
+ MAP = r'''
+ 挂起|hang|HANG|活锁|死锁|livelock|deadlock|spin|MRT_GC_LOG|⭐⭐⭐ 每次收集/每相位一条记录 ⇒ 多少轮、每轮进展多少、什么在重复触发（⛔ 别先上 gdb —— gdb 只给两张快照，⭐ 日志给整条时间序列）
+ young|minor|疏散|evac|晋升|MRT_GCV2_MINOR_DEFERS_HEU|⭐ ACTIVE：minor 回滚对照臂。YOUNG_CONC_MARK/FOLLOW、YOUNG_MARK_END_FORCE_REENTER、EPOCH_HANDSHAKE getenv 已随 mc 翻默认删除（恒开）
+-remset|跨代|cross-gen|着色|颜色|colour|color|带色|剥色|root|根|栈图|stackmap|MRT_GCV2_REMSET_HASH_OPT,MRT_GCV2_VERIFY_ROOTS,MRT_GCV2_VERIFY_HEAP,MRT_GCV2_VERIFY_OBJECTS,MRT_GCV2_MARKCOMPLETE,MRT_GCV2_VERIFY_MARKING,MRT_GCV2_VERIFY_REMSET,MRT_GCV2_VERIFY_REMEMBERED,MRT_GCV2_VERIFY_REGIONS,MRT_GCV2_VERIFY_OOPS,MRT_GCV2_DIAG,MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE,MRT_GCV2_STACK_WATERMARK_VERIFY,MRT_GCV2_REMSET_EVER,MRT_GCV2_STATHEAL_NOHEAL,MRT_GCV2_VERIFY_PAGE_OWNER|⭐ ACTIVE（源码真实 getenv，可 export）：VerifyFace 五面、MRT_GCV2_DIAG token、remset / stack-root / watermark 校验与回滚对照臂（coloured-write assert 与 PROMO_DOMAIN/PLAIN_ROOTS getenv 已随合并删除）
++remset|跨代|cross-gen|着色|颜色|colour|color|带色|剥色|root|根|栈图|stackmap|MRT_GCV2_REMSET_HASH_OPT,MRT_GCV2_VERIFY_ROOTS,MRT_GCV2_VERIFY_HEAP,MRT_GCV2_VERIFY_OBJECTS,MRT_GCV2_MARKCOMPLETE,MRT_GCV2_VERIFY_MARKING,MRT_GCV2_VERIFY_REMSET,MRT_GCV2_VERIFY_REMEMBERED,MRT_GCV2_VERIFY_REGIONS,MRT_GCV2_VERIFY_OOPS,MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE,MRT_GCV2_STACK_WATERMARK_VERIFY,MRT_GCV2_REMSET_EVER,MRT_GCV2_STATHEAL_NOHEAL,MRT_GCV2_VERIFY_PAGE_OWNER|⭐ ACTIVE（源码真实 getenv，可 export）：VerifyFace 五面、remset / stack-root / watermark 校验与回滚对照臂（coloured-write assert 与 PROMO_DOMAIN/PLAIN_ROOTS getenv 已随合并删除）
+ 并行疏散|evacuation gate|MRT_GCV2_EVACPAR_WORK_GATE|⭐ ACTIVE（源码真实 getenv，可 export）：evacuation worker gate 对照臂
+ 归还|uncommit|所有权|MRT_UNCOMMIT_CUT_OWNERSHIP|⭐ ACTIVE（源码真实 getenv）：uncommit 所有权断线对照臂（CartesianTree.cpp:153 / Uncommitter.cpp:149）
+ 并行 pinned|pinned scan|MRT_GCV2_PINNED_SCAN_PARALLEL|⭐ ACTIVE（源码真实 getenv，可 export）：pinned 扫描并行/串行对照臂

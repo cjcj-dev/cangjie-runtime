@@ -37,15 +37,9 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/CsetEmptyWho.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -371,7 +365,6 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
     if (allocPtr != 0) {
-        M0Correlation::InvalidateStampBinding(allocPtr, M0Correlation::BindingInvalidation::PINNED_SLOT_REUSE);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
         region->ResetCensusBoundary();
         region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());
@@ -420,9 +413,6 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Verify/AllocPhaseDiag.h"
-#include "Heap/Verify/MinorGCALot.h"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {

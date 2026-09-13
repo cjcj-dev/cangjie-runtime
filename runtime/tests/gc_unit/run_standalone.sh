@@ -232,28 +232,6 @@ else
 fi
 echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
 
-# The M0 counter accessor is deliberately absent from the default product. Compile its five
-# observer tests only when the linked SO was built with MRT_GC_UNIT_TESTS=ON.
-M0_TEST_FLAGS=()
-M0_TEST_SOURCES=()
-M0_TEST_ACCESS=off
-if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | c++filt |
-    /usr/bin/grep 'M0ExitDiagnostics::GetCounts' >/dev/null; then
-  M0_TEST_FLAGS=(-DMRT_GC_UNIT_TEST_ACCESS=1)
-  M0_TEST_SOURCES=("$SRC/test_m0_exit.cpp")
-  M0_TEST_ACCESS=on
-fi
-echo "M0_TEST_ACCESS=$M0_TEST_ACCESS"
-
-M0_CORRELATION_TEST_ARGS=()
-M0_CORRELATION_ENV=()
-if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | c++filt |
-    /usr/bin/grep 'M0Correlation::ResetForTest' >/dev/null; then
-  TEST_DEFINES+=(-DMRT_M0_CORRELATION_EXPERIMENT=1 -DMRT_GC_UNIT_TEST_ACCESS=1)
-  M0_CORRELATION_TEST_ARGS=("$SRC/test_m0_correlation.cpp")
-  M0_CORRELATION_ENV=(MRT_GCV2_DIAG=m0corr)
-fi
-
 # Compile the publication TU with the same testability shape as the linked
 # product SO. The default (OFF) SO has no retain hook, so it must not silently
 # register a test that can only skip; the ON arm keeps the explicit precondition
@@ -348,7 +326,6 @@ MAIN_COMPILE_FLAGS=(
   "${RANGE_REGISTRY_FLAGS[@]}"
   "${TEST_DEFINES[@]}"
   "${TESTABLE_FLAGS[@]}"
-  "${M0_TEST_FLAGS[@]}"
   "${INC_FLAGS[@]}"
 )
 MAIN_SOURCES=(
@@ -400,17 +377,11 @@ MAIN_SOURCES=(
   "$SRC/test_gc_thread_pool.cpp"
 
   "$SRC/test_exempt_unlock.cpp"
-  "$SRC/test_heal_coverage.cpp"
-  "$SRC/test_diag_gate.cpp"
-  "$SRC/test_interior_edge_class.cpp"
   "$SRC/test_isfromreg.cpp"
   "$SRC/test_current_object_ref.cpp"
   "$SRC/test_fillerobj.cpp"
   "$SRC/test_i2_readref.cpp"
-  "${M0_TEST_SOURCES[@]}"
   "$SRC/test_loadfc.cpp"
-  "${M0_CORRELATION_TEST_ARGS[@]}"
-  "$SRC/test_fwdreturn.cpp"
   "$SRC/test_ghost_region_lookup.cpp"
   "$SRC/test_fnlz_roots.cpp"
   "$SRC/test_reference_processor.cpp"
@@ -928,7 +899,7 @@ if command -v nm >/dev/null 2>&1; then
   nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|ZVerify|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
 fi
 
-printf -v GC_UNIT_MAIN_ENV '%s\n' "${M0_CORRELATION_ENV[@]}"
+GC_UNIT_MAIN_ENV=''
 GC_UNIT_MAIN_ENV=${GC_UNIT_MAIN_ENV%$'\n'}
 export GC_UNIT_MAIN_ENV
 set +e

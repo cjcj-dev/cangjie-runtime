@@ -1,0 +1,94 @@
+$ git grep -n -F AllocPhaseDiag.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F CsetEmptyWho.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F CsetEmptyWho.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F DiagGate.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F DiagGate.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F FillerZeroDiag.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F FillerZeroDiag.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F GarbRegionDiag.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F GarbRegionDiag.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F HealCoverage.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F HealCoverage.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F HealPairDiag.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F HealPairDiag.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F HoleWhoDiag.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F HoleWhoDiag.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F InteriorEdgeClass.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F M0Correlation.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F M0Correlation.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F M0ExitDiagnostics.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F M0ExitDiagnostics.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F MinorGCALot.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F MinorGCALot.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F NwDropAudit.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F Stw2CurrentAudit.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F Stw2CurrentAudit.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F SurvNodeDiag.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F SurvNodeDiag.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F TraceClear.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F TraceClear.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F Zap.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F Zap.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F ZgcInvariants.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F ZgcInvariants.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F ZgcSelfHealDiag.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F ZgcSelfHealDiag.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F UntagRefFieldBreadcrumb.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F StackExposureHook.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F StackExposureHook.h -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F test_diag_gate.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F test_fwdreturn.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F test_heal_coverage.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F test_interior_edge_class.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F test_m0_correlation.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F test_m0_exit.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F run_stack_exposure_probe.sh -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+$ git grep -n -F stack_exposure_harness.cpp -- runtime/src runtime/tests runtime/CMakeLists.txt runtime/config.cmake
+rc=1
+Positive retained source registration rc=0
+runtime/src/Heap/Verify/CMakeLists.txt:7:set(SRC_LIST "../z/zVerify.cpp")

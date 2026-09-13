@@ -35,7 +35,6 @@ run_colour_encoding_unit.sh               manual     host C++14 runner for low-4
 colour_encoding_unit.cpp                  manual     pure ColourEncoding contract table; no product component is recompiled into the test ELF
 
 run_stack_watermark_probe.sh              manual     built runtime SO + cpuset; has its own injection arm
-run_stack_exposure_probe.sh               manual     built runtime SO + cpuset; 6 cases
 run_stack_grow_probe.sh                   manual     built runtime SO + cpuset; 6 cases
 run_object_size_guard_probe.sh            manual     built runtime SO + cpuset + fault injection
 run_mutator_lock_liveness_probe.sh        manual     source-text structural check; awk-parses source order
@@ -51,7 +50,6 @@ test_resolve_runtime_output.sh             manual     shell fixture; configurati
 run_string_dedup_product.sh               manual     rebuilt std.core module + product SO + runtime SO; full/range, detach, unequal, and 32-way concurrent request arms
 
 stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh
-stack_exposure_harness.cpp                manual     harness for run_stack_exposure_probe.sh
 stack_grow_harness.cpp                    manual     harness for run_stack_grow_probe.sh
 object_size_guard_harness.cpp             manual     harness for run_object_size_guard_probe.sh
 mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh

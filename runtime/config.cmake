@@ -438,7 +438,6 @@ set(CMAKE_COV_FLAGS "-fprofile-arcs -ftest-coverage -O0 -fno-inline")
 option(BUILD_CJTHREAD "Build cjthread module" ON)
 option(BUILD_RUNTIME   "Build runtime module"   ON)
 option(BUILD_DEMANGLE  "Build demangle module"  OFF)
-option(MRT_GCV2_UNTAG_BREADCRUMB "Build untag-ref-field crash breadcrumb diagnostics" OFF)
 # GC unit tests (HotSpot-gtest-shaped, pure invariant TUs). Default OFF so product
 # builds are byte-identical when the option is left alone.
 option(MRT_GC_UNIT_TESTS "Build GC unit tests (cj_gc_unit)" OFF)
@@ -451,9 +450,6 @@ option(MRT_GC_UNIT_OHOS_HOST "Build the x86_64 Linux OHOS-host GC unit arm" OFF)
 # bind the implementation from libcangjie-runtime.  The default product keeps
 # those templates inline and does not grant test access.
 option(MRT_TESTABLE_INTERNALS "Build test-only exported GC internals" OFF)
-# M0 correlation is an experiment-only identity ledger.  The default product
-# does not compile its ABI or registry paths.
-option(MRT_M0_CORRELATION_EXPERIMENT "Build the M0 correlation experiment ledger" OFF)
 if (MRT_GC_UNIT_OHOS_HOST)
     if (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" OR
         NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" OR
