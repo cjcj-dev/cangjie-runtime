@@ -4706,7 +4706,6 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     LiveInfo* live = fx.PlantLiveInfo(holderRegion);
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Young>(live, holderRegion->GetRegionSize());
     (void)bitmap->MarkBits(0, objectSize, holderRegion->GetRegionSize());
-    holderRegion->PreserveRetainedLiveInfo();
     RegionManager manager;
     manager.AddFlipPromotedPage(holderRegion);
     holderRegion->metadata.liveInfo = nullptr;
@@ -4728,7 +4727,6 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     GC_EXPECT_EQ(previous.count(reinterpret_cast<MAddress>(deadField)), 0u);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     EmptyBothRememberedFaces(remembered);
-    holderRegion->FreeRetainedMarkWords();
     fx.FreePlanted(live);
     targetRegion->SetYoungRegionFlag(0);
 }
@@ -4879,7 +4877,6 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
             holderLive = fx.PlantLiveInfo(holderRegion);
             RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Young>(holderLive, holderRegion->GetRegionSize());
             (void)bitmap->MarkBits(0, holder->GetSize(), holderRegion->GetRegionSize());
-            holderRegion->PreserveRetainedLiveInfo();
             RegionManager manager;
             manager.AddFlipPromotedPage(holderRegion);
             GCWorkers workers(GCWorkers::Generation::YOUNG, 2);
@@ -4895,7 +4892,6 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         const uintptr_t markBits = MARKED_YOUNG_MASK | MARKED_OLD_MASK;
         GC_EXPECT_EQ(raw(field.GetFieldValue()) & markBits, raw(before) & markBits);
         if (holderLive != nullptr) {
-            holderRegion->FreeRetainedMarkWords();
             holderRegion->metadata.liveInfo = nullptr;
             fx.FreePlanted(holderLive);
         }
@@ -4909,7 +4905,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
 }
 
 // Direct semantic matrix for the current remembered face. The reference array
-// is live, but its far field lies beyond TryRecoverInteriorBase's 64-byte
+// is live, and its far field lies beyond the former 64-byte
 // recovery window. ZGC still applies the load barrier because the current old
 // page, rather than an object-level recovery guess, is the admission unit.
 GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)

@@ -563,13 +563,6 @@ public:
 
     bool IsUnmovableFromObject(BaseObject* obj) const override;
 
-    // zRelocate.cpp:368-372: insert publishes a completed copy only. A geometric
-    // GetRoute dest or table hit with TypeInfo=0 is not a find() hit.
-    static bool ToHeaderCovered(BaseObject* to)
-    {
-        return to != nullptr && Collector::PlausibleManagedObjectGate("ToHeaderCovered", to);
-    }
-
     BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region) const
     {
         // ZRelocate::forward_object consumes only the installed CAS winner.

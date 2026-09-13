@@ -38,7 +38,6 @@
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/z/zLiveMap.hpp"
-#include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
@@ -66,18 +65,6 @@ class RegionInfo {
     // The table serializes publication/unbinding of this facade's owner.
     friend class ForwardingTable;
 public:
-
-    enum class RetainedLiveInfoState : uint8_t {
-        NEVER_EXAMINED,
-        SNAPSHOT_VALID,
-        SNAPSHOT_EMPTY,
-        // A retained snapshot was published in this snapshot cycle and its
-        // carrier is no longer current.  This is derived from the monotonic
-        // ever-preserved bit; clear/unbind exits never write this state.
-        SNAPSHOT_LOST,
-    };
-
-
 
     unsigned RelocateObserve() const;
 
@@ -239,85 +226,13 @@ public:
     // FORWARDABLE so the paint is route-visible (pointer-share, same as PrepareForwardable).
     void BindLiveInfo0FromLiveIfNull();
 
-    bool IsRetainedLifeCurrent() const;
-
-    LiveInfo* GetRetainedLiveInfo() const
-    {
-        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfo : nullptr;
-    }
-
-    RetainedLiveInfoState GetRetainedLiveInfoState() const;
-
-    bool HasEverPreservedRetainedLiveInfo() const { return metadata.retainedEverPreserved != 0; }
-
-    uint64_t GetRetainedLiveInfoEpoch() const
-    {
-        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoEpoch : 0;
-    }
-
-    MAddress GetRetainedLiveInfoCoveredUpTo() const
-    {
-        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoCoveredUpTo : 0;
-    }
-
-    void StampRetainedSnapshot();
-
-    // holderlive (F2): the retained snapshot has to answer "was this holder live at the last
-    // mark" during every minor until the next major re-marks the region. It cannot do that as a
-    // borrowed LiveInfo* whose lifetime is shorter than the retained snapshot.
-    // Measured: 100% of remset holders read NEVER_EXAMINED, and for 2113/2115 of them the last
-    // thing that touched the snapshot was that unbind ([RETLIVE][why-never] lastOp=clrChecked).
-    // So keep our own copy of the bits — regionSize/512 bytes, allocated only for regions that
-    // are actually preserved. ZGC keeps the page livemap valid through relocation
-    // (zLiveMap.inline.hpp:38-40,86-90); this copy is the equivalent persistent carrier.
-    static constexpr bool RetainedOwnCopyEnabled() { return true; }
-
-    // Copy the page's one ordinary livemap plus resurrection bits into the
-    // retained owner. No generation-dependent face union is needed.
-    void CaptureRetainedMarkWords(LiveInfo* liveInfo, uint64_t epoch, uint8_t largeMarked);
-
-    bool HasRetainedMarkWords() const
-    {
-        return IsRetainedLifeCurrent() && metadata.retainedMarkWords != nullptr;
-    }
-
-    // Same indexing as RegionBitmap::IsMarked.
-    bool RetainedMarkWordsSay(size_t offset) const;
-
-    void FreeRetainedMarkWords();
-
-
-
-
-    // A Preserve attempt replaces the previous publication.  Keep the
-    // monotonic history armed, but invalidate the carrier until this attempt
-    // proves that it has a snapshot and publishes it in NoteRetainedPreserve.
-    ALWAYS_INLINE void BeginRetainedPreserve()
-    {
-        __atomic_store_n(&metadata.retainedLifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);
-    }
-
-    void PreserveRetainedLiveInfo();
-
     MAddress GetCensusBoundary() const
     {
         return GetRegionStart() + metadata.censusBoundaryOffset;
     }
 
     void StampCensusBoundary();
-
     void ResetCensusBoundary() { metadata.censusBoundaryOffset = 0; }
-
-    void PreserveRetainedLiveInfoUpTo(MAddress boundary);
-
-    ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride);
-
-    // holderlive (F2): record the outcome of a Preserve* attempt. Only a
-    // successful publication arms the monotonic bit and carrier stamp.
-    ALWAYS_INLINE void NoteRetainedPreserve(bool succeeded);
-
-
-    bool IsRetainedSnapshotValid() const;
 
     // ZPage constructs its livemap before publishing the page in the page table.
     void InitializeLiveInfo();
@@ -749,19 +664,7 @@ public:
 
     bool IsForwardingFaceCurrent() const;
 
-    static constexpr uint32_t FORWARDING_FACE_RESET_BIT = (1U << 31);
 
-    bool IsForwardingFaceReset() const;
-
-    void SetForwardingFaceReset()
-    {
-        (void)__atomic_fetch_or(&metadata.retainedPreserveCnt, FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);
-    }
-
-    void ClearForwardingFaceReset()
-    {
-        (void)__atomic_fetch_and(&metadata.retainedPreserveCnt, ~FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);
-    }
 
     void ClearCurrentMarkFace();
 
@@ -860,6 +763,25 @@ public:
     // from-page carrier; the new Old current metadata starts with no livemap.
     MarkView<Generation::Old> PromoteYoungRegion(MarkView<Generation::Young> youngView);
 
+    // The original young ZPage left by ZPage::clone_for_promotion. The
+    // region slot becomes old; this object owns the original, un-copied map.
+    class PromotionPage {
+    public:
+        PromotionPage(LiveInfoArena::OwnedLiveInfo live, MAddress start, MAddress top,
+                      uint8_t age, bool large)
+            : liveInfo(std::move(live)), start(start), top(top), age(age), large(large) {}
+        void ObjectIterate(const std::function<void(BaseObject*)>& visitor) const;
+        uint8_t Age() const { return age; }
+    private:
+        LiveInfoArena::OwnedLiveInfo liveInfo;
+        MAddress start;
+        MAddress top;
+        uint8_t age;
+        bool large;
+    };
+
+    std::unique_ptr<PromotionPage> CloneForPromotion(MarkView<Generation::Young> youngView);
+
     void SetYoungAge(uint8_t age);
 
     uint8_t GetYoungAge() const;
@@ -956,6 +878,8 @@ public:
 
     uint32_t GetLiveObjectCount() const;
 
+    void VerifyLive(size_t liveObjects, size_t liveBytes, bool inPlace) const;
+
     // ZPage::inc_live: the mark winner or its worker cache owns this addition.
     void AddLiveCounts(uint32_t objects, uint64_t bytes);
 
@@ -1041,26 +965,11 @@ private:
 
         RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
 
-        LiveInfo* retainedLiveInfo = nullptr;
-        // Monotonic within a retained-snapshot cycle: only successful
-        // Preserve arms it; old-mark start or region-life bump disarms it.
-        uint8_t retainedEverPreserved = 0;
-        uint64_t retainedLiveInfoEpoch = 0;
-        MAddress retainedLiveInfoCoveredUpTo = 0;
-        RegionLifeId retainedLifeId = 0;
-        // First-paint publication state; reset by InitRegionInfo.
-        // Only FORWARDING_FACE_RESET_BIT is used.
-        uint32_t retainedPreserveCnt = 0;
         uint8_t regionLifeSequence = 0;
         // Borrow the immutable forwarding identity. Its owner reference is
         // released at the page lifecycle boundary, never reset in place.
         std::atomic<ZForwarding*> fwdOwner{ nullptr };
-        // Owned retained mark bits (mark | resurrect).
-        // Freed by ClearLiveInfo / InitRegionInfo.
-        uint64_t* retainedMarkWords = nullptr;
-        uint32_t retainedMarkWordCnt = 0;
-        // In-flight copiers that hold LOCKED (TryLock success → Unlock). Fills the
-        // 4-byte hole after retainedMarkWordCnt; sizeof(UnitInfo) stays 208.
+        // In-flight copiers holding an object lock.
         std::atomic<int32_t> copyInflight{ 0 };
 
         // resolveto: Compact packs densely; GetRoute prefix-sum dests are holes.

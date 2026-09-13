@@ -8,7 +8,9 @@
 #ifndef MRT_LIVE_INFO_ARENA_H
 #define MRT_LIVE_INFO_ARENA_H
 
+#include <algorithm>
 #include <cstdlib>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -40,6 +42,29 @@ public:
         std::lock_guard<std::mutex> guard(recycleMutex);
         liveInfosByPage[page].push_back(live);
         return live;
+    }
+
+    using OwnedLiveInfo = std::unique_ptr<LiveInfo, void (*)(LiveInfo*)>;
+
+    // clone_for_promotion leaves the original young page in the relocation
+    // set. Transfer its ordinary livemap out of the reusable region slot.
+    OwnedLiveInfo TakePageLiveInfo(RegionInfo* page, LiveInfo* live)
+    {
+        if (live != nullptr) {
+            std::lock_guard<std::mutex> guard(recycleMutex);
+            auto pageIt = liveInfosByPage.find(page);
+            CHECK(pageIt != liveInfosByPage.end());
+            auto& owned = pageIt->second;
+            auto it = std::find(owned.begin(), owned.end(), live);
+            CHECK(it != owned.end());
+            owned.erase(it);
+            if (owned.empty()) {
+                liveInfosByPage.erase(pageIt);
+            }
+        }
+        return OwnedLiveInfo(live, [](LiveInfo* original) {
+            GetLiveInfoArena().DeleteLiveInfo(original);
+        });
     }
 
     // ZPageAllocator::safe_destroy_page / CHeapBitMap::~CHeapBitMap.

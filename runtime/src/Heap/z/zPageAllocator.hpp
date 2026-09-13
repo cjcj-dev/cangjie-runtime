@@ -438,12 +438,6 @@ private:
 public:
     void PushFront(BaseObject* slot)
     {
-        // getsizetrace: GetSize before the SlotList gate. CollectFreePinnedSlots
-        // already gated, but this public entry must not SEGV on a coloured /
-        // dead-region slot (same #GP family as SlotList::PopFront).
-        if (!PlausibleManagedObjectGate("FreePinnedSlotLists::PushFront", slot)) {
-            return;
-        }
         size_t size = slot->GetSize();
         switch (size) {
             case ATOMIC_OBJECT_SIZE:
@@ -564,6 +558,7 @@ public:
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
     void AddFlipPromotedPage(RegionInfo* region);
     void RememberFlipPromotedPages(GCWorkers& workers);
+    void ResetFlipPromotedPages();
     void StampCensusBoundaries();
     void PromoteAllRegions();
     // CompactRegion's list-ownership tail. A concurrent stay-young path may
@@ -847,7 +842,7 @@ private:
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
     std::mutex flipPromotedMutex;
-    std::vector<RegionInfo*> flipPromotedPages;
+    std::vector<std::unique_ptr<RegionInfo::PromotionPage>> flipPromotedPages;
     std::mutex pageAllocatorMutex;
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };

@@ -215,18 +215,6 @@ GC_TEST(DefectRegress, NonHeapTargetNeverCasNull)
     GC_EXPECT_EQ(broken, 0u); // documents pre-fix shape that tests must reject
 }
 
-// ③ B-4 ① / bbb8ff15 — is_mark_good fast path must heap-gate before IsMarkedObject.
-// Product: Collector::MarkGoodHeapGate (Collector.cpp:225).
-GC_TEST(DefectRegress, MarkGoodHeapGateBlocksNonHeap)
-{
-    GcHeapFixture fx;
-    GC_EXPECT_TRUE(Collector::MarkGoodHeapGate("gc_unit.markgood", fx.obj0));
-    auto* nonHeap = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x55));
-    GC_EXPECT_FALSE(Collector::MarkGoodHeapGate("gc_unit.markgood", nonHeap));
-    nonHeap = reinterpret_cast<BaseObject*>(fx.typeInfo);
-    GC_EXPECT_FALSE(Collector::MarkGoodHeapGate("gc_unit.markgood", nonHeap));
-}
-
 // ④ relroroot / rostatic 822b0d64 — RO / non-heap static slots must not get lock cmpxchg.
 // Contract via product IsHeapAddress gate used at every self-heal site.
 GC_TEST(DefectRegress, RelroNonHeapSkipsSelfHealCas)
@@ -286,48 +274,6 @@ GC_TEST(DefectRegress, MinorNonHeapResolveNeverCasNull)
                                             Heap::IsHeapAddress(nonHeap));
     GC_EXPECT_EQ(out, reinterpret_cast<Uptr>(nonHeap));
     GC_EXPECT_NE(out, 0u);
-}
-
-// ⑥ fc7e7965 tip-small-int — REJECT must not mean silent total loss of the host.
-// Product: PlausibleManagedObjectGate + TryRecoverInteriorBase (Collector.cpp:250/334).
-// Correct consumer: REJECT interior, then recover host (ForwardUpdateRawRef / FixMinor).
-// MarkObject path that only returns false without recover remains KNOWN_OPEN (see report).
-GC_TEST(DefectRegress, TipSmallIntRejectThenRecoverHost)
-{
-    GcHeapFixture fx;
-    BaseObject* base = fx.obj0;
-    auto interiorAddr = reinterpret_cast<uintptr_t>(base) + 8;
-    auto* interior = reinterpret_cast<BaseObject*>(interiorAddr);
-    // Classic RawArray+8: tip word is array length (0x200), not a TypeInfo*.
-    *reinterpret_cast<uint64_t*>(interior) = 0x200;
-
-    GC_EXPECT_FALSE(Collector::PlausibleManagedObjectGate("gc_unit.tip200", interior));
-    BaseObject* host = Collector::TryRecoverInteriorBase(interior);
-    // Not silent discard: host of the interior must still be recoverable.
-    GC_EXPECT_TRUE(host != nullptr);
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(host), reinterpret_cast<uintptr_t>(base));
-
-    *reinterpret_cast<uint64_t*>(base) = reinterpret_cast<uintptr_t>(fx.typeInfo);
-}
-
-// ⑥b KNOWN_OPEN witness: a consumer that only REJECTS without recover loses the root.
-// This test documents the *desired* contract (recover after REJECT). If a call site
-// only gates, the host is dropped — that is the open defect surface, not a green pass.
-// We keep this green by asserting the recover helper itself; mark-path silent drop is
-// load-level (needs concurrent mark) and is reported KNOWN_OPEN in REPORT-gcunit3.
-GC_TEST(DefectRegress, TipSmallIntRejectWithoutRecoverIsLoss_Contract)
-{
-    GcHeapFixture fx;
-    BaseObject* base = fx.obj0;
-    auto* interior = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(base) + 8);
-    *reinterpret_cast<uint64_t*>(interior) = 0x200;
-    bool rejected = !Collector::PlausibleManagedObjectGate("gc_unit.tip200.loss", interior);
-    GC_EXPECT_TRUE(rejected);
-    // Desired: every product consumer pairs REJECT with recover or derived mark.
-    // Witness that recover exists and works — absence of pairing at a site = KNOWN_OPEN.
-    BaseObject* host = Collector::TryRecoverInteriorBase(interior);
-    GC_EXPECT_TRUE(host == base);
-    *reinterpret_cast<uint64_t*>(base) = reinterpret_cast<uintptr_t>(fx.typeInfo);
 }
 
 // ⑦ fe6d163f — field *address* may arrive coloured; ABI must peel before dereference.

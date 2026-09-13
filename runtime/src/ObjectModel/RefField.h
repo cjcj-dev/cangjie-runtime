@@ -42,29 +42,20 @@ enum class HealSite : uint16_t {
     BarrierWeakClean,
     BarrierCompareAndSwapReference,
     MutatorPreForwardHeaderlessRecord,
-    MutatorPreForwardInterior,
     MutatorPreForwardRoot,
     MutatorPreForwardStackField,
     MutatorStripRootColour,
-    WCollectorEnumRawInteriorRoot,
     WCollectorEnumRawRoot,
     WCollectorEnumRefFieldRoot,
     WCollectorFixRootForwarded,
-    WCollectorFixRootInteriorForward,
-    WCollectorFixRootPostForwardInterior,
     WCollectorForwardRawGhost,
-    WCollectorForwardRawInterior,
     WCollectorGetAndTryTagObj,
     WCollectorMinorFixForwarded,
     WCollectorMinorFixForwardNull,
     WCollectorMinorFixInteriorForward,
-    WCollectorMinorFixInteriorPostForward,
-    WCollectorMinorFixInteriorPreserve,
     WCollectorMinorResolveLoadGoodForward,
     WCollectorMinorResolveOldForward,
     WCollectorNormalizeRawRoot,
-    WCollectorPreserveRawInterior,
-    WCollectorPreserveRootInterior,
     WCollectorRemapYoungRoots,
     WCollectorResolveRootLoadGoodForward,
     WCollectorResolveRootOldForward,
@@ -493,7 +484,7 @@ inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expec
 
 // When the host is unknown, preserve the interior payload but still publish a
 // complete StoreGood word.
-// Prefer the (host, offset) overload when TryRecoverInteriorBase succeeds.
+// Use the (host, offset) overload for a metadata-provided derived base.
 template<bool isAtomic = false>
 inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expected,
                                        BaseObject* interior, HealSite site)

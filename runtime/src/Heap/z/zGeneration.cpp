@@ -553,6 +553,7 @@ void WCollector::DoYoungGarbageCollection()
             return !region->IsYoungRegion() || IsMarkedObject<Generation::Young>(object);
         });
         ForwardingTable::ResetRelocationSet(Generation::Young);
+        space.GetRegionManager().ResetFlipPromotedPages();
     }
 
     if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
@@ -894,7 +895,6 @@ namespace MapleRuntime {
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 #include "TypeInfoManager.h"

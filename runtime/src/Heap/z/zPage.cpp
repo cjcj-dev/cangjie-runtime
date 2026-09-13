@@ -169,27 +169,76 @@ const char* RegionInfo::GetTypeName() const
 }
 #endif
 
+// ZPage::clone_for_promotion (zPage.cpp:64-71). RegionInfo is an indexed
+// slot rather than a separately allocated page descriptor, so the original
+// young page is represented by PromotionPage while the slot becomes old.
+std::unique_ptr<RegionInfo::PromotionPage> RegionInfo::CloneForPromotion(MarkView<Generation::Young> youngView)
+{
+    CHECK(youngView.GetRegion() == this && IsYoungRegion());
+    const ZForwarding::FromPageView* from = GetFromPageView();
+    LiveInfo* original = from == nullptr ? GetLiveInfo() : from->liveInfo;
+    const MAddress originalTop = from == nullptr ? GetRegionAllocPtr() : from->topAtStart;
+    auto page = std::make_unique<PromotionPage>(
+        LiveInfoArena::GetLiveInfoArena().TakePageLiveInfo(this, original),
+        GetRegionStart(), originalTop, GetYoungAge(), IsLargeRegion());
+    (void)PromoteYoungRegion(youngView);
+    return page;
+}
+
+// ZPage::object_iterate (zPage.inline.hpp:320): visit the original page's
+// ordinary start bits. There is no second bitmap or post-promotion lookup.
+void RegionInfo::PromotionPage::ObjectIterate(const std::function<void(BaseObject*)>& visitor) const
+{
+    if (liveInfo == nullptr) {
+        return;
+    }
+    RegionBitmap* bitmap = __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
+    if (bitmap == nullptr) {
+        return;
+    }
+    if (large) {
+        if (bitmap->IsObjectStart(0)) {
+            visitor(from_region_addr(start));
+        }
+        return;
+    }
+    for (MAddress address = start; address < top; address += kMarkedBytesPerBit) {
+        if (bitmap->IsObjectStart(address - start)) {
+            visitor(from_region_addr(address));
+        }
+    }
+}
+
+// ZPage::verify_live (zPage.cpp:196). The forwarding owner holds the
+// original page livemap when this metadata facade already describes to-space.
+void RegionInfo::VerifyLive(size_t liveObjects, size_t liveBytes, bool inPlace) const
+{
+    const ZForwarding::FromPageView* from = GetFromPageView();
+    CHECK_DETAIL(from != nullptr && from->liveInfo != nullptr, "Missing forwarding source livemap");
+    const LiveInfo::MarkFace& face = from->liveInfo->GetMarkFace();
+    RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
+    CHECK_DETAIL(bitmap != nullptr, "Missing forwarding source bitmap");
+    if (!inPlace) {
+        MRT_ASSERT(from->epoch != 0, "Should be marked");
+        const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase(
+            static_cast<GCCycleGeneration>(from->owner));
+        MRT_ASSERT(phase != GC_PHASE_ENUM && phase != GC_PHASE_TRACE &&
+                   phase != GC_PHASE_CLEAR_SATB_BUFFER, "Wrong phase");
+    }
+    CHECK_DETAIL(liveObjects == bitmap->GetLiveObjects(), "Invalid number of live objects");
+    CHECK_DETAIL(liveBytes == bitmap->GetLiveBytes(), "Invalid number of live bytes");
+}
+
 void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
 {
     if (IsLargeRegion()) {
         BaseObject* obj = from_region_addr(GetRegionStart());
-        // getsize7: dense walk steps via GetSize; reject bad headers instead of SEGV.
-        // On reject: stop the walk (cannot invent a step size). Caller sees partial visit.
-        if (!Collector::PlausibleManagedObjectGate("VisitAllObjects", obj)) {
-            return;
-        }
         func(obj);
     } else if (IsSmallRegion()) {
         uintptr_t position = GetRegionStart();
         uintptr_t allocPtr = GetRegionAllocPtr();
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
-            // getsize7: GetAllocSize → GetSize reads TypeInfo; interiors/holes SEGV here
-            // (deadlock_enqfrontier: VisitLiveObjectsUntilFalse ← RouteRegion ← TryForward).
-            // Refuse: break without inventing size — remaining stream is unwalkable.
-            if (!Collector::PlausibleManagedObjectGate("VisitAllObjects", obj)) {
-                break;
-            }
             // GetAllocSize should before call func, because object maybe destroy in compact gc.
             size_t size = RegionSpace::GetAllocSize(*obj);
             func(obj);
@@ -220,9 +269,6 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
     auto survivedAt = [this](size_t offset) -> bool { return IsOwnerSurvivedObject(offset); };
     if (IsLargeRegion()) {
         BaseObject* obj = from_region_addr(GetRegionStart());
-        if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-            return !survivedAt(0);
-        }
         return func(obj);
     }
     if (IsSmallRegion()) {
@@ -247,12 +293,6 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
 
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
-            // getsize7: bitten site — PreForward → ForwardObject → RouteRegion → here → GetSize.
-            if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-                // tipwho tip-misaligned at e.g. +6424: do NOT return true (walk success).
-                // Incomplete if any liveInfo0 bit remains at/after break (orphan@19400).
-                return !remainingSurvivor(offset);
-            }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             if (allocSize == 0) {
                 return !remainingSurvivor(offset);

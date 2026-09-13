@@ -22,7 +22,6 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 #include "TypeInfoManager.h"
@@ -37,12 +36,6 @@ void Collector::MarkObjectIfActive(BaseObject* object) const
 {
     if (!Heap::IsHeapAddress(object)) {
         return;
-    }
-    if (!PlausibleManagedObjectGate("mark_object_if_active", object)) {
-        object = TryRecoverInteriorBase(object);
-        if (object == nullptr) {
-            return;
-        }
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
     if (region->IsYoungRegion()) {

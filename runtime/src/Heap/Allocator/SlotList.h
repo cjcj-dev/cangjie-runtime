@@ -9,7 +9,6 @@
 #define MRT_SLOT_LIST_H
 
 #include "Common/BaseObject.h"
-#include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Allocator/HeapFiller.h"
 
 namespace MapleRuntime {
@@ -40,11 +39,6 @@ public:
     // Clear the rest memory of slot object if the slot object size is greater than ObjectSlot(16 Bytes).
     bool ClearExtraContent(BaseObject* slot)
     {
-        if (!PlausibleManagedObjectGate("SlotList::ClearExtraContent", slot)) {
-            // The caller treats false as "do not add to the free-slot list". Stale payload
-            // remains uncleared, and this slot's individual reuse opportunity is lost.
-            return false;
-        }
         size_t size = slot->GetSize() - sizeof(ObjectSlot);
         if (size > 0) {
             MAddress start = reinterpret_cast<uintptr_t>(slot) + sizeof(ObjectSlot);
@@ -79,7 +73,7 @@ private:
             return 0;
         }
         BaseObject* obj = from_region_addr(rawHead);
-        if (!PlausibleManagedObjectGate("SlotList::PopFront", obj) || size != obj->GetSize()) {
+        if (size != obj->GetSize()) {
             return 0;
         }
         ObjectSlot* allocSlot = head;

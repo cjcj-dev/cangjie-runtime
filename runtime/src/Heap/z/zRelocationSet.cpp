@@ -101,10 +101,18 @@ void WCollector::CollectSmallSpace()
 namespace MapleRuntime {
 void RegionManager::AddFlipPromotedPage(RegionInfo* region)
 {
-    // zRelocationSet.cpp: register_flip_promoted. No per-page copy of liveness.
+    auto original = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
     std::lock_guard<std::mutex> lock(flipPromotedMutex);
-    flipPromotedPages.push_back(region);
+    flipPromotedPages.push_back(std::move(original));
 }
 
+
+// ZRelocationSet::reset: the original young pages are released with the
+// previous set, after its forwarding entries and remset scan consumers.
+void RegionManager::ResetFlipPromotedPages()
+{
+    std::lock_guard<std::mutex> lock(flipPromotedMutex);
+    flipPromotedPages.clear();
+}
 
 } // namespace MapleRuntime

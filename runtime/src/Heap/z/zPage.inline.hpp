@@ -340,249 +340,11 @@ inline void RegionInfo::BindLiveInfo0FromLiveIfNull()
                      "from-page forwarding carrier missing while binding live face region=%p", this);
     }
 
-inline bool RegionInfo::IsRetainedLifeCurrent() const
-    {
-        const RegionLifeId stamp = __atomic_load_n(&metadata.retainedLifeId, __ATOMIC_ACQUIRE);
-        const RegionLifeId current = GetRegionLifeId();
-        const bool auditAccepts =
-            (stamp == current);
-        // Validate is audit-only unless enforcement is enabled and therefore
-        // deliberately accepts missing/stale stamps in ordinary product runs.
-        // Snapshot-state derivation needs the structural answer in every
-        // configuration: zero is not a carrier, and only this life is current.
-        return stamp != 0 && stamp == current && auditAccepts;
-    }
-
-inline RegionInfo::RetainedLiveInfoState RegionInfo::GetRetainedLiveInfoState() const
-    {
-        if (metadata.retainedEverPreserved == 0) {
-            return RetainedLiveInfoState::NEVER_EXAMINED;
-        }
-        if (!IsRetainedLifeCurrent()) {
-            return RetainedLiveInfoState::SNAPSHOT_LOST;
-        }
-        return metadata.retainedLiveInfoCoveredUpTo <= GetRegionStart() &&
-                GetRegionAllocPtr() <= GetRegionStart()
-            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
-            : RetainedLiveInfoState::SNAPSHOT_VALID;
-    }
-
-inline void RegionInfo::StampRetainedSnapshot()
-    {
-        const RegionLifeId life = GetRegionLifeId();
-        __atomic_store_n(&metadata.retainedLifeId, life, __ATOMIC_RELEASE);
-    }
-
-inline void RegionInfo::CaptureRetainedMarkWords(LiveInfo* liveInfo, uint64_t epoch, uint8_t largeMarked)
-    {
-        FreeRetainedMarkWords();
-        if (IsLargeRegion()) {
-            // ZGC large pages contain one object at page start (zPage.inline.hpp:53-58),
-            // but still represent its liveness with the page livemap (228-240). Mirror
-            // our large-region mark/resurrect single bits in retained word bit zero.
-            bool marked = largeMarked != 0 || metadata.isResurrected == 1;
-            if (!marked) {
-                return;
-            }
-            uint64_t* words = static_cast<uint64_t*>(malloc(sizeof(uint64_t)));
-            CHECK(words != nullptr);
-            words[0] = 1;
-            metadata.retainedMarkWords = words;
-            metadata.retainedMarkWordCnt = 1;
-            return;
-        }
-        if (liveInfo == nullptr) {
-            return;
-        }
-        LiveInfo::MarkFace& markFace = liveInfo->GetMarkFace();
-        RegionBitmap* mark = markFace.epoch.load(std::memory_order_acquire) == epoch
-            ? __atomic_load_n(&markFace.bitmap, std::memory_order_acquire) : nullptr;
-        RegionBitmap* resurrect = liveInfo->resurrectBitmap;
-        size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
-        size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
-        size_t wordCnt = std::max(markWords, resurrectWords);
-        if (wordCnt == 0) {
-            return;
-        }
-        uint64_t* words = static_cast<uint64_t*>(malloc(wordCnt * sizeof(uint64_t)));
-        CHECK(words != nullptr);
-        for (size_t i = 0; i < wordCnt; ++i) {
-            uint64_t bits = 0;
-            if (i < markWords) {
-                bits |= mark->GetLiveWord(i);
-            }
-            if (i < resurrectWords) {
-                bits |= resurrect->GetLiveWord(i);
-            }
-            words[i] = bits;
-        }
-        metadata.retainedMarkWords = words;
-        metadata.retainedMarkWordCnt = static_cast<uint32_t>(wordCnt);
-    }
-
-inline bool RegionInfo::RetainedMarkWordsSay(size_t offset) const
-    {
-        if (!IsRetainedLifeCurrent()) {
-            return false;
-        }
-        if (metadata.retainedMarkWords == nullptr) {
-            return false;
-        }
-        size_t bitIdx = 2 * (offset / kMarkedBytesPerBit);
-        size_t wordIdx = bitIdx / kBitsPerWord;
-        if (wordIdx >= metadata.retainedMarkWordCnt) {
-            return false;
-        }
-        return (metadata.retainedMarkWords[wordIdx] &
-                (static_cast<uint64_t>(1) << (bitIdx % kBitsPerWord))) != 0;
-    }
-
-inline void RegionInfo::FreeRetainedMarkWords()
-    {
-        if (metadata.retainedMarkWords != nullptr) {
-            free(metadata.retainedMarkWords);
-            metadata.retainedMarkWords = nullptr;
-        }
-        metadata.retainedMarkWordCnt = 0;
-    }
-
-
-
-inline void RegionInfo::PreserveRetainedLiveInfo()
-    {
-        BeginRetainedPreserve();
-        metadata.retainedLiveInfo = GetLiveInfo();
-        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
-        const bool largeRegion = IsLargeRegion();
-        const uint64_t largeLiveBytes = largeRegion ? GetLiveByteCount() : 0;
-        uint8_t largeMarked = largeRegion ? IsCurrentFacePublished() : metadata.isMarked;
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        if (metadata.retainedLiveInfo == nullptr && from != nullptr) {
-            metadata.retainedLiveInfo = from->liveInfo;
-            metadata.retainedLiveInfoEpoch = from->epoch;
-            largeMarked = from->largeMarked;
-        }
-        // A done bit may outlive the face it described.  Suppress the young
-        // face while it is still the forwarding face, but keep a later face
-        // published by the current snapshot (ZGC's page-face identity rule).
-        if (IsYoungRegion() && IsForwardingDone() &&
-            (!IsCurrentFacePublished() || IsForwardingFaceCurrent())) {
-            metadata.retainedLiveInfo = nullptr;
-            largeMarked = 0;
-        }
-        metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
-        if (RetainedOwnCopyEnabled()) {
-            CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);
-        }
-        if (IsLargeRegion()) {
-            // A stale byte count without the publication bit belongs to the
-            // retired face (for example while ClearLiveInfo is sealing it),
-            // never to a current valid carrier.
-            if (largeLiveBytes == 0 || largeMarked == 0) {
-                NoteRetainedPreserve(GetRegionAllocPtr() <= GetRegionStart());
-                return;
-            }
-            NoteRetainedPreserve(true);
-            return;
-        }
-        if (metadata.retainedLiveInfo != nullptr) {
-            NoteRetainedPreserve(true);
-            return;
-        }
-        CHECK(GetLiveByteCount() == 0);
-        NoteRetainedPreserve(GetRegionAllocPtr() <= GetRegionStart());
-    }
-
 inline void RegionInfo::StampCensusBoundary()
     {
         uintptr_t offset = GetRegionAllocPtr() - GetRegionStart();
         metadata.censusBoundaryOffset =
             static_cast<uint32_t>(std::min<uintptr_t>(offset, std::numeric_limits<uint32_t>::max()));
-    }
-
-inline void RegionInfo::PreserveRetainedLiveInfoUpTo(MAddress boundary)
-    {
-        CHECK(boundary >= GetRegionStart() && boundary <= GetRegionAllocPtr());
-        if (IsLargeRegion()) {
-            PreserveRetainedLiveInfo();
-            return;
-        }
-        BeginRetainedPreserve();
-        metadata.retainedLiveInfo = GetLiveInfo();
-        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
-        uint8_t largeMarked = IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked;
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        if (metadata.retainedLiveInfo == nullptr && from != nullptr) {
-            metadata.retainedLiveInfo = from->liveInfo;
-            metadata.retainedLiveInfoEpoch = from->epoch;
-            largeMarked = from->largeMarked;
-        }
-        if (IsYoungRegion() && IsForwardingDone() &&
-            (!IsCurrentFacePublished() || IsForwardingFaceCurrent())) {
-            metadata.retainedLiveInfo = nullptr;
-            largeMarked = 0;
-        }
-        metadata.retainedLiveInfoCoveredUpTo = boundary;
-        if (RetainedOwnCopyEnabled()) {
-            CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);
-        }
-        if (metadata.retainedLiveInfo == nullptr) {
-            // This decision is derived after CaptureRetainedMarkWords has
-            // replaced the previous owned carrier.  Once a successful
-            // Preserve armed the monotonic bit, carrier absence is LOST on
-            // every exit; no clear/unbind exit has to remember to write it.
-            CHECK(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST);
-            NoteRetainedPreserve(false);
-            return;
-        }
-        NoteRetainedPreserve(true);
-    }
-
-inline ALWAYS_INLINE void RegionInfo::PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
-    {
-        if (coveredUpToOverride == GetRegionStart() && GetRegionAllocPtr() != GetRegionStart()) {
-            CHECK(GetLiveByteCount() == 0);
-            BeginRetainedPreserve();
-            metadata.retainedLiveInfo = GetLiveInfo();
-            metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
-            metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
-            NoteRetainedPreserve(true);
-            return;
-        }
-        CHECK(coveredUpToOverride == GetRegionAllocPtr());
-        PreserveRetainedLiveInfo();
-    }
-
-inline ALWAYS_INLINE void RegionInfo::NoteRetainedPreserve(bool succeeded)
-    {
-        if (succeeded) {
-            metadata.retainedEverPreserved = 1;
-            // Publish last: an acquiring reader that accepts this life also
-            // observes the retained pointer/owned words and covered boundary.
-            StampRetainedSnapshot();
-        }
-
-    }
-
-
-
-inline bool RegionInfo::IsRetainedSnapshotValid() const
-    {
-        RetainedLiveInfoState state = GetRetainedLiveInfoState();
-        if (state == RetainedLiveInfoState::NEVER_EXAMINED ||
-            state == RetainedLiveInfoState::SNAPSHOT_LOST) {
-            return false;
-        }
-        if (!IsRetainedLifeCurrent()) {
-            return false;
-        }
-        // An owned copy is the persistent livemap carrier. Its lifetime is
-        // ended explicitly by ClearLiveInfo<Old> or region reinitialization;
-        // forwarding's epoch bump only retires the borrowed LiveInfo face.
-        if (metadata.retainedMarkWords != nullptr) {
-            return true;
-        }
-        return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();
     }
 
 inline void RegionInfo::InitializeLiveInfo()
@@ -706,12 +468,6 @@ inline void RegionInfo::SetMarkedRegionFlag(MarkView<G> view, uint8_t flag)
 
 inline void RegionInfo::ResetMarkBit(MarkView<Generation::Old> view)
     {
-        // CollectLargeGarbage calls this for a live large page immediately
-        // after mark. Preserve its one-object livemap before clearing the
-        // current face, just as ZPage keeps its live bit through relocation.
-        if (IsLargeRegion() && IsSurvivedObject(view, 0)) {
-            PreserveRetainedLiveInfo();
-        }
         SetMarkedRegionFlag(view, 0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
@@ -764,12 +520,6 @@ inline bool RegionInfo::MarkLargeObject(MarkView<G> view, const BaseObject* obj,
 inline bool RegionInfo::MarkObject(MarkView<G> view, const BaseObject* obj)
     {
         CHECK(view.GetRegion() == this);
-        if (!PlausibleManagedObjectGate("RegionInfo::MarkObject.unsized", const_cast<BaseObject*>(obj))) {
-            // Rejected objects are deliberately reported as already marked: callers must not
-            // enqueue/scan them. If the gate ever rejects a real object, its liveness and
-            // transitive reference closure are the work lost by this fail-closed branch.
-            return true;
-        }
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
         if (IsLargeRegion()) {
             bool firstLive = false;
@@ -887,13 +637,6 @@ inline bool RegionInfo::ResurrectObjectWithLiveClaim(const BaseObject* obj, size
 inline bool RegionInfo::EnqueueObject(const BaseObject* obj, size_t offset)
     {
         if (IsFreeRegion() || IsGarbageRegion() || GetRegionType() == RegionType::FREE_REGION) {
-            return true;
-        }
-        if (!PlausibleManagedObjectGate("RegionInfo::EnqueueObject", const_cast<BaseObject*>(obj))) {
-            // Rejected objects are reported as already enqueued: ShouldEnqueue
-            // treats true as "do not SATB-push". Lost work is the SATB entry and
-            // the later mark/trace of this address; if the gate ever rejects a
-            // real object, that object's SATB-driven liveness is the miss.
             return true;
         }
         if (IsLargeRegion()) {
@@ -1458,7 +1201,7 @@ inline __attribute__((always_inline)) void RegionInfo::PublishForwardingCarrier(
         // zForwarding.inline.hpp:67-70 — construction token = 1. Late retain
         // after detach (count 0) is refused; carrier and token are published
         // by this single product operation.
-        ClearForwardingFaceReset();
+
         ClearCurrentMarkFace();
         metadata._generation_id = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
         // Always install ghost membership, including a zero-live page. This is
@@ -1615,18 +1358,6 @@ inline void RegionInfo::ClearLiveInfo(MarkView<G> view)
         // GenerationCycle::Begin already advanced the owning generation's seqnum.
         // Ordinary livemap metadata and segments reset lazily on the first mark,
         // including the single-object large-page map.
-        if (G == Generation::Old) {
-            // A new major mark supersedes the retained major snapshot.  Young
-            // clears deliberately leave this old/major authority intact.
-            FreeRetainedMarkWords();
-            metadata.retainedLiveInfo = nullptr;
-            metadata.retainedLiveInfoEpoch = 0;
-            metadata.retainedLiveInfoCoveredUpTo = 0;
-            metadata.retainedLifeId = 0;
-            // ClearLiveInfo<Old> starts a new retained-snapshot cycle.  It is
-            // the only same-region-life boundary allowed to disarm the bit.
-            metadata.retainedEverPreserved = 0;
-        }
         SetMarkFaceSealed(false);
     }
 
@@ -1685,11 +1416,7 @@ inline bool RegionInfo::IsForwardingFaceCurrent() const
         return true;
     }
 
-inline bool RegionInfo::IsForwardingFaceReset() const
-    {
-        return (__atomic_load_n(&metadata.retainedPreserveCnt, __ATOMIC_ACQUIRE) &
-            FORWARDING_FACE_RESET_BIT) != 0;
-    }
+
 
 inline void RegionInfo::ClearCurrentMarkFace()
     {
@@ -2096,13 +1823,6 @@ inline bool RegionInfo::IsSafeKnownYoungEmpty(MarkView<Generation::Young> view)
 inline void RegionInfo::ResetLiveMapAfterForward(MarkView<G> view)
     {
         CHECK(view.GetRegion() == this);
-        // Forwarding is the last reader of this mark face. Copy it while the
-        // supplied view is still current; a partially forwarded page may stay
-        // UNMOVABLE_FROM after the epoch bump and still contain live holders.
-        if (!IsLargeRegion()) {
-            PreserveRetainedLiveInfo();
-        }
-        SetForwardingFaceReset();
         ClearCurrentMarkFace();
 
         if (IsLargeRegion()) {
@@ -2165,9 +1885,6 @@ inline void RegionInfo::BumpRegionLifeId()
             }
             if (metadata.regionLifeId.compare_exchange_weak(old, old + 1, std::memory_order_release,
                                                             std::memory_order_relaxed)) {
-                // A new region life is the hard boundary for the monotonic
-                // retained Preserve history.
-                metadata.retainedEverPreserved = 0;
                 return;
             }
         }
@@ -2209,14 +1926,7 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass)
         metadata.censusBoundaryOffset = 0;
         metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
-        FreeRetainedMarkWords();
-        metadata.retainedLiveInfo = nullptr;
-        metadata.retainedLiveInfoEpoch = 0;
-        metadata.retainedLiveInfoCoveredUpTo = 0;
-        metadata.retainedLifeId = 0;
-        // holderlive (F2): new region life — its predecessor's snapshot history does not
-        // describe the objects that are about to be allocated here.
-        metadata.retainedPreserveCnt = 0;
+
         // routedest: this is the reuse edge named in the defect. TakeRegion has already run
         // ClearUnits over this payload; if a published route still names this region, the
         // route now answers into zeroed (or freshly re-allocated) memory. Count it here

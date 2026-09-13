@@ -63,11 +63,6 @@ bool WCollector::MarkObject(BaseObject* obj) const
 
 bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache* liveCache) const
 {
-    // markfloor: work stack may hold RawArray+8 interiors (tip word = length, e.g. 0x200).
-    // Return true ⇒ ConcurrentMarkingWork treats as already-marked and skips HasRefField.
-    if (!Collector::PlausibleManagedObjectGate("WCollector::MarkObject", obj)) {
-        return true;
-    }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
 
     size_t objectSize = obj->GetSize();
@@ -98,10 +93,6 @@ bool WCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry, M
 
 bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* region)
 {
-    // getsize7: ResurrectObject → GetSize; finalizer work-stack should be gated but base path was not.
-    if (!Collector::PlausibleManagedObjectGate("WCollector::ResurrectObject", obj)) {
-        return true;
-    }
     // livesame: ResurrectObject counts on 0→1 inside.
     bool resurrected = region->ResurrectObject(obj, offset);
     if (!resurrected) {
@@ -121,10 +112,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         BaseObject* target = to_object(oldField.GetTargetObject());
         // Plain/uncoloured non-null is mark-good under g_cjMarkBadMask; mirror the slow path.
         // Reject non-heap: do not call make_load_good (remap would touch non-heap).
-        if (!Collector::MarkGoodHeapGate("EnumRefFieldRoot", target)) {
-            return;
-        }
-        if (!Collector::PlausibleManagedObjectGate("EnumRefFieldRoot", target)) {
+        if (!Heap::IsHeapAddress(target)) {
             return;
         }
         CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
@@ -155,10 +143,6 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
-    if (!Collector::PlausibleManagedObjectGate("EnumRefFieldRoot.slow", latest)) {
-        return;
-    }
-
     CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
     // static roots stay Phase-C coloured (writable statics need colour; rostatic skips non-heap CAS).
     // plainroots only applies to stack/reg ObjectRef slots (RootSlotWriteback via !IsHeapAddress).
@@ -199,16 +183,6 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
         if (to != nullptr) {
             root = to;
         }
-    }
-    if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.plain", root)) {
-        // introot: a raw-root stack-map entry may still identify RawArray+8.
-        // The paired derived path cannot reach this branch because it is a DerivedSlot.
-        BaseObject* host = Collector::TryRecoverInteriorBase(root);
-        if (host != nullptr && host->IsValidObject()) {
-            HealRootWriteback(ref, root, HealSite::WCollectorEnumRawInteriorRoot);
-            rootSet.push_back(host);
-        }
-        return;
     }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
     HealRootWriteback(ref, root, HealSite::WCollectorEnumRawRoot);
@@ -256,21 +230,10 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         BaseObject* targetObj = to_object(oldField.GetTargetObject());
         // zbisect: plain non-heap (0x55–0x65) was admitted here → IsMarkedObject → GetUnitIdxAt OOB.
         // Skip field on reject — same as pre-zcolor7 slow path for plain non-heap.
-        if (!Collector::MarkGoodHeapGate("TraceRefField", targetObj)) {
+        if (!Heap::IsHeapAddress(targetObj)) {
             // gatedrop: reject arm only (default off). leave untraced.
 
             return;
-        }
-        // markfloor: skip interiors (RawArray+8 etc.) before IsValidObject/GetSize.
-        if (!Collector::PlausibleManagedObjectGate("TraceRefField", targetObj)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(targetObj);
-            if (host != nullptr && host != targetObj &&
-                Collector::PlausibleManagedObjectGate("TraceRefField.host", host)) {
-                targetObj = host;
-            } else {
-
-                return;
-            }
         }
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
         // obj is null when the field arrived as a partial-array chunk, which
@@ -305,7 +268,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             raw(oldField.GetTargetObject()), static_cast<Generation>(remap_generation(oldField)));
         if (stored != 0) {
             BaseObject* to = reinterpret_cast<BaseObject*>(stored);
-            if (ToHeaderCovered(to)) {
+            if ((to != nullptr)) {
                 latest = to;
             }
         } else if (latest->IsForwarded()) {
@@ -320,16 +283,6 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         }
         // Both tables miss: do not treat the from address as remapped.
         // ColourResolvedRefField → CheckStoreGoodTarget fail-closes.
-    }
-    if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
-        BaseObject* host = Collector::TryRecoverInteriorBase(latest);
-        if (host != nullptr && host != latest &&
-            Collector::PlausibleManagedObjectGate("TraceRefField.slow.host", host)) {
-            latest = host;
-        } else {
-
-            return;
-        }
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
                  latest, obj, obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),
@@ -486,7 +439,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     BaseObject* latest = nullptr;
     if (is_mark_good(oldField)) {
         BaseObject* targetObj = to_object(oldField.GetTargetObject());
-        if (!Collector::MarkGoodHeapGate("GetAndTryTagObj", targetObj)) {
+        if (!Heap::IsHeapAddress(targetObj)) {
             return nullptr;
         }
         // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
@@ -704,26 +657,10 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
 {
     RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
         BaseObject* obj = ResolveMinorReference(root);
-        if (obj != nullptr && Heap::IsHeapAddress(obj) &&
-            !Collector::PlausibleManagedObjectGate("VisitMinorRoots.raw", obj)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-            if (host != nullptr) {
-                visitor(host);
-            }
-            return;
-        }
         visitor(obj);
     };
     RootVisitor invisibleRootVisitor = [this, &invisibleVisitor](ObjectRef& root) {
         BaseObject* obj = ResolveMinorReference(root);
-        if (obj != nullptr && Heap::IsHeapAddress(obj) &&
-            !Collector::PlausibleManagedObjectGate("VisitMinorRoots.invisible", obj)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-            if (host != nullptr) {
-                invisibleVisitor(host);
-            }
-            return;
-        }
         invisibleVisitor(obj);
     };
     NativeSlotVisitor nativeVisitor = [&visitor](NativeSlot& root) {
@@ -744,16 +681,6 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    // markfloor / introot: interiors (RawArray+8) pass IsValidObject (tip=length≠null).
-    // Recover host object so the live array is marked; do not push the interior itself.
-    if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
-        BaseObject* host = Collector::TryRecoverInteriorBase(object);
-        if (host != nullptr && host != object) {
-            PushYoungObject(host, workStack, origin, finalizable);
-        }
-        return;
-    }
-
     if (!object->IsValidObject()) {
         // Rich diagnosis before fail-closed abort: address looks like a heap range
         // but object header is not a valid managed object (stack-ish residue, stale
@@ -828,17 +755,6 @@ BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void*
 {
     if (!Heap::IsHeapAddress(object)) {
         return nullptr;
-    }
-
-    if (!Collector::PlausibleManagedObjectGate("AdmitYoungObject", object)) {
-        BaseObject* host = Collector::TryRecoverInteriorBase(object);
-        if (host == nullptr || host == object) {
-            return nullptr;
-        }
-        object = host;
-        if (!Collector::PlausibleManagedObjectGate("AdmitYoungObject.host", object)) {
-            return nullptr;
-        }
     }
 
     return object;
@@ -1012,13 +928,6 @@ private:
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
             return;
         }
-        if (!Collector::PlausibleManagedObjectGate("ghostroute.wasMarked.child", target)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(target);
-            if (host == nullptr || host == target) {
-                return;
-            }
-            target = host;
-        }
         RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (targetRegion != nullptr && !targetRegion->IsYoungRegion()) {
             if (collector->GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
@@ -1037,13 +946,6 @@ private:
     void PushFilteredYoung(MarkContext& ctx, BaseObject* object, const char* origin, bool finalizable = false)
     {
         if (!Heap::IsHeapAddress(object)) {
-            return;
-        }
-        if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(object);
-            if (host != nullptr && host != object) {
-                PushFilteredYoung(ctx, host, origin, finalizable);
-            }
             return;
         }
         if (!object->IsValidObject()) {
@@ -1089,17 +991,6 @@ private:
         if (!Heap::IsHeapAddress(object)) {
             return;
         }
-        if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(object);
-            if (host != nullptr && host != object) {
-                BaseObject* admitted = AdmitYoungObject(host, "TraceYoungClosure.recover.striped");
-                if (admitted != nullptr) {
-                    PushObject(ctx, admitted);
-                }
-            }
-            return;
-        }
-
         auto& localObjects = output.objects;
         auto& localWeaks = output.weaks;
         WCollector* collector = shared.collector;
@@ -1534,14 +1425,6 @@ private:
             return;
         }
         BaseObject* obj = entry.object();
-        if (!Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.pop", obj)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-            if (host == nullptr || host == obj ||
-                !Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.host", host)) {
-                return;
-            }
-            obj = host;
-        }
         const bool wasMarked = collector.MarkEntryObject(obj, entry, &ctx.Cache());
         if (shared.exportOwner != nullptr && entry.mark() && !wasMarked) {
             TypeInfo* typeInfo = obj->GetTypeInfo();
@@ -1786,9 +1669,6 @@ namespace MapleRuntime {
 bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
                                        MarkLiveCache* cache) const
 {
-    if (!Collector::PlausibleManagedObjectGate("MarkEntryObject", obj)) {
-        return true;
-    }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     bool firstLive = entry.incLive();
     bool already = false;

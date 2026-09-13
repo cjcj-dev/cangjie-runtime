@@ -1060,10 +1060,8 @@ EXPORTS
     _ZN12MapleRuntime10RegionInfo21DispelGhostFromRegionEv @1058
     _ZN12MapleRuntime10RegionInfo24IncRawPointerObjectCountEv @1060
     _ZN12MapleRuntime10RegionInfo24PrepareForwardableRegionEv @1061
-    _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv @1062
     _ZN12MapleRuntime10RegionInfo26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10RegionInfo27BindLiveInfo0FromLiveIfNullEv @1065
-    _ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEy @1067
     _ZN12MapleRuntime10RegionInfo30LARGE_OBJECT_DEFAULT_THRESHOLDE @1068 DATA
     _ZN12MapleRuntime10RegionInfo8UnitInfo12ToFreeRegionEv @1070
     _ZN12MapleRuntime10RegionInfo8UnitInfo13GetUnitInfoAtEy @1071
@@ -2047,13 +2045,10 @@ EXPORTS
     _ZN12MapleRuntime9Collector13MarkNewObjectEPNS_10BaseObjectE @2265
     _ZN12MapleRuntime9Collector14GetGCPhaseNameENS_7GCPhaseE @2266
     _ZN12MapleRuntime9Collector15ResolveCycleRefEv @2267
-    _ZN12MapleRuntime9Collector16MarkGoodHeapGateEPKcPNS_10BaseObjectE @2268
     _ZN12MapleRuntime9Collector17RequestGCInternalENS_8GCReasonEb @2269
     _ZN12MapleRuntime9Collector18AbortUnimplementedEPKc @2270
     _ZN12MapleRuntime9Collector19AddRawPointerObjectEPNS_10BaseObjectE @2271
     _ZN12MapleRuntime9Collector22RemoveRawPointerObjectEPNS_10BaseObjectE @2272
-    _ZN12MapleRuntime9Collector22TryRecoverInteriorBaseEPNS_10BaseObjectES2_ @2273
-    _ZN12MapleRuntime9Collector26PlausibleManagedObjectGateEPKcPNS_10BaseObjectE @2274
     _ZN12MapleRuntime9Collector4FiniEv @2277
     _ZN12MapleRuntime9Collector9RequestGCENS_8GCReasonEb @2278
     _ZN12MapleRuntime9CollectorC2Ev @2279

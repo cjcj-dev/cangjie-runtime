@@ -495,12 +495,10 @@ STANDALONE_SYMBOLS=(
   _ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE0EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb
   _ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE1EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb
   _ZN12MapleRuntime10RegionInfo13ClearLiveInfoILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE
-  _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv
   _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE
   _ZNK12MapleRuntime9Collector18MarkObjectIfActiveEPNS_10BaseObjectE
 )
 STANDALONE_FULL_SYMBOLS=(
-  _ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm
   CJ_MCC_PostWriteRefField
 )
 # RegionInfo::MarkObject templates are instantiated by other TUs in this ELF.
@@ -609,41 +607,6 @@ fi
 if [[ "$STALL_PRODUCT_OBSERVE" -eq 0 ]]; then
   echo "STALL_SUITE=SKIP_DEFAULT_SO"
 fi
-
-# The target set is independent of the dlsym calls currently left in the test
-# source.  Deleting a test/call or shrinking the manifest therefore fails
-# closed instead of silently reducing the binding guard's coverage.
-PRODUCT_PATH_MANIFEST="$SRC/product_path_manifest.tsv"
-EXPECTED_BOUNDED_TESTS=(
-  LiveMap.UnexaminedRelocselPageKeepsWithoutSnapshot
-  LiveMap.ExaminedPageWithoutSnapshotStillAborts
-  LiveMap.OwnedCopyExaminedPageWithoutSnapshotStillAborts
-)
-manifest_rows=0
-while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
-  if [[ "$test_name" == "test_name" ]]; then
-    continue
-  fi
-  if [[ "$test_name" == Uncommitter.* ]]; then
-    echo "SKIP_PRODUCT_PATH_UNCOMMIT test_name=$test_name anchor=$anchor carrier=$carrier consumer=$consumer cut_site=$cut_site"
-    continue
-  fi
-  [[ "$anchor" == "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm" ]]
-  [[ "$carrier" == "product_so" ]]
-  [[ "$consumer" == "ProductPreserveRetainedUpToFn" ]]
-  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/z/zPage.inline.hpp"
-  suite="${test_name%%.*}"
-  name="${test_name#*.}"
-  /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_live_map.cpp"
-  manifest_rows=$((manifest_rows + 1))
-done <"$PRODUCT_PATH_MANIFEST"
-[[ "$manifest_rows" -eq "${#EXPECTED_BOUNDED_TESTS[@]}" ]]
-for test_name in "${EXPECTED_BOUNDED_TESTS[@]}"; do
-  /usr/bin/grep -F -q "$test_name" "$PRODUCT_PATH_MANIFEST"
-done
-actual_bounded_calls=$(/usr/bin/grep -F -c 'ProductPreserveRetainedUpToFn()(' "$SRC/test_live_map.cpp")
-[[ "$actual_bounded_calls" -eq "$manifest_rows" ]]
-echo "GATE_PRODUCT_PATH_MANIFEST_OK rows=$manifest_rows bounded_calls=$actual_bounded_calls"
 
 # ReferenceProcessor is an independently replaceable product carrier. Guard
 # full symbols (not only the dynamic table) so no local/weak test copy can
@@ -894,9 +857,9 @@ echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
 if command -v nm >/dev/null 2>&1; then
   echo "=== BINDING_PROOF (undefined in binary that resolve via runtime) ==="
-  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo|PlausibleManagedObjectGate|TryRecoverInteriorBase|RecordCrossGen|BindLiveInfo|GetRoute|MarkGoodHeapGate' || true
+  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo|RecordCrossGen|BindLiveInfo|GetRoute' || true
   echo "=== RUNTIME_EXPORTS (product .so) ==="
-  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|ZVerify|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
+  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo8GetRoute|RecordCrossGenEdge' | head -40 || true
 fi
 
 GC_UNIT_MAIN_ENV=''

@@ -291,13 +291,7 @@ void ZForwarding::verify() const
         ZVerify::Object(object, nullptr);
         bytes += RegionSpace::GetAllocSize(*object);
     }
-    // The source incarnation's livemap is retained by FromPageView even for
-    // in-place relocation, where reusable page metadata already names to-space.
-    const FromPageView* from = from_page_snapshot();
-    CHECK_DETAIL(from != nullptr && from->liveInfo != nullptr, "Missing forwarding source livemap");
-    RegionBitmap* bitmap = _page->GetOwnerMarkBitmap(from->liveInfo);
-    CHECK_DETAIL(bitmap != nullptr && sources.size() == bitmap->GetLiveObjects() &&
-                 bytes == bitmap->GetLiveBytes(), "Invalid forwarding live objects or bytes");
+    _page->VerifyLive(sources.size(), bytes, in_place());
 }
 
 } // namespace MapleRuntime

@@ -10,11 +10,6 @@
 namespace MapleRuntime {
 bool TracingCollector::MarkObject(BaseObject* obj) const
     {
-        // getsize7: base path uses unsized RegionInfo::MarkObject → GetSize without gate.
-        // WCollector overrides this; keep the base arm safe for non-WCollector builds/tests.
-        if (!Collector::PlausibleManagedObjectGate("TracingCollector::MarkObject", obj)) {
-            return true;
-        }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
         bool marked = regionInfo->MarkObjectByOwner(obj);

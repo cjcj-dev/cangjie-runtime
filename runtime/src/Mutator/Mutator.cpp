@@ -850,8 +850,7 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     }
 }
 
-// interiorsrc2: stack/reg root slots may hold coloured bits or RawArray+8 interiors.
-// Peel colour for range checks; reject interiors before PushRoot (work-stack poison).
+// Decode legacy ABI root words before classifying heap and stack storage.
 static BaseObject* PlainRootObject(zaddress_unsafe maybeColoured)
 {
     if (is_null(maybeColoured)) {
@@ -870,15 +869,10 @@ static void StripRootObjectColour(ObjectRef& root)
     }
 }
 
-static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool young, bool follow = true)
+static bool PushHeapRoot(BaseObject* obj, bool young, bool follow = true)
 {
     BaseObject* plain = PlainRootObject(to_zaddress_unsafe(reinterpret_cast<MAddress>(obj)));
     if (!Heap::IsHeapAddress(plain)) {
-
-        return false;
-    }
-    // markfloor gate: tip-small-int (e.g. length at RawArray+8) must not enter work stack.
-    if (!Collector::PlausibleManagedObjectGate(site, plain)) {
 
         return false;
     }
@@ -895,7 +889,7 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool
     }
     zaddress_unsafe word;
     memcpy(&word, record, sizeof(word));
-    return PushHeapRootIfPlausible(PlainRootObject(word), site, young);
+    return PushHeapRoot(PlainRootObject(word), young);
 }
 
 // Argument-form struct-live: `root` holds a pointer to a headerless record
@@ -1014,7 +1008,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
         RootSlot& rootField = RootSlotAt(
             static_cast<void*>(&refFieldAddr)); // Stack-object field metadata denotes a root word.
         BaseObject* obj = PlainRootObject(rootField.LoadPlain());
-        if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.ref", young)) {
+        if (PushHeapRoot(obj, young)) {
 
             DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
@@ -1031,7 +1025,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
         // so mutator restore after STW does not reload a non-canonical pointer (si_code=128).
         StripRootObjectColour(root);
         BaseObject* obj = PlainRootObject(root.LoadPlain());
-        if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.root", young)) {
+        if (PushHeapRoot(obj, young)) {
 
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
@@ -1039,18 +1033,6 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
                 CheckAndPush(obj, rootSet, rootStack);
             } else {
                 PushHeaderlessRecordField(obj, "GcPhaseEnum.root.headerless", young);
-            }
-        } else if (Heap::IsHeapAddress(obj) &&
-                   !Collector::PlausibleManagedObjectGate("GcPhaseEnum.interior", obj)) {
-            // introot: slot holds RawArray+8 (&length). Push the host object so mark
-            // closure reaches the live array; leave the slot plain (not object-head).
-            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-            if (host != nullptr) {
-                (void)PushHeapRootIfPlausible(host, "GcPhaseEnum.interiorBase", young);
-
-                DLOG(ENUM, "enum interior stack root @%p: interior=%p host=%p", &root, obj, host);
-            } else {
-                DLOG(ENUM, "skip interior stack root @%p: %p", &root, obj);
             }
         }
         while (!rootStack.empty()) {
@@ -1062,7 +1044,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
     RootVisitor invisibleRootVisitor = [young](ObjectRef& root) {
         StripRootObjectColour(root);
         BaseObject* obj = PlainRootObject(root.LoadPlain());
-        (void)PushHeapRootIfPlausible(obj, "GcPhaseEnum.invisible", young, false);
+        (void)PushHeapRoot(obj, young, false);
     };
     DerivedPtrVisitor derivedVisitor = MakeDerivedRootVisitor(visitor);
     if (stackScanEpoch == 0) {
@@ -1150,22 +1132,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         // does not resume with a coloured interior (si_code=128 in arrayInitByFunction).
         StripRootObjectColour(root);
         BaseObject* oldObj = PlainRootObject(root.LoadPlain());
-        if (Heap::IsHeapAddress(oldObj) &&
-            !Collector::PlausibleManagedObjectGate("GCPhasePreForward.root", oldObj)) {
-            // introot: interior root — forward host and rewrite slot to to+offset.
-            BaseObject* host = Collector::TryRecoverInteriorBase(oldObj);
-            if (host != nullptr && collector.IsGhostFromObject(host) &&
-                !collector.IsUnmovableFromObject(host)) {
-                if (rootFieldSet.insert((void*)(&root)).second) {
-                    BaseObject* toHost = collector.ForwardObject(host, collector.ObjectGeneration(host));
-                    CHECK_DETAIL(toHost != nullptr, "preforward interior missing winner host=%p", host);
-                    HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
-                        (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
-                        HealSite::MutatorPreForwardInterior);
-                }
-            }
-            return;
-        }
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&root)).second) {
