@@ -200,6 +200,61 @@ GC_OTHER_VM_TEST(Uncommitter, UncommitIdleUnitsReleasesPhysical)
     GC_EXPECT_TRUE(backendReleased > 0);
 }
 
+// Ports of gc/z/TestUncommit.java and TestNoUncommit.java. These tests start
+// the allocator-owned product thread and observe the physical backing owner's
+// capacity, rather than a modeled counter. Each runs in a fresh process so the
+// process-wide delay setting and RegionInfo reservation belong to this test.
+static void ExercisePartitionWorker(bool enabled)
+{
+    GC_EXPECT_EQ(setenv("cjUncommitDelay", enabled ? "10ms" : "0", 1), 0);
+    BindUncommitWorkerThread();
+    const size_t n = 64 * MB / RegionInfo::UNIT_SIZE;
+    const size_t meta = RegionManager::GetMetadataSize(n);
+    MemMap* map = MemMap::MapMemory(meta + n * RegionInfo::UNIT_SIZE,
+                                     meta + n * RegionInfo::UNIT_SIZE);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
+    RegionInfo::Initialize(n, heapStart, map);
+    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& regions = space.GetRegionManager();
+    regions.freeRegionManager.Initialize(n);
+    (void)RegionInfo::InitRegion(0, n, RegionInfo::UnitRole::FREE_UNITS);
+    GC_EXPECT_TRUE(regions.freeRegionManager.releasedUnitTree.MergeInsert(0, n, false));
+    const size_t before = regions.GetCommittedCapacity();
+    const uint64_t start = TimeUtil::NanoSeconds();
+    Uncommitter& worker = space.GetUncommitter();
+    worker.Start();
+    const auto deadline = std::chrono::steady_clock::now() +
+        (enabled ? std::chrono::seconds(2) : std::chrono::milliseconds(50));
+    while (regions.GetCommittedCapacity() == before && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const uint64_t observed = TimeUtil::NanoSeconds();
+    worker.Stop();
+    const size_t after = regions.GetCommittedCapacity();
+    std::fprintf(stderr, "DETAIL partition-worker enabled=%d committed-before=%zu committed-after=%zu elapsed=%llu\n",
+                 enabled, before, after, static_cast<unsigned long long>(observed - start));
+    GC_EXPECT_EQ(after, map->GetCommittedSize());
+    if (enabled) {
+        GC_EXPECT_TRUE(after < before);
+        GC_EXPECT_TRUE(observed - start >= Uncommitter::DelayNs());
+        GC_EXPECT_TRUE(after >= 32 * MB);
+    } else {
+        GC_EXPECT_EQ(after, before);
+    }
+    MemMap::DestroyMemMap(map);
+}
+
+GC_OTHER_VM_TEST(Uncommitter, TestUncommitIndependentPartitionThread)
+{
+    ExercisePartitionWorker(true);
+}
+
+GC_OTHER_VM_TEST(Uncommitter, TestNoUncommitDisabledPartitionThread)
+{
+    ExercisePartitionWorker(false);
+}
+
 GC_OTHER_VM_TEST(Uncommitter, CancelDelaysActivation)
 {
     UncommitterTestAccess::ResetCancel();

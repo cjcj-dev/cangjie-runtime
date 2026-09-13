@@ -41,7 +41,6 @@ public:
     static bool ShouldStopUncommit();
     static bool ShouldRetryPartial(size_t requestedBytes, size_t releasedBytes);
 
-
 private:
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct UncommitterTestAccess;

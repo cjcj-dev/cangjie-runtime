@@ -185,6 +185,11 @@ void Uncommitter::RunCycle()
     while (!stopped.load(std::memory_order_acquire) && toUncommit != 0) {
         const size_t released = Uncommit();
         if (released == 0) {
+            std::lock_guard<std::mutex> guard(lock);
+            if (!canceled.load(std::memory_order_acquire)) {
+                cancelTime = TimeUtil::NanoSeconds();
+                canceled.store(true, std::memory_order_release);
+            }
             break;
         }
         RegisterUncommit(released);
@@ -196,6 +201,7 @@ void Uncommitter::RunCycle()
 
 void Uncommitter::Run()
 {
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
     uint64_t deadline = TimeUtil::NanoSeconds() + DelayNs();
     while (WaitUntil(deadline)) {
         if (Activate()) {
