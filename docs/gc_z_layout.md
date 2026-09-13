@@ -1,5 +1,7 @@
 # D09：GC 文件布局搬移表
 
+第四轮测试观测定义的当前锚与完整命中表见 [gc_z_layout_observer_rework.md](gc_z_layout_observer_rework.md)，其定义归属优先于以下旧版文件职责锚。
+
 本轮返工的定义级对应、诊断退回与 advisor 例外见 [gc_z_layout_rework.md](gc_z_layout_rework.md)。完整 TSV 的 ZGC 文件职责锚不代表逐函数等价。
 
 
