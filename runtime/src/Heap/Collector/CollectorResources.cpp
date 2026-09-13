@@ -22,6 +22,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "MutatorAllocRate.h"
+#include "GcTrigger.h"
 #include "Collector/Uncommitter.h"
 #include "Common/RunType.h"
 #include "Common/ScopedObjectAccess.h"
@@ -91,10 +92,13 @@ void CollectorResources::Init()
     taskQueue = new TaskQueue<GCExecutor>;
     taskQueue->Init();
     finishedGcIndex = GCTask::SYNC_TASK_MIN_INDEX;
-    StartGCThreads();
-    finalizerProcessor.Start();
     gcStats.Init();
     MutatorAllocRate::initialize();
+    const uint64_t now = TimeUtil::NanoSeconds();
+    youngCycle.Initialize(now);
+    oldCycle.Initialize(now);
+    StartGCThreads();
+    finalizerProcessor.Start();
     if (Uncommitter::Enabled()) {
         LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus tick=%ums",
             static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND), Uncommitter::TickMs());
@@ -117,6 +121,11 @@ void CollectorResources::Fini()
 void CollectorResources::StopGCWork()
 {
     finalizerProcessor.Stop();
+    {
+        std::lock_guard<std::mutex> lock(directorMutex);
+        directorStopped = true;
+        directorCondition.notify_all();
+    }
     // Close both ports before joining either driver.  This is the shutdown
     // acknowledgement for synchronous callers: WaitForAck observes stopped
     // and returns immediately instead of enqueueing into an abandoned queue.
@@ -144,7 +153,9 @@ void CollectorResources::StopGCThreads()
     if (gcThreadRunning.load(std::memory_order_acquire) == false) {
         return;
     }
-    int ret = ::pthread_join(minorDriverThread, nullptr);
+    int ret = ::pthread_join(directorThread, nullptr);
+    CHECK_E(UNLIKELY(ret != 0), "::pthread_join(director) in StopGCThreads() return %d", ret);
+    ret = ::pthread_join(minorDriverThread, nullptr);
     CHECK_E(UNLIKELY(ret != 0), "::pthread_join(minor) in StopGCThreads() return %d", ret);
     ret = ::pthread_join(majorDriverThread, nullptr);
     CHECK_E(UNLIKELY(ret != 0), "::pthread_join(major) in StopGCThreads() return %d", ret);
@@ -169,10 +180,10 @@ void CollectorResources::RunTaskLoop()
     // when the other generation is continuously requesting collections.
     while (true) {
         GCDriverRequest request {};
-        bool haveRequest = minorDriverPort.TryDequeue(request);
+        bool haveRequest = TakeDriverRequest(minorDriverPort, request);
         GCDriverPort* port = &minorDriverPort;
         if (!haveRequest) {
-            haveRequest = majorDriverPort.TryDequeue(request);
+            haveRequest = TakeDriverRequest(majorDriverPort, request);
             port = &majorDriverPort;
         }
         if (haveRequest) {
@@ -204,10 +215,9 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
     gcTid.store(MapleRuntime::GetTid(), std::memory_order_release);
     GCDriverPort& port = kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort;
     const bool ownsControlQueue = kind == GCDriverKind::MAJOR;
-    auto nextTimeout = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     while (true) {
         GCDriverRequest request {};
-        if (port.TryDequeue(request)) {
+        if (TakeDriverRequest(port, request)) {
             (void)ProcessDriverRequest(port, request);
             continue;
         }
@@ -226,35 +236,133 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
 #else
                 void* owner = static_cast<void*>(&collectorProxy);
 #endif
-                // The legacy queue still owns timeout and heap-dump work.
-                // Serialize it with both generation drivers because timeout
-                // can enter RunGarbageCollection as a major request.
+                // Heap-dump/control work shares the driver lifecycle lock.
                 std::lock_guard<std::mutex> lock(driverLock);
                 if (!controlTask.Execute(owner)) {
                     break;
                 }
-                nextTimeout = std::chrono::steady_clock::now() + std::chrono::seconds(1);
                 continue;
             }
-            // Preserve the legacy one-second decision cadence, but send a due
-            // backup through the major port. ZGC routes _z_timer to the major
-            // driver (zDriver.cpp:334-357), so it receives the same owned
-            // young prelude and lifecycle lock as every other major request.
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= nextTimeout) {
-                const uint64_t nowNs = TimeUtil::NanoSeconds();
-                const bool backupDue = Runtime::CurrentRef() == nullptr ||
-                    (nowNs - GCStats::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval;
-                if (Heap::GetHeap().IsGCEnabled() && backupDue) {
-                    GCStats::SetPrevGCStartTime(nowNs);
-                    majorDriverPort.EnqueueAsync(GC_REASON_BACKUP);
-                }
-                nextTimeout = now + std::chrono::seconds(1);
-            }
+
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     NotifyGCFinished(GCTask::TASK_INDEX_FOR_EXIT);
+}
+
+void* CollectorResources::DirectorThreadEntry(void* arg)
+{
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    static_cast<CollectorResources*>(arg)->RunDirectorLoop();
+    return nullptr;
+}
+
+bool CollectorResources::TakeDriverRequest(GCDriverPort& port, GCDriverRequest& request)
+{
+    std::lock_guard<std::mutex> lock(directorMutex);
+    if (!port.TryDequeue(request)) {
+        return false;
+    }
+    (port.Kind() == GCDriverKind::MINOR ? minorBusy : majorBusy) = true;
+    return true;
+}
+
+void CollectorResources::CompleteDriverRequest(GCDriverPort& port)
+{
+    // zDriver.cpp:217-223: publish completion after ack; the director samples
+    // again even when the next fixed tick is not due yet.
+    std::lock_guard<std::mutex> lock(directorMutex);
+    (port.Kind() == GCDriverKind::MINOR ? minorBusy : majorBusy) = false;
+    directorReevaluate = true;
+    directorCondition.notify_one();
+}
+
+void CollectorResources::RunDirectorLoop()
+{
+    GcMetronome metronome(TimeUtil::NanoSeconds());
+    std::unique_lock<std::mutex> lock(directorMutex);
+    while (!directorStopped) {
+        const uint64_t now = TimeUtil::NanoSeconds();
+        const bool tick = metronome.Poll(now);
+        if (tick || directorReevaluate) {
+            directorReevaluate = false;
+            EvaluateDirector(now);
+            continue;
+        }
+        directorCondition.wait_for(lock, std::chrono::nanoseconds(metronome.DeadlineNs() - now),
+                                   [this] { return directorStopped || directorReevaluate; });
+    }
+}
+
+void CollectorResources::EvaluateDirector(uint64_t now)
+{
+    // zDirector.cpp:875-927: one synchronized snapshot feeds all rules and
+    // active-worker adjustment. No driver lifecycle lock is acquired here.
+    if (Runtime::CurrentRef() == nullptr || !IsGCActive()) {
+        return;
+    }
+    auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    GcTriggerInputs in = ZStat::SampleDirectorStats(now, youngCycle, oldCycle, regions,
+        *youngWorkers, *oldWorkers);
+    in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
+    in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;
+    const GcTriggerDecision decision = DecideGcTrigger(in);
+    const GcWorkerSelection selection = SelectGcWorkers(in, in.workerCapacity,
+        in.lastYoungWorkers, decision.kind == GcTriggerKind::MAJOR);
+    if (decision.kind != GcTriggerKind::NONE) {
+        g_gcTriggerYoungWorkers.store(selection.youngWorkers, std::memory_order_relaxed);
+        g_gcTriggerOldWorkers.store(selection.oldWorkers, std::memory_order_relaxed);
+        NoteGcTriggerRule(decision.rule);
+        if (decision.kind == GcTriggerKind::MAJOR) {
+            const GCReason reason = decision.rule == GcTriggerRule::TIMER ? GC_REASON_BACKUP : GC_REASON_HEU;
+            majorDriverPort.EnqueueAsync(reason, selection.youngWorkers, selection.oldWorkers,
+                                         decision.rule == GcTriggerRule::WARMUP);
+        } else {
+            minorDriverPort.EnqueueAsync(GC_REASON_YOUNG, selection.youngWorkers);
+            if (in.oldWorkersActive && in.activeOldWorkers != selection.oldWorkers) {
+                oldWorkers->RequestResize(selection.oldWorkers);
+            }
+        }
+        return;
+    }
+    // zDirector.cpp:725-780: only an active young collection provides the
+    // pressure signal for live resizing; the existing worker task consumes it.
+    if (in.youngWorkersActive) {
+        GcTriggerInputs hard = in;
+        hard.softMaxBytes = in.capacityBytes;
+        const auto request = RuleDynamicAllocRate(hard, in.workerCapacity,
+            in.lastYoungWorkers, false);
+        if (!request.trigger) {
+            return;
+        }
+        uint32_t desired = std::max(request.workers, in.activeYoungWorkers);
+        desired = std::min(in.workerCapacity, in.activeYoungWorkers + 2 * (desired - in.activeYoungWorkers));
+        const auto adjusted = SelectWorkerThreads(in, desired, in.workerCapacity, in.oldWorkersActive);
+        if (in.oldWorkersActive && in.activeOldWorkers != adjusted.oldWorkers) {
+            oldWorkers->RequestResize(adjusted.oldWorkers);
+        }
+        if (in.activeYoungWorkers != adjusted.youngWorkers) {
+            youngWorkers->RequestResize(adjusted.youngWorkers);
+        }
+    }
+}
+
+void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup)
+{
+    const bool isYoung = reason == GC_REASON_YOUNG;
+    GCWorkers* workers = isYoung ? youngWorkers : oldWorkers;
+#if defined(MRT_GC_UNIT_TESTS)
+    if (workers == nullptr) {
+        collector.RunGarbageCollection(index, reason);
+        return;
+    }
+#endif
+    ZStatCycle& cycle = isYoung ? youngCycle : oldCycle;
+    const auto before = workers->GetSnapshot();
+    cycle.AtStart(TimeUtil::NanoSeconds(), before.elapsedNanos, before.workerNanos);
+    collector.RunGarbageCollection(index, reason);
+    const auto after = workers->GetSnapshot();
+    cycle.AtEnd(TimeUtil::NanoSeconds(), after.elapsedNanos, after.workerNanos, warmup);
 }
 
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
@@ -275,13 +383,26 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     MRT_ASSERT(!driverRequestActive, "nested driver request lifecycle");
     driverRequestActive = true;
 
+    // Set the request's generation budgets before mark-start can consume
+    // them, including the old mark domain prepared by the young prelude.
+    const uint32_t youngCount = request.youngWorkers == 0 ? concurrentGcThreadCount : request.youngWorkers;
+    const uint32_t oldCount = request.oldWorkers == 0 ? concurrentGcThreadCount : request.oldWorkers;
+    const bool warmup = request.warmup;
+    if (youngWorkers != nullptr) {
+        youngWorkers->SetActiveWorkers(youngCount);
+        if (request.reason != GC_REASON_YOUNG) {
+            oldWorkers->SetActiveWorkers(oldCount);
+        }
+    }
+
     // A major request owns its young prelude while holding the driver lock,
     // exactly like ZDriverMajor::collect_young followed by collect_old
     // (zDriver.cpp:416-452). Sending a synchronous request back through the
     // minor port would deadlock once both drivers share the ZGC lock.
     if (request.reason != GC_REASON_YOUNG) {
         youngPreludeRequest = &request;
-        collector->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG);
+        RunCollection(*collector, GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG,
+                      warmup);
         youngPreludeRequest = nullptr;
 #if defined(MRT_GC_UNIT_TESTS)
         if (testAfterYoungPrelude) {
@@ -297,8 +418,8 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     VLOG(GCPHASE, "[GCV2][driver] kind=%s seq=%llu reason=%u ack=pending",
          request.reason == GC_REASON_YOUNG ? "minor" : "major",
          static_cast<unsigned long long>(request.sequence), request.reason);
-    collector->RunGarbageCollection(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
-                                    request.reason);
+    RunCollection(*collector, request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
+                  request.reason, warmup);
     driverRequestActive = false;
     NotifyGCFinished(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
     return true;
@@ -308,9 +429,11 @@ bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriver
 {
     if (port.Abort().Poll() || !ExecuteDriverRequest(request)) {
         port.Cancel(request);
+        CompleteDriverRequest(port);
         return false;
     }
     port.Acknowledge(request);
+    CompleteDriverRequest(port);
     return true;
 }
 
@@ -508,6 +631,9 @@ void CollectorResources::StartGCThreads()
     // Keep the historical handle as an alias for diagnostics that name the
     // collector's main thread; shutdown joins both concrete driver handles.
     gcMainThread = majorDriverThread;
+    if (::pthread_create(&directorThread, nullptr, CollectorResources::DirectorThreadEntry, this) != 0) {
+        MRT_ASSERT(0, "pthread_create director failed!");
+    }
     // set thread name.
 #ifdef __WIN64
     int ret = pthread_setname_np(majorDriverThread, "gc-major-driver");

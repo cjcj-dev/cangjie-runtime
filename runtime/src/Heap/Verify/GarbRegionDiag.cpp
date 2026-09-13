@@ -1,5 +1,6 @@
 #include "Heap/Verify/GarbRegionDiag.h"
 
+#include "Base/ZStat.h"
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -225,7 +226,7 @@ void CensusBeforeForward(const char* where)
     std::fprintf(stderr,
                  "[GCV2][garbregion][census] n=%zu where=%s holders=%zu slots=%zu regionsHit=%zu sat=%zu gc=%zu\n",
                  n, g_lastWhere, holders, slots, g_tabUsed.load(std::memory_order_relaxed),
-                 g_tabSat.load(std::memory_order_relaxed), g_gcCount.load(std::memory_order_relaxed));
+                 g_tabSat.load(std::memory_order_relaxed), static_cast<size_t>(ZStat::Collections().Stats().totalCollections));
     std::fflush(stderr);
 }
 
@@ -320,7 +321,7 @@ void NoteCollectEnter(RegionInfo* region)
                      static_cast<unsigned>(knownEmpty), static_cast<unsigned>(neverExamined), liveInfo,
                      static_cast<unsigned long long>(faceEp), static_cast<unsigned long long>(snapEp), mb, cls,
                      slots, markedH, unmarkedH, youngH, oldH, static_cast<unsigned>(row != nullptr),
-                     g_gcCount.load(std::memory_order_relaxed), g_lastWhere);
+                     static_cast<size_t>(ZStat::Collections().Stats().totalCollections), g_lastWhere);
         std::fflush(stderr);
     }
 }
@@ -371,7 +372,7 @@ void NoteF3Join(RegionInfo* latestRegion, BaseObject* latest, const char* reason
                      static_cast<unsigned>(latestRegion->GetRouteMarkGeneration()),
                      static_cast<unsigned long long>(latestRegion->GetLiveByteCount()),
                      static_cast<unsigned>(auth), static_cast<unsigned>(knownEmpty), liveInfo, slots, markedH,
-                     unmarkedH, static_cast<unsigned>(row != nullptr), g_gcCount.load(std::memory_order_relaxed));
+                     unmarkedH, static_cast<unsigned>(row != nullptr), static_cast<size_t>(ZStat::Collections().Stats().totalCollections));
         std::fflush(stderr);
     }
 }
