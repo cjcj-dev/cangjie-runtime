@@ -176,7 +176,11 @@ void ZStatValue::InitializeStorage()
 {
     // Each CpuData is cache-line aligned; the entire per-CPU layout is resident.
     stride = (stride + 63) & ~static_cast<size_t>(63);
-    base = static_cast<char*>(::operator new(stride * CpuCount(), std::align_val_t(64)));
+    // zUtils.inline.hpp:37-49: reserve padding and keep the aligned storage
+    // for process lifetime. This also works in the product's C++14 build.
+    const uintptr_t allocation = reinterpret_cast<uintptr_t>(std::malloc(stride * CpuCount() + 63));
+    CHECK_DETAIL(allocation != 0, "statistics storage allocation failed");
+    base = reinterpret_cast<char*>((allocation + 63) & ~static_cast<uintptr_t>(63));
 }
 
 size_t ZStatValue::CpuCount()
@@ -286,6 +290,8 @@ void ZStat::SampleAndCollect(std::vector<ZStatSamplerHistory>& history)
 
 void ZStat::Print(const std::vector<ZStatSamplerHistory>& history)
 {
+    // zStat.cpp:1052-1064: logging controls output, never collection.
+    if (Logger::GetLogger().GetMinimumLogLevel() > RTLOG_INFO) return;
     std::vector<const ZStatSampler*> sorted;
     for (const auto* sampler = ZStatSampler::First(); sampler != nullptr; sampler = sampler->Next()) {
         sorted.push_back(sampler);
