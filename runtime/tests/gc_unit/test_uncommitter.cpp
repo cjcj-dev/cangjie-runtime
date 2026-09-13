@@ -12,12 +12,12 @@
 #include "Heap/Allocator/CartesianTree.h"
 #define private public
 #include "Heap/Allocator/FreeRegionManager.h"
-#include "Heap/Allocator/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 #undef private
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/Uncommitter.h"
+#include "Heap/z/zUncommitter.hpp"
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Heap.h"
 #include "Mutator/ThreadLocal.h"

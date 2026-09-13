@@ -10,13 +10,13 @@
 
 #include <vector>
 #include <memory>
-#include "RangeRegistry.h"
+#include "Heap/z/zRangeRegistry.hpp"
 
 #include "AllocationStallQueue.h"
 #include "CartesianTree.h"
-#include "zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Common/ScopedObjectAccess.h"
-#include "Heap/Collector/Uncommitter.h"
+#include "Heap/z/zUncommitter.hpp"
 
 namespace MapleRuntime {
 class RegionManager;

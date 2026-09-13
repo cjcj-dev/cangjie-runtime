@@ -23,7 +23,7 @@
 #include <unordered_set>
 
 #include "Allocator/RegionSpace.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 #include "Collector/CopyCollector.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/RemsetScanStats.h"

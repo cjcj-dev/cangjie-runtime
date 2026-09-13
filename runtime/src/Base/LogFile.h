@@ -15,7 +15,7 @@
 #include "Base/Log.h"
 #include "Base/Macros.h"
 #include "Base/TimeUtils.h"
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include "Cangjie.h"
 #include "Interpreter/Options.h"
 

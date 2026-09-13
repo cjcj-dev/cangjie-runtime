@@ -18,7 +18,7 @@
 
 #include "Base/AtomicSpinLock.h"
 #include "Base/GcLog.h"
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include "Base/Globals.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"

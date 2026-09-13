@@ -20,9 +20,9 @@
 
 #include "Concurrency/Concurrency.h"
 #include "Base/Log.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Barrier/Barrier.h"
+#include "Heap/z/zBarrier.hpp"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/TracingCollector.h"
@@ -32,8 +32,8 @@
 #include "Heap/Collector/MarkingStacks.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Mutator/ThreadLocal.h"
-#include "Heap/Collector/HeapIterator.h"
-#include "Heap/Verify/ZVerify.h"
+#include "Heap/z/zHeapIterator.hpp"
+#include "Heap/z/zVerify.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
 

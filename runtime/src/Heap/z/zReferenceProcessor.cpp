@@ -2,12 +2,12 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-#include "Collector/ReferenceProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 
 #include <new>
 
 #include "Base/Panic.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/RefField.inline.h"

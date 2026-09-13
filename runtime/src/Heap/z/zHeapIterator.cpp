@@ -1,7 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
-#include "Heap/Collector/HeapIterator.h"
+#include "Heap/z/zHeapIterator.hpp"
 #include "Heap/Collector/TracingCollector.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"

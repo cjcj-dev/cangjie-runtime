@@ -7,7 +7,7 @@
 #ifndef MRT_REGIONMANAGER_INLINE_H
 #define MRT_REGIONMANAGER_INLINE_H
 
-#include "zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 
 namespace MapleRuntime {
 

@@ -39,7 +39,7 @@
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Collector/ManagedObjectGate.h"
-#include "Heap/Collector/Uncommitter.h"
+#include "Heap/z/zUncommitter.hpp"
 #include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/DiagGate.h"
@@ -47,9 +47,9 @@
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Allocator/RouteDestHold.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 #include "Heap/Allocator/MemMap.h"
-#include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/z/zGranuleMap.hpp"
 
 #include "Heap/Verify/M0Correlation.h"
 #include "Base/TimeUtils.h"
@@ -1498,5 +1498,5 @@ private:
 };
 } // namespace MapleRuntime
 
-#include "zPage.inline.hpp"
+#include "Heap/z/zPage.inline.hpp"
 #endif // MRT_REGION_INFO_H

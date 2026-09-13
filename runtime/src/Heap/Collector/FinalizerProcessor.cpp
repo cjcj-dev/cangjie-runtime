@@ -10,12 +10,12 @@
 #include <algorithm>
 #include <chrono>
 #include "Base/Macros.h"
-#include "Collector/Uncommitter.h"
+#include "Heap/z/zUncommitter.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/Heap.h"
 #include "Heap/Allocator/HeapFiller.h"
-#include "Heap/Barrier/Barrier.h"
+#include "Heap/z/zBarrier.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MObject.h"

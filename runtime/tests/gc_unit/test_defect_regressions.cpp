@@ -9,15 +9,15 @@
 
 #include <cstdint>
 #include <dlfcn.h>
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
 
 #include "Common/ColourMask.h"
 #include "Common/ColourTypes.h"
-#include "Heap/Barrier/Barrier.h"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"

@@ -19,9 +19,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Heap/Allocator/ForwardingEntry.h"
-#include "Heap/Allocator/ForwardingAllocator.h"
-#include "Heap/Allocator/ZAttachedArray.h"
+#include "Heap/z/zForwardingEntry.hpp"
+#include "Heap/z/zForwardingAllocator.hpp"
+#include "Heap/z/zAttachedArray.hpp"
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Heap.h"
 

@@ -8,7 +8,7 @@
 #include <iostream>
 #include <unordered_set>
 
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 
 namespace MapleRuntime {
 class RememberedSetTest {

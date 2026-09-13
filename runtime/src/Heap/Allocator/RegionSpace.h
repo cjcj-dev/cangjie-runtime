@@ -19,7 +19,7 @@
 #include "Allocator.h"
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
-#include "zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif

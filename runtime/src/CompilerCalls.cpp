@@ -8,7 +8,7 @@
 #include "CompilerCalls.h"
 
 #include "Base/CString.h"
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
@@ -28,9 +28,9 @@
 #endif
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Barrier/Barrier.h"
-#include "Heap/Allocator/zPage.hpp"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/GcStats.h"

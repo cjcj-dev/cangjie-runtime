@@ -10,9 +10,9 @@
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Allocator/zPage.hpp"
-#include "Heap/Collector/ZForwarding.h"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zForwarding.hpp"
 #include "Heap/Heap.h"
 #include "Heap/Verify/M0Correlation.h"
 

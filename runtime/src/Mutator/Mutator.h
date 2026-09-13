@@ -14,7 +14,7 @@
 
 #include "Exception/Exception.h"
 #include "Heap/Allocator/Allocator.h"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Collector/GcInfos.h"
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"

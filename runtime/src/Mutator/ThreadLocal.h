@@ -13,7 +13,7 @@
 #include "Base/RwLock.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
-#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkStripe.h"
 
 namespace MapleRuntime {

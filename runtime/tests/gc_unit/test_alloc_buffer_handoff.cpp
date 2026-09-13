@@ -36,7 +36,7 @@
 #include "gc_unittest.hpp"
 
 #include "Heap/Allocator/AllocBuffer.h"
-#include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/z/zMarkStackEntry.hpp"
 #include "Heap/Collector/MarkEngine.h"
 #include "Mutator/ThreadLocal.h"
 

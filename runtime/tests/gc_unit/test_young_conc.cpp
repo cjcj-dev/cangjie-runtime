@@ -32,14 +32,14 @@
 #include "Concurrency/Concurrency.h"
 
 #define private public
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Collector/LiveInfo.h"
 #include "Mutator/Mutator.h"
 #undef private
 
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Barrier/Barrier.h"
+#include "Heap/z/zBarrier.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"

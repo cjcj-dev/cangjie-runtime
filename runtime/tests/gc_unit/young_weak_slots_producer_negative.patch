@@ -1,6 +1,6 @@
-diff --git a/runtime/src/Heap/Collector/Mark.cpp b/runtime/src/Heap/Collector/Mark.cpp
---- a/runtime/src/Heap/Collector/Mark.cpp
-+++ b/runtime/src/Heap/Collector/Mark.cpp
+diff --git a/runtime/src/Heap/z/zMark.cpp b/runtime/src/Heap/z/zMark.cpp
+--- a/runtime/src/Heap/z/zMark.cpp
++++ b/runtime/src/Heap/z/zMark.cpp
 @@ -1825,7 +1825,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
          }
          if (UNLIKELY(object->IsWeakRef())) {

@@ -2,7 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-#include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/z/zGranuleMap.hpp"
 
 #include <algorithm>
 #include <cstdio>

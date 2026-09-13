@@ -1,6 +1,6 @@
-diff --git a/runtime/src/Heap/Collector/Mark.cpp b/runtime/src/Heap/Collector/Mark.cpp
---- a/runtime/src/Heap/Collector/Mark.cpp
-+++ b/runtime/src/Heap/Collector/Mark.cpp
+diff --git a/runtime/src/Heap/z/zMark.cpp b/runtime/src/Heap/z/zMark.cpp
+--- a/runtime/src/Heap/z/zMark.cpp
++++ b/runtime/src/Heap/z/zMark.cpp
 @@ -1689,5 +1689,9 @@ private:
  #if defined(MRT_TESTABLE_INTERNALS)
              NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::STRIPED);

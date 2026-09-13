@@ -14,7 +14,7 @@
 #include <type_traits>
 
 #include "Base/Log.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
 namespace {

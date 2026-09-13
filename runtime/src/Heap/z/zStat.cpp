@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,7 +13,7 @@
 #include "CangjieRuntime.h"
 #include "Heap/Heap.h"
 #include "Heap/GcThreadPool.h"
-#include "Heap/Allocator/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 #include "Heap/Collector/GcTrigger.h"
 
 namespace MapleRuntime {
@@ -422,7 +422,7 @@ const ZStatPhase MajorCollection("Major Collection", "Major Collection");
 
 #include "Base/AtomicSpinLock.h"
 #include "Heap/Collector/TruncatedSeq.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
 namespace {

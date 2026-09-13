@@ -17,7 +17,7 @@
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/LiveInfoArena.h"
-#include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/z/zMarkStackEntry.hpp"
 #include "Mutator/MutatorManager.h"
 
 // set 1 to enable concurrent mark test.

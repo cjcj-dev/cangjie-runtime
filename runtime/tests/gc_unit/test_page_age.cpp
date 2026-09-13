@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Heap/Allocator/PageAge.h"
+#include "Heap/z/zPageAge.hpp"
 #include "Heap/Collector/TenuringThreshold.h"
 #include "gc_unittest.hpp"
 

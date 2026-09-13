@@ -2,7 +2,7 @@
 # Format: relative-path:line<TAB>why this representation cast is required.
 runtime/src/Sync/Sync.cpp:570	CJMonitor embeds a managed mutex field; the read barrier requires its holder as BaseObject storage.
 runtime/src/Sync/Sync.cpp:605	CJMultiConditionMonitor embeds the same managed mutex field and uses the same holder representation.
-runtime/src/Heap/Barrier/Barrier.cpp:503	The bulk struct-array copy contract identifies dstObj as the destination MArray before field recolouring.
+runtime/src/Heap/z/zBarrier.cpp:503	The bulk struct-array copy contract identifies dstObj as the destination MArray before field recolouring.
 runtime/src/Heap/Collector/FinalizerProcessor.cpp:235	workingFinalizables contains finalizable class instances; MObject exposes their finalizer TypeInfo.
 runtime/src/Heap/Collector/Collector.cpp:215	Interior-base probing forms a candidate object start and validates its heap address and TypeInfo before use.
 runtime/src/Heap/Collector/Collector.cpp:262	The validated interior offset is subtracted to recover the already-checked host object start.

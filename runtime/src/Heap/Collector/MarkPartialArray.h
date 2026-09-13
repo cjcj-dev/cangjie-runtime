@@ -12,7 +12,7 @@
 #include <functional>
 
 #include "Common/TypeDef.h"
-#include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/z/zMarkStackEntry.hpp"
 
 namespace MapleRuntime {
 class BaseObject;

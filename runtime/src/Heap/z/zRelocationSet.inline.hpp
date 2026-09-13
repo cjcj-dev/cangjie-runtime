@@ -7,7 +7,7 @@
 #ifndef MRT_RELOCATION_SET_INLINE_H
 #define MRT_RELOCATION_SET_INLINE_H
 
-#include "Heap/Allocator/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 
 namespace MapleRuntime {
     template<Generation G>

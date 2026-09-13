@@ -19,7 +19,7 @@
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #endif
-#include "Allocator/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -40,25 +40,25 @@
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Collector/Collector.h"
-#include "Collector/ZForwarding.h"
+#include "Heap/z/zForwarding.hpp"
 #include "Collector/CollectorResources.h"
 #include "Collector/CopyCollector.h"
 #include "Collector/GcTrigger.h"
-#include "Collector/Uncommitter.h"
-#include "Base/ZStat.h"
+#include "Heap/z/zUncommitter.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Collector/TenuringThreshold.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Collector/zRelocationSetSelector.hpp"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"

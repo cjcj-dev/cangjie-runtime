@@ -10,7 +10,7 @@
 #include <set>
 #include <array>
 #include <cstring>
-#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Cangjie.h"
 #include "Common/Runtime.h"

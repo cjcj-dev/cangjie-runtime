@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -22,9 +22,9 @@
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Heap.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Collector/Collector.h"
-#include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/z/zGranuleMap.hpp"
 #include "Heap/Verify/M0Correlation.h"
 #include "Heap/WCollector/WCollector.h"
 

@@ -8,7 +8,7 @@
 #ifndef MRT_BARRIER_INLINE_H
 #define MRT_BARRIER_INLINE_H
 
-#include "Barrier.h"
+#include "Heap/z/zBarrier.hpp"
 #include "securec.h"
 
 namespace MapleRuntime {

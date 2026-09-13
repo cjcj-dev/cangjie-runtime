@@ -4,16 +4,16 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "StoreBarrierBuffer.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Allocator/Allocator.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/RefField.h"
-#include "RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 
 namespace MapleRuntime {
 

@@ -32,7 +32,7 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
-#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"

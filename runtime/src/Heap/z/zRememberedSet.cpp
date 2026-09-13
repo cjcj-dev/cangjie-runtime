@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <algorithm>
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 
 #include <cstdlib>
 #include <functional>
@@ -19,11 +19,11 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Collector/Collector.h"
-#include "Heap/Collector/ZForwarding.h"
+#include "Heap/z/zForwarding.hpp"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {

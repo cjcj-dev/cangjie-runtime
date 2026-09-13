@@ -10,7 +10,7 @@
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Allocator/Allocator.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"

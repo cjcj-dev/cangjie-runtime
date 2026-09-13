@@ -4,11 +4,11 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Barrier.inline.h"
+#include "Heap/z/zBarrier.inline.hpp"
 #include "Base/Macros.h"
 #include "Heap/Allocator/AllocBuffer.h"
-#include "Heap/Barrier/StoreBarrierBuffer.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"

@@ -103,7 +103,7 @@ private:
 } // namespace MapleRuntime
 
 #ifndef MRT_TESTABLE_INTERNALS
-#include "Heap/Allocator/RangeRegistry.inline.h"
+#include "Heap/z/zRangeRegistry.inline.hpp"
 #endif
 
 #endif // MRT_ALLOC_RANGE_REGISTRY_H

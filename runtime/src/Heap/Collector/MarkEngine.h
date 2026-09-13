@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "Heap/Collector/MarkStripe.h"
-#include "Heap/Collector/ZAbort.hpp"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/Collector/MarkingStacks.h"
 
 namespace MapleRuntime {

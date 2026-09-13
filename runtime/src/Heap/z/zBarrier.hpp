@@ -9,7 +9,7 @@
 
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 #include "ObjectModel/Field.h"
 #include "ObjectModel/MClass.h"
 

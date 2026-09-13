@@ -5,18 +5,18 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/ZVerify.h"
+#include "Heap/z/zVerify.hpp"
 
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"

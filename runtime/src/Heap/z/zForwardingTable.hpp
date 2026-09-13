@@ -12,7 +12,7 @@
 #include <functional>
 
 #include "Common/TypeDef.h"
-#include "Heap/Collector/ZForwarding.h"
+#include "Heap/z/zForwarding.hpp"
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;

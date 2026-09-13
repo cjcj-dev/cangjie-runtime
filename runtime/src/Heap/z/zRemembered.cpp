@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/Verify/ZVerify.h"
+#include "Heap/z/zVerify.hpp"
 #include "Heap/WCollector/WCollector.h"
 
 #include <array>
@@ -27,7 +27,7 @@
 #include <unistd.h>
 
 #include "Concurrency/Concurrency.h"
-#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
@@ -39,10 +39,10 @@
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Barrier/RememberedSet.h"
-#include "Heap/Collector/ZForwarding.h"
+#include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zForwarding.hpp"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
 #include "Mutator/MutatorManager.h"

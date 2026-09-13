@@ -11,7 +11,7 @@
 #include "Inspector/CjAllocData.h"
 // model interface
 #include "ExceptionManager.h"
-#include "Heap/Barrier/Barrier.inline.h"
+#include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/Heap.h"
 #include "HeapManager.inline.h"
 // module internal interfaces

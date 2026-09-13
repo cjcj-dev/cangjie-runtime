@@ -1,13 +1,13 @@
 #include "Heap/Verify/GarbRegionDiag.h"
 
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Collector/LiveInfo.h"

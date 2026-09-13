@@ -5,7 +5,7 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
-    "ZVerify.cpp"
+    "../z/zVerify.cpp"
     "VerifyRememberedSet.cpp"
     "VerifyRoots.cpp"
     "VerifyHeap.cpp"

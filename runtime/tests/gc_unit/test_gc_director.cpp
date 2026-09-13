@@ -3,7 +3,7 @@
 // with Runtime Library Exception.
 
 #include "Heap/Collector/GcTrigger.h"
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include "Heap/Allocator/AllocationStallQueue.h"
 #include "gc_unittest.hpp"
 

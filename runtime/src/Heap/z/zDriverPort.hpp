@@ -12,8 +12,8 @@
 #include <mutex>
 #include <utility>
 
-#include "GcRequest.h"
-#include "ZAbort.hpp"
+#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zAbort.hpp"
 
 namespace MapleRuntime {
 

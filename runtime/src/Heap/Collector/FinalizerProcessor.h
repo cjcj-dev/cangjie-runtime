@@ -17,7 +17,7 @@
 #include "Common/PageAllocator.h"
 #include "Common/TypeDef.h"
 #include "Heap/Collector/Collector.h"
-#include "Heap/Collector/ReferenceProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 
 namespace MapleRuntime {
 

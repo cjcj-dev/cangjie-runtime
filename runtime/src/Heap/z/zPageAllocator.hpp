@@ -17,24 +17,24 @@
 #include <unordered_set>
 #include <vector>
 
-#include "AllocBuffer.h"
-#include "AllocationStallQueue.h"
-#include "Allocator.h"
+#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Allocator/AllocationStallQueue.h"
+#include "Heap/Allocator/Allocator.h"
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
-#include "RoutePublish.h"
+#include "Heap/Allocator/RoutePublish.h"
 #include "Common/RunType.h"
-#include "FreeRegionManager.h"
-#include "RangeRegistry.h"
-#include "PageAge.h"
+#include "Heap/Allocator/FreeRegionManager.h"
+#include "Heap/z/zRangeRegistry.hpp"
+#include "Heap/z/zPageAge.hpp"
 #include "Heap/GcThreadPool.h"
 #include "Heap/Collector/RelocationRequestQueue.h"
-#include "RegionList.h"
+#include "Heap/Allocator/RegionList.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "securec.h"
-#include "SlotList.h"
+#include "Heap/Allocator/SlotList.h"
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
@@ -597,8 +597,8 @@ private:
 
 } // namespace MapleRuntime
 
-#include "zObjectAllocator.hpp"
-#include "zPageAllocator.inline.hpp"
-#include "Heap/Collector/zRelocate.hpp"
-#include "Heap/Collector/zRelocationSet.inline.hpp"
+#include "Heap/z/zObjectAllocator.hpp"
+#include "Heap/z/zPageAllocator.inline.hpp"
+#include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zRelocationSet.inline.hpp"
 #endif // MRT_REGION_MANAGER_H

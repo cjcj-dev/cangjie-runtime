@@ -17,7 +17,7 @@
 #include <unordered_map>
 
 #include "Common/TypeDef.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 
 namespace MapleRuntime {
 

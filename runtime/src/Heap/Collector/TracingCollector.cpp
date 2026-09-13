@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Heap/Verify/ZVerify.h"
+#include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/MarkStripe.h"
@@ -15,7 +15,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
-#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/M0ExitDiagnostics.h"

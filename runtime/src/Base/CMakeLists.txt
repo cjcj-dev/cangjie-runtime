@@ -12,7 +12,7 @@ set(SRC_LIST
     "TimeUtils.cpp"
     "LogFile.cpp"
     "MemUtils.cpp"
-    "ZStat.cpp"
+    "../Heap/z/zStat.cpp"
 )
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 add_library(Base STATIC ${SRC_LIST})

@@ -605,7 +605,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_store_barrier_buffer.cpp"
   /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/CompilerCalls.cpp"
   /usr/bin/grep -F -q "$consumer" "$SRC/test_store_barrier_buffer.cpp"
-  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/Barrier/Barrier.cpp"
+  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/z/zBarrier.cpp"
   oldvalue_rows=$((oldvalue_rows + 1))
 done <"$OLDVALUE_MANIFEST"
 [[ "$oldvalue_rows" -eq "${#EXPECTED_OLDVALUE_TESTS[@]}" ]]
@@ -660,7 +660,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   [[ "$anchor" == "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm" ]]
   [[ "$carrier" == "product_so" ]]
   [[ "$consumer" == "ProductPreserveRetainedUpToFn" ]]
-  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/Allocator/zPage.inline.hpp"
+  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/z/zPage.inline.hpp"
   suite="${test_name%%.*}"
   name="${test_name#*.}"
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_live_map.cpp"

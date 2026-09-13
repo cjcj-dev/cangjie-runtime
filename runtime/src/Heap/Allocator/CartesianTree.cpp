@@ -9,7 +9,7 @@
 
 #include <cstdlib>
 
-#include "Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
 int MappedCache::SizeClass(Count count)

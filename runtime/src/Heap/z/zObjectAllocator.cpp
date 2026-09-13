@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Allocator/zObjectAllocator.hpp"
+#include "Heap/z/zObjectAllocator.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -21,30 +21,30 @@
 #include <processthreadsapi.h>
 #endif
 
-#include "Allocator/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Base/CString.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
-#include "Collector/Collector.h"
-#include "Collector/ZForwarding.h"
-#include "Collector/CollectorResources.h"
-#include "Collector/CopyCollector.h"
-#include "Collector/GcTrigger.h"
-#include "Collector/Uncommitter.h"
-#include "Base/ZStat.h"
-#include "Collector/TenuringThreshold.h"
+#include "Heap/Collector/Collector.h"
+#include "Heap/z/zForwarding.hpp"
+#include "Heap/Collector/CollectorResources.h"
+#include "Heap/Collector/CopyCollector.h"
+#include "Heap/Collector/GcTrigger.h"
+#include "Heap/z/zUncommitter.hpp"
+#include "Heap/z/zStat.hpp"
+#include "Heap/Collector/TenuringThreshold.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
-#include "Heap.h"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Heap.h"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
-#include "Heap/Allocator/zForwardingTable.hpp"
-#include "Heap/Collector/zRelocationSetSelector.hpp"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"

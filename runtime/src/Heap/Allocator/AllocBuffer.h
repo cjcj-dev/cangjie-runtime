@@ -14,7 +14,7 @@
 #include <unordered_set>
 
 #include "Common/MarkWorkStack.h"
-#include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/z/zMarkStackEntry.hpp"
 #include "RegionList.h"
 
 namespace MapleRuntime {

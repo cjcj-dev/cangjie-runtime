@@ -1,12 +1,12 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
-#include "Heap/Verify/ZVerify.h"
+#include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/CollectorResources.h"
 #include "Common/ColourPredicates.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/HeapIterator.h"
+#include "Heap/z/zHeapIterator.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Mutator/MutatorManager.h"

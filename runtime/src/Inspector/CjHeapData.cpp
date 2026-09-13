@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/Collector/HeapIterator.h"
+#include "Heap/z/zHeapIterator.hpp"
 #include "CjHeapData.h"
 #include <cerrno>
 #include <cstdint>

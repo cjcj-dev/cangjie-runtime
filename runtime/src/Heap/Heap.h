@@ -13,7 +13,7 @@
 #include <vector>
 #include "Common/ColourEncoding.h"
 
-#include "Barrier/Barrier.h"
+#include "Heap/z/zBarrier.hpp"
 #include "Base/ImmortalWrapper.h"
 #include "Collector/Collector.h"
 #include "Common/BaseObject.h"

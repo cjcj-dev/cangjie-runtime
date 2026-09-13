@@ -19,7 +19,7 @@
 
 #include "Cangjie.h"
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
 

@@ -16,19 +16,19 @@
 #include "gc_heap_fixture.hpp"
 
 #include "Common/ColourPredicates.h"
-#include "Heap/Barrier/Barrier.h"
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Heap.h"
-#include "Heap/Barrier/Barrier.h"
+#include "Heap/z/zBarrier.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_unittest.hpp"
 
 // Test-only read of the heap-wide remembered-set init state so repeated fixtures in one process
 // do not double-initialize it (the M0Exit fixtures may already have done so).
 #define private public
-#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/z/zRememberedSet.hpp"
 #undef private
 
 using namespace MapleRuntime;

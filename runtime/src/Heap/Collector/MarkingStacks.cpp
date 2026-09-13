@@ -2,7 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "Heap/Collector/MarkingStacks.h"
-#include "Heap/Verify/ZVerify.h"
+#include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/MarkEngine.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"

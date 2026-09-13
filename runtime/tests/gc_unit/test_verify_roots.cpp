@@ -3,7 +3,7 @@
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/Verify/ZVerify.h"
+#include "Heap/z/zVerify.hpp"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/RefField.inline.h"
 using namespace MapleRuntime;

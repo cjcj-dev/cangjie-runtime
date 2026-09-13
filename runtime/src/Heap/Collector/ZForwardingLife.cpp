@@ -6,8 +6,8 @@
 
 #include "Heap/Collector/ZForwardingLife.h"
 
-#include "Heap/Allocator/zPage.hpp"
-#include "Heap/Collector/ZForwarding.h"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zForwarding.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 
 #include <cstdio>

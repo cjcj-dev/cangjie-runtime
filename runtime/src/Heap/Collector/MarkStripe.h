@@ -13,8 +13,8 @@
 #include <memory>
 #include <vector>
 
-#include "Heap/Collector/MarkStackEntry.h"
-#include "Heap/Allocator/ZAttachedArray.h"
+#include "Heap/z/zMarkStackEntry.hpp"
+#include "Heap/z/zAttachedArray.hpp"
 
 namespace MapleRuntime {
 

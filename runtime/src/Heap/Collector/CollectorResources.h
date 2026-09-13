@@ -11,13 +11,13 @@
 #include <functional>
 
 #include "Base/Macros.h"
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include "FinalizerProcessor.h"
 #include "Heap/Collector/TaskQueue.h"
 #include "Heap/GcThreadPool.h"
 #include "Inspector/CjHeapData.h"
 #include "TaskQueue.h"
-#include "DriverPort.h"
+#include "Heap/z/zDriverPort.hpp"
 
 namespace MapleRuntime {
 class Collector;

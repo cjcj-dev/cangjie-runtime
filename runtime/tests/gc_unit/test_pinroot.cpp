@@ -11,7 +11,7 @@
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/Allocator/zPageAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 #include "Sync/Sync.h"
 
 using namespace MapleRuntime;

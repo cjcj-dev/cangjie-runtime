@@ -1,6 +1,6 @@
-diff --git a/runtime/src/Heap/Collector/ZForwarding.h b/runtime/src/Heap/Collector/ZForwarding.h
---- a/runtime/src/Heap/Collector/ZForwarding.h
-+++ b/runtime/src/Heap/Collector/ZForwarding.h
+diff --git a/runtime/src/Heap/z/zForwarding.hpp b/runtime/src/Heap/z/zForwarding.hpp
+--- a/runtime/src/Heap/z/zForwarding.hpp
++++ b/runtime/src/Heap/z/zForwarding.hpp
 @@ -448 +448 @@
 -    std::atomic<uint8_t> _to_life_n;
 +    uint8_t _to_life_n;

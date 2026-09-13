@@ -11,7 +11,7 @@
 #include <sys/mman.h>
 
 #include "Cangjie.h"
-#include "Heap/Allocator/zPage.hpp"
+#include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
 namespace {

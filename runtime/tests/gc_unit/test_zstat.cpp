@@ -7,7 +7,7 @@
 // zStat.cpp:65-240,386-517,1036-1049. The reference tree has no dedicated
 // ZStat gtest; these exercise its registry and history invariants directly.
 #include "gc_unittest.hpp"
-#include "Base/ZStat.h"
+#include "Heap/z/zStat.hpp"
 #include <cstring>
 
 using namespace MapleRuntime;
