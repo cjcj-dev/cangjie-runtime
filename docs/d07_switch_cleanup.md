@@ -176,3 +176,8 @@
 ZGC `zPage.hpp:45`–`:55` 按实际成员组织页元数据，没有 UnitInfo 固定字节预算对应物。
 我方 `zPage.hpp:1160`、`:1168`、`:1252` 按实际 sizeof(UnitInfo) 计算元数据位置；
 本修复不补回已删除的探针字段、不增加占位字段或开关。
+
+同时删除 `runtime/tests/PROBES.manifest` 对 run_stack_watermark_probe.sh、
+run_stack_grow_probe.sh、stack_watermark_harness.cpp、stack_grow_harness.cpp 的失效登记。
+这四个文件已由前轮 `38af979d64530218c09cccffaf8b4ec6648161af` 删除；
+保留 CMakeLists.txt:929 的库存一致性检查，不修改任何现存测试判据。
