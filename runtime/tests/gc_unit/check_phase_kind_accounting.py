@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "runtime/tests/perf_vs_official"))
 
-from gclog_schema import PILLARS, parse_gclog, parse_zstat, pillar_for  # noqa: E402
+from gclog_schema import PILLARS, parse_gclog, pillar_for  # noqa: E402
 
 
 def main() -> int:
@@ -22,17 +22,20 @@ def main() -> int:
     text = args.log.read_text(encoding="utf-8", errors="replace")
     try:
         gclog = parse_gclog(text)
-        zstat = parse_zstat(text)
     except ValueError as exc:
         print(f"PHASE_KIND_ACCOUNTING_FAIL schema={exc}")
         return 1
 
     totals: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
-    for record in zstat.phases:
+    # Timer emits each completed observation directly; resident history is not a
+    # per-cycle ledger. Preserve entry-time pause/concurrent ownership here.
+    for record in gclog.phases:
         phase = totals[record.name]
-        phase[0] += record.pause_ns
-        phase[1] += record.conc_ns
-        phase[2] += record.n
+        if record.kind == "pause":
+            phase[0] += record.ns
+        elif record.kind == "conc":
+            phase[1] += record.ns
+        phase[2] += 1
 
     failures: list[str] = []
 
@@ -44,8 +47,8 @@ def main() -> int:
 
     require(
         "positive_control",
-        bool(zstat.phases and gclog.stw and gclog.cycles and gclog.phases),
-        f"zphase_lines={len(zstat.phases)} stw_lines={len(gclog.stw)} "
+        bool(gclog.stw and gclog.cycles and gclog.phases),
+        f"stw_lines={len(gclog.stw)} "
         f"cycle_lines={len(gclog.cycles)} phase_lines={len(gclog.phases)}",
     )
 
@@ -86,8 +89,8 @@ def main() -> int:
     print(
         "ACCOUNTING "
         f"phase_ns={sum(record.ns for record in gclog.phases)} "
-        f"zpause_ns={sum(values[0] for values in totals.values())} "
-        f"zconc_ns={sum(values[1] for values in totals.values())} "
+        f"pause_ns={sum(values[0] for values in totals.values())} "
+        f"conc_ns={sum(values[1] for values in totals.values())} "
         f"held_ns={sum(record.held_ns for record in gclog.stw)} "
         f"cycle_ns={sum(record.dur_ns for record in gclog.cycles)}"
     )
