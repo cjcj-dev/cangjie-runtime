@@ -762,6 +762,7 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ① FlushAllocationRegions
         MRT_PHASE_TIMER("young.flush_alloc");
+        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ResetTLABUsage();
         FlushAllocationRegions();
     }
 

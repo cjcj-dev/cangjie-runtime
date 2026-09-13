@@ -1405,9 +1405,9 @@ void RegionManager::InitializeTLAB(AllocBuffer& buffer)
                       GetThreadLocalRegionSize());
 }
 
-// zTLABUsage.cpp:46 reset and zThreadLocalAllocBuffer.cpp:59 publish_statistics.
-// Called in the young mark-start pause, after every active TLAB was retired.
-void RegionManager::PublishTLABStatistics()
+// ZTLABUsage::reset (zTLABUsage.cpp:41), called before retiring allocating
+// regions in young mark-start (zGeneration.cpp:862).
+void RegionManager::ResetTLABUsage()
 {
     std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
@@ -1417,6 +1417,13 @@ void RegionManager::PublishTLABStatistics()
         tlabCapacity = lastTLABUsed == 0 ? used : tlabCapacity + 0.3 * (used - tlabCapacity);
         lastTLABUsed = used;
     }
+}
+
+// ZThreadLocalAllocBuffer::publish_statistics (zThreadLocalAllocBuffer.cpp:52).
+// Thread retirement statistics consume the already published backing history.
+void RegionManager::PublishTLABStatistics()
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t capacity = GetTLABCapacity();
     TLABStatistics total = retiredTLABStatistics;
     retiredTLABStatistics = TLABStatistics{};

@@ -231,6 +231,7 @@ public:
     size_t GetTLABUsed() const { return lastTLABUsed; }
     size_t GetTLABCapacity() const { return static_cast<size_t>(tlabCapacity); }
     void InitializeTLAB(AllocBuffer& buffer);
+    void ResetTLABUsage();
     void PublishTLABStatistics();
     void RetireTLABStatistics(AllocBuffer& buffer);
 
