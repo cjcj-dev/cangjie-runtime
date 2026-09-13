@@ -231,6 +231,7 @@ public:
     bool ClaimAllocationLocked(AllocationStallRequest& request);
     void ReturnPageMemory(const PageMemory& memory);
     void SatisfyStalledAllocations();
+    bool IsAllocationStalling() const { return allocationStallQueue.IsStalling(); }
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     using AllocationStallTestHook = std::function<void(RegionManager&)>;
     MRT_EXPORT void SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,

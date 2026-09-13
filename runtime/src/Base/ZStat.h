@@ -55,14 +55,11 @@ private:
 };
 
 struct GcTriggerInputs;
-class GCStats;
+class GCWorkers;
 class RegionManager;
-// Two-level gate (0823 二轮): a default-OFF runtime env check still costs ~4ns per Timer scope
-// (measured, kkk2 20M-op pairs) and that was enough to push the natural_wave gold cliff at 320MB
-// up by one heap step.  So the first level is compile-time, same shape as kGcTrigger* in
-// GcTriggerFlags.h: a product build without -DMRT_ZSTAT (cmake option, default OFF) contains no
-// ZStat code at all -- every entry point below is an inline no-op and `nm -D` finds zero ZStat
-// symbols.  The second level (only in builds that compiled it in) is the MRT_ZSTAT env var.
+// Cycle statistics and the director snapshot above are always present.
+// MRT_ZSTAT_COMPILED controls only the pre-existing phase-log instrumentation;
+// the phase registry/history migration belongs to A12a.
 #ifndef MRT_ZSTAT_COMPILED
 #define MRT_ZSTAT_COMPILED 0
 #endif
@@ -89,7 +86,7 @@ class RegionManager;
 class ZStat {
 public:
     static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                              RegionManager& regions, uint32_t concurrentWorkers,
+                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers,
                                               uint32_t collectionsAtMajorStart);
     struct PhaseTotals {
         uint64_t pauseNs = 0;    // sum of samples that started with the world stopped
@@ -149,12 +146,12 @@ private:
     static std::atomic<int> g_enabledOverride; // -1 = read env, 0/1 = forced by SetEnabledForTest
 };
 
-#else // !MRT_ZSTAT_COMPILED: every entry point is an inline no-op; the build contains no ZStat code.
+#else // !MRT_ZSTAT_COMPILED: optional phase-log entry points are no-ops.
 
 class ZStat {
 public:
     static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                              RegionManager& regions, uint32_t concurrentWorkers,
+                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers,
                                               uint32_t collectionsAtMajorStart);
     static constexpr bool Enabled() { return false; }
     static void EnterStwScope() {}
