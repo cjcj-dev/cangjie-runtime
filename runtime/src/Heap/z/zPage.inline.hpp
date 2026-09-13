@@ -1375,32 +1375,6 @@ inline bool RegionInfo::IsForwardingDone() const
         return owner && owner->is_done();
     }
 
-inline bool RegionInfo::IsForwardingFaceCurrent() const
-    {
-        // Prefer the current LiveInfo face, just as ZGC's page seqnum check
-        // does.  A fresh face means forwarding-done is stale even if the
-        // immutable from-page carrier has already retired.  Otherwise the
-        // carrier epoch distinguishes a real copy (same face) from an older
-        // forwarding completion; absent both identities, keep the historical
-        // conservative guard.
-        const uint64_t snapshotEpoch = GetSnapshotEpoch();
-        LiveInfo* liveInfo = GetLiveInfo();
-        if (liveInfo != nullptr &&
-            liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) == snapshotEpoch) {
-            return false;
-        }
-        if (HasFromPageMetadata()) {
-            const ZForwarding::FromPageView* from = GetFromPageView();
-            return from != nullptr && from->epoch == snapshotEpoch;
-        }
-        if (IsCurrentFacePublished()) {
-            return false;
-        }
-        return true;
-    }
-
-
-
 inline void RegionInfo::ClearCurrentMarkFace()
     {
         LiveInfo* live = GetLiveInfo();

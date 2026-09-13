@@ -661,7 +661,6 @@ public:
 
     bool IsForwardingDone() const;
 
-    bool IsForwardingFaceCurrent() const;
 
 
 
