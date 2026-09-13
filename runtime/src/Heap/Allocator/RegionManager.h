@@ -212,15 +212,30 @@ public:
           oldPinnedRegionList("old pinned regions"), rawPointerPinnedRegionList("raw pointer pinned regions"),
           oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
           largeTraceRegions("large trace regions")
-    {}
+    {
+        tlabAllocatingThreads.Sample(1);
+        tlabRequestedFraction.Sample(0.1);
+    }
 
     RegionManager(const RegionManager&) = delete;
 
     RegionManager& operator=(const RegionManager&) = delete;
 
     // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
-    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false, bool youngRegion = true,
+    RegionInfo* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
                                           bool allowSaferegion = true);
+
+    // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
+    // independent of the thread-local requested bytes and retirement waste.
+    void UndoThreadLocalRegionAllocation(RegionInfo* region);
+    // Stable cycle history: read under the statistics lock, at a safepoint,
+    // or with managed access preventing the next young pause.
+    size_t GetTLABUsed() const { return lastTLABUsed; }
+    size_t GetTLABCapacity() const { return static_cast<size_t>(tlabCapacity); }
+    void InitializeTLAB(AllocBuffer& buffer);
+    void ResetTLABUsage();
+    void PublishTLABStatistics();
+    void RetireTLABStatistics(AllocBuffer& buffer);
 
     template<Generation G>
     void ForwardFromRegions(GCWorkers& workers);
@@ -457,10 +472,7 @@ public:
         return maxUnitCountPerRegion * RegionInfo::UNIT_SIZE;
     }
 
-    size_t GetYoungAllocatedSize() const
-    {
-        return RegionInfo::GetYoungRegionCount() * GetThreadLocalRegionSize();
-    }
+    size_t GetYoungAllocatedSize() const;
 
     static bool IsKnownEmptyForView(RegionInfo* region, MarkView<Generation::Young> view)
     {
@@ -1238,6 +1250,14 @@ private:
     RangeRegistry inactiveRanges;
     size_t heapUnitCount = 0;
     std::atomic<size_t> activeUnitCount{ 0 };
+    std::atomic<size_t> tlabUsed{ 0 };
+    size_t lastTLABUsed = 0;
+    double tlabCapacity = 0;
+    TLABAllocationAverage tlabAllocatingThreads;
+    TLABAllocationAverage tlabRequestedFraction;
+    std::mutex tlabStatisticsLock;
+    TLABStatistics retiredTLABStatistics;
+
     size_t maxUnitCountPerRegion = MAX_UNIT_COUNT_PER_REGION;   // max units count for threadLocal buffer.
     size_t maxUnitCountPerPinnedRegion = maxUnitCountPerRegion; // max units count for pinned region.
     size_t largeObjectThreshold;
