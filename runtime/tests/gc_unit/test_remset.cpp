@@ -1040,3 +1040,61 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
     }
 }
 #endif
+
+// zGeneration.inline.hpp:174-182: old relocation tracks face parity across
+// arbitrary young cycles, independently of whether young marking is active.
+GC_TEST(Remset, OldRelocationTracksYoungFaceParity)
+{
+    GenerationCycle old(GCCycleGeneration::OLD);
+    old.RecordYoungSequenceAtRelocateStart(17);
+    GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(17));
+    GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(18));
+    GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(19));
+    GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(20));
+}
+
+GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
+{
+    GcHeapFixture heap;
+    auto& collector = Heap::GetHeap().GetCollector();
+    collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
+    collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+    RememberedSet rs;
+    rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const MAddress from = heap.heapStart + 256;
+    const MAddress to = heap.heapStart + 128;
+    rs.Record(from + sizeof(void*));
+    GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
+    rs.FlipForMinor();
+    std::unordered_set<MAddress> fields;
+    rs.ScanPreviousForMinor(fields);
+    GC_EXPECT_TRUE(fields.count(to + sizeof(void*)) == 1);
+}
+
+GC_OTHER_VM_TEST(Remset, InPlacePreviousFieldsPublishDuringYoungMark)
+{
+    GcHeapFixture heap;
+    auto& collector = Heap::GetHeap().GetCollector();
+    collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_TRACE);
+    collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
+    RememberedSet rs;
+    rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const MAddress from = heap.heapStart + 256;
+    const MAddress to = heap.heapStart + 128;
+    rs.Record(from + sizeof(void*));
+    rs.FlipForMinor();
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    fwd->set_in_place();
+    const size_t moved = rs.TransferObjectSlots(from, to, 32, fwd);
+    fwd->relocated_remembered_fields_after_relocate();
+    fwd->release_page();
+    fwd->mark_done();
+    size_t visited = 0;
+    MAddress field = 0;
+    fwd->relocated_remembered_fields_apply_to_published([&](MAddress p) { ++visited; field = p; });
+    fwd->Destroy();
+    GC_EXPECT_EQ(moved, 1u);
+    GC_EXPECT_EQ(visited, 1u);
+    GC_EXPECT_EQ(field, to + sizeof(void*));
+}

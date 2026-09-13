@@ -25,6 +25,12 @@ struct Life {
     std::atomic<int32_t> ref{ 0 };
     std::atomic<bool> claimed{ false };
     std::atomic<bool> done{ false };
+    std::atomic<bool> waiting{ false };
+    void Wait()
+    {
+        waiting.store(true, std::memory_order_release);
+        while (!done.load(std::memory_order_acquire)) std::this_thread::yield();
+    }
 };
 
 } // namespace
@@ -33,18 +39,18 @@ GC_TEST(ZForwardingLife, RetainAfterReleaseRefuses)
 {
     Life life;
     ZForwardingLife::ResetForForwarding(life.ref, life.claimed, life.done);
-    GC_EXPECT_TRUE(ZForwardingLife::retain_page(life.ref, life.done));
+    GC_EXPECT_TRUE(ZForwardingLife::retain_page(life.ref, [&] { life.Wait(); }));
     ZForwardingLife::release_page(life.ref); // construction 1 + retain → 2 → 1
     ZForwardingLife::release_page(life.ref); // 1 → 0
     GC_EXPECT_EQ(life.ref.load(), 0);
-    GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, life.done));
+    GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, [&] { life.Wait(); }));
 }
 
 GC_TEST(ZForwardingLife, DetachWaitsForLastReader)
 {
     Life life;
     ZForwardingLife::ResetForForwarding(life.ref, life.claimed, life.done);
-    GC_EXPECT_TRUE(ZForwardingLife::retain_page(life.ref, life.done)); // 2
+    GC_EXPECT_TRUE(ZForwardingLife::retain_page(life.ref, [&] { life.Wait(); })); // 2
     std::atomic<bool> detachEntered{ false };
     std::atomic<bool> detachDone{ false };
     std::thread waiter([&]() {
@@ -69,48 +75,56 @@ GC_TEST(ZForwardingLife, DetachWaitsForLastReader)
     GC_EXPECT_EQ(life.ref.load(), 0);
 }
 
-GC_TEST(ZForwardingLife, ClaimInvertsAndLateRetainRefusesImmediately)
+// Port of zForwarding.cpp:95-100: a claimed page completes before false.
+GC_TEST(ZForwardingLife, ClaimedRetainWaitsForPageTask)
 {
     Life life;
     ZForwardingLife::ResetForForwarding(life.ref, life.claimed, life.done);
-    GC_EXPECT_TRUE(ZForwardingLife::retain_page(life.ref, life.done)); // 2
-    GC_EXPECT_TRUE(ZForwardingLife::claim(life.claimed));
-    GC_EXPECT_FALSE(ZForwardingLife::claim(life.claimed));
-    std::atomic<bool> claimEntered{ false };
-    std::atomic<bool> claimDone{ false };
-    std::thread claimer([&]() {
-        claimEntered.store(true, std::memory_order_release);
-        ZForwardingLife::in_place_relocation_claim_page(life.ref);
-        claimDone.store(true, std::memory_order_release);
+    ZForwardingLife::in_place_relocation_claim_page(life.ref);
+    std::atomic<bool> returned{ false };
+    bool retained = true;
+    std::thread waiter([&] {
+        retained = ZForwardingLife::retain_page(life.ref, [&] { life.Wait(); });
+        returned.store(true, std::memory_order_release);
     });
-    JoinGuard claimerGuard(claimer);
-    while (!claimEntered.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    const bool doneBeforeRelease = claimDone.load(std::memory_order_acquire);
-    const int32_t refBeforeLateRetain = life.ref.load();
-    // The late retain is a try-lock. It must not wait while this test still
-    // owns the reader that the claimer needs to reach -1.
-    const bool lateRetained = ZForwardingLife::retain_page(life.ref, life.done);
-    const int32_t refAfterLateRetain = life.ref.load();
-    if (lateRetained) {
-        // Keep the negative control joinable even if retain_page regresses and
-        // unexpectedly creates a second reader token.
-        ZForwardingLife::release_page(life.ref);
-    }
-    ZForwardingLife::release_page(life.ref); // 2 → -2, then +1 → -1, claim proceeds
-    claimer.join();
-    GC_EXPECT_FALSE(doneBeforeRelease);
-    GC_EXPECT_TRUE(refBeforeLateRetain < 0);
-    GC_EXPECT_FALSE(lateRetained);
-    GC_EXPECT_EQ(refAfterLateRetain, -2);
-    GC_EXPECT_TRUE(claimDone.load(std::memory_order_acquire));
-    GC_EXPECT_EQ(life.ref.load(), -1);
+    JoinGuard guard(waiter);
+    while (!life.waiting.load(std::memory_order_acquire)) std::this_thread::yield();
+    const bool beforeDone = returned.load(std::memory_order_acquire);
+    ZForwardingLife::release_page(life.ref);
+    const bool afterRelease = returned.load(std::memory_order_acquire);
     ZForwardingLife::mark_done(life.done);
-    ZForwardingLife::release_page(life.ref); // -1 → 0
+    waiter.join();
+    GC_EXPECT_FALSE(beforeDone);
+    GC_EXPECT_FALSE(afterRelease);
+    GC_EXPECT_FALSE(retained);
+    GC_EXPECT_TRUE(returned.load());
+}
+
+// Preserve the original multi-reader claim/drain case while replacing only
+// the late-retain contract (zForwarding.cpp:110-130).
+GC_TEST(ZForwardingLife, ClaimInversionDrainsExistingReader)
+{
+    Life life;
+    ZForwardingLife::ResetForForwarding(life.ref, life.claimed, life.done);
+    GC_EXPECT_TRUE(ZForwardingLife::retain_page(life.ref, [&] { life.Wait(); }));
+    std::atomic<bool> claimed{ false };
+    std::thread worker([&] {
+        ZForwardingLife::in_place_relocation_claim_page(life.ref);
+        claimed.store(true, std::memory_order_release);
+    });
+    JoinGuard guard(worker);
+    while (life.ref.load(std::memory_order_acquire) > 0) std::this_thread::yield();
+    const int32_t beforeRelease = life.ref.load(std::memory_order_acquire);
+    const bool claimedBeforeRelease = claimed.load(std::memory_order_acquire);
+    ZForwardingLife::release_page(life.ref);
+    worker.join();
+    const int32_t afterDrain = life.ref.load(std::memory_order_acquire);
+    ZForwardingLife::release_page(life.ref);
+    ZForwardingLife::mark_done(life.done);
+    GC_EXPECT_EQ(beforeRelease, -2);
+    GC_EXPECT_FALSE(claimedBeforeRelease);
+    GC_EXPECT_EQ(afterDrain, -1);
     GC_EXPECT_EQ(life.ref.load(), 0);
-    GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, life.done));
 }
 
 GC_TEST(ZForwardingLife, RouteDestHoldDecisionDistribution)
@@ -147,18 +161,11 @@ GC_TEST(ZForwardingLife, RouteDestHoldDecisionDistribution)
     GC_EXPECT_EQ(heldBack, 6u);
 }
 
-GC_TEST(ZForwardingLife, ClaimedRetainRefusesImmediatelyAndResetIdle)
+GC_TEST(ZForwardingLife, IdleStateDoesNotCompleteTask)
 {
-    // Our mutator retain is a try-lock and can be nested under an existing
-    // retain on this page. Once DrainScope has claimed the page (n<0), waiting
-    // here would retain that outer pin and deadlock the drain at -1. Refuse
-    // immediately; ResetIdle remains responsible for the next forwarding era.
     Life life;
     ZForwardingLife::ResetForForwarding(life.ref, life.claimed, life.done);
-    ZForwardingLife::in_place_relocation_claim_page(life.ref); // 1 → -1
-    GC_EXPECT_TRUE(life.ref.load() < 0);
-    GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, life.done));
-    GC_EXPECT_EQ(life.ref.load(), -1);
     ZForwardingLife::ResetIdle(life.ref, life.claimed, life.done);
     GC_EXPECT_EQ(life.ref.load(), 0);
+    GC_EXPECT_FALSE(life.done.load());
 }

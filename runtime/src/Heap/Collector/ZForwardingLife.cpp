@@ -8,6 +8,7 @@
 
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/ZForwarding.h"
+#include "Heap/Allocator/RegionSpace.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -35,27 +36,6 @@ ZForwardingLife::PageWorkScope::~PageWorkScope()
     currentPageWork = previous;
 }
 ZForwarding* ZForwardingLife::CurrentPageWork() { return currentPageWork; }
-
-std::atomic<uint64_t> ZForwardingLife::g_retainRefusedReleased{ 0 };
-std::atomic<uint64_t> ZForwardingLife::g_retainRefusedClaimed{ 0 };
-std::atomic<uint64_t> ZForwardingLife::g_detachWaited{ 0 };
-
-namespace {
-struct DumpOnce {
-    DumpOnce()
-    {
-        std::atexit([]() {
-            std::fprintf(stderr,
-                         "[GCV2][zlife] atexit refuse_released=%llu refuse_claimed=%llu detach_waited=%llu\n",
-                         static_cast<unsigned long long>(ZForwardingLife::RetainRefusedReleased()),
-                         static_cast<unsigned long long>(ZForwardingLife::RetainRefusedClaimed()),
-                         static_cast<unsigned long long>(ZForwardingLife::DetachWaited()));
-            std::fflush(stderr);
-        });
-    }
-};
-const DumpOnce g_dumpOnce;
-} // namespace
 
 void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect)
 {
@@ -95,24 +75,13 @@ void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
     if (forwarding == nullptr) {
         return;
     }
-    // zForwarding.cpp:110-130: the page worker never waits for its own done.
-    if (CurrentPageWork() == forwarding) {
-        return;
-    }
-    WaitUntilDone(forwarding->ref_count(), forwarding->done());
+    // Legacy page cleanup runs inside the completion owner itself.
+    if (CurrentPageWork() == forwarding || forwarding->is_done()) return;
+    auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetRelocationRequestQueue();
+    const auto request = queue.Add(ForwardingTable::Owner(forwarding));
+    CHECK_DETAIL(request.accepted, "forwarding wait requires a page task");
+    (void)queue.Wait(request.request);
 }
 
-void ZForwardingLife::WaitUntilDone(std::atomic<int32_t>& refCount, const std::atomic<bool>& done)
-{
-    // zForwarding.cpp:96-100 add_and_wait: wait until is_done. Also treat
-    // ref==0 as terminal — ResetIdle / InitRegionInfo reuse the same
-    // ZForwardingLife words in place (ZGC destroys the forwarding).
-    if (done.load(std::memory_order_acquire) || refCount.load(std::memory_order_acquire) == 0) {
-        return;
-    }
-    while (!done.load(std::memory_order_acquire) && refCount.load(std::memory_order_acquire) != 0) {
-        sched_yield();
-    }
-}
 
 } // namespace MapleRuntime

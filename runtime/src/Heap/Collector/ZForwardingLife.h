@@ -27,12 +27,7 @@ class ZForwarding;
 // The three-state count is the ABA answer: a late reader is refused, it is never
 // handed a reused table. 0 is terminal. <0 is claimed (in-place relocate). >0 is live.
 //
-// Always on. This is the mechanism that replaced MRT_GCV2_FWDDATA_GRACE and
-// MRT_GCV2_MUTRELOC_DRAIN, not another gate.
-//
-// The three atomics live in RegionInfo::UnitMetadata (they fit the padding after
-// routeDestHold). The lock is process-wide: waiters are rare (claim drain, detach,
-// a late retain that arrived during claim) and ZGC's notify is already a broadcast.
+// The canonical words belong to ZForwarding, owned by the relocation set.
 class ZForwardingLife {
 public:
     ZForwardingLife() = delete;
@@ -70,12 +65,7 @@ public:
         refCount.store(1, std::memory_order_release);
     }
 
-    // Region reuse / never-a-forwarding. 0 is terminal: retain_page refuses.
-    // Store 0 then notify: a waiter in WaitUntilDone (n<0 claimed) must observe
-    // the idle transition. ZGC never reuses a ZForwarding waiters still sit on;
-    // we ResetIdle in place (InitRegionInfo), so the
-    // predicate is n==0 as well as is_done (zForwarding.cpp:96-100 add_and_wait
-    // only watches is_done because the object is not reset under them).
+    // Idle state is not evidence that a forwarding page task completed.
     static void ResetIdle(std::atomic<int32_t>& refCount, std::atomic<bool>& claimed, std::atomic<bool>& done)
     {
         claimed.store(false, std::memory_order_relaxed);
@@ -100,28 +90,22 @@ public:
 
     static bool is_done(const std::atomic<bool>& done) { return done.load(std::memory_order_acquire); }
 
-    // zForwarding.cpp:86-108. queue->add_and_wait is inlined: wait until is_done, then refuse.
-    // A late reader therefore never observes a reused from-page.
-    static bool retain_page(std::atomic<int32_t>& refCount, const std::atomic<bool>& done)
+    // zForwarding.cpp:86-108: the claimed arm must finish add_and_wait
+    // before it reports that the source page cannot be retained.
+    template<typename Wait>
+    static bool retain_page(std::atomic<int32_t>& refCount, Wait wait)
     {
         for (;;) {
             int32_t n = refCount.load(std::memory_order_acquire);
             if (n == 0) {
-                g_retainRefusedReleased.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
             if (n < 0) {
-                // Try-lock: refuse claimed pages immediately. Waiting here deadlocks
-                // when this thread already holds a retain on the same count
-                // (TryMutatorRelocate retain nested RetainScope) while
-                // in-place claim inverted n→-n and WaitUntilRef(-1). ZGC's retain_page
-                // waits because the caller does not already pin; our mutator path
-                // is a try-lock (WCollector.cpp:9976-9977). zForwarding.cpp:95-100.
-                g_retainRefusedClaimed.fetch_add(1, std::memory_order_relaxed);
-                (void)done;
+                wait();
                 return false;
             }
-            if (refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
                 return true;
             }
         }
@@ -174,21 +158,9 @@ public:
         if (refCount.load(std::memory_order_acquire) == 0) {
             return;
         }
-        g_detachWaited.fetch_add(1, std::memory_order_relaxed);
         WaitUntilRef(refCount, 0);
     }
 
-    static uint64_t RetainRefusedReleased()
-    {
-        return g_retainRefusedReleased.load(std::memory_order_relaxed);
-    }
-    static uint64_t RetainRefusedClaimed()
-    {
-        return g_retainRefusedClaimed.load(std::memory_order_relaxed);
-    }
-    static uint64_t DetachWaited() { return g_detachWaited.load(std::memory_order_relaxed); }
-
-    static void WaitUntilDone(std::atomic<int32_t>& refCount, const std::atomic<bool>& done);
     static void WaitPageDone(ZForwarding* forwarding);
 
 private:
@@ -214,9 +186,6 @@ private:
 
     static void WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect);
 
-    static std::atomic<uint64_t> g_retainRefusedReleased;
-    static std::atomic<uint64_t> g_retainRefusedClaimed;
-    static std::atomic<uint64_t> g_detachWaited;
 };
 
 } // namespace MapleRuntime

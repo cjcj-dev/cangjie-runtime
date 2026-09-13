@@ -22,6 +22,9 @@
 #include "gc_heap_fixture.hpp"
 
 #include <type_traits>
+#include <chrono>
+#include <thread>
+#include "Heap/Collector/RelocationRequestQueue.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -155,8 +158,8 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), -1);
-    GC_EXPECT_FALSE(fwd->retain_page());
     fwd->mark_done();
+    GC_EXPECT_FALSE(fwd->retain_page());
     GC_EXPECT_TRUE(fwd->is_done());
     fwd->release_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 0);
@@ -278,4 +281,113 @@ GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
     young->release_page();
     young->mark_done();
     (void)selected.TakeHeadRegion();
+}
+
+// Protocol cases ported from zRemembered.cpp:284-324 and
+// zForwarding.cpp:278-350; this is source coverage, not a load test.
+GC_TEST(ZForwardingRemembered, PublishedFieldsConsumedOnce)
+{
+    GcHeapFixture heap;
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    const MAddress field = heap.heapStart + sizeof(void*);
+    fwd->relocated_remembered_fields_register(field);
+    fwd->relocated_remembered_fields_publish();
+    fwd->release_page();
+    fwd->mark_done();
+    size_t count = 0;
+    MAddress observed = 0;
+    fwd->relocated_remembered_fields_apply_to_published([&](MAddress p) { ++count; observed = p; });
+    GC_EXPECT_EQ(count, 1u);
+    GC_EXPECT_EQ(observed, field);
+    fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
+    GC_EXPECT_EQ(count, 1u);
+    fwd->Destroy();
+}
+
+GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
+{
+    GcHeapFixture heap;
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    GC_EXPECT_TRUE(fwd->retain_page());
+    fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
+    fwd->relocated_remembered_fields_notify_concurrent_scan_of();
+    GC_EXPECT_TRUE(fwd->relocated_remembered_fields_is_concurrently_scanned());
+    fwd->release_page();
+    fwd->relocated_remembered_fields_publish();
+    fwd->release_page();
+    fwd->mark_done();
+    size_t count = 0;
+    fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
+    GC_EXPECT_EQ(count, 0u);
+    fwd->Destroy();
+}
+
+GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
+{
+    GcHeapFixture heap;
+    auto& collector = Heap::GetHeap().GetCollector();
+    const auto young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+    const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    for (bool marking : { false, true }) {
+        collector.PublishGenerationPhase(GCCycleGeneration::YOUNG,
+            marking ? GCPhase::GC_PHASE_TRACE : GCPhase::GC_PHASE_IDLE);
+        collector.PublishGenerationPhase(GCCycleGeneration::OLD,
+            marking ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_TRACE);
+        auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+        fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
+        fwd->relocated_remembered_fields_after_relocate();
+        fwd->release_page();
+        fwd->mark_done();
+        size_t count = 0;
+        fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
+        fwd->Destroy();
+        collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, young.phase);
+        collector.PublishGenerationPhase(GCCycleGeneration::OLD, old.phase);
+        GC_EXPECT_EQ(count, marking ? 1u : 0u);
+    }
+}
+
+namespace {
+std::atomic<bool> rememberedWaitEntered{ false };
+void RememberedWaitEntered(ZForwarding*)
+{
+    rememberedWaitEntered.store(true, std::memory_order_release);
+}
+}
+
+GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
+{
+    GcHeapFixture heap;
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    GC_EXPECT_TRUE(fwd->claim());
+    fwd->in_place_relocation_claim_page();
+    rememberedWaitEntered.store(false);
+    RelocationRequestQueue::SetWaitEnterHook(RememberedWaitEntered);
+    std::atomic<bool> returned{ false };
+    bool retained = true;
+    std::thread reader([&] {
+        retained = fwd->retain_page();
+        returned.store(true, std::memory_order_release);
+    });
+    JoinGuard guard(reader);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!rememberedWaitEntered.load(std::memory_order_acquire) &&
+           !returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool queued = rememberedWaitEntered.load(std::memory_order_acquire);
+    const bool returnedBeforeDone = returned.load(std::memory_order_acquire);
+    fwd->release_page();
+    const bool returnedAfterRelease = returned.load(std::memory_order_acquire);
+    fwd->mark_done();
+    reader.join();
+    RelocationRequestQueue::SetWaitEnterHook(nullptr);
+    auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator())
+        .GetRegionManager().GetRelocationRequestQueue();
+    (void)queue.Complete(fwd);
+    fwd->Destroy();
+    GC_EXPECT_TRUE(queued);
+    GC_EXPECT_FALSE(returnedBeforeDone);
+    GC_EXPECT_FALSE(returnedAfterRelease);
+    GC_EXPECT_FALSE(retained);
 }

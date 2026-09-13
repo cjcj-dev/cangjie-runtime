@@ -26,7 +26,6 @@
 #include "LoaderManager.h"
 // paramzero: avoid #include WCollector.h (its Heap include graph needs WCollector TU paths).
 namespace MapleRuntime {
-void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 }
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -209,8 +208,6 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
     if (n > 0) {
         WriteSigDiag(line, static_cast<size_t>(n));
     }
-    // paramzero: dump -0x50(%rbp) + heap CAS-null counters (gate MRT_GCV2_NULLSLOT).
-    // Mode A pc_off=0x6ef90a / si_addr=0x38: answer "was entry arg already 0?".
     if (context != nullptr) {
         const ucontext_t& uctx = *static_cast<const ucontext_t*>(context);
 #if defined(__x86_64__) && !defined(__APPLE__)
@@ -222,7 +219,6 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
 #else
         uintptr_t rbx = 0;
 #endif
-        EmitParamzeroCrashProbe(sigRbp, rbx, sigPc);
 #if defined(__x86_64__) && !defined(__APPLE__)
         HealPairDiag::NoteCrashWhoZero(r13, rcx, rsi, rbx, r12);
 #endif

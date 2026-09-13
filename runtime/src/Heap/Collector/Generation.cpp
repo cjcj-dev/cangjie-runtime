@@ -56,6 +56,33 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
+// ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
+// young sequence once for the whole old relocation, not once per forwarding.
+void GenerationCycle::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
+{
+    CHECK(generation == GCCycleGeneration::OLD);
+    youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
+}
+
+bool GenerationCycle::ActiveRemsetIsCurrent(uint64_t youngSequence) const
+{
+    CHECK(generation == GCCycleGeneration::OLD);
+    // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
+    return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
+}
+
+void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
+{
+    GenerationCycle& cycle = generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
+    const GCPhase before = cycle.Phase();
+    if (generation == GCCycleGeneration::OLD &&
+        (value == GCPhase::GC_PHASE_PREFORWARD || value == GCPhase::GC_PHASE_FORWARD) &&
+        before != GCPhase::GC_PHASE_PREFORWARD && before != GCPhase::GC_PHASE_FORWARD) {
+        oldCycle.RecordYoungSequenceAtRelocateStart(youngCycle.Sequence());
+    }
+    cycle.PublishPhase(value);
+}
+
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
 struct Y2yHandoffReceiptState {

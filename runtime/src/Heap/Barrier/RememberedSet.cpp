@@ -203,7 +203,7 @@ size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MA
 }
 
 size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size,
-                                          ZForwarding* forwarding, bool youngMarking)
+                                          ZForwarding* forwarding)
 {
     CheckInitialized();
     if (size < kFieldBytes || fromBase == toBase) {
@@ -228,6 +228,7 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
     const size_t current = activeBuffer.load(std::memory_order_acquire);
     const size_t previous = current ^ 1U;
     const ptrdiff_t delta = static_cast<ptrdiff_t>(toBase) - static_cast<ptrdiff_t>(fromBase);
+    const bool youngMarking = ZForwarding::young_marking();
     size_t transferred = 0;
     auto transferFace = [&](size_t buffer) {
         for (size_t bit = firstBit; bit < endBit; ++bit) {
@@ -247,7 +248,9 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
             ++transferred;
         }
     };
-    transferFace(youngMarking ? previous : current);
+    const bool currentRemset = Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent();
+    const bool inPlace = forwarding != nullptr && forwarding->in_place();
+    transferFace(currentRemset && !inPlace ? current : previous);
     return transferred;
 }
 
