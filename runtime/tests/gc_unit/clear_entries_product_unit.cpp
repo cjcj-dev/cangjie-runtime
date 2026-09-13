@@ -4830,6 +4830,81 @@ GC_TEST(LoadHealDeliveryProduct, PromotedObjectRemembersYoungTargetOnly)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
+// zRelocate.cpp:780-784,1241: resolve a young from-address to an old
+// target and heal the field before omitting its remset entry.
+GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
+{
+    GcHeapFixture& fx = ProductFixture();
+    for (bool flipPromoted : {false, true}) {
+        RegionInfo* holderRegion = ResetDeliveryUnit(fx, 0);
+        RegionInfo* fromRegion = ResetDeliveryUnit(fx, 4);
+        RegionInfo* toRegion = ResetDeliveryUnit(fx, 2);
+        fromRegion->SetYoungRegionFlag(1);
+        BaseObject* holder = fx.PlaceObject(holderRegion->GetRegionStart());
+        BaseObject* from = fx.PlaceObject(fromRegion->GetRegionStart());
+        BaseObject* to = fx.PlaceObject(toRegion->GetRegionStart());
+        holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetSize());
+        fromRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+        toRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
+        auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+        RememberedSet& remembered = DeliveryRememberedSet(fx);
+        EmptyBothRememberedFaces(remembered);
+        WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+        LoadHealDeliveryTestAccess::PublishColours(collector);
+        LiveInfo* fromLive = PrepareForwardable(fx, fromRegion, reinterpret_cast<MAddress>(from));
+        field.StoreColoured(GcUnit::StoreGoodPointer(from));
+        LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+        const zpointer before = field.GetFieldValue();
+        GC_EXPECT_FALSE(collector.is_load_good(field));
+        GC_EXPECT_TRUE(ForwardingTable::GetCovering(reinterpret_cast<MAddress>(from), Generation::Young) != nullptr);
+        if (!flipPromoted) {
+            // Unfinished relocation must remain deferred, without waiting.
+            RegionManager::RememberPromotedObject(holder);
+            GC_EXPECT_EQ(raw(field.GetFieldValue()), raw(before));
+            GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
+            EmptyBothRememberedFaces(remembered);
+        }
+        ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
+            fromRegion, reinterpret_cast<MAddress>(from));
+        GC_EXPECT_TRUE(static_cast<bool>(publication));
+        GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, reinterpret_cast<MAddress>(from),
+                                                   reinterpret_cast<MAddress>(to)),
+                     reinterpret_cast<MAddress>(to));
+        LiveInfo* holderLive = nullptr;
+        if (flipPromoted) {
+            holderLive = fx.PlantLiveInfo(holderRegion);
+            RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Young>(holderLive, holderRegion->GetRegionSize());
+            (void)bitmap->MarkBits(0, holder->GetSize(), holderRegion->GetRegionSize());
+            holderRegion->PreserveRetainedLiveInfo();
+            RegionManager manager;
+            manager.AddFlipPromotedPage(holderRegion);
+            GCWorkers workers(GCWorkers::Generation::YOUNG, 2);
+            workers.SetActive();
+            manager.RememberFlipPromotedPages(workers);
+            workers.SetInactive();
+        } else {
+            RegionManager::RememberPromotedObject(holder);
+        }
+        GC_EXPECT_EQ(to_object(field.GetTargetObject()), to);
+        GC_EXPECT_TRUE(collector.is_load_good(field));
+        GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
+        const uintptr_t markBits = MARKED_YOUNG_MASK | MARKED_OLD_MASK;
+        GC_EXPECT_EQ(raw(field.GetFieldValue()) & markBits, raw(before) & markBits);
+        if (holderLive != nullptr) {
+            holderRegion->FreeRetainedMarkWords();
+            holderRegion->metadata.liveInfo = nullptr;
+            fx.FreePlanted(holderLive);
+        }
+        ForwardingTable::ClearEntries(fromRegion->GetRegionStart(), fromRegion->GetRegionSize());
+        fromRegion->metadata.liveInfo = nullptr;
+        fx.FreePlanted(fromLive);
+        fromRegion->SetYoungRegionFlag(0);
+        LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    }
+}
+
 // Direct semantic matrix for the current remembered face. The reference array
 // is live, but its far field lies beyond TryRecoverInteriorBase's 64-byte
 // recovery window. ZGC still applies the load barrier because the current old

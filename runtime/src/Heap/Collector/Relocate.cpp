@@ -1728,6 +1728,32 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         manager.ReassembleFromSpace();
     }
 }
+// ZBarrier::barrier / remap_young_relocated (zBarrier.inline.hpp:318-361).
+// Resolve and heal the same preloaded word. Preserve mark/remember metadata;
+// another writer's load-good value terminates the shared self-heal CAS loop.
+static BaseObject* RemapPromotedField(Collector& collector, RefField<>& field, zpointer observed)
+{
+    RefField<> value(observed);
+    auto loadGood = [](zpointer word) {
+        return ColourPredicates::is_load_good_or_null(raw(word), ::g_cjLoadBadMask);
+    };
+    if (loadGood(observed)) {
+        return to_object(value.GetTargetObject());
+    }
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
+    BaseObject* target = collector.make_load_good(value, provenance);
+    CHECK_DETAIL(target != nullptr || !ColourPredicates::has_address(raw(observed)),
+                 "promotion remap must preserve a non-null reference");
+    // ZAddress::load_good: upgrade remap bits without claiming a marking epoch.
+    const zpointer healed = !ColourPredicates::has_address(raw(observed))
+        ? to_zpointer(::g_cjStoreGoodMask | REMEMBERED_MASK)
+        : to_zpointer(reinterpret_cast<uintptr_t>(target) | REMEMBERED_MASK |
+            (raw(observed) & ~kPointerAddressMask & ~REMAP_COLOUR_MASK) |
+            (::g_cjLoadBadMask ^ REMAP_COLOUR_MASK));
+    ZgcSelfHeal(field, observed, healed, loadGood, HealSite::WCollectorMinorResolveLoadGoodForward);
+    return target;
+}
+
 // ZRelocateWork::update_remset_promoted_filter_and_remap_per_field
 // (zRelocate.cpp:741-794). Unfinished young relocation is remembered for
 // deferred remapping; a page worker must not wait on another page's work.
@@ -1739,10 +1765,12 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     Collector& collector = Heap::GetHeap().GetCollector();
     object->ForEachRefField([&](RefField<>& field) {
-        BaseObject* target = to_object(field.GetTargetObject());
+        const zpointer observed = field.GetFieldValue();
+        RefField<> value(observed);
+        BaseObject* target = to_object(value.GetTargetObject());
         if (target != nullptr && Heap::IsHeapAddress(target)) {
             const MAddress address = reinterpret_cast<MAddress>(target);
-            ZForwarding* forwarding = collector.is_load_good(field) ? nullptr :
+            ZForwarding* forwarding = collector.is_load_good(value) ? nullptr :
                 ForwardingTable::GetCovering(address, Generation::Young);
             const MAddress to = forwarding == nullptr ? address : forwarding->find(address);
             if (to == 0 || RegionInfo::GetRegionInfoAt(to)->IsYoungRegion()) {
@@ -1750,8 +1778,9 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
                 return;
             }
         }
-        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-        collector.make_load_good(field, provenance);
+        // Only completed/non-relocating old targets reach eager remapping.
+        // Unfinished young forwarding above stays deferred in the remset.
+        RemapPromotedField(collector, field, observed);
     });
 }
 
@@ -1791,8 +1820,8 @@ void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
                         continue;
                     }
                     object->ForEachRefField([&](RefField<>& field) {
-                        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-                        BaseObject* target = Heap::GetHeap().GetCollector().make_load_good(field, provenance);
+                        const zpointer observed = field.GetFieldValue();
+                        BaseObject* target = RemapPromotedField(Heap::GetHeap().GetCollector(), field, observed);
                         if (target != nullptr && Heap::IsHeapAddress(target) &&
                             RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
                             // RegionManager owns access to the remset producer.
