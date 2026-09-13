@@ -601,35 +601,39 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
     WeakClosureTestRuntime runtime(manager);
     MarkDomain old(64, MarkingStacks::MarkingGeneration::MAJOR);
     MarkDomain young(64, MarkingStacks::MarkingGeneration::YOUNG);
-    auto& stacks = ThreadLocal::GetMarkStacks(old);
-    stacks.Push(old.Stripes(), 0,
-                MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(0x1000)), true);
-    GC_EXPECT_TRUE(old.Stripes().IsEmpty());
-    GC_EXPECT_FALSE(stacks.IsEmpty());
-    {
-        ScopedStopTheWorld stw("mark stacks verification test", false);
-        MarkingStacks::VerifyAllEmpty(young);
-        const pid_t child = fork();
-        GC_EXPECT_TRUE(child >= 0);
-        if (child == 0) {
-            signal(SIGABRT, SIG_DFL);
-            MarkingStacks::VerifyAllEmpty(old);
-            _exit(0);
-        }
-        int status = 0;
-        GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-        GC_EXPECT_TRUE(WIFSIGNALED(status));
-        GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-        // Verification of the other generation has not flushed this stack.
+    for (MarkDomain* domain : {&old, &young}) {
+        MarkDomain& current = *domain;
+        MarkDomain& other = domain == &old ? young : old;
+        auto& stacks = ThreadLocal::GetMarkStacks(current);
+        stacks.Push(current.Stripes(), 0,
+                    MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(0x1000)), true);
+        GC_EXPECT_TRUE(current.Stripes().IsEmpty());
         GC_EXPECT_FALSE(stacks.IsEmpty());
-        GC_EXPECT_TRUE(old.Stripes().IsEmpty());
-        GC_EXPECT_TRUE(stacks.Flush(old.Stripes(), true));
-        MarkingSMR smr(1);
-        MarkStripeStack* published = old.Stripes().At(0).StealStack(smr, 0);
-        GC_EXPECT_TRUE(published != nullptr);
-        MarkStripeStack::Destroy(published);
-        smr.Reclaim(0);
-        MarkingStacks::VerifyAllEmpty(old);
+        {
+            ScopedStopTheWorld stw("mark stacks verification test", false);
+            MarkingStacks::VerifyAllEmpty(other);
+            const pid_t child = fork();
+            GC_EXPECT_TRUE(child >= 0);
+            if (child == 0) {
+                signal(SIGABRT, SIG_DFL);
+                MarkingStacks::VerifyAllEmpty(current);
+                _exit(0);
+            }
+            int status = 0;
+            GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+            GC_EXPECT_TRUE(WIFSIGNALED(status));
+            GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+            // Verification of the other generation has not flushed this stack.
+            GC_EXPECT_FALSE(stacks.IsEmpty());
+            GC_EXPECT_TRUE(current.Stripes().IsEmpty());
+            GC_EXPECT_TRUE(stacks.Flush(current.Stripes(), true));
+            MarkingSMR smr(1);
+            MarkStripeStack* published = current.Stripes().At(0).StealStack(smr, 0);
+            GC_EXPECT_TRUE(published != nullptr);
+            MarkStripeStack::Destroy(published);
+            smr.Reclaim(0);
+            MarkingStacks::VerifyAllEmpty(current);
+        }
     }
 }
 
