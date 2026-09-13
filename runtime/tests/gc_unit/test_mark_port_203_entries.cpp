@@ -267,7 +267,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     if (!major) {
         GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", variant, 1), 0);
     }
-    GC_EXPECT_EQ(unsetenv("MRT_GCV2_PARTIAL_ARRAY"), 0);
     MutatorManager manager;
     MarkPortRuntime runtime(manager);
     GcHeapFixture fx;

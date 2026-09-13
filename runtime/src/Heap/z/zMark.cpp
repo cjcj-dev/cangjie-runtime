@@ -368,11 +368,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 void WCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable) const
 {
     if (UNLIKELY(!MarkPartialArray::Encodable(addr, length))) {
-        MarkPartialArray::NoteNotEncodable();
         FollowArrayElementsSmall(nullptr, addr, length, workStack, finalizable);
         return;
     }
-    MarkPartialArray::NoteChunkPushed();
     workStack.push_back(MarkPartialArray::Encode(addr, length, finalizable));
 }
 
@@ -399,8 +397,6 @@ void WCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, 
     const size_t middleLength =
         AlignDown(static_cast<size_t>(end - middleStart), MarkPartialArray::MIN_LENGTH);
     RefField<>* const middleEnd = middleStart + middleLength;
-
-    MarkPartialArray::NoteArraySplit();
 
     // Push unaligned trailing part
     if (end > middleEnd) {
@@ -440,7 +436,6 @@ void WCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& work
     MAddress chunkStart = 0;
     size_t length = 0;
     MarkPartialArray::Decode(entry, chunkStart, length);
-    MarkPartialArray::NoteChunkFollowed();
     FollowArrayElements(nullptr, &HeapSlotAt<>(chunkStart), length, workStack, entry.finalizable());
 }
 
@@ -473,13 +468,7 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, boo
             // This is ZGC's objArrayOop case (zMark.cpp:346-369 follow_array_object):
             // a flat run of reference slots, the only shape it chunks. The struct
             // -component branch above has no ZGC counterpart and is left alone.
-            if (UNLIKELY(MarkPartialArray::Enabled())) {
-                FollowArrayElements(obj, arrayContent, arrayLength, workStack, finalizable);
-                return;
-            }
-            for (MIndex i = 0; i < arrayLength; ++i) {
-                visitor(arrayContent[i]);
-            }
+            FollowArrayElements(obj, arrayContent, arrayLength, workStack, finalizable);
         } else {
             LOG(RTLOG_FATAL, "array object %p has wrong component type", array);
         }
@@ -2101,11 +2090,8 @@ void FollowElements(MAddress start, size_t length, bool finalizable,
 {
     const MAddress end = start + length * sizeof(MAddress);
     const MAddress middleStart = AlignUp(start + sizeof(MAddress), MIN_SIZE);
-    if (!Enabled() || length <= MIN_LENGTH || length > MAX_LENGTH ||
+    if (length <= MIN_LENGTH || length > MAX_LENGTH ||
         !Encodable(reinterpret_cast<const void*>(AlignDown(end, MIN_SIZE)), 1)) {
-        if (Enabled() && length > MIN_LENGTH) {
-            NoteNotEncodable();
-        }
         for (size_t i = 0; i < length; ++i) {
             visit(start + i * sizeof(MAddress));
         }
@@ -2115,16 +2101,13 @@ void FollowElements(MAddress start, size_t length, bool finalizable,
     const MAddress middleEnd = middleStart + middleLength * sizeof(MAddress);
     auto push = [&](MAddress address, size_t count) {
         if (!Encodable(reinterpret_cast<const void*>(address), count)) {
-            NoteNotEncodable();
             for (size_t i = 0; i < count; ++i) {
                 visit(address + i * sizeof(MAddress));
             }
             return;
         }
-        NoteChunkPushed();
         publish(Encode(reinterpret_cast<const void*>(address), count, finalizable));
     };
-    NoteArraySplit();
     if (end > middleEnd) {
         push(middleEnd, (end - middleEnd) / sizeof(MAddress));
     }
@@ -2159,7 +2142,6 @@ void FollowPartialReferences(const MarkStackEntry& entry,
     MAddress start = 0;
     size_t length = 0;
     Decode(entry, start, length);
-    NoteChunkFollowed();
     FollowElements(start, length, entry.finalizable(), visit, publish);
 }
 
