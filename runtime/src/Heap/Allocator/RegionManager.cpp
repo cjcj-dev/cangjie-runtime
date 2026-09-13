@@ -324,48 +324,39 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     // zCollectedHeap.cpp:310-311: public safepoint work uses the heap's
     // runtime workers, independently of either generation's GC workers.
     RuntimeWorkers& workers = Heap::GetHeap().GetCollectorResources().GetRuntimeWorkers();
-    std::vector<RegionInfo*> regions;
-    auto collect = [&regions, &skipPinnedScanRegion](RegionInfo* region) {
-        if (!skipPinnedScanRegion(region)) {
-            regions.push_back(region);
-        }
-    };
-    recentPinnedRegionList.VisitAllRegions(collect);
-    oldPinnedRegionList.VisitAllRegions(collect);
-    rawPointerPinnedRegionList.VisitAllRegions(collect);
-    recentLargeRegionList.VisitAllRegions(collect);
-    oldLargeRegionList.VisitAllRegions(collect);
-    largeTraceRegions.VisitAllRegions(collect);
-    recentFullRegionList.VisitAllRegions(collect);
-    fullTraceRegions.VisitAllRegions(collect);
-
+    // Keep page descriptors stable for the entire worker gang, as for the
+    // serial page-table iterator. No page-pointer snapshot is needed.
+    RegionInfo::PageIterationScope iteration;
     class PinnedScanTask : public GCWorkerTask {
     public:
-        PinnedScanTask(const std::vector<RegionInfo*>& regions,
-                       const std::function<void(RegionInfo*)>& scan, size_t workers)
-            : regions(regions), scan(scan),
-              chunk(std::max<size_t>(1, (regions.size() + workers * 4 - 1) / (workers * 4 + 1))) {}
+        explicit PinnedScanTask(const std::function<void(RegionInfo*)>& scan)
+            : iterator(RegionInfo::pageOwners), scan(scan) {}
 
         void Work(uint32_t) override
         {
-            for (;;) {
-                const size_t first = cursor.fetch_add(chunk, std::memory_order_relaxed);
-                if (first >= regions.size()) {
-                    return;
+            iterator.do_pages([&](RegionInfo* region) {
+                // Preserve the former pinned/large/full list domain. The trace
+                // caches use RECENT_LARGE_REGION and RECENT_FULL_REGION too.
+                switch (region->GetRegionType()) {
+                    case RegionInfo::RegionType::RECENT_PINNED_REGION:
+                    case RegionInfo::RegionType::FULL_PINNED_REGION:
+                    case RegionInfo::RegionType::RAW_POINTER_PINNED_REGION:
+                    case RegionInfo::RegionType::RECENT_LARGE_REGION:
+                    case RegionInfo::RegionType::LARGE_REGION:
+                    case RegionInfo::RegionType::RECENT_FULL_REGION:
+                        scan(region);
+                        break;
+                    default:
+                        break;
                 }
-                const size_t end = std::min(first + chunk, regions.size());
-                for (size_t i = first; i < end; ++i) {
-                    scan(regions[i]);
-                }
-            }
+                return true;
+            });
         }
 
     private:
-        const std::vector<RegionInfo*>& regions;
+        ZPageTableParallelIterator<RegionInfo*> iterator;
         const std::function<void(RegionInfo*)> scan;
-        const size_t chunk;
-        std::atomic<size_t> cursor { 0 };
-    } task(regions, scanRegion, workers.ActiveWorkers());
+    } task(scanRegion);
     workers.Run(task);
     return recorded.load(std::memory_order_relaxed);
 }
