@@ -100,53 +100,22 @@ public:
     void GetInstances(const TypeInfo*, bool, size_t, std::vector<MObject*>&) const {}
     void ClassInstanceNum(std::map<CString, long>&) const {}
 
-    size_t ReclaimGarbageMemory(bool releaseAll) override
+    size_t ReclaimGarbageMemory(bool /* releaseAll */) override
     {
-        size_t dirtyHeapBefore = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
-        {
-            MRT_PHASE_TIMER(ZStatPhases::PReclaimGarbageRegions);
-            regionManager.ReclaimGarbageRegions();
-        }
-
-        MRT_PHASE_TIMER(ZStatPhases::PReleaseGarbageMemory);
-        if (releaseAll) {
-            return regionManager.ReleaseGarbageRegions(0);
-        } else {
-            size_t dirtyHeapAfter = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
-            // estimation of additional heap memory that was used since last GC
-            size_t dirtyHeapUsed = dirtyHeapAfter > dirtyHeapBefore ? dirtyHeapAfter - dirtyHeapBefore : 0;
-            
-            size_t sizeAfter = regionManager.GetAllocatedSize();
-            double cachedRatio = 1.0 / CangjieRuntime::GetHeapParam().heapUtilization - 1.0;
-
-            // Release memory to OS only when it was not used since previous GC and is over heapUtilization threshold.
-            // It is important for avoiding the case where before GC we request more memory from OS
-            // then GC happens and releases memory, and then we need to request same memory from OS again.
-            size_t targetCachedSize =
-                std::max(dirtyHeapUsed, static_cast<size_t>(sizeAfter * cachedRatio));
-            return regionManager.ReleaseGarbageRegions(targetCachedSize);
-        }
+        const size_t cachedBefore = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        MRT_PHASE_TIMER(ZStatPhases::PReclaimGarbageRegions);
+        // zPageAllocator.cpp: free pages return to the mapped cache. Physical
+        // uncommit belongs to zUncommitter.cpp:367-421, including OOM reclaim.
+        regionManager.ReclaimGarbageRegions();
+        const size_t cachedAfter = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        return cachedAfter > cachedBefore ? cachedAfter - cachedBefore : 0;
     }
 #if defined(__EULER__)
     void TryReclaimGarbageMemory() override
     {
-        double cachedRatio = regionManager.GetCacheRatio();
-        if (cachedRatio == 1.0) { // 1.0 is the default value
-            return;
-        }
-        {
-            MRT_PHASE_TIMER(ZStatPhases::PTryReclaimGarbageRegions);
-            regionManager.ReclaimGarbageRegions();
-        }
-        MRT_PHASE_TIMER(ZStatPhases::PTryReleaseGarbageMemory);
-        size_t size = regionManager.GetAllocatedSize();
-        size_t targetCachedSize = static_cast<size_t>(size * cachedRatio);
-        regionManager.ReleaseGarbageRegions(targetCachedSize);
-        return;
+        ReclaimGarbageMemory(false);
     }
 #endif
-    size_t UncommitIdleMemory() override;
-    size_t DrainUncommitIdleMemory() override;
     bool ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const override
     {
         if (UNLIKELY(safe)) {

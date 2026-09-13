@@ -65,8 +65,12 @@ void GenerationCycle::Begin(uint64_t index)
 {
     std::lock_guard<std::mutex> lock(mutex);
     CHECK(!active);
-    CHECK(sequence != UINT64_MAX);
-    ++sequence;
+    // Young sequence belongs to mark_start together with the remset flip
+    // (zGeneration.cpp:871-880), not to the earlier request preparation.
+    if (generation == GCCycleGeneration::OLD) {
+        CHECK(sequence != UINT64_MAX);
+        ++sequence;
+    }
     requestIndex = index;
     active = true;
 }

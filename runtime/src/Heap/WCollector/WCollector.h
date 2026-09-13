@@ -37,7 +37,6 @@ class ScopedStopTheWorld;
 // paramzero: crash-time dump of Mode-A frame slot + heap CAS-null counters.
 // Declared here so SignalManager can call without including WCollector.cpp guts.
 // Gate = MRT_GCV2_NULLSLOT (default off).
-void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 
 #if defined(MRT_TESTABLE_INTERNALS)
 // One-shot wave8 attribution receipts.  The storage is native and fixed-size;
@@ -201,8 +200,6 @@ public:
     };
     MRT_EXPORT RouteLookupTestResult RouteLookupForTest(BaseObject* fromObj);
 #endif
-
-    void Init() override { LiveInfoArena::GetLiveInfoArena().InitializeForwardData(); }
 
     void MarkNewObject(BaseObject* obj) override;
     void StartYoungMarkWork();

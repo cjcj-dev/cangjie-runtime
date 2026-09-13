@@ -17,6 +17,7 @@ set(GC_UNIT_SOURCES
     test_trustp1_phase1.cpp
 
     test_live_map.cpp
+    test_live_map_segments.cpp
     test_object_gate.cpp
     test_remset.cpp
     test_defect_regressions.cpp
@@ -41,6 +42,7 @@ set(GC_UNIT_SOURCES
     test_barrier_old_atomic.cpp
     test_page_age.cpp
     test_range_registry.cpp
+    test_mapped_cache.cpp
     test_stay_young.cpp
     test_gc_trigger.cpp
     test_gc_director.cpp

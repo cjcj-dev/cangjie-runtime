@@ -638,7 +638,7 @@ int ExerciseSegmentedPageRetirement(RetirementPath path, bool concurrent)
                 first->GetRegionType() != type || first->IsFreeRegion()) {
                 result = 24;
             }
-            if (manager.GetDirtyUnitCount() != 0 || manager.GetReleasedUnitCount() != 0 ||
+            if (manager.GetDirtyUnitCount() != 0 || manager.GetInactiveUnitCount() != 0 ||
                 !backend.releases.empty()) {
                 result = 25;
             }
@@ -679,7 +679,7 @@ int ExerciseSegmentedPageRetirement(RetirementPath path, bool concurrent)
             manager.ReleaseMarkQuarantine();
         }
         if (path == RetirementPath::RELEASE) {
-            if (manager.GetReleasedUnitCount() != 2 || backend.releases.size() != 1) {
+            if (manager.GetInactiveUnitCount() != 2 || backend.releases.size() != 1) {
                 result = 29;
             }
         } else if (manager.GetDirtyUnitCount() != 2 || !backend.releases.empty()) {
@@ -796,7 +796,7 @@ int ExerciseRegionPartialCommit(size_t failureCall)
             map->GetCommittedSize() != manager.GetCommittedCapacity()) { return 4; }
         if (failureCall != 0) {
             if (manager.GetDirtyUnitCount() != expected ||
-                manager.GetReleasedUnitCount() != 2 - expected) { return 5; }
+                manager.GetInactiveUnitCount() != 2 - expected) { return 5; }
             const size_t before = backend.commitCalls;
             backend.failCommitCall = 0;
             RegionInfo* small = manager.TakeRegion(1, role, false, false, false);

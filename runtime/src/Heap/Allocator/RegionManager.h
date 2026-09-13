@@ -653,6 +653,7 @@ public:
         }
         // STEER3: scrub runs here (async reclaim), not inside young STW.
         DumpScrubCostAndReset("post-reclaim-batch");
+        SatisfyStalledAllocations();
     }
 
     size_t CollectLargeGarbage();
@@ -660,13 +661,6 @@ public:
     size_t CollectPinnedGarbage();
     size_t CollectFreePinnedSlots(RegionInfo* region);
 
-    // targetSize: size of memory which we do not release and keep it as cache for future allocation.
-    size_t ReleaseGarbageRegions(size_t targetSize)
-    {
-        size_t released = freeRegionManager.ReleaseGarbageRegions(targetSize);
-        SatisfyStalledAllocations();
-        return released;
-    }
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
     size_t ExemptFromRegions();
@@ -706,16 +700,10 @@ public:
     }
 
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
-    size_t GetReleasedUnitCount() const { return freeRegionManager.GetReleasedUnitCount(); }
     size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
-    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true)
-    {
-        return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
-    }
+    size_t GetInactiveUnitCount() const { return freeRegionManager.GetVirtualUnitCount(); }
 
-    size_t GetInactiveUnitCount() const { return heapUnitCount - activeUnitCount.load(std::memory_order_acquire); }
-
-    size_t GetActiveUnitCount() const { return activeUnitCount.load(std::memory_order_acquire); }
+    size_t GetActiveUnitCount() const { return heapUnitCount - GetInactiveUnitCount(); }
 
     inline size_t GetLargeObjectSize() const
     {
@@ -1201,6 +1189,7 @@ private:
     bool relocationStarted{ false };
     bool relocationDrained{ false };
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
+    friend class Uncommitter;
     std::mutex pageAllocatorMutex;
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };
@@ -1248,9 +1237,7 @@ private:
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
-    RangeRegistry inactiveRanges;
     size_t heapUnitCount = 0;
-    std::atomic<size_t> activeUnitCount{ 0 };
     std::atomic<size_t> tlabUsed{ 0 };
     size_t lastTLABUsed = 0;
     double tlabCapacity = 0;
