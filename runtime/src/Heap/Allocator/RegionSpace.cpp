@@ -250,6 +250,8 @@ void AllocBuffer::Init()
                   "need to modify the offset of this value in llvm-project at the same time");
     tlRegion = RegionInfo::NullRegion();
     ThreadLocal::InitializeCleaner();
+    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    manager.InitializeTLAB(*this);
     Heap::GetHeap().RegisterAllocBuffer(*this);
 }
 
@@ -260,7 +262,89 @@ void AllocBuffer::Fini()
     if (ThreadLocal::GetAllocBuffer() == this) {
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }
+    FlushRegion();
+    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    manager.RetireTLABStatistics(*this);
     Heap::GetHeap().RemoveAllocBuffer(*this);
+}
+
+// ThreadLocalAllocBuffer::fill (threadLocalAllocBuffer.cpp:201).
+void AllocBuffer::SetRegion(RegionInfo* region)
+{
+    RetireTLAB(false);
+    tlRegion = region;
+    if (region == nullptr || region == RegionInfo::NullRegion()) {
+        return;
+    }
+    const size_t capacity = region->GetAvailableSize();
+    tlabStatistics.allocatedSize += capacity;
+    tlabRefills.fetch_add(1, std::memory_order_relaxed);
+}
+
+// The region top also includes compiler-generated bump allocations. Read it
+// before returning the region, rather than counting only the C++ slow path.
+void AllocBuffer::RetireTLAB(bool gcWaste)
+{
+    if (tlRegion == nullptr || tlRegion == RegionInfo::NullRegion()) {
+        return;
+    }
+    const size_t waste = tlRegion->GetAvailableSize();
+    if (gcWaste) {
+        tlabStatistics.gcWaste += waste;
+    } else {
+        tlabStatistics.refillWaste += waste;
+    }
+    tlRegion = RegionInfo::NullRegion();
+}
+
+void AllocBuffer::ClearRegion()
+{
+    RetireTLAB(true);
+}
+
+// ThreadLocalAllocBuffer::compute_size (threadLocalAllocBuffer.inline.hpp:57).
+// The page allocator returns whole units; its limit is also unit-aligned.
+size_t AllocBuffer::ComputeTLABSize(size_t objectSize, size_t maxSize) const
+{
+    if (objectSize > maxSize || maxSize < RegionInfo::UNIT_SIZE) {
+        return 0;
+    }
+    constexpr size_t targetRefills = 50; // 100 / (2 * TLABWasteTargetPercent)
+    const size_t refills = tlabRefills.load(std::memory_order_relaxed);
+    const size_t steps = refills > targetRefills ? std::min((refills - targetRefills) / 8, size_t{4}) : 0;
+    size_t desired = desiredTLABSize.load(std::memory_order_relaxed);
+    desired = desired > (maxSize >> steps) ? maxSize : desired << steps;
+    const size_t size = desired > maxSize - objectSize ? maxSize : desired + objectSize;
+    return AlignUp(std::max(size, RegionInfo::UNIT_SIZE), RegionInfo::UNIT_SIZE);
+}
+
+// ThreadLocalAllocBuffer::accumulate_and_reset_statistics (cpp:78).
+void AllocBuffer::AccumulateTLABStatistics(TLABStatistics& total, size_t used, size_t capacity)
+{
+    const size_t requested = tlabStatistics.Used();
+    if (requested != 0) {
+        if (used > 0.5 * capacity) {
+            tlabAllocationFraction.Sample(std::min(static_cast<double>(requested) /
+                                                   std::max(capacity, size_t{1}), 1.0));
+        }
+        tlabStatistics.allocatingThreads = 1;
+    }
+    tlabStatistics.refills = tlabRefills.exchange(0, std::memory_order_relaxed);
+    total.Update(tlabStatistics);
+    tlabStatistics = TLABStatistics{};
+}
+
+// ThreadLocalAllocBuffer::resize (threadLocalAllocBuffer.cpp:161).
+void AllocBuffer::ResizeTLAB(size_t capacity, double fallbackFraction, size_t maxSize)
+{
+    constexpr size_t targetRefills = 50;
+    double fraction = tlabAllocationFraction.Average();
+    if (fraction == 0) {
+        fraction = fallbackFraction;
+    }
+    const size_t allocation = static_cast<size_t>(fraction * capacity);
+    const size_t desired = std::min(std::max(allocation / targetRefills, RegionInfo::UNIT_SIZE), maxSize);
+    desiredTLABSize.store(AlignUp(desired, RegionInfo::UNIT_SIZE), std::memory_order_relaxed);
 }
 
 MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
@@ -285,7 +369,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
             manager.RemoveThreadLocalRegion(tlRegion);
             manager.EnlistFullThreadLocalRegion(tlRegion);
         }
-        tlRegion = RegionInfo::NullRegion();
+        ClearRegion();
     }
 
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
@@ -412,7 +496,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
                 manager.RemoveThreadLocalRegion(tlRegion);
                 manager.EnlistFullThreadLocalRegion(tlRegion);
             }
-            tlRegion = RegionInfo::NullRegion();
+            ClearRegion();
         } else {
             MAddress addr = tlRegion->Alloc(totalSize);
             if (addr != 0) {
@@ -424,7 +508,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
             {
                 manager.RemoveThreadLocalRegion(tlRegion);
                 manager.EnlistFullThreadLocalRegion(tlRegion);
-                tlRegion = RegionInfo::NullRegion();
+                RetireTLAB(false);
             }
         }
     }
@@ -432,7 +516,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     // now region must be null. If a region has been ready, then use it and tell gc-assitant thread to prepare
     // a new region, or take a new one.
     RegionInfo* r  = preparedRegion.load(std::memory_order_acquire);
-    if (r != nullptr) {
+    if (r != nullptr && r->GetAvailableSize() >= totalSize) {
         preparedRegion.store(nullptr, std::memory_order_release);
         if (UNLIKELY(RegionIsInRelocationSet(r))) {
             NoteAllocIntoCSet(r, "prepared-reject");
@@ -443,7 +527,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
             manager.ReclaimRegion(r);
             r = nullptr;
         } else {
-            tlRegion = r;
+            SetRegion(r);
             if (theAllocator.IsAsyncAllocationEnable()) {
                 theAllocator.AddHungryBuffer(*this);
                 Heap::GetHeap().GetFinalizerProcessor().NotifyToFeedAllocBuffers();
@@ -454,7 +538,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     // AllocateThreadLocalRegion is a safepoint, in which cj thread rescheule may happen.
     // tlRegion is bound to specific thread, so we need to forbid reschedule.
     CJThreadPreemptOffCntAdd();
-    r = manager.AllocateThreadLocalRegion();
+    r = manager.AllocateThreadLocalRegion(ComputeTLABSize(totalSize, manager.GetThreadLocalRegionSize()));
     CJThreadPreemptOffCntSub();
     if (UNLIKELY(r == nullptr)) {
         return 0;
@@ -462,23 +546,21 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     // tlRegion may be set in PreforwardPhase handler while allocating region.
     // Null region means tlRegion is not set.
     if (tlRegion == RegionInfo::NullRegion()) {
-        tlRegion = r;
+        SetRegion(r);
         return r->Alloc(totalSize);
     }
     // tlRegion has been set in preforward phase.
     MAddress addr = tlRegion->Alloc(totalSize);
     if (addr != 0) {
         if (!SetPreparedRegion(r)) {
-            // r is inserted in thread-local region list when allocated, we need to remove it from the list.
-            manager.RemoveThreadLocalRegion(r);
-            manager.ReclaimRegion(r);
+            manager.UndoThreadLocalRegionAllocation(r);
         }
         return addr;
     }
     // tlRegion is not enough for allocation, so we use r.
     manager.RemoveThreadLocalRegion(tlRegion);
     manager.EnlistFullThreadLocalRegion(tlRegion);
-    tlRegion = r;
+    SetRegion(r);
     return r->Alloc(totalSize);
 }
 
@@ -530,21 +612,16 @@ void RegionSpace::FeedHungryBuffers()
     ScopedObjectAccess soa;
     AllocBufferManager::HungryBuffers hungryBuffers;
     allocBufferManager->SwapHungryBuffers(hungryBuffers);
-    RegionInfo* region = nullptr;
     for (auto* buffer : hungryBuffers) {
         if (buffer->GetPreparedRegion() != nullptr) { continue; }
-        if (region == nullptr) {
-            region = regionManager.AllocateThreadLocalRegion(true);
-            if (region == nullptr) { return; }
+        RegionInfo* region = regionManager.AllocateThreadLocalRegion(
+            buffer->ComputeTLABSize(0, regionManager.GetThreadLocalRegionSize()), true);
+        if (region == nullptr) { return; }
+        if (!buffer->SetPreparedRegion(region)) {
+            // This extent was computed for this buffer's history. Return it
+            // instead of handing that thread's size to another buffer.
+            regionManager.UndoThreadLocalRegionAllocation(region);
         }
-        if (buffer->SetPreparedRegion(region)) {
-            region = nullptr;
-        }
-    }
-    if (region != nullptr) {
-        // The region is inserted in thread-local region list when allocated, we need to remove it from the list.
-        regionManager.RemoveThreadLocalRegion(region);
-        regionManager.CollectRegion<Generation::Old>(region);
     }
 }
 
@@ -555,7 +632,7 @@ void AllocBuffer::FlushRegion()
         RegionManager& manager = theAllocator.GetRegionManager();
         manager.RemoveThreadLocalRegion(tlRegion);
         manager.EnlistFullThreadLocalRegion(tlRegion);
-        tlRegion = RegionInfo::NullRegion();
+        ClearRegion();
     }
     RegionInfo* prepared = preparedRegion.load();
     if (LIKELY(prepared != RegionInfo::NullRegion()) && prepared != nullptr) {

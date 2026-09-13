@@ -111,6 +111,11 @@ size_t RegionInfo::pageIterationCount = 0;
 std::vector<std::function<void()>> RegionInfo::deferredPageRetirements;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
+namespace {
+// ZPageAllocator::used_generation (zPageAllocator.cpp:1311). TLAB extents
+// vary, so region counts cannot stand in for young-generation byte occupancy.
+std::atomic<size_t> youngRegionBytes{ 0 };
+}
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 #if defined(MRT_GC_UNIT_TESTS)
 std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
@@ -367,6 +372,7 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
     bool wasYoung = IsYoungRegion();
     bool makeYoung = flag != 0;
     if (!wasYoung && makeYoung) {
+        youngRegionBytes.fetch_add(GetRegionSize(), std::memory_order_release);
         youngRegionCount.fetch_add(1, std::memory_order_release);
     }
     metadata.regionStateBitField.SetAtomicValue(
@@ -375,12 +381,18 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
         size_t count = youngRegionCount.load(std::memory_order_relaxed);
         CHECK(count > 0);
         youngRegionCount.fetch_sub(1, std::memory_order_release);
+        youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
     }
 }
 
 size_t RegionInfo::GetYoungRegionCount()
 {
     return youngRegionCount.load(std::memory_order_acquire);
+}
+
+size_t RegionManager::GetYoungAllocatedSize() const
+{
+    return youngRegionBytes.load(std::memory_order_acquire);
 }
 
 bool RegionInfo::HasYoungRegions()
@@ -1383,8 +1395,58 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
 }
 
+// ThreadLocalAllocBuffer::initial_desired_size (cpp:265): a new thread
+// starts with the published allocation fraction instead of a fixed extent.
+void RegionManager::InitializeTLAB(AllocBuffer& buffer)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    buffer.ResizeTLAB(GetTLABCapacity(), tlabRequestedFraction.Average() / threads,
+                      GetThreadLocalRegionSize());
+}
+
+// zTLABUsage.cpp:46 reset and zThreadLocalAllocBuffer.cpp:59 publish_statistics.
+// Called in the young mark-start pause, after every active TLAB was retired.
+void RegionManager::PublishTLABStatistics()
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
+    if (used != 0) {
+        // TruncatedSeq::davg uses AbsSeq's exponential average, alpha=0.3;
+        // its last value and average are stable throughout the next cycle.
+        tlabCapacity = lastTLABUsed == 0 ? used : tlabCapacity + 0.3 * (used - tlabCapacity);
+        lastTLABUsed = used;
+    }
+    const size_t capacity = GetTLABCapacity();
+    TLABStatistics total = retiredTLABStatistics;
+    retiredTLABStatistics = TLABStatistics{};
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    const double fallback = tlabRequestedFraction.Average() / threads;
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
+        buffer.AccumulateTLABStatistics(total, GetTLABUsed(), capacity);
+        buffer.ResizeTLAB(capacity, fallback, GetThreadLocalRegionSize());
+    });
+    if (total.Used() != 0) {
+        tlabAllocatingThreads.Sample(total.allocatingThreads);
+        if (lastTLABUsed > 0.5 * capacity) {
+            tlabRequestedFraction.Sample(std::min(static_cast<double>(total.Used()) /
+                                                 std::max(capacity, size_t{1}), 1.0));
+        }
+    }
+    VLOG(REPORT, "TLAB totals: used=%zu capacity=%zu allocated=%zu refills=%zu refill-waste=%zu gc-waste=%zu threads=%zu",
+         lastTLABUsed, capacity, total.allocatedSize, total.refills, total.refillWaste, total.gcWaste,
+         total.allocatingThreads);
+}
+
+void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    buffer.AccumulateTLABStatistics(retiredTLABStatistics, GetTLABUsed(), GetTLABCapacity());
+}
+
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
+    PublishTLABStatistics();
     YoungCollectionStats stats;
     uint64_t subStart = TimeUtil::NanoSeconds();
     RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
@@ -2688,13 +2750,25 @@ void RegionManager::DumpRegionStats(const char* msg) const
     TRACE_COUNT("CJRT_GC_unitCapacity", static_cast<size_t>(unitCapacity * decimalPrecision));
 }
 
-RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, bool youngRegion, bool allowSaferegion)
+RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem, bool youngRegion,
+                                                   bool allowSaferegion)
 {
-    RegionInfo* region = TakeRegion(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
+    // ZHeap::max_tlab_size / unsafe_max_tlab_alloc (zHeap.cpp:144-160):
+    // the caller computes the refill size; the allocator enforces its extent.
+    if (size == 0 || size > GetThreadLocalRegionSize()) {
+        return nullptr;
+    }
+    const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
+    RegionInfo* region = TakeRegion(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
                                     allowSaferegion);
     if (region != nullptr) {
         {
             region->SetYoungRegionFlag(youngRegion ? 1 : 0);
+            if (youngRegion) {
+                // zHeap.cpp:233: charge the backing extent even before a
+                // prepared region is installed as a thread's current TLAB.
+                tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
+            }
             region->SetYoungAge(0);
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
@@ -2714,6 +2788,21 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
     }
 
     return region;
+}
+
+// ZHeap::undo_alloc_page (zHeap.cpp:270): only a failed publication of
+// a newly allocated, unused backing region cancels its allocation charge.
+// GC retirement/reclamation is not an undo and must retain that cycle's usage.
+void RegionManager::UndoThreadLocalRegionAllocation(RegionInfo* region)
+{
+    CHECK(region != nullptr && region->IsEmpty() && region->IsThreadLocalRegion());
+    if (region->IsYoungRegion()) {
+        const size_t size = region->GetRegionSize();
+        const size_t previous = tlabUsed.fetch_sub(size, std::memory_order_relaxed);
+        CHECK(previous >= size);
+    }
+    RemoveThreadLocalRegion(region);
+    ReclaimRegion(region);
 }
 
 void RegionManager::RequestForRegion(size_t size)
