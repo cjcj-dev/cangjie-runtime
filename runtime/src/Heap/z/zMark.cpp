@@ -1406,7 +1406,12 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
     const size_t after = youngMarkDomain->Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
-    return workStack.empty() && youngMarkDomain->Stripes().IsEmpty();
+    if (!workStack.empty() || !youngMarkDomain->Stripes().IsEmpty()) {
+        return false;
+    }
+    // zMark.cpp:973-989: successful mark-end verifies the current generation.
+    MarkingStacks::VerifyAllEmpty(*youngMarkDomain);
+    return true;
 }
 void WCollector::MarkNewObject(BaseObject* obj)
 {
