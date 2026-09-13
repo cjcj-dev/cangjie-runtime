@@ -10,7 +10,6 @@
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
     gc_unit_stubs.cpp
-    ${CMAKE_SOURCE_DIR}/src/Base/ZStat.cpp
     test_colour_address.cpp
     test_z_bit_field.cpp
     test_z_list.cpp
@@ -102,10 +101,8 @@ target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
 # this prevents unrelated fixture TUs from exporting weak inline copies.
 target_compile_options(cj_gc_unit PRIVATE -fvisibility-inlines-hidden)
 target_link_options(cj_gc_unit PRIVATE -Wl,--exclude-libs,ALL)
-# The suite tests the real ZStat implementation regardless of whether the product .so was
-# built with MRT_ZSTAT: it compiles Base/ZStat.cpp itself with the compile-time gate open.
+# ZStat is always present in the product SO; use it instead of a second implementation.
 target_compile_definitions(cj_gc_unit PRIVATE
-    MRT_ZSTAT_COMPILED=1
     MRT_TESTABLE_INTERNALS=1
     MRT_GC_UNIT_TESTS=1)
 # Prefer in-tree runtime library when building as part of the product tree.

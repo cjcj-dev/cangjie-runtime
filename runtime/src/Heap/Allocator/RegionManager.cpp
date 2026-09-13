@@ -28,7 +28,7 @@
 #include "Collector/CopyCollector.h"
 #include "Collector/GcTrigger.h"
 #include "Collector/Uncommitter.h"
-#include "Collector/MutatorAllocRate.h"
+#include "Base/ZStat.h"
 #include "Collector/TenuringThreshold.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
@@ -1847,7 +1847,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
         }
-        MutatorAllocRate::sample_allocation(size);
+        ZStatMutatorAllocRate::sample_allocation(size);
         return region;
     }
 

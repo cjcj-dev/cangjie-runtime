@@ -21,7 +21,7 @@
 #include "CollectorProxy.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
-#include "MutatorAllocRate.h"
+#include "Base/ZStat.h"
 #include "GcTrigger.h"
 #include "Collector/Uncommitter.h"
 #include "Common/RunType.h"
@@ -30,6 +30,20 @@
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
+std::atomic<uint64_t> g_gcTriggerArmed{ 0 };
+std::atomic<uint64_t> g_gcTriggerTurned{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleTimer{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleWarmup{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleAllocRate{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleHighUsage{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleMajorAllocRateArmed{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleMajorAllocRate{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleProactiveArmed{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleProactive{ 0 };
+std::atomic<uint32_t> g_gcTriggerYoungWorkers{ 1 };
+std::atomic<uint32_t> g_gcTriggerOldWorkers{ 1 };
+
+
 extern "C" uintptr_t MRT_StopGCWork()
 {
     Heap::GetHeap().StopGCWork();
@@ -92,11 +106,13 @@ void CollectorResources::Init()
     taskQueue = new TaskQueue<GCExecutor>;
     taskQueue->Init();
     finishedGcIndex = GCTask::SYNC_TASK_MIN_INDEX;
+    ZStat::Initialize();
     gcStats.Init();
-    MutatorAllocRate::initialize();
+    ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();
     youngCycle.Initialize(now);
     oldCycle.Initialize(now);
+    statistics.Start();
     StartGCThreads();
     finalizerProcessor.Start();
     if (Uncommitter::Enabled()) {
@@ -133,6 +149,7 @@ void CollectorResources::StopGCWork()
     majorDriverPort.Stop();
     TerminateGCTask();
     StopGCThreads();
+    statistics.Stop();
 }
 
 // Send terminate task to gc thread.
@@ -359,10 +376,13 @@ void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCR
 #endif
     ZStatCycle& cycle = isYoung ? youngCycle : oldCycle;
     const auto before = workers->GetSnapshot();
-    cycle.AtStart(TimeUtil::NanoSeconds(), before.elapsedNanos, before.workerNanos);
+    const uint64_t start = TimeUtil::NanoSeconds();
+    cycle.AtStart(start, before.elapsedNanos, before.workerNanos);
     collector.RunGarbageCollection(index, reason);
     const auto after = workers->GetSnapshot();
-    cycle.AtEnd(TimeUtil::NanoSeconds(), after.elapsedNanos, after.workerNanos, warmup);
+    const uint64_t end = TimeUtil::NanoSeconds();
+    cycle.AtEnd(end, after.elapsedNanos, after.workerNanos, warmup);
+    (isYoung ? ZStatPhases::YoungGeneration : ZStatPhases::OldGeneration).RegisterEnd(end - start);
 }
 
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
@@ -382,6 +402,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     }
     MRT_ASSERT(!driverRequestActive, "nested driver request lifecycle");
     driverRequestActive = true;
+    const uint64_t collectionStart = TimeUtil::NanoSeconds();
 
     // Set the request's generation budgets before mark-start can consume
     // them, including the old mark domain prepared by the young prelude.
@@ -420,6 +441,8 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
          static_cast<unsigned long long>(request.sequence), request.reason);
     RunCollection(*collector, request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
                   request.reason, warmup);
+    (request.reason == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
+        .RegisterEnd(TimeUtil::NanoSeconds() - collectionStart);
     driverRequestActive = false;
     NotifyGCFinished(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
     return true;

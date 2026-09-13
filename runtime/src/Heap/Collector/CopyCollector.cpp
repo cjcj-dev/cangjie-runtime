@@ -102,9 +102,6 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
                  g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
                  gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,
                  Heap::GetHeap().GetUsedPageSize(), gcStats.GetThreshold());
-    // ZStatPhase cycle rollup (zStat.hpp:228 ZStatPhaseCollection): per-phase pause/concurrent
-    // totals + max pause for the cycle that just closed.  No-op unless MRT_ZSTAT is on.
-    ZStat::NoteCycleEnd(cycleSeq);
     if (reason != GC_REASON_YOUNG) {
         UpdateGCStats();
     }
@@ -124,8 +121,6 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         const char* minorDefersHeuEnv = std::getenv("MRT_GCV2_MINOR_DEFERS_HEU");
         const bool minorDefersHeu =
             minorDefersHeuEnv == nullptr || std::strcmp(minorDefersHeuEnv, "0") != 0;
-        gcStats.RecordYoungStats(gcStats.youngCandidateBytes, gcStats.youngPromotedBytes, gcStats.collectedBytes,
-                                 gcTimeNs, maxCapacity);
         GCStats::YoungHeuThrottleDecision decision = gcStats.RecordYoungGCFinish(
             finishTime, allocatedAfter, gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, maxCapacity,
             gcTimeNs, heuMinInterval, minorDefersHeu);
@@ -138,16 +133,17 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     } else {
         gcStats.RecordMajorGCFinish(finishTime, gcTimeNs, Heap::GetHeap().GetAllocatedSize(),
                                     gcStats.collectedBytes);
-        gcStats.lastGcDurationNs.store(gcTimeNs, std::memory_order_relaxed);
-        const uint32_t warmupDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
-        if (warmupDone < kGcTriggerWarmupCycles) {
-            gcStats.warmupCyclesDone.store(warmupDone + 1, std::memory_order_relaxed);
-        }
-        if (gcStats.warmupCyclesDone.load(std::memory_order_relaxed) >= kGcTriggerWarmupCycles) {
-            gcStats.isWarm.store(true, std::memory_order_relaxed);
-        }
-        gcStats.isTimeTrustable.store(true, std::memory_order_relaxed);
+
     }
+    // zStatHeap::at_relocate_end: publish only to the generation being collected.
+    const bool young = reason == GC_REASON_YOUNG;
+    const size_t usedAfter = Heap::GetHeap().GetAllocatedSize();
+    // A12a scope ruling: preserve the old-generation baseline scalar until
+    // A07's mark-end livemap aggregation replaces it. Do not infer live bytes
+    // from candidate minus reclaimed capacity. Young has an actual mark result.
+    const size_t liveBytes = young ? gcStats.youngPromotedBytes : usedAfter;
+    (young ? ZStat::YoungHeap() : ZStat::OldHeap()).AtRelocateEnd(
+        usedAfter, liveBytes, gcStats.collectedBytes);
     ActiveCycle().End();
     collectorResources.NotifyGCPhaseFinished(gcIndex);
 }

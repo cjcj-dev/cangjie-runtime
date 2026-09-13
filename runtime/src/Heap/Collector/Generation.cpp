@@ -800,7 +800,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     {
         // minortime: ① FlushAllocationRegions
-        MRT_PHASE_TIMER("young.flush_alloc");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
         reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ResetTLABUsage();
         FlushAllocationRegions();
     }
@@ -823,7 +823,7 @@ void WCollector::DoYoungGarbageCollection()
     YoungCollectionStats stats;
     {
         // minortime: ② PrepareYoungGarbageCandidates
-        MRT_PHASE_TIMER("young.prepare_candidates");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
         stats = manager.PrepareYoungGarbageCandidates(
             [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     }
@@ -831,8 +831,8 @@ void WCollector::DoYoungGarbageCollection()
     // producers and before publishing the young mark phase (zGeneration.cpp:871-880).
     MinorSlotSet rememberedSlots;
     {
-        // minortime: ④ remembered-set face flip; sparse consumption after world release
-        MRT_PHASE_TIMER("young.remset_drain");
+        // Remembered-set face flip; sparse consumption after world release.
+        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
         RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
         (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
         // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
@@ -974,7 +974,7 @@ void WCollector::DoYoungGarbageCollection()
     // the world-release publication below.
     auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
-        MRT_PHASE_TIMER("young.root_enum");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungRootEnum);
         (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
         VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
@@ -1039,7 +1039,7 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
         // The release above makes this ZGC mark_roots()+mark_follow work concurrent.
-        MRT_PHASE_TIMER("young.mark_closure");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungMarkClosure);
         ++concWindow.closureCalls;
         TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
                           reachableSlotDomain);
@@ -1077,7 +1077,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorInteriorBaseMap remsetInteriorBases;
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
-        MRT_PHASE_TIMER("young.remset_rescan");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetRescan);
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,
                             fullYoungScan,
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
@@ -1087,7 +1087,7 @@ void WCollector::DoYoungGarbageCollection()
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
 
     {
-        MRT_PHASE_TIMER("young.mark_from_remset");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungMarkFromRemset);
         ++concWindow.closureCalls;
         concWindow.remsetSlots = remsetStats.consumed;
         TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
@@ -1258,7 +1258,7 @@ void WCollector::DoYoungGarbageCollection()
 
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
-        MRT_PHASE_TIMER("young.pre_evac_clear");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
         // tracecache: PrepareTrace above switched the TRACE-phase region caches on
         // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
@@ -1333,7 +1333,7 @@ void WCollector::DoYoungGarbageCollection()
 
     {
         // minortime: ⑧ post-evac finish
-        MRT_PHASE_TIMER("young.post_evac_finish");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungPostEvacFinish);
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
         MergeResurrectExportObjects(Generation::Young);
     }

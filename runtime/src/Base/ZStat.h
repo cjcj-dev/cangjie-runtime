@@ -11,12 +11,16 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
-#include <unordered_map>
+#include <array>
+#include <memory>
+#include <condition_variable>
+#include <thread>
+#include <algorithm>
 #include <vector>
 
 namespace MapleRuntime {
 // zStat.cpp:1226-1330: cycle inputs used by the director are always
-// collected, independently of the optional phase-log instrumentation below.
+// collected independently of log output.
 struct ZStatCycleStats {
     uint32_t warmupCycles = 0;
     double timeSinceLast = 0;
@@ -73,113 +77,291 @@ private:
     ZStatCollectionStats counts;
 };
 
+
+// zStat.cpp:65-240: rolling ten-second, ten-minute and ten-hour windows.
+struct ZStatSamplerData {
+    uint64_t nsamples = 0;
+    uint64_t sum = 0;
+    uint64_t max = 0;
+    void Add(const ZStatSamplerData& value)
+    {
+        nsamples += value.nsamples;
+        sum += value.sum;
+        max = std::max(max, value.max);
+    }
+    uint64_t Average() const { return nsamples == 0 ? 0 : sum / nsamples; }
+};
+
+template<size_t Size>
+class ZStatSamplerHistoryInterval {
+public:
+    bool Add(const ZStatSamplerData& sample)
+    {
+        const auto old = samples[next];
+        samples[next] = sample;
+        accumulated.Add(sample);
+        total.nsamples += sample.nsamples - old.nsamples;
+        total.sum += sample.sum - old.sum;
+        if (total.max < sample.max) {
+            total.max = sample.max;
+        } else if (total.max == old.max) {
+            total.max = 0;
+            for (const auto& value : samples) total.max = std::max(total.max, value.max);
+        }
+        if (++next == Size) {
+            next = 0;
+            accumulated = {};
+            return true;
+        }
+        return false;
+    }
+    const ZStatSamplerData& Total() const { return total; }
+    const ZStatSamplerData& Accumulated() const { return accumulated; }
+private:
+    size_t next = 0;
+    std::array<ZStatSamplerData, Size> samples {};
+    ZStatSamplerData accumulated;
+    ZStatSamplerData total;
+};
+
+class ZStatSamplerHistory {
+public:
+    void Add(const ZStatSamplerData& sample)
+    {
+        if (seconds.Add(sample) && minutes.Add(seconds.Total()) && hours.Add(minutes.Total())) {
+            total.Add(hours.Total());
+        }
+    }
+    std::array<ZStatSamplerData, 4> Windows() const
+    {
+        auto minute = minutes.Total();
+        minute.Add(seconds.Accumulated());
+        auto hour = hours.Total();
+        hour.Add(minutes.Accumulated());
+        hour.Add(seconds.Accumulated());
+        auto all = total;
+        all.Add(hours.Accumulated());
+        all.Add(minutes.Accumulated());
+        all.Add(seconds.Accumulated());
+        return {seconds.Total(), minute, hour, all};
+    }
+private:
+    ZStatSamplerHistoryInterval<10> seconds;
+    ZStatSamplerHistoryInterval<60> minutes;
+    ZStatSamplerHistoryInterval<60> hours;
+    ZStatSamplerData total;
+};
+
+enum class ZStatUnit { TIME, BYTES, THREADS, BYTES_PER_SECOND, OPS_PER_SECOND };
+
+// Identity and list membership are fixed by static construction, before startup.
+class ZStatValue {
+public:
+    const char* Group() const { return group; }
+    const char* Name() const { return name; }
+    uint32_t Id() const { return id; }
+    ZStatValue(const ZStatValue&) = delete;
+    ZStatValue& operator=(const ZStatValue&) = delete;
+protected:
+    ZStatValue(const char* group, const char* name, uint32_t id, size_t size);
+    template<typename T> T* CpuLocal(size_t cpu) const
+    {
+        return reinterpret_cast<T*>(base + stride * cpu + offset);
+    }
+    static void InitializeStorage();
+    friend class ZStat;
+    static size_t CpuCount();
+    static size_t CpuId();
+private:
+    const char* const group;
+    const char* const name;
+    const uint32_t id;
+    const size_t offset;
+    static size_t stride;
+    static char* base;
+};
+
+class ZStatSampler : public ZStatValue {
+public:
+    ZStatSampler(const char* group, const char* name, ZStatUnit unit);
+    void Initialize() const;
+    void Sample(uint64_t value) const;
+    ZStatSamplerData CollectAndReset() const;
+    ZStatUnit Unit() const { return unit; }
+    static ZStatSampler* First() { return first; }
+    const ZStatSampler* Next() const { return next; }
+    static uint32_t Count() { return count; }
+    static void Sort();
+private:
+    struct alignas(64) CpuData {
+        std::atomic<uint64_t> nsamples {0};
+        std::atomic<uint64_t> sum {0};
+        std::atomic<uint64_t> max {0};
+    };
+    static ZStatSampler* first;
+    static uint32_t count;
+    ZStatSampler* next;
+    const ZStatUnit unit;
+};
+
+class ZStatCounter : public ZStatValue {
+public:
+    ZStatCounter(const char* group, const char* name, ZStatUnit unit);
+    void Initialize() const;
+    void Increment(uint64_t value = 1) const;
+    void SampleAndReset() const;
+    static ZStatCounter* First() { return first; }
+    const ZStatCounter* Next() const { return next; }
+    const ZStatSampler& Sampler() const { return sampler; }
+private:
+    struct alignas(64) CpuData { std::atomic<uint64_t> value {0}; };
+    static ZStatCounter* first;
+    static uint32_t count;
+    ZStatCounter* const next;
+    const ZStatSampler sampler;
+};
+
+// zStat.cpp:600-875: phase group and generation are properties of the
+// static phase object; neither the observed name nor a cycle table owns it.
+class ZStatPhase {
+public:
+    ZStatPhase(const char* group, const char* name) : sampler(group, name, ZStatUnit::TIME) {}
+    const char* Name() const { return sampler.Name(); }
+    virtual void RegisterEnd(uint64_t duration) const { sampler.Sample(duration); }
+    virtual ~ZStatPhase() = default;
+    const ZStatSampler& Sampler() const { return sampler; }
+private:
+    const ZStatSampler sampler;
+};
+
+// zStat.cpp:848-875: critical phases register both duration and frequency.
+class ZStatCriticalPhase : public ZStatPhase {
+public:
+    explicit ZStatCriticalPhase(const char* name)
+        : ZStatPhase("Critical", name), counter("Critical", name, ZStatUnit::OPS_PER_SECOND) {}
+    void RegisterEnd(uint64_t duration) const override
+    {
+        ZStatPhase::RegisterEnd(duration);
+        counter.Increment();
+    }
+private:
+    const ZStatCounter counter;
+};
+
+namespace ZStatPhases {
+extern const ZStatPhase PCollectFromSpaceGarbage;
+extern const ZStatPhase PCollectLargeGarbage;
+extern const ZStatPhase PConcurrentMarking;
+extern const ZStatPhase PConcurrentReMarking;
+extern const ZStatPhase PConcurrentResurrection;
+extern const ZStatPhase PDoTracing;
+extern const ZStatPhase PEnumRootsUpdateOldPointersWithin;
+extern const ZStatPhase PExemptFromRegions;
+extern const ZStatCriticalPhase PFinalizer;
+extern const ZStatCriticalPhase PFinalizerProcessorWaittingTime;
+extern const ZStatPhase YoungForwardFromRegions;
+extern const ZStatPhase OldForwardFromRegions;
+extern const ZStatPhase PIdentifyUselessExternRef;
+extern const ZStatPhase POldRelocateStart;
+extern const ZStatPhase PPostTrace;
+extern const ZStatPhase PPreforward;
+extern const ZStatCriticalPhase PReclaimGarbageRegions;
+extern const ZStatPhase PRemapYoungRoots;
+extern const ZStatPhase PTraceLiveObjectsUpdateOldPointersInRefFields;
+extern const ZStatPhase PYoungConcPromoteWalk;
+extern const ZStatPhase PYoungConcurrentRelocate;
+extern const ZStatPhase PYoungEvacFinish;
+extern const ZStatPhase PYoungEvacRetire;
+extern const ZStatPhase PYoungFlushAlloc;
+extern const ZStatPhase PYoungMarkClosure;
+extern const ZStatPhase PYoungMarkFollow;
+extern const ZStatPhase PYoungMarkFromRemset;
+extern const ZStatPhase PYoungPinnedScan;
+extern const ZStatPhase PYoungPostEvacFinish;
+extern const ZStatPhase PYoungPreEvacClear;
+extern const ZStatPhase PYoungPrepareCandidates;
+extern const ZStatPhase PYoungRefFix;
+extern const ZStatPhase PYoungRefFixBulk;
+extern const ZStatPhase PYoungRefFixPrepare;
+extern const ZStatPhase PYoungRefFixRootPass1;
+extern const ZStatPhase PYoungRemsetDrain;
+extern const ZStatPhase PYoungRemsetRescan;
+extern const ZStatPhase PYoungRootEnum;
+extern const ZStatPhase YoungGeneration;
+extern const ZStatPhase OldGeneration;
+extern const ZStatPhase MinorCollection;
+extern const ZStatPhase MajorCollection;
+}
+
+// zStat.cpp:935-1017 — ZStatMutatorAllocRate.
+struct ZStatMutatorAllocRateStats {
+    double avg = 0.0;
+    double predict = 0.0;
+    double sd = 0.0;
+};
+
+class ZStatMutatorAllocRate {
+public:
+    static void initialize();
+    static void sample_allocation(size_t allocationBytes);
+    static ZStatMutatorAllocRateStats stats();
+    // zDirector.cpp:867 / zHeap.cpp:61 — SoftMaxHeapSize. Trigger denominator
+    // only; allocation failure still uses hard capacity.
+    static size_t soft_max_heap_size();
+
+private:
+    static void update_sampling_granule();
+};
+
+
+// zStatHeap::stats / at_relocate_end: one synchronized heap account per generation.
+struct ZStatHeapStats {
+    size_t usedAtRelocateEnd = 0;
+    size_t liveAtMarkEnd = 0;
+    double reclaimedAverage = 0;
+};
+class ZStatHeap {
+public:
+    explicit ZStatHeap(const char* group) : reclaimed(group, "Reclaimed", ZStatUnit::BYTES) {}
+    void AtRelocateEnd(size_t used, size_t live, size_t reclaimedBytes);
+    ZStatHeapStats Stats() const;
+private:
+    const ZStatSampler reclaimed;
+    mutable std::mutex lock;
+    ZStatHeapStats stats;
+    bool initialized = false;
+};
+
 struct GcTriggerInputs;
 class GCWorkers;
 class RegionManager;
-// Cycle statistics and the director snapshot above are always present.
-// MRT_ZSTAT_COMPILED controls only the pre-existing phase-log instrumentation;
-// the phase registry/history migration belongs to A12a.
-#ifndef MRT_ZSTAT_COMPILED
-#define MRT_ZSTAT_COMPILED 0
-#endif
 
-#if MRT_ZSTAT_COMPILED
-
-// Port of ZGC's ZStatPhase family (zStat.hpp:212-342): every GC phase is timed and its duration is
-// booked under exactly one of two kinds -- pause or concurrent -- so a consumer never has to guess
-// whether a number contains the concurrent window.  ZGC binds the kind statically to each phase
-// object (ZStatPhasePause zStat.hpp:257 / ZStatPhaseConcurrent zStat.hpp:270) because no HotSpot
-// phase name is ever used in both contexts.  This runtime reuses the same MRT_PHASE_TIMER name on
-// both sides of a world-release (e.g. "young.ref_fix_bulk" runs under STW1 and again concurrently),
-// so a static kind would misclassify half its samples.  The kind is therefore sampled at scope
-// entry from the STW depth counter kept by EnterStwScope/ExitStwScope (driven by
-// ScopedStopTheWorld), which classifies each individual sample rather than each name.
-//
-// The registry property of ZStatValue (zStat.hpp:66 -- "which counters exist" is an enumerable
-// fact, not a grep result) is kept: every observed phase name registers on first sight and
-// RegisteredPhases() enumerates the set.
-//
-// Everything is gated by MRT_ZSTAT (default off).  When off, NotePhase is never called (Timer
-// skips it), the STW depth counter short-circuits on a cached bool, and NoteCycleEnd returns
-// before touching anything -- the default-path rec=cycle/rec=phase/rec=stw stream is unchanged.
 class ZStat {
 public:
+    ZStat() = default;
+    ~ZStat();
+    void Start();
+    void Stop();
+    static void Initialize();
     static ZStatCollection& Collections();
+    static ZStatHeap& YoungHeap();
+    static ZStatHeap& OldHeap();
     static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
                                               RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers);
-    struct PhaseTotals {
-        uint64_t pauseNs = 0;    // sum of samples that started with the world stopped
-        uint64_t concNs = 0;     // sum of samples that started with the world running
-        uint64_t maxPauseNs = 0; // ZStatPhasePause::_max analog (zStat.cpp:750)
-        uint32_t nPause = 0;
-        uint32_t nConc = 0;
-    };
-
-    static bool Enabled();
-
-    // STW depth, maintained by ScopedStopTheWorld.  Kind at scope entry is depth>0.
+    static void SampleAndCollect(std::vector<ZStatSamplerHistory>& history);
+    static void Print(const std::vector<ZStatSamplerHistory>& history);
+    // Existing GCLOG kind observer. It does not select sampler identity or group.
     static void EnterStwScope();
     static void ExitStwScope();
     static bool WorldStoppedNow();
-
-    // Called from ~Timer only when Enabled().  ns is the scope duration; worldStoppedAtStart was
-    // sampled in the Timer ctor so a phase that straddles the world-release is classified by where
-    // its work began.
-    static void NotePhase(const char* name, bool worldStoppedAtStart, uint64_t ns);
-
-    // Cycle rollup, called next to GcLog::Cycle with the same seq.  Emits one
-    //   [ZSTAT] v=1 rec=zphase seq= name= pause_ns= conc_ns= n=
-    // per registered phase and one
-    //   [ZSTAT] v=1 rec=zcycle seq= pause_ns= conc_ns= max_pause_ns= phases=
-    // then resets the per-cycle table.  No-op when disabled.
-    static void NoteCycleEnd(uint64_t seq);
-
-    // Introspection for consumers and the unit suite.  These read the live table regardless of
-    // the env gate so a test can drive NotePhase directly.
-    static PhaseTotals Phase(const char* name);
-    static std::vector<std::string> RegisteredPhases();
-    static uint64_t CyclePauseNs();
-    static uint64_t CycleConcNs();
-    static uint64_t CycleMaxPauseNs();
-
-    // Test hooks: the env gate is cached, so a test process flips the override instead.
-    static void SetEnabledForTest(bool enabled);
-    static void ResetForTest();
-
 private:
-    struct Table {
-        std::unordered_map<std::string, PhaseTotals> phases;
-        uint64_t pauseNs = 0;
-        uint64_t concNs = 0;
-        uint64_t maxPauseNs = 0;
-    };
-
-    static void EmitLine(const char* format, ...);
-    // One token per value (same folding rule as GcLog::FoldToToken) so key=value readers hold.
-    static void FoldToToken(const char* text, char* out, size_t cap);
-
-    static std::mutex& TableLock();
-    static Table& CycleTable();
-
-    static std::atomic<int> g_stwDepth;
-    static std::atomic<int> g_enabledOverride; // -1 = read env, 0/1 = forced by SetEnabledForTest
+    void Run();
+    std::thread thread;
+    std::mutex lock;
+    std::condition_variable condition;
+    bool stopped = true;
+    static std::atomic<int> stwDepth;
 };
 
-#else // !MRT_ZSTAT_COMPILED: optional phase-log entry points are no-ops.
-
-class ZStat {
-public:
-    static ZStatCollection& Collections();
-    static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers);
-    static constexpr bool Enabled() { return false; }
-    static void EnterStwScope() {}
-    static void ExitStwScope() {}
-    static constexpr bool WorldStoppedNow() { return false; }
-    static void NotePhase(const char*, bool, uint64_t) {}
-    static void NoteCycleEnd(uint64_t) {}
-};
-
-#endif // MRT_ZSTAT_COMPILED
 } // namespace MapleRuntime
 #endif // MRT_ZSTAT_H

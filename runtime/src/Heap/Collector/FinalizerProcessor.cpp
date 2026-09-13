@@ -107,7 +107,7 @@ void FinalizerProcessor::Run()
         bool hasPendingReclaimHeapGarbage = false;
         bool hasPendingFeedHungryBuffers = false;
         {
-            MRT_PHASE_TIMER("finalizerProcessor waitting time", FINALIZE);
+            MRT_PHASE_TIMER(ZStatPhases::PFinalizerProcessorWaittingTime, FINALIZE);
             while (running.load(std::memory_order_acquire)) {
                 hasPendingFinalizableJob = HasFinalizableJob();
                 hasPendingReclaimHeapGarbage =
@@ -354,7 +354,7 @@ void FinalizerProcessor::ProcessFinalizableList()
 
 void FinalizerProcessor::ProcessFinalizables()
 {
-    MRT_PHASE_TIMER("Finalizer", FINALIZE);
+    MRT_PHASE_TIMER(ZStatPhases::PFinalizer, FINALIZE);
     {
         // we leave saferegion to avoid GC visit those changing queues.
         ScopedObjectAccess soa;
