@@ -2754,17 +2754,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             CollectRegion<G>(region);
             return;
         }
-        if (region->IsYoungRegion()) {
-            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            // In-place relocation already visited each destination object.
-            // Only a page promoted without compaction needs the later page task.
-            auto forwarding = ForwardingTable::RetainPageOwner(region);
-            if (!forwarding || !forwarding->in_place()) {
-                region->PreserveRetainedLiveInfo();
-                AddFlipPromotedPage(region);
-            }
-            (void)region->PromoteYoungRegion(promotionView);
-        }
+        // ZGC zRelocate.cpp:868-896: in-place relocation uses one destination
+        // age for both the page and its remembered fields. CompactRegion already
+        // applied that age and remembered promoted objects, for workers and root
+        // helpers alike. A surviving young page must keep that result here.
         return;
     }
 
