@@ -8,6 +8,8 @@
 // Contracts only — not implementation trivia. Product symbols where the harness can reach them.
 
 #include <cstdint>
+#include <dlfcn.h>
+#include "Base/ZStat.h"
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -580,13 +582,23 @@ GC_TEST(DefectRegress, YoungHeuDeferralKillSwitchDoesNotTouchSharedClockOrCredit
     GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 3'000u);
 }
 
-GC_TEST(DefectRegress, GcCountExportReadsAtomic)
+GC_TEST(DefectRegress, GcCountExportReadsCollectionStarts)
 {
-    size_t before = MCC_GetGCCount();
-    g_gcCount.fetch_add(1, std::memory_order_release);
-    GC_EXPECT_EQ(MCC_GetGCCount(), before + 1);
-    g_gcCount.fetch_sub(1, std::memory_order_release);
-    GC_EXPECT_EQ(MCC_GetGCCount(), before);
+    // The aggregate separately compiles ZStat.cpp. Resolve the product's
+    // singleton explicitly so the service query and producer share storage.
+    void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    GC_EXPECT_TRUE(product != nullptr);
+    using CollectionSource = ZStatCollection& (*)();
+    auto source = reinterpret_cast<CollectionSource>(
+        dlsym(product, "_ZN12MapleRuntime5ZStat11CollectionsEv"));
+    GC_EXPECT_TRUE(source != nullptr);
+    const uint32_t before = static_cast<uint32_t>(MCC_GetGCCount());
+    source().AtYoungMarkStart(false);
+    GC_EXPECT_EQ(MCC_GetGCCount(), static_cast<uint32_t>(before + 1));
+    source().AtYoungMarkStart(true);
+    GC_EXPECT_EQ(MCC_GetGCCount(), static_cast<uint32_t>(before + 2));
+    GC_EXPECT_EQ(source().Stats().collectionsAtMajorStart, static_cast<uint32_t>(before + 2));
+    dlclose(product);
 }
 
 // hunt-coll SUSPECT: raw-index reuse made double-remove + stale handle ABA.

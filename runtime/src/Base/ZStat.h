@@ -104,9 +104,9 @@ class RegionManager;
 // before touching anything -- the default-path rec=cycle/rec=phase/rec=stw stream is unchanged.
 class ZStat {
 public:
+    static ZStatCollection& Collections();
     static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers,
-                                              const ZStatCollection& collections);
+                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers);
     struct PhaseTotals {
         uint64_t pauseNs = 0;    // sum of samples that started with the world stopped
         uint64_t concNs = 0;     // sum of samples that started with the world running
@@ -169,9 +169,9 @@ private:
 
 class ZStat {
 public:
+    static ZStatCollection& Collections();
     static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers,
-                                              const ZStatCollection& collections);
+                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers);
     static constexpr bool Enabled() { return false; }
     static void EnterStwScope() {}
     static void ExitStwScope() {}

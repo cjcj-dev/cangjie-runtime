@@ -112,7 +112,6 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);
     double rate = (static_cast<double>(gcStats.collectedBytes) / gcTimeNs) * (static_cast<double>(NS_PER_S) / MB);
     VLOG(REPORT, "total gc time: %s us, collection rate %.3lf MB/s\n", Pretty(gcTimeNs / NS_PER_US).Str(), rate);
-    g_gcCount.fetch_add(1, std::memory_order_release);
     g_gcTotalTimeUs.fetch_add(gcTimeNs / NS_PER_US, std::memory_order_release);
     g_gcCollectedTotalBytes.fetch_add(gcStats.collectedBytes, std::memory_order_release);
     gcStats.collectionRate = rate;
@@ -138,8 +137,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
              static_cast<unsigned long long>(heuMinInterval), maxCapacity / 4);
     } else {
         gcStats.RecordMajorGCFinish(finishTime, gcTimeNs, Heap::GetHeap().GetAllocatedSize(),
-                                    gcStats.collectedBytes,
-                                    static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)));
+                                    gcStats.collectedBytes);
         gcStats.lastGcDurationNs.store(gcTimeNs, std::memory_order_relaxed);
         const uint32_t warmupDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
         if (warmupDone < kGcTriggerWarmupCycles) {

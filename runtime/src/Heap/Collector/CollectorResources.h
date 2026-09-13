@@ -69,7 +69,7 @@ public:
 
     // Called once in the young mark-start pause, for both minor and
     // combined young/old starts (zGeneration.cpp:600-602,637).
-    void NoteYoungMarkStart() { collections.AtYoungMarkStart(youngPreludeRequest != nullptr); }
+    void NoteYoungMarkStart() { ZStat::Collections().AtYoungMarkStart(youngPreludeRequest != nullptr); }
 
     // ZResurrection (zResurrection.cpp:35-47): shared by both generations.
     // Block only in the successful old mark-end pause; unblock after the
@@ -196,7 +196,6 @@ private:
     bool directorReevaluate = false;
     bool minorBusy = false;
     bool majorBusy = false;
-    ZStatCollection collections;
     ZStatCycle youngCycle;
     ZStatCycle oldCycle;
     pthread_t gcMainThread = 0;

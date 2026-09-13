@@ -72,6 +72,12 @@ ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
             lastActiveWorkers};
 }
 
+ZStatCollection& ZStat::Collections()
+{
+    static ZStatCollection collections;
+    return collections;
+}
+
 void ZStatCollection::AtYoungMarkStart(bool startsOld)
 {
     std::lock_guard<std::mutex> guard(lock);
@@ -88,8 +94,7 @@ ZStatCollectionStats ZStatCollection::Stats() const
 }
 
 GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                    RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers,
-                                    const ZStatCollection& collections)
+                                    RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers)
 {
     const auto youngState = youngWorkers.GetSnapshot();
     const auto oldState = oldWorkers.GetSnapshot();
@@ -129,7 +134,7 @@ GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZSta
     in.warmupCyclesDone = oldCycle.warmupCycles;
     in.isWarm = oldCycle.warmupCycles >= 3;
     in.isTimeTrustable = oldCycle.warmupCycles > 0;
-    const auto collectionStats = collections.Stats();
+    const auto collectionStats = Collections().Stats();
     in.totalCollections = collectionStats.totalCollections;
     in.collectionsAtLastMajor = collectionStats.collectionsAtMajorStart;
     in.usedAtLastMajorEnd = GCStats::usedAtLastMajorEnd.load(std::memory_order_relaxed);

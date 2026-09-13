@@ -13,6 +13,7 @@
 #include "Heap/Verify/HealCoverage.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
+#include "Base/ZStat.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -531,7 +532,7 @@ public:
                      "tid=%d obj=%p region=%p gcCycle=%zu "
                      "route.snapshot=%#llx fwdDone=%u",
                      obj, static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(obj),
-                     static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed),
+                     static_cast<void*>(forwarding), static_cast<size_t>(ZStat::Collections().Stats().totalCollections),
                      static_cast<unsigned long long>(
                          forwarding->RelocateObserve()),
                      static_cast<unsigned>(forwarding->IsForwardingDone()));

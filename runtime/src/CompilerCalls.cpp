@@ -8,6 +8,7 @@
 #include "CompilerCalls.h"
 
 #include "Base/CString.h"
+#include "Base/ZStat.h"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
@@ -552,7 +553,7 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber() { return ScheduleCJThreadCount
 
 extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCount(); }
 
-extern "C" size_t MCC_GetGCCount() { return g_gcCount.load(std::memory_order_acquire); }
+extern "C" size_t MCC_GetGCCount() { return ZStat::Collections().Stats().totalCollections; }
 
 extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
 

@@ -303,7 +303,7 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     }
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     GcTriggerInputs in = ZStat::SampleDirectorStats(now, youngCycle, oldCycle, regions,
-        *youngWorkers, *oldWorkers, collections);
+        *youngWorkers, *oldWorkers);
     in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
     in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;
     const GcTriggerDecision decision = DecideGcTrigger(in);
