@@ -931,7 +931,7 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
                 barrier.WriteReference(fx.obj0, field, fx.obj1);
             }
             GC_EXPECT_EQ(rs.Contains(reinterpret_cast<MAddress>(&field)), weak);
-            GC_EXPECT_EQ(to_object(field.GetTargetObject()), fx.obj1);
+            GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == fx.obj1);
         }
     }
 }
@@ -953,8 +953,8 @@ GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
     GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(fx.obj0));
     GC_EXPECT_FALSE(barrier.CompareAndSwapReference(nullptr, native, nullptr, fx.obj1,
         std::memory_order_seq_cst, std::memory_order_seq_cst));
-    GC_EXPECT_EQ(barrier.AtomicSwapReference(nullptr, native, fx.obj1, std::memory_order_seq_cst), fx.obj0);
-    GC_EXPECT_EQ(barrier.AtomicReadReference(nullptr, native, std::memory_order_seq_cst), fx.obj1);
+    GC_EXPECT_TRUE(barrier.AtomicSwapReference(nullptr, native, fx.obj1, std::memory_order_seq_cst) == fx.obj0);
+    GC_EXPECT_TRUE(barrier.AtomicReadReference(nullptr, native, std::memory_order_seq_cst) == fx.obj1);
     GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(fx.obj1));
 }
 
@@ -1003,5 +1003,5 @@ GC_TEST(StoreBuf, ThreadRootVisitorIncludesExecuteClosure)
     };
     MRT_VisitorCaller(&data, &visitor);
     GC_EXPECT_EQ(executeVisits, 1u);
-    GC_EXPECT_EQ(data.execute, static_cast<void*>(fx.obj1));
+    GC_EXPECT_TRUE(data.execute == static_cast<void*>(fx.obj1));
 }
