@@ -1,0 +1,772 @@
+{
+  "base": "78fc9ce028de705b3ea705b7069759c1036a2796",
+  "code_head": "83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7",
+  "n": 51,
+  "scans": [
+    {
+      "symbol": "MarkGoodHeapGate",
+      "base": {
+        "command": "git grep -n -F MarkGoodHeapGate 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:238:bool Collector::MarkGoodHeapGate(const char* site, BaseObject* target)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zCollectedHeap.hpp:300:    static bool MarkGoodHeapGate(const char* site, BaseObject* target);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:124:        if (!Collector::MarkGoodHeapGate(\"EnumRefFieldRoot\", target)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:259:        if (!Collector::MarkGoodHeapGate(\"TraceRefField\", targetObj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:489:        if (!Collector::MarkGoodHeapGate(\"GetAndTryTagObj\", targetObj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/windows_x86_64_exports.def:2060:    _ZN12MapleRuntime9Collector16MarkGoodHeapGateEPKcPNS_10BaseObjectE @2268\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F MarkGoodHeapGate 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "PlausibleManagedObjectGate",
+      "base": {
+        "command": "git grep -n -F PlausibleManagedObjectGate 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Allocator/SlotList.h:43:        if (!PlausibleManagedObjectGate(\"SlotList::ClearExtraContent\", slot)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Allocator/SlotList.h:82:        if (!PlausibleManagedObjectGate(\"SlotList::PopFront\", obj) || size != obj->GetSize()) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:249:bool PlausibleManagedObjectGate(const char*, BaseObject* obj)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:276:bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:278:    return MapleRuntime::PlausibleManagedObjectGate(site, obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/ManagedObjectGate.h:16:bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/WCollector/WCollector.h:577:        return to != nullptr && Collector::PlausibleManagedObjectGate(\"ToHeaderCovered\", to);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zCollectedHeap.cpp:41:    if (!PlausibleManagedObjectGate(\"mark_object_if_active\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zCollectedHeap.hpp:308:    static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:68:    if (!Collector::PlausibleManagedObjectGate(\"WCollector::MarkObject\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:102:    if (!Collector::PlausibleManagedObjectGate(\"WCollector::ResurrectObject\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:127:        if (!Collector::PlausibleManagedObjectGate(\"EnumRefFieldRoot\", target)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:158:    if (!Collector::PlausibleManagedObjectGate(\"EnumRefFieldRoot.slow\", latest)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:203:    if (!Collector::PlausibleManagedObjectGate(\"EnumAndTagRawRoot.plain\", root)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:265:        if (!Collector::PlausibleManagedObjectGate(\"TraceRefField\", targetObj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:268:                Collector::PlausibleManagedObjectGate(\"TraceRefField.host\", host)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:324:    if (!Collector::PlausibleManagedObjectGate(\"TraceRefField.slow\", latest)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:327:            Collector::PlausibleManagedObjectGate(\"TraceRefField.slow.host\", host)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:708:            !Collector::PlausibleManagedObjectGate(\"VisitMinorRoots.raw\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:720:            !Collector::PlausibleManagedObjectGate(\"VisitMinorRoots.invisible\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:749:    if (!Collector::PlausibleManagedObjectGate(\"PushYoungObject\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:833:    if (!Collector::PlausibleManagedObjectGate(\"AdmitYoungObject\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:839:        if (!Collector::PlausibleManagedObjectGate(\"AdmitYoungObject.host\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1015:        if (!Collector::PlausibleManagedObjectGate(\"ghostroute.wasMarked.child\", target)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1042:        if (!Collector::PlausibleManagedObjectGate(\"PushYoungObject\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1092:        if (!Collector::PlausibleManagedObjectGate(\"TraceYoungClosure\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1535:        if (!Collector::PlausibleManagedObjectGate(\"ConcurrentMarkingWork.pop\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1538:                !Collector::PlausibleManagedObjectGate(\"ConcurrentMarkingWork.host\", host)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1787:    if (!Collector::PlausibleManagedObjectGate(\"MarkEntryObject\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.hpp:383:        if (!Collector::PlausibleManagedObjectGate(\"TracingCollector::ResurrectObject\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.inline.hpp:15:        if (!Collector::PlausibleManagedObjectGate(\"TracingCollector::MarkObject\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.cpp:178:        if (!Collector::PlausibleManagedObjectGate(\"VisitAllObjects\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.cpp:190:            if (!Collector::PlausibleManagedObjectGate(\"VisitAllObjects\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.cpp:223:        if (!Collector::PlausibleManagedObjectGate(\"VisitLiveObjects\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.cpp:251:            if (!Collector::PlausibleManagedObjectGate(\"VisitLiveObjects\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:767:        if (!PlausibleManagedObjectGate(\"RegionInfo::MarkObject.unsized\", const_cast<BaseObject*>(obj))) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:892:        if (!PlausibleManagedObjectGate(\"RegionInfo::EnqueueObject\", const_cast<BaseObject*>(obj))) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPageAllocator.cpp:806:            if (!Collector::PlausibleManagedObjectGate(\"CollectFreePinnedSlots\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPageAllocator.hpp:444:        if (!PlausibleManagedObjectGate(\"FreePinnedSlotLists::PushFront\", slot)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:249:    if (!Collector::PlausibleManagedObjectGate(\"ForwardUpdateRawRef\", oldObj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:464:    if (!Collector::PlausibleManagedObjectGate(\"EnsureRouteDomain\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:530:        if (Collector::PlausibleManagedObjectGate(\"EnsureRouteDomain.size\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:564:    if (!Collector::PlausibleManagedObjectGate(\"statresid.force_domain\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:570:        if (!Collector::PlausibleManagedObjectGate(\"statresid.force_domain.host\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:597:            if (Collector::PlausibleManagedObjectGate(\"statresid.force_domain.size\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:722:            Collector::PlausibleManagedObjectGate(\"FixMinorEvacuatedSlot.knownBase\", knownBase);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:771:            Collector::PlausibleManagedObjectGate(\"FixMinorEvacuatedSlot.knownBase\", knownBase) &&\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:777:    if (knownBase != nullptr || !Collector::PlausibleManagedObjectGate(\"FixMinorEvacuatedSlot\", target)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:844:    if (!Collector::PlausibleManagedObjectGate(\"FixMinorEvacuatedSlot.postfwd\", current)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:888:        !Collector::PlausibleManagedObjectGate(\"FixMinorEvacuatedSlot\", observed)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:984:    if (!Collector::PlausibleManagedObjectGate(\"FixMinorEvacuatedSlot.postfwd\", current)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1040:    // fixinput / nilclass 丙: mark side already uses PlausibleManagedObjectGate\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1044:    if (!Collector::PlausibleManagedObjectGate(\"FixMinorObjectSlots\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1050:            Collector::PlausibleManagedObjectGate(\"FixMinorObjectSlots.host\", host)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1528:            if (!MapleRuntime::PlausibleManagedObjectGate(\"inplacepop-walk\", o)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1801:    if (!Collector::PlausibleManagedObjectGate(\"WCollector::ForwardObject\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1811:            // content heuristic (PlausibleManagedObjectGate reads the tip word) must\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1975:    if (!Collector::PlausibleManagedObjectGate(\"WCollector::RelocateObjectInner\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:2125:        if (!Collector::PlausibleManagedObjectGate(\"ForEachLiveObjectStart\", object)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:880:    if (!Collector::PlausibleManagedObjectGate(site, plain)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:1043:                   !Collector::PlausibleManagedObjectGate(\"GcPhaseEnum.interior\", obj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:1153:            !Collector::PlausibleManagedObjectGate(\"GCPhasePreForward.root\", oldObj)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/TypeInfoManager.cpp:1294:    // ATTR_PACKED(4) documents 4-byte layout; PlausibleManagedObjectGate / StateWord\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/windows_x86_64_exports.def:2066:    _ZN12MapleRuntime9Collector26PlausibleManagedObjectGateEPKcPNS_10BaseObjectE @2274\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F PlausibleManagedObjectGate 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "TryRecoverInteriorBase",
+      "base": {
+        "command": "git grep -n -F TryRecoverInteriorBase 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Common/BaseObject.cpp:30:        holder = Collector::TryRecoverInteriorBase(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:114:// Raising the floor rejects large-length interiors so TryRecoverInteriorBase can\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:281:BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* knownBase)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zCollectedHeap.cpp:42:        object = TryRecoverInteriorBase(object);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zCollectedHeap.hpp:312:    static BaseObject* TryRecoverInteriorBase(BaseObject* obj, BaseObject* knownBase = nullptr);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:206:        BaseObject* host = Collector::TryRecoverInteriorBase(root);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:266:            BaseObject* host = Collector::TryRecoverInteriorBase(targetObj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:325:        BaseObject* host = Collector::TryRecoverInteriorBase(latest);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:709:            BaseObject* host = Collector::TryRecoverInteriorBase(obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:721:            BaseObject* host = Collector::TryRecoverInteriorBase(obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:750:        BaseObject* host = Collector::TryRecoverInteriorBase(object);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:834:        BaseObject* host = Collector::TryRecoverInteriorBase(object);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1016:            BaseObject* host = Collector::TryRecoverInteriorBase(target);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1043:            BaseObject* host = Collector::TryRecoverInteriorBase(object);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1093:            BaseObject* host = Collector::TryRecoverInteriorBase(object);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:1536:            BaseObject* host = Collector::TryRecoverInteriorBase(obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:250:        BaseObject* host = Collector::TryRecoverInteriorBase(oldObj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:565:        BaseObject* host = Collector::TryRecoverInteriorBase(obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:778:        BaseObject* host = knownBase != nullptr ? knownBase : Collector::TryRecoverInteriorBase(target);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:889:        BaseObject* host = Collector::TryRecoverInteriorBase(observed);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1046:        BaseObject* host = Collector::TryRecoverInteriorBase(object);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRemembered.cpp:102:    BaseObject* holder = Collector::TryRecoverInteriorBase(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:1046:            BaseObject* host = Collector::TryRecoverInteriorBase(obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:1155:            BaseObject* host = Collector::TryRecoverInteriorBase(oldObj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/ObjectModel/RefField.h:496:// Prefer the (host, offset) overload when TryRecoverInteriorBase succeeds.\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/windows_x86_64_exports.def:2065:    _ZN12MapleRuntime9Collector22TryRecoverInteriorBaseEPNS_10BaseObjectES2_ @2273\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F TryRecoverInteriorBase 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "ManagedObjectGate.h",
+      "base": {
+        "command": "git grep -n -F ManagedObjectGate.h 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Allocator/SlotList.h:12:#include \"Heap/Collector/ManagedObjectGate.h\"\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:25:#include \"Heap/Collector/ManagedObjectGate.h\"\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zCollectedHeap.cpp:25:#include \"Heap/Collector/ManagedObjectGate.h\"\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zGeneration.cpp:896:#include \"Heap/Collector/ManagedObjectGate.h\"\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:41:#include \"Heap/Collector/ManagedObjectGate.h\"\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F ManagedObjectGate.h 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "kMinPlausibleTypeInfoAddr",
+      "base": {
+        "command": "git grep -n -F kMinPlausibleTypeInfoAddr 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:116:constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:151:    if (tipAddr == 0 || tipAddr < kMinPlausibleTypeInfoAddr) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:264:    if (tipAddr == 0 || tipAddr < kMinPlausibleTypeInfoAddr ||\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F kMinPlausibleTypeInfoAddr 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "TipLow32IsZero",
+      "base": {
+        "command": "git grep -n -F TipLow32IsZero 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:123:inline bool TipLow32IsZero(uintptr_t tipAddr)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:157:    if (TipLow32IsZero(tipAddr)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:265:        (tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0 || TipLow32IsZero(tipAddr) ||\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F TipLow32IsZero 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "ObjectFitsInRegion",
+      "base": {
+        "command": "git grep -n -F ObjectFitsInRegion 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:128:bool ObjectFitsInRegion(BaseObject* obj, RegionInfo* region)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:216:        if (region != nullptr && ObjectFitsInRegion(obj, region)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:270:    if (!ObjectFitsInRegion(obj, region)) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F ObjectFitsInRegion 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "TipWordLooksLikeTypeInfo",
+      "base": {
+        "command": "git grep -n -F TipWordLooksLikeTypeInfo 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:149:bool TipWordLooksLikeTypeInfo(uintptr_t tipAddr)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:196:        if (TipWordLooksLikeTypeInfo(tipAddr)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:214:    if (TipWordLooksLikeTypeInfo(tipAddr)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:222:        if (TipWordLooksLikeTypeInfo(hostTip)) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F TipWordLooksLikeTypeInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "ClassifyInteriorOffset",
+      "base": {
+        "command": "git grep -n -F ClassifyInteriorOffset 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:171:unsigned ClassifyInteriorOffset(BaseObject* obj)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:230:    unsigned off = ClassifyInteriorOffset(obj);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zCollectedHeap.hpp:311:    // trust it over ClassifyInteriorOffset heuristics.\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1048:        // tip-in-heap residuals must not invent a false host via ClassifyInteriorOffset.\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F ClassifyInteriorOffset 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "RecoverInteriorBaseImpl",
+      "base": {
+        "command": "git grep -n -F RecoverInteriorBaseImpl 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:208:BaseObject* RecoverInteriorBaseImpl(BaseObject* obj, BaseObject* knownBase)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Collector.cpp:283:    return RecoverInteriorBaseImpl(obj, knownBase);\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F RecoverInteriorBaseImpl 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "ToHeaderCovered",
+      "base": {
+        "command": "git grep -n -F ToHeaderCovered 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/WCollector/WCollector.h:575:    static bool ToHeaderCovered(BaseObject* to)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/WCollector/WCollector.h:577:        return to != nullptr && Collector::PlausibleManagedObjectGate(\"ToHeaderCovered\", to);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:308:            if (ToHeaderCovered(to)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1995:        if (toObj == obj || ToHeaderCovered(toObj)) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F ToHeaderCovered 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "PushHeapRootIfPlausible",
+      "base": {
+        "command": "git grep -n -F PushHeapRootIfPlausible 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:872:static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool young, bool follow = true)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:897:    return PushHeapRootIfPlausible(PlainRootObject(word), site, young);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:1016:        if (PushHeapRootIfPlausible(obj, \"GcPhaseEnum.ref\", young)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:1033:        if (PushHeapRootIfPlausible(obj, \"GcPhaseEnum.root\", young)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:1048:                (void)PushHeapRootIfPlausible(host, \"GcPhaseEnum.interiorBase\", young);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Mutator/Mutator.cpp:1064:        (void)PushHeapRootIfPlausible(obj, \"GcPhaseEnum.invisible\", young, false);\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F PushHeapRootIfPlausible 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "RetainedLiveInfoState",
+      "base": {
+        "command": "git grep -n -F RetainedLiveInfoState 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:70:    enum class RetainedLiveInfoState : uint8_t {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:249:    RetainedLiveInfoState GetRetainedLiveInfoState() const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:356:inline RegionInfo::RetainedLiveInfoState RegionInfo::GetRetainedLiveInfoState() const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:359:            return RetainedLiveInfoState::NEVER_EXAMINED;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:362:            return RetainedLiveInfoState::SNAPSHOT_LOST;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:366:            ? RetainedLiveInfoState::SNAPSHOT_EMPTY\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:367:            : RetainedLiveInfoState::SNAPSHOT_VALID;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:534:            CHECK(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:571:        RetainedLiveInfoState state = GetRetainedLiveInfoState();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:572:        if (state == RetainedLiveInfoState::NEVER_EXAMINED ||\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:573:            state == RetainedLiveInfoState::SNAPSHOT_LOST) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F RetainedLiveInfoState 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "IsRetainedLifeCurrent",
+      "base": {
+        "command": "git grep -n -F IsRetainedLifeCurrent 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:242:    bool IsRetainedLifeCurrent() const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:246:        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfo : nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:255:        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoEpoch : 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:260:        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoCoveredUpTo : 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:281:        return IsRetainedLifeCurrent() && metadata.retainedMarkWords != nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:343:inline bool RegionInfo::IsRetainedLifeCurrent() const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:361:        if (!IsRetainedLifeCurrent()) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:425:        if (!IsRetainedLifeCurrent()) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:576:        if (!IsRetainedLifeCurrent()) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F IsRetainedLifeCurrent 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "GetRetainedLiveInfo",
+      "base": {
+        "command": "git grep -n -F GetRetainedLiveInfo 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:244:    LiveInfo* GetRetainedLiveInfo() const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:249:    RetainedLiveInfoState GetRetainedLiveInfoState() const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:253:    uint64_t GetRetainedLiveInfoEpoch() const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:258:    MAddress GetRetainedLiveInfoCoveredUpTo() const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:356:inline RegionInfo::RetainedLiveInfoState RegionInfo::GetRetainedLiveInfoState() const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:534:            CHECK(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:571:        RetainedLiveInfoState state = GetRetainedLiveInfoState();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1401:                const MAddress end = page->GetRetainedLiveInfoCoveredUpTo();\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F GetRetainedLiveInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "HasEverPreservedRetainedLiveInfo",
+      "base": {
+        "command": "git grep -n -F HasEverPreservedRetainedLiveInfo 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:251:    bool HasEverPreservedRetainedLiveInfo() const { return metadata.retainedEverPreserved != 0; }\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F HasEverPreservedRetainedLiveInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "GetRetainedLiveInfoEpoch",
+      "base": {
+        "command": "git grep -n -F GetRetainedLiveInfoEpoch 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:253:    uint64_t GetRetainedLiveInfoEpoch() const\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F GetRetainedLiveInfoEpoch 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "GetRetainedLiveInfoCoveredUpTo",
+      "base": {
+        "command": "git grep -n -F GetRetainedLiveInfoCoveredUpTo 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:258:    MAddress GetRetainedLiveInfoCoveredUpTo() const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1401:                const MAddress end = page->GetRetainedLiveInfoCoveredUpTo();\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F GetRetainedLiveInfoCoveredUpTo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "StampRetainedSnapshot",
+      "base": {
+        "command": "git grep -n -F StampRetainedSnapshot 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:263:    void StampRetainedSnapshot();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:370:inline void RegionInfo::StampRetainedSnapshot()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:562:            StampRetainedSnapshot();\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F StampRetainedSnapshot 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "RetainedOwnCopyEnabled",
+      "base": {
+        "command": "git grep -n -F RetainedOwnCopyEnabled 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:273:    static constexpr bool RetainedOwnCopyEnabled() { return true; }\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:474:        if (RetainedOwnCopyEnabled()) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:526:        if (RetainedOwnCopyEnabled()) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F RetainedOwnCopyEnabled 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "CaptureRetainedMarkWords",
+      "base": {
+        "command": "git grep -n -F CaptureRetainedMarkWords 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:277:    void CaptureRetainedMarkWords(LiveInfo* liveInfo, uint64_t epoch, uint8_t largeMarked);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:376:inline void RegionInfo::CaptureRetainedMarkWords(LiveInfo* liveInfo, uint64_t epoch, uint8_t largeMarked)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:475:            CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:527:            CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:530:            // This decision is derived after CaptureRetainedMarkWords has\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F CaptureRetainedMarkWords 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "HasRetainedMarkWords",
+      "base": {
+        "command": "git grep -n -F HasRetainedMarkWords 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:279:    bool HasRetainedMarkWords() const\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F HasRetainedMarkWords 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "RetainedMarkWordsSay",
+      "base": {
+        "command": "git grep -n -F RetainedMarkWordsSay 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:285:    bool RetainedMarkWordsSay(size_t offset) const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:423:inline bool RegionInfo::RetainedMarkWordsSay(size_t offset) const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1404:                    if (!page->RetainedMarkWordsSay(address - start)) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F RetainedMarkWordsSay 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "FreeRetainedMarkWords",
+      "base": {
+        "command": "git grep -n -F FreeRetainedMarkWords 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:287:    void FreeRetainedMarkWords();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:378:        FreeRetainedMarkWords();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:440:inline void RegionInfo::FreeRetainedMarkWords()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1621:            FreeRetainedMarkWords();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2212:        FreeRetainedMarkWords();\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F FreeRetainedMarkWords 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "BeginRetainedPreserve",
+      "base": {
+        "command": "git grep -n -F BeginRetainedPreserve 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:295:    ALWAYS_INLINE void BeginRetainedPreserve()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:453:        BeginRetainedPreserve();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:510:        BeginRetainedPreserve();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:545:            BeginRetainedPreserve();\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F BeginRetainedPreserve 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "PreserveRetainedLiveInfo",
+      "base": {
+        "command": "git grep -n -F PreserveRetainedLiveInfo 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zObjectAllocator.cpp:370:        region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:300:    void PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:311:    void PreserveRetainedLiveInfoUpTo(MAddress boundary);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:313:    ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:451:inline void RegionInfo::PreserveRetainedLiveInfo()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:503:inline void RegionInfo::PreserveRetainedLiveInfoUpTo(MAddress boundary)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:507:            PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:541:inline ALWAYS_INLINE void RegionInfo::PreserveRetainedLiveInfo(MAddress coveredUpToOverride)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:553:        PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:713:            PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2103:            PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPageAllocator.cpp:695:                region->PreserveRetainedLiveInfoUpTo(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPageAllocator.cpp:698:                region->PreserveRetainedLiveInfo(region->GetRegionStart());\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1297:                region->PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:2696:            region->PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocationSetSelector.cpp:315:        fromRegion->PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocationSetSelector.cpp:344:            region->PreserveRetainedLiveInfoUpTo(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocationSetSelector.cpp:458:                del->PreserveRetainedLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocationSetSelector.cpp:496:        del->PreserveRetainedLiveInfoUpTo(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/windows_x86_64_exports.def:1063:    _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv @1062\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/windows_x86_64_exports.def:1066:    _ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEy @1067\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F PreserveRetainedLiveInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "PreserveRetainedLiveInfoUpTo",
+      "base": {
+        "command": "git grep -n -F PreserveRetainedLiveInfoUpTo 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zObjectAllocator.cpp:370:        region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:311:    void PreserveRetainedLiveInfoUpTo(MAddress boundary);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:503:inline void RegionInfo::PreserveRetainedLiveInfoUpTo(MAddress boundary)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPageAllocator.cpp:695:                region->PreserveRetainedLiveInfoUpTo(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocationSetSelector.cpp:344:            region->PreserveRetainedLiveInfoUpTo(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocationSetSelector.cpp:496:        del->PreserveRetainedLiveInfoUpTo(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/windows_x86_64_exports.def:1066:    _ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEy @1067\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F PreserveRetainedLiveInfoUpTo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "NoteRetainedPreserve",
+      "base": {
+        "command": "git grep -n -F NoteRetainedPreserve 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:294:    // proves that it has a snapshot and publishes it in NoteRetainedPreserve.\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:317:    ALWAYS_INLINE void NoteRetainedPreserve(bool succeeded);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:482:                NoteRetainedPreserve(GetRegionAllocPtr() <= GetRegionStart());\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:485:            NoteRetainedPreserve(true);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:489:            NoteRetainedPreserve(true);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:493:        NoteRetainedPreserve(GetRegionAllocPtr() <= GetRegionStart());\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:535:            NoteRetainedPreserve(false);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:538:        NoteRetainedPreserve(true);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:549:            NoteRetainedPreserve(true);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:556:inline ALWAYS_INLINE void RegionInfo::NoteRetainedPreserve(bool succeeded)\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F NoteRetainedPreserve 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "IsRetainedSnapshotValid",
+      "base": {
+        "command": "git grep -n -F IsRetainedSnapshotValid 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:320:    bool IsRetainedSnapshotValid() const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:569:inline bool RegionInfo::IsRetainedSnapshotValid() const\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F IsRetainedSnapshotValid 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "FORWARDING_FACE_RESET_BIT",
+      "base": {
+        "command": "git grep -n -F FORWARDING_FACE_RESET_BIT 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:752:    static constexpr uint32_t FORWARDING_FACE_RESET_BIT = (1U << 31);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:758:        (void)__atomic_fetch_or(&metadata.retainedPreserveCnt, FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:763:        (void)__atomic_fetch_and(&metadata.retainedPreserveCnt, ~FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1052:        // Only FORWARDING_FACE_RESET_BIT is used.\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1691:            FORWARDING_FACE_RESET_BIT) != 0;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F FORWARDING_FACE_RESET_BIT 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "IsForwardingFaceReset",
+      "base": {
+        "command": "git grep -n -F IsForwardingFaceReset 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:754:    bool IsForwardingFaceReset() const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1688:inline bool RegionInfo::IsForwardingFaceReset() const\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F IsForwardingFaceReset 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "SetForwardingFaceReset",
+      "base": {
+        "command": "git grep -n -F SetForwardingFaceReset 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:756:    void SetForwardingFaceReset()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2105:        SetForwardingFaceReset();\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F SetForwardingFaceReset 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "ClearForwardingFaceReset",
+      "base": {
+        "command": "git grep -n -F ClearForwardingFaceReset 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:761:    void ClearForwardingFaceReset()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1461:        ClearForwardingFaceReset();\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F ClearForwardingFaceReset 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "retainedLiveInfo",
+      "base": {
+        "command": "git grep -n -F retainedLiveInfo 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:246:        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfo : nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:255:        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoEpoch : 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:260:        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoCoveredUpTo : 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1044:        LiveInfo* retainedLiveInfo = nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1048:        uint64_t retainedLiveInfoEpoch = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1049:        MAddress retainedLiveInfoCoveredUpTo = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:364:        return metadata.retainedLiveInfoCoveredUpTo <= GetRegionStart() &&\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:454:        metadata.retainedLiveInfo = GetLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:455:        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:460:        if (metadata.retainedLiveInfo == nullptr && from != nullptr) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:461:            metadata.retainedLiveInfo = from->liveInfo;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:462:            metadata.retainedLiveInfoEpoch = from->epoch;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:470:            metadata.retainedLiveInfo = nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:473:        metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:475:            CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:488:        if (metadata.retainedLiveInfo != nullptr) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:511:        metadata.retainedLiveInfo = GetLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:512:        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:515:        if (metadata.retainedLiveInfo == nullptr && from != nullptr) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:516:            metadata.retainedLiveInfo = from->liveInfo;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:517:            metadata.retainedLiveInfoEpoch = from->epoch;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:522:            metadata.retainedLiveInfo = nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:525:        metadata.retainedLiveInfoCoveredUpTo = boundary;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:527:            CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:529:        if (metadata.retainedLiveInfo == nullptr) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:546:            metadata.retainedLiveInfo = GetLiveInfo();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:547:            metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:548:            metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:585:        return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1622:            metadata.retainedLiveInfo = nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1623:            metadata.retainedLiveInfoEpoch = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1624:            metadata.retainedLiveInfoCoveredUpTo = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2213:        metadata.retainedLiveInfo = nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2214:        metadata.retainedLiveInfoEpoch = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2215:        metadata.retainedLiveInfoCoveredUpTo = 0;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F retainedLiveInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "retainedEverPreserved",
+      "base": {
+        "command": "git grep -n -F retainedEverPreserved 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:251:    bool HasEverPreservedRetainedLiveInfo() const { return metadata.retainedEverPreserved != 0; }\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1047:        uint8_t retainedEverPreserved = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:358:        if (metadata.retainedEverPreserved == 0) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:559:            metadata.retainedEverPreserved = 1;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1628:            metadata.retainedEverPreserved = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2170:                metadata.retainedEverPreserved = 0;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F retainedEverPreserved 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "retainedLiveInfoEpoch",
+      "base": {
+        "command": "git grep -n -F retainedLiveInfoEpoch 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:255:        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoEpoch : 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1048:        uint64_t retainedLiveInfoEpoch = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:455:        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:462:            metadata.retainedLiveInfoEpoch = from->epoch;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:475:            CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:512:        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:517:            metadata.retainedLiveInfoEpoch = from->epoch;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:527:            CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:547:            metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:585:        return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1623:            metadata.retainedLiveInfoEpoch = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2214:        metadata.retainedLiveInfoEpoch = 0;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F retainedLiveInfoEpoch 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "retainedLiveInfoCoveredUpTo",
+      "base": {
+        "command": "git grep -n -F retainedLiveInfoCoveredUpTo 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:260:        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoCoveredUpTo : 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1049:        MAddress retainedLiveInfoCoveredUpTo = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:364:        return metadata.retainedLiveInfoCoveredUpTo <= GetRegionStart() &&\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:473:        metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:525:        metadata.retainedLiveInfoCoveredUpTo = boundary;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:548:            metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1624:            metadata.retainedLiveInfoCoveredUpTo = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2215:        metadata.retainedLiveInfoCoveredUpTo = 0;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F retainedLiveInfoCoveredUpTo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "retainedLifeId",
+      "base": {
+        "command": "git grep -n -F retainedLifeId 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:297:        __atomic_store_n(&metadata.retainedLifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1050:        RegionLifeId retainedLifeId = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:345:        const RegionLifeId stamp = __atomic_load_n(&metadata.retainedLifeId, __ATOMIC_ACQUIRE);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:373:        __atomic_store_n(&metadata.retainedLifeId, life, __ATOMIC_RELEASE);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1625:            metadata.retainedLifeId = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2216:        metadata.retainedLifeId = 0;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F retainedLifeId 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "retainedPreserveCnt",
+      "base": {
+        "command": "git grep -n -F retainedPreserveCnt 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:758:        (void)__atomic_fetch_or(&metadata.retainedPreserveCnt, FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:763:        (void)__atomic_fetch_and(&metadata.retainedPreserveCnt, ~FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1053:        uint32_t retainedPreserveCnt = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1690:        return (__atomic_load_n(&metadata.retainedPreserveCnt, __ATOMIC_ACQUIRE) &\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:2219:        metadata.retainedPreserveCnt = 0;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F retainedPreserveCnt 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "retainedMarkWords",
+      "base": {
+        "command": "git grep -n -F retainedMarkWords 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:281:        return IsRetainedLifeCurrent() && metadata.retainedMarkWords != nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1060:        uint64_t* retainedMarkWords = nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:390:            metadata.retainedMarkWords = words;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:419:        metadata.retainedMarkWords = words;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:428:        if (metadata.retainedMarkWords == nullptr) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:436:        return (metadata.retainedMarkWords[wordIdx] &\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:442:        if (metadata.retainedMarkWords != nullptr) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:443:            free(metadata.retainedMarkWords);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:444:            metadata.retainedMarkWords = nullptr;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:582:        if (metadata.retainedMarkWords != nullptr) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F retainedMarkWords 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "retainedMarkWordCnt",
+      "base": {
+        "command": "git grep -n -F retainedMarkWordCnt 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1061:        uint32_t retainedMarkWordCnt = 0;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:1063:        // 4-byte hole after retainedMarkWordCnt; sizeof(UnitInfo) stays 208.\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:391:            metadata.retainedMarkWordCnt = 1;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:420:        metadata.retainedMarkWordCnt = static_cast<uint32_t>(wordCnt);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:433:        if (wordIdx >= metadata.retainedMarkWordCnt) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:446:        metadata.retainedMarkWordCnt = 0;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F retainedMarkWordCnt 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "IsForwardingFaceCurrent",
+      "base": {
+        "command": "git grep -n -F IsForwardingFaceCurrent 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:750:    bool IsForwardingFaceCurrent() const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:469:            (!IsCurrentFacePublished() || IsForwardingFaceCurrent())) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:521:            (!IsCurrentFacePublished() || IsForwardingFaceCurrent())) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:1664:inline bool RegionInfo::IsForwardingFaceCurrent() const\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F IsForwardingFaceCurrent 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "ResetMarkBit",
+      "base": {
+        "command": "git grep -n -F ResetMarkBit 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.hpp:341:    void ResetMarkBit(MarkView<Generation::Old> view);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPage.inline.hpp:707:inline void RegionInfo::ResetMarkBit(MarkView<Generation::Old> view)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPageAllocator.cpp:893:            region->ResetMarkBit(view);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zPageAllocator.cpp:901:        region->ResetMarkBit(view);\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F ResetMarkBit 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "KeepRememberedHolder",
+      "base": {
+        "command": "git grep -n -F KeepRememberedHolder 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/WCollector/RememberedHolderPolicy.h:12:inline bool KeepRememberedHolder(bool retainedSnapshotSaysLive, bool isCurrentMinorRoot)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:905:    if (KeepRememberedHolder(SlotHeldByLiveObject(&field), holderIsCurrentMinorRoot)) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F KeepRememberedHolder 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "RememberedHolderPolicy.h",
+      "base": {
+        "command": "git grep -n -F RememberedHolderPolicy.h 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/Mark.cpp:10:#include \"Heap/WCollector/RememberedHolderPolicy.h\"\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/zRelocate.cpp:51:#include \"Heap/WCollector/RememberedHolderPolicy.h\"\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/zRelocate.cpp:196:#include \"Heap/WCollector/RememberedHolderPolicy.h\"\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:10:#include \"Heap/WCollector/RememberedHolderPolicy.h\"\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:11:#include \"Heap/WCollector/RememberedHolderPolicy.h\"\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F RememberedHolderPolicy.h 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "holderIsCurrentMinorRoot",
+      "base": {
+        "command": "git grep -n -F holderIsCurrentMinorRoot 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/WCollector/WCollector.h:900:                                     bool holderIsCurrentMinorRoot = false,\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/WCollector/WCollector.h:942:                               bool holderIsCurrentMinorRoot = false) const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/WCollector/WCollectorInternal.h:30:                                                    bool holderIsCurrentMinorRoot = false);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:891:                          bool holderIsCurrentMinorRoot)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zMark.cpp:905:    if (KeepRememberedHolder(SlotHeldByLiveObject(&field), holderIsCurrentMinorRoot)) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:649:                                              bool holderIsCurrentMinorRoot,\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:653:    (void)holderIsCurrentMinorRoot;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:705:                                      bool holderIsCurrentMinorRoot) const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:744:    BaseObject* target = ResolveMinorReference(field, stw, holderIsCurrentMinorRoot);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:756:    if (ScrubMinorFreeTarget(field, target, true, holderIsCurrentMinorRoot)) {\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F holderIsCurrentMinorRoot 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "preservedByCurrentRoot",
+      "base": {
+        "command": "git grep -n -F preservedByCurrentRoot 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/WCollector/WCollector.h:901:                                     bool* preservedByCurrentRoot = nullptr) const;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:650:                                              bool* preservedByCurrentRoot) const\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:654:    (void)preservedByCurrentRoot;\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F preservedByCurrentRoot 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "currentRootRanges",
+      "base": {
+        "command": "git grep -n -F currentRootRanges 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1100:    std::vector<std::pair<MAddress, MAddress>> currentRootRanges;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1101:    currentRootRanges.reserve(currentMinorRoots.size());\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1104:        currentRootRanges.emplace_back(start, start + RegionSpace::GetAllocSize(*root));\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1106:    auto holderIsCurrentRoot = [&currentRootRanges](MAddress slot) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1107:        return std::any_of(currentRootRanges.begin(), currentRootRanges.end(),\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F currentRootRanges 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "g_fixinputReject",
+      "base": {
+        "command": "git grep -n -F g_fixinputReject 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1029:std::atomic<size_t> g_fixinputReject{ 0 };\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1045:        size_t n = g_fixinputReject.fetch_add(1, std::memory_order_relaxed) + 1;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1256:            size_t rej = g_fixinputReject.load(std::memory_order_relaxed);\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F g_fixinputReject 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "g_fixinputRecover",
+      "base": {
+        "command": "git grep -n -F g_fixinputRecover 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1030:std::atomic<size_t> g_fixinputRecover{ 0 };\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1051:            g_fixinputRecover.fetch_add(1, std::memory_order_relaxed);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1257:            size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F g_fixinputRecover 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    {
+      "symbol": "g_fixinputUnrecoverable",
+      "base": {
+        "command": "git grep -n -F g_fixinputUnrecoverable 78fc9ce028de705b3ea705b7069759c1036a2796 -- runtime/src",
+        "rc": 0,
+        "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1031:std::atomic<size_t> g_fixinputUnrecoverable{ 0 };\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1055:        g_fixinputUnrecoverable.fetch_add(1, std::memory_order_relaxed);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zRelocate.cpp:1258:            size_t unr = g_fixinputUnrecoverable.load(std::memory_order_relaxed);\n",
+        "stderr": ""
+      },
+      "candidate": {
+        "command": "git grep -n -F g_fixinputUnrecoverable 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+        "rc": 1,
+        "stdout": "",
+        "stderr": ""
+      }
+    }
+  ]
+}

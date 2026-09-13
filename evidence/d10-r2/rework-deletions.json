@@ -1,0 +1,1226 @@
+[
+  {
+    "symbol": "MarkGoodHeapGate",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "MarkGoodHeapGate",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F MarkGoodHeapGate 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "PlausibleManagedObjectGate",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "PlausibleManagedObjectGate",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F PlausibleManagedObjectGate 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "TryRecoverInteriorBase",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "TryRecoverInteriorBase",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F TryRecoverInteriorBase 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "ManagedObjectGate.h",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "ManagedObjectGate.h",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F ManagedObjectGate.h 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "kMinPlausibleTypeInfoAddr",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "kMinPlausibleTypeInfoAddr",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F kMinPlausibleTypeInfoAddr 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "TipLow32IsZero",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "TipLow32IsZero",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F TipLow32IsZero 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "ObjectFitsInRegion",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "ObjectFitsInRegion",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F ObjectFitsInRegion 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "TipWordLooksLikeTypeInfo",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "TipWordLooksLikeTypeInfo",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F TipWordLooksLikeTypeInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "ClassifyInteriorOffset",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "ClassifyInteriorOffset",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F ClassifyInteriorOffset 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "RecoverInteriorBaseImpl",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "RecoverInteriorBaseImpl",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F RecoverInteriorBaseImpl 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "ToHeaderCovered",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "ToHeaderCovered",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F ToHeaderCovered 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "PushHeapRootIfPlausible",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "PushHeapRootIfPlausible",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F PushHeapRootIfPlausible 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "RetainedLiveInfoState",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "RetainedLiveInfoState",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F RetainedLiveInfoState 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "IsRetainedLifeCurrent",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "IsRetainedLifeCurrent",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F IsRetainedLifeCurrent 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "GetRetainedLiveInfo",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "GetRetainedLiveInfo",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F GetRetainedLiveInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "HasEverPreservedRetainedLiveInfo",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "HasEverPreservedRetainedLiveInfo",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F HasEverPreservedRetainedLiveInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "GetRetainedLiveInfoEpoch",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "GetRetainedLiveInfoEpoch",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F GetRetainedLiveInfoEpoch 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "GetRetainedLiveInfoCoveredUpTo",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "GetRetainedLiveInfoCoveredUpTo",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F GetRetainedLiveInfoCoveredUpTo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "StampRetainedSnapshot",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "StampRetainedSnapshot",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F StampRetainedSnapshot 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "RetainedOwnCopyEnabled",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "RetainedOwnCopyEnabled",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F RetainedOwnCopyEnabled 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "CaptureRetainedMarkWords",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "CaptureRetainedMarkWords",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F CaptureRetainedMarkWords 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "HasRetainedMarkWords",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "HasRetainedMarkWords",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F HasRetainedMarkWords 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "RetainedMarkWordsSay",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "RetainedMarkWordsSay",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F RetainedMarkWordsSay 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "FreeRetainedMarkWords",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "FreeRetainedMarkWords",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F FreeRetainedMarkWords 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "BeginRetainedPreserve",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "BeginRetainedPreserve",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F BeginRetainedPreserve 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "PreserveRetainedLiveInfo",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "PreserveRetainedLiveInfo",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F PreserveRetainedLiveInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "PreserveRetainedLiveInfoUpTo",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "PreserveRetainedLiveInfoUpTo",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F PreserveRetainedLiveInfoUpTo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "NoteRetainedPreserve",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "NoteRetainedPreserve",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F NoteRetainedPreserve 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "IsRetainedSnapshotValid",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "IsRetainedSnapshotValid",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F IsRetainedSnapshotValid 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "FORWARDING_FACE_RESET_BIT",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "FORWARDING_FACE_RESET_BIT",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F FORWARDING_FACE_RESET_BIT 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "IsForwardingFaceReset",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "IsForwardingFaceReset",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F IsForwardingFaceReset 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "SetForwardingFaceReset",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "SetForwardingFaceReset",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F SetForwardingFaceReset 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "ClearForwardingFaceReset",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "ClearForwardingFaceReset",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F ClearForwardingFaceReset 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "retainedLiveInfo",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "retainedLiveInfo",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F retainedLiveInfo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "retainedEverPreserved",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "retainedEverPreserved",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F retainedEverPreserved 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "retainedLiveInfoEpoch",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "retainedLiveInfoEpoch",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F retainedLiveInfoEpoch 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "retainedLiveInfoCoveredUpTo",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "retainedLiveInfoCoveredUpTo",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F retainedLiveInfoCoveredUpTo 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "retainedLifeId",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "retainedLifeId",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F retainedLifeId 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "retainedPreserveCnt",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "retainedPreserveCnt",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F retainedPreserveCnt 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "retainedMarkWords",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "retainedMarkWords",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F retainedMarkWords 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "retainedMarkWordCnt",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "retainedMarkWordCnt",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F retainedMarkWordCnt 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "IsForwardingFaceCurrent",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "IsForwardingFaceCurrent",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F IsForwardingFaceCurrent 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "ResetMarkBit",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "ResetMarkBit",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F ResetMarkBit 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "KeepRememberedHolder",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "KeepRememberedHolder",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F KeepRememberedHolder 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "RememberedHolderPolicy.h",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "RememberedHolderPolicy.h",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F RememberedHolderPolicy.h 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "holderIsCurrentMinorRoot",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "holderIsCurrentMinorRoot",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F holderIsCurrentMinorRoot 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "preservedByCurrentRoot",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "preservedByCurrentRoot",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F preservedByCurrentRoot 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "currentRootRanges",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "currentRootRanges",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F currentRootRanges 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "g_fixinputReject",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "g_fixinputReject",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F g_fixinputReject 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "g_fixinputRecover",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "g_fixinputRecover",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F g_fixinputRecover 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "symbol": "g_fixinputUnrecoverable",
+    "frozen": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-F",
+        "g_fixinputUnrecoverable",
+        "1fb79dd69685fc958756d45af594bb50c32ca7f3",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": "git grep -n -F g_fixinputUnrecoverable 83a8ad3bc619ac30cbfeaad1cd2b3f3774d5afa7 -- runtime/src",
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  }
+]

@@ -1,3 +1,5 @@
+> R2 修正（候选产品 9553f311dabf537273a93d21ee2601b80c5a8275）：原报告的 PromotionPage 遍历对应漏掉 ZLiveMap::is_marked 序号条件。当前 zPage.cpp:195–198 在读取位图前比较原年轻代**当前**序号，不使用晋升后槽位的老年代身份，也不保存 clone 时的序号。详情及本轮新构建结果见 `evidence/d10-r2/` 与本棒报告。下文既有构建数字仅是首轮历史证据。
+
 待主控登记进 `/root/cj_build/ops/CURRENT_DOCS.manifest`。
 
 # D10：命名根启发式与 retained 副本删除
