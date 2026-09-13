@@ -70,7 +70,7 @@ public:
     void Discard();
 
 #if defined(MRT_TESTABLE_INTERNALS)
-    uintptr_t LastProcessedColorForTest() const { return lastProcessedColor; }
+    uintptr_t LastProcessedColorForTest() const;
 #endif
 #if defined(MRT_GC_UNIT_TESTS)
     static void SetFlushObserverForTest(StoreBarrierFlushObserver observer);
@@ -87,4 +87,5 @@ private:
 };
 } // namespace MapleRuntime
 
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #endif

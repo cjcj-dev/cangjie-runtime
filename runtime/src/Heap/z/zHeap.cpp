@@ -148,7 +148,7 @@ public:
     void UnregisterStaticRoots(Uptr addr, U32) override;
     void VisitStaticRoots(const NativeSlotVisitor& visitor) override;
 #ifdef MRT_TESTABLE_INTERNALS
-    size_t GetStaticRootCountForTesting() { return staticRootTable.RootCountForTesting(); }
+    size_t GetStaticRootCountForTesting();
 #endif
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
     ssize_t GetHeapPhysicalMemorySize() const override;
@@ -203,6 +203,8 @@ private:
 
 static ImmortalWrapper<HeapImpl> g_heapInstance;
 
+#include "Heap/HeapTestObservations.h"
+
 MAddress HeapImpl::Allocate(size_t size, AllocType allocType) { return theSpace->Allocate(size, allocType); }
 
 bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
@@ -252,12 +254,6 @@ MAddress HeapImpl::GetSpaceEndAddress() const { return theSpace->GetSpaceEndAddr
 
 Heap& Heap::GetHeap() { return *g_heapInstance; }
 
-#ifdef MRT_TESTABLE_INTERNALS
-size_t Heap::GetStaticRootCountForTesting()
-{
-    return g_heapInstance->GetStaticRootCountForTesting();
-}
-#endif
 
 void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
 {

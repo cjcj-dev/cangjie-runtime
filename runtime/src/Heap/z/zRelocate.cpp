@@ -127,9 +127,7 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #endif
 
 
-#if defined(MRT_GC_UNIT_TESTS)
-static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext = nullptr;
-#endif
+#include "Heap/Collector/zRelocateTestObservations.h"
 #if defined(MRT_TESTABLE_INTERNALS)
 void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object);
 #endif
@@ -2077,26 +2075,6 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj, Generation generation)
     // (zForwardingTable.inline.hpp:36-46): the page was never selected.
     return WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(region));
 }
-
-#if defined(MRT_GC_UNIT_TESTS)
-WCollector::RouteLookupTestResult WCollector::RouteLookupForTest(BaseObject* fromObj)
-{
-    RouteLookupTestResult result;
-    struct ContextScope {
-        WCollector::RouteLookupTestResult*& slot;
-        WCollector::RouteLookupTestResult* previous;
-        explicit ContextScope(WCollector::RouteLookupTestResult*& context,
-                              WCollector::RouteLookupTestResult* current)
-            : slot(context), previous(context)
-        {
-            slot = current;
-        }
-        ~ContextScope() { slot = previous; }
-    } scope(g_routeLookupTestContext, &result);
-    (void)TryForwardObject(fromObj, ActiveForwardingGeneration());
-    return result;
-}
-#endif
 
 BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
                                           const RegionInfo::RetainScope& lease)

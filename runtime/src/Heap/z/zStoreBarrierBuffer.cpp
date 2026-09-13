@@ -16,19 +16,9 @@
 #include "Heap/z/zRememberedSet.hpp"
 
 namespace MapleRuntime {
+#include "Heap/Barrier/StoreBarrierBufferTestObservations.h"
 
 namespace {
-#if defined(MRT_GC_UNIT_TESTS)
-thread_local StoreBarrierFlushObserver g_flushObserver = nullptr;
-
-void NotifyFlushObserver(StoreBarrierFlushEvent event, const StoreBarrierEntry& entry)
-{
-    if (g_flushObserver != nullptr) {
-        g_flushObserver(event, entry);
-    }
-}
-#endif
-
 MAddress RemapPendingField(const StoreBarrierEntry& entry, uintptr_t color)
 {
     if (entry.pBase == nullptr) {
@@ -56,14 +46,6 @@ MAddress RemapPendingField(const StoreBarrierEntry& entry, uintptr_t color)
     return entry.Remap(remappedBase);
 }
 } // namespace
-
-#if defined(MRT_GC_UNIT_TESTS)
-void StoreBarrierBuffer::SetFlushObserverForTest(StoreBarrierFlushObserver observer)
-{
-    g_flushObserver = observer;
-}
-
-#endif
 
 StoreBarrierBuffer::StoreBarrierBuffer()
     : current(kStoreBarrierBufferLength), lastProcessedColor(::g_cjStoreGoodMask) {}

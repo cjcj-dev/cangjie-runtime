@@ -13,12 +13,7 @@
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
-
-#if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-std::function<void()> g_beforeWeakCleanCasForTest;
-}
-#endif
+#include "Heap/Collector/ReferenceProcessor.h"
 
 ReferenceProcessor::ReferenceProcessor()
 {
@@ -186,19 +181,6 @@ void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
 {
     ProcessReferencesImpl(isStronglyLive, ObserveWeakFinal{});
 }
-
-#if defined(MRT_TESTABLE_INTERNALS)
-void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive,
-                                           const ObserveWeakFinal& observeWeakFinal)
-{
-    ProcessReferencesImpl(isStronglyLive, observeWeakFinal);
-}
-
-void ReferenceProcessor::SetBeforeWeakCleanCasForTest(std::function<void()> hook)
-{
-    g_beforeWeakCleanCasForTest = std::move(hook);
-}
-#endif
 
 size_t ReferenceProcessor::Encountered(ReferenceType type) const
 {

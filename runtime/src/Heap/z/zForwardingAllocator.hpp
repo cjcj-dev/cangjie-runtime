@@ -32,12 +32,7 @@ public:
     bool valid() const;
     size_t capacity() const;
 #if defined(MRT_TESTABLE_INTERNALS)
-    bool contains_for_test(const void* address, size_t size) const
-    {
-        const uintptr_t start = reinterpret_cast<uintptr_t>(start_);
-        const uintptr_t at = reinterpret_cast<uintptr_t>(address);
-        return at >= start && at - start <= capacity_ && size <= capacity_ - (at - start);
-    }
+    bool contains_for_test(const void* address, size_t size) const;
 #endif
     size_t used() const;
 
@@ -52,4 +47,5 @@ private:
 } // namespace MapleRuntime
 #include "Heap/z/zForwardingAllocator.inline.hpp"
 
+#include "Heap/Allocator/ForwardingAllocator.h"
 #endif // MRT_FORWARDING_ALLOCATOR_H

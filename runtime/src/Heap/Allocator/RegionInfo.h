@@ -152,3 +152,9 @@ NO_RETURN inline ATTR_COLD ATTR_NO_INLINE void RegionInfo::ReportInvalidObjectSi
         std::abort();
     }
 }
+
+namespace MapleRuntime {
+inline void RegionInfo::InjectDispelCountForTest() {
+        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
+    }
+} // namespace MapleRuntime

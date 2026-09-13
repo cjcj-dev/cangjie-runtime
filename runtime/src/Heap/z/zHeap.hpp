@@ -136,7 +136,7 @@ public:
 #ifdef MRT_TESTABLE_INTERNALS
     // Test-only injection seam for the arbitrary-base codec arm. Production
     // writes remain confined to OnHeapCreated below.
-    static void SetHeapStartForTesting(MAddress startAddr) { heapStartAddr = startAddr; }
+    static void SetHeapStartForTesting(MAddress startAddr);
 #endif
 
     static void OnHeapCreated(MAddress startAddr)
@@ -176,4 +176,5 @@ private:
     static std::vector<HeapSlotAddressRange> heapReservations;
 };
 } // namespace MapleRuntime
+#include "Heap/Heap.h"
 #endif // MRT_HEAP_MANAGER_H

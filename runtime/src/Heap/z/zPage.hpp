@@ -778,10 +778,7 @@ public:
     }
 
     // Positive control only (MRT_GCV2_REFFIX_INJECT_DISPEL=1): bump without real dispel.
-    static void InjectDispelCountForTest()
-    {
-        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
-    }
+    static void InjectDispelCountForTest();
 
     void ClearGhostFromRegionBits();
 

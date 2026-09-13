@@ -178,12 +178,7 @@ public:
 
 #if defined(MRT_TESTABLE_INTERNALS)
     using Y2yDirtyHolderMergeHook = void (*)(void*);
-    void SetY2yDirtyHolderMergeHookForTest(Y2yDirtyHolderMergeHook hook, void* context)
-    {
-        std::lock_guard<std::mutex> lock(y2yDirtyLock);
-        y2yDirtyHolderMergeHook = hook;
-        y2yDirtyHolderMergeHookContext = context;
-    }
+    void SetY2yDirtyHolderMergeHookForTest(Y2yDirtyHolderMergeHook hook, void* context);
 #endif
 
 #if defined(MRT_GC_UNIT_TESTS)
@@ -193,11 +188,7 @@ public:
     // container.  A publication that lands in this interval is dropped by the
     // following clear() and never reaches any batch.
     using HandoffHook = void (*)(void*);
-    void SetYoungAllocBlackHandoffHookForTest(HandoffHook hook, void* context)
-    {
-        youngAllocBlackHandoffHook = hook;
-        youngAllocBlackHandoffHookContext = context;
-    }
+    void SetYoungAllocBlackHandoffHookForTest(HandoffHook hook, void* context);
 #endif
 
     void FlushRegion();
@@ -205,12 +196,7 @@ public:
 
 private:
 #if defined(MRT_GC_UNIT_TESTS)
-    static void FireHandoffHook(HandoffHook hook, void* context)
-    {
-        if (hook != nullptr) {
-            hook(context);
-        }
-    }
+    static void FireHandoffHook(HandoffHook hook, void* context);
 #endif
 
     // slow path
@@ -257,4 +243,5 @@ private:
 #endif
 };
 } // namespace MapleRuntime
+#include "Heap/Allocator/AllocBuffer.h"
 #endif // MRT_ALLOC_BUFFER_H

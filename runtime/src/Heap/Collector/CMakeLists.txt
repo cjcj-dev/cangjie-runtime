@@ -22,6 +22,7 @@ set(SRC_LIST
     "../z/zRootsIterator.cpp"
     "MarkPartialArray.cpp"
     "../z/zMarkStack.cpp"
+    "MarkStripe.cpp"
     "../z/zMarkingSMR.cpp"
     "../z/zMarkCache.cpp"
     "TaskQueue.cpp"

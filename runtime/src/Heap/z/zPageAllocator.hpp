@@ -169,31 +169,11 @@ public:
     }
 
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    size_t Pending() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return requests.size();
-    }
-    size_t EnqueuedCount() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return enqueued;
-    }
-    size_t DequeuedCount() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return dequeued;
-    }
-    size_t SatisfiedCount() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return satisfiedCount;
-    }
-    size_t FailedCount() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return failedCount;
-    }
+    size_t Pending() const;
+    size_t EnqueuedCount() const;
+    size_t DequeuedCount() const;
+    size_t SatisfiedCount() const;
+    size_t FailedCount() const;
 #endif
 
 private:
@@ -211,6 +191,7 @@ private:
 
 } // namespace MapleRuntime
 
+#include "Heap/Allocator/AllocationStallQueue.h"
 #endif // MRT_ALLOCATION_STALL_QUEUE_H
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.

@@ -21,11 +21,10 @@ namespace MapleRuntime {
 namespace {
 constexpr size_t FIRST_STACK_CAPACITY = 128;
 constexpr size_t REGULAR_STACK_CAPACITY = 512;
-#if defined(MRT_TESTABLE_INTERNALS)
-std::atomic<MarkStripeStack::StorageObserver> storageObserver{nullptr};
-#endif
 
 } // namespace
+
+#include "Heap/Collector/MarkStripe.h"
 
 MarkStripeStack* MarkStripeStack::Create(bool firstStack)
 {
@@ -62,33 +61,9 @@ void MarkStripeStack::Destroy(MarkStripeStack* stack)
     AttachedArray::free(stack);
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-namespace {
-std::atomic<MarkClosureObserver> g_markClosureObserver{nullptr};
-}
-void SetMarkClosureObserverForTest(MarkClosureObserver observer)
-{
-    g_markClosureObserver.store(observer, std::memory_order_release);
-}
-void ObserveMarkClosureForTest(const std::vector<BaseObject*>* objects)
-{
-    auto observer = g_markClosureObserver.load(std::memory_order_acquire);
-    if (observer != nullptr) {
-        observer(objects);
-    }
-}
-#endif
-
 MarkStripeStack::MarkStripeStack(size_t capacity)
     : entries(capacity)
 {}
-
-#if defined(MRT_TESTABLE_INTERNALS)
-void MarkStripeStack::SetStorageObserver(StorageObserver observer)
-{
-    storageObserver.store(observer, std::memory_order_release);
-}
-#endif
 
 size_t MarkStripeStackList::Length() const
 {

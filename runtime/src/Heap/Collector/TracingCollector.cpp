@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
@@ -333,3 +334,15 @@ void TracingCollector::DumpAfterGC()
     }
 #endif
 }
+
+namespace MapleRuntime {
+#ifdef MRT_TESTABLE_INTERNALS
+USize StaticRootTable::RootCountForTesting()
+{
+    std::lock_guard<std::mutex> lock(gcRootsLock);
+    return totalRootsCount;
+}
+#endif
+
+
+} // namespace MapleRuntime
