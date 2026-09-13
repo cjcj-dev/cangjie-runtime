@@ -52,7 +52,6 @@
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
@@ -309,12 +308,11 @@ void WCollector::DoGarbageCollection()
 
     CollectSmallSpace();
     // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
-    PromotedRegionDomain::DumpCoverageByReason("post-major");
     // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.
     // Ablation D (both major STWs disabled) restores mid_alloc 5/5; any of
     // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
     // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
-    // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
+    // in-place promote paths that already preserve page liveness.
     Collector::ReportMarkGoodHeapGateCounts();
 
 }

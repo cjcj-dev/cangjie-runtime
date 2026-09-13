@@ -27,7 +27,6 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/CollectorProxy.h"
-#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Collector/RelocationRequestQueue.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/WCollector/WCollector.h"
@@ -4679,10 +4678,9 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierConsumerSurvivesCurrentPageResetUnti
 
 // ZGC zRelocate.cpp:1256-1279: the promoted page keeps the relocation-set
 // livemap selected at registration, and discharge walks only that live set.
-GC_TEST(LoadHealDeliveryProduct, PromotedSnapshotDischargesOnlyLiveHolder)
+GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
 {
     GcHeapFixture& fx = ProductFixture();
-    PromotedRegionDomain::ResetForNextMinor(100);
     RegionInfo* holderRegion = ResetDeliveryUnit(fx, 0);
     RegionInfo* targetRegion = ResetDeliveryUnit(fx, 1);
     holderRegion->SetYoungRegionFlag(1);
@@ -4705,38 +4703,29 @@ GC_TEST(LoadHealDeliveryProduct, PromotedSnapshotDischargesOnlyLiveHolder)
     LiveInfo* live = fx.PlantLiveInfo(holderRegion);
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Young>(live, holderRegion->GetRegionSize());
     (void)bitmap->MarkBits(0, objectSize, holderRegion->GetRegionSize());
-    PromotedRegionDomain::Register(holderRegion, PromotedRegionDomain::RegisterPath::InPlace);
-
-    // Registration is the producer boundary.  Remove the current face before
-    // discharge so only Entry::CopyMarkWordsForView can carry the decision.
+    holderRegion->PreserveRetainedLiveInfo();
+    RegionManager manager;
+    manager.AddFlipPromotedPage(holderRegion);
     holderRegion->metadata.liveInfo = nullptr;
     holderRegion->SetYoungRegionFlag(0);
-    size_t liveResolve = 0;
-    size_t deadResolve = 0;
-    std::unordered_set<MAddress> recordedSlots;
-    const size_t recorded = PromotedRegionDomain::DischargeAll(
-        [&](RefField<>& field) -> BaseObject* {
-            const MAddress slot = reinterpret_cast<MAddress>(&field);
-            liveResolve += slot == reinterpret_cast<MAddress>(liveField) ? 1 : 0;
-            deadResolve += slot == reinterpret_cast<MAddress>(deadField) ? 1 : 0;
-            return to_object(field.GetTargetObject());
-        },
-        [&](MAddress slot) { recordedSlots.insert(slot); });
-
-    std::fprintf(stderr,
-                 "DETAIL loadheal_promoted registered=%zu recorded=%zu live_resolve=%zu "
-                 "dead_resolve=%zu live_slot=%zu dead_slot=%zu\n",
-                 PromotedRegionDomain::RegisteredCount(), recorded, liveResolve, deadResolve,
-                 recordedSlots.count(reinterpret_cast<MAddress>(liveField)),
-                 recordedSlots.count(reinterpret_cast<MAddress>(deadField)));
-    std::fflush(stderr);
-    GC_EXPECT_EQ(recorded, 1u);
-    GC_EXPECT_EQ(liveResolve, 1u);
-    GC_EXPECT_EQ(deadResolve, 0u);
-    GC_EXPECT_EQ(recordedSlots.count(reinterpret_cast<MAddress>(liveField)), 1u);
-    GC_EXPECT_EQ(recordedSlots.count(reinterpret_cast<MAddress>(deadField)), 0u);
-
-    PromotedRegionDomain::ResetForNextMinor(101);
+    RememberedSet& remembered = DeliveryRememberedSet(fx);
+    EmptyBothRememberedFaces(remembered);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    GCWorkers workers(GCWorkers::Generation::YOUNG, 2);
+    workers.SetActive();
+    manager.RememberFlipPromotedPages(workers);
+    workers.SetInactive();
+    GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(liveField)));
+    GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(deadField)));
+    std::unordered_set<MAddress> previous;
+    remembered.FlipForMinor();
+    remembered.ScanPreviousForMinor(previous);
+    GC_EXPECT_EQ(previous.count(reinterpret_cast<MAddress>(liveField)), 1u);
+    GC_EXPECT_EQ(previous.count(reinterpret_cast<MAddress>(deadField)), 0u);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    EmptyBothRememberedFaces(remembered);
+    holderRegion->FreeRetainedMarkWords();
     fx.FreePlanted(live);
     targetRegion->SetYoungRegionFlag(0);
 }
@@ -4814,54 +4803,31 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     targetRegion->SetYoungRegionFlag(0);
 }
 
-// The conservative pinned producer is accepted only for a value inside the
-// young page's current [start, allocPtr) domain.
-GC_TEST(LoadHealDeliveryProduct, CrossGenRangeGateRecordsLegalAndRejectsBeyondTop)
+// ZRelocateWork::update_remset_promoted: young targets are remembered;
+// old targets are remapped without adding a remembered bit.
+GC_TEST(LoadHealDeliveryProduct, PromotedObjectRemembersYoungTargetOnly)
 {
     GcHeapFixture& fx = ProductFixture();
     RegionInfo* holderRegion = ResetDeliveryUnit(fx, 0);
     RegionInfo* targetRegion = ResetDeliveryUnit(fx, 1);
     targetRegion->SetYoungRegionFlag(1);
-    targetRegion->SetYoungAge(1);
-
-    BaseObject* legalHolder = fx.PlaceObject(holderRegion->GetRegionStart());
-    const size_t objectSize = legalHolder->GetSize();
-    BaseObject* invalidHolder = fx.PlaceObject(reinterpret_cast<MAddress>(legalHolder) + objectSize);
-    BaseObject* legalTarget = fx.PlaceObject(targetRegion->GetRegionStart());
-    holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(invalidHolder) + objectSize);
-    targetRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(legalTarget) + legalTarget->GetSize());
-    BaseObject* beyondTop = reinterpret_cast<BaseObject*>(targetRegion->GetRegionAllocPtr() + 64);
-    auto* legalField = &HeapSlotAt<>(reinterpret_cast<MAddress>(legalHolder) + TYPEINFO_PTR_SIZE);
-    auto* invalidField = &HeapSlotAt<>(reinterpret_cast<MAddress>(invalidHolder) + TYPEINFO_PTR_SIZE);
-    legalField->StoreColoured(GcUnit::StoreGoodPointer(legalTarget));
-    invalidField->StoreColoured(GcUnit::StoreGoodPointer(beyondTop));
-
+    BaseObject* holder = fx.PlaceObject(holderRegion->GetRegionStart());
+    BaseObject* target = fx.PlaceObject(targetRegion->GetRegionStart());
+    holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetSize());
+    targetRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(target) + target->GetSize());
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
-    RegionManager manager;
-    manager.EnlistFullThreadLocalRegion(holderRegion);
-    RuntimeWorkers runtimeWorkers(2);
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &runtimeWorkers);
-    const size_t recorded = manager.RecordPinnedCrossGenEdges();
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
-    const std::unordered_set<MAddress> snapshot = remembered.Snapshot();
-    const size_t legalRecorded = snapshot.count(reinterpret_cast<MAddress>(legalField));
-    const size_t invalidRecorded = snapshot.count(reinterpret_cast<MAddress>(invalidField));
-    std::fprintf(stderr,
-                 "DETAIL loadheal_crossgen producer_recorded=%zu legal_recorded=%zu "
-                 "invalid_recorded=%zu target_top=0x%zx invalid_target=0x%zx\n",
-                 recorded, legalRecorded, invalidRecorded,
-                 static_cast<size_t>(targetRegion->GetRegionAllocPtr()),
-                 reinterpret_cast<size_t>(beyondTop));
-    std::fflush(stderr);
-
-    GC_EXPECT_EQ(recorded, 1u);
-    GC_EXPECT_EQ(legalRecorded, 1u);
-    GC_EXPECT_EQ(invalidRecorded, 0u);
-    RelocationReceiptTestAccess::ReleaseListOwnership(holderRegion);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    field.StoreColoured(GcUnit::StoreGoodPointer(target));
+    RegionManager::RememberPromotedObject(holder);
+    GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
     EmptyBothRememberedFaces(remembered);
     targetRegion->SetYoungRegionFlag(0);
+    RegionManager::RememberPromotedObject(holder);
+    GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 // Direct semantic matrix for the current remembered face. The reference array

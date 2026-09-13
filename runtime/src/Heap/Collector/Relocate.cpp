@@ -54,7 +54,6 @@
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
@@ -1675,18 +1674,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     }
 
     {
-        // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
         MRT_PHASE_TIMER("young.evac_finish");
-        // Residual remset walk no longer runs here; residualPromote stays 0.
-        // The walk is young.conc_promote_walk after STW3 release.
-        size_t residualPromoteRecords = 0;
-        // Positive-control only (rebuildgate): force one live young region so the
-        // rebuild gate must open. Prefer leaving a residual young undemoted; if
-        // residualPromote path is empty (product real_load: residual≡0), re-tag
-        // the first minor candidate as young after demote. Default off.
         {
-        // Decision + Register + Promote stay in STW3 (O(regions)). The remset walk
-        // moved to young.conc_promote_walk after STW3 release (zRelocate.cpp:1257-1306).
+        // Select flip-promoted pages; field iteration runs after world release.
         for (RegionInfo* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
                 // markwater2: allocating pages never entered the route plan
@@ -1695,9 +1685,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 const bool hasObjectLiveness = region->IsLargeRegion() ||
                     region->GetMarkBitmap(promotionView) != nullptr || region->GetResurrectBitmap() != nullptr;
-                if (!PromotedRegionDomain::ResidualPromotionHasClosedLiveness(
-                        region->HasMarkStartAllocGap(), region->IsLiveCountAuthoritative(),
-                        hasObjectLiveness)) {
+                if (region->HasMarkStartAllocGap() || !region->IsLiveCountAuthoritative() ||
+                    !hasObjectLiveness) {
                     continue;
                 }
                 if (kPageAgeAdaptiveTenuring &&
@@ -1711,53 +1700,23 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 }
                 // Residual candidates not forwarded above (e.g. raw-pointer pinned):
                 // still demote to old. Remset walk is ZRelocateAddRemsetForFlipPromoted
-                // (zRelocate.cpp:1257-1306): Register+Promote here under STW3, walk after
+                // (zRelocate.cpp:1257-1306): Select+Promote here under STW3, walk after
                 // STW3 release (young.conc_promote_walk). Do not Record here — that walk
                 // is the STW cost this lane moves out.
                 region->PreserveRetainedLiveInfo();
-                PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Residual);
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(GC_REASON_YOUNG),
-                                                       /*site*/ 2, /*registered*/ true);
+                manager.AddFlipPromotedPage(region);
                 (void)region->PromoteYoungRegion(promotionView);
             }
         }
         }
-        size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
-
-        const size_t liveYoungRegions = RegionInfo::GetYoungRegionCount();
-        VLOG(REPORT,
-             "[GCV2Minor] remembered-set promoteReplay=%zu residualPromote=%zu "
-             "youngRegionCount=%zu",
-             promotedPathRecords, residualPromoteRecords, liveYoungRegions);
-
-
-
     }
 
-    // ZRelocateAddRemsetForFlipPromoted runs after STW3 release, still in FORWARD.
-    // Keep the forwarding receipts alive across this concurrent walk: a short retire
-    // safepoint below performs PrepareForwardTable only after DischargeAll has resolved
-    // every promoted field. This preserves the prerequisite recorded by 3ddac725f8
-    // without violating PromotedRegionDomain.h's off-STW lifecycle contract.
+    // zRelocate.cpp:1289-1306: finish relocation before walking flip-promoted pages.
+    // Keep forwarding entries available until every field has been remapped.
     CHECK_DETAIL(stw != nullptr && *stw != nullptr,
-                 "promoted-domain discharge must release an active STW3 owner");
+                 "flip-promoted page task must release an active STW3 owner");
     stw->reset();
-    {
-        MRT_PHASE_TIMER("young.conc_promote_walk");
-        if (PromotedRegionDomain::Enabled()) {
-            RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
-            size_t domainEdges = PromotedRegionDomain::DischargeAll(
-                [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
-                [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
-            PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
-                                                 /*site*/ 3, domainEdges);
-            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "conc_promote_walk");
-            PromotedRegionDomain::DumpProcessTotals("conc_promote_walk");
-            VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu", domainEdges);
-        } else {
-            PromotedRegionDomain::DumpCoverageByReason("conc_promote_walk_domain_off");
-        }
-    }
+    manager.RememberFlipPromotedPages(workers);
 
     *stw = std::make_unique<ScopedStopTheWorld>("young retire forwarding", true,
                                                 GCPhase::GC_PHASE_FORWARD);
@@ -1769,6 +1728,90 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         manager.ReassembleFromSpace();
     }
 }
+// ZRelocateWork::update_remset_promoted_filter_and_remap_per_field
+// (zRelocate.cpp:741-794). Unfinished young relocation is remembered for
+// deferred remapping; a page worker must not wait on another page's work.
+void RegionManager::RememberPromotedObject(BaseObject* object)
+{
+    if (!object->HasRefField()) {
+        return;
+    }
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    Collector& collector = Heap::GetHeap().GetCollector();
+    object->ForEachRefField([&](RefField<>& field) {
+        BaseObject* target = to_object(field.GetTargetObject());
+        if (target != nullptr && Heap::IsHeapAddress(target)) {
+            const MAddress address = reinterpret_cast<MAddress>(target);
+            ZForwarding* forwarding = collector.is_load_good(field) ? nullptr :
+                ForwardingTable::GetCovering(address, Generation::Young);
+            const MAddress to = forwarding == nullptr ? address : forwarding->find(address);
+            if (to == 0 || RegionInfo::GetRegionInfoAt(to)->IsYoungRegion()) {
+                remset.Record(reinterpret_cast<MAddress>(&field));
+                return;
+            }
+        }
+        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
+        collector.make_load_good(field, provenance);
+    });
+}
+
+void RegionManager::AddFlipPromotedPage(RegionInfo* region)
+{
+    // zRelocationSet.cpp: register_flip_promoted. No per-page copy of liveness.
+    std::lock_guard<std::mutex> lock(flipPromotedMutex);
+    flipPromotedPages.push_back(region);
+}
+
+void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
+{
+    // zRelocate.cpp:1257-1306. Producers have finished before the worker gang
+    // starts; pages and their retained livemaps stay alive until it joins.
+    std::vector<RegionInfo*> pages;
+    {
+        std::lock_guard<std::mutex> lock(flipPromotedMutex);
+        pages.swap(flipPromotedPages);
+    }
+    class PageTask final : public GCWorkerTask {
+    public:
+        PageTask(const std::vector<RegionInfo*>& pages, const std::function<void(RefField<>&)>& remember)
+            : pages(pages), remember(remember) {}
+        void Work(uint32_t) override
+        {
+            for (size_t index = next.fetch_add(1); index < pages.size(); index = next.fetch_add(1)) {
+                RegionInfo* page = pages[index];
+                const MAddress start = page->GetRegionStart();
+                const MAddress end = page->GetRetainedLiveInfoCoveredUpTo();
+                // Iterate object start bits, never parse non-live holder headers.
+                for (MAddress address = start; address < end; address += kMarkedBytesPerBit) {
+                    if (!page->RetainedMarkWordsSay(address - start)) {
+                        continue;
+                    }
+                    BaseObject* object = from_region_addr(address);
+                    if (!object->HasRefField()) {
+                        continue;
+                    }
+                    object->ForEachRefField([&](RefField<>& field) {
+                        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
+                        BaseObject* target = Heap::GetHeap().GetCollector().make_load_good(field, provenance);
+                        if (target != nullptr && Heap::IsHeapAddress(target) &&
+                            RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
+                            // RegionManager owns access to the remset producer.
+                            remember(field);
+                        }
+                    });
+                }
+            }
+        }
+    private:
+        const std::vector<RegionInfo*>& pages;
+        const std::function<void(RefField<>&)> remember;
+        std::atomic<size_t> next{0};
+    } task(pages, [](RefField<>& field) {
+        Heap::GetHeap().GetRememberedSet().Record(reinterpret_cast<MAddress>(&field));
+    });
+    workers.Run(task);
+}
+
 // permhole receiptization (steer1): RouteObject is geometric (ROUTED before Copy fills
 // tip). A tip-valid to is a *receipt* (copy happened). A geometric to with tip==0 is only
 //
@@ -2458,39 +2501,7 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
                                           forwarding);
         return;
     }
-    if (!to->HasRefField()) {
-        return;
-    }
-    to->ForEachRefField([this, &rememberedSet](RefField<>& field) {
-        const MAddress observedRaw = raw(field.GetFieldValue());
-        RefField<> observed(to_zpointer(observedRaw));
-        BaseObject* target = to_object(observed.GetTargetObject());
-        if (target == nullptr || !Heap::IsHeapAddress(target)) {
-            return;
-        }
-        const MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
-        if (Heap::GetHeap().GetCollector().is_load_good(observed)) {
-            RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                rememberedSet.Record(fieldAddr);
-            }
-            return;
-        }
-        const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(target),
-            static_cast<Generation>(remap_generation(observed)));
-        if (hit != 0) {
-            RegionInfo* winnerRegion = RegionInfo::TryGetRegionInfoAt(hit);
-            if (winnerRegion != nullptr && winnerRegion->IsYoungRegion()) {
-                rememberedSet.Record(fieldAddr);
-            } else {
-                (void)CasInstallResolvedTarget(field, observedRaw,
-                                               from_object(reinterpret_cast<BaseObject*>(hit)),
-                                               HealSite::WCollectorFixRootForwarded, HealNull::Disallow);
-            }
-            return;
-        }
-        rememberedSet.Record(fieldAddr);
-    });
+    RegionManager::RememberPromotedObject(to);
 }
 
 BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage)
