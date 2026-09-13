@@ -335,6 +335,7 @@ MAIN_SOURCES=(
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zList.cpp"
   "$SRC/test_zstat.cpp"
+  "$SRC/test_zserviceability.cpp"
   "$SRC/test_trustp1_phase1.cpp"
 
   "$SRC/test_live_map.cpp"

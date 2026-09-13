@@ -329,6 +329,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     MRT_ASSERT(!driverRequestActive, "nested driver request lifecycle");
     driverRequestActive = true;
     StringDedup::GCScope suspendDedup;
+    GCIdMark gcId;
     const uint64_t collectionStart = TimeUtil::NanoSeconds();
 
     // Set the request's generation budgets before mark-start can consume
@@ -348,6 +349,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     // (zDriver.cpp:416-452). Sending a synchronous request back through the
     // minor port would deadlock once both drivers share the ZGC lock.
     if (request.reason != GC_REASON_YOUNG) {
+        ZGCIdMajor majorId(GCIdMark::Current(), 'Y');
         youngPreludeRequest = &request;
         RunCollection(*collector, GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG,
                       warmup);
@@ -366,8 +368,15 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     VLOG(GCPHASE, "[GCV2][driver] kind=%s seq=%llu reason=%u ack=pending",
          request.reason == GC_REASON_YOUNG ? "minor" : "major",
          static_cast<unsigned long long>(request.sequence), request.reason);
-    RunCollection(*collector, request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
-                  request.reason, warmup);
+    if (request.reason == GC_REASON_YOUNG) {
+        ZGCIdMinor minorId(GCIdMark::Current());
+        RunCollection(*collector, request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
+                      request.reason, warmup);
+    } else {
+        ZGCIdMajor majorId(GCIdMark::Current(), 'O');
+        RunCollection(*collector, request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
+                      request.reason, warmup);
+    }
     (request.reason == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
         .RegisterEnd(TimeUtil::NanoSeconds() - collectionStart);
     driverRequestActive = false;

@@ -14,6 +14,7 @@ set(GC_UNIT_SOURCES
     test_zBitField.cpp
     test_zList.cpp
     test_zstat.cpp
+    test_zserviceability.cpp
     test_trustp1_phase1.cpp
 
     test_live_map.cpp
