@@ -22,7 +22,6 @@ set(SRC_LIST
     "CopyCollector.cpp"
     "LiveInfo.cpp"
     "LiveInfoArena.cpp"
-    "PromotedRegionDomain.cpp"
     "RelocationRequestQueue.cpp"
     "ZForwardingLife.cpp"
 )

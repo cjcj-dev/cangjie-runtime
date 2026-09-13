@@ -43,7 +43,6 @@
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/RememberedSet.h"

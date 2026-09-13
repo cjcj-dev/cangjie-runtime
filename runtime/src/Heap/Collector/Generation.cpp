@@ -43,7 +43,6 @@
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
 #include "Mutator/MutatorManager.h"
@@ -831,17 +830,9 @@ void WCollector::DoYoungGarbageCollection()
     // producers and before publishing the young mark phase (zGeneration.cpp:871-880).
     MinorSlotSet rememberedSlots;
     {
-        // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
+        // Remembered-set face flip; sparse consumption after world release.
         MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
         RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-        size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
-        if (pinnedRemsetRecords != 0) {
-            VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
-        }
-        // d1producer: D1 counts misses against the *mutator* remset at :5204, but the pinned walk
-        // above drains into this same minor. Ask here, before the drain, how many D1 edges the
-        // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
-
         (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
         // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
         // world-release with mark_follow (zRemembered.cpp:561-576).
@@ -898,7 +889,6 @@ void WCollector::DoYoungGarbageCollection()
 
     // promodomain: reset last cycle's flip-promoted table (CHECK registered==discharged).
     // Corresponds to ZGC reset_relocation_set before the new young collection.
-    PromotedRegionDomain::ResetForNextMinor(minorTotalRuns + 1);
     // flippromo: open broad-vs-product window for regions demoted last minor.
 
     uint64_t stackScanEpoch = 0;
