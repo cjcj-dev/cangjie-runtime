@@ -141,7 +141,7 @@ void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, u
         ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target))
         : nullptr;
     const MAddress from = reinterpret_cast<MAddress>(target);
-    ZForwarding* active = region == nullptr ? nullptr : ForwardingTable::GetEntries(from);
+    ZForwarding* active = region == nullptr ? nullptr : ForwardingTable::GetEntries(from, Heap::GetHeap().GetCollector().ActiveForwardingGeneration());
     const MAddress activeTo = (active != nullptr && active->covers(from)) ? active->find(from) : 0;
 
     // FORWARDED is published only after CopyObject completed. Keep it as an independent witness:

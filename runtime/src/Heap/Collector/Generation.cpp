@@ -1311,7 +1311,7 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ⑧ post-evac finish
         MRT_PHASE_TIMER("young.post_evac_finish");
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
-        MergeResurrectExportObjects();
+        MergeResurrectExportObjects(Generation::Young);
     }
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;

@@ -205,7 +205,7 @@ GC_TEST(ZForwardingTable, GenerationResetOwnsForwardingLifetime)
 {
     GcHeapFixture fixture;
     fixture.InstallPageOwner(fixture.region0);
-    ZForwarding* forwarding = ForwardingTable::GetEntries(fixture.heapStart);
+    ZForwarding* forwarding = ForwardingTable::GetEntries(fixture.heapStart, fixture.region0->GetOwnerGeneration());
     GC_EXPECT_TRUE(forwarding != nullptr);
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
     const MAddress to = reinterpret_cast<MAddress>(fixture.obj1);
@@ -214,11 +214,35 @@ GC_TEST(ZForwardingTable, GenerationResetOwnsForwardingLifetime)
     forwarding->detach_page();
     forwarding->mark_done();
     ForwardingTable::ClearPageOwner(fixture.region0);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from, fixture.region0->GetOwnerGeneration()), to);
     const Generation owner = fixture.region0->GetOwnerGeneration();
     const Generation other = owner == Generation::Young ? Generation::Old : Generation::Young;
     ForwardingTable::ResetRelocationSet(other);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from, fixture.region0->GetOwnerGeneration()), to);
     ForwardingTable::ResetRelocationSet(owner);
-    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from) == nullptr);
+    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, owner) == nullptr);
+}
+
+GC_TEST(ZForwardingTable, SameAddressHasIndependentGenerationMaps)
+{
+    GcHeapFixture fixture;
+    RegionList selected("same-address-generations");
+    selected.PrependRegion(fixture.region0, fixture.region0->GetRegionType());
+    fixture.region0->SetYoungRegionFlag(1);
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
+    fixture.region0->SetYoungRegionFlag(0);
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
+    auto* young = ForwardingTable::get(from, Generation::Young);
+    auto* old = ForwardingTable::get(from, Generation::Old);
+    GC_EXPECT_TRUE(young != nullptr && old != nullptr && young != old);
+    GC_EXPECT_EQ(young->insert(from, from + 8), from + 8);
+    GC_EXPECT_EQ(old->insert(from, from + 16), from + 16);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from, Generation::Young), from + 8);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from, Generation::Old), from + 16);
+    ForwardingTable::ResetRelocationSet(Generation::Young);
+    GC_EXPECT_TRUE(ForwardingTable::get(from, Generation::Young) == nullptr);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from, Generation::Old), from + 16);
+    ForwardingTable::ResetRelocationSet(Generation::Old);
+    (void)selected.TakeHeadRegion();
 }

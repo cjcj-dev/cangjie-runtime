@@ -2028,7 +2028,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
     }
     const MAddress start = region->GetRegionStart();
     const MAddress regionEnd = region->GetRegionEnd();
-    ZForwarding* active = ForwardingTable::GetEntries(start);
+    ZForwarding* active = ForwardingTable::RetainPageOwner(region).get();
     const ZForwarding::FromPageView* fromPage = active == nullptr ? nullptr : active->from_page_snapshot();
     const MAddress frozenTop = fromPage == nullptr ? regionEnd : fromPage->topAtStart;
     size_t survivors = 0;
@@ -2044,7 +2044,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
         }
         ++survivors;
         const MAddress from = start + offset;
-        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
+        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupForwarding(from, ForwardingTable::RetainPageOwner(region).get());
         const bool hit = lookup.to != 0 &&
             lookup.answer == ForwardingTable::ToAnswer::ArmedHit;
         CHECK_DETAIL(hit,
@@ -2094,7 +2094,7 @@ bool IncompleteRouteUnpublished(RegionInfo* region)
     if (region->IsForwardingDone()) {
         return false;
     }
-    return ForwardingTable::GetEntries(region->GetRegionStart()) != nullptr;
+    return ForwardingTable::RetainPageOwner(region).get() != nullptr;
 }
 } // namespace
 
@@ -2645,7 +2645,8 @@ bool RegionManager::RelocateClaimedPage(RegionInfo* region)
         if (allocFailed) {
             return;
         }
-        if (ForwardingTable::FindTo(reinterpret_cast<MAddress>(currentObj))) {
+        if (ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(currentObj),
+                ForwardingTable::RetainPageOwner(region).get()).to) {
             return;
         }
         if (collector.ForwardObjectExclusive(currentObj) == nullptr) {
@@ -2694,7 +2695,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
-        if (ForwardingTable::FindTo(currentPtr)) {
+        if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {
             return;
         }
         size_t size = currentObj->GetSize();
@@ -2845,7 +2846,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
-        if (ForwardingTable::FindTo(currentPtr)) {
+        if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {
             return;
         }
         size_t size = currentObj->GetSize();
@@ -3143,9 +3144,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     size_t o2yOnToForOld = 0;
     size_t recordedOnToForOld = 0;
     bool forwarded = region->VisitLiveObjectsUntilFalse(
-        [&collector, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded,
+        [&collector, region, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded,
          &o2yOnToForOld, &recordedOnToForOld](BaseObject* obj) {
-            BaseObject* toObj = collector.ForwardObject(obj);
+            BaseObject* toObj = collector.ForwardObject(obj,
+                static_cast<Generation>(ForwardingTable::RetainPageOwner(region)->table_generation()));
             // Remset slots must address the surviving (to-space) holder, not the from copy
             // that CollectRegion is about to reclaim.
             //
@@ -3179,7 +3181,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 size_t sz = RegionSpace::GetAllocSize(*obj);
                 MAddress fromBase = reinterpret_cast<MAddress>(obj);
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);
-                ZForwarding* forwarding = ForwardingTable::GetCovering(fromBase);
+                ZForwarding* forwarding = ForwardingTable::GetCovering(fromBase, Generation::Old);
                 const bool youngMarking = Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_TRACE;
                 size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz, forwarding, youngMarking);
                 recordedOnToForOld += moved;
@@ -3190,7 +3192,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             return obj->IsForwarded();
         });
     if (!youngRegion) {
-        if (ZForwarding* forwarding = ForwardingTable::GetCovering(region->GetRegionStart())) {
+        if (ZForwarding* forwarding = ForwardingTable::GetCovering(region->GetRegionStart(), Generation::Old)) {
             forwarding->relocated_remembered_fields_after_relocate();
         }
     }
@@ -3276,11 +3278,12 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     };
 
     if (!forwarded || !allLiveBitsHaveReceipt()) {
-        forwarded = region->VisitLiveObjectsUntilFalse([&collector](BaseObject* obj) {
+        forwarded = region->VisitLiveObjectsUntilFalse([&collector, region](BaseObject* obj) {
             if (obj->IsForwarded()) {
                 return true;
             }
-            (void)collector.ForwardObject(obj);
+            (void)collector.ForwardObject(obj,
+                static_cast<Generation>(ForwardingTable::RetainPageOwner(region)->table_generation()));
             return obj->IsForwarded();
         });
     }

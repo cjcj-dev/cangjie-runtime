@@ -822,11 +822,10 @@ bool ValidateEndpointForTest(bool present, const ObjectStamp& stamp)
 
 const char* ClassifyEvidenceForTest(bool targetPresent, const ObjectStamp& target,
                                     bool consumerPresent, const ObjectStamp& consumer,
-                                    bool activeToPresent, const ObjectStamp& activeTo,
-                                    bool retiredToPresent, const ObjectStamp& retiredTo)
+                                    bool activeToPresent, const ObjectStamp& activeTo)
 {
     return EndpointValid(targetPresent, target) && EndpointValid(consumerPresent, consumer) &&
-        EndpointValid(activeToPresent, activeTo) && EndpointValid(retiredToPresent, retiredTo)
+        EndpointValid(activeToPresent, activeTo)
         ? "VALID" : "INVALID_EVIDENCE";
 }
 

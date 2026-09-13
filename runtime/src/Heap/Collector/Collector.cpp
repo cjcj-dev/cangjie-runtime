@@ -393,13 +393,28 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
 // Illegal null (D: old tag + ghost already dispelled + from cleared) fails loudly here.
 // See reports/REPORT-nullenum.md LEGAL_NULL_SET; reports/REPORT-tagaba.md F5.
 // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
-BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance) const
+// Synchronous root operations consume the generation of their phase context.
+// Unlike ZStackWatermark, these closures do not retain frames across relocations.
+BaseObject* Collector::ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const
+{
+    if (ref == nullptr || !Heap::IsHeapAddress(ref) || JudgeHandOutTarget(ref) == HandVerdict::Usable) {
+        return ref;
+    }
+    FailClosedLoad("current raw value required", ref, 0, provenance);
+}
+
+Generation Collector::ActiveForwardingGeneration() const
+{
+    return ActiveCycle().Reason() == GC_REASON_YOUNG ? Generation::Young : Generation::Old;
+}
+
+BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const
 {
     if (obj == nullptr) {
         return nullptr;
     }
 
-    BaseObject* to = FindToVersion(obj).GetOrFailClosed("Collector::FindLatestVersion", provenance);
+    BaseObject* to = FindToVersion(obj, generation).GetOrFailClosed("Collector::FindLatestVersion", provenance);
     if (to != nullptr) {
         if (to != obj && Heap::IsHeapAddress(to) && !to->IsValidObject()) {
             CHECK_DETAIL(obj->IsValidObject(),
@@ -573,7 +588,7 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         : nullptr;
     const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
     const ForwardingTable::LookupResult lookup = canLookup
-        ? ForwardingTable::LookupTo(from)
+        ? ForwardingTable::LookupTo(from, Heap::GetHeap().GetCollector().ActiveForwardingGeneration())
         : ForwardingTable::LookupResult{};
     // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
     // gc_unit other-vm children, have CollectorResources but no CollectorProxy target to query.

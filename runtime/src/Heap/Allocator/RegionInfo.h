@@ -395,7 +395,7 @@ public:
 
     ZForwarding* GetFromPageCarrier() const
     {
-        ZForwarding* carrier = ForwardingTable::GetEntries(GetRegionStart());
+        ZForwarding* carrier = ForwardingTable::RetainPageOwner(this).get();
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 
@@ -2333,7 +2333,7 @@ public:
             return OptionalRouteTicket();
         }
 
-        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(fromAddress);
+        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupForwarding(fromAddress, ForwardingTable::RetainPageOwner(this).get());
         if (lookup.to != 0 && lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
             return OptionalRouteTicket(fromObj);
         }
@@ -2361,7 +2361,7 @@ public:
     {
         BaseObject* fromObj = t.From();
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
-        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(fromAddress);
+        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupForwarding(fromAddress, ForwardingTable::RetainPageOwner(this).get());
         if (lookup.to != 0 && lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
             return from_region_addr(lookup.to);
         }
@@ -2573,7 +2573,7 @@ public:
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
         // parallel with the region machinery so the two answers can be compared before either is
         // trusted; nothing reads it for decisions yet.
-        CHECK_DETAIL(ForwardingTable::InstallPublicationBeforeCopy(GetRegionStart(), GetRegionSize(), this),
+        CHECK_DETAIL(ForwardingTable::InstallPublicationBeforeCopy(GetRegionStart(), GetRegionSize(), this, G),
                      "forwarding table install failed before relocation region=%p range=[%#zx,%#zx)",
                      this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
         // enrolphase: which side of the relocate-start flip does this enrolment land on?

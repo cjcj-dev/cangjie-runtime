@@ -357,11 +357,11 @@ public:
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
         if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
             resurrectedExportObjectes.insert(ResolveCurrentValueRoot(
-                obj, &resurrectedExportObjectes, ForwardingStage::IncomingNew));
+                obj, &resurrectedExportObjectes, ActiveForwardingGeneration(), ForwardingStage::IncomingNew));
         } else {
             resurrectedExportObjectesForwardPhase.insert(
                 ResolveCurrentValueRoot(
-                    obj, &resurrectedExportObjectesForwardPhase, ForwardingStage::IncomingNew));
+                    obj, &resurrectedExportObjectesForwardPhase, ActiveForwardingGeneration(), ForwardingStage::IncomingNew));
         }
     }
 
@@ -519,10 +519,10 @@ protected:
     // Value-only root containers have no addressable RootSlot to heal. Keep
     // their RootObligation on the existing ResolveStoreValue authority and
     // rebuild key-bearing containers while their owner lock is held.
-    BaseObject* ResolveCurrentValueRoot(BaseObject* value, const void* owner,
+    BaseObject* ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
                                         ForwardingStage stage = ForwardingStage::OverwritePrevious) const;
-    void CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots) const;
-    void CurrentizeValueRootMap(std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots) const;
+    void CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots, Generation generation) const;
+    void CurrentizeValueRootMap(std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots, Generation generation) const;
 
     void ResetBitmap(bool heapMarked)
     {
@@ -567,7 +567,7 @@ protected:
     void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);
 
     void AddExportObjectsTracingWork(RootSet& exportRoots);
-    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
+    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet, Generation generation) const
     {
         Collector::AbortUnimplemented("TracingCollector::EnumAndTagRawRoot");
     }

@@ -171,7 +171,8 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
             zhSteps |= 1u;
             if (theCollector.IsGhostFromObject(loadGood)) {
                 zhSteps |= 2u;
-                BaseObject* fwd = theCollector.ForwardObject(loadGood);
+                BaseObject* fwd = theCollector.ForwardObject(loadGood,
+                    static_cast<Generation>(theCollector.remap_generation(oldField)));
                 // tipnull: ForwardObject may null on soft miss; never hand null to mutator
                 // for a live non-null ref (self-heal would CAS null into the slot).
                 if (fwd != nullptr) {
@@ -249,7 +250,8 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
             const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
             loadGood = theCollector.make_load_good(oldField, provenance);
             if (theCollector.IsGhostFromObject(loadGood)) {
-                BaseObject* fwd = theCollector.ForwardObject(loadGood);
+                BaseObject* fwd = theCollector.ForwardObject(loadGood,
+                    static_cast<Generation>(theCollector.remap_generation(oldField)));
                 // tipnull: ForwardObject may null on soft miss; never hand null to mutator
                 // for a live non-null ref (self-heal would CAS null into the slot).
                 if (fwd != nullptr) {

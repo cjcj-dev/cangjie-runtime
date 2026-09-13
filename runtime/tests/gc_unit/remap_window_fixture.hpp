@@ -262,8 +262,8 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         GC_EXPECT_FALSE(state.kept->IsCompacted());
         GC_EXPECT_TRUE(static_cast<uintptr_t>(state.collector->ZPointerRemappedYoungMask) != state.oldColour);
         if (state.checkArena) {
-            auto* keptTable = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from));
-            auto* copyTable = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.copyFrom));
+            auto* keptTable = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from), Generation::Young);
+            auto* copyTable = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.copyFrom), Generation::Young);
             const auto* arena = keptTable == nullptr ? nullptr : ForwardingTable::ArenaForTest(static_cast<Generation>(keptTable->table_generation()));
             state.arenaInstalled = arena != nullptr && copyTable != nullptr &&
                 ForwardingTable::ArenaForTest(static_cast<Generation>(copyTable->table_generation())) == arena &&
@@ -276,7 +276,7 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
             state.arenaInstalled = state.arenaInstalled && state.arenaUsed > 0 &&
                 state.arenaUsed <= state.arenaBudget;
         }
-        const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from));
+        const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from), Generation::Young);
         GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
         std::fprintf(stderr, "REMAP_WINDOW prepared=1 flipped=1 before_forward=1 wait_entered=%d\n",
                      state.entered);
@@ -293,7 +293,7 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         state.cv.notify_all();
         state.Wait(lock, state.published, "kept-publication");
     } else if (point == 3 && region == state.kept) {
-        const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from));
+        const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from), Generation::Young);
         GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
         GC_EXPECT_TRUE(lookup.activeAnswer == ForwardingTable::ToAnswer::ArmedHit);
         GC_EXPECT_EQ(lookup.to, reinterpret_cast<MAddress>(state.from));
