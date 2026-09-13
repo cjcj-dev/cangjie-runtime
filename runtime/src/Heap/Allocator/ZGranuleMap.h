@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <new>
 
+#include "Base/Globals.h"
 #include "Common/TypeDef.h"
 #include "Common/ColourEncoding.h"
 
@@ -22,11 +23,12 @@ namespace MapleRuntime {
 // zIndexDistributor.inline.hpp:100-320. Three 16-way claim levels lead to
 // power-of-two leaf segments; stealing descends through the same claim tree.
 class ZIndexDistributorClaimTree {
+#if defined(MRT_GC_UNIT_TESTS)
     friend class ZIndexDistributorTest;
+#endif
     static constexpr size_t N = 4;
     static constexpr size_t ClaimLevels = N - 1;
     static constexpr size_t CacheLineSize = 64;
-    static constexpr size_t ClaimAlignment = 4096;
 
     static constexpr size_t claim_level_size(size_t level)
     {
@@ -95,12 +97,13 @@ public:
             ++lastLevelSegmentSizeShift;
         }
         const size_t entries = claim_level_end_index(ClaimLevels);
-        allocation = std::malloc(entries * sizeof(std::atomic<size_t>) + ClaimAlignment);
+        const size_t claimAlignment = MRT_PAGE_SIZE;
+        allocation = std::malloc(entries * sizeof(std::atomic<size_t>) + claimAlignment);
         if (allocation == nullptr) {
             std::abort();
         }
-        const uintptr_t aligned = (reinterpret_cast<uintptr_t>(allocation) + ClaimAlignment - 1) &
-            ~(uintptr_t(ClaimAlignment) - 1);
+        const uintptr_t aligned = (reinterpret_cast<uintptr_t>(allocation) + claimAlignment - 1) &
+            ~(uintptr_t(claimAlignment) - 1);
         claims = reinterpret_cast<std::atomic<size_t>*>(aligned);
         for (size_t i = 0; i < entries; ++i) {
             new (&claims[i]) std::atomic<size_t>(0);
