@@ -388,6 +388,7 @@ MAIN_SOURCES=(
   "$SRC/test_barrier_old_atomic.cpp"
   "$SRC/test_page_age.cpp"
   "${RANGE_REGISTRY_SOURCES[@]}"
+  "$SRC/test_mapped_cache.cpp"
   "$SRC/test_stay_young.cpp"
   "$SRC/test_gc_trigger.cpp"
   "$SRC/test_gc_director.cpp"

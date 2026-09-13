@@ -9,6 +9,7 @@
 #define MRT_ALLOCATOR_H
 
 #include "AllocBufferManager.h"
+#include "Heap/Collector/Uncommitter.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/Heap.h"
 
@@ -29,8 +30,7 @@ public:
 #if defined(__EULER__)
     virtual void TryReclaimGarbageMemory() = 0;
 #endif
-    virtual size_t UncommitIdleMemory() { return 0; }
-    virtual size_t DrainUncommitIdleMemory() { return 0; }
+    Uncommitter& GetUncommitter() { return uncommitter; }
     virtual void FeedHungryBuffers() = 0;
 
     // returns the total size of live large objects, excluding alignment/roundup/header, ...
@@ -84,6 +84,7 @@ protected:
     AllocBufferManager* allocBufferManager;
     std::atomic<bool> isAsyncAllocationEnable = { true };
 private:
+    Uncommitter uncommitter{*this};
     bool InitAyncAllocation();
     bool asyncAllocationInitSwitch = true;
 };

@@ -155,6 +155,9 @@ public:
     size_t CommitMemory(void* addr, size_t size, uint32_t numaNode);
     size_t ReleaseMemory(void* addr, size_t size);
     size_t ReleaseMemory(void* addr, size_t size, uint32_t numaNode);
+    // A13: the claimed range remains owned until its completed prefix is published.
+    size_t ReleaseMemoryDeferred(void* addr, size_t size);
+    size_t PublishMemoryRelease(void* addr, size_t completed);
     bool ProtectMemory(void* addr, size_t size, int prot);
     struct BackingSegment {
         uintptr_t backing;
@@ -183,7 +186,7 @@ public:
 
 private:
     static bool IsValidRange(uintptr_t start, size_t size);
-    size_t ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release);
+    size_t ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release, bool publish = true);
 
     void* memBaseAddr{ nullptr };
     void* memCurrEndAddr{ nullptr };

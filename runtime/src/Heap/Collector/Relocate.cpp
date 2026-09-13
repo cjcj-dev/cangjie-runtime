@@ -1453,7 +1453,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             HeapTask(decltype(fixHeapSlice) slice, std::atomic<size_t>& objs, std::atomic<size_t>& slots,
                      size_t nObjects, size_t nSlots, size_t objectChunk, size_t slotChunk,
                      std::vector<size_t>& taken)
-                : fixHeapSlice(slice), objCursor(objs), slotCursor(slots), nObj(nObjects), nSlot(nSlots),
+                : sliceFn(slice), objCursor(objs), slotCursor(slots), nObj(nObjects), nSlot(nSlots),
                   objChunk(objectChunk), slotChunk(slotChunk), objectsTaken(taken) {}
             void Work(uint32_t id) override
             {
@@ -1485,11 +1485,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     if (!got) {
                         break;
                     }
-                    fixHeapSlice(o0, o1, s0, s1, *taken);
+                    sliceFn(o0, o1, s0, s1, *taken);
                 }
             }
         private:
-            decltype(fixHeapSlice) fixHeapSlice;
+            decltype(fixHeapSlice) sliceFn;
             std::atomic<size_t>& objCursor;
             std::atomic<size_t>& slotCursor;
             size_t nObj;

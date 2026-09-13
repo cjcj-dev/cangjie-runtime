@@ -684,7 +684,7 @@ void MemMap::SplitBackingAt(uintptr_t address)
     }
 }
 
-size_t MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release)
+size_t MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release, bool publish)
 {
     std::lock_guard<std::mutex> lock(backingMutex);
     const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
@@ -716,10 +716,20 @@ size_t MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode,
                 const size_t done = backend->Release(reinterpret_cast<void*>(found->backing), requested, found->node);
                 CHECK(done <= requested);
                 if (done != 0) { CHECK(backend->UnmapBacking(reinterpret_cast<void*>(cursor), done)); }
-                found->start += done;
-                found->backing += done;
-                found->size -= done;
-                if (found->size == 0) { committedRanges.erase(found); }
+                if (publish) {
+                    found->start += done;
+                    found->backing += done;
+                    found->size -= done;
+                    if (found->size == 0) { committedRanges.erase(found); }
+                } else if (done != 0) {
+                    found->mapped = false;
+                    if (done != requested) {
+                        const CommittedRange tail{found->start + done, found->size - done,
+                                                  found->backing + done, found->node, true};
+                        found->size = done;
+                        committedRanges.push_back(tail);
+                    }
+                }
                 cursor += done;
                 if (done != requested) { return cursor - start; }
             } else {
@@ -864,6 +874,34 @@ size_t MemMap::ReleaseMemory(void* addr, size_t size)
 size_t MemMap::ReleaseMemory(void* addr, size_t size, uint32_t numaNode)
 {
     return ApplyByPartition(addr, size, &numaNode, true);
+}
+
+size_t MemMap::ReleaseMemoryDeferred(void* addr, size_t size)
+{
+    // zUncommitter.cpp:409: perform only the physical operation here.
+    return ApplyByPartition(addr, size, nullptr, true, false);
+}
+
+size_t MemMap::PublishMemoryRelease(void* addr, size_t completed)
+{
+    // zUncommitter.cpp:415: called under the page allocator owner after rejoining.
+    std::lock_guard<std::mutex> lock(backingMutex);
+    const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
+    CHECK(!AddOverflows(start, completed));
+    const uintptr_t end = start + completed;
+    SplitBackingAt(start);
+    SplitBackingAt(end);
+    size_t released = 0;
+    auto it = committedRanges.begin();
+    while (it != committedRanges.end()) {
+        if (it->start >= start && it->End() <= end) {
+            released += it->size;
+            it = committedRanges.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    return released;
 }
 
 bool MemMap::ProtectMemory(void* addr, size_t size, int prot)
