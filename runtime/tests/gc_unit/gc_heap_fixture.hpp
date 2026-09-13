@@ -50,10 +50,37 @@ inline zpointer StoreGoodPointer(BaseObject* object)
                                              static_cast<uintptr_t>(::g_cjStoreGoodMask)));
 }
 
+// Access the product generation state for the same setup used by ZLiveMapTest.
+struct LiveMapCycleAccess : Collector {
+    static GenerationCycle& Cycle(Collector& collector, Generation generation)
+    {
+        return generation == Generation::Young ? collector.*&LiveMapCycleAccess::youngCycle
+                                               : collector.*&LiveMapCycleAccess::oldCycle;
+    }
+};
+
 struct GcHeapFixture {
     // Six permits the intrusive RegionList port to exercise the same six-node
     // order/removal matrix as OpenJDK test_zList.  Existing fixtures still
     // initialize and use region0/region1 only.
+    static void AdvanceGeneration(Generation generation)
+    {
+        auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation);
+        if (cycle.Snapshot().active) {
+            cycle.End();
+        }
+        cycle.Begin(0);
+        if (generation == Generation::Young) {
+            // Young sequence now advances with the remset flip at mark-start.
+            // This liveness-only fixture supplies an empty remembered set;
+            // it does not perform a collection of the synthetic heap.
+            alignas(8) uint64_t storage[16] {};
+            RememberedSet remembered;
+            remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
+            cycle.StartYoungMark(remembered);
+        }
+    }
+
     static constexpr size_t kUnits = 6;
 
     explicit GcHeapFixture(bool withMemoryOwner = false)
@@ -72,11 +99,16 @@ struct GcHeapFixture {
             std::abort();
         }
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
+        EnsureHeapRange(heapStart);
+        for (Generation generation : {Generation::Young, Generation::Old}) {
+            if (LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation).Sequence() == 0) {
+                AdvanceGeneration(generation);
+            }
+        }
         RegionInfo::Initialize(kUnits, heapStart, memoryOwner);
         region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         ForwardingTable::Initialize(heapStart, kUnits * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
-        EnsureForwardData(heapStart);
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
         typeInfo = reinterpret_cast<TypeInfo*>(typeInfoStorage);
@@ -108,6 +140,8 @@ struct GcHeapFixture {
             ForwardingTable::ResetRelocationSet(Generation::Young);
             ForwardingTable::ResetRelocationSet(Generation::Old);
         }
+        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region0);
+        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region1);
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
         // are mapped per test, so leaving their flags set before munmap makes
         // later tests observe young regions that no longer exist.
@@ -133,13 +167,9 @@ struct GcHeapFixture {
         return obj;
     }
 
-    // Product GetOrAlloc* faces go through LiveInfoArena.
-    // gc_unit never Heap::Init, so FDM's arena starts at 0 and AllocateRegionBitmap
-    // CHECKs bitmap != nullptr. Union order hits this after ForwardingNoGeometry arms
-    // the table: YoungConc.StaleOldMarkDoesNotSkipYoungEnqueue → ShouldEnqueue →
-    // EnqueueObject → GetOrAllocEnqueueBitmap (enqueue face was never planted).
-    // youngconcmark §3b: fixture Init FDM, do not relax the CHECK.
-    static void EnsureForwardData(MAddress heapStart)
+    // Keep the synthetic heap's existing 64-unit envelope. Livemap storage is
+    // page-owned and no longer depends on a separately initialized fixed arena.
+    static void EnsureHeapRange(MAddress heapStart)
     {
         static bool ready = false;
         if (ready) {
@@ -151,7 +181,6 @@ struct GcHeapFixture {
             space.reservedStart = heapStart;
             space.reservedEnd = heapStart + kFdmUnits * RegionInfo::UNIT_SIZE;
         }
-        LiveInfoArena::GetLiveInfoArena().InitializeForwardData();
         ready = true;
     }
 
@@ -175,7 +204,7 @@ struct GcHeapFixture {
         }
         CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region, region->GetOwnerGeneration()));
         CHECK(ForwardingTable::PublishFromPageView(region, region->GetLiveInfo(), region->GetSnapshotEpoch(),
-            region->GetRegionAllocPtr(), region->metadata.markStartAllocPtr, region->GetLiveByteCount(),
+            region->GetRegionAllocPtr(), region->metadata.markStartAllocPtr,
             static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
             0, region->GetRegionLifeId()));
     }

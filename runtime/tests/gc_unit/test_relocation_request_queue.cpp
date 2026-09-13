@@ -27,7 +27,7 @@ struct PageQueueFixture {
         GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
             page->GetRegionStart(), page->GetRegionSize(), page, page->GetOwnerGeneration()));
         GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(page, nullptr, 1, page->GetRegionAllocPtr(),
-            page->GetRegionStart(), 64, 1, 0, page->GetRegionLifeId()));
+            page->GetRegionStart(), 1, 0, page->GetRegionLifeId()));
         owner = ForwardingTable::RetainPageOwner(page);
         GC_EXPECT_TRUE(static_cast<bool>(owner));
     }

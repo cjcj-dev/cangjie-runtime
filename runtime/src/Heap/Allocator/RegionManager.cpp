@@ -145,16 +145,6 @@ void RegionInfo::RunGhostLookupTestHook(RegionInfo* region)
 #endif
 std::atomic<size_t> RegionInfo::markEpochStaleReadCount { 0 };
 std::atomic<bool> RegionInfo::markEpochAtexitInstalled { false };
-std::atomic<size_t> RegionInfo::oneseqBumpClearYoung { 0 };
-std::atomic<size_t> RegionInfo::oneseqBumpClearOld { 0 };
-std::atomic<size_t> RegionInfo::oneseqBumpInitRegion { 0 };
-std::atomic<size_t> RegionInfo::oneseqBumpResetAfterForward { 0 };
-std::atomic<size_t> RegionInfo::oneseqIsKnownEmptyCalls { 0 };
-std::atomic<size_t> RegionInfo::oneseqAuthBlocksReclaim { 0 };
-std::atomic<size_t> RegionInfo::oneseqAuthAndEmpty { 0 };
-std::atomic<size_t> RegionInfo::oneseqAuthNotEmpty { 0 };
-std::atomic<size_t> RegionInfo::oneseqNoAuthNotEmpty { 0 };
-std::atomic<bool> RegionInfo::oneseqAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::ikeTrueEmpty { 0 };
 std::atomic<size_t> RegionInfo::ikeConservativeKeep { 0 };
 std::atomic<size_t> RegionInfo::ikeConservativeKeepBytes { 0 };
@@ -166,42 +156,6 @@ std::atomic<size_t> RegionInfo::liveCrossCheckCount { 0 };
 std::atomic<bool> RegionInfo::liveCrossAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
 
-void RegionInfo::ReportOneseqCounts(const char* point)
-{
-    if (!OneseqDiagEnabled()) {
-        return;
-    }
-    std::fprintf(stderr,
-                 "[GCV2][oneseq] point=%s bump_clear_young=%zu bump_clear_old=%zu "
-                 "bump_init=%zu bump_reset_fwd=%zu "
-                 "ike_calls=%zu auth_blocks=%zu auth_empty=%zu auth_not_empty=%zu noauth_not_empty=%zu "
-                 "stale_read=%zu live_cross_check=%zu live_cross_mismatch=%zu\n",
-                 point != nullptr ? point : "?",
-                 oneseqBumpClearYoung.load(std::memory_order_relaxed),
-                 oneseqBumpClearOld.load(std::memory_order_relaxed),
-                 oneseqBumpInitRegion.load(std::memory_order_relaxed),
-                 oneseqBumpResetAfterForward.load(std::memory_order_relaxed),
-                 oneseqIsKnownEmptyCalls.load(std::memory_order_relaxed),
-                 oneseqAuthBlocksReclaim.load(std::memory_order_relaxed),
-                 oneseqAuthAndEmpty.load(std::memory_order_relaxed),
-                 oneseqAuthNotEmpty.load(std::memory_order_relaxed),
-                 oneseqNoAuthNotEmpty.load(std::memory_order_relaxed),
-                 markEpochStaleReadCount.load(std::memory_order_relaxed),
-                 liveCrossCheckCount.load(std::memory_order_relaxed),
-                 liveCrossMismatchCount.load(std::memory_order_relaxed));
-    std::fflush(stderr);
-}
-
-void RegionInfo::EnsureOneseqAtexit()
-{
-    if (!OneseqDiagEnabled()) {
-        return;
-    }
-    bool expected = false;
-    if (oneseqAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        std::atexit([]() { ReportOneseqCounts("atexit"); });
-    }
-}
 std::mutex RegionInfo::youngRegionFlagMutex;
 std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
 
@@ -3555,24 +3509,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
         // live bytes + mark face (ResetLiveMapAfterForward).
         {
-            const uint64_t liveBefore = region->GetLiveByteCount();
-            size_t validBefore = 0;
-            size_t markedBefore = 0;
-
             region->VerifyLiveBooks(markView, "pre-ResetLiveMapAfterForward");
-            // Simulated split for ORDER: live-only then mark-only was the old bug;
-            // measure residual marks after live-zero before joint reset.
-            region->ResetLiveByteCount();
-            const uint64_t liveAfterReset = region->GetLiveByteCount();
-            size_t validAfterReset = 0;
-            size_t markedAfterReset = 0;
-
-            // Joint publish (restores live empty + epoch bump in one API).
             region->ResetLiveMapAfterForward(markView);
-            size_t validAfterInv = 0;
-            size_t markedAfterInv = 0;
-
-
             region->VerifyLiveBooks(markView, "post-ResetLiveMapAfterForward");
             if (youngRegion) {
                 if (promotedRecords != 0) {
@@ -3581,9 +3519,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 (void)region->PromoteYoungRegion(promotionView);
             }
-            (void)validBefore;
-            (void)validAfterReset;
-            (void)validAfterInv;
         }
         // After-copy Collect zeros the from payload while live holders still name
         // it. ZGC free_page waits for detach (zRelocate.cpp:1041-1047) and keeps
@@ -3651,9 +3586,7 @@ template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
 // instead of instantiating a second copy in the test executable.
 template void RegionInfo::ClearLiveInfo<Generation::Young>(MarkView<Generation::Young>);
 template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Old>);
-using GcUnitBumpSnapshotEpoch = void (RegionInfo::*)();
-[[gnu::used]] static GcUnitBumpSnapshotEpoch const gcUnitBumpSnapshotEpoch =
-    &RegionInfo::BumpSnapshotEpochFromInitRegion;
+
 #endif
 } // namespace MapleRuntime
 

@@ -12,4 +12,10 @@
 #include "LiveInfo.h"
 
 namespace MapleRuntime {
+uint64_t RegionInfo::GetSnapshotEpoch() const
+{
+    const GCCycleGeneration generation = GetOwnerGeneration() == Generation::Young
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    return Heap::GetHeap().GetCollector().GetCycleSnapshot(generation).sequence;
+}
 } // namespace MapleRuntime

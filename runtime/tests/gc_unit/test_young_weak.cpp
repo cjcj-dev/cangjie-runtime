@@ -192,7 +192,6 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
         fx.PlantMarkBitmap<Generation::Old>(route.sourceLive, route.source->GetRegionSize());
     const size_t sourceOffset = route.source->GetAddressOffset(reinterpret_cast<MAddress>(route.from));
     (void)sourceBitmap->MarkBits(sourceOffset, route.from->GetSize(), route.source->GetRegionSize());
-    route.source->AddLiveByteCount(route.from->GetSize());
     route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
     route.source->RecordRouteStart(sourceOffset);
     route.from->SetStateCode(ObjectState::FORWARDED);

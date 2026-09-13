@@ -362,6 +362,7 @@ MAIN_SOURCES=(
   "$SRC/test_trustp1_phase1.cpp"
 
   "$SRC/test_live_map.cpp"
+  "$SRC/test_live_map_segments.cpp"
   "$SRC/test_object_gate.cpp"
   "$SRC/test_remset.cpp"
   "$SRC/test_defect_regressions.cpp"
@@ -523,7 +524,6 @@ STANDALONE_SYMBOLS=(
   _ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE1EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb
   _ZN12MapleRuntime10RegionInfo13ClearLiveInfoILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE
   _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv
-  _ZN12MapleRuntime10RegionInfo31BumpSnapshotEpochFromInitRegionEv
   _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE
   _ZNK12MapleRuntime9Collector18MarkObjectIfActiveEPNS_10BaseObjectE
 )

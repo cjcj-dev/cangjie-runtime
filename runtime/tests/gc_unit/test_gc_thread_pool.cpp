@@ -74,7 +74,6 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0)),
                            fx.obj0->GetSize(), region->GetRegionSize());
-    region->AddLiveByteCount(fx.obj0->GetSize());
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->MarkForwardingDone();
 }
@@ -92,7 +91,6 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     from = reinterpret_cast<MAddress>(fx.obj0);
     to = reinterpret_cast<MAddress>(fx.obj1);
     (void)bitmap->MarkBits(region->GetAddressOffset(from), fx.obj0->GetSize(), region->GetRegionSize());
-    region->AddLiveByteCount(fx.obj0->GetSize());
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
