@@ -189,7 +189,7 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     // Domain still frozen on ghost without B ⇒ Admit/GetRouteForProbe must miss.
     GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(objB), ForwardingTable::RetainPageOwner(region).get()).to) == nullptr);
 
-    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ResetRelocationSet(region->GetOwnerGeneration());
     region->metadata.liveInfo = nullptr;
     lateBm->~RegionBitmap();
     std::free(lateBm);

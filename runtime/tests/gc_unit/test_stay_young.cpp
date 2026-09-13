@@ -8,7 +8,7 @@
 
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zPageAllocator.hpp"
-#include "Collector/TenuringThreshold.h"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

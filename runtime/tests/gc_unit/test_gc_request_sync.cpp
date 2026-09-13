@@ -1083,10 +1083,6 @@ GC_TEST(GcRequestSync, CompilerAsyncEntryReturnsAndMergesPendingRequest)
     GC_EXPECT_EQ(harness.collector.ReasonAt(3), GC_REASON_USER);
 }
 
-} // namespace MapleRuntime
-
-#endif // MRT_GC_UNIT_TESTS
-
 // zDriverPort.hpp:33 ZDriverRequest / zDirector.cpp:796-817: queued requests own
 // their selected quotas; a later decision cannot replace a pending budget.
 GC_TEST(GcRequestSync, DriverRequestOwnsDirectorQuota)
@@ -1145,3 +1141,7 @@ GC_TEST(GcRequestSync, MajorPartialRootsWithoutPreclean)
     GC_EXPECT_TRUE(collector.TypeAt(1) == ZYoungType::none);
     CollectorResourcesTestPeer::Destroy(resources);
 }
+
+} // namespace MapleRuntime
+
+#endif // MRT_GC_UNIT_TESTS

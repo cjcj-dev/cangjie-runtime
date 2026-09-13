@@ -212,7 +212,7 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
                      publication, reinterpret_cast<MAddress>(route.from),
                      reinterpret_cast<MAddress>(route.to)),
                  reinterpret_cast<MAddress>(route.to));
-    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(route.from)),
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(route.from), Generation::Young),
                  reinterpret_cast<MAddress>(route.to));
 
     route.destinationLive = fx.PlantLiveInfo(route.destination);
@@ -730,8 +730,8 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
-    ForwardingTable::ReclaimRetired("value-root-minor-runtime-dispatch");
-    const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from));
+    ForwardingTable::ResetRelocationSet(Generation::Young);
+    const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
     const bool independentAfterCoverage =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     std::fprintf(stderr,

@@ -45,7 +45,9 @@
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/WCollector/WCollector.h"
+#if defined(MRT_TESTABLE_INTERNALS)
 #include "mark_publication_fixture.hpp"
+#endif
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -53,6 +55,7 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+#if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
 {
     GcHeapFixture fx;
@@ -74,6 +77,7 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
     processor.ProcessReferences([](BaseObject*) { return true; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
 }
+#endif // MRT_TESTABLE_INTERNALS
 
 #if defined(MRT_TESTABLE_INTERNALS)
 
@@ -1042,7 +1046,6 @@ GC_OTHER_VM_TEST(YoungConc, ExportRootRegisteredAfterT1ReachesT2Closure)
 
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
-    Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
     Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
     const U64 seedHandle = Heap::GetHeap().RegisterExportRoot(fx.obj0);
     Heap::GetHeap().RemoveExportObject(seedHandle);
@@ -1235,16 +1238,8 @@ GC_TEST(YoungConc, TraceRefFieldRemapsLoadGoodFromBeforeStoreGood)
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
-    // FROM membership can carry a provisional table. EntriesArmed alone does
-    // not establish copying authority. Complete installation before retaining
-    // the publication (zRelocationSet.cpp:112-126, zForwarding.cpp:86-108).
-    if (!ForwardingTable::InstallPublicationBeforeCopy(
-            fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0)) {
-        GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
-            fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
-        GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
-            fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
-    }
+    // Install the selected generation set before borrowing its publication.
+    fx.InstallPageOwner(fx.region0);
     ForwardingTable::Publication publication =
         ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
     GC_EXPECT_TRUE(static_cast<bool>(publication));
@@ -1261,7 +1256,7 @@ GC_TEST(YoungConc, TraceRefFieldRemapsLoadGoodFromBeforeStoreGood)
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(healed), to);
     GC_EXPECT_EQ(static_cast<unsigned>(Collector::JudgeHandOutTarget(healed)),
                  static_cast<unsigned>(HandVerdict::Usable));
-    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(healed));
+    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(healed), Generation::Young);
     GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
 }
 #endif
@@ -1575,6 +1570,7 @@ GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
 
 // After a completed handoff, new inserts belong to the live set, not the
 // already-swapped batch. Header-only MergeY2yDirtyHolders (AllocBuffer.h).
+#if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(YoungConc, Y2yAfterHandoffWritesStayOnLiveSet)
 {
     GcHeapFixture fx;
@@ -1592,7 +1588,9 @@ GC_TEST(YoungConc, Y2yAfterHandoffWritesStayOnLiveSet)
     GC_EXPECT_EQ(secondBatch.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(secondBatch[0]), reinterpret_cast<MAddress>(fx.obj1));
 }
+#endif // MRT_TESTABLE_INTERNALS
 
+#if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(YoungConc, Y2yThreadExitLeavesHoldersForNextMerge)
 {
     GcHeapFixture fx;
@@ -1606,7 +1604,9 @@ GC_TEST(YoungConc, Y2yThreadExitLeavesHoldersForNextMerge)
     GC_EXPECT_EQ(batch.size(), 2u);
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
 }
+#endif // MRT_TESTABLE_INTERNALS
 
+#if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
 {
     GcHeapFixture fx;
@@ -1618,6 +1618,7 @@ GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
     buffer->PushY2yDirtyHolder(fx.obj1);
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
 }
+#endif // MRT_TESTABLE_INTERNALS
 
 #if defined(MRT_TESTABLE_INTERNALS)
 

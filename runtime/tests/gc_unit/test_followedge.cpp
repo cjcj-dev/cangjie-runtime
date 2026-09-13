@@ -77,6 +77,7 @@ GC_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
     MAddress slotAddress = reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE;
     *reinterpret_cast<MAddress*>(slotAddress) = reinterpret_cast<MAddress>(bytes);
 
+    const auto view = targetRegion->GetMarkView<Generation::Old>();
     size_t holderSlotVisits = 0;
     size_t targetContentVisits = 0;
     size_t pushed = 0;

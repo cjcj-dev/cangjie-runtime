@@ -56,6 +56,7 @@ struct PageQueueFixture {
 // Observe the product wait predicate without registering a synthetic mutator
 // with the runtime's global thread list. The two states are the actual inputs
 // to EnsurePhaseTransition and HandshakeState::try_process respectively.
+#if defined(MRT_TESTABLE_INTERNALS)
 struct WaitContext {
     Mutator mutator;
     Mutator* savedMutator = ThreadLocal::GetMutator();
@@ -94,11 +95,13 @@ struct WaitContext {
     }
 };
 thread_local WaitContext* WaitContext::current = nullptr;
+#endif
 }
 
 // ZRelocateQueue::add_and_wait (zRelocate.cpp:134-151), called from the
 // JRT_LEAF barrier (zBarrierSetRuntime.cpp:29): waiting preserves the context
 // that prevents reset until the final forwarding lookup has returned.
+#if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
 {
     PageQueueFixture f;
@@ -125,6 +128,8 @@ GC_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
     GC_EXPECT_FALSE(context.handshake.observed_safe());
     GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
 }
+
+#endif // MRT_TESTABLE_INTERNALS
 
 // zRelocate.cpp:134-191: objects on one page share one forwarding/claim/done.
 GC_TEST(RelocationPageQueue, TwoObjectsShareOnePageClaim)
