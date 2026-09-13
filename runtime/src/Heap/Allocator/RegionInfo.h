@@ -999,7 +999,7 @@ public:
     // ZPage constructs its livemap before publishing the page in the page table.
     void InitializeLiveInfo()
     {
-        LiveInfo* live = new (LiveInfoArena::GetLiveInfoArena().AllocateLiveInfo()) LiveInfo();
+        LiveInfo* live = LiveInfoArena::GetLiveInfoArena().AllocateLiveInfo(this);
         live->bindedRegion = this;
         live->resurrectBitmap = LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
         live->enqueueBitmap = LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
@@ -3815,7 +3815,7 @@ private:
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
-        LiveInfoArena::GetLiveInfoArena().RecycleOwnerBitmaps(GetLiveInfo());
+        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(this);
         SetYoungRegionFlag(0);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;

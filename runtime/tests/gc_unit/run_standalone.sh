@@ -362,6 +362,7 @@ MAIN_SOURCES=(
   "$SRC/test_trustp1_phase1.cpp"
 
   "$SRC/test_live_map.cpp"
+  "$SRC/test_live_map_segments.cpp"
   "$SRC/test_object_gate.cpp"
   "$SRC/test_remset.cpp"
   "$SRC/test_defect_regressions.cpp"

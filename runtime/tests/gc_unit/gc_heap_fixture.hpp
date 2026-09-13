@@ -90,7 +90,7 @@ struct GcHeapFixture {
             std::abort();
         }
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
-        EnsureForwardData(heapStart);
+        EnsureHeapRange(heapStart);
         for (Generation generation : {Generation::Young, Generation::Old}) {
             if (LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation).Sequence() == 0) {
                 AdvanceGeneration(generation);
@@ -131,6 +131,8 @@ struct GcHeapFixture {
             ForwardingTable::ResetRelocationSet(Generation::Young);
             ForwardingTable::ResetRelocationSet(Generation::Old);
         }
+        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region0);
+        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region1);
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
         // are mapped per test, so leaving their flags set before munmap makes
         // later tests observe young regions that no longer exist.
@@ -156,13 +158,9 @@ struct GcHeapFixture {
         return obj;
     }
 
-    // Product GetOrAlloc* faces go through LiveInfoArena.
-    // gc_unit never Heap::Init, so FDM's arena starts at 0 and AllocateRegionBitmap
-    // CHECKs bitmap != nullptr. Union order hits this after ForwardingNoGeometry arms
-    // the table: YoungConc.StaleOldMarkDoesNotSkipYoungEnqueue → ShouldEnqueue →
-    // EnqueueObject → GetOrAllocEnqueueBitmap (enqueue face was never planted).
-    // youngconcmark §3b: fixture Init FDM, do not relax the CHECK.
-    static void EnsureForwardData(MAddress heapStart)
+    // Keep the synthetic heap's existing 64-unit envelope. Livemap storage is
+    // page-owned and no longer depends on a separately initialized fixed arena.
+    static void EnsureHeapRange(MAddress heapStart)
     {
         static bool ready = false;
         if (ready) {
@@ -174,7 +172,6 @@ struct GcHeapFixture {
             space.reservedStart = heapStart;
             space.reservedEnd = heapStart + kFdmUnits * RegionInfo::UNIT_SIZE;
         }
-        LiveInfoArena::GetLiveInfoArena().InitializeForwardData();
         ready = true;
     }
 

@@ -18,6 +18,7 @@ set(GC_UNIT_SOURCES
     test_trustp1_phase1.cpp
 
     test_live_map.cpp
+    test_live_map_segments.cpp
     test_object_gate.cpp
     test_remset.cpp
     test_defect_regressions.cpp

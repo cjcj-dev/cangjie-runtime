@@ -302,6 +302,7 @@ private:
     }
 
     friend class RegionInfo;
+    friend class LiveInfoArena;
 };
 
 } // namespace MapleRuntime
