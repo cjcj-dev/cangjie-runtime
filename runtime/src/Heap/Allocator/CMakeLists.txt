@@ -7,6 +7,7 @@
 set(SRC_LIST
     "Allocator.cpp"
     "zForwardingTable.cpp"
+    "../z/zForwardingAllocator.cpp"
     "../z/zVirtualMemoryManager.cpp"
     "../z/zAddressSpaceLimit.cpp"
     "../z/zNUMA.cpp"

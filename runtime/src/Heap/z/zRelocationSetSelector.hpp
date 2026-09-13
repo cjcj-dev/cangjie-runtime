@@ -1,3 +1,4 @@
+#include "Heap/z/z_globals.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -110,7 +111,7 @@ namespace MapleRuntime {
 
 // Compile-time port of ZFragmentationLimit (z_globals.hpp) — not an MRT_* env.
 inline constexpr bool kUseRelocationSetSelector = true;
-inline constexpr double kRelocationFragmentationLimitPercent = 25.0;
+
 // RegionManager::MAX_UNIT_COUNT_PER_REGION * UNIT_SIZE (128KB) — no medium tier.
 inline constexpr size_t kRelocationMaxSmallRegionBytes = 128 * 1024;
 // Analog of ZObjectSizeLimitSmall relative to the group max page (1/8).

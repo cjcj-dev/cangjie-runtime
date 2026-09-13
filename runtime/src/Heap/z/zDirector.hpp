@@ -1,3 +1,4 @@
+#include "Heap/z/z_globals.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -50,7 +51,7 @@ constexpr size_t kGcTriggerYoungFixedBytes = 32 * MB;
 // zDirector.cpp:39 — P(sample outside CI) ≈ 1/1000 for a normal.
 constexpr double kGcTriggerOneIn1000 = 3.290527;
 // z_globals.hpp:37 — unforeseen phase-change guard on moving-average rate.
-constexpr double kGcTriggerSpikeTolerance = 2.0;
+
 // zDirector.cpp:306 / :324 — young too small / free too low.
 constexpr double kGcTriggerYoungSmallPercent = 5.0;
 constexpr double kGcTriggerHighUsageFreePercent = 5.0;

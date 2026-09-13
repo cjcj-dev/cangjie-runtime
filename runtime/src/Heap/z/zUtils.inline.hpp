@@ -6,9 +6,9 @@
 
 #pragma once
 #include "Base/Log.h"
+#include "Heap/z/zGlobals.hpp"
 namespace MapleRuntime {
 namespace {
-constexpr size_t MARK_STRIPE_SHIFT = 20;
 bool IsPowerOfTwo(size_t value)
 {
     return value != 0 && (value & (value - 1)) == 0;

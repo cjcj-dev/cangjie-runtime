@@ -5,14 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #pragma once
-#include <memory>
-#include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/z/zMarkStack.hpp"
 namespace MapleRuntime {
-// ZThreadLocalData: one store buffer and two generation stacks per OS thread.
-struct ThreadGCData {
-    StoreBarrierBuffer storeBarrierBuffer;
-    std::unique_ptr<MarkThreadLocalStacks> markStacks[2];
-};
-
+constexpr double kGcTriggerSpikeTolerance = 2.0;
+inline constexpr double kRelocationFragmentationLimitPercent = 25.0;
 }

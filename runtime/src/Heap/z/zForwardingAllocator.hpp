@@ -20,9 +20,8 @@ namespace MapleRuntime {
 // The generation relocation set owns the arena through its reset boundary.
 class ForwardingAllocator {
 public:
-    explicit ForwardingAllocator(size_t capacity)
-        : start_(capacity == 0 ? nullptr : std::malloc(capacity)), capacity_(capacity), top_(0) {}
-    ~ForwardingAllocator() { std::free(start_); }
+    explicit ForwardingAllocator(size_t capacity);
+    ~ForwardingAllocator();
     ForwardingAllocator(const ForwardingAllocator&) = delete;
     ForwardingAllocator& operator=(const ForwardingAllocator&) = delete;
 

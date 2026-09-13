@@ -85,3 +85,53 @@ void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
 
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+bool ZForwarding::claim()
+{ return ZForwardingLife::claim(_claimed); }
+
+bool ZForwarding::retain_page()
+{
+        return ZForwardingLife::retain_page(_ref_count, [this] { ZForwardingLife::WaitPageDone(this); });
+    }
+
+void ZForwarding::release_page()
+{
+        int32_t count = _ref_count.load(std::memory_order_relaxed);
+        for (;;) {
+            CHECK(count != 0);
+            const int32_t next = count > 0 ? count - 1 : count + 1;
+            if (_ref_count.compare_exchange_weak(count, next, std::memory_order_acq_rel,
+                                                std::memory_order_relaxed)) {
+                if (next == 0 || next == -1) {
+                    std::lock_guard<std::mutex> lock(_ref_lock);
+                    _ref_changed.notify_all();
+                }
+                return;
+            }
+        }
+    }
+
+void ZForwarding::detach_page()
+{
+        std::unique_lock<std::mutex> lock(_ref_lock);
+        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == 0; });
+    }
+
+void ZForwarding::mark_done()
+{ ZForwardingLife::mark_done(_done); }
+
+bool ZForwarding::is_done() const
+{ return ZForwardingLife::is_done(_done); }
+
+void ZForwarding::in_place_relocation_claim_page()
+{
+        int32_t count = _ref_count.load(std::memory_order_relaxed);
+        do {
+            CHECK(count > 0);
+        } while (!_ref_count.compare_exchange_weak(count, -count, std::memory_order_acq_rel,
+                                                   std::memory_order_relaxed));
+        std::unique_lock<std::mutex> lock(_ref_lock);
+        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
+    }
+}

@@ -13,6 +13,7 @@
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zMarkStackEntry.hpp"
+#include "Heap/z/zGlobals.hpp"
 
 namespace MapleRuntime {
 class BaseObject;
@@ -33,12 +34,6 @@ class BaseObject;
 //
 // Default ON; MRT_GCV2_PARTIAL_ARRAY=0 keeps the complete inline control path.
 namespace MarkPartialArray {
-
-// zGlobals.hpp:82-84. MIN_LENGTH is in elements; our ref slots are 8 bytes,
-// same as ZGC's oopSize with compressed oops off.
-constexpr size_t MIN_SIZE_SHIFT = 12; // 4K
-constexpr size_t MIN_SIZE = static_cast<size_t>(1) << MIN_SIZE_SHIFT;
-constexpr size_t MIN_LENGTH = MIN_SIZE / sizeof(MAddress);
 
 // Partial-array payload bounds come from the typed MarkStackEntry layout.
 constexpr size_t MAX_LENGTH = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_ARRAY_LENGTH);

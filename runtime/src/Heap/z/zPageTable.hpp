@@ -1,3 +1,9 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
 #pragma once
 #include "Heap/z/zGranuleMap.hpp"
 #include "Heap/z/zIndexDistributor.hpp"
@@ -9,23 +15,10 @@ namespace MapleRuntime {
 template<typename T>
 class ZPageTableParallelIterator {
 public:
-    explicit ZPageTableParallelIterator(const ZGranuleMap<T>& table)
-        : table(table), distributor(ZIndexDistributorClaimTree::get_count(table.size())) {}
+    explicit ZPageTableParallelIterator(const ZGranuleMap<T>& table);
 
     template<typename Function>
-    void do_pages(Function function)
-    {
-        distributor.do_indices([&](size_t index) {
-            T page = table.at(index);
-            if (page != T()) {
-                const size_t startIndex = (page->GetRegionStart() - table.base()) / table.granule();
-                if (index == startIndex) {
-                    return function(page);
-                }
-            }
-            return true;
-        });
-    }
+    void do_pages(Function function);
 
 private:
     const ZGranuleMap<T>& table;
@@ -33,3 +26,5 @@ private:
 };
 
 }
+
+#include "Heap/z/zPageTable.inline.hpp"
