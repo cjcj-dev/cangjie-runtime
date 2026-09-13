@@ -370,7 +370,6 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     if (allocPtr != 0) {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
         region->ResetCensusBoundary();
-        region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());
     }
     // For making bitmap comform with live object count, do not mark object repeated.
     bool barrierClosedMarking = oldPhase == GCPhase::GC_PHASE_ENUM ||

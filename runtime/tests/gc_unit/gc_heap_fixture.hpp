@@ -118,7 +118,7 @@ struct GcHeapFixture {
         GCTib gctib {};
         gctib.tag = SIGN_BIT | 1;
         typeInfo->SetGCTib(gctib);
-        // Product gate requires TypeInfo residence (TIM image/mmap); stack-planted TI needs note.
+        // ZVerify checks TypeInfo residence; register this fixture's metadata range.
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
             reinterpret_cast<uintptr_t>(typeInfoStorage), sizeof(typeInfoStorage));
 

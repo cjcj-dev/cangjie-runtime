@@ -689,10 +689,7 @@ void RegionManager::PromoteAllRegions()
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
             size_t liveBytes = region->GetLiveByteCount();
             if (liveBytes > 0) {
-                region->PreserveRetainedLiveInfoUpTo(
-                    std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
             } else if (region->GetRawPointerObjectCount() == 0) {
-                region->PreserveRetainedLiveInfo(region->GetRegionStart());
             }
             if (region->IsYoungRegion()) {
                 MarkView<Generation::Young> youngView = region->GetMarkView<Generation::Young>();
@@ -800,9 +797,6 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
     region->VisitAllObjects([this, region, view, start, &garbageSize](BaseObject* object) {
         size_t offset = reinterpret_cast<MAddress>(object) - start;
         if (!region->IsSurvivedObject(view, offset)) {
-            if (!Collector::PlausibleManagedObjectGate("CollectFreePinnedSlots", object)) {
-                return;
-            }
             size_t objSize = object->GetSize();
             DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, object->GetTypeInfo(), objSize);
             garbageSize += objSize;
@@ -887,16 +881,8 @@ size_t RegionManager::CollectLargeGarbage()
                 garbageSize += CollectRegion<Generation::Old>(del);
             }
         } else {
-            region->ResetMarkBit(view);
             region = region->GetNextRegion();
         }
-    }
-
-    region = recentLargeRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        region->ResetMarkBit(view);
-        region = region->GetNextRegion();
     }
 
     return garbageSize;

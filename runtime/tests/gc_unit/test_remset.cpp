@@ -39,7 +39,6 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/WCollector/RememberedHolderPolicy.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
@@ -83,7 +82,7 @@ struct RemsetRearmTestAccess {
 
     static bool FixInteriorSlot(WCollector& collector, RefField<>& field, BaseObject* knownBase)
     {
-        return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr, false);
+        return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr);
     }
 
     static ConsumeResult ConsumePrevious(WCollector& collector, const std::unordered_set<MAddress>& previous,
@@ -260,14 +259,6 @@ private:
 };
 
 } // namespace
-
-GC_TEST(Remset, CurrentMinorRootOverridesRetainedDeadSnapshotAndNullHeal)
-{
-    GC_EXPECT_TRUE(KeepRememberedHolder(true, false));
-    GC_EXPECT_TRUE(KeepRememberedHolder(true, true));
-    GC_EXPECT_TRUE(KeepRememberedHolder(false, true));
-    GC_EXPECT_FALSE(KeepRememberedHolder(false, false));
-}
 
 // U7: product Barrier NVI WriteReference records old→young edge.
 GC_TEST(Remset, OldToYoungRecordedByBarrier)

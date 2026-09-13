@@ -102,7 +102,7 @@ struct RelocationReceiptTestAccess {
 
     static bool FixMinorField(WCollector& collector, RefField<>& field, BaseObject* knownBase = nullptr)
     {
-        return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr, false);
+        return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr);
     }
 
     static bool FixMinorRoot(WCollector& collector, RootSlot& root)
@@ -2864,8 +2864,7 @@ struct DerivedBaseMapImage {
 };
 DerivedBaseMapImage derivedBaseMapImage;
 
-void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
-                            size_t interiorOffset = 8, bool expectFailClosed = false,
+void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClosed = false,
                             bool unresolvedGhost = false)
 {
     auto& image = derivedBaseMapImage;
@@ -2896,11 +2895,6 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     var(1); put(2, 2); // derived row selects second slot row
 
     GcHeapFixture& fx = ProductFixture();
-    const U32 savedSize = fx.typeInfo->GetInstanceSize();
-    if (interior && interiorOffset > 8) {
-        fx.typeInfo->SetInstanceSize(128);
-        std::memset(reinterpret_cast<char*>(fx.obj0) + sizeof(void*), 0, 128);
-    }
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LateBackfillState state {};
@@ -2933,9 +2927,8 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     }
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
     const bool usesState = moving || unresolvedGhost;
-    const size_t usedOffset = interior ? interiorOffset : 0;
-    const uintptr_t base = reinterpret_cast<uintptr_t>(usesState ? state.from : fx.obj0) + usedOffset;
-    const uintptr_t expected = reinterpret_cast<uintptr_t>(moving ? state.to : fx.obj0) + usedOffset;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(usesState ? state.from : fx.obj0);
+    const uintptr_t expected = reinterpret_cast<uintptr_t>(moving ? state.to : fx.obj0);
     uintptr_t frame[8] = {};
     frame[0] = base;
     frame[1] = base + 8;
@@ -2945,14 +2938,13 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     context.frameInfo.mFrame.SetIP(image.pc);
     context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[3]));
     context.anchorFA = nullptr;
-    std::fprintf(stderr, "DERIVED_BASE_INPUT interior=%d tagged=%d moving=%d offset=%zu base=%zx derived=%zx\n",
-                 interior, tagged, moving, usedOffset, frame[0], frame[1]);
+    std::fprintf(stderr, "DERIVED_BASE_INPUT tagged=%d moving=%d base=%zx derived=%zx\n",
+                 tagged, moving, frame[0], frame[1]);
     if (expectFailClosed) {
         AbortCapture aborted = CaptureAbort([&]() {
             mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_PREFORWARD, false);
         });
         std::fprintf(stderr, "DERIVED_BASE_FAILCLOSED status=%d\n%s", aborted.status, aborted.output.c_str());
-        fx.typeInfo->SetInstanceSize(savedSize);
         if (usesState) { CleanupLateBackfill(fx, state); }
         collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
         RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -2969,7 +2961,6 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     std::fprintf(stderr, "DERIVED_BASE_RESULT base=%zx derived=%zx expected=%zx\n", frame[0], frame[1], expected + 8);
     const bool baseCorrect = frame[0] == expected;
     const bool derivedCorrect = frame[1] == expected + 8;
-    fx.typeInfo->SetInstanceSize(savedSize);
     if (usesState) { CleanupLateBackfill(fx, state); }
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -2978,37 +2969,25 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
 }
 }
 
-GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorBaseProducer)
-{
-    RunDerivedBaseProducer(true, false);
-}
 GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedBaseProducer)
 {
-    RunDerivedBaseProducer(false, true);
+    RunDerivedBaseProducer(true);
 }
 GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryBaseProducer)
 {
-    RunDerivedBaseProducer(false, false);
-}
-GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorMovingBaseProducer)
-{
-    RunDerivedBaseProducer(true, false, true);
+    RunDerivedBaseProducer(false);
 }
 GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedMovingBaseProducer)
 {
-    RunDerivedBaseProducer(false, true, true);
+    RunDerivedBaseProducer(true, true);
 }
 GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryMovingBaseProducer)
 {
-    RunDerivedBaseProducer(false, false, true);
-}
-GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorUnrecoveredHostFailsClosed)
-{
-    RunDerivedBaseProducer(true, false, false, 80, true);
+    RunDerivedBaseProducer(false, true);
 }
 GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedUnresolvedGhostFailsClosed)
 {
-    RunDerivedBaseProducer(false, true, false, 8, true, true);
+    RunDerivedBaseProducer(true, false, true, true);
 }
 #endif
 
@@ -3650,37 +3629,6 @@ GC_TEST(ForwardingPublicationProduct, IdentityForwardStillWritesBackRootWord)
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-}
-
-GC_TEST(ForwardingPublicationProduct, FixRootInteriorFailClosedWhenHostUnresolved)
-{
-#if defined(__linux__)
-    GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
-    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    ExpectRootAbortAt("FixMinorEvacuatedSlot.interior-unresolved", [&]() {
-        ObjectRef root;
-        StorePlain(root, to_zaddress(reinterpret_cast<MAddress>(from) + 8));
-        (void)RelocationReceiptTestAccess::FixMinorRoot(collector, root);
-    });
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
-    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
-    if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-#endif
 }
 
 GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestination)
@@ -4706,7 +4654,6 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     LiveInfo* live = fx.PlantLiveInfo(holderRegion);
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Young>(live, holderRegion->GetRegionSize());
     (void)bitmap->MarkBits(0, objectSize, holderRegion->GetRegionSize());
-    holderRegion->PreserveRetainedLiveInfo();
     RegionManager manager;
     manager.AddFlipPromotedPage(holderRegion);
     holderRegion->metadata.liveInfo = nullptr;
@@ -4728,7 +4675,6 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     GC_EXPECT_EQ(previous.count(reinterpret_cast<MAddress>(deadField)), 0u);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     EmptyBothRememberedFaces(remembered);
-    holderRegion->FreeRetainedMarkWords();
     fx.FreePlanted(live);
     targetRegion->SetYoungRegionFlag(0);
 }
@@ -4879,7 +4825,6 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
             holderLive = fx.PlantLiveInfo(holderRegion);
             RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Young>(holderLive, holderRegion->GetRegionSize());
             (void)bitmap->MarkBits(0, holder->GetSize(), holderRegion->GetRegionSize());
-            holderRegion->PreserveRetainedLiveInfo();
             RegionManager manager;
             manager.AddFlipPromotedPage(holderRegion);
             GCWorkers workers(GCWorkers::Generation::YOUNG, 2);
@@ -4895,7 +4840,6 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         const uintptr_t markBits = MARKED_YOUNG_MASK | MARKED_OLD_MASK;
         GC_EXPECT_EQ(raw(field.GetFieldValue()) & markBits, raw(before) & markBits);
         if (holderLive != nullptr) {
-            holderRegion->FreeRetainedMarkWords();
             holderRegion->metadata.liveInfo = nullptr;
             fx.FreePlanted(holderLive);
         }
@@ -4909,7 +4853,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
 }
 
 // Direct semantic matrix for the current remembered face. The reference array
-// is live, but its far field lies beyond TryRecoverInteriorBase's 64-byte
+// is live, and its far field lies beyond the former 64-byte
 // recovery window. ZGC still applies the load barrier because the current old
 // page, rather than an object-level recovery guess, is the admission unit.
 GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)

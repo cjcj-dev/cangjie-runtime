@@ -312,7 +312,6 @@ size_t RegionManager::ExemptMarkStartAllocatingFromCSet()
         DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) markwater skip CSet: %zu units, %zu live bytes",
              fromRegion, fromRegion->GetRegionStart(), fromRegion->GetRegionAllocatedSize(),
              fromRegion->GetRegionEnd(), fromRegion->GetUnitCount(), fromRegion->GetLiveByteCount());
-        fromRegion->PreserveRetainedLiveInfo();
         ExemptFromRegion(fromRegion);
         ++turned;
     }
@@ -339,12 +338,6 @@ size_t RegionManager::ExemptFromRegions()
     size_t forwardBytes = 0;
     size_t floatingGarbage = 0;
     size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
-    rawPointerPinnedRegionList.VisitAllRegions([](RegionInfo* region) {
-        if (region->GetLiveByteCount() > 0) {
-            region->PreserveRetainedLiveInfoUpTo(
-                std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
-        }
-    });
     std::vector<RegionInfo*> snapshot;
     fromRegionList.VisitAllRegions([&snapshot](RegionInfo* r) { snapshot.push_back(r); });
     std::vector<RelocRegionDesc> descs;
@@ -454,9 +447,6 @@ size_t RegionManager::ExemptFromRegions()
             if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION, "cset-rawpin")) {
                 continue;
             }
-            if (liveBytes > 0) {
-                del->PreserveRetainedLiveInfo();
-            }
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
             continue;
@@ -488,13 +478,6 @@ size_t RegionManager::ExemptFromRegions()
         if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::UNMOVABLE_FROM_REGION, "cset-relocsel")) {
             continue;
         }
-        // ZGC keeps an unselected relocation-set page in place; its liveness
-        // snapshot is only required when this cycle actually examined the
-        // page.  Relocsel also sees pages with a live-byte census but no
-        // current mark face (NEVER_EXAMINED), so use the bounded preserve
-        // form rather than asserting that every live page has a snapshot.
-        del->PreserveRetainedLiveInfoUpTo(
-            std::min(del->GetCensusBoundary(), del->GetRegionAllocPtr()));
         ExemptFromRegion(del);
         floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
     }

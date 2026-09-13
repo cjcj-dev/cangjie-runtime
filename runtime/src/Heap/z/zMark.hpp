@@ -379,10 +379,6 @@ public:
 
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
     {
-        // getsize7: same GetSize hazard as MarkObject on the unsized resurrect path.
-        if (!Collector::PlausibleManagedObjectGate("TracingCollector::ResurrectObject", obj)) {
-            return true;
-        }
         // livesame: ResurrectObject counts on 0→1 inside.
         bool resurrected = regionInfo->ResurrectObject(obj, offset);
         if (!resurrected) {

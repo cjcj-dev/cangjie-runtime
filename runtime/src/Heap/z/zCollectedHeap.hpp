@@ -309,21 +309,6 @@ public:
         return (raw(ref.GetFieldValue()) & ::g_cjStoreBadMask) != 0;
     }
 
-    // zc7fix: is_mark_good admits plain (uncoloured) non-null; those may be non-heap.
-    static bool MarkGoodHeapGate(const char* site, BaseObject* target);
-
-    // markfloor: reject heap interiors (e.g. RawArray+8 / &length) whose first word is a
-    // small integer or non-TypeInfo, before GetSize/HasRefField dereference the tip.
-    // sizeguard: also reject addresses in FREE/GARBAGE regions (stale payload may still
-    // look like a TypeInfo tip and trip INVALID_OBJECT_SIZE at MarkObject).
-    // tailslot: reject when obj+GetSize crosses regionEnd on any live region
-    // (zMarkStackEntry.hpp:81 object_address bits 63-5; zPage.inline.hpp:188 is_in).
-    static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);
-    // introot: if obj is a heap interior (RawArray+8/...), return host object base; else nullptr.
-    // writeback2: when knownBase is non-null (derived channel already paired base↔derived),
-    // trust it over ClassifyInteriorOffset heuristics.
-    static BaseObject* TryRecoverInteriorBase(BaseObject* obj, BaseObject* knownBase = nullptr);
-
     virtual bool IsOldPointer(RefField<>&) const { AbortUnimplemented("Collector::IsOldPointer"); }
     virtual bool IsCurrentPointer(RefField<>&) const { AbortUnimplemented("Collector::IsCurrentPointer"); }
     virtual void AddRawPointerObject(BaseObject*) { AbortUnimplemented("Collector::AddRawPointerObject"); }

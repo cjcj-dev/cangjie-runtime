@@ -1,0 +1,2 @@
+lane: sym_cangjie_runtime_503_implement_r5656150642
+主控裁定（0914 05:3x）：属于 D10 范围，按你建议删。RememberedHolderPolicy.h::KeepRememberedHolder（retained 快照 OR 当前 minor 根放行）在 ZGC 无对应（zRemembered 的 scan 只看当前 livemap/remset），连专属测试一起删；ScrubMinorFreeTarget 只用 SlotHeldByLiveObject（当前页 liveness），去掉 currentMinorRoot 覆盖输入；free/garbage → FailClosedLoad 的既有屏障处理保持。⛔ 不改名假称删除。对应表给 zRemembered.cpp 的 scan_page/should_scan 锚。

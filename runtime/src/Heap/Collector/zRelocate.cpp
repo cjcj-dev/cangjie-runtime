@@ -48,7 +48,6 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
-#include "Heap/WCollector/RememberedHolderPolicy.h"
 
 #include <array>
 #include <atomic>
@@ -193,7 +192,6 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
-#include "Heap/WCollector/RememberedHolderPolicy.h"
 
 #include <array>
 #include <atomic>

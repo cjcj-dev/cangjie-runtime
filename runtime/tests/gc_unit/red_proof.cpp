@@ -56,8 +56,6 @@ struct BrokenGhost {
     }
 };
 
-// --- Broken U6: tip-small-int accepted ---
-static bool broken_tip_ok(uintptr_t tip) { return tip != 0; } // BUG: accepts small ints
 
 // --- Broken nullslot: non-heap CAS-null ---
 static uintptr_t broken_null_nonheap(uintptr_t target, bool isHeap)
@@ -104,8 +102,6 @@ int main()
     g.ClearBoth();
     RED_EXPECT(g.liveInfo0 != nullptr, "U4 liveInfo0 survives clear [pre installdomain snapshot]");
 
-    // U6 red: tip-small-int accepted
-    RED_EXPECT(!broken_tip_ok(42), "U6 tip-small-int rejected [pre PlausibleManagedObjectGate]");
 
     // nullslot red: non-heap nulled
     RED_EXPECT(broken_null_nonheap(0x7f000000, false) != 0, "nullslot non-heap never CAS-null");

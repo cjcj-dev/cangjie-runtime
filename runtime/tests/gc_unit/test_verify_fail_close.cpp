@@ -118,8 +118,13 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
     auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     owner->verify();
-    ExpectSceneAbort("Invalid forwarding live objects or bytes", [&] {
+    ExpectSceneAbort("Invalid number of live objects", [&] {
         fixture.region0->AddLiveCounts(1, RegionSpace::GetAllocSize(*fixture.obj0));
+        owner->verify();
+    });
+    owner->verify();
+    ExpectSceneAbort("Invalid number of live bytes", [&] {
+        fixture.region0->AddLiveCounts(0, RegionSpace::GetAllocSize(*fixture.obj0));
         owner->verify();
     });
     owner->verify();

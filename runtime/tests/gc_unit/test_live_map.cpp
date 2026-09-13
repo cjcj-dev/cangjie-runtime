@@ -81,8 +81,6 @@ ProductMarkObject<Generation::Old> ProductMarkObjectFn<Generation::Old>()
 }
 
 using ProductClearLiveInfo = void (*)(RegionInfo*, MarkView<Generation::Young>);
-using ProductPreserveRetained = void (*)(RegionInfo*);
-using ProductPreserveRetainedUpTo = void (*)(RegionInfo*, MAddress);
 
 ProductClearLiveInfo ProductClearLiveInfoFn()
 {
@@ -91,21 +89,6 @@ ProductClearLiveInfo ProductClearLiveInfoFn()
         "_ZN12MapleRuntime10RegionInfo13ClearLiveInfoILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE"));
     return fn;
 }
-
-ProductPreserveRetained ProductPreserveRetainedFn()
-{
-    static auto fn = reinterpret_cast<ProductPreserveRetained>(dlsym(
-        ProductRuntimeHandle(), "_ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv"));
-    return fn;
-}
-
-ProductPreserveRetainedUpTo ProductPreserveRetainedUpToFn()
-{
-    static auto fn = reinterpret_cast<ProductPreserveRetainedUpTo>(dlsym(
-        ProductRuntimeHandle(), "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm"));
-    return fn;
-}
-
 
 } // namespace
 
@@ -157,294 +140,6 @@ GC_TEST(LiveMap, MarkAndSurvive)
 
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
-}
-
-// livemap: retained own-copy is the mark-time authority after the borrowed
-// LiveInfo has been unbound and forwarding has retired the current mark face.
-GC_TEST(LiveMap, RetainedMarkWordsSurviveUnbindAndMapReset)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, region->GetRegionSize());
-    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    (void)bm->MarkBits(holderOffset, 8, region->GetRegionSize());
-
-    MarkView<Generation::Old> old = region->GetMarkView<Generation::Old>();
-    region->ResetLiveMapAfterForward(old);
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
-
-    GC_EXPECT_FALSE(region->IsMarkedObject(region->GetMarkView<Generation::Old>(), holderOffset));
-    GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
-
-    region->FreeRetainedMarkWords();
-    fx.FreePlanted(live);
-}
-
-// An unmovable Young page may preserve its current owner livemap before the
-// promotion replacement; the retained copy is independent of both page lives.
-GC_TEST(LiveMap, RetainedCaptureUnionsYoungFaceBeforePromotion)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* youngBitmap = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
-    (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
-    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    (void)youngBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
-
-    ProductPreserveRetainedFn()(region);
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
-
-    MarkView<Generation::Young> young = region->GetMarkView<Generation::Young>();
-    (void)region->PromoteYoungRegion(young);
-    GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
-
-    region->FreeRetainedMarkWords();
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
-// After a real copy, MarkForwardingDone is published first
-// (RegionManager.cpp:3544). Young bits then name FROM copies and must
-// not enter the retained snapshot (nw256 GOLD 9→3 when they did).
-GC_TEST(LiveMap, RetainedCaptureSkipsYoungFaceAfterForwardingDone)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* youngBitmap = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
-    (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
-    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    (void)youngBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
-
-    fx.InstallPageOwner(region);
-    region->MarkForwardingDone();
-    ProductPreserveRetainedFn()(region);
-    GC_EXPECT_FALSE(region->RetainedMarkWordsSay(holderOffset));
-
-    region->FreeRetainedMarkWords();
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
-// A forwarding completion from the previous face may still be visible while
-// the next mark cycle publishes a new current face.  The product sequence
-// below (publish carrier → complete/reset forwarding → clear/mark next face)
-// must retain that new face rather than treating the stale done bit as a FROM
-// copy indicator.
-GC_TEST(LiveMap, RetainedCaptureKeepsCurrentYoungFaceAfterStaleForwardingDone)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* previous = fx.PlantLiveInfo(region);
-    RegionBitmap* previousBitmap = fx.PlantMarkBitmap<Generation::Young>(previous, region->GetRegionSize());
-    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    (void)previousBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
-
-    MarkView<Generation::Young> previousView = region->GetMarkView<Generation::Young>();
-    region->PublishFromPageMetadata(previousView);
-    region->MarkForwardingDone();
-    region->ResetLiveMapAfterForward(previousView);
-
-    // ClearLiveInfo + MarkObject are the product mark-start/current-face path;
-    // no test-only epoch or LiveInfo fields are written here.
-    GcHeapFixture::AdvanceGeneration(Generation::Young);
-    MarkView<Generation::Young> clearView = region->GetMarkView<Generation::Young>();
-    ProductClearLiveInfoFn()(region, clearView);
-    MarkView<Generation::Young> currentView = region->GetMarkView<Generation::Young>();
-    (void)ProductMarkObjectFn<Generation::Young>()(region, currentView, fx.obj0, 8, true);
-    ProductPreserveRetainedFn()(region);
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
-
-    region->metadata.liveInfo = nullptr;
-    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    region->FreeRetainedMarkWords();
-    fx.FreePlanted(previous);
-}
-
-// GenerationCycle::Begin starts a new mark cycle but does not itself publish a current
-// liveness face.  With no MarkObject in that cycle, a stale forwarding-done
-// carrier must not make the previous from-page bits current again.
-GC_TEST(LiveMap, RetainedCaptureRejectsOldFromFaceWhenNewCycleMarksNothing)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* previous = fx.PlantLiveInfo(region);
-    RegionBitmap* previousBitmap = fx.PlantMarkBitmap<Generation::Young>(previous, region->GetRegionSize());
-    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-
-    // Build the old face through the product marker, then carry it through the
-    // real forwarding publication/reset path.  No epoch, flag, from-page or
-    // retained field is written by the test.
-    MarkView<Generation::Young> previousView = region->GetMarkView<Generation::Young>();
-    GC_EXPECT_FALSE(ProductMarkObjectFn<Generation::Young>()(region, previousView, fx.obj0, 8, true));
-    GC_EXPECT_TRUE(previousBitmap->IsMarked(holderOffset));
-    region->PublishFromPageMetadata(previousView);
-    region->MarkForwardingDone();
-    region->ResetLiveMapAfterForward(previousView);
-
-    GcHeapFixture::AdvanceGeneration(Generation::Young);
-    MarkView<Generation::Young> clearView = region->GetMarkView<Generation::Young>();
-    ProductClearLiveInfoFn()(region, clearView);
-    // Deliberately no MarkObject: the new cycle has zero first paint.
-    ProductPreserveRetainedFn()(region);
-    GC_EXPECT_FALSE(region->RetainedMarkWordsSay(holderOffset));
-
-    region->metadata.liveInfo = nullptr;
-    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    region->FreeRetainedMarkWords();
-    fx.FreePlanted(previous);
-}
-
-// Relocsel's unselected-page arm may carry a live-byte census without a
-// current mark face.  The bounded preserve records that this page was not
-// examined instead of applying PreserveRetainedLiveInfo's examined-page CHECK.
-GC_TEST(LiveMap, UnexaminedRelocselPageKeepsWithoutSnapshot)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    region->GetOrAllocMarkBitmap(region->GetMarkView<Generation::Old>())->AddLiveCounts(0, 64);
-    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    ProductPreserveRetainedUpToFn()(
-        region,
-        std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
-    GC_EXPECT_TRUE(region->GetRetainedLiveInfo() == nullptr);
-    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED));
-}
-
-// Positive control: first publish a valid snapshot, then clear/unbind its
-// borrowed LiveInfo.  The bounded API must retain the examined-then-lost
-// distinction and abort; this is not the initial NEVER_EXAMINED fixture.
-GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, region->GetRegionSize());
-    (void)bm->MarkBits(0, 8, region->GetRegionSize());
-    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    region->PreserveRetainedLiveInfo();
-    GC_EXPECT_TRUE(region->HasEverPreservedRetainedLiveInfo());
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    region->FreeRetainedMarkWords();
-    region->BeginRetainedPreserve();
-    region->GetOrAllocMarkBitmap(region->GetMarkView<Generation::Old>())->AddLiveCounts(0, 64);
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_LOST));
-    pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        ProductPreserveRetainedUpToFn()(
-            region,
-            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
-        _exit(0);
-    }
-    int status = 0;
-    GC_EXPECT_TRUE(waitpid(pid, &status, 0) == pid);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-    fx.FreePlanted(live);
-}
-
-// Owned-copy positive arm: retained words stay valid until a later Preserve
-// replaces the carrier.
-GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, region->GetRegionSize());
-    (void)bm->MarkBits(0, 8, region->GetRegionSize());
-    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    region->PreserveRetainedLiveInfo();
-    GC_EXPECT_TRUE(region->HasEverPreservedRetainedLiveInfo());
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    region->GetOrAllocMarkBitmap(region->GetMarkView<Generation::Old>())->AddLiveCounts(0, 64);
-    pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        ProductPreserveRetainedUpToFn()(
-            region,
-            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
-        _exit(0);
-    }
-    int status = 0;
-    GC_EXPECT_TRUE(waitpid(pid, &status, 0) == pid);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-    region->FreeRetainedMarkWords();
-    fx.FreePlanted(live);
-}
-
-GC_TEST(LiveMap, RetainedCaptureUnionsYoungLargeFlagBeforePromotion)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
-    region->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
-    region->SetYoungRegionFlag(1);
-    MarkView<Generation::Young> young = region->GetMarkView<Generation::Young>();
-    region->SetMarkedRegionFlag(young, 1);
-    region->SetRegionAllocPtr(region->GetRegionStart() + 64);
-    region->AddLiveCounts(1, 64);
-
-    ProductPreserveRetainedFn()(region);
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
-
-    region->FreeRetainedMarkWords();
-}
-
-// ZGC zPage.inline.hpp:53-58: a large page contains one object at page start.
-// Its retained livemap is therefore one persistent bit, including resurrection.
-GC_TEST(LiveMap, RetainedLargeMarkBitSurvivesCurrentFaceLoss)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
-    region->SetRegionType(RegionInfo::RegionType::LARGE_REGION);
-    BaseObject* holder = fx.PlaceObject(region->GetRegionStart());
-    region->SetRegionAllocPtr(region->GetRegionStart() + holder->GetSize());
-    MarkView<Generation::Old> old = region->GetMarkView<Generation::Old>();
-    GC_EXPECT_FALSE(region->MarkObject(old, holder, holder->GetSize()));
-
-    // Product write site: CollectLargeGarbage resets the one-bit face after
-    // mark and ResetMarkBit must preserve it first.
-    region->ResetMarkBit(old);
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
-
-    GC_EXPECT_FALSE(region->IsMarkedObject(old, holder));
-    GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
-
-    region->FreeRetainedMarkWords();
 }
 
 // U4: liveInfo0 snapshot survives clearing current liveInfo.
@@ -939,3 +634,120 @@ GC_TEST(ZLiveMapPort, CollectorMarkObjectConsumesProductPair)
 }
 
 // U4: product mark then IsSurvivedObject.
+
+// ZPage::clone_for_promotion / ZPage::object_iterate; the large-page case
+// follows ZLiveMapTest.strongly_live_for_large_zpage. The old page descriptor
+// gets a fresh map while the original young page keeps the same owned map.
+GC_TEST(ZLiveMapPort, CloneForPromotionKeepsOriginalPageLivemap)
+{
+    for (bool large : { false, true }) {
+        GcHeapFixture fx;
+        RegionInfo* region = fx.region0;
+        region->SetYoungRegionFlag(1);
+        region->SetYoungAge(1);
+        if (large) {
+            region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+        }
+        BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
+        LiveInfo* originalLive = region->GetLiveInfo();
+        GC_EXPECT_TRUE(originalLive != nullptr);
+        const auto mark = ProductMarkObjectFn<Generation::Young>();
+        GC_EXPECT_TRUE(mark != nullptr);
+        GC_EXPECT_FALSE(mark(region, region->GetMarkView<Generation::Young>(),
+                             object, object->GetSize(), true));
+        auto originalPage = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
+        GC_EXPECT_FALSE(region->IsYoungRegion());
+        GC_EXPECT_EQ(originalPage->Age(), 1u);
+        GC_EXPECT_TRUE(region->GetLiveInfo() != originalLive);
+        GC_EXPECT_TRUE(region->GetCurrentLiveMap() == nullptr);
+        std::vector<BaseObject*> visited;
+        originalPage->ObjectIterate([&](BaseObject* obj) { visited.push_back(obj); });
+        GC_EXPECT_EQ(visited.size(), 1u);
+        GC_EXPECT_TRUE(visited[0] == object);
+        // Retiring the reusable descriptor cannot release the original page.
+        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region);
+        region->metadata.liveInfo = nullptr;
+        visited.clear();
+        originalPage->ObjectIterate([&](BaseObject* obj) { visited.push_back(obj); });
+        GC_EXPECT_EQ(visited.size(), 1u);
+        GC_EXPECT_TRUE(visited[0] == object);
+    }
+}
+
+// ZLiveMap::iterate checks is_marked(original_generation) before consuming
+// segments, including when an allocated bitmap still contains previous bits.
+GC_TEST(ZLiveMapPort, PromotionIteratorRequiresCurrentYoungSequence)
+{
+    for (bool large : { false, true }) {
+        for (bool advanceBeforeClone : { false, true }) {
+            GcHeapFixture fx;
+            RegionInfo* region = fx.region0;
+            region->SetYoungRegionFlag(1);
+            if (large) {
+                region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+            }
+            BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
+            const auto mark = ProductMarkObjectFn<Generation::Young>();
+            GC_EXPECT_TRUE(mark != nullptr);
+            GC_EXPECT_FALSE(mark(region, region->GetMarkView<Generation::Young>(),
+                                 object, object->GetSize(), true));
+            LiveInfo* originalLive = region->GetLiveInfo();
+            RegionBitmap* bitmap = originalLive->GetMarkFace().bitmap;
+            const size_t offset = reinterpret_cast<MAddress>(object) - region->GetRegionStart();
+            GC_EXPECT_TRUE(bitmap->IsObjectStart(offset));
+            if (advanceBeforeClone) {
+                GcHeapFixture::AdvanceGeneration(Generation::Young);
+            }
+            auto originalPage = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
+            size_t visits = 0;
+            const auto visit = [&](BaseObject* obj) {
+                GC_EXPECT_TRUE(obj == object);
+                ++visits;
+            };
+            originalPage->ObjectIterate(visit);
+            GC_EXPECT_EQ(visits, advanceBeforeClone ? 0u : 1u);
+            if (!advanceBeforeClone) {
+                // The old owner of the reused slot is irrelevant to this page.
+                GcHeapFixture::AdvanceGeneration(Generation::Old);
+                visits = 0;
+                originalPage->ObjectIterate(visit);
+                GC_EXPECT_EQ(visits, 1u);
+                GcHeapFixture::AdvanceGeneration(Generation::Young);
+            }
+            // Old start bits really remain; sequence mismatch must suppress them.
+            GC_EXPECT_TRUE(bitmap->IsObjectStart(offset));
+            visits = 0;
+            originalPage->ObjectIterate(visit);
+            GC_EXPECT_EQ(visits, 0u);
+        }
+    }
+}
+
+// ZPage::object_iterate (zPage.inline.hpp:320-331) consumes start bits;
+// unmarked storage before and between objects is not an object header.
+GC_TEST(ZLiveMapPort, LiveIteratorVisitsOnlyObjectStarts)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    BaseObject* second = fx.PlaceObject(region->GetRegionStart() + 256);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    auto mark = ProductMarkObjectFn<Generation::Old>();
+    GC_EXPECT_TRUE(mark != nullptr);
+    auto view = region->GetMarkView<Generation::Old>();
+    GC_EXPECT_FALSE(mark(region, view, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_FALSE(mark(region, view, second, second->GetSize(), true));
+    std::vector<BaseObject*> visited;
+    GC_EXPECT_TRUE(region->VisitLiveObjectsUntilFalse([&](BaseObject* obj) {
+        visited.push_back(obj);
+        return true;
+    }));
+    GC_EXPECT_EQ(visited.size(), 2u);
+    GC_EXPECT_TRUE(visited[0] == fx.obj0);
+    GC_EXPECT_TRUE(visited[1] == second);
+    size_t visits = 0;
+    GC_EXPECT_FALSE(region->VisitLiveObjectsUntilFalse([&](BaseObject*) {
+        ++visits;
+        return false;
+    }));
+    GC_EXPECT_EQ(visits, 1u);
+}

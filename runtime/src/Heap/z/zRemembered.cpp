@@ -99,8 +99,12 @@ bool SlotHeldByLiveObject(const void* slot)
     if (RegionIsAllocatingPage(region)) {
         return true;
     }
-    BaseObject* holder = Collector::TryRecoverInteriorBase(
-        reinterpret_cast<BaseObject*>(const_cast<void*>(slot)));
+    BaseObject* holder = reinterpret_cast<BaseObject*>(
+        region->FindLiveObjectStart(reinterpret_cast<MAddress>(slot)));
+    if (holder == nullptr || reinterpret_cast<MAddress>(slot) - reinterpret_cast<MAddress>(holder) >=
+        RegionSpace::GetAllocSize(*holder)) {
+        return false;
+    }
     return HolderObjectIsLive(holder);
 }
 

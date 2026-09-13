@@ -34,7 +34,7 @@ struct PrimitiveArrayTypeInfos {
         array->SetType(TypeKind::TYPE_KIND_RAWARRAY);
         array->SetComponentTypeInfo(byte);
 
-        // The major visitor's PlausibleManagedObjectGate requires a resident
+        // The fixture uses a resident
         // TypeInfo. Static storage keeps this registered range alive.
         TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
             reinterpret_cast<uintptr_t>(this), sizeof(*this));
@@ -67,8 +67,6 @@ GC_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
     RegionInfo* targetRegion = fx.region1;
     targetRegion->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
     targetRegion->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
-    MarkView<Generation::Old> view = targetRegion->GetMarkView<Generation::Old>();
-    targetRegion->ResetMarkBit(view);
 
     GC_EXPECT_TRUE(bytes->IsPrimitiveArray());
     GC_EXPECT_FALSE(infos.array->HasRefField());
@@ -86,7 +84,6 @@ GC_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
         ++holderSlotVisits;
         BaseObject* target = to_object(field.GetTargetObject());
         GC_EXPECT_TRUE(target == bytes);
-        GC_EXPECT_TRUE(Collector::PlausibleManagedObjectGate("gc_unit.followedge", target));
         if (!targetRegion->IsMarkedObject(view, target)) {
             ++pushed;
             GC_EXPECT_FALSE(targetRegion->MarkObject(view, target, target->GetSize()));

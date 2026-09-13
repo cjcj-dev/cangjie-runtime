@@ -8,7 +8,6 @@
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
-#include "Heap/WCollector/RememberedHolderPolicy.h"
 
 #include <array>
 #include <atomic>
@@ -240,31 +239,6 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
     if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
         return oldObj;
     }
-    // arrayinit2 / markfloor Q2 / introot: stackmap may label RawArray+8 (&length) as a root.
-    // Colouring that interior makes the mutator load a non-canonical address (si_code=128).
-    // Relocate via host object; write plain interior (toHost+offset) back.
-    if (!Collector::PlausibleManagedObjectGate("ForwardUpdateRawRef", oldObj)) {
-        BaseObject* host = Collector::TryRecoverInteriorBase(oldObj);
-        RegionInfo* hostRegion = host == nullptr ? nullptr :
-            RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(host));
-        const bool hostHasForwardingFace = hostRegion != nullptr && hostRegion->GetLiveInfo0ForProbe() != nullptr;
-        if (hostHasForwardingFace && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
-            BaseObject* toHost = TryForwardObject(host, generation);
-            if (toHost == nullptr) {
-                Collector::FailClosedLoad(
-                    "WCollector::ForwardUpdateRawRef.interior-unresolved", host,
-                    reinterpret_cast<uintptr_t>(&root),
-                    ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
-            }
-            BaseObject* toInterior = reinterpret_cast<BaseObject*>(
-                reinterpret_cast<uintptr_t>(toHost) +
-                (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
-            HealRootWriteback(root, toInterior, HealSite::WCollectorForwardRawInterior);
-            return toInterior;
-        }
-        HealRootWriteback(root, oldObj, HealSite::WCollectorPreserveRawInterior);
-        return oldObj;
-    }
     if (IsGhostFromObject(oldObj)) {
         const MAddress mappedAddr = ForwardingTable::FindTo(reinterpret_cast<MAddress>(oldObj), generation);
         if (mappedAddr != 0) {
@@ -447,10 +421,6 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    if (!Collector::PlausibleManagedObjectGate("EnsureRouteDomain", obj)) {
-        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
     if (!obj->IsValidObject()) {
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
@@ -512,10 +482,8 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     LiveInfo* ghost = region->GetLiveInfo0ForProbe();
     RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : region->GetOwnerMarkBitmap(ghost);
     if (ghost != nullptr && ghost != live && ghostBitmap != nullptr) {
-        size_t objSize = 0;
-        if (Collector::PlausibleManagedObjectGate("EnsureRouteDomain.size", obj)) {
-            objSize = obj->GetSize();
-        }
+        const size_t objSize = obj->GetSize();
+
         MAddress regionStart = region->GetRegionStart();
         size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - regionStart);
         if (objSize > 0 && offset + objSize <= regionSize) {
@@ -547,16 +515,6 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return false;
     }
-    if (!Collector::PlausibleManagedObjectGate("statresid.force_domain", obj)) {
-        BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-        if (host == nullptr || host == obj) {
-            return false;
-        }
-        obj = host;
-        if (!Collector::PlausibleManagedObjectGate("statresid.force_domain.host", obj)) {
-            return false;
-        }
-    }
     EnsureRouteDomainMembership(collector, obj);
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
@@ -579,10 +537,8 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
     RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetOwnerMarkBitmap(g0);
     if (g0 != nullptr && ghostBitmap != nullptr) {
         if (!region->IsRouteSurvivedObject(offset)) {
-            size_t objSize = 0;
-            if (Collector::PlausibleManagedObjectGate("statresid.force_domain.size", obj)) {
-                objSize = obj->GetSize();
-            }
+            const size_t objSize = obj->GetSize();
+
             size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
             if (objSize > 0 && offset + objSize <= regionSize) {
 
@@ -631,13 +587,9 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
     return true;
 }
 
-BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw,
-                                              bool holderIsCurrentMinorRoot,
-                                              bool* preservedByCurrentRoot) const
+BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
 {
     (void)stw;
-    (void)holderIsCurrentMinorRoot;
-    (void)preservedByCurrentRoot;
 
     RefField<> observed(field);
     BaseObject* from = to_object(observed.GetTargetObject());
@@ -687,8 +639,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
     return resolved;
 }
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
-                                      const ScopedStopTheWorld* stw,
-                                      bool holderIsCurrentMinorRoot) const
+                                      const ScopedStopTheWorld* stw) const
 {
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
@@ -704,8 +655,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         const MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
         RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(targetAddress);
         RegionInfo* baseRegion = RegionInfo::TryGetRegionInfoAt(baseAddress);
-        const bool baseValid = targetAddress > baseAddress && targetRegion == baseRegion &&
-            Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.knownBase", knownBase);
+        const bool baseValid = targetAddress > baseAddress && targetRegion == baseRegion;
         if (!baseValid) {
             return false;
         }
@@ -727,7 +677,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         }
         return true;
     }
-    BaseObject* target = ResolveMinorReference(field, stw, holderIsCurrentMinorRoot);
+    BaseObject* target = ResolveMinorReference(field, stw);
     // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
     // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
     // Same heap gate as ForwardUpdateRawRef / FindToVersion.
@@ -739,62 +689,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // concurrent fix peers can win. Pre-evac H3 samples the prior cycle's residue —
     // nulling here clears it before the next VERIFY_HEAP inventory.
     // Criterion: RegionInfo::IsFreeRegion|IsGarbageRegion at this Fix call (file:line).
-    if (ScrubMinorFreeTarget(field, target, true, holderIsCurrentMinorRoot)) {
+    if (ScrubMinorFreeTarget(field, target, true)) {
         return true;
-    }
-    // interiorsrc2 / introot: value may be RawArray+8 (derived interior). Relocate via host;
-    // keep the interior payload. Storage is HeapSlot (fields/remset), so publish
-    // it with StoreGood; stackmap DerivedSlot remains plain.
-    // ScopedPlainWriter tags DerivedLegal column, not K1 HeapSlot plain.
-    if (knownBase != nullptr) {
-        MAddress targetAddress = reinterpret_cast<MAddress>(target);
-        MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
-        size_t offset = targetAddress > baseAddress ? targetAddress - baseAddress : 0;
-        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(targetAddress);
-        RegionInfo* baseRegion = RegionInfo::TryGetRegionInfoAt(baseAddress);
-        bool allowedOffset = offset == 8u || offset == 16u || offset == 24u || offset == 32u;
-        bool verifiedBase = allowedOffset && targetRegion == baseRegion &&
-            Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.knownBase", knownBase) &&
-            offset < RegionSpace::GetAllocSize(*knownBase);
-        if (!verifiedBase) {
-            return false;
-        }
-    }
-    if (knownBase != nullptr || !Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
-        BaseObject* host = knownBase != nullptr ? knownBase : Collector::TryRecoverInteriorBase(target);
-        RegionInfo* hostRegion = host == nullptr ? nullptr :
-            RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(host));
-        const bool hostHasForwardingFace = knownBase != nullptr ||
-            (hostRegion != nullptr && hostRegion->GetLiveInfo0ForProbe() != nullptr);
-        if (hostHasForwardingFace && host != nullptr && IsGhostFromObject(host) &&
-            !IsUnmovableFromObject(host)) {
-            EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
-            BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host, Generation::Young);
-            if (toHost == nullptr) {
-                Collector::FailClosedLoad(
-                    "WCollector::FixMinorEvacuatedSlot.field-interior-unresolved", host,
-                    reinterpret_cast<uintptr_t>(&field),
-                    ForwardingProvenance{ ForwardingHolderKind::Derived, knownBase, &field });
-            }
-            size_t offset = static_cast<size_t>(reinterpret_cast<uintptr_t>(target) -
-                                                reinterpret_cast<uintptr_t>(host));
-            MAddress oldVal = raw(oldField.GetFieldValue());
-            MAddress interiorAddress = reinterpret_cast<MAddress>(toHost) + offset;
-            if (oldVal != interiorAddress) {
-                (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), toHost, offset,
-                                                 HealSite::WCollectorMinorFixInteriorForward);
-            }
-            return true;
-        }
-        // Gate rejected; host unknown or not forwarded — preserve the interior
-        // address, but the heap carrier is still fully coloured.
-        MAddress oldVal = raw(oldField.GetFieldValue());
-        MAddress interiorAddress = reinterpret_cast<MAddress>(target);
-        if (oldVal != interiorAddress) {
-            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), target,
-                                             HealSite::WCollectorMinorFixInteriorPreserve);
-        }
-        return false;
     }
     HeapSlot<> oldBits(oldField);
     BaseObject* oldObj = to_object(oldBits.GetTargetObject());
@@ -825,16 +721,6 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
             "WCollector::FixMinorEvacuatedSlot.unresolved", target,
             static_cast<uintptr_t>(raw(field.GetFieldValue())),
             ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
-    }
-    // ForwardObject may return the same interior if gated; re-check before colouring.
-    if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
-        MAddress oldVal = raw(field.GetFieldValue());
-        MAddress interiorAddress = reinterpret_cast<MAddress>(current);
-        if (oldVal != interiorAddress) {
-            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), current,
-                                             HealSite::WCollectorMinorFixInteriorPostForward);
-        }
-        return false;
     }
     // plainroots: stack/reg root slots → plain current; heap remset/fields → Phase C colour.
     // Plain on heap was the trust-state install that AssertColouredWriteIfEnabled fires on.
@@ -870,57 +756,6 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
     MAddress oldValue = raw(root.LoadPlain());
     HeapSlot<> observedBits(to_zpointer(oldValue));
     BaseObject* observed = to_object(observedBits.GetTargetObject());
-    if (observed != nullptr && Heap::IsHeapAddress(observed) &&
-        !Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", observed)) {
-        BaseObject* host = Collector::TryRecoverInteriorBase(observed);
-        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
-            // A bare ForwardingTable::FindTo asks for a receipt that only exists once the
-            // host has actually been relocated.  While its page is still FORWARDABLE no
-            // receipt has been written yet, so the miss says nothing about the host -- and
-            // measured, that is the miss this branch was reporting: route=1 compacted=0
-            // young=1 marked=1 survived=1 isStart=1, a live object whose page had not been
-            // routed.  ZGC has one rule here and the barrier is the *producer*:
-            // ZRelocate::relocate_object looks the address up and, on a miss, performs the
-            // relocation itself (zRelocate.cpp:382-416).  The base branch below already
-            // spells that out (ForceRootRouteDomainWhileForwardable + ForwardObject, retried
-            // once, then the versioned table).  Resolve the interior host through the same
-            // producer so the two halves of one mechanism cannot disagree about when a
-            // from-address is resolvable.
-            BaseObject* toHost = nullptr;
-            RegionInfo* hostRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(host));
-            if (hostRegion != nullptr && hostRegion->GetLiveInfo0ForProbe() != nullptr) {
-                (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host);
-                toHost = const_cast<WCollector*>(this)->ForwardObject(host, Generation::Young);
-                if (toHost == nullptr &&
-                    ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host)) {
-                    toHost = const_cast<WCollector*>(this)->ForwardObject(host, Generation::Young);
-                }
-            }
-            if (toHost == nullptr) {
-                const ForwardingProvenance provenance{
-                    ForwardingHolderKind::StackSlot, this, &root
-                };
-                BaseObject* viaTable = FindToVersion(host, Generation::Young).GetOrFailClosed(
-                    "WCollector::FixMinorEvacuatedSlot.interior", provenance);
-                if (viaTable != nullptr && Heap::IsHeapAddress(viaTable) && viaTable->IsValidObject()) {
-                    toHost = viaTable;
-                }
-            }
-            if (toHost == nullptr) {
-                Collector::FailClosedLoad(
-                    "WCollector::FixMinorEvacuatedSlot.interior-unresolved", host,
-                    reinterpret_cast<uintptr_t>(&root),
-                    ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
-            }
-            BaseObject* toInterior = reinterpret_cast<BaseObject*>(
-                reinterpret_cast<uintptr_t>(toHost) +
-                (reinterpret_cast<uintptr_t>(observed) - reinterpret_cast<uintptr_t>(host)));
-            HealRootWriteback(root, toInterior, HealSite::WCollectorFixRootInteriorForward);
-            return toInterior != observed;
-        }
-        HealRootWriteback(root, observed, HealSite::WCollectorPreserveRootInterior);
-        return false;
-    }
     BaseObject* target = ResolveMinorReference(root, stw);
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
@@ -967,10 +802,6 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             reinterpret_cast<uintptr_t>(&root),
             ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
     }
-    if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
-        HealRootWriteback(root, current, HealSite::WCollectorFixRootPostForwardInterior);
-        return false;
-    }
     MAddress newValue = reinterpret_cast<MAddress>(current);
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
         return false;
@@ -1008,44 +839,10 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 
 }
 
-// fixinput: FixMinorObjectSlots reader-side accounting (default on, cheap atomics).
-// Reject arm must not silent-drop a real interior edge: recover host when Plausible.
-// tip-in-heap / non-object: no legitimate field edges — account + sample, no invent.
-namespace {
-std::atomic<size_t> g_fixinputReject{ 0 };
-std::atomic<size_t> g_fixinputRecover{ 0 };
-std::atomic<size_t> g_fixinputUnrecoverable{ 0 };
-} // namespace
-
 void WCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorld* stw)
 {
     // secondclass ②: belt-and-braces — refuse null tip before HasRefField.
     if (object == nullptr || !object->IsValidObject()) {
-        return;
-    }
-    // fixinput / nilclass 丙: mark side already uses PlausibleManagedObjectGate
-    // (PushYoungObject / TraceYoungClosure); Fix only had IsValidObject (tip≠null).
-    // Coloured heap ref as tip (tip-in-heap) still passes IsValidObject → SEGV_nil in
-    // ForEachBitmapWord. Reuse gate semantics at the consumer; do not relax the gate.
-    if (!Collector::PlausibleManagedObjectGate("FixMinorObjectSlots", object)) {
-        size_t n = g_fixinputReject.fetch_add(1, std::memory_order_relaxed) + 1;
-        BaseObject* host = Collector::TryRecoverInteriorBase(object);
-        // Only rescan when host itself is a real managed object (classic RawArray+8).
-        // tip-in-heap residuals must not invent a false host via ClassifyInteriorOffset.
-        if (host != nullptr && host != object &&
-            Collector::PlausibleManagedObjectGate("FixMinorObjectSlots.host", host)) {
-            g_fixinputRecover.fetch_add(1, std::memory_order_relaxed);
-            FixMinorObjectSlots(host, stw);
-            return;
-        }
-        g_fixinputUnrecoverable.fetch_add(1, std::memory_order_relaxed);
-        // Edge disposition: not a managed object header — no legitimate field edges.
-        if (n <= 16) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][fixinput] reject FixMinorObjectSlots obj=%p tip=%p n=%zu "
-                "reason=non-object-no-host (edge: no field walk; host unknown)",
-                object, object->GetTypeInfo(), n);
-        }
         return;
     }
     if (!object->HasRefField()) {
@@ -1062,7 +859,6 @@ void WCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorl
 
 void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
                                        const MinorSlotSet& rememberedSlots,
-                                       const MinorObjectSet& currentMinorRoots,
                                        bool refFixSlotsCoveredByReachable,
                                        const MinorInteriorBaseMap& interiorBases,
                                        std::unique_ptr<ScopedStopTheWorld>* stw)
@@ -1083,17 +879,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     std::vector<MAddress> remsetVec;
     remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
 
-    std::vector<std::pair<MAddress, MAddress>> currentRootRanges;
-    currentRootRanges.reserve(currentMinorRoots.size());
-    for (BaseObject* root : currentMinorRoots) {
-        MAddress start = reinterpret_cast<MAddress>(root);
-        currentRootRanges.emplace_back(start, start + RegionSpace::GetAllocSize(*root));
-    }
-    auto holderIsCurrentRoot = [&currentRootRanges](MAddress slot) {
-        return std::any_of(currentRootRanges.begin(), currentRootRanges.end(),
-                           [slot](const auto& range) { return slot >= range.first && slot < range.second; });
-    };
-
     // zRemembered.cpp:remap_current visits remembered slots. Stack completion
     // belongs to the phase watermark; it does not require a reachable-heap sweep.
     auto remapRemembered = [&](GCWorkers& pool) {
@@ -1112,7 +897,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 }
                 auto known = interiorBases.find(slot);
                 BaseObject* base = known == interiorBases.end() ? nullptr : known->second;
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw(), holderIsCurrentRoot(slot));
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw());
             }
         });
         pool.Run(task);
@@ -1230,16 +1015,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             remapRemembered(workers);
         }
-        {
-            size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
-            size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
-            size_t unr = g_fixinputUnrecoverable.load(std::memory_order_relaxed);
-            if (rej != 0 || rec != 0 || unr != 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][fixinput] reject=%zu recover=%zu unrecoverable=%zu",
-                    rej, rec, unr);
-            }
-        }
     }
 
     {
@@ -1267,14 +1042,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     }
                     continue;
                 }
-                // Residual candidates not forwarded above (e.g. raw-pointer pinned):
-                // still demote to old. Remset walk is ZRelocateAddRemsetForFlipPromoted
-                // (zRelocate.cpp:1257-1306): Select+Promote here under STW3, walk after
-                // STW3 release (young.conc_promote_walk). Do not Record here — that walk
-                // is the STW cost this lane moves out.
-                region->PreserveRetainedLiveInfo();
                 manager.AddFlipPromotedPage(region);
-                (void)region->PromoteYoungRegion(promotionView);
             }
         }
         }
@@ -1361,30 +1129,24 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
 void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
 {
     // zRelocate.cpp:1257-1306. Producers have finished before the worker gang
-    // starts; pages and their retained livemaps stay alive until it joins.
-    std::vector<RegionInfo*> pages;
+    // starts; pages and their livemaps stay alive until it joins.
+    std::vector<RegionInfo::PromotionPage*> pages;
     {
         std::lock_guard<std::mutex> lock(flipPromotedMutex);
-        pages.swap(flipPromotedPages);
+        for (const auto& page : flipPromotedPages) {
+            pages.push_back(page.get());
+        }
     }
     class PageTask final : public GCWorkerTask {
     public:
-        PageTask(const std::vector<RegionInfo*>& pages, const std::function<void(RefField<>&)>& remember)
+        PageTask(const std::vector<RegionInfo::PromotionPage*>& pages, const std::function<void(RefField<>&)>& remember)
             : pages(pages), remember(remember) {}
         void Work(uint32_t) override
         {
             for (size_t index = next.fetch_add(1); index < pages.size(); index = next.fetch_add(1)) {
-                RegionInfo* page = pages[index];
-                const MAddress start = page->GetRegionStart();
-                const MAddress end = page->GetRetainedLiveInfoCoveredUpTo();
-                // Iterate object start bits, never parse non-live holder headers.
-                for (MAddress address = start; address < end; address += kMarkedBytesPerBit) {
-                    if (!page->RetainedMarkWordsSay(address - start)) {
-                        continue;
-                    }
-                    BaseObject* object = from_region_addr(address);
+                pages[index]->ObjectIterate([&](BaseObject* object) {
                     if (!object->HasRefField()) {
-                        continue;
+                        return;
                     }
                     object->ForEachRefField([&](RefField<>& field) {
                         const zpointer observed = field.GetFieldValue();
@@ -1395,11 +1157,11 @@ void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
                             remember(field);
                         }
                     });
-                }
+                });
             }
         }
     private:
-        const std::vector<RegionInfo*>& pages;
+        const std::vector<RegionInfo::PromotionPage*>& pages;
         const std::function<void(RefField<>&)> remember;
         std::atomic<size_t> next{0};
     } task(pages, [](RefField<>& field) {
@@ -1503,9 +1265,6 @@ static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* 
         MAddress position = start;
         for (size_t steps = 0; position < allocPtr && steps < (1u << 20); ++steps) {
             BaseObject* o = reinterpret_cast<BaseObject*>(position);
-            if (!MapleRuntime::PlausibleManagedObjectGate("inplacepop-walk", o)) {
-                break;
-            }
             const size_t allocSize = RegionSpace::GetAllocSize(*o);
             if (allocSize == 0) {
                 break;
@@ -1771,57 +1530,6 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj, Generation generation)
 {
-    // ZGC returns the original address only when forwarding-table membership
-    // is absent (zGeneration.inline.hpp:131-140).  A stale RegionInfo face is
-    // still membership and must resolve through a receipt or fail closed.
-    // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
-    // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
-    if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
-        // tipnull: uncopied movable ghost is not VisitLive success.
-        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
-            // receiptfirst: ZRelocate::relocate_object opens with
-            // `forwarding->find(from_addr, &cursor)` and returns on a hit
-            // (zRelocate.cpp:382-389); forward_object then asserts that read answers
-            // (zRelocate.cpp:411-415).  The receipt is consulted *before* anything is
-            // read out of the from copy, and it has to be: relocation copies the object
-            // away and reclamation is allowed to clear the from payload afterwards --
-            // that cleared payload is exactly what HandVerdict::ZeroHeader names.  So a
-            // content heuristic (PlausibleManagedObjectGate reads the tip word) must
-            // never be a precondition for reading the table; ordering it first refuses
-            // addresses whose to-version is already published.  A ghost-from movable
-            // address is precisely the population ZGC calls relocate_object on -- a page
-            // with a live ZForwarding -- so the table read belongs here, not after.
-            if (BaseObject* published = FindToVersion(obj, generation).found()) {
-                return published;
-            }
-            // inplaceto: an interior of an *already relocated* object fails the content gate the
-            // same way a stale from-address does, and on a compacted-in-place page both live in
-            // the one span.  Classify by geometry rather than by the gate's answer.
-            RegionInfo* ghostRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-            if (ghostRegion != nullptr && ghostRegion->IsCompacted()) {
-                const CompactedMissClass cls = ClassifyCompactedMiss(ghostRegion, obj);
-                // Registers may hold interiors; heap fields may not, which is why the field
-                // consumers above take only the start class.
-                if (cls == CompactedMissClass::kAlreadyToStart ||
-                    cls == CompactedMissClass::kAlreadyToInterior) {
-                    return obj;
-                }
-            }
-            BaseObject* waited = WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(ghostRegion));
-            if (waited != nullptr) {
-                return waited;
-            }
-            if (const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(obj), generation)) {
-                return reinterpret_cast<BaseObject*>(hit);
-            }
-            if (ZForwardingLife::CurrentPageWork() != nullptr) {
-                return nullptr;
-            }
-            CHECK_DETAIL(false, "should be forwarded from=%p", obj);
-            return nullptr;
-        }
-        return obj;
-    }
     BaseObject* to = TryForwardObject(obj, generation);
     if (to != nullptr) {
         return to;
@@ -1947,9 +1655,6 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPag
         UpdateRemsetForFields(obj, to);
         return to;
     }
-    if (!Collector::PlausibleManagedObjectGate("WCollector::RelocateObjectInner", obj)) {
-        return nullptr;
-    }
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
@@ -1967,7 +1672,7 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPag
             toObj->SetStateCode(ObjectState::NORMAL);
         }
         std::atomic_thread_fence(std::memory_order_release);
-        if (toObj == obj || ToHeaderCovered(toObj)) {
+        if (toObj == obj || (toObj != nullptr)) {
             const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(
                 publication, reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
             const MAddress mapped = receipt.address;
@@ -2081,21 +1786,19 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
 template<typename Fn>
 void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPtr, Fn&& fn)
 {
+    // ZPage::object_iterate over the original page's ordinary livemap.
+    RegionBitmap* bitmap = region->GetLiveStartBitmap();
+    if (bitmap == nullptr) {
+        return;
+    }
     const size_t regionBytes = allocPtr > start ? static_cast<size_t>(allocPtr - start) : 0;
-    size_t offset = 0;
-    while (offset < regionBytes) {
-        BaseObject* object = from_region_addr(start + offset);
-        if (!Collector::PlausibleManagedObjectGate("ForEachLiveObjectStart", object)) {
+    for (size_t offset = 0; offset < regionBytes; offset += kMarkedBytesPerBit) {
+        if (bitmap->IsObjectStart(offset)) {
+            fn(from_region_addr(start + offset), offset);
+        }
+        if (region->IsLargeRegion()) {
             break;
         }
-        const size_t size = RegionSpace::GetAllocSize(*object);
-        if (size == 0 || size > regionBytes - offset) {
-            break;
-        }
-        if (region->IsOwnerSurvivedObject(offset)) {
-            fn(object, offset);
-        }
-        offset += size;
     }
 }
 
@@ -2644,10 +2347,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             return;
         }
         if (youngRegion) {
-            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            region->PreserveRetainedLiveInfo();
             AddFlipPromotedPage(region);
-            (void)region->PromoteYoungRegion(promotionView);
         }
         ExemptFromRegion(region);
         region->DispelGhostFromRegion();

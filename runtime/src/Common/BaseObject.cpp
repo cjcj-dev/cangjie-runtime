@@ -25,14 +25,8 @@ void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
         return;
     }
     const SlotWordVerdict verdict = ClassifySlotWord(newVal);
-    BaseObject* holder = nullptr;
-    if (UNLIKELY(verdict == SlotWordVerdict::kIllegal)) {
-        holder = Collector::TryRecoverInteriorBase(
-            reinterpret_cast<BaseObject*>(const_cast<void*>(slot)));
-    }
     CHECK_DETAIL(verdict != SlotWordVerdict::kIllegal,
-                 "full-colour heap write rejected: slot=%p value=%#zx holder=%p",
-                 slot, newVal, holder);
+                 "full-colour heap write rejected: slot=%p value=%#zx", slot, newVal);
 }
 
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }
