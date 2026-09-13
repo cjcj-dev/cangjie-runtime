@@ -447,8 +447,7 @@ public:
         GCPhase phase = GC_PHASE_IDLE) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
-        // ZStat kind source (zStat.hpp:257/270): a scope entered while this counter is held is a
-        // pause phase.  No-op unless MRT_ZSTAT is on.
+        // Preserve the GCLOG phase-kind observation across rendezvous and held time.
         ZStat::EnterStwScope();
         MutatorManager::Instance().StopTheWorld(syncGCPhase, phase);
         stoppedTime = TimeUtil::NanoSeconds();
@@ -485,7 +484,7 @@ public:
     {
         startTime = TimeUtil::NanoSeconds();
         // StartLightSync parks every mutator, so phases entered anywhere in this scope
-        // belong to ZStat's pause account just like phases in ScopedStopTheWorld.
+        // are observed as paused, just like phases in ScopedStopTheWorld.
         ZStat::EnterStwScope();
         MutatorManager::Instance().StartLightSync(syncGCPhase, phase);
         stoppedTime = TimeUtil::NanoSeconds();

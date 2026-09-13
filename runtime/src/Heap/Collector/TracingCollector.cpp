@@ -811,16 +811,16 @@ void TracingCollector::FindUselessExternObjects()
 void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_TRACE");
-    MRT_PHASE_TIMER("DoTracing");
+    MRT_PHASE_TIMER(ZStatPhases::PDoTracing);
     VLOG(REPORT, "roots size: %zu", workStack.size());
 
     {
-        MRT_PHASE_TIMER("Concurrent marking");
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
         TracingImpl(workStack, foreignRootsSet);
     }
 
     {
-        MRT_PHASE_TIMER("Concurrent re-marking");
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
         ConcurrentReMark(workStack, foreignRootsSet);
     }
 
@@ -841,13 +841,13 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     CHECK_DETAIL(oldCycle.Phase() == GC_PHASE_MARK_COMPLETE,
                  "non-strong references require completed old marking");
     {
-        MRT_PHASE_TIMER("identify useless extern ref");
+        MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
         FindUselessExternObjects();
     }
     {
         // This explicit finalizable closure may mark after ordinary mark work
         // is closed, like ZGenerationOld::process_non_strong_references.
-        MRT_PHASE_TIMER("concurrent resurrection");
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentResurrection);
         DoResurrection(workStack);
     }
     // Process the discovered references after the finalizable closure, before

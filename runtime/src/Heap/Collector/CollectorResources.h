@@ -196,6 +196,7 @@ private:
     bool directorReevaluate = false;
     bool minorBusy = false;
     bool majorBusy = false;
+    ZStat statistics;
     ZStatCycle youngCycle;
     ZStatCycle oldCycle;
     pthread_t gcMainThread = 0;

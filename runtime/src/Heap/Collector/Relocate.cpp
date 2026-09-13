@@ -381,7 +381,7 @@ void WCollector::RemapYoungRoots()
     if (!RemapYoungRootsLogic::kEnableRemapYoungRoots) {
         return;
     }
-    MRT_PHASE_TIMER("RemapYoungRoots");
+    MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
     const uintptr_t youngMask = ZPointerRemappedYoungMask;
     const uintptr_t oldMask = ZPointerRemappedOldMask;
     size_t remsetSeen = 0;
@@ -593,16 +593,16 @@ void WCollector::StartRelocationTasks()
 void WCollector::Preforward()
 {
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
-    MRT_PHASE_TIMER("Preforward");
+    MRT_PHASE_TIMER(ZStatPhases::PPreforward);
     {
         // OpenJDK zGeneration.cpp:1175-1200: isolate pause_relocate_start from the
         // concurrent root-preforward work below. ScopedLightSync emits its matching
         // rec=stw record, including rendezvous and held time.
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
-        // ZStat samples pause/concurrent kind when the timer is constructed, so enter
+        // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
-        MRT_PHASE_TIMER("old.relocate_start");
+        MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
         RegionInfo::AdvanceCompactRouteTableGracePeriod();
         // fwdgrace: this sync does not go through TransitionToGCPhase, so the arena grace
         // period has to be advanced alongside the route-table one or the two drift apart.
@@ -1543,7 +1543,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     {
         // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
-        MRT_PHASE_TIMER("young.ref_fix");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungRefFix);
 
         // ZGC relocate_start (zGeneration.cpp:918-931): flip remap colour then
         // enter Relocate. Product path.
@@ -1568,7 +1568,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // Our own major path already has the ZGC order: PrepareForwardTable<Old> at :2533 runs
         // before flip_young/old_relocate_start at :2552-2553.  The two paths disagreed.
         {
-            MRT_PHASE_TIMER("young.ref_fix_prepare");
+            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixPrepare);
 
             // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
@@ -1602,7 +1602,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // pass1 root fix after the domain snapshot.
         // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
         {
-            MRT_PHASE_TIMER("young.ref_fix_root_pass1");
+            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixRootPass1);
             FixMinorRootSlots(liveStw());
             PreforwardDiscoveredExternObjects(Generation::Young);
             PreforwardAllResurrectExportFromObjects(Generation::Young);
@@ -1619,7 +1619,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true);
         {
             stw->reset();
-            MRT_PHASE_TIMER("young.concurrent_relocate");
+            MRT_PHASE_TIMER(ZStatPhases::PYoungConcurrentRelocate);
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
             ForwardFromSpace();
@@ -1633,7 +1633,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         postEvacPoint("post-forward-pre-reclaim", true);
         {
-            MRT_PHASE_TIMER("young.ref_fix_bulk");
+            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
             g_minorRefCasFail.store(0, std::memory_order_relaxed);
             g_minorRefCasOk.store(0, std::memory_order_relaxed);
             FixMinorRootSlots(liveStw());
@@ -1676,7 +1676,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     {
         // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
-        MRT_PHASE_TIMER("young.evac_finish");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungEvacFinish);
         // Residual remset walk no longer runs here; residualPromote stays 0.
         // The walk is young.conc_promote_walk after STW3 release.
         size_t residualPromoteRecords = 0;
@@ -1743,7 +1743,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                  "promoted-domain discharge must release an active STW3 owner");
     stw->reset();
     {
-        MRT_PHASE_TIMER("young.conc_promote_walk");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungConcPromoteWalk);
         if (PromotedRegionDomain::Enabled()) {
             RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
             size_t domainEdges = PromotedRegionDomain::DischargeAll(
@@ -1762,7 +1762,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     *stw = std::make_unique<ScopedStopTheWorld>("young retire forwarding", true,
                                                 GCPhase::GC_PHASE_FORWARD);
     {
-        MRT_PHASE_TIMER("young.evac_retire");
+        MRT_PHASE_TIMER(ZStatPhases::PYoungEvacRetire);
         // zGeneration.cpp:563: keep this set until the next young mark-end reset.
         // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
         manager.FinishIncompleteFromRegions();

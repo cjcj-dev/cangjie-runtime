@@ -103,7 +103,7 @@ public:
     size_t ReclaimGarbageMemory(bool /* releaseAll */) override
     {
         const size_t cachedBefore = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
-        MRT_PHASE_TIMER("ReclaimGarbageRegions");
+        MRT_PHASE_TIMER(ZStatPhases::PReclaimGarbageRegions);
         // zPageAllocator.cpp: free pages return to the mapped cache. Physical
         // uncommit belongs to zUncommitter.cpp:367-421, including OOM reclaim.
         regionManager.ReclaimGarbageRegions();
@@ -129,7 +129,7 @@ public:
     // Return the garbage size of from space.
     size_t RefineFromSpace()
     {
-        MRT_PHASE_TIMER("ExemptFromRegions");
+        MRT_PHASE_TIMER(ZStatPhases::PExemptFromRegions);
         return regionManager.ExemptFromRegions();
     }
 
@@ -146,7 +146,8 @@ public:
     template<Generation G>
     void ForwardFromSpace(GCWorkers& workers)
     {
-        MRT_PHASE_TIMER("ForwardFromRegions");
+        MRT_PHASE_TIMER(G == Generation::Young ? ZStatPhases::YoungForwardFromRegions :
+                        ZStatPhases::OldForwardFromRegions);
         regionManager.ForwardFromRegions<G>(workers);
     }
 

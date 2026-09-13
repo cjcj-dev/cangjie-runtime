@@ -197,7 +197,7 @@ case "${MRT_GC_UNIT_OHOS_HOST:-0}" in
     ;;
 esac
 
-TEST_DEFINES=(-DMRT_ZSTAT_COMPILED=1)
+TEST_DEFINES=()
 RANGE_REGISTRY_FLAGS=()
 RANGE_REGISTRY_SOURCES=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -354,7 +354,6 @@ MAIN_COMPILE_FLAGS=(
 MAIN_SOURCES=(
   "$SRC/gc_unit_main.cpp"
   "$SRC/gc_unit_stubs.cpp"
-  "$ROOT/runtime/src/Base/ZStat.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_z_bit_field.cpp"
   "$SRC/test_z_list.cpp"
