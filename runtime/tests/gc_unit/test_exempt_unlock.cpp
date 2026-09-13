@@ -153,7 +153,6 @@ void ExerciseExclusiveCopy(intptr_t destinationDelta, bool primeSourceHeaderFrom
     LiveInfo* live = fx.PlantLiveInfo(region);
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     (void)bitmap->MarkBits(region->GetAddressOffset(fromAddress), from->GetSize(), region->GetRegionSize());
-    region->AddLiveByteCount(from->GetSize());
     // SetRegionType installs a provisional carrier. Replace it at the same
     // product publication boundary used by PrepareForwardableRegion, without
     // asking the standalone fixture for an initialized CollectorProxy phase.

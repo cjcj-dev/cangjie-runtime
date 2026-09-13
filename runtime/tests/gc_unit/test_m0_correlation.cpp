@@ -250,7 +250,6 @@ LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liv
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     BaseObject* object = reinterpret_cast<BaseObject*>(liveObject);
     (void)bitmap->MarkBits(region->GetAddressOffset(liveObject), object->GetSize(), region->GetRegionSize());
-    region->AddLiveByteCount(object->GetSize());
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     return live;
 }

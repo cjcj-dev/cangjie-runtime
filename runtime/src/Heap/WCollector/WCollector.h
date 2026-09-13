@@ -201,8 +201,6 @@ public:
     MRT_EXPORT RouteLookupTestResult RouteLookupForTest(BaseObject* fromObj);
 #endif
 
-    void Init() override { LiveInfoArena::GetLiveInfoArena().InitializeForwardData(); }
-
     void MarkNewObject(BaseObject* obj) override;
     void StartYoungMarkWork();
     void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);

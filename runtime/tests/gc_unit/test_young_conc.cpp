@@ -221,10 +221,7 @@ void ModelAllocBlackPaint(RegionInfo* reg, BaseObject* obj, size_t totalSize, Al
     if (bm == nullptr) {
         return;
     }
-    bool already = bm->MarkBits(offset, totalSize, regionSize);
-    if (!already) {
-        reg->AddLiveByteCount(totalSize);
-    }
+    (void)bm->MarkBits(offset, totalSize, regionSize);
     LiveInfo* ghost = reg->GetLiveInfo0ForProbe();
     RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : reg->GetRouteMarkBitmap(ghost);
     if (ghost != nullptr && ghostBitmap != nullptr) {

@@ -62,7 +62,6 @@ public:
         uint64_t epoch = 0;
         MAddress topAtStart = 0;
         MAddress markStartAllocPtr = 0;
-        uint64_t liveByteCount = 0;
         uint8_t owner = 1;
         uint8_t largeMarked = 0;
         RegionLifeId lifeId = 0;
@@ -130,7 +129,7 @@ public:
     size_t length() const { return _entries.length(); }
 
     void publish_from_page_view(LiveInfo* liveInfo, uint64_t epoch, MAddress topAtStart,
-                                MAddress markStartAllocPtr, uint64_t liveByteCount,
+                                MAddress markStartAllocPtr,
                                 uint8_t owner, uint8_t largeMarked, RegionLifeId lifeId)
     {
         // lifeId is the publication word. Readers either reject the zero word
@@ -140,7 +139,6 @@ public:
         _from_page.epoch = epoch;
         _from_page.topAtStart = topAtStart;
         _from_page.markStartAllocPtr = markStartAllocPtr;
-        _from_page.liveByteCount = liveByteCount;
         _from_page.owner = owner;
         _from_page.largeMarked = largeMarked;
         __atomic_store_n(&_from_page.lifeId, lifeId, __ATOMIC_RELEASE);
