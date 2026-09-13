@@ -846,6 +846,39 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
     GC_EXPECT_EQ(thirdMinor.size(), 0u);
 }
 
+// zRemembered.cpp:347-420: enumerate sparse pages, tolerate a stale page
+// entry, and keep post-flip publications separate from previous-face scanning.
+GC_TEST(Remset, SparsePagesConsumeAndRearmAcrossFaces)
+{
+    const MAddress start = 0x300000000ULL;
+    const size_t pageBytes = RegionInfo::UNIT_SIZE;
+    RememberedSet rs;
+    rs.Initialize(start, 130 * pageBytes);
+    const MAddress first = start + pageBytes + sizeof(RefField<>);
+    const MAddress stale = start + 65 * pageBytes + sizeof(RefField<>);
+    const MAddress last = start + 129 * pageBytes + sizeof(RefField<>);
+    rs.Record(first);
+    rs.Record(stale);
+    rs.Record(last);
+    rs.ClearRegion(start + 65 * pageBytes, start + 66 * pageBytes);
+    std::unordered_set<size_t> pages;
+    rs.VisitRememberedPages(rs.activeBuffer.load(), [&](size_t page) { pages.insert(page); });
+    const std::unordered_set<size_t> expectedPages{1, 65, 129};
+    GC_EXPECT_TRUE(pages == expectedPages);
+    rs.FlipForMinor();
+    rs.Record(stale);
+    std::unordered_set<MAddress> previous;
+    rs.ScanPreviousForMinor(previous);
+    const std::unordered_set<MAddress> expectedPrevious{first, last};
+    GC_EXPECT_TRUE(previous == expectedPrevious);
+    GC_EXPECT_TRUE(rs.Contains(stale));
+    rs.FlipForMinor();
+    previous.clear();
+    rs.ScanPreviousForMinor(previous);
+    const std::unordered_set<MAddress> expectedNext{stale};
+    GC_EXPECT_TRUE(previous == expectedNext);
+}
+
 #if defined(MRT_GC_UNIT_TESTS)
 namespace {
 
@@ -871,7 +904,7 @@ void RecordFlipSlots(RememberedSet& rememberedSet, const std::unordered_set<MAdd
 
 enum class RemsetWordBacking : uint8_t {
     BITMAP,
-    DIRTY_MAP,
+    PAGE_MAP,
 };
 
 enum class RemsetProbeOperation : uint8_t {
@@ -902,8 +935,8 @@ size_t ProbeRemsetWordAccess(RememberedSet& rememberedSet, RemsetWordBacking bac
                 (void)rememberedSet.bitmaps[buffer].release();
                 rememberedSet.bitmaps[buffer].reset(words);
             } else {
-                (void)rememberedSet.dirtyMaps[buffer].release();
-                rememberedSet.dirtyMaps[buffer].reset(words);
+                (void)rememberedSet.rememberedPages[buffer].release();
+                rememberedSet.rememberedPages[buffer].reset(words);
             }
         }
 
@@ -950,7 +983,7 @@ RememberedSet::FlipTouchCounts ProbeFlipWordAccesses(RememberedSet& rememberedSe
 {
     return RememberedSet::FlipTouchCounts {
         ProbeRemsetWordAccess(rememberedSet, RemsetWordBacking::BITMAP, RemsetProbeOperation::FLIP),
-        ProbeRemsetWordAccess(rememberedSet, RemsetWordBacking::DIRTY_MAP, RemsetProbeOperation::FLIP),
+        ProbeRemsetWordAccess(rememberedSet, RemsetWordBacking::PAGE_MAP, RemsetProbeOperation::FLIP),
     };
 }
 
@@ -970,7 +1003,7 @@ GC_TEST(Remset, FlipTouchReceiptPositiveControl)
     const size_t bitmapAccesses = ProbeRemsetWordAccess(
         rs, RemsetWordBacking::BITMAP, RemsetProbeOperation::CLEAR_ACTIVE);
     const size_t dirtyAccesses = ProbeRemsetWordAccess(
-        rs, RemsetWordBacking::DIRTY_MAP, RemsetProbeOperation::CLEAR_ACTIVE);
+        rs, RemsetWordBacking::PAGE_MAP, RemsetProbeOperation::CLEAR_ACTIVE);
     std::fprintf(stderr, "DETAIL remset_flip_touch_control bitmap_word_accesses=%zu "
                          "dirty_word_accesses=%zu\n",
                  bitmapAccesses, dirtyAccesses);
@@ -980,7 +1013,7 @@ GC_TEST(Remset, FlipTouchReceiptPositiveControl)
 }
 
 // Two bitmap capacities x two cardinalities. Flip itself must touch no bitmap
-// or dirty-map word. The post-flip producer writes before the deferred consumer
+// or page-map word. The post-flip producer writes before the deferred consumer
 // runs, so exact set equality on both faces also proves that the consumer reads
 // the pre-flip contents and does not mix in records from the new current face.
 GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
