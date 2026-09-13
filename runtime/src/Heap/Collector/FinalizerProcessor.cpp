@@ -50,6 +50,7 @@ extern "C" MRT_EXPORT void* MRT_ProcessFinalizers(void* arg)
 
 void FinalizerProcessor::Start()
 {
+    Heap::GetHeap().GetAllocator().GetUncommitter().Start();
     pthread_t thread;
     pthread_attr_t attr;
     size_t stackSize = CangjieRuntime::GetConcurrencyParam().thStackSize * KB; // default 1MB stacksize
@@ -79,6 +80,7 @@ void FinalizerProcessor::Start()
 void FinalizerProcessor::Stop()
 {
     CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");
+    Heap::GetHeap().GetAllocator().GetUncommitter().Stop();
     running.store(false, std::memory_order_release);
     Notify();
     WaitStop();
@@ -88,9 +90,7 @@ FinalizerProcessor::FinalizerProcessor()
 {
     started = false;
     running.store(false, std::memory_order_relaxed);
-    uint32_t uncommitTickMs = Uncommitter::TickMs();
-    iterationWaitTime = uncommitTickMs == 0 ? DEFAULT_FINALIZER_TIMEOUT_MS :
-        std::min(DEFAULT_FINALIZER_TIMEOUT_MS, uncommitTickMs);
+    iterationWaitTime = DEFAULT_FINALIZER_TIMEOUT_MS;
     timeProcessorBegin = 0;
     timeProcessUsed = 0;
     timeCurrentProcessBegin = 0;
@@ -118,12 +118,10 @@ void FinalizerProcessor::Run()
                     break;
                 }
                 Wait(iterationWaitTime);
-                UncommitIdleMemory();
             }
         }
 
         if (!running.load(std::memory_order_acquire)) {
-            DrainUncommitIdleMemory();
             break;
         }
 
@@ -456,19 +454,6 @@ void FinalizerProcessor::ReclaimHeapGarbage()
 {
     ScopedEntryTrace trace("CJRT_GC_RECLAIM");
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
-}
-
-void FinalizerProcessor::UncommitIdleMemory()
-{
-    if (!Uncommitter::Enabled()) {
-        return;
-    }
-    Heap::GetHeap().GetAllocator().UncommitIdleMemory();
-}
-
-void FinalizerProcessor::DrainUncommitIdleMemory()
-{
-    Heap::GetHeap().GetAllocator().DrainUncommitIdleMemory();
 }
 
 void FinalizerProcessor::FeedHungryBuffers()
