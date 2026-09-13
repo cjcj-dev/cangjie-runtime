@@ -98,6 +98,7 @@ struct GcTriggerInputs {
     double lastGcDurationSec = 0.0;
     double youngSerialTimeSec = 0.0;
     double youngParallelTimeSec = 0.0;
+    double lastYoungWorkers = 1.0;
     double lastYoungGcDurationSec = 0.0;
     double lastOldGcDurationSec = 0.0;
     double timeSinceLastGcSec = 0.0;
@@ -190,8 +191,8 @@ inline bool GcTriggerMajorUrgent(const GcTriggerInputs& in)
 
 inline double GcTriggerGcTimeSec(double durationSec)
 {
-    // zDirector.cpp:426-434 — serial + parallelizable, both + 3.3 sigma.
-    // We only have a single wall sample; treat it as the serial+parallel sum.
+    // zDirector.cpp:426-434 — ZStat already supplies the sum of measured
+    // serial and parallelizable time, each with its own variance margin.
     return durationSec;
 }
 
@@ -206,12 +207,9 @@ inline double CalculateExtraYoungGcTime(const GcTriggerInputs& in)
     const double oldGarbage = static_cast<double>(oldUsed - oldLive);
     const double youngGcTime = GcTriggerGcTimeSec(in.lastYoungGcDurationSec);
     const double reclaimedPerYoungGc = in.reclaimedPerYoungAvg;
-    if (reclaimedPerYoungGc <= 0.0) {
-        return std::numeric_limits<double>::infinity();
-    }
     const double currentYoungGcTimePerBytesFreed = youngGcTime / reclaimedPerYoungGc;
     const double potentialYoungGcTimePerBytesFreed = youngGcTime / (reclaimedPerYoungGc + oldGarbage);
-    if (!std::isfinite(currentYoungGcTimePerBytesFreed)) {
+    if (currentYoungGcTimePerBytesFreed == std::numeric_limits<double>::infinity()) {
         return std::numeric_limits<double>::infinity();
     }
     const double extraYoungGcTimePerBytesFreed =
@@ -233,7 +231,7 @@ inline bool RuleWarmup(const GcTriggerInputs& in)
     if (in.isWarm || GcTriggerSoftMaxBytes(in) == 0) {
         return false;
     }
-    const double threshold = (in.warmupCyclesDone + 1) * 0.1 * GcTriggerSoftMaxBytes(in);
+    const size_t threshold = static_cast<size_t>((in.warmupCyclesDone + 1) * 0.1 * GcTriggerSoftMaxBytes(in));
     return in.usedBytes >= threshold;
 }
 
@@ -296,11 +294,6 @@ inline bool RuleMajorProactive(const GcTriggerInputs& in)
     const double serialGcTime = GcTriggerGcTimeSec(in.lastOldGcDurationSec) +
         GcTriggerGcTimeSec(in.lastYoungGcDurationSec);
     const double gcDuration = serialGcTime;
-    if (gcDuration <= 0.0) {
-        // ZGC is warm only after sampled cycles; a zero duration makes the
-        // acceptable interval 0 and would fire every tick.
-        return false;
-    }
     const double acceptableGcInterval =
         gcDuration * ((kGcTriggerProactiveAssumedThroughputDrop / kGcTriggerProactiveAcceptableThroughputDrop) - 1.0);
     const double timeUntilGc = acceptableGcInterval - in.timeSinceLastMajorSec;
@@ -482,8 +475,8 @@ inline GcTriggerDecision DecideGcTrigger(const GcTriggerInputs& in)
     GcTriggerInputs hard = in;
     hard.softMaxBytes = in.capacityBytes;
     const bool allocationRate = !GcTriggerYoungSmall(in) &&
-        (RuleDynamicAllocRate(in, in.workerCapacity, 1.0, false).trigger ||
-         RuleDynamicAllocRate(hard, in.workerCapacity, 1.0, true).trigger);
+        (RuleDynamicAllocRate(in, in.workerCapacity, in.lastYoungWorkers, false).trigger ||
+         RuleDynamicAllocRate(hard, in.workerCapacity, in.lastYoungWorkers, true).trigger);
     const GcTriggerRule minorRule = allocationRate ? GcTriggerRule::ALLOC_RATE :
         RuleHighUsage(in) ? GcTriggerRule::HIGH_USAGE : GcTriggerRule::NONE;
     if (minorRule != GcTriggerRule::NONE) {

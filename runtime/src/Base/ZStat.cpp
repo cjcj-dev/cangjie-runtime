@@ -93,6 +93,7 @@ GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZSta
     in.youngSerialTimeSec = youngCycle.serialTime + youngCycle.serialTimeSd * kGcTriggerOneIn1000;
     in.youngParallelTimeSec = youngCycle.parallelTime + youngCycle.parallelTimeSd * kGcTriggerOneIn1000;
     in.lastYoungGcDurationSec = in.youngSerialTimeSec + in.youngParallelTimeSec;
+    in.lastYoungWorkers = youngCycle.lastActiveWorkers;
     in.lastOldGcDurationSec = oldCycle.serialTime + oldCycle.serialTimeSd * kGcTriggerOneIn1000 +
         oldCycle.parallelTime + oldCycle.parallelTimeSd * kGcTriggerOneIn1000;
     in.lastGcDurationSec = in.youngSerialTimeSec + in.youngParallelTimeSec / concurrentWorkers;

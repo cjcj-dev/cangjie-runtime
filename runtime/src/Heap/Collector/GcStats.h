@@ -105,7 +105,7 @@ public:
 
     std::atomic<size_t> heapThreshold{ 0 };
 
-    // L1: last minor feeds the young watermark (CopyCollector.cpp skipped UpdateGCStats).
+    // Last completed minor collection statistics.
     std::atomic<size_t> lastYoungCandidateBytes{ 0 };
     std::atomic<size_t> lastYoungPromotedBytes{ 0 };
     std::atomic<size_t> lastYoungCollectedBytes{ 0 };

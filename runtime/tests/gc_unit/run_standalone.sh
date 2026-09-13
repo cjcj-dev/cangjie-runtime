@@ -388,6 +388,7 @@ MAIN_SOURCES=(
   "${RANGE_REGISTRY_SOURCES[@]}"
   "$SRC/test_stay_young.cpp"
   "$SRC/test_gc_trigger.cpp"
+  "$SRC/test_gc_director.cpp"
   "$SRC/test_gc_request_sync.cpp"
 
   "$SRC/test_uncommitter.cpp"

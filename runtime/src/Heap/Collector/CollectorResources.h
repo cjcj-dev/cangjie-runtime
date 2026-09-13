@@ -192,9 +192,6 @@ private:
     bool directorReevaluate = false;
     bool minorBusy = false;
     bool majorBusy = false;
-    uint64_t directorWarmupSequence = 0;
-    uint32_t initialYoungWorkers = 1;
-    uint32_t initialOldWorkers = 1;
     std::atomic<uint32_t> collectionsAtMajorStart {0};
     ZStatCycle youngCycle;
     ZStatCycle oldCycle;

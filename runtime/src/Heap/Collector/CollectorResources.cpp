@@ -312,21 +312,17 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     in.workerCapacity = young.capacity;
     const GcTriggerDecision decision = DecideGcTrigger(in);
     const GcWorkerSelection selection = SelectGcWorkers(in, young.capacity,
-        youngCycle.Stats(now).lastActiveWorkers);
+        in.lastYoungWorkers);
     if (decision.kind != GcTriggerKind::NONE) {
-        initialYoungWorkers = selection.youngWorkers;
-        initialOldWorkers = selection.oldWorkers;
         g_gcTriggerYoungWorkers.store(selection.youngWorkers, std::memory_order_relaxed);
         g_gcTriggerOldWorkers.store(selection.oldWorkers, std::memory_order_relaxed);
         NoteGcTriggerRule(decision.rule);
         if (decision.kind == GcTriggerKind::MAJOR) {
             const GCReason reason = decision.rule == GcTriggerRule::TIMER ? GC_REASON_BACKUP : GC_REASON_HEU;
-            const uint64_t sequence = majorDriverPort.EnqueueAsync(reason);
-            if (decision.rule == GcTriggerRule::WARMUP) {
-                directorWarmupSequence = sequence;
-            }
+            majorDriverPort.EnqueueAsync(reason, selection.youngWorkers, selection.oldWorkers,
+                                         decision.rule == GcTriggerRule::WARMUP);
         } else {
-            minorDriverPort.EnqueueAsync(GC_REASON_YOUNG);
+            minorDriverPort.EnqueueAsync(GC_REASON_YOUNG, selection.youngWorkers);
             if (old.cycleActive && old.activeWorkers != selection.oldWorkers) {
                 oldWorkers->RequestResize(selection.oldWorkers);
             }
@@ -339,7 +335,7 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         GcTriggerInputs hard = in;
         hard.softMaxBytes = in.capacityBytes;
         const auto request = RuleDynamicAllocRate(hard, young.capacity,
-            youngCycle.Stats(now).lastActiveWorkers, false);
+            in.lastYoungWorkers, false);
         if (!request.trigger) {
             return;
         }
@@ -397,15 +393,9 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
 
     // Set the request's generation budgets before mark-start can consume
     // them, including the old mark domain prepared by the young prelude.
-    uint32_t youngCount;
-    uint32_t oldCount;
-    bool warmup;
-    {
-        std::lock_guard<std::mutex> lock(directorMutex);
-        youngCount = initialYoungWorkers;
-        oldCount = initialOldWorkers;
-        warmup = request.reason != GC_REASON_YOUNG && request.sequence == directorWarmupSequence;
-    }
+    const uint32_t youngCount = request.youngWorkers == 0 ? concurrentGcThreadCount : request.youngWorkers;
+    const uint32_t oldCount = request.oldWorkers == 0 ? concurrentGcThreadCount : request.oldWorkers;
+    const bool warmup = request.warmup;
     if (youngWorkers != nullptr) {
         youngWorkers->SetActiveWorkers(youngCount);
         if (request.reason != GC_REASON_YOUNG) {
@@ -633,8 +623,6 @@ void CollectorResources::StartGCThreads()
         // GCWorkers counts participants, excluding the coordinating driver.
         youngWorkers = new GCWorkers(GCWorkers::Generation::YOUNG, concurrentGcThreadCount);
         oldWorkers = new GCWorkers(GCWorkers::Generation::OLD, concurrentGcThreadCount);
-        initialYoungWorkers = concurrentGcThreadCount;
-        initialOldWorkers = concurrentGcThreadCount;
 
     }
 

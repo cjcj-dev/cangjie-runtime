@@ -1123,3 +1123,28 @@ GC_TEST(GcRequestSync, CompilerAsyncEntryReturnsAndMergesPendingRequest)
 } // namespace MapleRuntime
 
 #endif // MRT_GC_UNIT_TESTS
+
+// zDriver.hpp ZDriverRequest / zDirector.cpp:796-817: queued requests own
+// their selected quotas; a later decision cannot replace a pending budget.
+GC_TEST(GcRequestSync, DriverRequestOwnsDirectorQuota)
+{
+    GCDriverPort port(GCDriverKind::MAJOR);
+    port.EnqueueAsync(GC_REASON_HEU, 2, 3, true);
+    port.EnqueueAsync(GC_REASON_BACKUP, 4, 1, false);
+    GCDriverRequest first{};
+    GCDriverRequest second{};
+    GC_EXPECT_TRUE(port.TryDequeue(first));
+    GC_EXPECT_TRUE(port.TryDequeue(second));
+    GC_EXPECT_EQ(first.youngWorkers, 2u);
+    GC_EXPECT_EQ(first.oldWorkers, 3u);
+    GC_EXPECT_TRUE(first.warmup);
+    GC_EXPECT_EQ(second.youngWorkers, 4u);
+    GC_EXPECT_EQ(second.oldWorkers, 1u);
+    GC_EXPECT_TRUE(!second.warmup);
+    port.EnqueueAsync(GC_REASON_USER);
+    GCDriverRequest user{};
+    GC_EXPECT_TRUE(port.TryDequeue(user));
+    GC_EXPECT_EQ(user.youngWorkers, 0u);
+    GC_EXPECT_EQ(user.oldWorkers, 0u);
+    GC_EXPECT_TRUE(!user.warmup);
+}
