@@ -107,13 +107,30 @@ void GetHeapUsage(const std::string &message, SendMsgCB sendMsg)
     MapleRuntime::StreamWriter* writer = new MapleRuntime::StreamWriter(stream);
     writer->WriteString("{\"id\":");
     writer->WriteString(stream->GetMessageID());
+    const auto usage = Heap::GetHeap().GetMemoryUsage();
+    const auto writeSize = [writer](size_t value) {
+        writer->WriteString(CString(static_cast<uint64_t>(value)));
+    };
+    const auto writePool = [writer, &writeSize](const ZMemoryUsage& pool) {
+        writer->WriteString("{\"usedSize\":");
+        writeSize(pool.used);
+        writer->WriteString(",\"currentSize\":");
+        writeSize(pool.current);
+        writer->WriteString(",\"maxSize\":");
+        writeSize(pool.max);
+        writer->WriteString("}");
+    };
     writer->WriteString(",\"result\":{\"usedSize\":");
-    ssize_t allocatedSize = MapleRuntime::Heap::GetHeap().GetAllocatedSize();
-    writer->WriteNumber(allocatedSize);
-    writer->WriteString(",\"totalSize\":");
-    ssize_t totalSize = MapleRuntime::Heap::GetHeap().GetMaxCapacity();
-    writer->WriteNumber(totalSize);
-    writer->WriteString("}");
+    writeSize(usage.young.used + usage.old.used);
+    writer->WriteString(",\"currentSize\":");
+    writeSize(usage.young.current + usage.old.current);
+    writer->WriteString(",\"maxSize\":");
+    writeSize(usage.young.max);
+    writer->WriteString(",\"young\":");
+    writePool(usage.young);
+    writer->WriteString(",\"old\":");
+    writePool(usage.old);
+    writer->WriteString("}}");
     writer->End();
     delete writer;
 }
