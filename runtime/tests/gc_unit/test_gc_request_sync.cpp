@@ -181,6 +181,7 @@ public:
                !maxActiveRuns.compare_exchange_weak(observed, activeNow, std::memory_order_relaxed)) {
         }
         if (advanceEpoch) {
+            youngCycle.Begin(gcIndex);
             resources->SetGcStarted(true);
         }
         size_t runNumber = 0;
@@ -193,7 +194,7 @@ public:
             release.wait(lock, [this, runNumber] { return releasedRuns >= runNumber; });
         }
         if (advanceEpoch) {
-            g_gcCount.fetch_add(1, std::memory_order_release);
+            youngCycle.End();
         }
         activeRuns.fetch_sub(1, std::memory_order_acq_rel);
         resources->NotifyGCPhaseFinished(gcIndex);
@@ -879,7 +880,7 @@ GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
 {
     RequestHarness harness;
     harness.collector.SetAdvanceEpoch(true);
-    const size_t epochBefore = g_gcCount.load(std::memory_order_acquire);
+    const size_t epochBefore = harness.collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence;
     std::promise<void> returnedPromise;
     std::future<void> returned = returnedPromise.get_future();
     std::atomic<size_t> epochAfter{ epochBefore };
@@ -887,7 +888,8 @@ GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
     std::thread requester([&] {
         ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
         harness.resources.RequestGC(GC_REASON_YOUNG, false);
-        epochAfter.store(g_gcCount.load(std::memory_order_acquire), std::memory_order_release);
+        epochAfter.store(harness.collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence,
+                         std::memory_order_release);
         startedAfter.store(harness.resources.IsGcStarted(), std::memory_order_release);
         returnedPromise.set_value();
     });
@@ -1123,3 +1125,28 @@ GC_TEST(GcRequestSync, CompilerAsyncEntryReturnsAndMergesPendingRequest)
 } // namespace MapleRuntime
 
 #endif // MRT_GC_UNIT_TESTS
+
+// zDriverPort.hpp:33 ZDriverRequest / zDirector.cpp:796-817: queued requests own
+// their selected quotas; a later decision cannot replace a pending budget.
+GC_TEST(GcRequestSync, DriverRequestOwnsDirectorQuota)
+{
+    GCDriverPort port(GCDriverKind::MAJOR);
+    port.EnqueueAsync(GC_REASON_HEU, 2, 3, true);
+    port.EnqueueAsync(GC_REASON_BACKUP, 4, 1, false);
+    GCDriverRequest first{};
+    GCDriverRequest second{};
+    GC_EXPECT_TRUE(port.TryDequeue(first));
+    GC_EXPECT_TRUE(port.TryDequeue(second));
+    GC_EXPECT_EQ(first.youngWorkers, 2u);
+    GC_EXPECT_EQ(first.oldWorkers, 3u);
+    GC_EXPECT_TRUE(first.warmup);
+    GC_EXPECT_EQ(second.youngWorkers, 4u);
+    GC_EXPECT_EQ(second.oldWorkers, 1u);
+    GC_EXPECT_TRUE(!second.warmup);
+    port.EnqueueAsync(GC_REASON_USER);
+    GCDriverRequest user{};
+    GC_EXPECT_TRUE(port.TryDequeue(user));
+    GC_EXPECT_EQ(user.youngWorkers, 0u);
+    GC_EXPECT_EQ(user.oldWorkers, 0u);
+    GC_EXPECT_TRUE(!user.warmup);
+}

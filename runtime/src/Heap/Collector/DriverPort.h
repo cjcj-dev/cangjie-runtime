@@ -43,6 +43,11 @@ struct GCDriverRequest {
     GCReason reason;
     bool asynchronous;
     GCDriverReceipt receipt;
+    // zDriverPort.hpp:33: ZDriverRequest owns the budgets selected for this request.
+    // Zero lets non-director callers request the full generation capacity.
+    uint32_t youngWorkers = 0;
+    uint32_t oldWorkers = 0;
+    bool warmup = false;
 };
 
 // Per-generation request port.  Keeping the queues separate is the important
@@ -53,7 +58,8 @@ public:
     explicit GCDriverPort(GCDriverKind kind) : kind(kind) {}
 
     GCDriverReceipt EnqueueSync(GCReason reason);
-    uint64_t EnqueueAsync(GCReason reason);
+    uint64_t EnqueueAsync(GCReason reason, uint32_t youngWorkers = 0,
+                          uint32_t oldWorkers = 0, bool warmup = false);
     bool TryDequeue(GCDriverRequest& request);
     void Acknowledge(const GCDriverRequest& request);
     void Cancel(const GCDriverRequest& request);

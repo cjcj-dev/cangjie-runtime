@@ -58,7 +58,7 @@ GCDriverReceipt GCDriverPort::EnqueueSync(GCReason reason)
     return receipt;
 }
 
-uint64_t GCDriverPort::EnqueueAsync(GCReason reason)
+uint64_t GCDriverPort::EnqueueAsync(GCReason reason, uint32_t youngWorkers, uint32_t oldWorkers, bool warmup)
 {
     std::lock_guard<std::mutex> lock(mutex);
     if (stopped) {
@@ -71,7 +71,7 @@ uint64_t GCDriverPort::EnqueueAsync(GCReason reason)
         }
     }
     const uint64_t sequence = NextSequenceLocked();
-    requests.push_back({ sequence, reason, true, {} });
+    requests.push_back({ sequence, reason, true, {}, youngWorkers, oldWorkers, warmup });
     condition.notify_all();
     return sequence;
 }

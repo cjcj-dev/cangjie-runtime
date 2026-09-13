@@ -15,12 +15,70 @@
 #include <vector>
 
 namespace MapleRuntime {
-// Two-level gate (0823 二轮): a default-OFF runtime env check still costs ~4ns per Timer scope
-// (measured, kkk2 20M-op pairs) and that was enough to push the natural_wave gold cliff at 320MB
-// up by one heap step.  So the first level is compile-time, same shape as kGcTrigger* in
-// GcTriggerFlags.h: a product build without -DMRT_ZSTAT (cmake option, default OFF) contains no
-// ZStat code at all -- every entry point below is an inline no-op and `nm -D` finds zero ZStat
-// symbols.  The second level (only in builds that compiled it in) is the MRT_ZSTAT env var.
+// zStat.cpp:1226-1330: cycle inputs used by the director are always
+// collected, independently of the optional phase-log instrumentation below.
+struct ZStatCycleStats {
+    uint32_t warmupCycles = 0;
+    double timeSinceLast = 0;
+    double serialTime = 0;
+    double serialTimeSd = 0;
+    double parallelTime = 0;
+    double parallelTimeSd = 0;
+    double lastActiveWorkers = 1;
+};
+
+class ZStatCycle {
+public:
+    void Initialize(uint64_t now);
+    void AtStart(uint64_t now, uint64_t workerDuration, uint64_t workerTime);
+    void AtEnd(uint64_t now, uint64_t workerDuration, uint64_t workerTime, bool warmup);
+    ZStatCycleStats Stats(uint64_t now) const;
+
+private:
+    // utilities/numberSeq.cpp:35-49,79-94: exponentially decaying mean
+    // and variance, alpha=0.7 as used by ZStatCycle.
+    struct Sequence {
+        void Add(double value);
+        bool initialized = false;
+        double average = 0;
+        double variance = 0;
+    };
+    mutable std::mutex lock;
+    uint64_t start = 0;
+    uint64_t end = 0;
+    uint64_t initialWorkerDuration = 0;
+    uint64_t initialWorkerTime = 0;
+    uint32_t warmupCycles = 0;
+    double lastActiveWorkers = 1;
+    Sequence serial;
+    Sequence parallel;
+};
+
+// zGeneration.cpp:600-602,637,1248: total collections count young
+// mark starts, including the young part of a major. Old completion is
+// not another collection start. Keep the total and old baseline together
+// so a director sample cannot combine opposite sides of a major start.
+struct ZStatCollectionStats {
+    uint32_t totalCollections = 0;
+    uint32_t collectionsAtMajorStart = 0;
+};
+
+class ZStatCollection {
+public:
+    void AtYoungMarkStart(bool startsOld);
+    ZStatCollectionStats Stats() const;
+
+private:
+    mutable std::mutex lock;
+    ZStatCollectionStats counts;
+};
+
+struct GcTriggerInputs;
+class GCWorkers;
+class RegionManager;
+// Cycle statistics and the director snapshot above are always present.
+// MRT_ZSTAT_COMPILED controls only the pre-existing phase-log instrumentation;
+// the phase registry/history migration belongs to A12a.
 #ifndef MRT_ZSTAT_COMPILED
 #define MRT_ZSTAT_COMPILED 0
 #endif
@@ -46,6 +104,9 @@ namespace MapleRuntime {
 // before touching anything -- the default-path rec=cycle/rec=phase/rec=stw stream is unchanged.
 class ZStat {
 public:
+    static ZStatCollection& Collections();
+    static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
+                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers);
     struct PhaseTotals {
         uint64_t pauseNs = 0;    // sum of samples that started with the world stopped
         uint64_t concNs = 0;     // sum of samples that started with the world running
@@ -104,10 +165,13 @@ private:
     static std::atomic<int> g_enabledOverride; // -1 = read env, 0/1 = forced by SetEnabledForTest
 };
 
-#else // !MRT_ZSTAT_COMPILED: every entry point is an inline no-op; the build contains no ZStat code.
+#else // !MRT_ZSTAT_COMPILED: optional phase-log entry points are no-ops.
 
 class ZStat {
 public:
+    static ZStatCollection& Collections();
+    static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
+                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers);
     static constexpr bool Enabled() { return false; }
     static void EnterStwScope() {}
     static void ExitStwScope() {}
