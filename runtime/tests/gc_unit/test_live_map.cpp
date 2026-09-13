@@ -673,3 +673,32 @@ GC_TEST(ZLiveMapPort, CloneForPromotionKeepsOriginalPageLivemap)
         GC_EXPECT_TRUE(visited[0] == object);
     }
 }
+
+// ZPage::object_iterate (zPage.inline.hpp:320-331) consumes start bits;
+// unmarked storage before and between objects is not an object header.
+GC_TEST(ZLiveMapPort, LiveIteratorVisitsOnlyObjectStarts)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    BaseObject* second = fx.PlaceObject(region->GetRegionStart() + 256);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    auto mark = ProductMarkObjectFn<Generation::Old>();
+    GC_EXPECT_TRUE(mark != nullptr);
+    auto view = region->GetMarkView<Generation::Old>();
+    GC_EXPECT_FALSE(mark(region, view, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_FALSE(mark(region, view, second, second->GetSize(), true));
+    std::vector<BaseObject*> visited;
+    GC_EXPECT_TRUE(region->VisitLiveObjectsUntilFalse([&](BaseObject* obj) {
+        visited.push_back(obj);
+        return true;
+    }));
+    GC_EXPECT_EQ(visited.size(), 2u);
+    GC_EXPECT_TRUE(visited[0] == fx.obj0);
+    GC_EXPECT_TRUE(visited[1] == second);
+    size_t visits = 0;
+    GC_EXPECT_FALSE(region->VisitLiveObjectsUntilFalse([&](BaseObject*) {
+        ++visits;
+        return false;
+    }));
+    GC_EXPECT_EQ(visits, 1u);
+}

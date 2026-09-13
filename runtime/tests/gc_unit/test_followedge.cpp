@@ -67,8 +67,6 @@ GC_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
     RegionInfo* targetRegion = fx.region1;
     targetRegion->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
     targetRegion->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
-    MarkView<Generation::Old> view = targetRegion->GetMarkView<Generation::Old>();
-    targetRegion->ResetMarkBit(view);
 
     GC_EXPECT_TRUE(bytes->IsPrimitiveArray());
     GC_EXPECT_FALSE(infos.array->HasRefField());

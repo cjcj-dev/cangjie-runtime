@@ -466,23 +466,6 @@ inline void RegionInfo::SetMarkedRegionFlag(MarkView<G> view, uint8_t flag)
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
     }
 
-inline void RegionInfo::ResetMarkBit(MarkView<Generation::Old> view)
-    {
-        SetMarkedRegionFlag(view, 0);
-        SetEnqueuedRegionFlag(0);
-        SetResurrectedRegionFlag(0);
-    }
-
-
-
-
-
-
-
-
-
-
-
     template<Generation G>
 inline void RegionInfo::VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const
     {

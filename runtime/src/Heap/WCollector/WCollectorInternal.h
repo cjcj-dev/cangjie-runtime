@@ -26,8 +26,7 @@ WCOLLECTOR_INTERNAL_HIDDEN void PushAdmittedYoung(const MarkStackEntry& entry,
                                                   TracingCollector::WorkStack& workStack,
                                                   const char* origin, const void* slot = nullptr,
                                                   BaseObject* holder = nullptr);
-WCOLLECTOR_INTERNAL_HIDDEN bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix,
-                                                    bool holderIsCurrentMinorRoot = false);
+WCOLLECTOR_INTERNAL_HIDDEN bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
 
 WCOLLECTOR_INTERNAL_HIDDEN bool HolderObjectIsLive(BaseObject* holder);
 WCOLLECTOR_INTERNAL_HIDDEN bool SlotHeldByLiveObject(const void* slot);

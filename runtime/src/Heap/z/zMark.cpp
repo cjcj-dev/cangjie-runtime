@@ -7,7 +7,6 @@
 
 #include "Heap/z/zVerify.hpp"
 #include "Heap/WCollector/WCollector.h"
-#include "Heap/WCollector/RememberedHolderPolicy.h"
 
 #include <array>
 #include <atomic>
@@ -803,8 +802,7 @@ namespace WCollectorInternal {
 // Criterion fields (RegionInfo state word): IsFreeRegion() / IsGarbageRegion()
 // via TryGetRegionInfoAt(target) at the call site (closure edge or Fix).
 // Returns true if the slot was scrubbed (caller must not push / treat as live edge).
-bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*/,
-                          bool holderIsCurrentMinorRoot)
+bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*/)
 {
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
@@ -818,7 +816,7 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
     if (!isFree && !isGarbage) {
         return false;
     }
-    if (KeepRememberedHolder(SlotHeldByLiveObject(&field), holderIsCurrentMinorRoot)) {
+    if (SlotHeldByLiveObject(&field)) {
         return false;
     }
     RefField<> oldField(field);

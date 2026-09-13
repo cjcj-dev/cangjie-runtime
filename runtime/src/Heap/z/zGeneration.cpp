@@ -583,7 +583,7 @@ void WCollector::DoYoungGarbageCollection()
     // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
     // Concurrent mark force-admits slots without that proof.
     const bool refFixSlotsCoveredByReachable = false;
-    EvacuateYoungRegions(reachableVec, consumedSlots, currentMinorRoots, refFixSlotsCoveredByReachable,
+    EvacuateYoungRegions(reachableVec, consumedSlots, refFixSlotsCoveredByReachable,
                          remsetInteriorBases, &stw);
     if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
         return;

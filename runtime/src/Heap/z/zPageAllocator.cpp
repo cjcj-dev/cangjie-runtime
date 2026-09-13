@@ -884,16 +884,8 @@ size_t RegionManager::CollectLargeGarbage()
                 garbageSize += CollectRegion<Generation::Old>(del);
             }
         } else {
-            region->ResetMarkBit(view);
             region = region->GetNextRegion();
         }
-    }
-
-    region = recentLargeRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        region->ResetMarkBit(view);
-        region = region->GetNextRegion();
     }
 
     return garbageSize;

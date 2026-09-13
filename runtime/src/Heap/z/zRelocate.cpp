@@ -8,7 +8,6 @@
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
-#include "Heap/WCollector/RememberedHolderPolicy.h"
 
 #include <array>
 #include <atomic>
@@ -594,13 +593,9 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
     return true;
 }
 
-BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw,
-                                              bool holderIsCurrentMinorRoot,
-                                              bool* preservedByCurrentRoot) const
+BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
 {
     (void)stw;
-    (void)holderIsCurrentMinorRoot;
-    (void)preservedByCurrentRoot;
 
     RefField<> observed(field);
     BaseObject* from = to_object(observed.GetTargetObject());
@@ -650,8 +645,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
     return resolved;
 }
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
-                                      const ScopedStopTheWorld* stw,
-                                      bool holderIsCurrentMinorRoot) const
+                                      const ScopedStopTheWorld* stw) const
 {
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
@@ -689,7 +683,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         }
         return true;
     }
-    BaseObject* target = ResolveMinorReference(field, stw, holderIsCurrentMinorRoot);
+    BaseObject* target = ResolveMinorReference(field, stw);
     // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
     // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
     // Same heap gate as ForwardUpdateRawRef / FindToVersion.
@@ -701,7 +695,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // concurrent fix peers can win. Pre-evac H3 samples the prior cycle's residue —
     // nulling here clears it before the next VERIFY_HEAP inventory.
     // Criterion: RegionInfo::IsFreeRegion|IsGarbageRegion at this Fix call (file:line).
-    if (ScrubMinorFreeTarget(field, target, true, holderIsCurrentMinorRoot)) {
+    if (ScrubMinorFreeTarget(field, target, true)) {
         return true;
     }
     HeapSlot<> oldBits(oldField);
@@ -871,7 +865,6 @@ void WCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorl
 
 void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
                                        const MinorSlotSet& rememberedSlots,
-                                       const MinorObjectSet& currentMinorRoots,
                                        bool refFixSlotsCoveredByReachable,
                                        const MinorInteriorBaseMap& interiorBases,
                                        std::unique_ptr<ScopedStopTheWorld>* stw)
@@ -892,17 +885,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     std::vector<MAddress> remsetVec;
     remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
 
-    std::vector<std::pair<MAddress, MAddress>> currentRootRanges;
-    currentRootRanges.reserve(currentMinorRoots.size());
-    for (BaseObject* root : currentMinorRoots) {
-        MAddress start = reinterpret_cast<MAddress>(root);
-        currentRootRanges.emplace_back(start, start + RegionSpace::GetAllocSize(*root));
-    }
-    auto holderIsCurrentRoot = [&currentRootRanges](MAddress slot) {
-        return std::any_of(currentRootRanges.begin(), currentRootRanges.end(),
-                           [slot](const auto& range) { return slot >= range.first && slot < range.second; });
-    };
-
     // zRemembered.cpp:remap_current visits remembered slots. Stack completion
     // belongs to the phase watermark; it does not require a reachable-heap sweep.
     auto remapRemembered = [&](GCWorkers& pool) {
@@ -921,7 +903,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 }
                 auto known = interiorBases.find(slot);
                 BaseObject* base = known == interiorBases.end() ? nullptr : known->second;
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw(), holderIsCurrentRoot(slot));
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw());
             }
         });
         pool.Run(task);
@@ -1833,18 +1815,19 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
 template<typename Fn>
 void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPtr, Fn&& fn)
 {
+    // ZPage::object_iterate over the original page's ordinary livemap.
+    RegionBitmap* bitmap = region->GetLiveStartBitmap();
+    if (bitmap == nullptr) {
+        return;
+    }
     const size_t regionBytes = allocPtr > start ? static_cast<size_t>(allocPtr - start) : 0;
-    size_t offset = 0;
-    while (offset < regionBytes) {
-        BaseObject* object = from_region_addr(start + offset);
-        const size_t size = RegionSpace::GetAllocSize(*object);
-        if (size == 0 || size > regionBytes - offset) {
+    for (size_t offset = 0; offset < regionBytes; offset += kMarkedBytesPerBit) {
+        if (bitmap->IsObjectStart(offset)) {
+            fn(from_region_addr(start + offset), offset);
+        }
+        if (region->IsLargeRegion()) {
             break;
         }
-        if (region->IsOwnerSurvivedObject(offset)) {
-            fn(object, offset);
-        }
-        offset += size;
     }
 }
 

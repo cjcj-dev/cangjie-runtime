@@ -882,9 +882,7 @@ private:
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
                                   HealSite site, HealNull allowNull = HealNull::Disallow) const;
     BaseObject* ResolveMinorReference(RefField<>& field,
-                                     const ScopedStopTheWorld* stw = nullptr,
-                                     bool holderIsCurrentMinorRoot = false,
-                                     bool* preservedByCurrentRoot = nullptr) const;
+                                     const ScopedStopTheWorld* stw = nullptr) const;
     BaseObject* ResolveMinorReference(RootSlot& root,
                                      const ScopedStopTheWorld* stw = nullptr) const;
     void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
@@ -924,8 +922,7 @@ private:
                              MinorInteriorBaseMap* interiorBasesOut = nullptr,
                              const ScopedStopTheWorld* stw = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
-                               const ScopedStopTheWorld* stw = nullptr,
-                               bool holderIsCurrentMinorRoot = false) const;
+                               const ScopedStopTheWorld* stw = nullptr) const;
     bool FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw = nullptr) const;
     bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase = nullptr,
                                const ScopedStopTheWorld* stw = nullptr) const;
@@ -934,8 +931,7 @@ private:
     // stw: live handle lets relocate follow ZGC Phase 7/8 (zGeneration.cpp:573-580):
     // pause = flip + phase + root fix; concurrent = ForwardFromSpace; re-STW = heap
     // slot catch-up + evac_finish. nullptr keeps the whole evacuate under the caller STW.
-    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots,
-                              const MinorObjectSet& currentMinorRoots, bool refFixSlotsCoveredByReachable,
+    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots, bool refFixSlotsCoveredByReachable,
                               const MinorInteriorBaseMap& interiorBases,
                               std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.

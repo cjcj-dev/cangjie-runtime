@@ -253,7 +253,6 @@ public:
     template<Generation G>
     void SetMarkedRegionFlag(MarkView<G> view, uint8_t flag);
 
-    void ResetMarkBit(MarkView<Generation::Old> view);
 
     Generation GetOwnerGeneration() const;
 

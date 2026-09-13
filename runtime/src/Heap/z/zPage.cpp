@@ -260,46 +260,12 @@ void RegionInfo::ClearRelocationResiduals()
 
 bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func)
 {
-    // Skip only when a mark phase established live==0. Bare zero (e.g. non-young under minor)
-    // is not an emptiness proof — fall through and consult the mark bitmap.
-    if (IsOwnerKnownEmpty()) {
-        return true;
-    }
-    // tipnull arm R: Admit/GetRoute use the typed liveInfo0 face after PrepareForwardable.
-    auto survivedAt = [this](size_t offset) -> bool { return IsOwnerSurvivedObject(offset); };
-    if (IsLargeRegion()) {
-        BaseObject* obj = from_region_addr(GetRegionStart());
-        return func(obj);
-    }
-    if (IsSmallRegion()) {
-        uintptr_t position = GetRegionStart();
-        size_t offset = 0;
-        uintptr_t allocPtr = GetRegionAllocPtr();
-        size_t regionBytes = allocPtr > GetRegionStart() ? (allocPtr - GetRegionStart()) : 0;
-
-        // tipalign 丙 attempt: cannot skip-and-continue without size (GetAllocSize needs
-        // tip; gate tip-misaligned blocks that). Stepping to next liveInfo0 bit lands on
-        // multi-bit MarkBits interiors (not object starts) → SEGV. So on gate reject we
-        // only refuse to treat the walk as complete if survivors remain (return false).
-        // Gate itself is not relaxed.
-        auto remainingSurvivor = [&](size_t fromOff) -> bool {
-            for (size_t rest = fromOff; rest < regionBytes; rest += kMarkedBytesPerBit) {
-                if (survivedAt(rest)) {
-                    return true;
-                }
-            }
+    // ZPage::object_iterate: only object-start bits authorize a header read.
+    std::vector<MAddress> objects;
+    CollectLiveObjectStarts(objects);
+    for (MAddress address : objects) {
+        if (!func(from_region_addr(address))) {
             return false;
-        };
-
-        while (position < allocPtr) {
-            BaseObject* obj = from_region_addr(position);
-            size_t allocSize = RegionSpace::GetAllocSize(*obj);
-            if (allocSize == 0) {
-                return !remainingSurvivor(offset);
-            }
-            position += allocSize;
-            if (survivedAt(offset) && !func(obj)) { return false; }
-            offset += allocSize;
         }
     }
     return true;
