@@ -11,7 +11,7 @@
 
 #include "Heap/Allocator/CartesianTree.h"
 #define private public
-#include "Heap/Allocator/FreeRegionManager.h"
+#include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #undef private
 #include "Heap/z/zForwardingTable.hpp"

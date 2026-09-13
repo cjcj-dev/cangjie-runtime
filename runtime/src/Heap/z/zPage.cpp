@@ -32,7 +32,7 @@
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"
-#include "Heap/Collector/TenuringThreshold.h"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
@@ -337,5 +337,27 @@ void RegionInfo::NoteEnrolPhase()
     LOG(RTLOG_ERROR, "[ENROLTIME] afterFlip=%d n=%lu phase=%d before=%lu after=%lu", afterFlip ? 1 : 0, n,
         static_cast<int>(phase), EnrolBeforeFlip().load(std::memory_order_relaxed),
         EnrolAfterFlip().load(std::memory_order_relaxed));
+}
+} // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+
+#include "Base/ImmortalWrapper.h"
+#include "Heap/z/zPage.hpp"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Collector/LiveInfoArena.h"
+#include "Heap/z/zLiveMap.hpp"
+
+namespace MapleRuntime {
+uint64_t RegionInfo::GetSnapshotEpoch() const
+{
+    const GCCycleGeneration generation = GetOwnerGeneration() == Generation::Young
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    return Heap::GetHeap().GetCollector().GetCycleSnapshot(generation).sequence;
 }
 } // namespace MapleRuntime

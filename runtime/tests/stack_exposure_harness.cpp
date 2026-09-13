@@ -21,7 +21,7 @@
 #include <string>
 
 #include "UnwindStack/StackExposureHook.h"
-#include "UnwindStack/StackWatermark.h"
+#include "Heap/z/zStackWatermark.hpp"
 
 using MapleRuntime::StackExposureHook;
 using MapleRuntime::StackWatermark;

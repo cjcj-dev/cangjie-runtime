@@ -32,7 +32,7 @@
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"
-#include "Heap/Collector/TenuringThreshold.h"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
@@ -394,3 +394,77 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
 }
 
 } // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+
+#include "Allocator/RegionSpace.h"
+
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zDirector.hpp"
+#include "Heap/z/zUncommitter.hpp"
+#include "Base/TimeUtils.h"
+#if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
+#include "Sanitizer/SanitizerInterface.h"
+#endif
+#include "Common/ScopedObjectAccess.h"
+#include "Common/ColourEncoding.h"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/Verify/AllocPhaseDiag.h"
+#include "Heap/Verify/MinorGCALot.h"
+#include "Heap/Verify/Zap.h"
+#include "Mutator/Mutator.h"
+
+namespace MapleRuntime {
+MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
+{
+    if (UNLIKELY(allocType == AllocType::PINNED_OBJECT)) {
+        return regionManager.AllocPinned(allocSize);
+    }
+    if (UNLIKELY(allocSize >= regionManager.GetLargeObjectThreshold())) {
+        return regionManager.AllocLarge(
+            allocSize, allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
+    }
+    CHECK_DETAIL(allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR,
+                 "segmented-clear allocation must be a large object: size=%zu threshold=%zu",
+                 allocSize, regionManager.GetLargeObjectThreshold());
+    AllocBuffer* allocBuffer = AllocBuffer::GetOrCreateAllocBuffer();
+    return allocBuffer->Allocate(allocSize, allocType);
+}
+
+MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
+{
+    uintptr_t internalAddr = 0;
+    size_t allocSize = ToAllocSize(size);
+    internalAddr = TryAllocateOnce(allocSize, allocType);
+    if (UNLIKELY(internalAddr == 0)) {
+        // GC workers are strictly non-blocking: inability to obtain a region
+        // means this move cannot be completed in the current collection.
+        if (IsGcThread()) {
+            return 0;
+        }
+        // Page allocation owns the request through stall and consumption.
+        // Reaching this point means that request failed, not a retry promise.
+        regionManager.DumpRegionStats("region statistics when gc ends");
+        VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
+        LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
+        ExceptionManager::OutOfMemory();
+        return 0;
+    }
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanAllocObject(reinterpret_cast<void *>(internalAddr), allocSize);
+#endif
+    return internalAddr + HEADER_SIZE;
+}
+
+}

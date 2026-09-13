@@ -29,9 +29,9 @@
 
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/GcTriggerFlags.h"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Collector/TenuringThreshold.h"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/z/zMark.hpp"

@@ -33,9 +33,9 @@
 #endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/GcTriggerFlags.h"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Collector/TenuringThreshold.h"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"

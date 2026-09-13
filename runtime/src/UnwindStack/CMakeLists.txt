@@ -9,7 +9,7 @@ set(SRC_LIST
     "EhStackInfo.cpp"
     "GcStackInfo.cpp"
     "StackFrameCursor.cpp"
-    "StackWatermark.cpp"
+    "../Heap/z/zStackWatermark.cpp"
     "StackExposureHook.cpp"
     "StackGrowStackInfo.cpp"
     "PrintStackInfo.cpp"

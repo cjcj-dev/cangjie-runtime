@@ -4,7 +4,7 @@
 
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zStat.hpp"
-#include "Heap/Allocator/AllocationStallQueue.h"
+#include "Heap/z/zPageAllocator.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

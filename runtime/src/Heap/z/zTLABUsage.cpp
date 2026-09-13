@@ -29,28 +29,20 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-bool RegionSpace::IsHeapObject(MAddress addr) const
+void AllocBuffer::AccumulateTLABStatistics(TLABStatistics& total, size_t used, size_t capacity)
 {
-    return IsHeapAddress(addr);
-}
-#endif
-void RegionSpace::FeedHungryBuffers()
-{
-    ScopedObjectAccess soa;
-    AllocBufferManager::HungryBuffers hungryBuffers;
-    allocBufferManager->SwapHungryBuffers(hungryBuffers);
-    for (auto* buffer : hungryBuffers) {
-        if (buffer->GetPreparedRegion() != nullptr) { continue; }
-        RegionInfo* region = regionManager.AllocateThreadLocalRegion(
-            buffer->ComputeTLABSize(0, regionManager.GetThreadLocalRegionSize()), true);
-        if (region == nullptr) { return; }
-        if (!buffer->SetPreparedRegion(region)) {
-            // This extent was computed for this buffer's history. Return it
-            // instead of handing that thread's size to another buffer.
-            regionManager.UndoThreadLocalRegionAllocation(region);
+    const size_t requested = tlabStatistics.Used();
+    if (requested != 0) {
+        if (used > 0.5 * capacity) {
+            tlabAllocationFraction.Sample(std::min(static_cast<double>(requested) /
+                                                   std::max(capacity, size_t{1}), 1.0));
         }
+        tlabStatistics.allocatingThreads = 1;
     }
+    tlabStatistics.refills = tlabRefills.exchange(0, std::memory_order_relaxed);
+    total.Update(tlabStatistics);
+    tlabStatistics = TLABStatistics{};
 }
 
-} // namespace MapleRuntime
+// ThreadLocalAllocBuffer::resize (threadLocalAllocBuffer.cpp:161).
+}

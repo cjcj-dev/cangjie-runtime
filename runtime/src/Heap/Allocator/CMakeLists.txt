@@ -12,6 +12,8 @@ set(SRC_LIST
     "../z/zNUMA.cpp"
     "../z/zPhysicalMemoryManager.cpp"
     "RegionSpace.cpp"
+    "../z/zThreadLocalAllocBuffer.cpp"
+    "../z/zTLABUsage.cpp"
     "../z/zPageAllocator.cpp"
     "../z/zPage.cpp"
     "../z/zObjectAllocator.cpp"

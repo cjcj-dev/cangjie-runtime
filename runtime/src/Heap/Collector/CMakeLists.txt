@@ -26,7 +26,6 @@ set(SRC_LIST
     "StringDedup.cpp"
     "../z/zUncommitter.cpp"
     "CopyCollector.cpp"
-    "../z/zLiveMap.cpp"
     "LiveInfoArena.cpp"
     "../z/zForwarding.cpp"
 )

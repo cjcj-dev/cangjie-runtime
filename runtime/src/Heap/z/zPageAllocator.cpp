@@ -32,7 +32,7 @@
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"
-#include "Heap/Collector/TenuringThreshold.h"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
@@ -1201,3 +1201,93 @@ void RegionManager::DumpRegionStats(const char* msg) const
 } // namespace MapleRuntime
 
 #include "Heap/z/zList.inline.hpp"
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+
+#include "Allocator/RegionSpace.h"
+
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zDirector.hpp"
+#include "Heap/z/zUncommitter.hpp"
+#include "Base/TimeUtils.h"
+#if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
+#include "Sanitizer/SanitizerInterface.h"
+#endif
+#include "Common/ScopedObjectAccess.h"
+#include "Common/ColourEncoding.h"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/Verify/AllocPhaseDiag.h"
+#include "Heap/Verify/MinorGCALot.h"
+#include "Heap/Verify/Zap.h"
+#include "Mutator/Mutator.h"
+
+namespace MapleRuntime {
+void RegionSpace::Init(const HeapParam& vmHeapParam)
+{
+    MemMap::Option opt = MemMap::DEFAULT_OPTIONS;
+    opt.tag = "cangjie_heap";
+    size_t heapSize = 0;
+    CHECK_DETAIL(CheckedMulSize(vmHeapParam.heapSize, size_t{1024}, heapSize),
+                 "heap size overflows bytes before reservation: heapSizeKB=%zu", vmHeapParam.heapSize);
+    size_t unitNum = RegionManager::GetHeapUnitCount(heapSize);
+    // Seal both process inputs before the first mmap. The values remain fixed
+    // for the complete reservation and physical-page lifetime.
+    const AddressSpaceBudget addressBudget = AddressSpaceBudget::SealProcessBudget();
+    const NumaTopology numaTopology = NumaTopology::SealProcessTopology();
+#if defined(CANGJIE_ASAN_SUPPORT)
+    // asan's memory alias technique needs a shareable page
+    opt.flags &= ~MAP_PRIVATE;
+    opt.flags |= MAP_SHARED;
+    DLOG(SANITIZER, "mmap flags set to 0x%x", opt.flags);
+#endif
+    // this must succeed otherwise it won't return
+    map = MemMap::MapMemory(unitNum * RegionInfo::UNIT_SIZE, 0, opt, addressBudget, numaTopology);
+    const auto& reservations = map->GetReservationRegistry().Ranges();
+    for (const auto& range : reservations) {
+        CHECK_DETAIL(IsRepresentableLow48Range(range.start, range.size),
+                     "heap reservation exceeds the 48-bit HeapSlot address carrier: start=%#zx size=%zu",
+                     static_cast<size_t>(range.start), range.size);
+#if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
+        Sanitizer::OnHeapAllocated(reinterpret_cast<void*>(range.start), range.size);
+#endif
+    }
+    // Metadata remains a contiguous reverse-indexed ABI array, independent of
+    // the payload reservations (zPage metadata lives outside virtual memory).
+    const size_t metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(reservations));
+    size_t totalSize = 0;
+    CHECK(CheckedAddSize(map->GetMappedSize(), metadataSize, totalSize) && addressBudget.Allows(totalSize));
+    metadataMap = MemMap::MapMemory(metadataSize, metadataSize, MemMap::DEFAULT_OPTIONS,
+                                    addressBudget, numaTopology);
+    CHECK(metadataMap->GetReservationRegistry().Contains(
+        reinterpret_cast<uintptr_t>(metadataMap->GetBaseAddr()), metadataSize));
+    Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
+    MAddress metadata = reinterpret_cast<MAddress>(metadataMap->GetBaseAddr());
+    CHECK(IsRepresentableLow48Range(metadata, metadataSize));
+    regionManager.InitializeSegments(metadata, reservations, *map, vmHeapParam,
+                                     CangjieRuntime::GetGCParam().garbageThreshold);
+    reservedStart = regionManager.GetRegionHeapStart();
+    reservedEnd = reinterpret_cast<MAddress>(map->GetMappedEndAddr());
+#if defined(MRT_DUMP_ADDRESS)
+    VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadata, reservedStart, reservedEnd - reservedStart,
+         reservedEnd);
+#endif
+    std::vector<HeapSlotAddressRange> heapReservations;
+    for (const auto& range : reservations) {
+        heapReservations.push_back({ range.start, range.End() });
+    }
+    Heap::OnHeapCreated(reservedStart, heapReservations);
+    Heap::OnHeapExtended(reservedEnd);
+}
+
+}

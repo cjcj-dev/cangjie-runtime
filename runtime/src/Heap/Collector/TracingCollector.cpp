@@ -123,24 +123,6 @@ WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt()
 }
 #endif
 
-void TracingCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
-{
-    HeapSlot<>& referentField =
-        HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
-    BaseObject* referent = GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, reference, referentField);
-    if (referent == nullptr) {
-        return;
-    }
-    DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", reference, &referent, referent);
-    CHECK(DiscoverReference(reference, ReferenceType::WEAK) == ReferenceStatus::DISCOVERED);
-#if defined(MRT_TESTABLE_INTERNALS)
-    g_weakDiscoveryCount.fetch_add(1, std::memory_order_relaxed);
-#endif
-    // Deliberately no push/TraceObjectRefFields(referent): discovery must not
-    // publish the weak referent into the strong marking work stack.
-    (void)workStack;
-}
-
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 void TracingCollector::DumpHeap(const CString& tag)
 {

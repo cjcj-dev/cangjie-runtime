@@ -8,7 +8,7 @@
 // Remap space is four one-hots; a flip is xor, so a colour published at N is
 // load-good again at N+2 unless roots are remapped between young flips.
 
-#include "UnwindStack/StackWatermark.h"
+#include "Heap/z/zStackWatermark.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
