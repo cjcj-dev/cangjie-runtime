@@ -171,8 +171,12 @@ public:
         const BackingFile* file = FindFile(addr, size);
         if (file == nullptr) { return 0; }
         const size_t offset = reinterpret_cast<uintptr_t>(addr) - file->start;
-        return fallocate(file->fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                         static_cast<off_t>(offset), static_cast<off_t>(size)) == 0 ? size : 0;
+        if (fallocate(file->fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                      static_cast<off_t>(offset), static_cast<off_t>(size)) != 0) {
+            LOG(RTLOG_ERROR, "failed to uncommit backing: %d", errno);
+            return 0;
+        }
+        return size;
 #else
         return madvise(addr, size, MADV_DONTNEED) == 0 ? size : 0;
 #endif
@@ -220,6 +224,7 @@ private:
         // zPhysicalMemoryBacking_linux.cpp:639: whole range, then binary
         // subdivision retaining every successful granule-aligned prefix.
         if (fallocate(fd, 0, offset, size) == 0) { return size; }
+        LOG(RTLOG_ERROR, "failed to commit whole backing range: %d", errno);
         size_t start = 0;
         size_t end = size;
         for (;;) {
@@ -558,15 +563,34 @@ size_t MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode,
         if (partStart != cursor || (requiredNode != nullptr && *requiredNode != partition.node)) {
             return static_cast<size_t>(cursor - start);
         }
-        const size_t completed = release ? backend->Release(reinterpret_cast<void*>(partStart), partEnd - partStart,
-                                                   partition.node)
-                                : backend->Commit(reinterpret_cast<void*>(partStart), partEnd - partStart, commitProt,
-                                                  partition.node, bindNuma);
-        CHECK(completed <= partEnd - partStart && completed % ALLOC_UTIL_PAGE_SIZE == 0);
-        RecordBacking(partStart, completed, release);
-        cursor += completed;
-        if (completed != partEnd - partStart) {
-            return static_cast<size_t>(cursor - start);
+        while (cursor < partEnd) {
+            uintptr_t operationEnd = partEnd;
+            if (!release) {
+                // zPageAllocator.cpp:1880: harvested backing participates in
+                // the successful prefix but must not be committed again.
+                bool harvested = false;
+                for (const auto& range : committedRanges) {
+                    if (range.End() <= cursor) { continue; }
+                    if (range.start <= cursor) {
+                        cursor = std::min(partEnd, range.End());
+                        harvested = true;
+                    } else {
+                        operationEnd = std::min(partEnd, range.start);
+                    }
+                    break;
+                }
+                if (harvested) { continue; }
+            }
+            const size_t requested = operationEnd - cursor;
+            const size_t completed = release
+                ? backend->Release(reinterpret_cast<void*>(cursor), requested, partition.node)
+                : backend->Commit(reinterpret_cast<void*>(cursor), requested, commitProt, partition.node, bindNuma);
+            CHECK(completed <= requested);
+            RecordBacking(cursor, completed, release);
+            cursor += completed;
+            if (completed != requested) {
+                return static_cast<size_t>(cursor - start);
+            }
         }
         if (cursor == end) {
             return size;
