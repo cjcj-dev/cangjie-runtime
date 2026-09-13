@@ -13,6 +13,7 @@
 #include "Heap/Collector/Collector.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
+#include "gc_heap_fixture.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -32,6 +33,23 @@ GC_TEST(TLABUsage, BoundsAndDemand)
     GC_EXPECT_EQ(buffer.ComputeTLABSize(maximum + 1, maximum), size_t{0});
     GC_EXPECT_EQ(buffer.ComputeTLABSize(std::numeric_limits<size_t>::max(), maximum), size_t{0});
     GC_EXPECT_EQ(buffer.ComputeTLABSize(1, 0), size_t{0});
+}
+
+// ZPageAllocator::increase_used_generation/decrease_used_generation:
+// occupancy changes by the page extent, independently of the TLAB maximum.
+GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
+{
+    GcHeapFixture fixture;
+    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    RegionInfo* twoUnits = RegionInfo::InitRegion(2, 2, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    const size_t before = manager.GetYoungAllocatedSize();
+    fixture.region0->SetYoungRegionFlag(1);
+    twoUnits->SetYoungRegionFlag(1);
+    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, 3 * RegionInfo::UNIT_SIZE);
+    twoUnits->SetYoungRegionFlag(0);
+    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, RegionInfo::UNIT_SIZE);
+    fixture.region0->SetYoungRegionFlag(0);
+    GC_EXPECT_EQ(manager.GetYoungAllocatedSize(), before);
 }
 
 #if defined(__linux__)

@@ -111,6 +111,11 @@ size_t RegionInfo::pageIterationCount = 0;
 std::vector<std::function<void()>> RegionInfo::deferredPageRetirements;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
+namespace {
+// ZPageAllocator::used_generation (zPageAllocator.cpp:1311). TLAB extents
+// vary, so region counts cannot stand in for young-generation byte occupancy.
+std::atomic<size_t> youngRegionBytes{ 0 };
+}
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 #if defined(MRT_GC_UNIT_TESTS)
 std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
@@ -376,6 +381,7 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
     bool wasYoung = IsYoungRegion();
     bool makeYoung = flag != 0;
     if (!wasYoung && makeYoung) {
+        youngRegionBytes.fetch_add(GetRegionSize(), std::memory_order_release);
         youngRegionCount.fetch_add(1, std::memory_order_release);
     }
     metadata.regionStateBitField.SetAtomicValue(
@@ -384,12 +390,18 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
         size_t count = youngRegionCount.load(std::memory_order_relaxed);
         CHECK(count > 0);
         youngRegionCount.fetch_sub(1, std::memory_order_release);
+        youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
     }
 }
 
 size_t RegionInfo::GetYoungRegionCount()
 {
     return youngRegionCount.load(std::memory_order_acquire);
+}
+
+size_t RegionManager::GetYoungAllocatedSize() const
+{
+    return youngRegionBytes.load(std::memory_order_acquire);
 }
 
 bool RegionInfo::HasYoungRegions()

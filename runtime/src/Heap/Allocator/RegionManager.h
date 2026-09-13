@@ -466,10 +466,7 @@ public:
         return maxUnitCountPerRegion * RegionInfo::UNIT_SIZE;
     }
 
-    size_t GetYoungAllocatedSize() const
-    {
-        return RegionInfo::GetYoungRegionCount() * GetThreadLocalRegionSize();
-    }
+    size_t GetYoungAllocatedSize() const;
 
     static bool IsKnownEmptyForView(RegionInfo* region, MarkView<Generation::Young> view)
     {
