@@ -697,6 +697,8 @@ inline void RegionManager::UntagHugePage(RegionInfo* region, size_t num) const
 void FreeRegionManager::Initialize(UnitCount regionCnt, const std::vector<MemoryRange>& reservations, MemMap& owner)
 {
     markQuarantineTree.Init(regionCnt);
+    partitions.clear();
+    nextPartition = 0;
     backingOwner = &owner;
     for (const auto& numa : owner.GetNumaPartitionRegistry().Ranges()) {
         auto found = std::find_if(partitions.begin(), partitions.end(), [&](const std::unique_ptr<Partition>& p) {
@@ -793,7 +795,7 @@ size_t FreeRegionManager::ReleaseMarkQuarantineToDirty()
     return count;
 }
 
-bool FreeRegionManager::ClaimPageMemory(size_t num, uint32_t, PageMemory& memory)
+bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
     CHECK(num != 0 && num <= UINT32_MAX);
@@ -915,7 +917,7 @@ FreeRegionManager::UnitCount FreeRegionManager::GetDirtyUnitCount() const
     return count;
 }
 
-FreeRegionManager::UnitCount FreeRegionManager::GetReleasedUnitCount() const
+FreeRegionManager::UnitCount FreeRegionManager::GetVirtualUnitCount() const
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
     size_t bytes = 0;
@@ -931,7 +933,7 @@ FreeRegionManager::UnitCount FreeRegionManager::GetDirtyMaxBlock() const
     return maximum;
 }
 
-FreeRegionManager::UnitCount FreeRegionManager::GetReleasedMaxBlock() const
+FreeRegionManager::UnitCount FreeRegionManager::GetVirtualMaxBlock() const
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
     size_t maximum = 0;
@@ -949,7 +951,7 @@ size_t FreeRegionManager::GetDirtyNodeCount() const
     return count;
 }
 
-size_t FreeRegionManager::GetReleasedNodeCount() const
+size_t FreeRegionManager::GetVirtualNodeCount() const
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
     size_t count = 0;
@@ -1365,7 +1367,7 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     const size_t size = request.GetSize();
     const size_t num = size / RegionInfo::UNIT_SIZE;
     PageMemory& memory = request.Memory();
-    if (!freeRegionManager.ClaimPageMemory(num, 0, memory)) { return false; }
+    if (!freeRegionManager.ClaimPageMemory(num, memory)) { return false; }
     if (memory.virtualClaimed) {
         const uintptr_t end = RegionInfo::GetUnitAddress(memory.index) + size;
         inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), end), std::memory_order_release);
@@ -2774,7 +2776,7 @@ void RegionManager::DumpRegionStats(const char* msg) const
 
     size_t usedUnitCount = GetUsedUnitCount();
     size_t usedObjSize = GetAllocatedSize();
-    size_t releasedUnits = freeRegionManager.GetReleasedUnitCount();
+    size_t virtualUnits = freeRegionManager.GetVirtualUnitCount();
     size_t dirtyUnits = freeRegionManager.GetDirtyUnitCount();
     size_t dirtySize = dirtyUnits * RegionInfo::UNIT_SIZE;
 
@@ -2823,14 +2825,14 @@ void RegionManager::DumpRegionStats(const char* msg) const
     DUMP_REGION_STATS_LOG("\tused summary: usedUnits %zu (%zu B), usedObjSize %zu B",
                           usedUnitCount, usedUnitCount * RegionInfo::UNIT_SIZE, usedObjSize);
 
-    size_t releasedMaxBlock = freeRegionManager.GetReleasedMaxBlock();
+    size_t virtualMaxBlock = freeRegionManager.GetVirtualMaxBlock();
     size_t dirtyMaxBlock = freeRegionManager.GetDirtyMaxBlock();
-    size_t releasedNodeCount = freeRegionManager.GetReleasedNodeCount();
+    size_t virtualNodeCount = freeRegionManager.GetVirtualNodeCount();
     size_t dirtyNodeCount = freeRegionManager.GetDirtyNodeCount();
-    DUMP_REGION_STATS_LOG("\treleased units: %zu (%zu B), nodes: %zu, maxBlock: %zu units (%zu B)",
-                          releasedUnits, releasedUnits * RegionInfo::UNIT_SIZE,
-                          releasedNodeCount,
-                          releasedMaxBlock, releasedMaxBlock * RegionInfo::UNIT_SIZE);
+    DUMP_REGION_STATS_LOG("\tfree virtual units: %zu (%zu B), nodes: %zu, maxBlock: %zu units (%zu B)",
+                          virtualUnits, virtualUnits * RegionInfo::UNIT_SIZE,
+                          virtualNodeCount,
+                          virtualMaxBlock, virtualMaxBlock * RegionInfo::UNIT_SIZE);
     DUMP_REGION_STATS_LOG("\tdirty units: %zu (%zu B), nodes: %zu, maxBlock: %zu units (%zu B)",
                           dirtyUnits, dirtyUnits * RegionInfo::UNIT_SIZE, dirtyNodeCount,
                           dirtyMaxBlock,

@@ -349,7 +349,18 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     manager.inactiveZone.store(lifetimeTarget != nullptr ? manager.regionHeapEnd :
                                fx.heapStart + 3 * RegionInfo::UNIT_SIZE);
     manager.maxUnitCountPerRegion = 1;
-    manager.freeRegionManager.Initialize(GcHeapFixture::kUnits);
+    manager.freeRegionManager.Initialize(GcHeapFixture::kUnits,
+        {{fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE}}, *fx.memoryOwner);
+    // Preserve the fixture's explicitly owned prefix in the new virtual
+    // registry. A lifetime arm supplies no allocation target, as above.
+    for (auto& partition : manager.freeRegionManager.partitions) {
+        for (const Range& range : partition->virtualMemory.Snapshot()) {
+            const uintptr_t usedEnd = std::min(range.End(), manager.inactiveZone.load());
+            if (usedEnd > range.Start()) {
+                (void)partition->virtualMemory.ClaimLow(usedEnd - range.Start());
+            }
+        }
+    }
 
     // Fully walkable pages: no untyped prefix before the first object.
     fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());

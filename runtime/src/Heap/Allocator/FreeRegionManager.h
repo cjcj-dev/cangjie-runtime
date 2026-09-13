@@ -31,7 +31,7 @@ public:
 
     virtual ~FreeRegionManager() { markQuarantineTree.Fini(); }
     void Initialize(UnitCount regionCnt, const std::vector<MemoryRange>& reservations, MemMap& owner);
-    bool ClaimPageMemory(size_t num, uint32_t partition, PageMemory& memory);
+    bool ClaimPageMemory(size_t num, PageMemory& memory);
     bool PreparePageMemory(PageMemory& memory);
 
     // zPageAllocator.cpp:1470-1515: consume the already-owned vmem outside
@@ -104,10 +104,10 @@ public:
 
     void AddReleaseUnits(UnitIndex idx, UnitCount num);
     UnitCount GetDirtyUnitCount() const;
-    UnitCount GetReleasedUnitCount() const;
-    UnitCount GetReleasedMaxBlock() const;
+    UnitCount GetVirtualUnitCount() const;
+    UnitCount GetVirtualMaxBlock() const;
     UnitCount GetDirtyMaxBlock() const;
-    size_t GetReleasedNodeCount() const;
+    size_t GetVirtualNodeCount() const;
     size_t GetDirtyNodeCount() const;
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
     size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true);

@@ -21,8 +21,8 @@
 namespace MapleRuntime {
 
 // ZVirtualMemory represented in heap granules; ownership travels with the
-// page allocation until materialization or hand-back. A02c supplies cache
-// partition selection; the current allocator has one logical partition.
+// page allocation until materialization or hand-back. The partition index
+// selects the cache and virtual registry that own the complete allocation.
 struct PageMemory {
     size_t index{ 0 };
     size_t units{ 0 };

@@ -156,12 +156,12 @@ size_t RegionSpace::UncommitIdleMemory()
 size_t RegionSpace::DrainUncommitIdleMemory()
 {
     size_t usedBytes = regionManager.GetUsedRegionSize();
-    size_t releasedBytes = regionManager.GetReleasedUnitCount() * RegionInfo::UNIT_SIZE;
+    size_t cachedBytes = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
     size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
     size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
-    size_t flush = Uncommitter::FlushBytes(usedBytes, releasedBytes, minCapacity, chunk);
+    size_t flush = Uncommitter::FlushBytes(usedBytes, cachedBytes, minCapacity, chunk);
     if (flush == 0) {
-        flush = releasedBytes;
+        flush = cachedBytes;
     }
     if (flush == 0) {
         return 0;

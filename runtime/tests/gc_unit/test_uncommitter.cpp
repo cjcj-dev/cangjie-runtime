@@ -147,6 +147,19 @@ static void BindUncommitWorkerThread()
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
 }
 
+// The uncommit fixture owns a committed unit. After A02c it belongs to the
+// mapped cache; uncommitted virtual ranges belong to the virtual registry.
+static void InitializeUncommitCache(FreeRegionManager& frm, size_t n, uintptr_t heapStart, MemMap& map)
+{
+    frm.Initialize(n, {{heapStart, n * RegionInfo::UNIT_SIZE}}, map);
+    for (auto& partition : frm.partitions) {
+        partition->virtualMemory.ClaimLow(partition->virtualMemory.TotalSize());
+        // Preserve the fixture's old MergeInsert(..., false): it deliberately
+        // retains the descriptor whose forwarding eligibility is under test.
+        partition->cache.SetRefresh({});
+    }
+}
+
 static size_t ProbeProductUncommit(bool cancelFirst, bool honorCancel)
 {
     BindUncommitWorkerThread();
@@ -166,12 +179,12 @@ static size_t ProbeProductUncommit(bool cancelFirst, bool honorCancel)
     std::fflush(stderr);
     RegionManager rm;
     FreeRegionManager frm(rm);
-    frm.Initialize(n);
+    InitializeUncommitCache(frm, n, heapStart, *map);
     std::fprintf(stderr, "DETAIL probe tree ready\n");
     std::fflush(stderr);
     (void)RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
-    GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
-    std::fprintf(stderr, "DETAIL probe releasedCount=%u\n", frm.GetReleasedUnitCount());
+    frm.partitions.front()->cache.Insert({0, 1});
+    std::fprintf(stderr, "DETAIL probe releasedCount=%u\n", frm.GetDirtyUnitCount());
     std::fflush(stderr);
     Uncommitter::ActivateCycle();
     if (cancelFirst) {
@@ -206,9 +219,9 @@ static size_t ProbeProductDrainAfterCancel()
     RegionInfo::Initialize(n, heapStart, map);
     RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     FreeRegionManager& frm = space.GetRegionManager().freeRegionManager;
-    frm.Initialize(n);
+    InitializeUncommitCache(frm, n, heapStart, *map);
     (void)RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
-    GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
+    frm.partitions.front()->cache.Insert({0, 1});
     Uncommitter::ActivateCycle();
     Uncommitter::CancelCycle();
     const size_t backendReleased = space.RegionSpace::DrainUncommitIdleMemory();
@@ -253,12 +266,11 @@ GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
     ForwardingTable::Initialize(static_cast<MAddress>(heapStart), heapBytes, RegionInfo::UNIT_SIZE);
     RegionManager rm;
     FreeRegionManager frm(rm);
-    frm.Initialize(n);
+    InitializeUncommitCache(frm, n, heapStart, *map);
 
     frm.AddReleaseUnits(0, 1);
-    GC_EXPECT_EQ(frm.GetReleasedUnitCount(), 1U);
-    CartesianTree::Index idx = 0;
-    GC_EXPECT_TRUE(frm.releasedUnitTree.TakeUnits(1, idx, false));
+    GC_EXPECT_EQ(frm.GetDirtyUnitCount(), 1U);
+    GC_EXPECT_EQ(frm.partitions.front()->cache.RemoveContiguous(1).count, 1U);
 
     if (!ForwardingTable::InsertProvisional(region->GetRegionStart(), region->GetRegionSize(), region)) {
         GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
@@ -271,15 +283,15 @@ GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
 
     frm.AddReleaseUnits(0, 1);
     std::fprintf(stderr, "DETAIL liveFwd released=%u quarantine=%d\n",
-                 frm.GetReleasedUnitCount(), frm.HasDetachQuarantine() ? 1 : 0);
+                 frm.GetDirtyUnitCount(), frm.HasDetachQuarantine() ? 1 : 0);
     std::fflush(stderr);
-    GC_EXPECT_EQ(frm.GetReleasedUnitCount(), 1U);
+    GC_EXPECT_EQ(frm.GetDirtyUnitCount(), 1U);
     GC_EXPECT_FALSE(frm.HasDetachQuarantine());
 
-    CartesianTree::Index takeIdx = 0;
-    GC_EXPECT_TRUE(frm.releasedUnitTree.TakeUnits(1, takeIdx, false));
-    GC_EXPECT_EQ(takeIdx, 0U);
-    GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
+    const auto taken = frm.partitions.front()->cache.RemoveContiguous(1);
+    GC_EXPECT_EQ(taken.count, 1U);
+    GC_EXPECT_EQ(taken.index, 0U);
+    frm.partitions.front()->cache.Insert({0, 1});
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("Uncommitter.LiveForwardingTableBlocksReleasedCache.cleanup");
@@ -302,7 +314,7 @@ GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
     GC_EXPECT_TRUE(region != nullptr);
     RegionManager rm;
     FreeRegionManager frm(rm);
-    frm.Initialize(n);
+    InitializeUncommitCache(frm, n, heapStart, *map);
     frm.AddReleaseUnits(0, 1);
     ZForwarding* owner = ZForwarding::alloc(1, region->GetRegionStart(), region->GetRegionStart(),
                                           region->GetRegionSize(), region, region->GetRegionLifeId());
@@ -312,10 +324,10 @@ GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
     GC_EXPECT_TRUE(region->RetainForwarding());
     GC_EXPECT_TRUE(region->ForwardingRefCount() != 0);
     GC_EXPECT_FALSE(FreeRegionManager::ExtentReadyForReleasedCache(region));
-    GC_EXPECT_EQ(frm.GetReleasedUnitCount(), 1U);
+    GC_EXPECT_EQ(frm.GetDirtyUnitCount(), 1U);
     GC_EXPECT_FALSE(frm.HasDetachQuarantine());
     std::fprintf(stderr, "DETAIL refCount released=%u quarantine=%d ref=%d ready=%d\n",
-                 frm.GetReleasedUnitCount(), frm.HasDetachQuarantine() ? 1 : 0,
+                 frm.GetDirtyUnitCount(), frm.HasDetachQuarantine() ? 1 : 0,
                  region->ForwardingRefCount(),
                  FreeRegionManager::ExtentReadyForReleasedCache(region) ? 1 : 0);
     std::fflush(stderr);
