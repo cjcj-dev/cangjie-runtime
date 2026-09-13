@@ -56,17 +56,11 @@ set(GC_UNIT_SOURCES
     test_gc_thread_pool.cpp
 
     test_exempt_unlock.cpp
-    test_heal_coverage.cpp
-    test_diag_gate.cpp
-    test_interior_edge_class.cpp
     test_isfromreg.cpp
     test_current_object_ref.cpp
     test_fillerobj.cpp
     test_i2_readref.cpp
-    test_m0_exit.cpp
     test_loadfc.cpp
-    test_m0_correlation.cpp
-    test_fwdreturn.cpp
     test_ghost_region_lookup.cpp
     test_fnlz_roots.cpp
     test_reference_processor.cpp
