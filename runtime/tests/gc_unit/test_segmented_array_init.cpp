@@ -209,7 +209,11 @@ struct SegmentedArrayContext {
         if (ctx.gcRequests < ctx.gcLimit && ctx.gc != YieldGc::NONE) {
             ctx.requestedGc = true;
             ++ctx.gcRequests;
-            ctx.gcCountBefore = g_gcCount.load(std::memory_order_acquire);
+            ctx.youngSequenceBefore = Heap::GetHeap().GetCollector().GetCycleSnapshot(
+                GCCycleGeneration::YOUNG).sequence;
+            ctx.oldSequenceBefore = Heap::GetHeap().GetCollector().GetCycleSnapshot(
+                GCCycleGeneration::OLD).sequence;
+            ctx.colorBefore = ::g_cjStoreGoodMask;
             Mutator* mutator = Mutator::GetMutator();
             ctx.requestingMutator = mutator;
             U64 youngSeedRoot = 0;
@@ -235,9 +239,13 @@ struct SegmentedArrayContext {
             if (youngSeedRoot != 0) {
                 Heap::GetHeap().RemoveExportObject(youngSeedRoot);
             }
-            ctx.gcCountAfter = g_gcCount.load(std::memory_order_acquire);
+            ctx.youngSequenceAfter = Heap::GetHeap().GetCollector().GetCycleSnapshot(
+                GCCycleGeneration::YOUNG).sequence;
+            ctx.oldSequenceAfter = Heap::GetHeap().GetCollector().GetCycleSnapshot(
+                GCCycleGeneration::OLD).sequence;
+            ctx.colorAfter = ::g_cjStoreGoodMask;
             MArray* rootAfter = static_cast<MArray*>(Mutator::GetMutator()->LoadInvisibleRoot());
-            if (ctx.gcCountAfter <= ctx.gcCountBefore || rootAfter == nullptr ||
+            if (!ctx.GcSafepointHappened() || rootAfter == nullptr ||
                 rootAfter->GetTypeInfo() != ctx.expectedType ||
                 rootAfter->GetLength() != ctx.length) {
                 ++ctx.failures;
@@ -291,8 +299,17 @@ struct SegmentedArrayContext {
     size_t failures = 0;
     size_t fullIteratorVisits = 0;
     size_t rangeIteratorVisits = 0;
-    size_t gcCountBefore = 0;
-    size_t gcCountAfter = 0;
+    uint64_t youngSequenceBefore = 0;
+    uint64_t youngSequenceAfter = 0;
+    uint64_t oldSequenceBefore = 0;
+    uint64_t oldSequenceAfter = 0;
+    uintptr_t colorBefore = 0;
+    uintptr_t colorAfter = 0;
+    bool GcSafepointHappened() const
+    {
+        return youngSequenceBefore != youngSequenceAfter || oldSequenceBefore != oldSequenceAfter ||
+            colorBefore != colorAfter;
+    }
     bool checkedDirtyBoundary = false;
     bool requestedGc = false;
     bool rootMoved = false;
@@ -452,7 +469,7 @@ void* RunSegmentedCase(void* rawMode)
     status += array != nullptr && AllSlotsAreRawNull(array) ? 0 : 1;
     if (gc != YieldGc::NONE) {
         status += ctx.requestedGc ? 0 : 1;
-        status += ctx.gcCountAfter > ctx.gcCountBefore ? 0 : 1;
+        status += ctx.GcSafepointHappened() ? 0 : 1;
         status += ctx.firstSegmentYieldCount >= 2 ? 0 : 1;
         const bool phaseObserved = gc == YieldGc::YOUNG
             ? ctx.minorRootPhaseObservations == 1
@@ -489,13 +506,16 @@ void* RunSegmentedCase(void* rawMode)
                  "[SEGMENTED_ARRAY_CASE] mode=%u status=%zu failures=%zu dirty=%d dirty_addr=%#lx "
                  "array=%p publish=%zu yield=%zu first=%zu withdraw=%zu requested_gc=%d context=%s "
                  "iterator_full=%zu iterator_range=%zu "
-                 "gc_before=%zu gc_after=%zu moved=%d root_sites=%#x phase_n=%zu watermark_done=%d null=%d\n",
+                 "young_before=%llu young_after=%llu old_before=%llu old_after=%llu moved=%d root_sites=%#x phase_n=%zu watermark_done=%d null=%d\n",
                  static_cast<unsigned>(gc), status, ctx.failures, ctx.checkedDirtyBoundary,
                  static_cast<unsigned long>(ctx.dirtyAddress), static_cast<void*>(array), ctx.publishCount,
                  ctx.yieldCount, ctx.firstSegmentYieldCount, ctx.withdrawCount, ctx.requestedGc,
                  requireWatermarkDone ? "native-watermark" : "native",
                  ctx.fullIteratorVisits, ctx.rangeIteratorVisits,
-                 ctx.gcCountBefore, ctx.gcCountAfter, ctx.rootMoved, ctx.rootVisitSites,
+                 static_cast<unsigned long long>(ctx.youngSequenceBefore),
+                 static_cast<unsigned long long>(ctx.youngSequenceAfter),
+                 static_cast<unsigned long long>(ctx.oldSequenceBefore),
+                 static_cast<unsigned long long>(ctx.oldSequenceAfter), ctx.rootMoved, ctx.rootVisitSites,
                  gc == YieldGc::YOUNG ? ctx.minorRootPhaseObservations : ctx.majorRootPhaseObservations,
                  gc == YieldGc::YOUNG ? ctx.minorWatermarkDone : ctx.majorWatermarkDone,
                  array != nullptr && AllSlotsAreRawNull(array));

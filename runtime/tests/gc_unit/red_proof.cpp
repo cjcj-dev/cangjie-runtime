@@ -121,7 +121,7 @@ int main()
     {
         size_t count = 0;
         bool published = true; // NotifyGCFinished first
-        RED_EXPECT(published && count == 1, "waiter sees this-cycle g_gcCount [pre late NotifyGCFinished]");
+        RED_EXPECT(published && count == 1, "waiter sees this-cycle completion [pre late NotifyGCFinished]");
     }
 
     // hunt-coll export: double-remove recycles the same raw index twice

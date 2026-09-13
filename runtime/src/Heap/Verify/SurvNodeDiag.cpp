@@ -6,6 +6,7 @@
 
 #include "Heap/Verify/SurvNodeDiag.h"
 
+#include "Base/ZStat.h"
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -181,7 +182,7 @@ void NoteStore(const void* slot, BaseObject* pre, BaseObject* neu, uint8_t site)
     WriteRec& rec = g_writes[WriteIndex(slotAddr)];
     rec.neu.store(reinterpret_cast<uintptr_t>(neu), std::memory_order_relaxed);
     rec.pre.store(reinterpret_cast<uintptr_t>(pre), std::memory_order_relaxed);
-    rec.gcCount.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)), std::memory_order_relaxed);
+    rec.gcCount.store(ZStat::Collections().Stats().totalCollections, std::memory_order_relaxed);
     rec.phase.store(phase, std::memory_order_relaxed);
     rec.site.store(site, std::memory_order_relaxed);
     rec.slot.store(slotAddr, std::memory_order_release);
@@ -207,7 +208,7 @@ void NotePaint(BaseObject* obj, RegionInfo* region)
     rec.region.store(reinterpret_cast<uintptr_t>(region), std::memory_order_relaxed);
     LiveInfo* live = region == nullptr ? nullptr : region->GetLiveInfo();
     rec.liveInfo.store(reinterpret_cast<uintptr_t>(live), std::memory_order_relaxed);
-    rec.gcCount.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)), std::memory_order_relaxed);
+    rec.gcCount.store(ZStat::Collections().Stats().totalCollections, std::memory_order_relaxed);
     rec.epoch.store(region == nullptr ? 0ULL : region->GetMarkSnapshotEpoch<Generation::Old>(),
                     std::memory_order_relaxed);
     rec.obj.store(addr, std::memory_order_release);
@@ -228,7 +229,7 @@ void NoteTraceVisit(const void* slot, BaseObject* target, uint8_t action)
     WriteRec& rec = g_visits[WriteIndex(slotAddr)];
     rec.neu.store(reinterpret_cast<uintptr_t>(target), std::memory_order_relaxed);
     rec.pre.store(0, std::memory_order_relaxed);
-    rec.gcCount.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)), std::memory_order_relaxed);
+    rec.gcCount.store(ZStat::Collections().Stats().totalCollections, std::memory_order_relaxed);
     rec.phase.store(static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), std::memory_order_relaxed);
     rec.site.store(static_cast<uint8_t>(0x40u | action), std::memory_order_relaxed);
     rec.slot.store(slotAddr, std::memory_order_release);
@@ -252,7 +253,7 @@ void NoteFollowHolder(BaseObject* holder, uint8_t action)
         rec.action.load(std::memory_order_relaxed) == FOLLOW_SKIP_GATE && action == FOLLOW_SKIP_MARKED) {
         return;
     }
-    rec.gcCount.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)), std::memory_order_relaxed);
+    rec.gcCount.store(ZStat::Collections().Stats().totalCollections, std::memory_order_relaxed);
     rec.action.store(action, std::memory_order_relaxed);
     rec.holder.store(addr, std::memory_order_release);
     if (action == FOLLOW_SCAN) {
@@ -275,7 +276,7 @@ void NoteClear(RegionInfo* region, uint8_t site, bool epochBumped)
     LiveInfo* live = region->GetLiveInfo();
     rec.liveInfoBefore = reinterpret_cast<uintptr_t>(live);
     rec.epochBefore = region->GetMarkSnapshotEpoch<Generation::Old>();
-    rec.gcCount = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    rec.gcCount = ZStat::Collections().Stats().totalCollections;
     rec.phase = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
     rec.site = site;
     rec.epochBumped = epochBumped ? 1u : 0u;
@@ -365,7 +366,7 @@ void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, Region
     const uintptr_t tgtAddr = reinterpret_cast<uintptr_t>(target);
     PaintRec& prec = g_paints[PaintIndex(tgtAddr)];
     const bool paintHit = prec.obj.load(std::memory_order_acquire) == tgtAddr;
-    const uint32_t nowGc = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    const uint32_t nowGc = ZStat::Collections().Stats().totalCollections;
     const bool paintedThisCycle = paintHit && prec.gcCount.load(std::memory_order_relaxed) == nowGc;
     if (paintedThisCycle) {
         g_deadPaintedThenClear.fetch_add(1, std::memory_order_relaxed);
