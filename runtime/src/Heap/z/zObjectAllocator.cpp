@@ -360,7 +360,8 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
     // Pinned slots are reclaimed through the old mark view (CollectFreePinnedSlots).
     // ZGeneration::generation owns phase; another generation's handshake does not.
-    const GCPhase oldPhase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
+    const auto oldCycle = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
+    const GCPhase oldPhase = oldCycle.phase;
     // For preventing missing mark, do not allocate object from slot list when gc phase is post trace.
     if (oldPhase == GCPhase::GC_PHASE_POST_TRACE) {
         return 0;
@@ -377,7 +378,7 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         oldPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
     bool censusSafeMarking = oldPhase == GCPhase::GC_PHASE_PREFORWARD ||
         oldPhase == GCPhase::GC_PHASE_FORWARD ||
-        (oldPhase == GCPhase::GC_PHASE_IDLE && !Heap::GetHeap().IsGcStarted());
+        (oldPhase == GCPhase::GC_PHASE_IDLE && !oldCycle.active);
     if (allocPtr == 0 || (!barrierClosedMarking && !censusSafeMarking)) {
         return allocPtr;
     }
