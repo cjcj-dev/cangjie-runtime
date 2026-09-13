@@ -584,7 +584,7 @@ void WCollector::Preforward()
         // concurrent root-preforward work below. ScopedLightSync emits its matching
         // rec=stw record, including rendezvous and held time.
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
-        // ZStat samples pause/concurrent kind when the timer is constructed, so enter
+        // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
         MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);

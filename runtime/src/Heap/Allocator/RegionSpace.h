@@ -177,7 +177,8 @@ public:
     template<Generation G>
     void ForwardFromSpace(GCWorkers& workers)
     {
-        MRT_PHASE_TIMER(ZStatPhases::PForwardFromRegions);
+        MRT_PHASE_TIMER(G == Generation::Young ? ZStatPhases::YoungForwardFromRegions :
+                        ZStatPhases::OldForwardFromRegions);
         regionManager.ForwardFromRegions<G>(workers);
     }
 

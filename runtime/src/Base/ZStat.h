@@ -20,7 +20,7 @@
 
 namespace MapleRuntime {
 // zStat.cpp:1226-1330: cycle inputs used by the director are always
-// collected, independently of the optional phase-log instrumentation below.
+// collected independently of log output.
 struct ZStatCycleStats {
     uint32_t warmupCycles = 0;
     double timeSinceLast = 0;
@@ -243,7 +243,8 @@ extern const ZStatPhase PEnumRootsUpdateOldPointersWithin;
 extern const ZStatPhase PExemptFromRegions;
 extern const ZStatPhase PFinalizer;
 extern const ZStatPhase PFinalizerProcessorWaittingTime;
-extern const ZStatPhase PForwardFromRegions;
+extern const ZStatPhase YoungForwardFromRegions;
+extern const ZStatPhase OldForwardFromRegions;
 extern const ZStatPhase PIdentifyUselessExternRef;
 extern const ZStatPhase POldRelocateStart;
 extern const ZStatPhase PPostTrace;
