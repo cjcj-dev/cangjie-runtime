@@ -91,6 +91,7 @@ void GCWorkers::WorkerLoop(uint32_t id)
             continue;
         }
         GCWorkerTask* task = currentTask;
+        GCIdMark gcId(currentGCId);
         lock.unlock();
 #if defined(CANGJIE_TSAN_SUPPORT)
         Sanitizer::TsanAttachNativeThread();
@@ -115,6 +116,7 @@ void GCWorkers::RunBatch(GCWorkerTask& task)
     ThreadLocal::FlushCurrentThreadMarkStacks();
     std::unique_lock<std::mutex> lock(mutex);
     currentTask = &task;
+    currentGCId = GCIdMark::Current();
     runningWorkers = activeWorkers;
     remainingWorkers = runningWorkers;
     ++batch;

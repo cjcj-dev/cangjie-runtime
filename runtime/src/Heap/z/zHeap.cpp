@@ -132,6 +132,7 @@ public:
     Allocator& GetAllocator() override;
 
     size_t GetMaxCapacity() const override;
+    ZMemoryUsageInfo GetMemoryUsage() const override;
     size_t GetCurrentCapacity() const override;
     size_t GetUsedPageSize() const override;
     size_t GetAllocatedSize() const override;
@@ -234,6 +235,12 @@ GCPhase HeapImpl::GetGCPhase(GCCycleGeneration generation) const { return collec
 void HeapImpl::SetGCPhase(GCCycleGeneration generation, const GCPhase phase) { collectorProxy.SetGCPhase(generation, phase); }
 
 size_t HeapImpl::GetMaxCapacity() const { return theSpace->GetMaxCapacity(); }
+
+ZMemoryUsageInfo HeapImpl::GetMemoryUsage() const
+{
+    return static_cast<RegionSpace*>(theSpace)->GetMemoryUsage();
+}
+
 
 size_t HeapImpl::GetCurrentCapacity() const { return theSpace->GetCurrentCapacity(); }
 

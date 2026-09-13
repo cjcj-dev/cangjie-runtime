@@ -2881,7 +2881,6 @@ EXPORTS
     _ZZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoEE5probe @3239 DATA
     _ZZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoEENKUlvE_clEv @3240
     _ZZN12MapleRuntime13RegionManager21PrepareFromRegionListEvENKUlPNS_10RegionInfoEE_clES2_ @3241
-    _ZZN12MapleRuntime5GcLog12CycleCounterEvE7counter @3244 DATA
     _ZZN12MapleRuntime5GcLog7EnabledEvE7enabled @3245 DATA
     _ZZN12MapleRuntime5GcLog8FatalLenEvE3len @3246 DATA
     _ZZN12MapleRuntime5GcLog9FatalSlotEvE4slot @3247 DATA

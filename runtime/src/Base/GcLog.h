@@ -8,6 +8,7 @@
 #define MRT_GC_LOG_H
 
 #include <atomic>
+#include "Heap/z/zGCIdPrinter.hpp"
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -23,22 +24,23 @@ namespace MapleRuntime {
 // record is one line, `key=value` separated by spaces, with a stable field order and a schema
 // version so a reader can refuse a record it does not understand.
 //
-//   [GCLOG] v=3 rec=cycle seq= kind= reason= start_ns= dur_ns= live_before= live_after=
+//   [GCLOG] v=4 rec=cycle seq= gc_tag= kind= reason= start_ns= dur_ns= live_before= live_after=
 //           collected= heap_used= threshold= rss_kb=
-//   [GCLOG] v=3 rec=phase seq= name= kind= start_ns= ns=
-//   [GCLOG] v=3 rec=phase_leaf seq= name= ns= kind= depth= path_ok= path=
-//   [GCLOG] v=3 rec=stw   seq= reason= start_ns= wait_ns= held_ns=
+//   [GCLOG] v=4 rec=phase seq= gc_tag= name= kind= start_ns= ns=
+//   [GCLOG] v=4 rec=phase_leaf seq= gc_tag= name= ns= kind= depth= path_ok= path=
+//   [GCLOG] v=4 rec=stw   seq= gc_tag= reason= start_ns= wait_ns= held_ns=
 //   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
-// A phase record carries the seq of the cycle it belongs to, so phases join to cycles without
+// gc_tag is y for a minor, Y/O for the young/old parts of a major, and - without a registered ID.
+// A phase record carries the thread context ID, so phases join to collections without
 // relying on line adjacency. Enabled with MRT_GC_LOG=1; the cost when off is one relaxed load.
 // Cycle/phase emit to stderr (always-on when enabled) so MRT_GC_LOG alone is sufficient;
 // they do not depend on MRT_REPORT / WriteLog(REPORT). Crash records are independent of
 // MRT_GC_LOG so a crash before GcLog init still emits.
 class GcLog {
 public:
-    static constexpr uint32_t SCHEMA_VERSION = 3;
-    // Crash records share v3 but remain independently emitted and parsed.
+    static constexpr uint32_t SCHEMA_VERSION = 4;
+    // Crash records remain independently emitted and parsed at v3.
     static constexpr uint32_t CRASH_SCHEMA_VERSION = 3;
     // 128: longest phase name in the tree is well under this; longer ones are truncated.
     // v3: all machine durations are nanoseconds and all names are folded to one token.
@@ -53,28 +55,7 @@ public:
         return enabled;
     }
 
-    // There is exactly one process-wide active collection.  A Timer snapshots CurrentSeq() in its
-    // constructor; scopes created outside a collection therefore retain seq=0 even if they end
-    // during a later collection.  Pairing is a default product invariant, not a test-only check.
-    static uint64_t BeginCycle()
-    {
-        uint64_t seq = CycleCounter().fetch_add(1, std::memory_order_relaxed) + 1;
-        if (seq == 0 || ActiveSeq().exchange(seq, std::memory_order_acq_rel) != 0) {
-            std::abort();
-        }
-        return seq;
-    }
-
-    static uint64_t CurrentSeq() { return ActiveSeq().load(std::memory_order_acquire); }
-
-    static void CompleteCycle(uint64_t seq)
-    {
-        uint64_t expected = seq;
-        if (seq == 0 || !ActiveSeq().compare_exchange_strong(
-                            expected, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            std::abort();
-        }
-    }
+    static uint64_t CurrentSeq() { return GCIdMark::Current(); }
 
     static void Cycle(uint64_t seq, const char* kind, const char* reason, uint64_t startNs, uint64_t durNs,
                       size_t liveBefore, size_t liveAfter, size_t collected, size_t heapUsed, size_t threshold)
@@ -93,9 +74,9 @@ public:
         char safeReason[MAX_PHASE_NAME + 1];
         FoldToToken(kind, safeKind);
         FoldToToken(reason, safeReason);
-        EmitLine("[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_ns=%llu dur_ns=%llu "
+        EmitLine("[GCLOG] v=%u rec=cycle seq=%llu gc_tag=%c kind=%s reason=%s start_ns=%llu dur_ns=%llu "
                  "live_before=%zu live_after=%zu collected=%zu heap_used=%zu threshold=%zu rss_kb=%zu",
-                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), safeKind, safeReason,
+                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safeKind, safeReason,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
                  liveAfter, collected, heapUsed, threshold, ResidentKB());
     }
@@ -108,8 +89,8 @@ public:
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(name, safe);
         // Same always-on channel as Cycle (see Cycle comment).
-        EmitLine("[GCLOG] v=%u rec=phase seq=%llu name=%s kind=%s start_ns=%llu ns=%llu", SCHEMA_VERSION,
-                 static_cast<unsigned long long>(seq), safe, kind,
+        EmitLine("[GCLOG] v=%u rec=phase seq=%llu gc_tag=%c name=%s kind=%s start_ns=%llu ns=%llu", SCHEMA_VERSION,
+                 static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safe, kind,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(ns));
     }
 
@@ -124,9 +105,9 @@ public:
         }
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(name, safe);
-        EmitLine("[GCLOG] v=%u rec=phase_leaf seq=%llu name=%s ns=%llu kind=%s depth=%llu "
+        EmitLine("[GCLOG] v=%u rec=phase_leaf seq=%llu gc_tag=%c name=%s ns=%llu kind=%s depth=%llu "
                  "path_ok=%u path=%s",
-                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), safe,
+                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safe,
                  static_cast<unsigned long long>(ns), kind, static_cast<unsigned long long>(depth),
                  pathOk ? 1U : 0U, path);
     }
@@ -151,8 +132,8 @@ public:
         }
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(reason, safe);
-        EmitLine("[GCLOG] v=%u rec=stw seq=%llu reason=%s start_ns=%llu wait_ns=%llu held_ns=%llu", SCHEMA_VERSION,
-                 static_cast<unsigned long long>(CurrentSeq()), safe,
+        EmitLine("[GCLOG] v=%u rec=stw seq=%llu gc_tag=%c reason=%s start_ns=%llu wait_ns=%llu held_ns=%llu", SCHEMA_VERSION,
+                 static_cast<unsigned long long>(CurrentSeq()), ZGCIdPrinter::Tag(CurrentSeq()), safe,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(waitNs),
                  static_cast<unsigned long long>(heldNs));
     }
@@ -271,18 +252,6 @@ private:
         buf[n] = '\0';
         std::fprintf(stderr, "%s\n", buf);
         std::fflush(stderr);
-    }
-
-    static std::atomic<uint64_t>& CycleCounter()
-    {
-        static std::atomic<uint64_t> counter{ 0 };
-        return counter;
-    }
-
-    static std::atomic<uint64_t>& ActiveSeq()
-    {
-        static std::atomic<uint64_t> seq{ 0 };
-        return seq;
     }
 
     static char* FatalSlot()

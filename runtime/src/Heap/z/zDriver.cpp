@@ -206,7 +206,23 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         return false;
     }
     StringDedup::GCScope suspendDedup;
+    GCIdMark gcId;
     const uint64_t collectionStart = TimeUtil::NanoSeconds();
+    size_t liveBefore = 0;
+    size_t liveAfter = 0;
+    size_t collected = 0;
+    size_t threshold = 0;
+    bool firstGeneration = true;
+    // ZServiceabilityCycleTracer spans the request, including all young
+    // prelude phases of a major. Capture existing generation stats before reuse.
+    const auto accumulate = [&](GCCycleGeneration generation) {
+        GCStats& stats = collector->GetGCStats(generation);
+        if (firstGeneration) liveBefore = stats.liveBytesBeforeGC;
+        firstGeneration = false;
+        liveAfter = stats.liveBytesAfterGC;
+        collected += stats.collectedBytes;
+        threshold = stats.GetThreshold();
+    };
 
     // Set the request's generation budgets before mark-start can consume
     // them, including the old mark domain prepared by the young prelude.
@@ -223,11 +239,13 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     // zDriver.cpp:416-436: full causes preclean with promote-all, then
     // establish the combined young/old roots cycle. Other causes use partial roots.
     if (request.reason != GC_REASON_YOUNG) {
+        ZGCIdMajor majorId(GCIdMark::Current(), 'Y');
         collector->GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(
             request.reason, request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
         const bool preclean = ShouldPrecleanYoung(request.reason);
         if (preclean) {
             RunYoungCollection(*collector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
+            accumulate(GCCycleGeneration::YOUNG);
             if (majorDriverPort.Abort().Poll()) {
                 CancelDriverRequestLifecycle(port.Kind());
                 return false;
@@ -235,6 +253,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         }
         RunYoungCollection(*collector, GCTask::ASYNC_TASK_INDEX,
                            preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
+        accumulate(GCCycleGeneration::YOUNG);
 #if defined(MRT_GC_UNIT_TESTS)
         if (testAfterYoungPrelude) {
             testAfterYoungPrelude();
@@ -250,9 +269,13 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
          static_cast<unsigned long long>(request.sequence), request.reason);
     const uint64_t index = request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence;
     if (request.reason == GC_REASON_YOUNG) {
+        ZGCIdMinor minorId(GCIdMark::Current());
         RunYoungCollection(*collector, index, ZYoungType::minor, warmup);
+        accumulate(GCCycleGeneration::YOUNG);
     } else {
+        ZGCIdMajor majorId(GCIdMark::Current(), 'O');
         RunCollection(*collector, index, request.reason, warmup);
+        accumulate(GCCycleGeneration::OLD);
     }
     (request.reason == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
         .RegisterEnd(TimeUtil::NanoSeconds() - collectionStart);
@@ -262,6 +285,9 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         CancelDriverRequestLifecycle(port.Kind());
         return false;
     }
+    GcLog::Cycle(GCIdMark::Current(), request.reason == GC_REASON_YOUNG ? "minor" : "major",
+                 g_gcRequests[request.reason].name, collectionStart, TimeUtil::NanoSeconds() - collectionStart,
+                 liveBefore, liveAfter, collected, Heap::GetHeap().GetUsedPageSize(), threshold);
     return true;
 }
 
@@ -444,7 +470,6 @@ namespace MapleRuntime {
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
     ScopedEntryTrace trace("CJRT_GC_START");
-    const uint64_t cycleSeq = GcLog::BeginCycle();
 
     const GCCycleGeneration generation = reason == GC_REASON_YOUNG
         ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
@@ -474,7 +499,6 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         // forwarding storage alive for driver shutdown; skip normal reclaim.
         GetWorkers(generation).SetInactive();
         cycle.End();
-        GcLog::CompleteCycle(cycleSeq);
         return;
     }
 
@@ -484,14 +508,20 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 
     PostGarbageCollection(generation, gcIndex);
     gcStats.gcEndTime = TimeUtil::NanoSeconds();
-    // Emitted here rather than from GCStats::Dump, because UpdateGCStats below (and so Dump) is
-    // skipped for young collections: a minor would produce no cycle record and its phases would
-    // be attributed to the next major.
-    GcLog::CompleteCycle(cycleSeq);
-    GcLog::Cycle(cycleSeq, reason == GC_REASON_YOUNG ? "minor" : "major",
-                 g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
-                 gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,
-                 Heap::GetHeap().GetUsedPageSize(), gcStats.GetThreshold());
+    const char* phaseName = "major.old";
+    if (generation == GCCycleGeneration::YOUNG) {
+        switch (cycle.YoungType()) {
+            case ZYoungType::none: phaseName = "young"; break;
+            case ZYoungType::minor: phaseName = "minor.young"; break;
+            case ZYoungType::major_full_preclean: phaseName = "major.preclean"; break;
+            case ZYoungType::major_full_roots: phaseName = "major.full_roots"; break;
+            case ZYoungType::major_partial_roots: phaseName = "major.partial_roots"; break;
+        }
+    }
+    // A generation span includes pauses and concurrent work. Its start and
+    // duration distinguish multiple Y spans without inventing another GC ID.
+    GcLog::Phase(GCIdMark::Current(), phaseName, "unknown", gcStats.gcStartTime,
+                 gcStats.gcEndTime - gcStats.gcStartTime);
     if (reason != GC_REASON_YOUNG) {
         UpdateGCStats();
     }

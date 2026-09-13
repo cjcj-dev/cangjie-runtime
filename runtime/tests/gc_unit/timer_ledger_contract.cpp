@@ -15,7 +15,6 @@ namespace {
 void CloseCycle(uint64_t seq)
 {
     constexpr uint64_t durationNs = 1000000000;
-    GcLog::CompleteCycle(seq);
     GcLog::Cycle(seq, "minor", "timer_contract", 1, durationNs, 9, 8, 1, 8, 10);
 }
 } // namespace
@@ -29,7 +28,8 @@ int main()
         return 1;
     }
 
-    const uint64_t nestedSeq = GcLog::BeginCycle();
+    std::unique_ptr<MapleRuntime::GCIdMark> nestedId(new MapleRuntime::GCIdMark());
+    const uint64_t nestedSeq = GcLog::CurrentSeq();
     {
         Timer root("contract.root");
         {
@@ -41,14 +41,18 @@ int main()
     }
     GcLog::Stw("timer_nested", 1, 1, 2);
     CloseCycle(nestedSeq);
+    nestedId.reset();
 
-    const uint64_t capturedSeq = GcLog::BeginCycle();
+    std::unique_ptr<MapleRuntime::GCIdMark> capturedId(new MapleRuntime::GCIdMark());
+    const uint64_t capturedSeq = GcLog::CurrentSeq();
     std::unique_ptr<Timer> captured(new Timer("cycle.captured"));
     GcLog::Stw("timer_captured", 1, 1, 2);
     CloseCycle(capturedSeq);
+    capturedId.reset();
     captured.reset();
 
-    const uint64_t ownershipSeq = GcLog::BeginCycle();
+    std::unique_ptr<MapleRuntime::GCIdMark> ownershipId(new MapleRuntime::GCIdMark());
+    const uint64_t ownershipSeq = GcLog::CurrentSeq();
     {
         Timer external("contract.external", FINALIZE);
     }
@@ -57,6 +61,7 @@ int main()
     }
     GcLog::Stw("timer_ownership", 1, 1, 2);
     CloseCycle(ownershipSeq);
+    ownershipId.reset();
 
     {
         Timer finalizer("Finalizer", FINALIZE);

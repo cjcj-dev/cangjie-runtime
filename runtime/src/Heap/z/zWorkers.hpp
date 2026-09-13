@@ -98,6 +98,7 @@ private:
     uint64_t elapsedNanos = 0;
     uint64_t workerNanos = 0;
     GCWorkerTask* currentTask = nullptr;
+    uint64_t currentGCId = 0;
 };
 
 }
