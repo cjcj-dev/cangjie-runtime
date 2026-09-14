@@ -1,0 +1,100 @@
+$ git grep -n ReadStaticRef -- runtime/src
+rc=0
+runtime/src/CompilerCalls.cpp:1906:        return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
+runtime/src/CompilerCalls.cpp:1931:extern "C" ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field)
+runtime/src/CompilerCalls.cpp:1933:    return Heap::GetBarrier().ReadStaticRef(*field);
+runtime/src/CompilerCalls.h:158:extern "C" MRT_EXPORT ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field);
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:36:    return Heap::GetBarrier().ReadStaticRef(slot);
+runtime/src/Heap/Collector/TracingCollector.cpp:182:        auto obj = Heap::GetBarrier().ReadStaticRef(ref);
+runtime/src/Heap/z/zBarrier.cpp:107:                ? barrier.ReadStaticRef(source) : barrier.ReadReference(nullptr, source);
+runtime/src/Heap/z/zBarrier.cpp:264:BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
+runtime/src/Heap/z/zBarrier.cpp:272:                 "NativeSlot requires colored value at ReadStaticRef slot=%p word=%#zx", &field, raw(observed));
+runtime/src/Heap/z/zBarrier.hpp:39:    BaseObject* ReadStaticRef(NativeSlot& field) const;
+runtime/src/Heap/z/zCollectedHeap.hpp:267:    // consumer now uses the public ReadStaticRef runtime path instead of this helper. Compiler
+runtime/src/Heap/z/zGeneration.cpp:738:        BaseObject* finalizerObj = Heap::GetBarrier().ReadStaticRef(ref);
+runtime/src/Heap/z/zHeapIterator.cpp:45:        Push(Heap::GetBarrier().ReadStaticRef(root), objectVisitor);
+runtime/src/Heap/z/zMark.cpp:109:    // The major root iterator bypasses ReadStaticRef. Enforce the same
+runtime/src/Heap/z/zMark.cpp:676:        visitor(Heap::GetBarrier().ReadStaticRef(root));
+runtime/src/Heap/z/zRelocate.cpp:303:    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+runtime/src/Heap/z/zRelocate.cpp:374:        [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); }); },
+runtime/src/Heap/z/zRelocate.cpp:838:    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+runtime/src/Heap/z/zRootsIterator.hpp:92:        return Heap::GetBarrier().ReadStaticRef(exportRoots[index].exportObj);
+runtime/src/Heap/z/zRootsIterator.hpp:125:        if (Heap::GetBarrier().ReadStaticRef(info.exportObj) != obj) {
+runtime/src/Heap/z/zVerify.cpp:81:    ZVerify::Object(Heap::GetBarrier().ReadStaticRef(root), &root);
+runtime/src/Inspector/CjHeapData.cpp:363:        BaseObject* obj = Heap::GetBarrier().ReadStaticRef(root);
+runtime/src/Inspector/CjHeapData.cpp:396:        BaseObject* obj = Heap::GetBarrier().ReadStaticRef(objRef);
+runtime/src/Interpreter/InterpreterSpecific.cpp:39:extern "C" ObjectPtr CJ_MCC_ReadStaticRef(RefField<false>* field);
+runtime/src/Interpreter/InterpreterSpecific.cpp:393:    BaseObject* res = Heap::GetBarrier().ReadStaticRef(NativeSlotAt(source));
+runtime/src/ObjectModel/FieldInfo.cpp:183:        return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(addr));
+runtime/src/windows_x86_64_exports.def:286:    CJ_MCC_ReadStaticRef @280
+runtime/src/windows_x86_64_exports.def:2364:    _ZNK12MapleRuntime7Barrier13ReadStaticRefERNS_8HeapSlotILb0EEE @2676
+$ git grep -n EnumRefFieldRoot -- runtime/src
+rc=0
+runtime/src/Heap/WCollector/WCollector.h:184:    void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
+runtime/src/Heap/z/zMark.cpp:106:void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
+runtime/src/Heap/z/zMark.cpp:115:                 "NativeSlot requires colored value at EnumRefFieldRoot slot=%p word=%#zx",
+runtime/src/Heap/z/zMark.cpp:162:                        HealSite::WCollectorEnumRefFieldRoot)) {
+runtime/src/Heap/z/zMark.hpp:380:    virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
+runtime/src/Heap/z/zRootsIterator.cpp:322:        EnumRefFieldRoot(root, foreignRootsSet);
+runtime/src/Heap/z/zRootsIterator.cpp:407:            [&] { VisitStrongColoredRoots([&](NativeSlot& root) { EnumRefFieldRoot(root, roots[id]); }); },
+runtime/src/ObjectModel/RefField.h:49:    WCollectorEnumRefFieldRoot,
+runtime/src/windows_x86_64_exports.def:2201:    _ZNK12MapleRuntime10WCollector16EnumRefFieldRootERNS_8HeapSlotILb0EEERNS_9MarkStackIPNS_10BaseObjectEEE @2428
+runtime/src/windows_x86_64_exports.def:2328:    _ZNK12MapleRuntime16TracingCollector16EnumRefFieldRootERNS_8HeapSlotILb0EEERNS_9MarkStackIPNS_10BaseObjectEEE @2628
+$ git grep -n VisitAllColoredRoots\|VisitStrongColoredRoots\|VisitWeakColoredRoots -- runtime/src/Heap
+rc=0
+runtime/src/Heap/z/zHeapIterator.cpp:47:    collector.VisitStrongColoredRoots(colored);
+runtime/src/Heap/z/zHeapIterator.cpp:48:    if (visitWeaks) { collector.VisitWeakColoredRoots(colored); }
+runtime/src/Heap/z/zMark.cpp:625:    VisitAllColoredRoots([&remset, &nativeVisitor](NativeSlot& root) {
+runtime/src/Heap/z/zMark.cpp:631:    VisitAllColoredRoots(nativeVisitor);
+runtime/src/Heap/z/zMark.hpp:311:    void VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const;
+runtime/src/Heap/z/zMark.hpp:312:    void VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const;
+runtime/src/Heap/z/zMark.hpp:313:    void VisitAllColoredRoots(const NativeSlotVisitor& visitor) const;
+runtime/src/Heap/z/zRelocate.cpp:303:    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+runtime/src/Heap/z/zRelocate.cpp:374:        [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); }); },
+runtime/src/Heap/z/zRelocate.cpp:838:    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+runtime/src/Heap/z/zRootsIterator.cpp:365:void TracingCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
+runtime/src/Heap/z/zRootsIterator.cpp:371:void TracingCollector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
+runtime/src/Heap/z/zRootsIterator.cpp:377:void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
+runtime/src/Heap/z/zRootsIterator.cpp:379:    VisitStrongColoredRoots(visitor);
+runtime/src/Heap/z/zRootsIterator.cpp:380:    VisitWeakColoredRoots(visitor);
+runtime/src/Heap/z/zRootsIterator.cpp:407:            [&] { VisitStrongColoredRoots([&](NativeSlot& root) { EnumRefFieldRoot(root, roots[id]); }); },
+runtime/src/Heap/z/zVerify.cpp:96:    collector.VisitStrongColoredRoots([&](NativeSlot& root) { ColoredRoot(root, afterOldMark); });
+runtime/src/Heap/z/zVerify.cpp:108:    collector.VisitWeakColoredRoots([](NativeSlot& root) { ColoredRoot(root, true); });
+$ git grep -n VisitMinorRoots\|PushYoungObject\|RunMajorStripeMark\|DoEnumeration\|TraceHeap -- runtime/src/Heap/z/zMark.cpp runtime/src/Heap/z/zGeneration.cpp
+rc=0
+runtime/src/Heap/z/zGeneration.cpp:252:                PushYoungObject(target, destination, "y2y_slot");
+runtime/src/Heap/z/zGeneration.cpp:266:    // Keep one producer (the existing owner-specific VisitMinorRoots/epoch path),
+runtime/src/Heap/z/zGeneration.cpp:271:        // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
+runtime/src/Heap/z/zGeneration.cpp:274:        VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
+runtime/src/Heap/z/zGeneration.cpp:281:            PushYoungObject(object, workStack, "minor_root");
+runtime/src/Heap/z/zGeneration.cpp:748:        const size_t resurrectdObjects = RunMajorStripeMark(workStack);
+runtime/src/Heap/z/zGeneration.cpp:1000:    TraceHeap();
+runtime/src/Heap/z/zMark.cpp:477:void WCollector::TraceHeap()
+runtime/src/Heap/z/zMark.cpp:532:                // mutator-list lock owned by StopTheWorld. DoEnumeration cannot
+runtime/src/Heap/z/zMark.cpp:541:            DoEnumeration(workStack, foreignStack);
+runtime/src/Heap/z/zMark.cpp:546:            DoEnumeration(workStack, foreignStack);
+runtime/src/Heap/z/zMark.cpp:570:// gcbadroot: tag which root family is currently being walked so PushYoungObject
+runtime/src/Heap/z/zMark.cpp:663:void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
+runtime/src/Heap/z/zMark.cpp:682:void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
+runtime/src/Heap/z/zMark.cpp:684:    PushYoungObject(object, workStack, origin, false);
+runtime/src/Heap/z/zMark.cpp:687:void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin,
+runtime/src/Heap/z/zMark.cpp:760:// FYS raw workStack.push_back used to skip PushYoungObject recover + StartWho.
+runtime/src/Heap/z/zMark.cpp:961:            shared.collector->PushYoungObject(object, failClosed, origin);
+runtime/src/Heap/z/zMark.cpp:1512:size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
+runtime/src/Heap/z/zMark.cpp:1553:            markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
+runtime/src/Heap/z/zMark.cpp:1583:        markedObjectCount.fetch_add(RunMajorStripeMark(exportSeed), std::memory_order_relaxed);
+$ git grep -n NativeSlot\|WriteStaticRef -- runtime/src/Heap/Collector/FinalizerProcessor.cpp runtime/src/Heap/z/zRootsIterator.hpp
+rc=0
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:32:static BaseObject* LoadFinalizerGood(NativeSlot& slot)
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:379:    NativeSlot root(zpointer::null);
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:380:    Heap::GetBarrier().WriteStaticRef(root, obj);
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:438:    NativeSlot root(zpointer::null);
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:439:    Heap::GetBarrier().WriteStaticRef(root, obj);
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:451:        NativeSlot root(zpointer::null);
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:452:        Heap::GetBarrier().WriteStaticRef(root, Heap::GetBarrier().ReadPlainRoot(source));
+runtime/src/Heap/z/zRootsIterator.hpp:20:        NativeSlot* content[0];
+runtime/src/Heap/z/zRootsIterator.hpp:27:    void VisitRoots(const NativeSlotVisitor& visitor);
+runtime/src/Heap/z/zRootsIterator.hpp:47:    NativeSlot exportObj{zpointer::null};
+runtime/src/Heap/z/zRootsIterator.hpp:101:        Heap::GetBarrier().WriteStaticRef(exportRoots[index].exportObj, nullptr);
+runtime/src/Heap/z/zRootsIterator.hpp:106:    void VisitGCRoots(const NativeSlotVisitor& visitor);
+runtime/src/Heap/z/zRootsIterator.hpp:136:        Heap::GetBarrier().WriteStaticRef(slot.exportObj, exportObj);

@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zMark.cpp b/runtime/src/Heap/z/zMark.cpp
+index ea335d49c..0df66d3cb 100644
+--- a/runtime/src/Heap/z/zMark.cpp
++++ b/runtime/src/Heap/z/zMark.cpp
+@@ -158,7 +158,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
+     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
+              latest->GetTypeInfo(), latest->GetSize());
+-    } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
++    } else if (false && HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                         HealSite::WCollectorEnumRefFieldRoot)) {
+         DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()),
+              raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());

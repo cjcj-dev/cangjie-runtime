@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zBarrier.cpp b/runtime/src/Heap/z/zBarrier.cpp
+index fc2abfd95..d7624cd37 100644
+--- a/runtime/src/Heap/z/zBarrier.cpp
++++ b/runtime/src/Heap/z/zBarrier.cpp
+@@ -315,7 +315,7 @@ BaseObject* Barrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoin
+         return to_object(value.GetTargetObject());
+     }
+     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+-    BaseObject* target = theCollector.make_load_good(value, provenance);
++    BaseObject* target = to_object(value.GetTargetObject());
+     CHECK_DETAIL(target != nullptr || !ColourPredicates::has_address(raw(observed)),
+                  "load barrier relocation must preserve a non-null reference");
+     if (strength != ReferenceStrength::Strong && target != nullptr && Heap::IsHeapAddress(target)) {

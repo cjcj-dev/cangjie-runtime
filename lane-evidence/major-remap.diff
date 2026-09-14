@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zMark.cpp b/runtime/src/Heap/z/zMark.cpp
+index ea335d49c..0938879ed 100644
+--- a/runtime/src/Heap/z/zMark.cpp
++++ b/runtime/src/Heap/z/zMark.cpp
+@@ -145,7 +145,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
+     }
+ 
+     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
+-    BaseObject* latest = make_load_good(oldField, provenance);
++    BaseObject* latest = to_object(oldField.GetTargetObject());
+ 
+     // target object could be null or non-heap for some static variable.
+     if (!Heap::IsHeapAddress(latest)) {

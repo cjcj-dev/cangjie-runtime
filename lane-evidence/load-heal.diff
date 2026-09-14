@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zBarrier.cpp b/runtime/src/Heap/z/zBarrier.cpp
+index fc2abfd95..3141d04c7 100644
+--- a/runtime/src/Heap/z/zBarrier.cpp
++++ b/runtime/src/Heap/z/zBarrier.cpp
+@@ -339,7 +339,7 @@ BaseObject* Barrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoin
+     const zpointer healed = strength == ReferenceStrength::Strong
+         ? ColourLoadGood(target, observed)
+         : to_zpointer(reinterpret_cast<uintptr_t>(target) | ::g_cjStoreGoodMask | REMEMBERED_MASK);
+-    ZgcSelfHeal(field, observed, healed, fastPath, HealSite::BarrierReadReference);
++    /* B17 cut: omit native load self-heal. */
+     return target;
+ }
+ 

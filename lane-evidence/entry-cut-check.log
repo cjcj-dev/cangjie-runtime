@@ -1,0 +1,9 @@
+✅ lane-evidence/entry.diff :: runtime/src/Heap/z/zMark.cpp
+   ✅ 产品树文件 —— runtime/src/Heap/z/zMark.cpp
+   ✅ 文件在基线存在 —— e26fcb34329464aefefb08873795faae80f51366:runtime/src/Heap/z/zMark.cpp
+   ✅ 被断开的行在基线逐字存在 —— 2 行全在基线
+   ✅ 没有断在候选自己新增的行上 —— 无
+   ⭐ 相位入口命中: PushYoungObject（所在函数）
+✅ * :: *
+   ✅ 至少一处断线落在真实相位入口函数 —— RunGarbageCollection, RequestGC, DoGarbageCollection, PushYoungObject, FindUselessExternObjects, Preforward, PostTrace, PublishMarkCoverage, ReclaimRetired, RehomeCompactedInPlaceRegion, TryAllocateForRelocation, SetRelocationRegion, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, PostResolveCycleTask, VerifyFaceEnabled, VerifyPhaseEnter, GCPhasePreForward, TransitionToGCPhaseExclusive, ForwardObjectImpl, ForwardObjectExclusive, RelocateObjectInner, TryMutatorRelocate, WaitForPageForwarding, RunCycle, Uncommit, VisitHeapRootSlots, WriteReference, RecordCrossGenEdge, ZeroAndFill, runtime/src/Heap/z/zStat.cpp:Sort, PublishForwardingCarrier, PrepareForwardableRegion, DoYoungGarbageCollection, DoTracing, ProcessOldNonStrongReferences, PostWriteReference, WaitForAck, ProcessDriverRequest, RequestGCAndWait, DrainStackWatermark, VisitRawObjects, NoteLargeArrayInitRootVisit
+⇒ 断线补丁合法
