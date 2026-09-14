@@ -3,6 +3,8 @@
 // minor cycle in the runtime's structured log.
 import std.runtime.*
 
+foreign func getchar(): Int32
+
 class PhaseEntryPayload {
     let id: Int64
 
@@ -25,8 +27,13 @@ main(): Int64 {
         live[i] = PhaseEntryPayload(i + slots)
     }
 
-    // Let the allocation-triggered minor finish before the process exits.
-    sleep(500 * Duration.millisecond)
+    // The runner releases stdin only after observing a completed minor cycle
+    // from this process. A fixed delay can instead cancel the driver at exit.
+    // The foreign call leaves the managed thread available for GC handshakes.
+    if (unsafe { getchar() } != 10) {
+        println("PHASE_ENTRY_MINOR_FAIL completion_ack")
+        return 1
+    }
 
     if (let Some(first) <- live[0]) {
         checksum = checksum + first.id
