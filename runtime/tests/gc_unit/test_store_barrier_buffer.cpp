@@ -327,6 +327,8 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
+    Mutator mutator;
+    InstalledMutatorScope mutatorScope(mutator);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
@@ -334,6 +336,11 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
 
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
     GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
+    std::vector<BaseObject*> marked;
+    markFixture.DrainObjects(marked);
+    GC_EXPECT_EQ(marked.size(), 1u);
+    GC_EXPECT_EQ(marked[0], fx.obj0);
+    std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
 
 // B2: a non-null non-heap holder has the same immediate discipline as null;
@@ -350,6 +357,8 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
+    Mutator mutator;
+    InstalledMutatorScope mutatorScope(mutator);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(StoreBadPointer(fx.obj0));
     alignas(8) unsigned char nativeStorage[128] {};
@@ -361,6 +370,11 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
     GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
+    std::vector<BaseObject*> marked;
+    markFixture.DrainObjects(marked);
+    GC_EXPECT_EQ(marked.size(), 1u);
+    GC_EXPECT_EQ(marked[0], fx.obj0);
+    std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
 
 // Deterministic compiler-hit object graph: oldReferent is reachable only from
