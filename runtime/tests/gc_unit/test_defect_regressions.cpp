@@ -136,6 +136,8 @@ private:
 class ExportTestRuntime final : public Runtime {
 public:
     static void Ensure() { static ExportTestRuntime instance; }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
+    void SetGCThreshold(uint64_t) override {}
 private:
     ExportTestRuntime()
     {
