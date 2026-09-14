@@ -409,6 +409,18 @@ bool ForwardingTable::EntriesArmed(MAddress from, Generation gen) { return get(f
 
 ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from, Generation gen)
 {
+    // ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131)
+    // routes through the source generation's forwarding, independently of
+    // the current page installed by promotion. Keep the carrier while using
+    // its source identity; a cleared owner supplies no routing authority.
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(from);
+    auto carrier = RetainPageOwner(region);
+    if (carrier) {
+        const auto* source = carrier->from_page_view(region->GetRegionLifeId());
+        if (source != nullptr) {
+            gen = static_cast<Generation>(source->owner);
+        }
+    }
     return LookupForwarding(from, get(from, gen));
 }
 

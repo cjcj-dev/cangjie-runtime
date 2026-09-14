@@ -124,9 +124,8 @@ BaseObject* Collector::ValidateCurrentValue(BaseObject* ref, const ForwardingPro
 Generation Collector::ObjectGeneration(BaseObject* object) const
 {
     const MAddress address = reinterpret_cast<MAddress>(object);
-    RegionInfo* from = RegionInfo::GetGhostFromRegionAt(address);
-    return from != nullptr ? from->GetRouteMarkGeneration()
-                           : RegionInfo::GetRegionInfoAt(address)->GetOwnerGeneration();
+    // ZHeap::is_young uses the current page, including after promotion.
+    return RegionInfo::GetRegionInfoAt(address)->GetOwnerGeneration();
 }
 
 BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const

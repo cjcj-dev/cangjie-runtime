@@ -85,7 +85,10 @@ std::mutex RegionInfo::youngRegionFlagMutex;
 void RegionInfo::SetYoungRegionFlag(uint8_t flag)
 {
     std::lock_guard<std::mutex> lock(youngRegionFlagMutex);
-    bool wasYoung = IsYoungRegion();
+    // The bit records charged occupancy, including zero-initialized metadata.
+    // Page identity is published separately below (ZPage::reset, zPage.cpp:103).
+    bool wasYoung = metadata.regionStateBitField.GetAtomicValue(
+        RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
     bool makeYoung = flag != 0;
     if (!wasYoung && makeYoung) {
         youngRegionBytes.fetch_add(GetRegionSize(), std::memory_order_release);
@@ -93,6 +96,8 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
     }
     metadata.regionStateBitField.SetAtomicValue(
         RegionStateBitPos::YOUNG_REGION_FLAG, YOUNG_STATE_BIT_LENGTH, makeYoung ? 1 : 0);
+    ZGenerationId generation = makeYoung ? ZGenerationId::young : ZGenerationId::old;
+    __atomic_store(&metadata._generation_id, &generation, __ATOMIC_RELEASE);
     if (wasYoung && !makeYoung) {
         size_t count = youngRegionCount.load(std::memory_order_relaxed);
         CHECK(count > 0);
