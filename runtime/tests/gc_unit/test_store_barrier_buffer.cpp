@@ -339,7 +339,7 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
     GC_EXPECT_EQ(marked.size(), 1u);
-    GC_EXPECT_EQ(marked[0], fx.obj0);
+    GC_EXPECT_TRUE(marked[0] == fx.obj0);
     std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
 
@@ -373,7 +373,7 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
     GC_EXPECT_EQ(marked.size(), 1u);
-    GC_EXPECT_EQ(marked[0], fx.obj0);
+    GC_EXPECT_TRUE(marked[0] == fx.obj0);
     std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
 
