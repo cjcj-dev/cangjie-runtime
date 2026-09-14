@@ -16,6 +16,7 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 void InstallReceipt(GcHeapFixture& heap, MAddress from, MAddress to)
 {
+    Heap::GetHeap().GetRememberedSet().Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     heap.InstallPageOwner(heap.region0);
     auto publication = ForwardingTable::EnsurePublicationBeforeCopy(heap.region0, from);
     GC_EXPECT_TRUE(static_cast<bool>(publication));
@@ -63,6 +64,7 @@ struct MutatorPublishTestAccess {
     }
     static BaseObject* ForwardImpl(WCollector& collector, BaseObject* from, RegionInfo* page)
     {
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
         RegionInfo::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
         return collector.ForwardObjectImpl(from, page, lease);

@@ -446,6 +446,9 @@ if [[ $main_link_rc -ne 0 || $publication_link_rc -ne 0 ]]; then
   exit 2
 fi
 echo "GC_UNIT_COMPILE_PARALLEL jobs=$BUILD_JOBS tus=$((${#MAIN_SOURCES[@]} + ${#PUBLICATION_SOURCES[@]}))"
+# Capture the just-linked test identity before any case is executed.
+sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \
+  "$RUNTIME_LIB_DIR/libcangjie-runtime.so" "$RUNTIME_LIB_DIR/libboundscheck.so" >"$OUT/test-artifacts.sha256"
 
 # The standalone script is the frozen gate's real build entry point.  Keep the
 # same structural invariant as the CMake target at that point, before any test
@@ -607,7 +610,6 @@ LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RememberPromotedObject('
   'MapleRuntime::WCollector::RemapYoungRoots('
-  'MapleRuntime::RegionManager::FinishIncompleteFromRegions('
 )
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   LOADHEAL_PRODUCT_CONSUMERS+=(
