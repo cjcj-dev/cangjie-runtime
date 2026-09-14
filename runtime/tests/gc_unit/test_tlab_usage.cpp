@@ -25,6 +25,10 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
 GC_TEST(TLABUsage, BoundsAndDemand)
 {
     AllocBuffer buffer;
+    buffer.ClearRegion();
+    std::fprintf(stderr, "TLAB_EMPTY_IDENTITY product=%p caller=%p\n",
+                 static_cast<void*>(buffer.GetRegion()), static_cast<void*>(RegionInfo::NullRegion()));
+    GC_EXPECT_EQ(buffer.GetRegion(), RegionInfo::NullRegion());
     const size_t unit = RegionInfo::UNIT_SIZE;
     const size_t maximum = 32 * unit;
     GC_EXPECT_EQ(buffer.ComputeTLABSize(0, maximum), unit);

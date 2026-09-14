@@ -65,12 +65,6 @@ inline bool RegionInfo::IsRoutingState()
 
 
 
-inline RegionInfo* RegionInfo::NullRegion()
-    {
-        static RegionInfo nullRegion;
-        return &nullRegion;
-    }
-
 inline LiveInfo* RegionInfo::GetLiveInfo()
     {
         LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
