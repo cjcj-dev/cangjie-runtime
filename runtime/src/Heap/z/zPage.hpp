@@ -7,6 +7,8 @@
 #ifndef MRT_REGION_INFO_H
 #define MRT_REGION_INFO_H
 
+#include "Heap/z/zPageAge.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -471,7 +473,8 @@ public:
 
     static void InitFreeRegion(size_t unitIdx, size_t nUnit);
 
-    static RegionInfo* InitRegion(size_t unitIdx, size_t nUnit, RegionInfo::UnitRole uclass);
+    static RegionInfo* InitRegion(size_t unitIdx, size_t nUnit, RegionInfo::UnitRole uclass,
+                                  PageAge age = PageAge::old);
 
     static RegionInfo* InitRegionAt(uintptr_t addr, size_t nUnit, RegionInfo::UnitRole uclass);
 
@@ -1185,9 +1188,9 @@ private:
 
     // Reinitialization consumes an already retired descriptor. The allocator
     // must remove the old page and finish safe retirement before reaching here.
-    void InitRegionInfo(size_t nUnit, UnitRole uClass);
+    void InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge age = PageAge::old);
 
-    void InitRegion(size_t nUnit, UnitRole uClass);
+    void InitRegion(size_t nUnit, UnitRole uClass, PageAge age = PageAge::old);
 
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;
     UnitMetadata metadata;

@@ -87,7 +87,7 @@ inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
     {
         size_t regionCount = (size + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
         RegionInfo* region = TakeRegion(regionCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS,
-                                        false, true, clearPayload);
+                                        false, true, clearPayload, PageAge::eden);
         if (region == nullptr) {
             return 0;
         }
