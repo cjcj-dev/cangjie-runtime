@@ -664,6 +664,7 @@ void* RunLargeYoungClosureCase(void*)
     MArray* target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     Heap::GetBarrier().WriteReference(holder, field, target);
+    const bool holderYoung = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
     const U64 holderRoot = Heap::GetHeap().RegisterExportRoot(holder);
     LargeYoungClosureResult::target = target;
     LargeYoungClosureResult::live = false;
@@ -675,12 +676,12 @@ void* RunLargeYoungClosureCase(void*)
     Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
     SetMarkClosureObserverForTest(nullptr);
     LargeYoungClosureResult::target = nullptr;
-    std::fprintf(stderr, "LARGE_YOUNG_TARGET_LIVE_ASSERT_EXECUTED observations=%zu live=%d followed=%d\n",
-                 LargeYoungClosureResult::observations, LargeYoungClosureResult::live,
+    std::fprintf(stderr, "LARGE_YOUNG_TARGET_LIVE_ASSERT_EXECUTED holder_young=%d observations=%zu live=%d followed=%d\n",
+                 holderYoung, LargeYoungClosureResult::observations, LargeYoungClosureResult::live,
                  LargeYoungClosureResult::followed);
     Heap::GetHeap().RemoveExportObject(holderRoot);
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((LargeYoungClosureResult::live && LargeYoungClosureResult::followed) ? 0 : 1);
+    return reinterpret_cast<void*>((holderYoung && LargeYoungClosureResult::live && LargeYoungClosureResult::followed) ? 0 : 1);
 }
 #endif
 
