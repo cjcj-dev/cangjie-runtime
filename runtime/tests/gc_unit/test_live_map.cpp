@@ -224,9 +224,13 @@ GC_TEST(LiveMap, OldForwardingCarrierPublishesOwnerAndRetires)
         ExpectSourceObject(region, fx.obj0, "old-retained");
     }
     region->DispelGhostFromRegion();
+    {
+        RegionInfo::RetainScope released(region);
+        GC_EXPECT_FALSE(released.ok());
+    }
+    // ZForwarding::detach_page releases page access, not the forwarding set.
+    ForwardingTable::ResetRelocationSet(Generation::Old);
     GC_EXPECT_FALSE(region->HasFromPageMetadata());
-    RegionInfo::RetainScope released(region);
-    GC_EXPECT_FALSE(released.ok());
     // Dispel resets this non-promoted page's map. The old test incorrectly
     // expected a retained copy to keep the former mark readable here.
     GC_EXPECT_FALSE(region->IsRouteSurvivedObject(64));
@@ -284,10 +288,14 @@ GC_TEST(LiveMap, PromotionCarrierLivesUntilForwardingRelease)
             GC_EXPECT_TRUE(region->GetCurrentLiveMap() == nullptr);
         }
         region->DispelGhostFromRegion();
+        {
+            RegionInfo::RetainScope released(region);
+            GC_EXPECT_FALSE(released.ok());
+        }
+        // The relocation set owns forwarding storage beyond page detach.
+        ForwardingTable::ResetRelocationSet(Generation::Young);
         GC_EXPECT_FALSE(region->HasFromPageMetadata());
         GC_EXPECT_FALSE(region->IsRouteSurvivedObject(large ? 0 : 64));
-        RegionInfo::RetainScope released(region);
-        GC_EXPECT_FALSE(released.ok());
         size_t visits = 0;
         original->ObjectIterate([&](BaseObject* visited) {
             GC_EXPECT_TRUE(visited == object);
