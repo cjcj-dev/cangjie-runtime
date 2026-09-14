@@ -27,6 +27,7 @@
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zStat.hpp"
+#include "Mutator/ThreadLocal.h"
 
 namespace MapleRuntime {
 namespace {
@@ -489,6 +490,8 @@ struct SegmentedProductBackend final : MemMapBackend {
 
 int ExerciseSegmentedProductAllocation()
 {
+    // This is a native fixture, not a scheduler-managed mutator thread.
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     SegmentedProductBackend backend;
     const size_t unit = RegionInfo::UNIT_SIZE;
@@ -584,6 +587,8 @@ enum class RetirementPath { RETURN, RECLAIM, RELEASE, MARK_QUARANTINE };
 // ZSafeDelete gtest; these cases exercise that protocol via RegionManager.
 int ExerciseSegmentedPageRetirement(RetirementPath path, bool concurrent)
 {
+    // This is a native fixture, not a scheduler-managed mutator thread.
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     SegmentedProductBackend backend;
     const size_t unit = RegionInfo::UNIT_SIZE;
@@ -593,6 +598,10 @@ int ExerciseSegmentedPageRetirement(RetirementPath path, bool concurrent)
         return 20;
     }
     const auto& ranges = map->GetReservationRegistry().Ranges();
+    // ReleaseRetiredRegion clears the product remembered set before releasing
+    // backing. Its address space must exist just as it does after heap init.
+    Heap::GetHeap().GetRememberedSet().Initialize(ranges.front().start,
+                                                ranges.back().End() - ranges.front().start);
     const size_t metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(ranges));
     MemMap* metadata = MemMap::MapMemory(metadataSize, metadataSize);
     int result = 0;
@@ -616,6 +625,7 @@ int ExerciseSegmentedPageRetirement(RetirementPath path, bool concurrent)
         const auto type = first->GetRegionType();
         size_t retired = 0;
         auto retire = [&] {
+            ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
             switch (path) {
                 case RetirementPath::RETURN:
                     manager.ReturnPageMemory({ index, 2, 0, true });
@@ -740,6 +750,8 @@ GC_TEST(MemMapContract, PageTableMarkQuarantineWaitsForIterator)
 
 int ExerciseProductOwnerWiring()
 {
+    // This is a native fixture, not a scheduler-managed mutator thread.
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     constexpr size_t units = 2;
     const size_t metadataSize = RegionManager::GetMetadataSize(units);
@@ -782,6 +794,8 @@ GC_TEST(MemMapContract, RegionManagerInactiveAllocationUsesMemMapOwner)
 // a failed large allocation leaves its successfully committed memory reusable.
 int ExerciseRegionPartialCommit(size_t failureCall)
 {
+    // This is a native fixture, not a scheduler-managed mutator thread.
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
     const size_t unit = RegionInfo::UNIT_SIZE;
     ProductWiringBackend backend;
