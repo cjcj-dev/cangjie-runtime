@@ -72,6 +72,10 @@ struct RelocationReceiptTestAccess {
         auto& young = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
         collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        auto& remembered = Heap::GetHeap().GetRememberedSet();
+        if (!remembered.IsInitialized()) {
+            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        }
         // ZDriver::gc_major runs the young roots collection before old marking.
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
         collector.RunGarbageCollection(1, GC_REASON_YOUNG);
@@ -154,7 +158,7 @@ struct RelocationReceiptTestAccess {
     {
         PrepareMajorRoots(collector);
         DriverLocker locker(Heap::GetHeap().GetCollectorResources());
-        collector.DoGarbageCollection(GCCycleGeneration::OLD);
+        collector.RunGarbageCollection(2, GC_REASON_USER);
     }
 };
 
@@ -210,7 +214,7 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     }
 
     route.source->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    route.sourceLive = fx.PlantLiveInfo(route.source);
+    route.sourceLive = route.source->GetLiveInfo();
     RegionBitmap* sourceBitmap =
         destinationYoung
         ? fx.PlantMarkBitmap<Generation::Young>(route.sourceLive, route.source->GetRegionSize())
@@ -237,7 +241,7 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(route.from), route.source->GetOwnerGeneration()),
                  reinterpret_cast<MAddress>(route.to));
 
-    route.destinationLive = fx.PlantLiveInfo(route.destination);
+    route.destinationLive = route.destination->GetLiveInfo();
     (void)fx.PlantMarkBitmap<Generation::Young>(route.destinationLive,
                                                 route.destination->GetRegionSize());
     return route;
@@ -353,7 +357,8 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    // Promotion transfers arena-owned page metadata (ZPage::clone_for_promotion).
+    LiveInfo* live = fx.region1->GetLiveInfo();
     (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     WeakGraph graph(fx, fx.region1);
 
