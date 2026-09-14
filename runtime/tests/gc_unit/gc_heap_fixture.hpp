@@ -54,8 +54,10 @@ inline zpointer StoreGoodPointer(BaseObject* object)
 struct LiveMapCycleAccess : Collector {
     static GenerationCycle& Cycle(Collector& collector, Generation generation)
     {
-        return generation == Generation::Young ? collector.*&LiveMapCycleAccess::youngCycle
-                                               : collector.*&LiveMapCycleAccess::oldCycle;
+        // ZLiveMapTest initializes the generation that page/livemap readers use
+        // (test_zLiveMap.cpp:45-52). Preserve CollectorProxy's virtual routing.
+        return collector.GetGenerationCycle(generation == Generation::Young
+            ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     }
 };
 
