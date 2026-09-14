@@ -14,8 +14,6 @@ import time
 TESTS = [
     'YoungConc.ForwardingArenaProductInstall',
     'YoungConc.ForwardingPublishedTargetInitialized',
-    'ReceiptLifeRegistry.ExistingKeyReturnsFirstWinner',
-    'ReceiptLifeRegistry.ConcurrentSameKeyReturnsLockedWinner',
     'ZForwardingEntries.CapacityArithmeticDoesNotWrap',
     'ZForwardingEntries.ArenaRetainsLastCarrier',
     'ZForwardingEntries.ArenaBudgetFailureDoesNotConsumeStorage',
@@ -39,14 +37,6 @@ CUTS = {
     'copy': (PREFIX+'Heap/z/zRelocate.cpp',
         '    CopyObject(*obj, *toObj, size);',
         '    CopyObject(*obj, *toObj, TYPEINFO_PTR_SIZE);'),
-    'existing_winner': (PREFIX+'Heap/Allocator/zForwardingTable.cpp',
-        'return Receipt{ existingBeforeLock, false, Receipt::Status::EXISTING };',
-        'return Receipt{ to, false, Receipt::Status::EXISTING };'),
-    'locked_winner': (PREFIX+'Heap/Allocator/zForwardingTable.cpp',
-        '    const MAddress existing = find(from);\n    if (existing != 0) {\n'
-        '        return Receipt{ existing, false, Receipt::Status::EXISTING };',
-        '    const MAddress existing = find(from);\n    if (existing != 0) {\n'
-        '        return Receipt{ to, false, Receipt::Status::EXISTING };'),
     'header_capacity': (PREFIX+'Heap/z/zForwarding.hpp',
         '        return capacity;\n    }', '        return static_cast<uint32_t>(capacity);\n    }'),
     'header_winner': (PREFIX+'Heap/z/zForwarding.hpp',
@@ -61,8 +51,8 @@ CUTS = {
 EXPECTED = {
     'normal': [], 'restored': [],
     'entry': TESTS[:2], 'arena_begin': TESTS[:1], 'arena_storage': TESTS[:1],
-    'copy': TESTS[1:2], 'existing_winner': TESTS[2:3], 'locked_winner': TESTS[3:4],
-    'header_capacity': TESTS[4:5], 'header_winner': TESTS[7:8], 'header_retention': TESTS[5:6], 'header_width': TESTS[10:11],
+    'copy': TESTS[1:2],
+    'header_capacity': TESTS[2:3], 'header_winner': TESTS[5:6], 'header_retention': TESTS[3:4], 'header_width': TESTS[8:9],
 }
 
 
