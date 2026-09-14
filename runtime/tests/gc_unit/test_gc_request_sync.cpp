@@ -34,6 +34,7 @@
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Inspector/ProfilerAgentImpl.h"
 #include "Mutator/ThreadLocal.h"
 
@@ -64,6 +65,9 @@ class CollectorResourcesTestPeer {
 public:
     static void Init(CollectorResources& resources, Collector& collector, bool startNearReceiptWrap)
     {
+        // Match CollectorResources::Init before entering either driver:
+        // ZGC zInitialize.cpp:63 initializes statistics before zDriver at :69.
+        ZStat::Initialize();
         resources.testCollector = &collector;
         resources.GetMinorDriverPort().Reset();
         resources.GetMajorDriverPort().Reset();
