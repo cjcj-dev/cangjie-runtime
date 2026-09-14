@@ -559,7 +559,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    RefField<> installed = collector.GetAndTryTagRefField(fx.obj1);
+    RefField<> installed = RemsetRearmTestAccess::Tag(collector, fx.obj1);
     const uintptr_t observedPrev = raw(field->GetFieldValue());
     field->StoreColoured(installed.GetFieldValue());
     GC_EXPECT_FALSE(rs.Contains(slot)); // the direct store does not run a barrier
