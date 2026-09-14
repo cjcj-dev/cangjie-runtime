@@ -141,8 +141,12 @@ void CheckNativeRoot(bool minor, bool plain = false)
                  minor ? "minor" : "major", size_t(currentMarked), size_t(staleMarked), to, unsigned(marker));
     std::fprintf(stderr, "native_root_healed_current executed=1 before=%#zx after=%#zx expected=%p result=%u\n",
                  before, raw(slot.GetFieldValue()), to, unsigned(healed));
-    GC_EXPECT_TRUE(marker);
-    GC_EXPECT_TRUE(healed);
+    if (!marker) {
+        ::MapleRuntime::GcUnit::Fail(__FILE__, __LINE__, "native_root_marker_current");
+    }
+    if (!healed) {
+        ::MapleRuntime::GcUnit::Fail(__FILE__, __LINE__, "native_root_healed_current");
+    }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
     collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
     ForwardingTable::ResetRelocationSet(Generation::Young);
