@@ -30,6 +30,7 @@
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
 #include "TypeInfoManager.h"
+#include "Heap/z/zStat.hpp"
 
 namespace MapleRuntime {
 namespace GcUnit {
@@ -87,6 +88,8 @@ struct GcHeapFixture {
 
     explicit GcHeapFixture(bool withMemoryOwner = false)
     {
+        // ZInitialize initializes statistics before any allocation can sample.
+        ZStat::Initialize();
         const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
         mappedSize = metadataSize + kUnits * RegionInfo::UNIT_SIZE;
         if (withMemoryOwner) {
@@ -102,6 +105,8 @@ struct GcHeapFixture {
         }
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
         EnsureHeapRange(heapStart);
+        // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
+        Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * RegionInfo::UNIT_SIZE}});
         for (Generation generation : {Generation::Young, Generation::Old}) {
             if (LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation).Sequence() == 0) {
                 AdvanceGeneration(generation);
