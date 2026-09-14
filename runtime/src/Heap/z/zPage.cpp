@@ -49,6 +49,14 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+// Keep the empty allocation page identity in the product DSO. An inline
+// function-local object gives callers in another DSO a different sentinel.
+RegionInfo* RegionInfo::NullRegion()
+{
+    static RegionInfo nullRegion;
+    return &nullRegion;
+}
+
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;

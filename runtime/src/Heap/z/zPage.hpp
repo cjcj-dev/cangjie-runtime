@@ -129,7 +129,7 @@ public:
     void NoteEnrolPhase();
 
     RegionInfo();
-    static inline RegionInfo* NullRegion();
+    static RegionInfo* NullRegion();
 
     LiveInfo* GetLiveInfo();
 

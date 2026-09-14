@@ -120,7 +120,18 @@ namespace MapleRuntime {
 void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                        Mutator& mutator)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+    // HotSpot frame::oops_do_internal (frame.cpp:1166-1177) dispatches only
+    // frames with managed metadata to oop-map scanning. Native callbacks
+    // expose managed references through handles, not a Cangjie stack map.
+#ifdef __APPLE__
+    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
+#else
+    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
+#endif
+        return;
+    }
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
@@ -212,7 +223,18 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
                                                   const FrameInfo& frame, Mutator& mutator, bool young)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+    // HotSpot frame::oops_do_internal (frame.cpp:1166-1177) dispatches only
+    // frames with managed metadata to oop-map scanning. Native callbacks
+    // expose managed references through handles, not a Cangjie stack map.
+#ifdef __APPLE__
+    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
+#else
+    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
+#endif
+        return;
+    }
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
