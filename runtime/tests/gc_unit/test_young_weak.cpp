@@ -889,10 +889,20 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
                     observed.handoffOwners == 0 && observed.handoff.empty();
                 rootMarked = graph.IsMarked(graph.root);
                 consumerMarked = graph.IsMarked(graph.foreign);
+                std::fprintf(stderr,
+                             "EXPORT_OWNER_TARGET before producer_carrier=%d root_marked=%d consumer_marked=%d\n",
+                             static_cast<int>(producerCarrier), static_cast<int>(rootMarked),
+                             static_cast<int>(consumerMarked));
+                GC_EXPECT_TRUE(producerCarrier);
             } else {
                 ++afterObservations;
                 handoffCurrent = observed.discoveredOwners == 0 && observed.discovered.empty() &&
                     observed.handoffOwners == owners && paired(observed.handoff);
+                // Check the handoff here: later relocation requires the discovery
+                // map to be empty and would otherwise hide this target assertion.
+                std::fprintf(stderr, "EXPORT_OWNER_TARGET after handoff_current=%d\n",
+                             static_cast<int>(handoffCurrent));
+                GC_EXPECT_TRUE(handoffCurrent);
             }
         };
         RelocationReceiptTestAccess::RunMajorCollection(collector);
