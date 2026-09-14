@@ -1096,6 +1096,9 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     GenerationCycle& young = RemsetRearmTestAccess::YoungCycle(collector);
     RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    // The fixture may leave its liveness-setup cycle active. Complete that
+    // setup before issuing the first independent mark-start request.
+    if (young.Snapshot().active) young.End();
     auto markStart = [&] {
         young.Begin(young.Sequence() + 1);
         young.StartYoungMark(rs);
@@ -1105,6 +1108,7 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
     const MAddress to = heap.heapStart + 128;
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
     rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    size_t checked = 0;
     for (uint8_t initial = 0; initial != 2; ++initial) {
         for (size_t flips = 0; flips != 4; ++flips) {
             rs.ClearRegion(heap.heapStart, heap.heapStart + 2 * RegionInfo::UNIT_SIZE);
@@ -1118,8 +1122,12 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
             GC_EXPECT_EQ(collector.OldActiveRemsetIsCurrent(), flips % 2 == 0);
             GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
             GC_EXPECT_TRUE(rs.Contains(to + sizeof(void*)));
+            ++checked;
+            std::fprintf(stderr, "DETAIL remset_face initial=%u flips=%zu assertions_executed=1\n",
+                         static_cast<unsigned>(initial), flips);
         }
     }
+    GC_EXPECT_EQ(checked, 8u);
 }
 
 GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
