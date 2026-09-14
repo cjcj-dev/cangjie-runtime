@@ -138,6 +138,7 @@ std::atomic<uintptr_t> g_remapYoungRootsResolvedAddress{ 0 };
 std::atomic<uint64_t> g_remapYoungRootsVisits{ 0 };
 std::atomic<uint64_t> g_remapYoungRootsHeals{ 0 };
 std::atomic<bool> g_remapYoungRootsStoreGoodAfter{ false };
+std::atomic<uint64_t> g_remapYoungRootsOldPendingVisits{ 0 };
 } // namespace
 
 void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot)
@@ -149,6 +150,7 @@ void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot)
     g_remapYoungRootsVisits.store(0, std::memory_order_relaxed);
     g_remapYoungRootsHeals.store(0, std::memory_order_relaxed);
     g_remapYoungRootsStoreGoodAfter.store(false, std::memory_order_relaxed);
+    g_remapYoungRootsOldPendingVisits.store(0, std::memory_order_relaxed);
 }
 
 RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt()
@@ -159,7 +161,34 @@ RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt()
              g_remapYoungRootsResolvedAddress.load(std::memory_order_relaxed),
              g_remapYoungRootsVisits.load(std::memory_order_relaxed),
              g_remapYoungRootsHeals.load(std::memory_order_relaxed),
-             g_remapYoungRootsStoreGoodAfter.load(std::memory_order_relaxed) };
+             g_remapYoungRootsStoreGoodAfter.load(std::memory_order_relaxed),
+             g_remapYoungRootsOldPendingVisits.load(std::memory_order_relaxed) };
+}
+
+// Observe the product write-back; the receipt neither supplies roots nor
+// changes the forwarding decision. Share the existing one-shot slot selector.
+void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before)
+{
+    const uintptr_t selector = g_remapYoungRootsTargetSlot.load(std::memory_order_relaxed);
+    // A source-address selector also observes derived visitors' temporary base
+    // slots, whose addresses are deliberately not exposed to the fixture.
+    if (selector == 0 || (reinterpret_cast<uintptr_t>(&root) != selector && before != selector)) {
+        return;
+    }
+    const uintptr_t after = raw(root.LoadPlain());
+    ZForwarding* old = ForwardingTable::get(before, Generation::Old);
+    if (old != nullptr && !old->is_claimed() && !old->is_done() && old->find(before) == 0 &&
+        !ForwardingTable::EntriesArmed(before, Generation::Young) &&
+        Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD) == GCPhase::GC_PHASE_POST_TRACE) {
+        g_remapYoungRootsOldPendingVisits.fetch_add(1, std::memory_order_relaxed);
+    }
+    g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);
+    g_remapYoungRootsAfter.store(after, std::memory_order_relaxed);
+    g_remapYoungRootsResolvedAddress.store(after, std::memory_order_relaxed);
+    g_remapYoungRootsVisits.fetch_add(1, std::memory_order_relaxed);
+    if (before != after) {
+        g_remapYoungRootsHeals.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,

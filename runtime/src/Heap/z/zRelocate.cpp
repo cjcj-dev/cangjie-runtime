@@ -90,6 +90,7 @@
 
 namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
+void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before);
 void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
                                            bool storeGoodAfter);
 #endif
@@ -308,10 +309,12 @@ void WCollector::RemapYoungRoots()
         // Old relocation may already have installed its table before this
         // young-remap pass. Conversely a promoted source can still belong
         // to the young table, so the page's current generation is not a gate.
-        if (!ForwardingTable::EntriesArmed(raw(observed), Generation::Young)) {
-            return;
+        if (ForwardingTable::EntriesArmed(raw(observed), Generation::Young)) {
+            ForwardUpdateRawRef(root, Generation::Young);
         }
-        ForwardUpdateRawRef(root, Generation::Young);
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteRawRemapYoungRootsTestReceipt(root, raw(observed));
+#endif
     };
     VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
         DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);

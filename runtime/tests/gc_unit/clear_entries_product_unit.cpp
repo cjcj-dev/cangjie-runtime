@@ -1394,8 +1394,7 @@ struct DerivedBaseMapImage {
 };
 DerivedBaseMapImage derivedBaseMapImage;
 
-void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClosed = false,
-                            bool unresolvedGhost = false)
+void InitializeDerivedBaseMap(bool tagged)
 {
     auto& image = derivedBaseMapImage;
     std::memset(&image, 0, sizeof(image));
@@ -1423,6 +1422,14 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
     put(232, 8); put(1, 1); put(240, 8); put(1, 1);
     var(0); var(0); // empty line table
     var(1); put(2, 2); // derived row selects second slot row
+
+}
+
+void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClosed = false,
+                            bool unresolvedGhost = false)
+{
+    InitializeDerivedBaseMap(tagged);
+    auto& image = derivedBaseMapImage;
 
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -2755,6 +2762,160 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
 
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
 }
+#endif
+
+#if defined(MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE)
+// ZGenerationOld::remap_young_roots, zGeneration.cpp:1509: enter through
+// the real major driver; a registered runtime mutator owns the raw root.
+void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false)
+{
+    ZStat::Initialize();
+    GcHeapFixture& fx = ProductFixture();
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    LateBackfillState forwarding {};
+    BaseObject* secondOld = nullptr;
+    if (oldPending) {
+        RegionInfo* region = ResetDeliveryUnit(fx, 5);
+        BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
+        BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
+        region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+        LiveInfo* live = fx.PlantLiveInfo(region);
+        (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+        auto& regionManager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        RelocationReceiptTestAccess::ParkFrom(regionManager, region);
+        // ZGC selects a set only when packing can release a page. Two sparse
+        // pages are input to the real selector; a single page is exempted.
+        RegionInfo* second = ResetDeliveryUnit(fx, 4);
+        secondOld = fx.PlaceObject(second->GetRegionStart());
+        second->SetRegionAllocPtr(reinterpret_cast<MAddress>(secondOld) + secondOld->GetSize());
+        LiveInfo* secondLive = fx.PlantLiveInfo(second);
+        (void)fx.PlantMarkBitmap<Generation::Old>(secondLive, second->GetRegionSize());
+        RelocationReceiptTestAccess::ParkFrom(regionManager, second);
+        forwarding = {region, region, from, dead, live, Generation::Old};
+    } else {
+        forwarding = PrepareLateBackfill(fx, collector, Generation::Young);
+        LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+    }
+    std::unique_ptr<DeliverySharedPageScope> allocation;
+    if (oldPending) {
+        // Supply allocation capacity, as Heap::Init would. The product copier
+        // still allocates, copies and publishes the destination itself.
+        allocation = std::make_unique<DeliverySharedPageScope>(ResetDeliveryUnit(fx, 2));
+    }
+    if (promoted) {
+        // The source table, not its current page generation, owns remapping.
+        forwarding.region->SetYoungRegionFlag(0);
+    }
+
+    MutatorManager& manager = MutatorManager::Instance();
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    ObjectRef* root = mutator->AddNativeFrameRoot(forwarding.from);
+    ObjectRef* secondRoot = secondOld == nullptr ? nullptr : mutator->AddNativeFrameRoot(secondOld);
+    ObjectRef* nullRoot = mutator->AddNativeFrameRoot(nullptr);
+    static uintptr_t nonHeapStorage[2] = {};
+    ObjectRef* nonHeapRoot = mutator->AddNativeFrameRoot(reinterpret_cast<BaseObject*>(nonHeapStorage));
+    uintptr_t frame[8] = {};
+#if defined(__x86_64__) && defined(__linux__)
+    if (managed) {
+        InitializeDerivedBaseMap(false);
+        frame[0] = reinterpret_cast<uintptr_t>(forwarding.from);
+        frame[1] = frame[0] + 8;
+        frame[2] = reinterpret_cast<uintptr_t>(derivedBaseMapImage.pc) + 9;
+        auto& context = mutator->GetUnwindContext();
+        context.frameInfo.mFrame.SetIP(derivedBaseMapImage.pc);
+        context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[3]));
+        context.anchorFA = nullptr;
+        mutator->SetManagedContext(true);
+        if (fallback) {
+            // Missing stack bounds is the product's explicit legacy fallback
+            // case. The valid frame metadata and heap roots remain unchanged.
+            mutator->SetStackTopAddr(0);
+        }
+    }
+#endif
+    ResetRemapYoungRootsTestReceipt(reinterpret_cast<uintptr_t>(forwarding.from));
+    RuntimeWorkers threadPool(1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(2);
+    collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(2);
+    collector.StartOldMarkWork();
+    {
+        DriverLocker driver(resources);
+        collector.RunGarbageCollection(1, GC_REASON_USER);
+    }
+    const auto receipt = ReadRemapYoungRootsTestReceipt();
+    const uintptr_t expected = oldPending
+        ? ForwardingTable::FindTo(reinterpret_cast<uintptr_t>(forwarding.from), Generation::Old)
+        : reinterpret_cast<uintptr_t>(forwarding.to);
+    const uint64_t expectedVisits = managed ? 3 : 1; // native, ordinary base, derived temporary base
+    const uintptr_t before = reinterpret_cast<uintptr_t>(forwarding.from);
+    const bool result = receipt.visits == expectedVisits && receipt.before == before &&
+        receipt.after == (oldPending ? before : expected) &&
+        receipt.heals == (oldPending ? 0 : expectedVisits) &&
+        (!oldPending || receipt.oldPendingVisits == expectedVisits) &&
+        expected != 0 && (!oldPending || expected != before) && raw(root->LoadPlain()) == expected &&
+        is_null(nullRoot->LoadPlain()) && raw(nonHeapRoot->LoadPlain()) == reinterpret_cast<uintptr_t>(nonHeapStorage) &&
+        (!managed || (frame[0] == expected && frame[1] == expected + 8));
+    std::fprintf(stderr, "RAW_REMAP_TARGET_ASSERT promoted=%u managed=%u visits=%llu before=%zx after=%zx "
+        "expected=%zx base=%zx derived=%zx old_pending=%llu final_root=%zx result=%u\n", unsigned(promoted), unsigned(managed),
+        static_cast<unsigned long long>(receipt.visits), receipt.before, receipt.after,
+        expected, frame[0], frame[1], static_cast<unsigned long long>(receipt.oldPendingVisits),
+        raw(root->LoadPlain()), unsigned(result));
+    GC_EXPECT_TRUE(result);
+    mutator->RemoveNativeFrameRoot(root);
+    if (secondRoot != nullptr) mutator->RemoveNativeFrameRoot(secondRoot);
+    mutator->RemoveNativeFrameRoot(nullRoot);
+    mutator->RemoveNativeFrameRoot(nonHeapRoot);
+    manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+}
+void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false)
+{
+    const AbortCapture outcome = CaptureAbort([&] { RunMajorRawRemap(promoted, managed, oldPending, fallback); });
+    std::fprintf(stderr, "%s", outcome.output.c_str());
+    const bool completed = WIFEXITED(outcome.status) && WEXITSTATUS(outcome.status) == 0 &&
+        outcome.output.find("result=1") != std::string::npos;
+    std::fprintf(stderr, "RAW_REMAP_OUTCOME_ASSERT promoted=%u managed=%u old=%u status=%d completed=%u\n",
+        unsigned(promoted), unsigned(managed), unsigned(oldPending), outcome.status, unsigned(completed));
+    GC_EXPECT_TRUE(completed);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesYoungTable)
+{
+    CheckMajorRawRemap(false, false);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesPromotedYoungSource)
+{
+    CheckMajorRawRemap(true, false);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldPendingThenRelocatesRawRoot)
+{
+    CheckMajorRawRemap(false, false, true);
+}
+#if defined(__x86_64__) && defined(__linux__)
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkRemapsDerivedYoungSource)
+{
+    CheckMajorRawRemap(false, true);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkRemapsDerivedPromotedSource)
+{
+    CheckMajorRawRemap(true, true);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorKeepsOldPendingThenRelocatesDerivedRoot)
+{
+    CheckMajorRawRemap(false, true, true);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackRemapsDerivedPromotedSource)
+{
+    CheckMajorRawRemap(true, true, false, true);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackKeepsOldPendingThenRelocates)
+{
+    CheckMajorRawRemap(false, true, true, true);
+}
+#endif
 #endif
 
 #include "b09_runtime_fixture.hpp"
