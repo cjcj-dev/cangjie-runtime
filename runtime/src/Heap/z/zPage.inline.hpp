@@ -1182,7 +1182,6 @@ inline __attribute__((always_inline)) void RegionInfo::PublishForwardingCarrier(
         // zRelocationSet.cpp:110-118 / zVerify.cpp:601: the forwarding still
         // reads this source page's livemap. Publication does not reset it;
         // detach/reuse owns that transition after source-page consumers finish.
-        metadata._generation_id = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
         // Always install ghost membership, including a zero-live page. This is
         // what keeps the from-page carrier reachable until forwarding drain.
         SetInGhostRegion(1);
@@ -1930,7 +1929,12 @@ inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass)
 #endif
 
 namespace MapleRuntime {
-inline ZGenerationId RegionInfo::generation_id() const { return metadata._generation_id; }
+inline ZGenerationId RegionInfo::generation_id() const
+{
+    ZGenerationId generation;
+    __atomic_load(&metadata._generation_id, &generation, __ATOMIC_ACQUIRE);
+    return generation;
+}
 }
 
 #include "Heap/Allocator/RegionInfo.h"
@@ -1945,7 +1949,7 @@ inline Generation RegionInfo::GetOwnerGeneration() const
 namespace MapleRuntime {
 inline bool RegionInfo::IsYoungRegion() const
     {
-        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
+        return generation_id() == ZGenerationId::young;
     }
 }
 
