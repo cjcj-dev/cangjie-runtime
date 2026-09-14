@@ -785,8 +785,13 @@ void* RunMarkAllocationCase(void* rawExisting)
                  static_cast<unsigned long long>(after.sequence), resampled);
     heap.RemoveExportObject(holderRoot);
     mutator->SetManagedContext(true);
-    return reinterpret_cast<void*>((completed && !MarkAllocationWindow::timedOut &&
-        phase == GC_PHASE_TRACE && implicit && live && targetLive && excluded && nextCycle && resampled) ? 0 : 1);
+    const uintptr_t status = (implicit ? 0 : 1) | (live ? 0 : 2) |
+        (targetLive ? 0 : 4) | (excluded ? 0 : 8) | (nextCycle ? 0 : 16) |
+        (resampled ? 0 : 32) |
+        ((completed && !MarkAllocationWindow::timedOut && phase == GC_PHASE_TRACE) ? 0 : 64);
+    std::fprintf(stderr, "MARK_ALLOC_ASSERT_RESULT status=%zu "
+                 "bits=implicit:1,live:2,target_live:4,excluded:8,next_cycle:16,resampled:32,window:64\n", status);
+    return reinterpret_cast<void*>(status);
 }
 #endif
 
