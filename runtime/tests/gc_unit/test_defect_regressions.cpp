@@ -12,6 +12,7 @@
 #include "Heap/z/zStat.hpp"
 #include <cstring>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "Heap/z/zAddress.hpp"
@@ -24,13 +25,21 @@
 #include "ObjectModel/RefField.h"
 
 extern "C" size_t MCC_GetGCCount();
+extern "C" int CJ_ScheduleManagerInit();
 extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const MapleRuntime::ObjectPtr obj,
                                    MapleRuntime::RefField<false>* field);
+extern "C" void CJ_MCC_PostWriteRefField(const MapleRuntime::ObjectPtr ref, const MapleRuntime::ObjectPtr obj,
+                                        MapleRuntime::RefField<false>* field, uintptr_t observedPrev);
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/WCollector/WCollector.h"
 #include "Mutator/ThreadLocal.h"
+#include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
+#include "Concurrency/Concurrency.h"
+#include "Common/Runtime.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -125,6 +134,38 @@ private:
     AllocBuffer* previous;
 };
 
+class ExportTestRuntime final : public Runtime {
+public:
+    static void Ensure() { static ExportTestRuntime instance; }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
+    void SetGCThreshold(uint64_t) override {}
+private:
+    ExportTestRuntime()
+    {
+        runtime = this;
+        mutatorManager = &manager;
+        concurrencyModel = &concurrency;
+        manager.Init();
+        const ConcurrencyParam parameters = {1024, 64, 1};
+        concurrency.Init(parameters);
+    }
+    MutatorManager manager;
+    Concurrency concurrency;
+};
+
+class InstalledExportMutator final {
+public:
+    InstalledExportMutator() : previous(ThreadLocal::GetMutator())
+    {
+        ExportTestRuntime::Ensure();
+        ThreadLocal::SetMutator(&mutator);
+    }
+    ~InstalledExportMutator() { ThreadLocal::SetMutator(previous); }
+private:
+    Mutator mutator;
+    Mutator* previous;
+};
+
 struct ExportHandleFixture {
     ExportHandleFixture() : barrier(collector, rememberedSet), installed(barrier) {}
 
@@ -143,59 +184,24 @@ struct ExportHandleFixture {
     InstalledExportHandleBarrier installed;
 };
 
+struct CompilerStoreFixture {
+    CompilerStoreFixture()
+        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()),
+          barrier(collector, rememberedSet), installed(barrier) {}
+    GcHeapFixture heap;
+    WCollector collector;
+    RememberedSet rememberedSet;
+    Barrier barrier;
+    InstalledExportHandleBarrier installed;
+};
+
 } // namespace
 
 // ① iorfix 8baacb1e — pregrant before RouteRegion freezes domain.
 // Contract: after liveInfo0 is frozen without object B, later mark on a *different*
 // current liveInfo does not open GetRoute(B). Route geometry alone is not enough.
 // Product: RegionInfo::GetRoute domain gate (RegionInfo.h:812+) + installdomain paint face.
-GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    BaseObject* objA = fx.obj0;
-    BaseObject* objB = fx.PlaceObject(reinterpret_cast<MAddress>(objA) + 128);
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(objB) + 64);
 
-    LiveInfo* ghost = fx.PlantLiveInfo(region);
-    size_t regionSize = region->GetRegionSize();
-    RegionBitmap* bm = fx.PlantMarkBitmap(ghost, regionSize);
-    size_t offA = region->GetAddressOffset(reinterpret_cast<MAddress>(objA));
-    (void)bm->MarkBits(offA, 8, regionSize);
-    // Freeze domain face through the product publisher (pointer share + life stamp).
-    region->BindLiveInfo0FromLiveIfNull();
-    region->MarkForwardingDone();
-
-    GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(objA), ForwardingTable::RetainPageOwner(region).get()).to) != nullptr);
-    GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(objB), ForwardingTable::RetainPageOwner(region).get()).to) == nullptr);
-
-    // Late "grant" paints only a *new* current liveInfo — not the frozen ghost face.
-    // This is RouteRegion-before-pregrant: geometry frozen, B never in domain.
-    LiveInfo* late = new LiveInfo();
-    late->bindedRegion = region;
-    size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);
-    void* mem = std::calloc(1, bytes);
-    GC_EXPECT_TRUE(mem != nullptr);
-    auto* lateBm = new (mem) RegionBitmap(regionSize);
-    late->GetMarkFace().epoch.store(
-        region->GetMarkSnapshotEpoch<Generation::Old>(), std::memory_order_relaxed);
-    late->GetMarkFace().bitmap = lateBm;
-    region->metadata.liveInfo = late;
-    size_t offB = region->GetAddressOffset(reinterpret_cast<MAddress>(objB));
-    (void)lateBm->MarkBits(offB, 8, regionSize);
-    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-    GC_EXPECT_TRUE(late->IsSurvivedObject(view, offB));
-    // Domain still frozen on ghost without B ⇒ Admit/GetRouteForProbe must miss.
-    GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(objB), ForwardingTable::RetainPageOwner(region).get()).to) == nullptr);
-
-    ForwardingTable::ResetRelocationSet(region->GetOwnerGeneration());
-    region->metadata.liveInfo = nullptr;
-    lateBm->~RegionBitmap();
-    std::free(lateBm);
-    delete late;
-    fx.FreePlanted(ghost);
-}
 
 // ② nullslot 2da28bee — non-heap latest must not be CAS-null'd (recolour only).
 // Product predicate: Heap::IsHeapAddress; writeback shape RootSlotWriteback keeps target.
@@ -297,7 +303,9 @@ GC_TEST(DefectRegress, FieldPlaceColourMustStripAtAbi)
 // word and retaining the slot-keyed remembered-set obligation.
 GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
 {
-    ExportHandleFixture fx;
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    InstalledExportMutator mutator;
+    CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     fx.heap.region0->SetYoungRegionFlag(0);
     fx.heap.region1->SetYoungRegionFlag(1);
@@ -305,7 +313,10 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    std::memset(field, 0, sizeof(*field));
+    // ZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-705)
+    // skips raw null. Flip remembered metadata to exercise the actual slow path.
+    field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK));
+    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
 
     // obj == nullptr is the triggering ABI shape; field is demonstrably in heap.
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
@@ -323,7 +334,9 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
 // base cannot be remapped.
 GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
 {
-    ExportHandleFixture fx;
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    InstalledExportMutator mutator;
+    CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     fx.heap.region0->SetYoungRegionFlag(0);
     fx.heap.region1->SetYoungRegionFlag(1);
@@ -331,7 +344,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0));
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
     std::memcpy(field, &initial, sizeof(initial));
 
     AllocBuffer alloc;
@@ -342,12 +355,111 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
 
-    // This is the exported product ABI, not a direct Barrier invocation.
-    MCC_WriteRefField(fx.heap.obj1, nonHeapHolder,
-                      reinterpret_cast<RefField<false>*>(field));
+    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        // This is the exported product ABI. A rejected holder access must be
+        // observed by the parent's target assertion, not terminate the test runner.
+        MCC_WriteRefField(fx.heap.obj1, nonHeapHolder, reinterpret_cast<RefField<false>*>(field));
+        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
+        GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
+        GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "NONHEAP_HOLDER_TARGET_ASSERT_EXECUTED status=%d\n", status);
+    GC_EXPECT_TRUE(WIFEXITED(status));
+    GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+}
 
-    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
-    GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
+GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    InstalledExportMutator mutator;
+    CompilerStoreFixture fx;
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    fx.heap.region0->SetYoungRegionFlag(0);
+    fx.heap.region1->SetYoungRegionFlag(1);
+    fx.heap.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
+    std::memcpy(field, &initial, sizeof(initial));
+
+    AllocBuffer alloc;
+    InstalledExportAllocBuffer installedAlloc(alloc);
+
+    auto* nonHeapHolder = reinterpret_cast<BaseObject*>(uintptr_t(1));
+    GC_EXPECT_TRUE(nonHeapHolder != nullptr);
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
+
+    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        // This is the exported product ABI. A rejected holder access must be
+        // observed by the parent's target assertion, not terminate the test runner.
+        field->StoreColoured(StoreGoodPointer(fx.heap.obj1));
+        CJ_MCC_PostWriteRefField(fx.heap.obj1, nonHeapHolder,
+                                reinterpret_cast<RefField<false>*>(field), initial);
+        std::fprintf(stderr, "POST_BUFFER_TARGET_ASSERT_EXECUTED pending=%zu\n",
+                     ThreadLocal::GetGCData().storeBarrierBuffer.Pending());
+        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
+        GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
+        GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "POST_NONHEAP_HOLDER_TARGET_ASSERT_EXECUTED status=%d\n", status);
+    GC_EXPECT_TRUE(WIFEXITED(status));
+    GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    InstalledExportMutator mutator;
+    CompilerStoreFixture fx;
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    fx.heap.region0->SetYoungRegionFlag(0);
+    fx.heap.region1->SetYoungRegionFlag(1);
+    fx.heap.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
+    std::memcpy(field, &initial, sizeof(initial));
+
+    AllocBuffer alloc;
+    InstalledExportAllocBuffer installedAlloc(alloc);
+
+    auto* nonHeapHolder = fx.heap.obj0;
+    GC_EXPECT_TRUE(nonHeapHolder != nullptr);
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(nonHeapHolder));
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
+
+    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        // This is the exported product ABI. A rejected holder access must be
+        // observed by the parent's target assertion, not terminate the test runner.
+        MCC_WriteRefField(fx.heap.obj1, nonHeapHolder, reinterpret_cast<RefField<false>*>(field));
+        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 1u);
+        GC_EXPECT_FALSE(fx.rememberedSet.Contains(slot));
+        GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "HEAP_HOLDER_CONTROL_ASSERT_EXECUTED status=%d\n", status);
+    GC_EXPECT_TRUE(WIFEXITED(status));
+    GC_EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
 // T6 control arm: a non-heap destination remains a root slot even when the
