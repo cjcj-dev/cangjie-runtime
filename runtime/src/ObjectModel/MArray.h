@@ -83,6 +83,14 @@ enum class LargeArrayRootPhase : uint8_t {
     MINOR_MARK,
 };
 
+struct LargeArrayInitRootReceipt {
+    uint32_t markSites = 0;
+    uint32_t remapSites = 0;
+    BaseObject* remapRoot = nullptr;
+    size_t markPhases = 0;
+    bool markWatermarkDone = false;
+};
+
 // Test-only product hooks. They are compiled out of the default product shape;
 // the deterministic suite still enters through MCC_NewObjArray in the product SO.
 struct LargeArrayInitTestHooks {
@@ -92,9 +100,13 @@ struct LargeArrayInitTestHooks {
     void (*onWithdraw)(MArray* array) = nullptr;
     void (*onRootVisit)(LargeArrayRootVisitSite site, BaseObject* object) = nullptr;
     void (*onRootPhase)(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone) = nullptr;
+    // Observe the same product receipt from a native gc_unit allocation. This
+    // enables observation only; the fixture still requests a real GC at yield.
+    bool observeRootReceipt = false;
 };
 
 extern "C" MRT_EXPORT void CJ_MRT_SetLargeArrayInitTestHooks(const LargeArrayInitTestHooks* hooks);
+extern "C" MRT_EXPORT void CJ_MRT_ReadLargeArrayInitRootReceipt(LargeArrayInitRootReceipt* receipt);
 extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, AllocType allocType);
 void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* object,
     LargeArrayRootWorkPhase workPhase = LargeArrayRootWorkPhase::MARK);

@@ -68,6 +68,15 @@ extern "C" MRT_EXPORT void CJ_MRT_SetLargeArrayInitTestHooks(const LargeArrayIni
     g_largeArrayInitTestHooks = hooks == nullptr ? LargeArrayInitTestHooks{} : *hooks;
 }
 
+extern "C" MRT_EXPORT void CJ_MRT_ReadLargeArrayInitRootReceipt(LargeArrayInitRootReceipt* receipt)
+{
+    receipt->markSites = g_managedSegmentedMarkSites.load(std::memory_order_acquire);
+    receipt->remapSites = g_managedSegmentedRemapSites.load(std::memory_order_acquire);
+    receipt->remapRoot = g_managedSegmentedRemapRoot.load(std::memory_order_acquire);
+    receipt->markPhases = g_managedSegmentedMarkPhases.load(std::memory_order_acquire);
+    receipt->markWatermarkDone = g_managedSegmentedMarkDone.load(std::memory_order_acquire);
+}
+
 extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, AllocType allocType)
 {
     if (g_largeArrayInitTestHooks.allocate != nullptr) {
@@ -119,11 +128,12 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
     const bool managedTest = managedTestGc != ManagedSegmentedGc::NONE &&
         arrayClass.GetComponentTypeInfo()->IsRef();
     bool managedTestRequested = false;
-    if (managedTest) {
+    const bool recordRootReceipt = managedTest || g_largeArrayInitTestHooks.observeRootReceipt;
+    if (recordRootReceipt) {
         bool expectedInactive = false;
         CHECK_DETAIL(g_managedSegmentedActive.compare_exchange_strong(
                          expectedInactive, true, std::memory_order_acq_rel),
-                     "managed segmented-array test permits one active initializer");
+                     "segmented-array receipt permits one active initializer");
         g_managedSegmentedVisitSites.store(0, std::memory_order_release);
         g_managedSegmentedMarkSites.store(0, std::memory_order_release);
         g_managedSegmentedRemapSites.store(0, std::memory_order_release);
@@ -257,15 +267,17 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
             // zStackWatermark.cpp:171-173 and zUncoloredRoot.inline.hpp:79-100:
             // MARK and REMAP each consume the invisible root, without requiring
             // a second stack walk or a payload walk from DontFollow marking.
-            const uint32_t markSites = g_managedSegmentedMarkSites.load(std::memory_order_acquire);
-            const uint32_t remapSites = g_managedSegmentedRemapSites.load(std::memory_order_acquire);
-            const bool markDone = g_managedSegmentedMarkDone.load(std::memory_order_acquire);
-            const size_t markPhases = g_managedSegmentedMarkPhases.load(std::memory_order_acquire);
+            LargeArrayInitRootReceipt receipt;
+            CJ_MRT_ReadLargeArrayInitRootReceipt(&receipt);
+            const uint32_t markSites = receipt.markSites;
+            const uint32_t remapSites = receipt.remapSites;
+            const bool markDone = receipt.markWatermarkDone;
+            const size_t markPhases = receipt.markPhases;
             const uint32_t markRequired = markDone ? VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED)
                 : VisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED) |
                   VisitBit(LargeArrayRootVisitSite::MINOR_MARK);
             const uint32_t remapRequired = VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED);
-            BaseObject* remapRoot = g_managedSegmentedRemapRoot.load(std::memory_order_acquire);
+            BaseObject* remapRoot = receipt.remapRoot;
             // Keep both assertions reachable independently when one phase is cut.
             const bool markConsumed = markPhases == 1 && (markSites & markRequired) == markRequired;
             const bool remapConsumed = (remapSites & remapRequired) == remapRequired && remapRoot == complete;
@@ -302,6 +314,8 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                      forbidden, sites);
         std::fprintf(stderr, "[SEGMENTED_MANAGED_OK] mode=%s root_sites=%#x\n",
                      managedTestGc == ManagedSegmentedGc::YOUNG ? "young" : "full", sites);
+    }
+    if (recordRootReceipt) {
         g_managedSegmentedActive.store(false, std::memory_order_release);
     }
     if (g_largeArrayInitTestHooks.onWithdraw != nullptr) {
