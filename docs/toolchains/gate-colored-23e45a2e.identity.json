@@ -1,0 +1,788 @@
+{
+  "llvm_sha": "23e45a2e9dfbfc4a708d99bc7895fbc1d8ffcbaf",
+  "runtime_sha": "fca1c8ce77f139b14cef9117c1246fe01b0aa084",
+  "frontend_sha": "52cb48f5524f67f4df79761bac863441d2b72c79",
+  "compiler_stamps": [
+    "CJCJ-COMMIT:52cb48f5524f67f4df79761bac863441d2b72c79"
+  ],
+  "runtime_stamps": {
+    "default": [
+      "CJRT-COMMIT:src-56c9cf4dc969e82d472d8698fd74879ee83afd6511339503532c38857faa5b34",
+      "CJRT-DECLARED:fca1c8ce77f139b14cef9117c1246fe01b0aa084"
+    ],
+    "testable": [
+      "CJRT-COMMIT:src-56c9cf4dc969e82d472d8698fd74879ee83afd6511339503532c38857faa5b34",
+      "CJRT-DECLARED:fca1c8ce77f139b14cef9117c1246fe01b0aa084"
+    ]
+  },
+  "files": [
+    {
+      "component": "default/libcangjie-runtime.so",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so",
+      "sha256": "28100aa547d1f31152d0caaf587dbad350ccfd4481e729f79f4a4f00613cd258"
+    },
+    {
+      "component": "default/libboundscheck.so",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so",
+      "sha256": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    {
+      "component": "testable/libcangjie-runtime.so",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so",
+      "sha256": "3d3422489545dfda5c9204b0a058ef21e06e485fc6b537036c7ca1f9f4c3e4f6"
+    },
+    {
+      "component": "sdk/libcangjie-runtime.so",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so",
+      "sha256": "3d3422489545dfda5c9204b0a058ef21e06e485fc6b537036c7ca1f9f4c3e4f6"
+    },
+    {
+      "component": "testable/libboundscheck.so",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so",
+      "sha256": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    {
+      "component": "sdk/libboundscheck.so",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libboundscheck.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libboundscheck.so",
+      "sha256": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    {
+      "component": "compiler",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/bin/cjc",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/bin/cjcj-stage1",
+      "sha256": "51a59b78e717f61ec4d4e0080a3d7ac0085b564411c4311cf83a5630f6060f93"
+    },
+    {
+      "component": "llc",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/third_party/llvm/bin/llc",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/third_party/llvm/bin/llc",
+      "sha256": "cddc392aa298a466166b3f747d0ace98c28bfd02dbcea10bda3f1c74a92c21f4"
+    },
+    {
+      "component": "opt",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/third_party/llvm/bin/opt",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/third_party/llvm/bin/opt",
+      "sha256": "67a06eed817dbc547c846b4bb67f8720abbf95ba1cc2064e1a19753dfb3f5a32"
+    },
+    {
+      "component": "std/binary",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-binary.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-binary.a",
+      "sha256": "ded2e414f8f1d8ead0346a188695c353a4a4c3c176bd085bd054f546fe596d43"
+    },
+    {
+      "component": "std/binary",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-binary.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-binary.so",
+      "sha256": "806468ffc00e78e4476ff0ca647ee0b7c8c92a6a432f237f78d2228e5c475487"
+    },
+    {
+      "component": "std/binary",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.binary.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.binary.cjo",
+      "sha256": "928346e6d6aea55e695ff2a70df2d024b5ed118677f15de5a76d184d7731f715"
+    },
+    {
+      "component": "std/collection",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-collection.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-collection.a",
+      "sha256": "c0d5bcc24d2d431855563ea9aa925583865193fb6da7094ad5e2d570cbd01178"
+    },
+    {
+      "component": "std/collection",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-collection.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-collection.so",
+      "sha256": "e90567c8b156586e27c7494960f811d741d6c730a943d43ebae3b854d40cc4b1"
+    },
+    {
+      "component": "std/collection",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.collection.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.collection.cjo",
+      "sha256": "5cbcfb7e758d3330fa27ca783b8a971fe9190078a1f5f644955078e58b90d3a3"
+    },
+    {
+      "component": "std/convert",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-convert.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-convert.a",
+      "sha256": "b79dc933142152e2419bdd6b1f3c19a153b48ef638b69bbc4ccdcff0ec2898f7"
+    },
+    {
+      "component": "std/convert",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-convert.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-convert.so",
+      "sha256": "05a6060e010b19b9399345496f8db93385e1b8749a33aa42c7624e37de80ac46"
+    },
+    {
+      "component": "std/convert",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.convert.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.convert.cjo",
+      "sha256": "89c33acdf37a19f35908fcb864aeae49939975fae01e446bc8b34a34d4eeeefe"
+    },
+    {
+      "component": "std/core",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-core.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-core.a",
+      "sha256": "4008ce69f544178cce697423c7e3fafb049f3e403c3f075093475a805be96318"
+    },
+    {
+      "component": "std/core",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-core.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-core.so",
+      "sha256": "8ee61c549868fb87ed7b1e5bfc82c65306ce7aaff41912416e6d8f374ddb6319"
+    },
+    {
+      "component": "std/core",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.core.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.core.cjo",
+      "sha256": "2e5cfd3a4b13226040e05e2fcfca9fab1445739f23563b3926a0874e82d4ed33"
+    },
+    {
+      "component": "std/env",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-env.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-env.a",
+      "sha256": "0047479a2d2e44a745757fc7fea55d59455d990ba80579a25a98cfc96c0f8d65"
+    },
+    {
+      "component": "std/env",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-env.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-env.so",
+      "sha256": "6901d377129c2a91a6f927e6fbae1c29d3264ffa12902b799af0f9510c719b8b"
+    },
+    {
+      "component": "std/env",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.env.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.env.cjo",
+      "sha256": "df865551e71c47114e369497045664da9a77ac2fdc5470b16fcd751d609e473b"
+    },
+    {
+      "component": "std/fs",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-fs.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-fs.a",
+      "sha256": "0bf7418a3b0bdd44f0604217183e081cd139195cd9fd7b8890e0acae87253bb8"
+    },
+    {
+      "component": "std/fs",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-fs.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-fs.so",
+      "sha256": "2912665280fe4efd036b3b62988b5261ee31f89382f4cf6c8b07cb08b85221f0"
+    },
+    {
+      "component": "std/fs",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.fs.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.fs.cjo",
+      "sha256": "0cc3c974f2b2813fb1ffa7788869365fd632f9972dcde39ce667d8bd5001d8dc"
+    },
+    {
+      "component": "std/io",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-io.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-io.a",
+      "sha256": "e05a2c5ff02a6080b8897e81b9c8e3cc36d97105af6d8aa1e20e5f45e8da7e19"
+    },
+    {
+      "component": "std/io",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-io.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-io.so",
+      "sha256": "9be55a41a3b051e385a856f79200d52f79416b8171122c27e6113f73f72adfc0"
+    },
+    {
+      "component": "std/io",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.io.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.io.cjo",
+      "sha256": "925be826022d908eb57886c6a8d13c4433f341ab48993f1e3610bdfb922d6a33"
+    },
+    {
+      "component": "std/math",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-math.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-math.a",
+      "sha256": "3ae79000e68e3b1a9821d3d038066073fc44f1f6e737263540ff478d4b593875"
+    },
+    {
+      "component": "std/math",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-math.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-math.so",
+      "sha256": "bfa2f42c91455b5a5a7dc65935b2af6344a707b777e418255d6348588bc92268"
+    },
+    {
+      "component": "std/math",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.math.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.math.cjo",
+      "sha256": "d276bc86b025561a909f12f0312710f98a41eb254e8a143abbee98349016708b"
+    },
+    {
+      "component": "std/process",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-process.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-process.a",
+      "sha256": "07ec36a78f0bf83f4809e986a6e390beb11772c5dec8512486f5c582e7e31868"
+    },
+    {
+      "component": "std/process",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-process.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-process.so",
+      "sha256": "8a2f87c56ccd05909eb9571da5037dd64bf797ce60163fa62929187fe28b3bb7"
+    },
+    {
+      "component": "std/process",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.process.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.process.cjo",
+      "sha256": "8fe2c273f83fe47eb2693d4f7c079d73d3a9f4094be23280b0a9fedb9eebfbaa"
+    },
+    {
+      "component": "std/runtime",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-runtime.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-runtime.a",
+      "sha256": "4cc11df45ab8935d15ad58c00164a1bd93e9e51578455cae0e6de55b5cb4729e"
+    },
+    {
+      "component": "std/runtime",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-runtime.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-runtime.so",
+      "sha256": "cc9b3a0366d3149598a7aa0489ad73d86d8ef3264735ad6e205e4aa13e8ea0fd"
+    },
+    {
+      "component": "std/runtime",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.runtime.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.runtime.cjo",
+      "sha256": "34f17495226a79997ba53eedf6746a58039064184c2dad4642f8251af9ab94e3"
+    },
+    {
+      "component": "std/sync",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-sync.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-sync.a",
+      "sha256": "0b7e413170b6baaeea0830cd872df6d8f1dfbc8467412b65a79c9d4fdf37621a"
+    },
+    {
+      "component": "std/sync",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-sync.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-sync.so",
+      "sha256": "19b106e3c3a36c0672b13c109570dacfe743404b7d9f9cf3be23c58b2cd53cae"
+    },
+    {
+      "component": "std/sync",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.sync.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.sync.cjo",
+      "sha256": "8eea394d264a665e261b59381b9e2c57baa88fc95569518a57e1084d16619726"
+    },
+    {
+      "component": "std/time",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-time.a",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/lib/linux_x86_64_cjnative/libcangjie-std-time.a",
+      "sha256": "acfc41cce62f3cc32bc4e7e1e34814a4a27c1ecedb93786b2a6171b00fd4f8d1"
+    },
+    {
+      "component": "std/time",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-time.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/runtime/lib/linux_x86_64_cjnative/libcangjie-std-time.so",
+      "sha256": "b434fc9a64d727d2ad09bd6048129e9cd9c3861b5ca72724f2a6ecfe4f6b7962"
+    },
+    {
+      "component": "std/time",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.time.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/gate-sdk/modules/linux_x86_64_cjnative/std/std.time.cjo",
+      "sha256": "02504e01cf059fb3ab04d1c3d9eb058536b8d778bcd727224e22d94207d3cb6c"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/lib/libstdFFI.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/lib/libstdFFI.so",
+      "sha256": "6db784201302bd3a24232e592d23904458325857aec7ca0b31a45a588140e876"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/lib/linux_x86_64_cjnative/libboundscheck.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/lib/linux_x86_64_cjnative/libboundscheck.so",
+      "sha256": "a362a9d32c74a21054dba0dd8b3b5dd2788f489d47754dff880159637748e9be"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/modules/linux_x86_64_cjnative/std/libstd.sort.bc",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/modules/linux_x86_64_cjnative/std/libstd.sort.bc",
+      "sha256": "4c86f2c7f9d64359105b9511e6a48c59810319e6c53b9cce811a20267b71df02"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/modules/linux_x86_64_cjnative/std/std.sort.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/modules/linux_x86_64_cjnative/std/std.sort.cjo",
+      "sha256": "ad429876ddc9e88f76cca75ec39965362e28488efb4bf84de637e4fc9cf0fba3"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/modules/windows_x86_64_cjnative/std/std.sort.cjo",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/modules/windows_x86_64_cjnative/std/std.sort.cjo",
+      "sha256": "ad429876ddc9e88f76cca75ec39965362e28488efb4bf84de637e4fc9cf0fba3"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libboundscheck.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libboundscheck.so",
+      "sha256": "3ad04fe38be88d5123078bd11d78cbc82377c114f6e6514b393ecd374e559bb7"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-runtime.so",
+      "sha256": "7d1eeecff4d2a8ed012897785d309a221ddb7520e1b268b431812a0645b56cdc"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-argopt.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-argopt.so",
+      "sha256": "015bf52168391907dd6a8f04a38f529b2adff407c6d8a75e0e36b11fd964c369"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-ast.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-ast.so",
+      "sha256": "f9c1c66f0792d1e8bc5d82a317b73c241be1d29c9cc189b87d838b98fffd9745"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-binary.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-binary.so",
+      "sha256": "4845c0d2ce4ed0acf617cf33675f4d8e3395b8361d2f9be8f89e679824ad51cf"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-collection.concurrent.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-collection.concurrent.so",
+      "sha256": "b70ac03ec6c72105e8a7e524836a0be41d8a8f7d8bd2aea506ea3de4c64d8d62"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-collection.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-collection.so",
+      "sha256": "040ea0eb696278db2db2879ed6f9427ed3d918c399ab1f56f69695e80d87bfb4"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-concurrent.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-concurrent.so",
+      "sha256": "0a1c5a8b287af3350dd40c85616803f330675a2c5ee51c90324cbd056709535a"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-console.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-console.so",
+      "sha256": "fe6e8e3ed9d0313020c12dfbbffc8b5c15fa25223d3247ac4ca1e3e305c2178a"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-convert.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-convert.so",
+      "sha256": "e21fad464ba8daec537176bd96030c739e66724b2060ec95db24eada73ff884c"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-core.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-core.so",
+      "sha256": "1cd6d4efc71281216bdf82622ceb94c064c6e322383a715080367ca75ecc73a0"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-crypto.cipher.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-crypto.cipher.so",
+      "sha256": "4978a7d6cc707a8a934f6025524ef7f8c0e9a96d82562739ab1894489c61e3b8"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-crypto.digest.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-crypto.digest.so",
+      "sha256": "e9d581453aa5a07fbc4faae7b69052c78d1cb90171ed3550fa22491ae151ebd2"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-crypto.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-crypto.so",
+      "sha256": "d801090b5a523f077f9d298aebd94065bb107adf3b721cd0071f6a1dbe9d8559"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-database.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-database.so",
+      "sha256": "513ddbcd8fd07582c4e3f1905764e79f29b716b6c8adcf009a9d5d8bb25a03e7"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-database.sql.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-database.sql.so",
+      "sha256": "ac917af46ccec9f86c5f01dde2eb8e060639fb8e30c89b26b4901544b2bc3a2a"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.api.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.api.so",
+      "sha256": "0fa0ef64fb4104f5694bde163281904a56d05d21ba6fab1e94595f4c634f6947"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.builtins.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.builtins.so",
+      "sha256": "1f6c6c25c17d3294e8da0d62e92e92596c0b92adb07c2969be1e3b3fa44edadd"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.impl.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.impl.so",
+      "sha256": "4d316333cbbcd24abe19badecc25a777986150e0353726c804db505111a28a05"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.resolve.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.resolve.so",
+      "sha256": "a037c0e7e2fb582a479a0949d52b1f4eedbc2b186db4efa8721a41bbc45e8b6f"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-deriving.so",
+      "sha256": "89d251d6a14ddf41efd52d1d3310f4dbe8ec9eee347418f0018878d9fe24328c"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-env.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-env.so",
+      "sha256": "f2e67a51db18288dc61928d18e45e0b14eb50a92045dbfc97af63c4859e00821"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-fs.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-fs.so",
+      "sha256": "94819a06fe81162fc79561c57b467251134964c1a96bf5bf52ba64b853fc5f46"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-interop.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-interop.so",
+      "sha256": "453b3e052fdf66ccc4b004dbb79f0281e43cc486c77e695ee3c9799876673b92"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-io.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-io.so",
+      "sha256": "f2a06353bed673713f2376178ce37b66f0d95dad450162c51f0d3990f9b84571"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-math.numeric.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-math.numeric.so",
+      "sha256": "947d597901a50c942e159a5464864f8bac4bb670301870167cedd48a83f604a4"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-math.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-math.so",
+      "sha256": "9325611672cf5d692bdf8fb25fac18fa05ed5573c9289c816f6e13dfb12ad9e5"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-net.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-net.so",
+      "sha256": "710ba93bfe5d62e08e43ac527f8737edf8cda36012cb6016e7bbc4ab44453f28"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-objectpool.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-objectpool.so",
+      "sha256": "8b78b4579e6af5724cbb3040200045ee89bde1f6a0866e35282e3ef221159d85"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-overflow.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-overflow.so",
+      "sha256": "fd5dd93f1ad8d9f03874d48bd983a24c8ce7b57a72d35c31ab4327acabd1af52"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-posix.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-posix.so",
+      "sha256": "976c930a9b382075aea4f79c9cad8dc009e8bea0726a3f0a88a537a7b7979118"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-process.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-process.so",
+      "sha256": "7b56b560043b77c30a4f1b4d5b7e43a73f4dc570002d31e4bacc617383aeac30"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-random.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-random.so",
+      "sha256": "95315a05cdd36308ac7d6d95356fe11835e357ded45aa3adadd3ff0221b4c289"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-ref.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-ref.so",
+      "sha256": "cf50e98739bdc03b557ce175e7cb94b0d04478959d89a3d189c4a7dfef38f71c"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-reflect.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-reflect.so",
+      "sha256": "dde35f174e3e8566126dd5a69256a534a7b974b8da968861b683c8ba8201c98e"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-regex.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-regex.so",
+      "sha256": "53b10bc09ed9d362e944a4d0cd7ce0e459a42c86c1bfefd486720a9f44ec5595"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-runtime.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-runtime.so",
+      "sha256": "2006e8d5621e4ca2068a11490551f3f08ba9940f1b8f9e089c07e9823e1b487c"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-sort.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-sort.so",
+      "sha256": "851c25ee08a891bab6bacf6dc0c59ba9d5ad2d81c1ef4ee75f8e8eb66e6c97ff"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-sync.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-sync.so",
+      "sha256": "f844cfe7dc37920429da517a49d089228d906b96a71782ef44e148da9cc79a90"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-time.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-time.so",
+      "sha256": "02e8218ea166c15abda22d553f6a223feb2082b86972d6afa3ce56b47e4998e2"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unicode.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unicode.so",
+      "sha256": "381028dd52d8beb51878c8bc265f524b719c50055144aa0849c0b4e6a8776684"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.common.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.common.so",
+      "sha256": "a16894b5b3ccab17dd2a81f233c5ebea726555634fd172d0eb40efd7c82dd043"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.diff.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.diff.so",
+      "sha256": "401a8aecfa0863dc09ecd7d57b78208fd1485a34c0d845c309af4644aa7e8ff7"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.mock.internal.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.mock.internal.so",
+      "sha256": "ecf518d34c139cd7f6f882b82a11e5730664fc8f5c2461d4e7a8e141462a6c9f"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.mock.mockmacro.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.mock.mockmacro.so",
+      "sha256": "90e9ab26e584448851395df61fa4927e5bd6c7e66103fce65fda8a4e43b51462"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.mock.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.mock.so",
+      "sha256": "e481590b24cbd4437a70866705ac0cd995e51cc564235671747dc531b16401bc"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.prop_test.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.prop_test.so",
+      "sha256": "f283697b611b2ac5a78fb7b71a31f4a96e20cf739f6b6f02f6a22f9b3dc18553"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.so",
+      "sha256": "2c227dbbf4f2bc59099060b5817373aee0e8f366ea2d9d1efddbd188f38a3c12"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.testmacro.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std-unittest.testmacro.so",
+      "sha256": "01be21a390f8e1296f928b447dba2db558bf0c52e1e58b59ed377e8754bf83e6"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-std.so",
+      "sha256": "73fdc99313df444077bc5434545cc17bba55d02f9fac5dda239953a9a2e0c01e"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-trace.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libcangjie-trace.so",
+      "sha256": "1bc6252d54f919db1026434aee2a2c9a01f83a33b267ef335e1df9e3c5876dc0"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libpcre2-8.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libpcre2-8.so.0.14.0",
+      "sha256": "a91177b1bf15410592a53f9faa0b912173c4f8b357ec108e080738ee07873630"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libpcre2-8.so.0",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libpcre2-8.so.0.14.0",
+      "sha256": "a91177b1bf15410592a53f9faa0b912173c4f8b357ec108e080738ee07873630"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libpcre2-8.so.0.14.0",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libpcre2-8.so.0.14.0",
+      "sha256": "a91177b1bf15410592a53f9faa0b912173c4f8b357ec108e080738ee07873630"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libsecurec.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libsecurec.so",
+      "sha256": "3ad04fe38be88d5123078bd11d78cbc82377c114f6e6514b393ecd374e559bb7"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLLVM-15.0.4.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLLVM-15.so",
+      "sha256": "5654573218b49073f4b9cf00a42c8b50bd7971baceaef984495c1ff1aa953d4b"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLLVM-15.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLLVM-15.so",
+      "sha256": "5654573218b49073f4b9cf00a42c8b50bd7971baceaef984495c1ff1aa953d4b"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLLVM.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLLVM-15.so",
+      "sha256": "5654573218b49073f4b9cf00a42c8b50bd7971baceaef984495c1ff1aa953d4b"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLTO.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLTO.so.15",
+      "sha256": "5131181f62ded77f2bec5ccd76d3efa634a01ad5b00e6f66b99edc4fc19bac4f"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLTO.so.15",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libLTO.so.15",
+      "sha256": "5131181f62ded77f2bec5ccd76d3efa634a01ad5b00e6f66b99edc4fc19bac4f"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libboundscheck.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/runtime/lib/linux_x86_64_cjnative/libboundscheck.so",
+      "sha256": "3ad04fe38be88d5123078bd11d78cbc82377c114f6e6514b393ecd374e559bb7"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libcangjie-frontend.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcangjie-frontend.so",
+      "sha256": "41d4ff5d97c645559cac140529909a2ba6f0b17bbecfb95800d7b26fdf006ae1"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libcangjie-lsp.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcangjie-lsp.so",
+      "sha256": "981dab66d9769271295257c76de6edfba2b95d33a22d1bbe7a403624daaf7aa9"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libclang-cpp.so.15",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libclang-cpp.so.15",
+      "sha256": "a9f3d428956e85cb605669d3ddf86cc3f3befba12faf523b0994d7a18fa3636a"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldb.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldb.so.15.0.4",
+      "sha256": "5825fb789d1695e41af3a1a218ad9148bfafb10b9545d6abd0b34daedb14a6ac"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldb.so.15",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldb.so.15.0.4",
+      "sha256": "5825fb789d1695e41af3a1a218ad9148bfafb10b9545d6abd0b34daedb14a6ac"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldb.so.15.0.4",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldb.so.15.0.4",
+      "sha256": "5825fb789d1695e41af3a1a218ad9148bfafb10b9545d6abd0b34daedb14a6ac"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldbIntelFeatures.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldbIntelFeatures.so.15",
+      "sha256": "9270feb1c78779f48ca141812be0ffb179469c6a4fd401887ff9fe44266f2407"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldbIntelFeatures.so.15",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldbIntelFeatures.so.15",
+      "sha256": "9270feb1c78779f48ca141812be0ffb179469c6a4fd401887ff9fe44266f2407"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libxml2.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libxml2.so.2.14.0",
+      "sha256": "d14033f85f90f43bf58ab58b2b42dfdadd9e2f562d66fe2add451820ae1ebe63"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libxml2.so.16",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libxml2.so.2.14.0",
+      "sha256": "d14033f85f90f43bf58ab58b2b42dfdadd9e2f562d66fe2add451820ae1ebe63"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libxml2.so.2.14.0",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/libxml2.so.2.14.0",
+      "sha256": "d14033f85f90f43bf58ab58b2b42dfdadd9e2f562d66fe2add451820ae1ebe63"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/python3.11/site-packages/lldb/_lldb.cpython-311-x86_64-linux-gnu.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/third_party/llvm/lib/liblldb.so.15.0.4",
+      "sha256": "5825fb789d1695e41af3a1a218ad9148bfafb10b9545d6abd0b34daedb14a6ac"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcangjie-frontend.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcangjie-frontend.so",
+      "sha256": "41d4ff5d97c645559cac140529909a2ba6f0b17bbecfb95800d7b26fdf006ae1"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcangjie-lsp.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcangjie-lsp.so",
+      "sha256": "981dab66d9769271295257c76de6edfba2b95d33a22d1bbe7a403624daaf7aa9"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcjlint.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcjlint.so",
+      "sha256": "7aa971669465b320ff93587da69e79b424f8f7f3ec1eb98d3e2b583288d3246b"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcjprof-jni.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcjprof-jni.so",
+      "sha256": "8640286461f49a7103c2141f12518478876beca1d399d1de04bd3d8e0758b1df"
+    },
+    {
+      "component": "compiler-host",
+      "path": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcjprof.so",
+      "realpath": "/root/sym_cangjie_runtime_585_implement_r5669360435/host/tools/lib/libcjprof.so",
+      "sha256": "cf6692b2443287060332b04c3143356866942e43e9cac215ed692bae9f078396"
+    }
+  ]
+}
