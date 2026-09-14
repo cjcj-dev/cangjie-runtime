@@ -414,8 +414,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     (void)live;
 }
 
-// Allocate-black Follow is merged into FollowYoungMark. Pause leftover
-// injection must stay zero; cutting that concurrent merge reds only this case.
 // ZGC zGeneration.cpp:550-552,897-905: published work prevents mark completion.
 // Observe closure before relocation changes the page generation (zPage.cpp:64).
 GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
@@ -943,8 +941,6 @@ GC_TEST(YoungConc, StackScanIsRequired)
     GC_EXPECT_TRUE(MutatorManager::ConcurrentStackScanEnabled());
 }
 
-// RegionSpace publishes allocate-black work with the Follow receipt consumed by
-// FollowYoungMark. Pin that carrier independently of the bitmap paint.
 // FlipForMinor is an O(1) handoff: pre-flip records are scanned now while a
 // record produced after the flip remains on the active face for the next cycle.
 GC_TEST(YoungConc, FlipForMinorSeparatesConcurrentProducerFace)

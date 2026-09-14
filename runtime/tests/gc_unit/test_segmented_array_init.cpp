@@ -9,6 +9,7 @@
 #include <thread>
 #include <cstdint>
 #include <cstdio>
+#include <dlfcn.h>
 #include <cstdlib>
 #include <cstring>
 #if defined(__linux__)
@@ -717,6 +718,11 @@ struct MarkAllocationWindow {
 void* RunMarkAllocationCase(void* rawExisting)
 {
     const bool existing = reinterpret_cast<uintptr_t>(rawExisting) != 0;
+    using ProductLive = bool (*)(RegionInfo*, MarkView<Generation::Young>, const BaseObject*);
+    void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    auto productLive = reinterpret_cast<ProductLive>(dlsym(product,
+        "_ZN12MapleRuntime10RegionInfo14IsMarkedObjectILNS_10GenerationE0EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectE"));
+    if (productLive == nullptr) return reinterpret_cast<void*>(3);
     auto& heap = Heap::GetHeap();
     auto& collector = heap.GetCollector();
     Mutator* mutator = Mutator::GetMutator();
@@ -729,7 +735,12 @@ void* RunMarkAllocationCase(void* rawExisting)
     SetMarkClosureObserverForTest(MarkAllocationWindow::Observe);
     mutator->SetManagedContext(false);
     collector.RequestGC(GC_REASON_YOUNG, true);
-    if (!MarkAllocationWindow::Wait(MarkAllocationWindow::entered)) {
+    bool entered;
+    {
+        ScopedEnterSaferegion safe(false);
+        entered = MarkAllocationWindow::Wait(MarkAllocationWindow::entered);
+    }
+    if (!entered) {
         MarkAllocationWindow::released = true;
         SetMarkClosureObserverForTest(nullptr);
         mutator->SetManagedContext(true);
@@ -744,17 +755,22 @@ void* RunMarkAllocationCase(void* rawExisting)
     RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
     RegionInfo* targetPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
     const bool implicit = page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
-    const bool live = page->IsMarkedObject(page->GetMarkView<Generation::Young>(), holder);
-    const bool targetLive = targetPage->IsMarkedObject(targetPage->GetMarkView<Generation::Young>(), target);
+    const bool live = productLive(page, page->GetMarkView<Generation::Young>(), holder);
+    const bool targetLive = productLive(targetPage, targetPage->GetMarkView<Generation::Young>(), target);
     const bool excluded = page->HasMarkStartAllocGap() && !page->IsKnownYoungEmpty(page->GetMarkView<Generation::Young>());
-    const auto phase = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).phase;
+    const auto during = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+    const auto phase = during.phase;
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
                  "implicit=%d live=%d target_live=%d excluded=%d\n", existing, unsigned(phase),
                  page->IsYoungRegion(), page->IsLargeRegion(), implicit, live, targetLive, excluded);
     if (existing) heap.RemoveExportObject(targetRoot);
     mutator->SetManagedContext(false);
     MarkAllocationWindow::released.store(true, std::memory_order_release);
-    const bool completed = MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
+    bool completed;
+    {
+        ScopedEnterSaferegion safe(false);
+        completed = MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
+    }
     // Wait through the real driver's acknowledgement, then check next-cycle
     // watermark resampling using the same rooted holder.
     collector.RequestGC(GC_REASON_YOUNG, false);
@@ -762,11 +778,15 @@ void* RunMarkAllocationCase(void* rawExisting)
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
     const bool resampled = !page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
-    std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED resampled=%d\n", resampled);
+    const auto after = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+    const bool nextCycle = after.sequence > during.sequence;
+    std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=%llu after=%llu resampled=%d\n",
+                 static_cast<unsigned long long>(during.sequence),
+                 static_cast<unsigned long long>(after.sequence), resampled);
     heap.RemoveExportObject(holderRoot);
     mutator->SetManagedContext(true);
     return reinterpret_cast<void*>((completed && !MarkAllocationWindow::timedOut &&
-        phase == GC_PHASE_TRACE && implicit && live && targetLive && excluded && resampled) ? 0 : 1);
+        phase == GC_PHASE_TRACE && implicit && live && targetLive && excluded && nextCycle && resampled) ? 0 : 1);
 }
 #endif
 
