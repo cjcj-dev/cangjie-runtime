@@ -828,7 +828,7 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
     // The phase handshake has already completed each stack watermark. Only
     // non-frame plain carriers and colored storage remain at this entry.
     RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
         NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_RELOCATE,
                                     to_object(safe(root.LoadPlain(std::memory_order_acquire))));
 #endif

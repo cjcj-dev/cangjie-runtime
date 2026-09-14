@@ -62,7 +62,7 @@ private:
     // array content is appended here.
 };
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 class Mutator;
 
 enum class LargeArrayRootVisitSite : uint8_t {

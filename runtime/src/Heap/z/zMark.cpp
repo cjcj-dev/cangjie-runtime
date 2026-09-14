@@ -515,7 +515,7 @@ void WCollector::TraceHeap()
                     if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
                         (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false);
                     }
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
                     NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
                                                 mutator.GetStackWatermark().IsDone(stackScanEpoch));
 #endif
@@ -568,7 +568,7 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
                                      const NativeSlotVisitor& nativeVisitor,
                                      uint64_t stackScanEpoch)
 {
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
         NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_MARK,
                                     to_object(safe(root.LoadPlain(std::memory_order_acquire))));
@@ -594,7 +594,7 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
     VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
         NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MINOR_MARK, &mutator, watermarkDone);
 #endif
         if (watermarkDone) {

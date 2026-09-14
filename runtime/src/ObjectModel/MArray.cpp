@@ -8,7 +8,7 @@
 #include "MArray.inline.h"
 
 #include <algorithm>
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -26,7 +26,7 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 namespace {
 LargeArrayInitTestHooks g_largeArrayInitTestHooks;
 
@@ -93,7 +93,7 @@ void NoteLargeArrayInitRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bo
 MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex nElems,
                                         TypeInfo& arrayClass)
 {
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     const ManagedSegmentedGc managedTestGc = GetManagedSegmentedGc();
     const bool managedTest = managedTestGc != ManagedSegmentedGc::NONE &&
         arrayClass.GetComponentTypeInfo()->IsRef();
@@ -119,7 +119,7 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "large array initialization requires a mutator");
     mutator->PublishInvisibleRoot(array);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     if (g_largeArrayInitTestHooks.onPublish != nullptr) {
         g_largeArrayInitTestHooks.onPublish(array);
     }
@@ -156,7 +156,7 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                 // Entering a saferegion is this runtime's mutator/GC handshake edge.
                 // The root stays published throughout the whole interval.
                 ScopedEnterSaferegion yield(true);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
                 if (g_largeArrayInitTestHooks.onYield != nullptr) {
                     g_largeArrayInitTestHooks.onYield(segmentIndex);
                 }
@@ -200,7 +200,7 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
 
     MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());
     complete->SetInvisibleObject(false);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     if (managedTest) {
         const uint32_t required = VisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED) |
             VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED) |
@@ -229,7 +229,7 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
 void MArray::ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const
 {
     if (IsInvisibleObject()) {
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
         NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP,
                                     const_cast<MArray*>(this));
 #endif

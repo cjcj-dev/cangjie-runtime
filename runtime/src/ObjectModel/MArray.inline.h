@@ -134,7 +134,7 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
         (arrayClass.GetComponentTypeInfo()->IsPrimitiveType() ||
          (elemBytes == RefField<>::GetSize() && arrayClass.GetComponentTypeInfo()->IsRef()));
     MAddress address;
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     address = CJ_MRT_TestAllocateArrayStorage(
         arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
 #else
