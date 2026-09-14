@@ -156,8 +156,11 @@ struct MarkPort203TestAccess {
     }
     static void Collect(WCollector& collector, bool major)
     {
-        collector.GetGenerationCycle(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
-            .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
+        // The major driver normally initializes old marking in its young prelude.
+        // This focused old-body fixture supplies the same product initialization.
+        if (major) {
+            collector.StartOldMarkWork();
+        }
         collector.DoGarbageCollection(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
     }
 };
@@ -218,12 +221,20 @@ void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
         result.allocationRegion->SetYoungRegionFlag(1);
         result.allocationRegion->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
         result.allocationBuffer->SetRegion(result.allocationRegion);
+        // Exercise the mutator allocation producer, including its managed-context
+        // publication condition, rather than allocating on the GC coordinator.
+        Mutator allocationMutator;
+        Mutator* previousMutator = ThreadLocal::GetMutator();
+        allocationMutator.SetManagedContext(true);
+        ThreadLocal::SetMutator(&allocationMutator);
         const MAddress address = result.allocationBuffer->Allocate(2 * sizeof(MAddress), AllocType::MOVEABLE_OBJECT);
         if (address != 0) {
             result.allocated = reinterpret_cast<BaseObject*>(address);
             *reinterpret_cast<uintptr_t*>(address) = reinterpret_cast<uintptr_t>(result.allocationType);
             HeapSlotAt<>(address + TYPEINFO_PTR_SIZE).StoreColoured(StoreGoodPointer((*result.children)[0]));
         }
+        ThreadLocal::SetMutator(previousMutator);
+        allocationMutator.SetManagedContext(false);
         // The mapped fixture page is not in the allocator's intrusive TL
         // list. Restore the buffer shortcut before the GC's ordinary flush;
         // the real private Follow queue remains registered for consumption.
@@ -262,26 +273,28 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
                         int duplicateRootOrder = 0)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    // Phase timers require the same storage initialization as CollectorResources::Init.
+    // ZGC ZStatValue::initialize, zStat.cpp:362.
+    ZStat::Initialize();
     const bool major = std::strncmp(variant, "major", 5) == 0;
     const bool commonRoot = std::strcmp(variant, "major-common") == 0;
     const bool finalizable = std::strcmp(variant, "major-finalizable") == 0;
-    if (!major) {
-        GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", variant, 1), 0);
-    }
     MutatorManager manager;
     MarkPortRuntime runtime(manager);
     GcHeapFixture fx;
+    // Install the synthetic payload reservation before publishing GC roots.
+    Heap::OnHeapCreated(fx.heapStart);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     // An actual multi-unit page keeps all array slots in the mapped heap;
     // each subordinate unit resolves back to the same owning region.
+    // ZPageTable::remove/insert (zPageTable.cpp:44-65): retire before reuse.
+    RegionInfo::RetirePage(fx.region1, [] {});
     fx.region1 = RegionInfo::InitRegion(1, 4, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     fx.region1->SetYoungRegionFlag(major ? 0 : 1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    if (major) {
-        (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region1->GetRegionSize());
-    } else {
-        (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
-    }
+    // Let the product allocate and own this page's livemap. Promotion transfers
+    // that ownership (ZPage::clone_for_promotion, zPage.cpp:64); a bitmap
+    // planted outside LiveInfoArena cannot participate in a real collection.
 
     alignas(TypeInfo) unsigned char arrayTypeStorage[sizeof(TypeInfo)]{};
     auto* arrayType = reinterpret_cast<TypeInfo*>(arrayTypeStorage);
@@ -348,6 +361,12 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RuntimeWorkers pool(helpers + 1u);
     MarkPort203TestAccess::Bind(resources, &collector, &pool, static_cast<int32_t>(helpers + 1));
+    // ZGeneration owns its worker set (zGeneration.cpp:124-129).
+    for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+        collector.GetGenerationCycle(generation).InitializeWorkers(helpers + 1);
+    }
+    collector.GetGenerationCycle(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
+        .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
     collector.SetGCPhase(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG, major ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
@@ -440,7 +459,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     }
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG).reason = oldReason;
-    MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
     if (result.allocationBuffer != nullptr) {
         result.allocationBuffer->SetRegion(result.previousRegion);
         if (result.previousBuffer == nullptr) {
@@ -450,6 +468,11 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
             delete result.allocationBuffer;
         }
     }
+    // Worker TLS cleanup must finish while its collector still owns publication.
+    for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+        collector.GetGenerationCycle(generation).StopWorkers();
+    }
+    MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
     std::fprintf(stderr, "M2_ALLOC_RESULT attempted=%d objects=%u bytes=%zu\n",
                  result.allocationAttempted, result.allocatedObjects, static_cast<size_t>(result.allocatedBytes));
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",

@@ -146,57 +146,205 @@ GC_TEST(LiveMap, MarkAndSurvive)
     fx.FreePlanted(live);
 }
 
-// U4: liveInfo0 snapshot survives clearing current liveInfo.
+// ZGC zRelocationSet.cpp:79-134 allocates the selected forwarding set before
+// publication. This is focused fixture setup, not a complete GC phase test.
+namespace {
+// Headers expose inline definitions used by older focused tests in this TU.
+// Resolve these source-page operations from the loaded product, so this set
+// cannot silently execute the ELF's local copies when the SO is changed.
+bool ProductSourceSurvives(RegionInfo* region, size_t offset)
+{
+    using Fn = bool (*)(RegionInfo*, size_t);
+    static auto fn = reinterpret_cast<Fn>(dlsym(ProductRuntimeHandle(),
+        "_ZN12MapleRuntime10RegionInfo21IsRouteSurvivedObjectEm"));
+    GC_EXPECT_TRUE(fn != nullptr);
+    return fn(region, offset);
+}
+
+void ProductBindSource(RegionInfo* region)
+{
+    using Fn = void (*)(RegionInfo*);
+    static auto fn = reinterpret_cast<Fn>(dlsym(ProductRuntimeHandle(),
+        "_ZN12MapleRuntime10RegionInfo27BindLiveInfo0FromLiveIfNullEv"));
+    GC_EXPECT_TRUE(fn != nullptr);
+    fn(region);
+}
+
+void ProductDispelSource(RegionInfo* region)
+{
+    using Fn = void (*)(RegionInfo*);
+    static auto fn = reinterpret_cast<Fn>(dlsym(ProductRuntimeHandle(),
+        "_ZN12MapleRuntime10RegionInfo21DispelGhostFromRegionEv"));
+    GC_EXPECT_TRUE(fn != nullptr);
+    fn(region);
+}
+
+template<Generation G>
+bool ProductMarkSource(RegionInfo* region, BaseObject* object)
+{
+    const auto mark = ProductMarkObjectFn<G>();
+    GC_EXPECT_TRUE(mark != nullptr);
+    return mark(region, region->GetMarkView<G>(), object, object->GetSize(), true);
+}
+
+template<Generation G>
+void PublishLiveMapSource(RegionInfo* region)
+{
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    RegionList selected("livemap-source");
+    selected.PrependRegion(region, region->GetRegionType());
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(G, selected));
+    while (selected.TakeHeadRegion() != nullptr) {}
+    region->PublishForwardingCarrier(region->GetMarkView<G>());
+}
+
+void ExpectSourceObject(RegionInfo* region, BaseObject* object, const char* stage)
+{
+    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(object));
+    const bool survived = ProductSourceSurvives(region, offset);
+    std::fprintf(stderr, "LIVEMAP_SOURCE stage=%s survived=%d\n", stage, survived);
+    GC_EXPECT_TRUE(survived);
+    GC_EXPECT_FALSE(ProductSourceSurvives(region, offset + 16));
+}
+} // namespace
+
+// ZGC zForwarding.cpp:65-77: source iteration finishes before its map is reset.
+// Clearing the reusable descriptor's pointer does not clear the source map.
 GC_TEST(LiveMap, LiveInfo0SnapshotSurvivesClear)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    size_t regionSize = region->GetRegionSize();
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
-    (void)bm->MarkBits(256, 8, regionSize);
-
-    // Product publication shape: pointer-share plus route mark epoch/life stamp.
-    region->BindLiveInfo0FromLiveIfNull();
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(region->GetLiveInfo0ForProbe()),
-                 reinterpret_cast<uintptr_t>(live));
-    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(256));
-
+    GC_EXPECT_FALSE(ProductMarkSource<Generation::Old>(region, fx.obj0));
+    LiveInfo* source = region->GetLiveInfo();
+    PublishLiveMapSource<Generation::Old>(region);
     region->metadata.liveInfo = nullptr;
-    GC_EXPECT_TRUE(region->GetLiveInfo() == nullptr);
-    GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() != nullptr);
-    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(256));
-
-    ForwardingTable::ResetRelocationSet(region->GetOwnerGeneration());
-    fx.FreePlanted(live);
+    // Restore the descriptor even when an assertion throws; arena owns source.
+    struct Restore {
+        RegionInfo* region;
+        LiveInfo* source;
+        ~Restore() { region->metadata.liveInfo = source; }
+    } restore { region, source };
+    ExpectSourceObject(region, fx.obj0, "current-pointer-cleared");
+    GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == source);
 }
 
-// U4: installdomain — late bind null ghost from current live.
+// The local late-bind adapter supplies the same source-page map required by
+// ZGC zForwarding.cpp:65-77. Install the selected owner before publishing an
+// empty source; then mark through the product and bind its resulting map.
 GC_TEST(LiveMap, BindLiveInfo0AfterLateMark)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    size_t regionSize = region->GetRegionSize();
-
-    // PrepareForwardable saw null liveInfo → ghost stays null.
+    LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region);
     region->metadata.liveInfo = nullptr;
-    region->PublishForwardingCarrier(region->GetMarkView<Generation::Old>());
+    PublishLiveMapSource<Generation::Old>(region);
     GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == nullptr);
+    region->InitializeLiveInfo();
+    GC_EXPECT_FALSE(ProductMarkSource<Generation::Old>(region, fx.obj0));
+    ProductBindSource(region);
+    ExpectSourceObject(region, fx.obj0, "late-product-mark-bound");
+    GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == region->GetLiveInfo());
+}
 
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
-    (void)bm->MarkBits(8, 8, regionSize);
+// ZGC zForwarding.cpp:86-108 retains the page until release; :65-77 resets
+// the non-promoted map only after source iteration. No retained bitmap copy.
+GC_TEST(LiveMap, OldForwardingCarrierPublishesOwnerAndRetires)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    GC_EXPECT_FALSE(ProductMarkSource<Generation::Old>(region, fx.obj0));
+    PublishLiveMapSource<Generation::Old>(region);
+    GC_EXPECT_TRUE(region->HasFromPageMetadata());
+    GC_EXPECT_EQ(region->GetRouteMarkGeneration(), Generation::Old);
+    {
+        RegionInfo::RetainScope retained(region);
+        GC_EXPECT_TRUE(retained.ok());
+        ExpectSourceObject(region, fx.obj0, "old-retained");
+    }
+    ProductDispelSource(region);
+    {
+        RegionInfo::RetainScope released(region);
+        GC_EXPECT_FALSE(released.ok());
+    }
+    // ZForwarding::detach_page releases page access, not the forwarding set.
+    ForwardingTable::ResetRelocationSet(Generation::Old);
+    GC_EXPECT_FALSE(region->HasFromPageMetadata());
+    // This fixture did not relocate the page. Dispel retires forwarding
+    // access, whereas ForwardRegion resets the map after actual relocation
+    // (ZGC zForwarding.cpp:65-77; local zRelocate.cpp:2424). Preserve the
+    // original current-page fallback assertion: it is not a retained copy.
+    GC_EXPECT_TRUE(ProductSourceSurvives(region, 64));
+    GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == nullptr);
+}
 
-    region->BindLiveInfo0FromLiveIfNull();
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(region->GetLiveInfo0ForProbe()),
-                 reinterpret_cast<uintptr_t>(live));
-    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(8));
+// ZGC zPage.cpp:64-72 clones only layout/top; the original young page owns
+// its map, while the reusable descriptor becomes old with a fresh map.
+GC_TEST(LiveMap, FromPageOwnerAndLivemapStayIdenticalAcrossPromotion)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    GC_EXPECT_FALSE(ProductMarkSource<Generation::Young>(region, fx.obj0));
+    LiveInfo* source = region->GetLiveInfo();
+    PublishLiveMapSource<Generation::Young>(region);
+    auto original = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
+    GC_EXPECT_FALSE(region->IsYoungRegion());
+    GC_EXPECT_TRUE(region->GetLiveInfo() != source);
+    GC_EXPECT_EQ(region->GetRouteMarkGeneration(), Generation::Young);
+    ExpectSourceObject(region, fx.obj0, "promoted-source-owner");
+    GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == source);
+    size_t visits = 0;
+    original->ObjectIterate([&](BaseObject* object) {
+        GC_EXPECT_TRUE(object == fx.obj0);
+        ++visits;
+    });
+    GC_EXPECT_EQ(visits, 1u);
+    // Forwarding must stop referring to the original before its owner dies.
+    ForwardingTable::ResetRelocationSet(Generation::Young);
+}
 
-    ForwardingTable::ResetRelocationSet(region->GetOwnerGeneration());
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
+// zPage.cpp:64-72 + zForwarding.cpp:65-108, for both ordinary and one-object
+// pages. Source state is consumed while retained, then becomes inaccessible.
+GC_TEST(LiveMap, PromotionCarrierLivesUntilForwardingRelease)
+{
+    for (bool large : { false, true }) {
+        GcHeapFixture fx;
+        RegionInfo* region = fx.region0;
+        region->SetYoungRegionFlag(1);
+        if (large) region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+        BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
+        GC_EXPECT_FALSE(ProductMarkSource<Generation::Young>(region, object));
+        LiveInfo* source = region->GetLiveInfo();
+        PublishLiveMapSource<Generation::Young>(region);
+        auto original = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
+        region->ClearLiveInfo(region->GetMarkView<Generation::Old>());
+        {
+            RegionInfo::RetainScope retained(region);
+            GC_EXPECT_TRUE(retained.ok());
+            const bool survived = ProductSourceSurvives(region, large ? 0 : 64);
+            std::fprintf(stderr, "LIVEMAP_SOURCE stage=promotion-retained large=%d survived=%d\n",
+                         large, survived);
+            GC_EXPECT_TRUE(survived);
+            GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == source);
+            GC_EXPECT_TRUE(region->GetCurrentLiveMap() == nullptr);
+        }
+        ProductDispelSource(region);
+        {
+            RegionInfo::RetainScope released(region);
+            GC_EXPECT_FALSE(released.ok());
+        }
+        // The relocation set owns forwarding storage beyond page detach.
+        ForwardingTable::ResetRelocationSet(Generation::Young);
+        GC_EXPECT_FALSE(region->HasFromPageMetadata());
+        GC_EXPECT_FALSE(ProductSourceSurvives(region, large ? 0 : 64));
+        size_t visits = 0;
+        original->ObjectIterate([&](BaseObject* visited) {
+            GC_EXPECT_TRUE(visited == object);
+            ++visits;
+        });
+        GC_EXPECT_EQ(visits, 1u);
+        ForwardingTable::ResetRelocationSet(Generation::Young);
+    }
 }
 
 // U4: null markBitmap ⇒ never survived (domain reject).
@@ -255,117 +403,6 @@ GC_TEST(LiveMap, OwnerDispatchMarksYoungFace)
 
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
-}
-
-// The from-page carrier owns both generation and livemap for either owner.
-GC_TEST(LiveMap, OldForwardingCarrierPublishesOwnerAndRetires)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
-    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    (void)bitmap->MarkBits(offset, fx.obj0->GetSize(), region->GetRegionSize());
-
-    MarkView<Generation::Old> old = region->GetMarkView<Generation::Old>();
-    region->PublishForwardingCarrier(old);
-    GC_EXPECT_TRUE(region->HasFromPageMetadata());
-    GC_EXPECT_EQ(region->GetRouteMarkGeneration(), Generation::Old);
-    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(offset));
-    {
-        RegionInfo::RetainScope retained(region);
-        GC_EXPECT_TRUE(retained.ok());
-        GC_EXPECT_TRUE(region->IsRouteSurvivedObject(offset));
-    }
-
-    region->DispelGhostFromRegion();
-    GC_EXPECT_FALSE(region->HasFromPageMetadata());
-    RegionInfo::RetainScope released(region);
-    GC_EXPECT_FALSE(released.ok());
-    // With no owner replacement, the current Old page still owns this same
-    // livemap; this read is current-page fallback, not carrier access.
-    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(offset));
-    fx.FreePlanted(live);
-}
-
-// Young forwarding keeps its original owner in the carrier across promotion.
-GC_TEST(LiveMap, FromPageOwnerAndLivemapStayIdenticalAcrossPromotion)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* young = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
-    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    (void)young->MarkBits(offset, fx.obj0->GetSize(), region->GetRegionSize());
-    MarkView<Generation::Young> ownerView = region->GetMarkView<Generation::Young>();
-    region->PublishForwardingCarrier(ownerView);
-
-    GC_EXPECT_EQ(region->GetRouteMarkGeneration(), Generation::Young);
-    GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
-    GC_EXPECT_FALSE(region->GetOwnerMarkBitmap(live) == nullptr);
-
-    (void)region->PromoteYoungRegion(ownerView);
-    GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
-
-    ForwardingTable::ResetRelocationSet(region->GetOwnerGeneration());
-    fx.FreePlanted(live);
-}
-
-// Full product lifecycle: mark the current Young page, publish forwarding
-// metadata, replace current metadata on promotion, clear the new Old current
-// metadata, then retire forwarding. The Young bits belong only to the carrier.
-GC_TEST(LiveMap, PromotionCarrierLivesUntilForwardingRelease)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    LiveInfo* youngLive = fx.PlantLiveInfo(region);
-    (void)fx.PlantMarkBitmap<Generation::Young>(youngLive, region->GetRegionSize());
-    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-
-    GC_EXPECT_FALSE(region->MarkObjectByOwner(fx.obj0, fx.obj0->GetSize()));
-    MarkView<Generation::Young> young = region->GetMarkView<Generation::Young>();
-    region->PublishForwardingCarrier(young);
-    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(offset));
-
-    MarkView<Generation::Old> old = region->PromoteYoungRegion(young);
-    GC_EXPECT_TRUE(region->GetLiveInfo() != nullptr);
-    GC_EXPECT_TRUE(region->GetLiveInfo() != youngLive);
-    GC_EXPECT_TRUE(region->GetMarkBitmap(old) == nullptr);
-    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(offset));
-
-    region->ClearLiveInfo(old);
-    GC_EXPECT_TRUE(region->GetMarkBitmap(region->GetMarkView<Generation::Old>()) == nullptr);
-    {
-        RegionInfo::RetainScope retained(region);
-        GC_EXPECT_TRUE(retained.ok());
-        GC_EXPECT_TRUE(region->IsRouteSurvivedObject(offset));
-    }
-
-    region->DispelGhostFromRegion();
-    GC_EXPECT_FALSE(region->HasFromPageMetadata());
-    GC_EXPECT_FALSE(region->IsRouteSurvivedObject(offset));
-    RegionInfo::RetainScope released(region);
-    GC_EXPECT_FALSE(released.ok());
-
-    fx.FreePlanted(youngLive);
-
-    // The same replacement rule applies to the one-bit large-page livemap.
-    RegionInfo* large = fx.region1;
-    large->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
-    large->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    large->SetYoungRegionFlag(1);
-    MarkView<Generation::Young> largeYoung = large->GetMarkView<Generation::Young>();
-    large->SetMarkedRegionFlag(largeYoung, 1);
-    large->PublishForwardingCarrier(largeYoung);
-    MarkView<Generation::Old> largeOld = large->PromoteYoungRegion(largeYoung);
-    GC_EXPECT_EQ(large->GetMarkedRegionFlag(largeYoung), 1u);
-    GC_EXPECT_EQ(large->GetMarkedRegionFlag(largeOld), 0u);
-    ForwardingTable::ResetRelocationSet(large->GetOwnerGeneration());
 }
 
 // Large pages follow the same single-livemap rule, represented by one bit.

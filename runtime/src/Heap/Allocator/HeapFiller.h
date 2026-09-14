@@ -9,7 +9,6 @@ class BaseObject;
 
 namespace HeapFiller {
 
-bool Enabled();
 void ZeroAndFill(uintptr_t start, size_t size);
 bool IsFiller(const BaseObject* obj);
 

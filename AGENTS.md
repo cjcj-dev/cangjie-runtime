@@ -33,7 +33,7 @@
 
 ⚠⚠ ⭐⭐⭐ **主线历史已被 squash 重写（0823）**：
 ```
-⛔ 别 rebase / merge / pull  ⇒ ⭐ 旧的几百笔会被当成"新提交"
+⛔ 别 rebase、别 pull --rebase ⇒ ⭐ 旧的几百笔会被当成"新提交"；⭐ 但 0913 起**返工轮在同一候选分支上 `git merge cjcjdev/main` 是要求**（解冲突两侧机制都保留，审查用三点 diff），⛔ 不是禁止项
 ⭐ 读主线用：git show <主线sha>:<路径>
 ⭐⭐ 判「我的东西在不在主线」⇒ **按内容核**：git grep -c "<特征符号>" <主线sha> -- runtime/src
    ⛔ `merge-base --is-ancestor` 在这里**毫无意义**
