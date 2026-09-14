@@ -26,6 +26,7 @@
 
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zStat.hpp"
 
 namespace MapleRuntime {
 namespace {
@@ -251,7 +252,13 @@ GC_TEST(MemMapContract, TwoNodeOwnershipRejectsCrossNodeFree)
     GC_EXPECT_FALSE(map->ReleaseMemory(reinterpret_cast<void*>(base + ALLOC_UTIL_PAGE_SIZE),
                                       2U * ALLOC_UTIL_PAGE_SIZE, 3));
     GC_EXPECT_EQ(backend.releases.size(), 0U);
-    GC_EXPECT_TRUE(map->ReleaseMemory(reinterpret_cast<void*>(base), 2U * ALLOC_UTIL_PAGE_SIZE, 3));
+    // zPhysicalMemoryManager.cpp:295-312: uncommit operates on committed
+    // segments. Establish backing before expecting the backend release call.
+    GC_EXPECT_EQ(map->CommitMemory(reinterpret_cast<void*>(base), 2U * ALLOC_UTIL_PAGE_SIZE, 3),
+                 2U * ALLOC_UTIL_PAGE_SIZE);
+    GC_EXPECT_EQ(map->ReleaseMemory(reinterpret_cast<void*>(base), 2U * ALLOC_UTIL_PAGE_SIZE, 3),
+                 2U * ALLOC_UTIL_PAGE_SIZE);
+    backend.commits.clear();
     GC_EXPECT_EQ(backend.releases.size(), 1U);
     GC_EXPECT_TRUE(map->CommitMemory(reinterpret_cast<void*>(base), total));
     GC_EXPECT_TRUE(!backend.commits.empty());
@@ -392,7 +399,7 @@ GC_TEST(MemMapContract, InitialPartialCommitRollsBackPrefixBeforeDestroy)
 #if !defined(_WIN64)
 struct ProductWiringBackend final : MemMapBackend {
     size_t commitCalls{ 0 };
-    size_t failCommitCall{ 0 };
+    size_t commitLimit{ std::numeric_limits<size_t>::max() };
     int releaseEventFd{ -1 };
 
     void* Reserve(void* requested, size_t size, unsigned int, const char*, bool exact) override
@@ -411,7 +418,7 @@ struct ProductWiringBackend final : MemMapBackend {
     size_t Commit(void*, size_t size, int, uint32_t, bool) override
     {
         ++commitCalls;
-        return failCommitCall == 0 || commitCalls != failCommitCall ? size : 0;
+        return std::min(size, commitLimit);
     }
 
     bool Protect(void*, size_t, int) override { return true; }
@@ -482,6 +489,7 @@ struct SegmentedProductBackend final : MemMapBackend {
 
 int ExerciseSegmentedProductAllocation()
 {
+    ZStat::Initialize();
     SegmentedProductBackend backend;
     const size_t unit = RegionInfo::UNIT_SIZE;
     MemMap* map = MemMap::TryMapMemory(4 * unit, 0, MemMap::DEFAULT_OPTIONS,
@@ -576,6 +584,7 @@ enum class RetirementPath { RETURN, RECLAIM, RELEASE, MARK_QUARANTINE };
 // ZSafeDelete gtest; these cases exercise that protocol via RegionManager.
 int ExerciseSegmentedPageRetirement(RetirementPath path, bool concurrent)
 {
+    ZStat::Initialize();
     SegmentedProductBackend backend;
     const size_t unit = RegionInfo::UNIT_SIZE;
     MemMap* map = MemMap::TryMapMemory(4 * unit, 0, MemMap::DEFAULT_OPTIONS,
@@ -731,6 +740,7 @@ GC_TEST(MemMapContract, PageTableMarkQuarantineWaitsForIterator)
 
 int ExerciseProductOwnerWiring()
 {
+    ZStat::Initialize();
     constexpr size_t units = 2;
     const size_t metadataSize = RegionManager::GetMetadataSize(units);
     const size_t totalSize = metadataSize + units * RegionInfo::UNIT_SIZE;
@@ -768,14 +778,15 @@ GC_TEST(MemMapContract, RegionManagerInactiveAllocationUsesMemMapOwner)
     GC_EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
-// Behavioral port of gc/z/TestCommitFailure.java (Normal and ZFakeNUMA):
+// Behavioral port of gc/z/TestCommitFailure.java:
 // a failed large allocation leaves its successfully committed memory reusable.
 int ExerciseRegionPartialCommit(size_t failureCall)
 {
+    ZStat::Initialize();
     const size_t unit = RegionInfo::UNIT_SIZE;
     ProductWiringBackend backend;
     MemMap* map = MemMap::TryMapMemory(2 * unit, 0, MemMap::DEFAULT_OPTIONS,
-                                       LargeBudget(), NumaTopology::Seal({ 3, 7 }), backend);
+                                       LargeBudget(), OneNode(), backend);
     if (map == nullptr) { return 2; }
     const auto& ranges = map->GetReservationRegistry().Ranges();
     const size_t metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(ranges));
@@ -787,7 +798,10 @@ int ExerciseRegionPartialCommit(size_t failureCall)
         heapParam.exemptionThreshold = 0.8;
         manager.InitializeSegments(reinterpret_cast<uintptr_t>(metadata->GetBaseAddr()), ranges,
                                    *map, heapParam, 0.5);
-        backend.failCommitCall = failureCall;
+        // zPageAllocator.cpp:713-743: an allocation is claimed from one
+        // partition. Model a partial physical commit inside that partition,
+        // not an allocation larger than either of two NUMA partitions.
+        backend.commitLimit = failureCall == 0 ? 2 * unit : (failureCall - 1) * unit;
         const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
         RegionInfo* large = manager.TakeRegion(2, role, false, false, false);
         const size_t expected = failureCall == 0 ? 2 : failureCall - 1;
@@ -798,7 +812,7 @@ int ExerciseRegionPartialCommit(size_t failureCall)
             if (manager.GetDirtyUnitCount() != expected ||
                 manager.GetInactiveUnitCount() != 2 - expected) { return 5; }
             const size_t before = backend.commitCalls;
-            backend.failCommitCall = 0;
+            backend.commitLimit = std::numeric_limits<size_t>::max();
             RegionInfo* small = manager.TakeRegion(1, role, false, false, false);
             if (small == nullptr) { return 6; }
             // A retained prefix is harvested without re-committing it.
