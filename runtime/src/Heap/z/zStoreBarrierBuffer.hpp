@@ -38,7 +38,7 @@ struct StoreBarrierEntry {
     }
 };
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 enum class StoreBarrierFlushEvent : uint8_t {
     PREVIOUS_RETIRED,
     PREVIOUS_INVALID,
@@ -72,7 +72,7 @@ public:
 #if defined(MRT_TESTABLE_INTERNALS)
     uintptr_t LastProcessedColorForTest() const;
 #endif
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     static void SetFlushObserverForTest(StoreBarrierFlushObserver observer);
 #endif
 

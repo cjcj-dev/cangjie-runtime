@@ -902,7 +902,7 @@ inline RegionInfo* RegionInfo::GetGhostFromRegionAt(uintptr_t allocAddr)
                 region->GetRegionLifeId()) {
             return nullptr;
         }
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
         RunGhostLookupTestHook(region);
 #endif
         return region;

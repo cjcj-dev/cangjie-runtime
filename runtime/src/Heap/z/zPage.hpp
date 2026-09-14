@@ -461,7 +461,7 @@ public:
 
     static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr);
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     using GhostLookupTestHook = void (*)(RegionInfo*);
     MRT_EXPORT static void SetGhostLookupTestHook(GhostLookupTestHook hook);
     MRT_EXPORT static size_t GhostLookupTestHookCalls();
@@ -581,7 +581,7 @@ public:
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.
     static std::atomic<size_t> dispelGhostCount;
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     static std::atomic<GhostLookupTestHook> ghostLookupTestHook;
     static std::atomic<size_t> ghostLookupTestHookCalls;
     static void RunGhostLookupTestHook(RegionInfo* region);

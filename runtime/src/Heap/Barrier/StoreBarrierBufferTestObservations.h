@@ -7,7 +7,7 @@
 #pragma once
 
 namespace {
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 thread_local StoreBarrierFlushObserver g_flushObserver = nullptr;
 
 void NotifyFlushObserver(StoreBarrierFlushEvent event, const StoreBarrierEntry& entry)
@@ -20,7 +20,7 @@ void NotifyFlushObserver(StoreBarrierFlushEvent event, const StoreBarrierEntry& 
 
 }
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 void StoreBarrierBuffer::SetFlushObserverForTest(StoreBarrierFlushObserver observer)
 {
     g_flushObserver = observer;
