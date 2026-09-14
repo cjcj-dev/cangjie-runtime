@@ -4,6 +4,7 @@
 
 #include "gc_unittest.hpp"
 #include "Heap/z/zStat.hpp"
+#include "Mutator/ThreadLocal.h"
 #include "Heap/Allocator/CartesianTree.h"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -114,6 +115,8 @@ GC_TEST(MappedCache, NativeBackingSurvivesVirtualShuffle)
 
 static void ProductFragmentedAllocation(bool provideContiguousVirtual)
 {
+    // This synthetic allocator runs on a runtime worker, not a CJ scheduler thread.
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     // Match CollectorResources::Init before allocation-rate sampling.
     ZStat::Initialize();
     const size_t unit = RegionInfo::UNIT_SIZE;
@@ -177,6 +180,8 @@ GC_OTHER_VM_TEST(MappedCache, ProductFailedVirtualClaimRestoresOwners)
 // room of two units, a four-unit request harvests only two of six cached units.
 static void ProductPartialGrowth(bool provideContiguousVirtual)
 {
+    // This synthetic allocator runs on a runtime worker, not a CJ scheduler thread.
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     // Match CollectorResources::Init before allocation-rate sampling.
     ZStat::Initialize();
     const size_t unit = RegionInfo::UNIT_SIZE;
