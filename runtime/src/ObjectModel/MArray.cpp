@@ -82,7 +82,9 @@ void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* objec
     if (g_managedSegmentedActive.load(std::memory_order_acquire) && object != nullptr &&
         object->IsInvisibleObject()) {
         g_managedSegmentedVisitSites.fetch_or(VisitBit(site), std::memory_order_acq_rel);
-        if (workPhase == LargeArrayRootWorkPhase::MARK) {
+        if (site == LargeArrayRootVisitSite::ITERATOR_SKIP) {
+            // Iteration is tested independently, outside either root phase.
+        } else if (workPhase == LargeArrayRootWorkPhase::MARK) {
             g_managedSegmentedMarkSites.fetch_or(VisitBit(site), std::memory_order_acq_rel);
         } else {
             g_managedSegmentedRemapSites.fetch_or(VisitBit(site), std::memory_order_acq_rel);
