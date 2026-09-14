@@ -352,7 +352,9 @@ GC_TEST(ZForwardingEntries, CollisionPreservesIdentityAndOtherKey)
     table->Destroy();
 }
 
-GC_TEST(ZForwardingEntries, WidthBoundaryRoundTripAndFallback)
+// ZForwardingEntry encodes bounded offsets (zForwardingEntry.hpp:65-78).
+// The removed full-width side map is not part of that contract.
+GC_TEST(ZForwardingEntries, WidthBoundaryRoundTrip)
 {
     ForwardingEntry entry(ForwardingEntry::kMaxFromIndex, ForwardingEntry::kMaxToOffset);
     const bool roundTrip = entry.populated() && entry.from_index() == ForwardingEntry::kMaxFromIndex &&
@@ -363,11 +365,11 @@ GC_TEST(ZForwardingEntries, WidthBoundaryRoundTripAndFallback)
     auto* table = ZForwarding::Create(2, 0x1000, 0);
     GC_EXPECT_TRUE(table != nullptr);
     const MAddress lastAligned = ForwardingEntry::kMaxToOffset & ~MAddress(7);
-    const MAddress beyond = ForwardingEntry::kMaxToOffset + 1;
+    const MAddress previousAligned = lastAligned - 8;
     GC_EXPECT_EQ(table->insert(MAddress(0x1000), lastAligned), lastAligned);
-    GC_EXPECT_EQ(table->insert(MAddress(0x1008), beyond), beyond);
+    GC_EXPECT_EQ(table->insert(MAddress(0x1008), previousAligned), previousAligned);
     GC_EXPECT_EQ(table->find(MAddress(0x1000)), lastAligned);
-    GC_EXPECT_EQ(table->find(MAddress(0x1008)), beyond);
+    GC_EXPECT_EQ(table->find(MAddress(0x1008)), previousAligned);
     table->Destroy();
 }
 

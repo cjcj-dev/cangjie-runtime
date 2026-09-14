@@ -13,6 +13,7 @@
 #include <vector>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/z/zStat.hpp"
 #if defined(__linux__)
 #include <sched.h>
 #include <unistd.h>
@@ -78,6 +79,8 @@ struct SharedPageFixture {
     RegionManager manager;
     SharedPageFixture()
     {
+        // Match CollectorResources::Init before allocation-rate sampling.
+        ZStat::Initialize();
         constexpr size_t units = 64;
         const size_t metadata = RegionManager::GetMetadataSize(units);
         map = MemMap::MapMemory(metadata + units * RegionInfo::UNIT_SIZE, metadata);
