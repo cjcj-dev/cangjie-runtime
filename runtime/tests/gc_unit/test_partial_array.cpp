@@ -302,11 +302,14 @@ GC_TEST(PartialArray, EncodableRejectsAbsoluteOnlyAlignment)
     GC_EXPECT_TRUE(followedInline);
 }
 
-GC_TEST(PartialArray, RelativeBaseRoundtrips)
+GC_OTHER_VM_TEST(PartialArray, RelativeBaseRoundtrips)
 {
     // B=4097 and A%4096=1 must take the product Push -> Encode handoff.
     // Follow then decodes A and reaches the sole non-null slot at that address.
     GcHeapFixture fx;
+    // The arbitrary codec base does not replace the object's heap reservation.
+    Heap::OnHeapCreated(fx.heapStart);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     LowAddressSlots slots;
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     TracingCollector::WorkStack workStack;

@@ -156,8 +156,6 @@ struct MarkPort203TestAccess {
     }
     static void Collect(WCollector& collector, bool major)
     {
-        collector.GetGenerationCycle(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
-            .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
         collector.DoGarbageCollection(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
     }
 };
@@ -265,9 +263,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     const bool major = std::strncmp(variant, "major", 5) == 0;
     const bool commonRoot = std::strcmp(variant, "major-common") == 0;
     const bool finalizable = std::strcmp(variant, "major-finalizable") == 0;
-    if (!major) {
-        GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", variant, 1), 0);
-    }
     MutatorManager manager;
     MarkPortRuntime runtime(manager);
     GcHeapFixture fx;
@@ -353,6 +348,12 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RuntimeWorkers pool(helpers + 1u);
     MarkPort203TestAccess::Bind(resources, &collector, &pool, static_cast<int32_t>(helpers + 1));
+    // ZGeneration owns its worker set (zGeneration.cpp:124-129).
+    for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+        collector.GetGenerationCycle(generation).InitializeWorkers(helpers + 1);
+    }
+    collector.GetGenerationCycle(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
+        .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
     collector.SetGCPhase(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG, major ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
