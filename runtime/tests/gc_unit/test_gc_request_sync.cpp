@@ -178,6 +178,9 @@ public:
         }
         if (advanceEpoch) {
             youngCycle.Begin(gcIndex);
+            // Begin records the request; the mark-start event advances the
+            // sequence and flips the remembered set (ZGC zGeneration.cpp:871-880).
+            youngCycle.StartYoungMark(Heap::GetHeap().GetRememberedSet());
         }
         size_t runNumber = 0;
         {
