@@ -18,10 +18,6 @@ inline void AllocBuffer::SetY2yDirtyHolderMergeHookForTest(Y2yDirtyHolderMergeHo
 
 namespace MapleRuntime {
 #if defined(MRT_GC_UNIT_TESTS)
-inline void AllocBuffer::SetYoungAllocBlackHandoffHookForTest(HandoffHook hook, void* context) {
-        youngAllocBlackHandoffHook = hook;
-        youngAllocBlackHandoffHookContext = context;
-    }
 #endif
 } // namespace MapleRuntime
 

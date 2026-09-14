@@ -1868,9 +1868,8 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         // ZPage::reset(age), zPage.cpp:103-108: establish identity before page-table publication.
         SetYoungRegionFlag(age != PageAge::old);
         SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
-        // Unset until ClearLiveInfo starts a mark. 0 so idle / test regions do
-        // not treat every object as allocate-black.
-        metadata.markStartAllocPtr = 0;
+        // Existing pages re-snapshot top in ClearLiveInfo at the next mark.
+        InitializeAllocationWatermark();
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
         // Ghost walk (PrepareFromRegionList) follows nextRegionIdx0. A reused

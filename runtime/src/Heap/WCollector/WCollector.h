@@ -75,10 +75,9 @@ void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications);
 void PublishY2yAfterReleaseTestReceipt();
 void ArmMarkBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second = nullptr);
 void PublishMarkBeforeMarkEndTestReceipt();
-void ArmAllocBlackDuringConcurrentTestReceipt(BaseObject* object);
 void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder);
 void PublishConcurrentYoungProducersTestReceipt();
-void ArmLeftoverBeforePauseTestReceipt(BaseObject* allocBlack, BaseObject* y2yHolder);
+void ArmLeftoverBeforePauseTestReceipt(BaseObject* y2yHolder);
 void PublishLeftoverBeforePauseTestReceipt();
 
 struct ExportRootPublicationTestReceipt {
@@ -174,7 +173,7 @@ public:
     bool FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* domain);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
-    void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override;
+    void MarkYoungObjectIfActive(BaseObject* object) const override;
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const override;

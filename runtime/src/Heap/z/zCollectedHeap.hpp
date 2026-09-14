@@ -85,7 +85,7 @@ public:
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
     void MarkObjectIfActive(BaseObject* object) const;
-    virtual void MarkYoungObjectIfActive(BaseObject*, bool = false) const
+    virtual void MarkYoungObjectIfActive(BaseObject*) const
     {
         AbortUnimplemented("Collector::MarkYoungObjectIfActive");
     }

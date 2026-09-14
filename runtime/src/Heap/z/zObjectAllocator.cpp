@@ -174,7 +174,7 @@ static bool IsSmallEdenPage(const RegionInfo* page)
 RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole role,
                                              PageAge age, bool nonBlocking)
 {
-    RegionInfo* page = TakeRegion(units, role, false, !nonBlocking);
+    RegionInfo* page = TakeRegion(units, role, false, !nonBlocking, true, age);
     if (page == nullptr) { return nullptr; }
     page->SetYoungRegionFlag(age != PageAge::old);
     page->SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
@@ -281,7 +281,7 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
     }
     const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
     RegionInfo* region = TakeRegion(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
-                                    allowSaferegion);
+                                    allowSaferegion, true, youngRegion ? PageAge::eden : PageAge::old);
     if (region != nullptr) {
         {
             region->SetYoungRegionFlag(youngRegion ? 1 : 0);
