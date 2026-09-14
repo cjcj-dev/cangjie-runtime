@@ -41,6 +41,7 @@
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
+#include "Mutator/ThreadLocal.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -177,6 +178,20 @@ GC_TEST(Remset, Wave8FilterReceiptPositiveControls)
 #endif
 }
 
+// These standalone native threads have no CJ scheduler. Identify them as
+// runtime threads so GetMutator reads the product TLS. With no mutator, the
+// store barrier uses the direct mark/remember arm (ZGC zBarrier.cpp:253-261).
+class RemsetNativeThreadScope final {
+public:
+    RemsetNativeThreadScope() : previous(ThreadLocal::GetThreadType())
+    {
+        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+    }
+    ~RemsetNativeThreadScope() { ThreadLocal::SetThreadType(previous); }
+private:
+    ThreadType previous;
+};
+
 class InstalledBarrierScope {
 public:
     explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
@@ -269,6 +284,7 @@ private:
 // U7: product Barrier NVI WriteReference records old→young edge.
 GC_TEST(Remset, OldToYoungRecordedByBarrier)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
@@ -289,6 +305,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
 // ZGC zBarrier.inline.hpp:695-706: store-good fast path, old epoch slow path.
 GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
@@ -316,6 +333,7 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
 // ZGC zRemembered.cpp:591 and zBarrier.inline.hpp:695: bitmap and colour epochs differ.
 GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
@@ -352,6 +370,7 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
 // receive the slot from the current face established by that product consumer.
 GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
@@ -460,6 +479,7 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
 // re-arm line must leave this item green, so the negative arm is precise.
 GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
@@ -520,6 +540,7 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
 // ZGC zBarrier.inline.hpp:695-706: the compiler hand-off follows the previous word.
 GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
@@ -546,6 +567,7 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
 // ZGC zBarrier.inline.hpp:729-733: remember tests slot generation on the slow path.
 GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(0);
@@ -642,6 +664,7 @@ GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
 // ZGC zBarrier.inline.hpp:695-733: old heap slow-path stores remember during idle too.
 GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
@@ -723,6 +746,7 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
 // expectation was the stale half, not the fix.
 GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(0);
@@ -764,6 +788,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 
 GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
@@ -790,6 +815,7 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
 
 GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
 {
+    RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
