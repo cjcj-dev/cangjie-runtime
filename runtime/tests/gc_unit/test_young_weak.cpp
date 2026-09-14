@@ -41,6 +41,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 #if defined(MRT_TESTABLE_INTERNALS)
+#include "young_closure_observation.hpp"
 
 extern "C" int CJ_ScheduleManagerInit();
 
@@ -49,6 +50,12 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, TracingCollector* collector)
     {
+        if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
+            // Worker TLS teardown flushes through the still-bound collector.
+            for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+                resources.collectorProxy.currentCollector->GetGenerationCycle(generation).StopWorkers();
+            }
+        }
         resources.collectorProxy.currentCollector = collector;
         if (collector != nullptr) {
             // Product driver startup owns one worker set per generation
@@ -80,6 +87,7 @@ struct RelocationReceiptTestAccess {
         auto& cycle = collector.GetGenerationCycle(GCCycleGeneration::OLD);
         cycle.SelectReason(GC_REASON_USER);
         if (!cycle.Snapshot().active) cycle.Begin(1);
+        collector.StartOldMarkWork();
         collector.TraceHeap();
     }
 
@@ -364,11 +372,13 @@ void RunYoungWeakVariant(size_t helpers)
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
 
+    YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
-    const bool strongMarked = graph.IsMarked(graph.strongRoot);
-    const bool weakMarked = graph.IsMarked(graph.weak);
-    const bool referentMarked = graph.IsMarked(graph.referent);
-    const bool childMarked = graph.IsMarked(graph.child);
+    GC_EXPECT_TRUE(closure.Calls() > 0);
+    const bool strongMarked = closure.Saw(graph.strongRoot);
+    const bool weakMarked = closure.Saw(graph.weak);
+    const bool referentMarked = closure.Saw(graph.referent);
+    const bool childMarked = closure.Saw(graph.child);
     std::fprintf(stderr, "TARGET_YOUNG_STRONG_CLOSURE workers=%zu root=%d weak=%d referent=%d child=%d\n",
                  helpers + 1, strongMarked, weakMarked, referentMarked, childMarked);
     Heap::GetHeap().RemoveExportObject(rootHandle);
@@ -436,8 +446,10 @@ void RunYoungWeakRemsetFlow()
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
+    YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
-    const bool referentMarked = graph.IsMarked(graph.referent);
+    GC_EXPECT_TRUE(closure.Calls() > 0);
+    const bool referentMarked = closure.Saw(graph.referent);
     std::fprintf(stderr,
                  "DETAIL young_weak_remset slot=%#zx recorded_before_minor=%d referent_mark=%d\n",
                  static_cast<size_t>(weakSlot), static_cast<int>(recordedBeforeMinor),
@@ -451,7 +463,7 @@ void RunYoungWeakRemsetFlow()
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
     GC_EXPECT_TRUE(referentMarked);
-    GC_EXPECT_TRUE(graph.IsMarked(graph.child));
+    GC_EXPECT_TRUE(closure.Saw(graph.child));
     (void)holderLive;
     (void)targetLive;
 }
