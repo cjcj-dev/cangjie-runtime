@@ -4,9 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// Partial-array chunking: ON vs OFF must visit the same element set.
-// Split transcribed from WCollector.cpp FollowArrayElements / FollowArrayElementsLarge
-// (zMark.cpp:208-263). Criterion is set equality, not "did not crash".
+// Product partial-array chunking must visit each input slot exactly once.
+// ZGC zMark.cpp:208-270: follow the leading range and consume published tails.
 
 #include <cstdint>
 #include <csignal>
@@ -64,68 +63,6 @@ void MarkRange(std::set<size_t>& out, size_t begin, size_t length)
     }
 }
 
-void FollowSmall(std::set<size_t>& out, size_t begin, size_t length)
-{
-    MarkRange(out, begin, length);
-}
-
-void FollowElements(std::set<size_t>& out, Slot* addr, size_t length, Slot* base);
-
-void FollowLarge(std::set<size_t>& out, Slot* addr, size_t length, Slot* base)
-{
-    Slot* const start = addr;
-    Slot* const end = start + length;
-    Slot* const middleStart = AlignUp(start + 1, MarkPartialArray::MIN_SIZE);
-    const size_t middleLength =
-        AlignDown(static_cast<size_t>(end - middleStart), MarkPartialArray::MIN_LENGTH);
-    Slot* const middleEnd = middleStart + middleLength;
-
-    std::vector<std::pair<Slot*, size_t>> pushed;
-    if (end > middleEnd) {
-        pushed.push_back({ middleEnd, static_cast<size_t>(end - middleEnd) });
-    }
-    Slot* partialAddr = middleEnd;
-    while (partialAddr > middleStart) {
-        const size_t parts = 2;
-        const size_t partialLength = AlignUp(static_cast<size_t>(partialAddr - middleStart) / parts,
-                                             MarkPartialArray::MIN_LENGTH);
-        partialAddr -= partialLength;
-        pushed.push_back({ partialAddr, partialLength });
-    }
-
-    FollowSmall(out, static_cast<size_t>(start - base), static_cast<size_t>(middleStart - start));
-    for (auto& chunk : pushed) {
-        if (MarkPartialArray::Encodable(chunk.first, chunk.second)) {
-            MarkStackEntry entry = MarkPartialArray::Encode(chunk.first, chunk.second);
-            GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(entry));
-            MAddress decoded = 0;
-            size_t decodedLen = 0;
-            MarkPartialArray::Decode(entry, decoded, decodedLen);
-            GC_EXPECT_EQ(decoded, reinterpret_cast<MAddress>(chunk.first));
-            GC_EXPECT_EQ(decodedLen, chunk.second);
-        }
-        FollowElements(out, chunk.first, chunk.second, base);
-    }
-}
-
-void FollowElements(std::set<size_t>& out, Slot* addr, size_t length, Slot* base)
-{
-    if (length <= MarkPartialArray::MIN_LENGTH) {
-        FollowSmall(out, static_cast<size_t>(addr - base), length);
-        return;
-    }
-    if (length > MarkPartialArray::MAX_LENGTH ||
-        !MarkPartialArray::Encodable(
-            reinterpret_cast<const void*>(
-                AlignDown(reinterpret_cast<MAddress>(addr + length),
-                          static_cast<MAddress>(MarkPartialArray::MIN_SIZE))),
-            1)) {
-        FollowSmall(out, static_cast<size_t>(addr - base), length);
-        return;
-    }
-    FollowLarge(out, addr, length, base);
-}
-
 std::set<size_t> OffSet(size_t length)
 {
     std::set<size_t> s;
@@ -136,7 +73,23 @@ std::set<size_t> OffSet(size_t length)
 std::set<size_t> OnSet(Slot* addr, size_t length)
 {
     std::set<size_t> s;
-    FollowElements(s, addr, length, addr);
+    std::vector<MarkStackEntry> pending;
+    const MAddress base = reinterpret_cast<MAddress>(addr);
+    auto visit = [&](MAddress field) {
+        GC_EXPECT_TRUE(field >= base);
+        GC_EXPECT_EQ((field - base) % sizeof(Slot), 0u);
+        const size_t index = (field - base) / sizeof(Slot);
+        GC_EXPECT_TRUE(index < length);
+        GC_EXPECT_TRUE(s.insert(index).second);
+    };
+    auto publish = [&](const MarkStackEntry& entry) { pending.push_back(entry); };
+    MarkPartialArray::FollowElements(base, length, false, visit, publish);
+    while (!pending.empty()) {
+        const MarkStackEntry entry = pending.back();
+        pending.pop_back();
+        GC_EXPECT_TRUE(entry.partialArray());
+        MarkPartialArray::FollowPartialReferences(entry, visit, publish);
+    }
     return s;
 }
 
@@ -151,7 +104,9 @@ std::set<size_t> ExpectSame(Slot* addr, size_t length)
     const std::set<size_t> off = OffSet(length);
     const std::set<size_t> on = OnSet(addr, length);
     Heap::OnHeapCreated(savedStart);
-    Heap::OnHeapExtended(savedEnd);
+    if (savedEnd != 0) {
+        Heap::OnHeapExtended(savedEnd);
+    }
     GC_EXPECT_EQ(off.size(), on.size());
     GC_EXPECT_TRUE(off == on);
     GC_EXPECT_EQ(off.size(), length);
@@ -197,7 +152,9 @@ public:
     ~HeapBaseOverride()
     {
         Heap::SetHeapStartForTesting(savedStart);
+        if (savedEnd != 0) {
         Heap::OnHeapExtended(savedEnd);
+    }
     }
 
 private:
@@ -273,7 +230,9 @@ GC_TEST(PartialArray, EncodeDecodeRoundtrip)
     GC_EXPECT_EQ(start, reinterpret_cast<MAddress>(buf.slots));
     GC_EXPECT_EQ(length, MarkPartialArray::MIN_LENGTH);
     Heap::OnHeapCreated(savedStart);
-    Heap::OnHeapExtended(savedEnd);
+    if (savedEnd != 0) {
+        Heap::OnHeapExtended(savedEnd);
+    }
 }
 
 GC_TEST(PartialArray, HeapStartRequiresMinSizeAlignment)
@@ -314,7 +273,9 @@ GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
         GC_EXPECT_EQ(decodedLength, MarkPartialArray::MIN_LENGTH);
     }
     Heap::OnHeapCreated(savedStart);
-    Heap::OnHeapExtended(savedEnd);
+    if (savedEnd != 0) {
+        Heap::OnHeapExtended(savedEnd);
+    }
 }
 
 #ifdef MRT_TESTABLE_INTERNALS
