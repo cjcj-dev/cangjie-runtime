@@ -438,12 +438,21 @@ protected:
         BaseObject* object;
         ForwardingStage stage;
         uintptr_t color;
+        Generation generation;
         ValueRoot(BaseObject* value, ForwardingStage source = ForwardingStage::OverwritePrevious)
-            : object(value), stage(source), color(::g_cjLoadGoodMask) {}
+            : object(value), stage(source), color(::g_cjLoadGoodMask),
+              generation(source == ForwardingStage::IncomingNew && Heap::IsHeapAddress(value)
+                  ? RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(value))->GetOwnerGeneration()
+                  : Generation::Old) {}
         operator BaseObject*() const { return object; }
         ForwardingStage Stage() const
         {
-            return color == ::g_cjLoadGoodMask ? stage : ForwardingStage::OverwritePrevious;
+            // ZGC zUncoloredRoot.inline.hpp:64-65 selects the remap generation.
+            // An unrelated generation flip cannot invalidate this current root.
+            const uintptr_t mask = generation == Generation::Young
+                ? ColourPredicates::current_remapped_young_mask(::g_cjLoadBadMask)
+                : ColourPredicates::current_remapped_old_mask(::g_cjLoadBadMask);
+            return (color & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
         }
     };
     struct ValueRootHash {

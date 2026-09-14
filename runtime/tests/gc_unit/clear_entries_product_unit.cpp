@@ -2759,7 +2759,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
 
 #include "b09_runtime_fixture.hpp"
 
-static void CheckCompactIncoming(bool overlapping, bool external = false, bool major = false)
+static void CheckCompactIncoming(bool overlapping, bool external = false, bool major = false, bool flipYoung = false, bool rootBeforeCompact = false)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture& fx = ProductFixture();
@@ -2783,6 +2783,13 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     queue.BeginWorkers(1);
     const auto request = queue.Add(region, reinterpret_cast<MAddress>(second));
     GC_EXPECT_TRUE(request.accepted);
+    if (rootBeforeCompact) {
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+        collector.ResurrectExportObject(second);
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+        collector.ResurrectExportObject(second);
+        LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
+    }
     manager.CompactRegion(region);
     region->MarkForwardingDone();
     (void)queue.Wait(request.request);
@@ -2794,13 +2801,19 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     GC_EXPECT_EQ(secondTo, start + size);
     auto* current = external ? fx.PlaceObject(fx.region1->GetRegionStart()) : reinterpret_cast<BaseObject*>(overlapping ? secondTo : firstTo);
     GC_EXPECT_TRUE(current->IsValidObject());
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    collector.ResurrectExportObject(current);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
-    collector.ResurrectExportObject(current);
-    const bool identity = RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, current);
+    if (!rootBeforeCompact) {
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+        collector.ResurrectExportObject(current);
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+        collector.ResurrectExportObject(current);
+    }
+    const bool identity = RelocationReceiptTestAccess::BothResurrectionSetsEqual(
+        collector, rootBeforeCompact ? second : current);
     std::fprintf(stderr, "B09_OVERLAP_TARGET_ASSERT current_identity=%d\n", identity);
     GC_EXPECT_TRUE(identity);
+    if (flipYoung) {
+        LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+    }
     const auto visited = major ? RelocationReceiptTestAccess::EnumMajorValueRoots(collector)
                                : RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
     const bool consumerIdentity = visited.size() == 2 &&
@@ -2884,4 +2897,24 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartWithUsableT
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     CleanupPartialCompact(fx, state);
 #endif
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MinorCurrentOldRootSurvivesYoungColorFlip)
+{
+    CheckCompactIncoming(true, false, false, true);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MajorCurrentOldRootSurvivesYoungColorFlip)
+{
+    CheckCompactIncoming(true, false, true, true);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MinorStoredCurrentRootRemapsAfterOldColorFlip)
+{
+    CheckCompactIncoming(true, false, false, false, true);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MajorStoredCurrentRootRemapsAfterOldColorFlip)
+{
+    CheckCompactIncoming(true, false, true, false, true);
 }
