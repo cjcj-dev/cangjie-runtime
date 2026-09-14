@@ -19,6 +19,12 @@
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
+// Keep the out-of-line slot store available to declaration-only consumers.
+// Do not depend on a barrier call retaining an incidental template instance:
+// OHOS and optimized builds can inline every such call.
+// ZGC: zBarrier.inline.hpp:448-450, 692-706 (store-good barrier path).
+template void HeapSlot<false>::StoreColoured(zpointer, std::memory_order);
+
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
 {
     if (LIKELY(!Heap::IsHeapAddress(slot))) {
