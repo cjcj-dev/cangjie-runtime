@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <limits>
+#include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
@@ -121,7 +122,7 @@ bool GCDriverPort::WaitForAck(const GCDriverReceipt& receipt)
 #endif
     while (!stopped && !receipt.state->resolved) {
         lock.unlock();
-        if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
+        if (Runtime::CurrentRef() != nullptr && MutatorManager::Instance().MarkFlushHandshakeActive()) {
             (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
         }
         lock.lock();
