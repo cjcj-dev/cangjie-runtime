@@ -78,6 +78,9 @@ void PlaceOwnerObjects(GcHeapFixture& fx)
 void PrepareOwnerRegion(GcHeapFixture& fx)
 {
     PlaceOwnerObjects(fx);
+    // Relocation may compact in place and transfer remembered slots.
+    Heap::GetHeap().GetRememberedSet().Initialize(
+        fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     RegionInfo* region = fx.region0;
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     LiveInfo* live = fx.PlantLiveInfo(region);
