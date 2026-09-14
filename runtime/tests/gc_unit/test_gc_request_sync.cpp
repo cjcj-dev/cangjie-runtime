@@ -25,6 +25,9 @@
 #include "gc_unittest.hpp"
 
 #include "Cangjie.h"
+#include "Common/Runtime.h"
+#include "Mutator/Handshake.h"
+#include "Mutator/MutatorManager.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zDriver.hpp"
@@ -504,6 +507,73 @@ GC_TEST(GcRequestSync, DriverPortSyncSequenceAcknowledges)
     port.Acknowledge(request);
     waiter.join();
     GC_EXPECT_TRUE(completed.load(std::memory_order_acquire));
+}
+
+// ZGC zDriverPort.cpp:101-125 waits for the receipt; the local runtime's
+// cooperative handshake must remain live while that receipt is pending.
+GC_TEST(GcRequestSync, PendingReceiptProcessesCurrentThreadHandshake)
+{
+    class RequestRuntime final : public Runtime {
+    public:
+        explicit RequestRuntime(MutatorManager& manager) : saved(runtime)
+        {
+            mutatorManager = &manager;
+            runtime = this;
+        }
+        ~RequestRuntime() override { runtime = saved; }
+        RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
+        void SetGCThreshold(uint64_t) override {}
+    private:
+        Runtime* saved;
+    };
+    MutatorManager manager;
+    RequestRuntime runtime(manager);
+    GCDriverPort port(GCDriverKind::MINOR);
+    const auto receipt = port.EnqueueSync(GC_REASON_YOUNG);
+    GCDriverRequest request {};
+    GC_EXPECT_TRUE(port.TryDequeue(request));
+    auto* tls = ThreadLocal::GetThreadLocalData();
+    HandshakeState state(tls);
+    struct Binding {
+        explicit Binding(HandshakeState& state) { Handshake::BindCurrent(&state); }
+        ~Binding() { Handshake::BindCurrent(nullptr); }
+    } binding(state);
+    class ReceiptClosure final : public HandshakeClosure {
+    public:
+        ReceiptClosure(GCDriverPort& port, const GCDriverRequest& request)
+            : HandshakeClosure("request-wait"), port(port), request(request) {}
+        void do_thread(ThreadLocalData* tls) override
+        {
+            observed = tls;
+            ++calls;
+            port.Cancel(request);
+        }
+        ThreadLocalData* observed = nullptr;
+        size_t calls = 0;
+    private:
+        GCDriverPort& port;
+        const GCDriverRequest& request;
+    } closure(port, request);
+    HandshakeOperation operation(&closure, tls);
+    state.add_operation(&operation);
+    std::promise<void> finished;
+    auto completion = finished.get_future();
+    // Cleanup remains possible when the product handshake call is cut. The
+    // target assertion below, not the hang guard, diagnoses that cut.
+    std::thread guard([&] {
+        if (completion.wait_for(std::chrono::seconds(1)) != std::future_status::ready) {
+            port.Stop();
+        }
+    });
+    const bool completed = port.WaitForAck(receipt);
+    finished.set_value();
+    guard.join();
+    std::fprintf(stderr, "TARGET_WAIT_HANDSHAKE calls=%zu same_thread=%d completed=%d\n",
+                 closure.calls, closure.observed == tls, completed);
+    GC_EXPECT_EQ(closure.calls, 1u);
+    GC_EXPECT_TRUE(closure.observed == tls);
+    GC_EXPECT_FALSE(completed);
+    GC_EXPECT_FALSE(state.operation_pending(&operation));
 }
 
 GC_TEST(GcRequestSync, DriverAbortIsCooperativeAndResettable)
