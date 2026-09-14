@@ -221,6 +221,16 @@ private:
 // One-shot receipt for the actual DoGarbageCollection -> Preforward path. The
 // target slot is armed by a test, but the observed word is produced and sampled
 // inside the product remap loop before relocate-start changes the good masks.
+// Read-only copies of the product's ownership carriers at PostTrace's handoff.
+struct ExportOwnershipTestObservation {
+    using Edge = std::pair<BaseObject*, BaseObject*>;
+    bool afterHandoff = false;
+    size_t discoveredOwners = 0;
+    size_t handoffOwners = 0;
+    std::vector<Edge> discovered;
+    std::vector<Edge> handoff;
+};
+
 struct RemapYoungRootsTestReceipt {
     uintptr_t targetSlot = 0;
     uintptr_t before = 0;
@@ -290,6 +300,7 @@ public:
     static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
+    static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
 #endif
 
     void Init() override;
@@ -462,6 +473,9 @@ protected:
     using ValueRootList = std::list<ValueRoot>;
     using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>;
     ValueRootMap discoveredExternObjects;
+#if defined(MRT_TESTABLE_INTERNALS)
+    void ObserveExportOwnershipForTest(bool afterHandoff);
+#endif
     // Resolver callbacks may enter managed code and therefore must not own the
     // root-carrier mutex.  Keep resolver serialization separate from the mutex
     // used by GC root and preforward consumers.
@@ -529,7 +543,7 @@ protected:
     void FindUselessExternObjects();
 
 private:
-    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false, BaseObject* exportOwner = nullptr);
+    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
 
