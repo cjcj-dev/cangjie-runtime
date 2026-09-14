@@ -21,15 +21,6 @@ static TypeInfo* g_arrayTi = nullptr;
 static TypeInfo* g_byteTi = nullptr;
 static std::atomic<bool> g_typesReady{ false };
 
-bool Enabled()
-{
-    const char* v = std::getenv("CJRT_HEAP_FILLER");
-    if (v != nullptr && v[0] == '0' && v[1] == '\0') {
-        return false;
-    }
-    return true;
-}
-
 static TypeInfo* PlantTi(void* storage, TypeKind kind, U32 sizeOrComp, const char* name)
 {
     std::memset(storage, 0, sizeof(TypeInfo));
@@ -98,9 +89,7 @@ void ZeroAndFill(uintptr_t start, size_t size)
         return;
     }
     CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail");
-    if (Enabled()) {
-        Overlay(start, size);
-    }
+    Overlay(start, size);
 }
 
 } // namespace HeapFiller
