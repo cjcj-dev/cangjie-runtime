@@ -856,6 +856,7 @@ void RunMajorExportOwnership(bool sharedCycle)
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(graph.root);
 
     const U64 secondHandle = sharedCycle ? Heap::GetHeap().RegisterExportRoot(secondRoot) : 0;
+    const U64 duplicateHandle = sharedCycle ? Heap::GetHeap().RegisterExportRoot(graph.root) : 0;
     RelocationReceiptTestAccess::RunMajorMark(collector);
     const bool producerCarrier =
         RelocationReceiptTestAccess::DiscoveredCarrierEquals(collector, graph.root, graph.foreign, owners) &&
@@ -875,7 +876,10 @@ void RunMajorExportOwnership(bool sharedCycle)
                  static_cast<int>(consumerMarked), static_cast<int>(handoffCurrent));
 
     Heap::GetHeap().RemoveExportObject(exportHandle);
-    if (sharedCycle) Heap::GetHeap().RemoveExportObject(secondHandle);
+    if (sharedCycle) {
+        Heap::GetHeap().RemoveExportObject(secondHandle);
+        Heap::GetHeap().RemoveExportObject(duplicateHandle);
+    }
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(producerCarrier);
