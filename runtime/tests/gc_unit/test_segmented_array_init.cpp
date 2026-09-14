@@ -12,6 +12,7 @@
 #include <dlfcn.h>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 #if defined(__linux__)
 #include <sched.h>
 #include <sys/wait.h>
@@ -25,6 +26,7 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
+#include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
@@ -193,7 +195,18 @@ struct SegmentedArrayContext {
             rootBefore->ForEachRefFieldInRange(
                 [&ctx](RefField<>&) { ++ctx.rangeIteratorVisits; },
                 firstField, firstField + sizeof(RefField<>));
-            if (ctx.fullIteratorVisits != 0 || ctx.rangeIteratorVisits != 0) {
+            // Iterator test, not GC root visitation. Check the partial-array
+            // entry independently: the shared receipt cannot identify which
+            // iterator actually protected the incomplete payload.
+            MarkPartialArray::FollowObjectReferences(rootBefore, false,
+                [&ctx](MAddress) { ++ctx.markIteratorVisits; },
+                [&ctx](const MarkStackEntry&) { ++ctx.markIteratorPartials; });
+            const bool opaque = ctx.fullIteratorVisits == 0 && ctx.rangeIteratorVisits == 0 &&
+                ctx.markIteratorVisits == 0 && ctx.markIteratorPartials == 0;
+            std::fprintf(stderr, "[SEGMENTED_ITERATOR_ASSERT] full=%zu range=%zu mark=%zu partial=%zu pass=%d\n",
+                         ctx.fullIteratorVisits, ctx.rangeIteratorVisits, ctx.markIteratorVisits,
+                         ctx.markIteratorPartials, opaque);
+            if (!opaque) {
                 ++ctx.failures;
             }
         }
@@ -267,6 +280,43 @@ struct SegmentedArrayContext {
         if (array->IsInvisibleObject()) {
             ++current->failures;
         }
+        if (array->GetComponentTypeInfo()->IsRef()) {
+            // Positive control through the same product entry after publication
+            // completes. Consume the product's continuations, checking every
+            // slot address exactly once, without interpreting reference values.
+            std::vector<unsigned char> visits(array->GetLength(), 0);
+            std::vector<MarkStackEntry> pending;
+            const MAddress start = reinterpret_cast<MAddress>(array->ConvertToCArray());
+            size_t invalid = 0;
+            auto visit = [&](MAddress field) {
+                if (field < start || (field - start) % sizeof(RefField<>) != 0 ||
+                    (field - start) / sizeof(RefField<>) >= visits.size()) {
+                    ++invalid;
+                } else {
+                    ++visits[(field - start) / sizeof(RefField<>)];
+                }
+            };
+            auto publish = [&](const MarkStackEntry& entry) { pending.push_back(entry); };
+            MarkPartialArray::FollowObjectReferences(array, false, visit, publish);
+            const size_t partials = pending.size();
+            while (!pending.empty()) {
+                const MarkStackEntry entry = pending.back();
+                pending.pop_back();
+                MarkPartialArray::FollowPartialReferences(entry, visit, publish);
+            }
+            for (unsigned char count : visits) {
+                invalid += count != 1;
+            }
+            size_t full = 0;
+            size_t range = 0;
+            array->ForEachRefField([&](RefField<>&) { ++full; });
+            array->ForEachRefFieldInRange([&](RefField<>&) { ++range; },
+                                         start, start + sizeof(RefField<>));
+            const bool complete = invalid == 0 && full == visits.size() && range == 1;
+            std::fprintf(stderr, "[SEGMENTED_VISIBLE_ASSERT] fields=%zu full=%zu range=%zu partial=%zu invalid=%zu pass=%d\n",
+                         visits.size(), full, range, partials, invalid, complete);
+            current->failures += !complete;
+        }
     }
 
     static void OnRootVisit(LargeArrayRootVisitSite site, BaseObject* object)
@@ -304,6 +354,8 @@ struct SegmentedArrayContext {
     size_t failures = 0;
     size_t fullIteratorVisits = 0;
     size_t rangeIteratorVisits = 0;
+    size_t markIteratorVisits = 0;
+    size_t markIteratorPartials = 0;
     uint64_t youngSequenceBefore = 0;
     uint64_t youngSequenceAfter = 0;
     uint64_t oldSequenceBefore = 0;

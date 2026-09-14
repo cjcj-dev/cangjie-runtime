@@ -2011,6 +2011,14 @@ void FollowObjectReferences(BaseObject* object, bool finalizable,
         MArray* array = reinterpret_cast<MArray*>(object);
         TypeInfo* component = array->GetComponentTypeInfo();
         if (component->IsObjectType() || component->IsArrayType() || component->IsInterface()) {
+            // zIterator.inline.hpp:64-70: safe iteration must not expose the
+            // payload of an object array whose initialization is incomplete.
+            if (array->IsInvisibleObject()) {
+#if defined(MRT_GC_UNIT_TESTS)
+                NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP, array);
+#endif
+                return;
+            }
             FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
             return;
         }

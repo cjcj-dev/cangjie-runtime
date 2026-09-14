@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
 #include "Heap/z/zHeap.hpp"
@@ -164,6 +165,24 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                     managedTestRequested = true;
                     CHECK_DETAIL(mutator->IsManagedContext(),
                                  "language-level segmented-array test must retain managed context");
+                    // Iterator test, not GC root visitation. Like the native
+                    // fixture, call the real iterators on the published root;
+                    // callbacks count addresses without reading payload values.
+                    MArray* observed = static_cast<MArray*>(mutator->LoadInvisibleRoot());
+                    size_t fullVisits = 0;
+                    size_t rangeVisits = 0;
+                    size_t markVisits = 0;
+                    size_t partials = 0;
+                    observed->ForEachRefField([&](RefField<>&) { ++fullVisits; });
+                    const MAddress first = reinterpret_cast<MAddress>(observed->ConvertToCArray());
+                    observed->ForEachRefFieldInRange([&](RefField<>&) { ++rangeVisits; },
+                                                     first, first + sizeof(RefField<>));
+                    MarkPartialArray::FollowObjectReferences(observed, false,
+                        [&](MAddress) { ++markVisits; }, [&](const MarkStackEntry&) { ++partials; });
+                    std::fprintf(stderr, "[SEGMENTED_MANAGED_ITERATORS] full=%zu range=%zu mark=%zu partial=%zu\n",
+                                 fullVisits, rangeVisits, markVisits, partials);
+                    CHECK_DETAIL(fullVisits == 0 && rangeVisits == 0 && markVisits == 0 && partials == 0,
+                                 "invisible segmented-array iterator exposed payload");
                     const GCCycleGeneration generation = managedTestGc == ManagedSegmentedGc::YOUNG
                         ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
                     const uint64_t sequenceBefore = collector.GetCycleSnapshot(generation).sequence;
@@ -202,9 +221,10 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
     complete->SetInvisibleObject(false);
 #if defined(MRT_GC_UNIT_TESTS)
     if (managedTest) {
-        const uint32_t required = VisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED) |
-            VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED) |
-            VisitBit(LargeArrayRootVisitSite::MINOR_RELOCATE) |
+        // zMark.cpp:704-708 / zStackWatermark.cpp:171-173: the completed
+        // watermark owns this root, as in native RequiredPhaseRootVisits.
+        // No second mutator walk or minor-relocate stack consumer is required.
+        const uint32_t required = VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED) |
             VisitBit(LargeArrayRootVisitSite::ITERATOR_SKIP);
         const uint32_t sites = g_managedSegmentedVisitSites.load(std::memory_order_acquire);
         const uint32_t forbidden = VisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE) |
