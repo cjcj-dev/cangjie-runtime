@@ -73,11 +73,11 @@ void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, Remembe
         BaseObject* object = collector.make_load_good(previous, provenance);
         if (object != nullptr && Heap::IsHeapAddress(object)) {
             collector.MarkObjectIfActive(object);
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
             NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_RETIRED, entry);
 #endif
         } else {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
             NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_INVALID, entry);
 #endif
         }
@@ -97,7 +97,7 @@ void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, Remembe
             }
         }
         rs.Record(remapped.p, true);
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
         NotifyFlushObserver(StoreBarrierFlushEvent::SLOT_REMEMBERED, entry);
 #endif
     }

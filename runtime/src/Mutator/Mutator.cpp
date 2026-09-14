@@ -19,7 +19,7 @@
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
 #include "ObjectModel/MArray.h"
 #endif
 #include "MutatorManager.h"
@@ -368,7 +368,7 @@ void Mutator::VisitProcessedRoots(const RootVisitor& visitor)
 void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor)
 {
     MutatorLock();
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
     RootVisitor observedInvisibleRootVisitor = [this, &invisibleRootVisitor](ObjectRef& root) {
         NoteLargeArrayInitRootVisit(IsManagedContext() ? LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED
                                                       : LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE,
@@ -928,7 +928,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
 {
     scannedFrames = 0;
     MutatorLock();
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
     RootVisitor observedInvisibleRootVisitor = [this, &invisibleRootVisitor](ObjectRef& root) {
         NoteLargeArrayInitRootVisit(IsManagedContext() ? LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED
                                                       : LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE,

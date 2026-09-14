@@ -102,7 +102,7 @@ void BaseObject::ForEachRefField(const RefFieldVisitor& visitor)
     if (typeInfo->HasRefField()) {
         if (UNLIKELY(typeInfo->IsRawArray())) {
             if (IsInvisibleObject()) {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
                 NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP, this);
 #endif
                 return;

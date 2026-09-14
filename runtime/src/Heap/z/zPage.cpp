@@ -284,7 +284,7 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
     return true;
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
 // mc-r6: keep the unit-test-only mark-cycle entry points in the product
 // carrier.  Tests must import these instantiations from libcangjie-runtime.so
 // instead of instantiating a second copy in the test executable.

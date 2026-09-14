@@ -122,7 +122,7 @@ void RegionInfo::NoteEnrolPhase()
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_GC_UNIT_TESTS)
 std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
 std::atomic<size_t> RegionInfo::ghostLookupTestHookCalls { 0 };
 

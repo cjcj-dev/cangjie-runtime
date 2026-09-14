@@ -109,10 +109,13 @@ if (MRT_GC_UNIT_TESTS)
 endif()
 
 
-# Test-only access remains absent from the default product.  When the explicit
-# GC unit configuration is selected, both the product library and its tests see
-# the same compile-time contract.
-if (MRT_GC_UNIT_TESTS)
+# The standalone suite selects its GC-unit shape when the testable SO exposes
+# its array hook. Compile the complete observer/layout contract into that SO:
+# enabling individual hooks would leave GCDriverPort and CollectorResources
+# with different layouts in the product and the standalone executable.
+# Keep the CMake option unchanged: MRT_TESTABLE_INTERNALS alone must not add
+# the in-tree test targets below. The default product defines neither macro.
+if (MRT_GC_UNIT_TESTS OR MRT_TESTABLE_INTERNALS)
     add_compile_definitions(MRT_GC_UNIT_TESTS=1)
 endif()
 
