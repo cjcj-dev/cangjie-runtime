@@ -231,9 +231,12 @@ GC_TEST(LiveMap, OldForwardingCarrierPublishesOwnerAndRetires)
     // ZForwarding::detach_page releases page access, not the forwarding set.
     ForwardingTable::ResetRelocationSet(Generation::Old);
     GC_EXPECT_FALSE(region->HasFromPageMetadata());
-    // Dispel resets this non-promoted page's map. The old test incorrectly
-    // expected a retained copy to keep the former mark readable here.
-    GC_EXPECT_FALSE(region->IsRouteSurvivedObject(64));
+    // This fixture did not relocate the page. Dispel retires forwarding
+    // access, whereas ForwardRegion resets the map after actual relocation
+    // (ZGC zForwarding.cpp:65-77; local zRelocate.cpp:2424). Preserve the
+    // original current-page fallback assertion: it is not a retained copy.
+    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(64));
+    GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == nullptr);
 }
 
 // ZGC zPage.cpp:64-72 clones only layout/top; the original young page owns
