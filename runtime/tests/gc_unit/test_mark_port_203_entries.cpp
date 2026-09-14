@@ -221,12 +221,20 @@ void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
         result.allocationRegion->SetYoungRegionFlag(1);
         result.allocationRegion->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
         result.allocationBuffer->SetRegion(result.allocationRegion);
+        // Exercise the mutator allocation producer, including its managed-context
+        // publication condition, rather than allocating on the GC coordinator.
+        Mutator allocationMutator;
+        Mutator* previousMutator = ThreadLocal::GetMutator();
+        allocationMutator.SetManagedContext(true);
+        ThreadLocal::SetMutator(&allocationMutator);
         const MAddress address = result.allocationBuffer->Allocate(2 * sizeof(MAddress), AllocType::MOVEABLE_OBJECT);
         if (address != 0) {
             result.allocated = reinterpret_cast<BaseObject*>(address);
             *reinterpret_cast<uintptr_t*>(address) = reinterpret_cast<uintptr_t>(result.allocationType);
             HeapSlotAt<>(address + TYPEINFO_PTR_SIZE).StoreColoured(StoreGoodPointer((*result.children)[0]));
         }
+        ThreadLocal::SetMutator(previousMutator);
+        allocationMutator.SetManagedContext(false);
         // The mapped fixture page is not in the allocator's intrusive TL
         // list. Restore the buffer shortcut before the GC's ordinary flush;
         // the real private Follow queue remains registered for consumption.
