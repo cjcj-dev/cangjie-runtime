@@ -556,12 +556,126 @@ GC_OTHER_VM_TEST(YoungConc, YoungAllocBlackVisibleBeforePauseMarkEnd)
     (void)live;
 }
 
-// y2y dirty holders share the same concurrent merge as allocate-black.
+// ZGC zGeneration.cpp:550-552,897-905: published work prevents mark completion.
+// Observe closure before relocation changes the page generation (zPage.cpp:64).
+GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    MarkPublicationFixture markFixture;
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
 
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    RuntimeWorkers threadPool(1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ArmY2yDuringConcurrentTestReceipt(fx.obj1);
+
+    YoungClosureObservation closure;
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL y2y_mark_end pauses=%zu continues=%zu pauseY2y=%zu closure=%zu\n",
+                 receipt.pauses, receipt.continues, receipt.pauseY2y, receipt.closureDuringPause);
+    std::fprintf(stderr, "TARGET y2y holder=%d child=%d\n", closure.Saw(fx.obj1), closure.Saw(child));
+    GC_EXPECT_EQ(receipt.pauseY2y, 0u);
+    GC_EXPECT_EQ(receipt.continues, 0u);
+    GC_EXPECT_TRUE(closure.Saw(fx.obj1));
+    GC_EXPECT_TRUE(closure.Saw(child));
+
+    if (!ownerWasActive) activityCycle.End();
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live;
+}
 
 // Worker termination then mutator leftover alloc-black/y2y before STW.
 // Pause must merge leftover and continue; it must not commit mark-end.
+GC_OTHER_VM_TEST(YoungConc, LeftoverAllocBlackAndY2yAfterWorkerForcesContinue)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    MarkPublicationFixture markFixture;
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    BaseObject* allocChild = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
+    BaseObject* y2yHolder = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
+    BaseObject* y2yChild = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 192);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(y2yChild) + 64);
+    auto* allocField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    allocField->StoreColoured(GcUnit::StoreGoodPointer(allocChild));
+    (void)fx.region1->MarkObject(fx.region1->GetMarkView<Generation::Young>(), fx.obj1, 8);
+    auto* y2yField = &HeapSlotAt<>(reinterpret_cast<MAddress>(y2yHolder) + TYPEINFO_PTR_SIZE);
+    y2yField->StoreColoured(GcUnit::StoreGoodPointer(y2yChild));
 
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    RuntimeWorkers threadPool(1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    space.GetRegionManager().AddRawPointerObject(y2yHolder);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ArmLeftoverBeforePauseTestReceipt(fx.obj1, y2yHolder);
+
+    YoungClosureObservation closure;
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL leftover_mark_end pauses=%zu continues=%zu pauseAllocBlack=%zu pauseY2y=%zu\n",
+                 receipt.pauses, receipt.continues, receipt.pauseAllocBlack, receipt.pauseY2y);
+    std::fprintf(stderr, "TARGET leftover allocChild=%d holder=%d y2yChild=%d continues=%zu\n",
+                 closure.Saw(allocChild), closure.Saw(y2yHolder), closure.Saw(y2yChild), receipt.continues);
+    GC_EXPECT_TRUE(receipt.continues >= 1u);
+    GC_EXPECT_TRUE(receipt.pauseAllocBlack >= 1u);
+    GC_EXPECT_TRUE(receipt.pauseY2y >= 1u);
+    GC_EXPECT_TRUE(closure.Saw(allocChild));
+    GC_EXPECT_TRUE(closure.Saw(y2yHolder));
+    GC_EXPECT_TRUE(closure.Saw(y2yChild));
+
+    if (!ownerWasActive) activityCycle.End();
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live;
+}
 
 GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
 {
