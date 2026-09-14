@@ -43,6 +43,17 @@ Standalone default/testable return 0/0 (526/699 cases); OHOS attempt returns 21
 because its required product receipt symbol is absent. No runtime or std source
 or existing test expectation is changed by this delivery.
 
+The filler arm reuses the default executables with `CJRT_HEAP_FILLER=0`:
+526 cases, rc=0. Thus `UNIT_DEFAULT_RC=0`, `UNIT_FILLER_RC=0`,
+`UNIT_OHOS_RC=21`; testable is recorded separately. The absent OHOS receipt
+belongs to the selected baseline Linux configuration, not a source change here.
+
+The controller confirmed artifact-level binary replacement is the applicable
+cut/restoration evidence for this task; source `cut.diff` and `entry_cut_check`
+do not apply because runtime/std source is unchanged and LLVM #1 is already
+merged. Ruling: `/root/cj_build/ops/advisor/outbox/`
+`sym_cangjie_runtime_585_implement_r5669360435-20260914T194756Z.md`.
+
 The CJ struct is lowered into reference writes; native static-struct intrinsic
 coverage comes from the merged LLVM test. Atomic checks establish ABI/routing,
 not a separate runtime atomic semantics proof. No universal frontend/reflection
