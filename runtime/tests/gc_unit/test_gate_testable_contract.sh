@@ -16,6 +16,7 @@ unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE
 # Synthetic gate arms likewise supply their own header root. The copied-pair
 # integration regression exercises automatic publication lookup with real SOs.
+export GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/lib"
 export GCV2_RUNTIME_OUTPUT_ROOT="$fixture/selected-output"
 mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runtime/build" \
   "$fixture/lib" "$fixture/bin" \
@@ -167,6 +168,10 @@ grep -q 'TESTABLE_INTERNALS=1 but product SO lacks segmented-array test hooks' "
 printf '#!/usr/bin/env bash\necho "00000000 T CJ_MRT_SetLargeArrayInitTestHooks@@CANGJIE"\n' >"$fixture/bin/nm"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/sdk/bin/cjc"
 chmod +x "$fixture/sdk/bin/cjc"
+mkdir -p "$fixture/sdk/third_party/llvm/bin" "$fixture/sdk/lib/linux_x86_64_cjnative"
+printf 'fixture llc\n' >"$fixture/sdk/third_party/llvm/bin/llc"
+printf 'fixture opt\n' >"$fixture/sdk/third_party/llvm/bin/opt"
+printf 'fixture std\n' >"$fixture/sdk/lib/linux_x86_64_cjnative/libcangjie-std-core.a"
 printf '#!/usr/bin/env bash\necho SEGMENTED_ARRAY_MANAGED >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' \
   >"$fixture/runtime/tests/gc_unit/run_segmented_array_managed.sh"
 chmod +x "$fixture/runtime/tests/gc_unit/run_segmented_array_managed.sh"
@@ -195,6 +200,7 @@ PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/only.trace" GC_UNIT_OUT="
   CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/only.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/only.log" 2>&1
+echo "LANGUAGE_ENTRY_ASSERT mode=only trace=$(paste -sd, "$fixture/only.trace")"
 [[ "$(cat "$fixture/only.trace")" == $'FINALIZER_TRIGGER\nPHASE_ENTRY_TRIGGER\nSEGMENTED_ARRAY_MANAGED' ]]
 /usr/bin/grep -qx 'LANGUAGE_TESTS=LANGUAGE_DONE' "$fixture/only.status"
 
@@ -204,3 +210,78 @@ PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all.log" 2>&1
 [[ "$(cat "$fixture/all.trace")" == $'CPP_SUITE\nFINALIZER_TRIGGER\nPHASE_ENTRY_TRIGGER\nSEGMENTED_ARRAY_MANAGED' ]]
 /usr/bin/grep -qx 'LANGUAGE_TESTS=LANGUAGE_DONE' "$fixture/all.status"
+
+# Missing compilers must fail both C++ completion paths. A stamped C++ PASS
+# does not supply language evidence, even when it came from a full run.
+for source in fresh cache; do
+  out="$fixture/no-cjc-$source-out"
+  mkdir -p "$out"
+  if [[ "$source" == cache ]]; then
+    touch "$out/.gate_stamp"
+  fi
+  set +e
+  PATH="$fixture/bin:$PATH" CJC="$fixture/missing-cjc" GC_UNIT_GATE_TRACE="$fixture/no-cjc-$source.trace" \
+    GC_UNIT_OUT="$out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+    GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/no-cjc-$source.status" \
+    bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/no-cjc-$source.log" 2>&1
+  missing_rc=$?
+  set -e
+  echo "LANGUAGE_MISSING_ASSERT source=$source rc=$missing_rc"
+  [[ $missing_rc -eq 2 ]]
+  /usr/bin/grep -qx 'GATE=FAIL' "$fixture/no-cjc-$source.status"
+  /usr/bin/grep -qx 'REASON=NO_CJC' "$fixture/no-cjc-$source.status"
+  /usr/bin/grep -qx "CPP_SUITE_SOURCE=${source^^}" "$fixture/no-cjc-$source.status"
+done
+
+# The identity must describe the components actually selected, and changing
+# any embedded compiler/std input must execute the language consumers again.
+for component in cjc llc opt std; do
+  case "$component" in
+    cjc) file=bin/cjc; key=CJC_SHA256 ;;
+    llc) file=third_party/llvm/bin/llc; key=LLC_SHA256 ;;
+    opt) file=third_party/llvm/bin/opt; key=OPT_SHA256 ;;
+    std) file=lib/linux_x86_64_cjnative/libcangjie-std-core.a; key=STD_SHA256 ;;
+  esac
+  previous=$(sed -n "s/^$key=//p" "$fixture/all.status")
+  printf '\n# identity change\n' >>"$fixture/sdk/$file"
+  rm -f "$fixture/all.trace"
+  PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$fixture/all-out" \
+    GC_UNIT_GATE_CONTRACT_SELFTEST=1 CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/all.status" \
+    bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all-$component.log" 2>&1
+  actual=$(sed -n "s/^$key=//p" "$fixture/all.status")
+  echo "LANGUAGE_IDENTITY_ASSERT component=$component previous=$previous actual=$actual"
+  [[ "$actual" =~ ^[0-9a-f]{64}$ && "$actual" != "$previous" ]]
+  if [[ "$component" != std ]]; then
+    [[ "$actual" == "$(sha256sum "$fixture/sdk/$file" | awk '{print $1}')" ]]
+  fi
+  echo "LANGUAGE_REEXEC_ASSERT component=$component trace=$(test ! -f "$fixture/all.trace" || paste -sd, "$fixture/all.trace")"
+  [[ "$(cat "$fixture/all.trace" 2>/dev/null || true)" == $'FINALIZER_TRIGGER\nPHASE_ENTRY_TRIGGER\nSEGMENTED_ARRAY_MANAGED' ]]
+  /usr/bin/grep -qx 'CPP_SUITE_SOURCE=CACHE' "$fixture/all.status"
+  /usr/bin/grep -qx 'LANGUAGE_TESTS=LANGUAGE_DONE' "$fixture/all.status"
+done
+rm -f "$fixture/all.trace"
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$fixture/all-out" \
+  GC_UNIT_GATE_CONTRACT_SELFTEST=1 CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+  GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/all.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/all-cached.log" 2>&1
+[[ ! -f "$fixture/all.trace" ]]
+/usr/bin/grep -qx 'REASON=CACHED_PASS' "$fixture/all.status"
+echo 'LANGUAGE_CACHE_ASSERT unchanged=cache changed=fresh'
+
+# Identity collection must not allow an incomplete SDK or a missing compiler
+# host to reach a managed consumer. Both all and only use the same binding.
+for mode in all only; do
+  set +e
+  PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+    GC_UNIT_GATE_LANGUAGE_TESTS="$mode" GC_UNIT_OUT="$fixture/host-missing-$mode" \
+    CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/missing-host" \
+    GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/host-missing-$mode.status" \
+    bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/host-missing-$mode.log" 2>&1
+  host_rc=$?
+  set -e
+  echo "LANGUAGE_HOST_ASSERT mode=$mode rc=$host_rc"
+  [[ "$host_rc" -eq 2 ]]
+  /usr/bin/grep -qx 'REASON=LANGUAGE_HOST_RUNTIME_MISSING' "$fixture/host-missing-$mode.status"
+done
