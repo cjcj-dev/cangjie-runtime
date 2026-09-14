@@ -455,6 +455,9 @@ void WCollector::DoYoungGarbageCollection()
             MarkingStacks::VerifyEmpty(GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot().remainingWorkers);
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteExportRootPublicationAtT2TestReceipt();
+            if (testYoungMarkCompleted) {
+                testYoungMarkCompleted();
+            }
 #endif
             break;
         }

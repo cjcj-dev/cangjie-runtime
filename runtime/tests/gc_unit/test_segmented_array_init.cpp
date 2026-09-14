@@ -31,6 +31,7 @@
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
@@ -720,6 +721,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool existing = reinterpret_cast<uintptr_t>(rawExisting) != 0;
     using ProductLive = bool (*)(RegionInfo*, MarkView<Generation::Young>, const BaseObject*);
     void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    if (product == nullptr) return reinterpret_cast<void*>(3);
     auto productLive = reinterpret_cast<ProductLive>(dlsym(product,
         "_ZN12MapleRuntime10RegionInfo14IsMarkedObjectILNS_10GenerationE0EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectE"));
     if (productLive == nullptr) return reinterpret_cast<void*>(3);
@@ -763,6 +765,17 @@ void* RunMarkAllocationCase(void* rawExisting)
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
                  "implicit=%d live=%d target_live=%d excluded=%d\n", existing, unsigned(phase),
                  page->IsYoungRegion(), page->IsLargeRegion(), implicit, live, targetLive, excluded);
+    size_t markEndObservations = 0;
+    bool markEndTargetLive = false;
+    TracingCollector::testYoungMarkCompleted = [&, target, productLive]() {
+        const auto markEnd = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+        if (markEnd.sequence != during.sequence) return;
+        RegionInfo* endPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
+        markEndTargetLive = productLive(endPage, endPage->GetMarkView<Generation::Young>(), target);
+        ++markEndObservations;
+        std::fprintf(stderr, "MARK_ALLOC_MARK_END_ASSERT_EXECUTED sequence=%llu phase=%u live=%d\n",
+                     static_cast<unsigned long long>(markEnd.sequence), unsigned(markEnd.phase), markEndTargetLive);
+    };
     if (existing) heap.RemoveExportObject(targetRoot);
     mutator->SetManagedContext(false);
     MarkAllocationWindow::released.store(true, std::memory_order_release);
@@ -775,17 +788,16 @@ void* RunMarkAllocationCase(void* rawExisting)
     // watermark resampling using the same rooted holder.
     collector.RequestGC(GC_REASON_YOUNG, false);
     SetMarkClosureObserverForTest(nullptr);
+    TracingCollector::testYoungMarkCompleted = nullptr;
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     BaseObject* completedTarget = Heap::GetBarrier().ReadReference(holder, completedField);
-    RegionInfo* completedPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(completedTarget));
-    // Old targets are outside an independent young collection's reclaim domain.
-    // A remaining young target must pass the product mark predicate after ack.
-    const bool completedLive = !completedPage->IsYoungRegion() ||
-        productLive(completedPage, completedPage->GetMarkView<Generation::Young>(), completedTarget);
-    std::fprintf(stderr, "MARK_ALLOC_COMPLETED_TARGET_ASSERT_EXECUTED young=%d live=%d\n",
-                 completedPage->IsYoungRegion(), completedLive);
+    // The request includes relocation. Check the actual field result here;
+    // the mark-end predicate was observed before relocation at the success exit.
+    const bool completedValue = completedTarget != nullptr &&
+        static_cast<MArray*>(completedTarget)->GetLength() == 16;
+    std::fprintf(stderr, "MARK_ALLOC_COMPLETED_VALUE_ASSERT_EXECUTED length_valid=%d\n", completedValue);
     const bool resampled = !page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
     const auto after = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const bool nextCycle = after.sequence > during.sequence;
@@ -796,10 +808,12 @@ void* RunMarkAllocationCase(void* rawExisting)
     mutator->SetManagedContext(true);
     const uintptr_t status = (implicit ? 0 : 1) | (live ? 0 : 2) |
         (targetLive ? 0 : 4) | (excluded ? 0 : 8) | (nextCycle ? 0 : 16) |
-        (resampled ? 0 : 32) | (completedLive ? 0 : 128) |
+        (resampled ? 0 : 32) |
+        ((markEndObservations == 1 && markEndTargetLive) ? 0 : 128) |
+        (completedValue ? 0 : 256) |
         ((completed && !MarkAllocationWindow::timedOut && phase == GC_PHASE_TRACE) ? 0 : 64);
     std::fprintf(stderr, "MARK_ALLOC_ASSERT_RESULT status=%zu "
-                 "bits=implicit:1,live:2,target_live:4,excluded:8,next_cycle:16,resampled:32,window:64,completed_live:128\n", status);
+                 "bits=implicit:1,live:2,target_live:4,excluded:8,next_cycle:16,resampled:32,window:64,mark_end_live:128,completed_value:256\n", status);
     return reinterpret_cast<void*>(status);
 }
 #endif
