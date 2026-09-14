@@ -30,6 +30,7 @@
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
 #include "TypeInfoManager.h"
+#include "Heap/z/zStat.hpp"
 
 namespace MapleRuntime {
 namespace GcUnit {
@@ -85,6 +86,8 @@ struct GcHeapFixture {
 
     explicit GcHeapFixture(bool withMemoryOwner = false)
     {
+        // ZInitialize initializes statistics before any allocation can sample.
+        ZStat::Initialize();
         const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
         mappedSize = metadataSize + kUnits * RegionInfo::UNIT_SIZE;
         if (withMemoryOwner) {

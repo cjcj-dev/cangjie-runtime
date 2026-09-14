@@ -128,7 +128,9 @@ private:
     };
     static ZStatSampler* first;
     static uint32_t count;
-    ZStatSampler* next;
+    // zStat.cpp:405-428 sorts registry links even in const phase/counter samplers.
+    // Keep that link writable when constant initialization places its owner in RELRO.
+    mutable ZStatSampler* next;
     const ZStatUnit unit;
 };
 
