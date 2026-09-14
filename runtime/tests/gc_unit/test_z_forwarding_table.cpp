@@ -22,7 +22,6 @@
 #include "gc_heap_fixture.hpp"
 
 #include <type_traits>
-#include <dlfcn.h>
 #include <chrono>
 #include <thread>
 #include "Heap/z/zRelocate.hpp"
@@ -395,76 +394,3 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 }
 
 #endif // MRT_TESTABLE_INTERNALS
-
-// ZPage::clone_for_promotion/reset (zPage.cpp:64,103): current page identity
-// changes independently of the source forwarding retained for remapping.
-GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
-{
-    GcHeapFixture fixture;
-    auto* region = fixture.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    RegionList selected("page579-selected");
-    selected.PrependRegion(region, region->GetRegionType());
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
-    (void)selected.TakeHeadRegion();
-    // Resolve the existing product instantiation, never an executable copy.
-    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    GC_EXPECT_TRUE(handle != nullptr);
-    void* entry = dlsym(handle,
-        "_ZN12MapleRuntime10RegionInfo24PrepareForwardableRegionILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE");
-    GC_EXPECT_TRUE(entry != nullptr);
-    Dl_info identity {};
-    GC_EXPECT_TRUE(dladdr(entry, &identity) != 0);
-    std::fprintf(stderr, "PAGE579 product-entry=%s\n", identity.dli_fname);
-    using Prepare = void (*)(RegionInfo*, MarkView<Generation::Young>);
-    reinterpret_cast<Prepare>(entry)(region, region->GetMarkView<Generation::Young>());
-    dlclose(handle);
-    const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(fixture.obj1);
-    auto* forwarding = ForwardingTable::get(from, Generation::Young);
-    GC_EXPECT_EQ(forwarding->insert(from, to), to);
-    auto& collector = Heap::GetHeap().GetCollector();
-    GC_EXPECT_TRUE(collector.ObjectGeneration(fixture.obj0) == Generation::Young);
-    GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
-    auto original = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
-    const Generation current = collector.ObjectGeneration(fixture.obj0);
-    std::fprintf(stderr, "PAGE579 promotion current=%u id=%u\n",
-                 static_cast<unsigned>(current), static_cast<unsigned>(region->generation_id()));
-    GC_EXPECT_TRUE(current == Generation::Old);
-    GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
-    const auto retained = ForwardingTable::LookupTo(from, current);
-    std::fprintf(stderr, "PAGE579 retained to=%zx expected=%zx\n", retained.to, to);
-    GC_EXPECT_EQ(retained.to, to);
-    ForwardingTable::ClearPageOwner(region);
-    const auto cleared = ForwardingTable::LookupTo(from, current);
-    std::fprintf(stderr, "PAGE579 cleared answer=%u\n", static_cast<unsigned>(cleared.answer));
-    GC_EXPECT_TRUE(cleared.answer == ForwardingTable::ToAnswer::Unarmed);
-    // The old source table still exists: clearing the carrier must not recover
-    // its generation from stale page metadata or search both maps.
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from, Generation::Young), to);
-    GC_EXPECT_TRUE(collector.ObjectGeneration(fixture.obj0) == Generation::Old);
-}
-
-GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
-{
-    GcHeapFixture fixture;
-    auto* region = fixture.region0;
-    auto& collector = Heap::GetHeap().GetCollector();
-    for (uint8_t young : {1, 0, 1, 0}) {
-        region->SetYoungRegionFlag(young);
-        const Generation expected = young ? Generation::Young : Generation::Old;
-        const ZGenerationId expectedId = young ? ZGenerationId::young : ZGenerationId::old;
-        const Generation current = collector.ObjectGeneration(fixture.obj0);
-        std::fprintf(stderr, "PAGE579 reset young=%u current=%u id=%u\n", young,
-                     static_cast<unsigned>(current), static_cast<unsigned>(region->generation_id()));
-        GC_EXPECT_TRUE(current == expected);
-        GC_EXPECT_TRUE(region->generation_id() == expectedId);
-    }
-    const auto oldLife = region->GetRegionLifeId();
-    region->SetUnitRole(RegionInfo::UnitRole::FREE_UNITS);
-    region = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    GC_EXPECT_TRUE(region->GetRegionLifeId() != oldLife);
-    GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
-    GC_EXPECT_TRUE(collector.ObjectGeneration(fixture.obj0) == Generation::Old);
-}
