@@ -1567,7 +1567,7 @@ void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
         {
             std::lock_guard<std::mutex> lock(externMtx);
             // Multiple export handles may name the same owner.
-            if (!discoveredExternObjects.try_emplace(exportObj).second) {
+            if (!discoveredExternObjects.emplace(exportObj, ValueRootList{}).second) {
                 continue;
             }
         }
