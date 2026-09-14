@@ -44,7 +44,7 @@ public:
 
     void SeedCycleWork()
     {
-        cycleRefWorkStack.emplace(reinterpret_cast<BaseObject*>(uintptr_t{1}), std::list<BaseObject*>{});
+        cycleRefWorkStack.emplace(ValueRoot(reinterpret_cast<BaseObject*>(uintptr_t{1})), ValueRootList{});
     }
 };
 
