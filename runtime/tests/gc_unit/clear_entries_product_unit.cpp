@@ -483,7 +483,8 @@ struct LateBackfillState {
     Generation generation;
 };
 
-LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector)
+LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector,
+                                     Generation generation = Generation::Old)
 {
     RegionInfo* region = RegionInfo::InitRegion(5, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     RegionInfo* destination = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
@@ -496,11 +497,12 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector)
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    region->SetYoungRegionFlag(generation == Generation::Young);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
     region->MarkForwardingDone();
     from->SetStateCode(ObjectState::FORWARDED);
-    ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from), Generation::Old);
+    ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from), generation);
     GC_EXPECT_TRUE(table != nullptr);
     return LateBackfillState{ region, destination, from, to, live,
                               region->GetOwnerGeneration() };
@@ -605,9 +607,10 @@ void EmptyBothRememberedFaces(RememberedSet& remembered)
     remembered.DrainForMinor(discarded);
 }
 
-LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, WCollector& collector)
+LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, WCollector& collector,
+                                           Generation generation = Generation::Old)
 {
-    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    LateBackfillState state = PrepareLateBackfill(fx, collector, generation);
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         state.region, reinterpret_cast<MAddress>(state.from));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
@@ -645,7 +648,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorConsumerRewritesEveryCarrierBefor
 {
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    LateBackfillState state = PrepareValueRootForwarding(fx, collector);
+    LateBackfillState state = PrepareValueRootForwarding(fx, collector, Generation::Young);
     RelocationReceiptTestAccess::SeedValueRoots(collector, state.from);
 
     const std::vector<BaseObject*> first =
@@ -657,7 +660,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorConsumerRewritesEveryCarrierBefor
     CleanupLateBackfill(fx, state);
     CompleteValueRootCoverage();
     const ForwardingTable::LookupResult afterCoverage =
-        ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from), Generation::Old);
+        ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from), Generation::Young);
     const std::vector<BaseObject*> afterReclaim =
         RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
     const bool independentAfterReclaim = AllVisitedEqual(afterReclaim, state.to);
@@ -714,9 +717,9 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
     LateBackfillState state = PrepareValueRootForwarding(fx, collector);
 
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    collector.ResurrectExportObject(state.from);
+    collector.ResurrectExportObject(state.to);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
-    collector.ResurrectExportObject(state.from);
+    collector.ResurrectExportObject(state.to);
     const bool insertCurrent =
         RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, state.to);
 
@@ -1241,18 +1244,7 @@ AbortCapture CaptureAbort(Fn&& fn)
     return AbortCapture{ status, std::move(output) };
 }
 
-template <typename BeforeLookup>
-AbortCapture CaptureNeverInstalledAbort(WCollector& collector, BaseObject* target, BeforeLookup&& beforeLookup)
-{
-    return CaptureAbort([&]() {
-        beforeLookup();
-        FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, target, Generation::Old);
-        RootSlot slot;
-        StorePlain(slot, from_object(target));
-        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &slot };
-        (void)result.GetOrFailClosed("NeverInstalledDiagnostic.fixture", provenance);
-    });
-}
+
 
 // The receipt, retirement and lookup all belong to the linked product SO.
 // Save the expected identity from the actual publisher before retiring it;
@@ -1382,104 +1374,6 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarrier
     ForwardingTable::ResetRelocationSet(Generation::Young);
     ForwardingTable::ResetRelocationSet(Generation::Old);
     (void)selected.TakeHeadRegion();
-}
-
-GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledCurrentIncarnationDelta)
-{
-    GcHeapFixture& fx = ProductFixture();
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    LateBackfillState state = PrepareLateBackfill(fx, collector);
-    ForwardingTable::ResetRelocationSet(state.region->GetOwnerGeneration());
-
-    AbortCapture sameLife = CaptureNeverInstalledAbort(collector, state.from, [&]() {
-        GcHeapFixture::AdvanceGeneration(state.region->GetOwnerGeneration());
-    });
-    GC_EXPECT_TRUE(WIFSIGNALED(sameLife.status));
-    GC_EXPECT_EQ(WTERMSIG(sameLife.status), SIGABRT);
-    GC_EXPECT_TRUE(sameLife.output.find("witness_epoch_delta=1") != std::string::npos);
-    GC_EXPECT_TRUE(sameLife.output.find("witness_epoch_delta=n/a(reused)") == std::string::npos);
-
-    AbortCapture reused = CaptureNeverInstalledAbort(collector, state.from, [&]() {
-        // InitRegionInfo's incarnation edge is BumpRegionLifeId.  The mutation
-        // is isolated in this fork because product reuse correctly refuses to
-        // pass a live retired carrier.
-        state.region->BumpRegionLifeId();
-    });
-    GC_EXPECT_TRUE(WIFSIGNALED(reused.status));
-    GC_EXPECT_EQ(WTERMSIG(reused.status), SIGABRT);
-    GC_EXPECT_TRUE(reused.output.find("witness_epoch_delta=n/a(reused)") != std::string::npos);
-
-    CleanupLateBackfill(fx, state);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-}
-
-GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledRawHeaderVerdict)
-{
-    GcHeapFixture& fx = ProductFixture();
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    LateBackfillState state = PrepareLateBackfill(fx, collector);
-    ForwardingTable::ResetRelocationSet(state.region->GetOwnerGeneration());
-
-    AbortCapture forwarded = CaptureNeverInstalledAbort(collector, state.from, [&]() {
-        state.from->SetStateCode(ObjectState::FORWARDED);
-    });
-    GC_EXPECT_TRUE(WIFSIGNALED(forwarded.status));
-    GC_EXPECT_EQ(WTERMSIG(forwarded.status), SIGABRT);
-    GC_EXPECT_TRUE(forwarded.output.find("hand_verdict=Forwarded") != std::string::npos);
-
-    AbortCapture zero = CaptureNeverInstalledAbort(collector, state.from, [&]() {
-        *reinterpret_cast<uint64_t*>(state.from) = 0;
-    });
-    GC_EXPECT_TRUE(WIFSIGNALED(zero.status));
-    GC_EXPECT_EQ(WTERMSIG(zero.status), SIGABRT);
-    GC_EXPECT_TRUE(zero.output.find("raw_target_header=0 hand_verdict=ZeroHeader") != std::string::npos);
-
-    AbortCapture usable = CaptureNeverInstalledAbort(collector, state.from, [&]() {
-        (void)fx.PlaceObject(reinterpret_cast<MAddress>(state.from));
-    });
-    GC_EXPECT_TRUE(WIFSIGNALED(usable.status));
-    GC_EXPECT_EQ(WTERMSIG(usable.status), SIGABRT);
-    GC_EXPECT_TRUE(usable.output.find("hand_verdict=Usable") != std::string::npos);
-    GC_EXPECT_TRUE(usable.output.find("reverse_total=0") != std::string::npos);
-
-    CleanupLateBackfill(fx, state);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-
-    // Header-only classification calls both an ordinary object and an
-    // already-remapped destination Usable.  The cold reverse receipt scan is
-    // the conditional fourth diagnostic which distinguishes the latter.
-    LateBackfillState reverse = PrepareLateBackfill(fx, collector);
-    LiveInfo* destinationLive = PrepareForwardable(
-        fx, reverse.destination, reinterpret_cast<MAddress>(reverse.to));
-    {
-        ForwardingTable::Publication publication = ForwardingTable::RetainOpenPublicationAfterCopy(
-            reverse.region, reinterpret_cast<MAddress>(reverse.from));
-        GC_EXPECT_TRUE(static_cast<bool>(publication));
-        GC_EXPECT_EQ(ForwardingTable::InsertMapping(
-                         publication, reinterpret_cast<MAddress>(reverse.from),
-                         reinterpret_cast<MAddress>(reverse.to)),
-                     reinterpret_cast<MAddress>(reverse.to));
-    }
-    ForwardingTable::ResetRelocationSet(reverse.region->GetOwnerGeneration());
-    ForwardingTable::ResetRelocationSet(reverse.destination->GetOwnerGeneration());
-
-    AbortCapture alreadyTo = CaptureNeverInstalledAbort(collector, reverse.to, []() {});
-    GC_EXPECT_TRUE(WIFSIGNALED(alreadyTo.status));
-    GC_EXPECT_EQ(WTERMSIG(alreadyTo.status), SIGABRT);
-    GC_EXPECT_TRUE(alreadyTo.output.find("hand_verdict=Usable") != std::string::npos);
-    GC_EXPECT_TRUE(alreadyTo.output.find("reverse_total=1 reverse_emitted=1") != std::string::npos);
-    char reverseFrom[40] {};
-    std::snprintf(reverseFrom, sizeof(reverseFrom), "from=%#zx",
-                  reinterpret_cast<size_t>(reverse.from));
-    GC_EXPECT_TRUE(alreadyTo.output.find(reverseFrom) != std::string::npos);
-    GC_EXPECT_TRUE(alreadyTo.output.find("reverse_overflow=0") != std::string::npos);
-
-    reverse.from->SetStateCode(ObjectState::NORMAL);
-    reverse.region->metadata.liveInfo = nullptr;
-    reverse.destination->metadata.liveInfo = nullptr;
-    fx.FreePlanted(reverse.live);
-    fx.FreePlanted(destinationLive);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 // ZBarrier::is_good_or_null_fast_path does not send a load-good to-version

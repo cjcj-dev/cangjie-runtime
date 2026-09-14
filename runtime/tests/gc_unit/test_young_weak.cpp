@@ -189,9 +189,9 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     route.destination = fx.region1;
     route.from = fx.PlaceObject(route.source->GetRegionStart());
     route.to = fx.PlaceObject(route.destination->GetRegionStart());
-    route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + 64);
-    route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + 64);
-    route.source->SetYoungRegionFlag(0);
+    route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + route.from->GetSize());
+    route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + route.to->GetSize());
+    route.source->SetYoungRegionFlag(destinationYoung ? 1 : 0);
     route.destination->SetYoungRegionFlag(destinationYoung ? 1 : 0);
     if (destinationYoung) {
         route.destination->SetYoungAge(1);
@@ -200,10 +200,20 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     route.source->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     route.sourceLive = fx.PlantLiveInfo(route.source);
     RegionBitmap* sourceBitmap =
-        fx.PlantMarkBitmap<Generation::Old>(route.sourceLive, route.source->GetRegionSize());
+        destinationYoung
+        ? fx.PlantMarkBitmap<Generation::Young>(route.sourceLive, route.source->GetRegionSize())
+        : fx.PlantMarkBitmap<Generation::Old>(route.sourceLive, route.source->GetRegionSize());
     const size_t sourceOffset = route.source->GetAddressOffset(reinterpret_cast<MAddress>(route.from));
     (void)sourceBitmap->MarkBits(sourceOffset, route.from->GetSize(), route.source->GetRegionSize());
-    route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
+    RegionList selected("value-root-selected");
+    selected.PrependRegion(route.source, RegionInfo::RegionType::FROM_REGION);
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(route.source->GetOwnerGeneration(), selected));
+    (void)selected.TakeHeadRegion();
+    if (destinationYoung) {
+        route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Young>());
+    } else {
+        route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
+    }
     route.from->SetStateCode(ObjectState::FORWARDED);
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         route.source, reinterpret_cast<MAddress>(route.from));
@@ -212,7 +222,7 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
                      publication, reinterpret_cast<MAddress>(route.from),
                      reinterpret_cast<MAddress>(route.to)),
                  reinterpret_cast<MAddress>(route.to));
-    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(route.from), Generation::Young),
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(route.from), route.source->GetOwnerGeneration()),
                  reinterpret_cast<MAddress>(route.to));
 
     route.destinationLive = fx.PlantLiveInfo(route.destination);
@@ -711,6 +721,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RuntimeWorkers threadPool(1u);
@@ -766,6 +777,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBefore
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RuntimeWorkers threadPool(1u);
