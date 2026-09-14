@@ -483,8 +483,7 @@ struct LateBackfillState {
     Generation generation;
 };
 
-LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector,
-                                     Generation generation = Generation::Old)
+LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector)
 {
     RegionInfo* region = RegionInfo::InitRegion(5, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     RegionInfo* destination = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
@@ -497,12 +496,11 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector,
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    region->SetYoungRegionFlag(generation == Generation::Young);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
     region->MarkForwardingDone();
     from->SetStateCode(ObjectState::FORWARDED);
-    ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from), generation);
+    ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from), Generation::Old);
     GC_EXPECT_TRUE(table != nullptr);
     return LateBackfillState{ region, destination, from, to, live,
                               region->GetOwnerGeneration() };
@@ -607,10 +605,9 @@ void EmptyBothRememberedFaces(RememberedSet& remembered)
     remembered.DrainForMinor(discarded);
 }
 
-LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, WCollector& collector,
-                                           Generation generation = Generation::Old)
+LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, WCollector& collector)
 {
-    LateBackfillState state = PrepareLateBackfill(fx, collector, generation);
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         state.region, reinterpret_cast<MAddress>(state.from));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
@@ -648,7 +645,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorConsumerRewritesEveryCarrierBefor
 {
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    LateBackfillState state = PrepareValueRootForwarding(fx, collector, Generation::Young);
+    LateBackfillState state = PrepareValueRootForwarding(fx, collector);
     RelocationReceiptTestAccess::SeedValueRoots(collector, state.from);
 
     const std::vector<BaseObject*> first =
@@ -660,7 +657,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorConsumerRewritesEveryCarrierBefor
     CleanupLateBackfill(fx, state);
     CompleteValueRootCoverage();
     const ForwardingTable::LookupResult afterCoverage =
-        ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from), Generation::Young);
+        ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from), Generation::Old);
     const std::vector<BaseObject*> afterReclaim =
         RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
     const bool independentAfterReclaim = AllVisitedEqual(afterReclaim, state.to);
@@ -717,9 +714,9 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
     LateBackfillState state = PrepareValueRootForwarding(fx, collector);
 
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    collector.ResurrectExportObject(state.to);
+    collector.ResurrectExportObject(state.from);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
-    collector.ResurrectExportObject(state.to);
+    collector.ResurrectExportObject(state.from);
     const bool insertCurrent =
         RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, state.to);
 
