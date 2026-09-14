@@ -260,6 +260,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
                         int duplicateRootOrder = 0)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    // Phase timers require the same storage initialization as CollectorResources::Init.
+    // ZGC ZStatValue::initialize, zStat.cpp:362.
+    ZStat::Initialize();
     const bool major = std::strncmp(variant, "major", 5) == 0;
     const bool commonRoot = std::strcmp(variant, "major-common") == 0;
     const bool finalizable = std::strcmp(variant, "major-finalizable") == 0;
