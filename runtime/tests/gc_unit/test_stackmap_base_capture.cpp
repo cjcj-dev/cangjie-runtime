@@ -103,7 +103,7 @@ void RunCapture(bool registerBase, bool oop, bool derivedRegister, U32 derivedCo
         next.calleeSaved.push_back(0); next.offset.push_back(1);
         next.RecordCalleeSaved(locations, reinterpret_cast<Uptr>(&frame[2]));
         GC_EXPECT_TRUE(locations.HasReg(Register::RBX));
-        GC_EXPECT_EQ(locations.addrMap[Register::RBX], &RootSlotAt(reinterpret_cast<Uptr>(&frame[1])));
+        GC_EXPECT_TRUE(locations.addrMap[Register::RBX] == &RootSlotAt(reinterpret_cast<Uptr>(&frame[1])));
     }
 }
 }
