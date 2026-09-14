@@ -84,6 +84,8 @@ private:
     std::condition_variable condition;
     std::deque<GCDriverRequest> requests;
     uint64_t nextSequence { 2 };
+    // ZDriverPort keeps its message live from receive through ack.
+    uint64_t activeSequence { 0 };
     // Diagnostic high-water mark only. Receipt completion must never be
     // derived from this value because sequence numbers wrap.
     uint64_t highestAcknowledged { 1 };

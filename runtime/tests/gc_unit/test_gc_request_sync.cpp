@@ -53,6 +53,13 @@ public:
         port.nextSequence = sequence;
     }
 
+    static bool WaitForCompletion(GCDriverPort& port, uint64_t sequence)
+    {
+        std::unique_lock<std::mutex> lock(port.mutex);
+        return port.condition.wait_for(lock, std::chrono::seconds(30),
+                                       [&] { return port.highestAcknowledged >= sequence; });
+    }
+
     static bool WaitUntilReceiptWaits(GCDriverPort& port)
     {
         std::unique_lock<std::mutex> lock(port.mutex);
@@ -1143,25 +1150,49 @@ GC_TEST(GcRequestSync, CompilerAsyncEntryReturnsAndMergesPendingRequest)
     if (requester.joinable()) {
         requester.join();
     }
-    bool firstOldEntered = harness.collector.WaitForRuns(2);
+    // ZGC zDriver.cpp:416-440: one full major is preclean, roots, old.
+    // zDriverPort.cpp:126-135 merges all async sends while it is in progress.
+    bool rootsEntered = harness.collector.WaitForRuns(2);
+    const size_t pendingWhileActive = harness.resources.GetMajorDriverPort().Pending();
     harness.collector.ReleaseOne();
-    bool pendingYoungEntered = harness.collector.WaitForRuns(6);
+    bool oldEntered = harness.collector.WaitForRuns(3);
     harness.collector.ReleaseOne();
-    bool pendingOldEntered = harness.collector.WaitForRuns(4);
-    harness.collector.ReleaseOne();
+    bool completed = GCDriverPortTestPeer::WaitForCompletion(harness.resources.GetMajorDriverPort(), 2);
     harness.Stop();
 
+    std::printf("ASYNC_MERGE_ASSERT pending=%zu runs=%zu completed=%d\n",
+                pendingWhileActive, harness.collector.RunCount(), completed);
+    GC_EXPECT_EQ(pendingWhileActive, 0u);
     GC_EXPECT_TRUE(firstEntered);
     GC_EXPECT_TRUE(returnedBeforeRelease);
     GC_EXPECT_EQ(runsBeforeRelease, 1u);
-    GC_EXPECT_TRUE(firstOldEntered);
-    GC_EXPECT_TRUE(pendingYoungEntered);
-    GC_EXPECT_TRUE(pendingOldEntered);
-    GC_EXPECT_EQ(harness.collector.RunCount(), 4u);
+    GC_EXPECT_TRUE(rootsEntered);
+    GC_EXPECT_TRUE(oldEntered);
+    GC_EXPECT_TRUE(completed);
+    GC_EXPECT_EQ(harness.collector.RunCount(), 3u);
     GC_EXPECT_EQ(harness.collector.ReasonAt(0), GC_REASON_YOUNG);
-    GC_EXPECT_EQ(harness.collector.ReasonAt(1), GC_REASON_USER);
-    GC_EXPECT_EQ(harness.collector.ReasonAt(2), GC_REASON_YOUNG);
-    GC_EXPECT_EQ(harness.collector.ReasonAt(3), GC_REASON_USER);
+    GC_EXPECT_EQ(harness.collector.ReasonAt(1), GC_REASON_YOUNG);
+    GC_EXPECT_EQ(harness.collector.ReasonAt(2), GC_REASON_USER);
+}
+
+// Two real request entries while the product driver is blocked in a cycle.
+GC_TEST(GcRequestSync, ActiveAsyncPairRunsOneCycle)
+{
+    RequestHarness harness;
+    auto& port = harness.resources.GetMinorDriverPort();
+    harness.resources.RequestGC(GC_REASON_YOUNG, true);
+    const bool entered = harness.collector.WaitForRuns(1);
+    harness.resources.RequestGC(GC_REASON_YOUNG, true);
+    const size_t pendingWhileActive = port.Pending();
+    harness.collector.ReleaseOne();
+    const bool completed = GCDriverPortTestPeer::WaitForCompletion(port, 2);
+    harness.Stop();
+    std::printf("ASYNC_PAIR_ASSERT pending=%zu runs=%zu completed=%d\n",
+                pendingWhileActive, harness.collector.RunCount(), completed);
+    GC_EXPECT_EQ(pendingWhileActive, 0u);
+    GC_EXPECT_TRUE(entered);
+    GC_EXPECT_TRUE(completed);
+    GC_EXPECT_EQ(harness.collector.RunCount(), 1u);
 }
 
 // zDriverPort.hpp:33 ZDriverRequest / zDirector.cpp:796-817: queued requests own
@@ -1181,6 +1212,7 @@ GC_TEST(GcRequestSync, DriverRequestOwnsDirectorQuota)
     GC_EXPECT_EQ(second.youngWorkers, 4u);
     GC_EXPECT_EQ(second.oldWorkers, 1u);
     GC_EXPECT_TRUE(!second.warmup);
+    port.Acknowledge(second);
     port.EnqueueAsync(GC_REASON_USER);
     GCDriverRequest user{};
     GC_EXPECT_TRUE(port.TryDequeue(user));

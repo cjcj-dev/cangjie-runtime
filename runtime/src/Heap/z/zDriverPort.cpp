@@ -65,6 +65,12 @@ uint64_t GCDriverPort::EnqueueAsync(GCReason reason, uint32_t youngWorkers, uint
     if (stopped) {
         return 0;
     }
+    // ZGC zDriverPort.cpp:126-135,149-157: an outstanding message includes
+    // the collection in progress. Async requests merge until its ack; sync
+    // requests still enqueue a receipt for a subsequent collection.
+    if (activeSequence != 0) {
+        return activeSequence;
+    }
     // Async requests are intentionally deduplicated only within this port.
     for (const auto& pending : requests) {
         if (pending.reason == reason) {
@@ -85,12 +91,16 @@ bool GCDriverPort::TryDequeue(GCDriverRequest& request)
     }
     request = requests.front();
     requests.pop_front();
+    activeSequence = request.sequence;
     return true;
 }
 
 void GCDriverPort::Acknowledge(const GCDriverRequest& request)
 {
     std::lock_guard<std::mutex> lock(mutex);
+    if (activeSequence == request.sequence) {
+        activeSequence = 0;
+    }
     if (request.receipt.state != nullptr) {
         request.receipt.state->completed = true;
         request.receipt.state->resolved = true;
@@ -104,6 +114,9 @@ void GCDriverPort::Acknowledge(const GCDriverRequest& request)
 void GCDriverPort::Cancel(const GCDriverRequest& request)
 {
     std::lock_guard<std::mutex> lock(mutex);
+    if (activeSequence == request.sequence) {
+        activeSequence = 0;
+    }
     if (request.receipt.state != nullptr) {
         request.receipt.state->resolved = true;
     }
@@ -153,6 +166,7 @@ void GCDriverPort::Reset()
 {
     std::lock_guard<std::mutex> lock(mutex);
     requests.clear();
+    activeSequence = 0;
     stopped = false;
     nextSequence = 2;
     highestAcknowledged = 1;
@@ -183,6 +197,7 @@ bool GCDriverPort::Receive(GCDriverRequest& request)
     }
     request = std::move(requests.front());
     requests.pop_front();
+    activeSequence = request.sequence;
     return true;
 }
 }
