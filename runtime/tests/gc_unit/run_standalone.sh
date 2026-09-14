@@ -105,7 +105,7 @@ run_ohos_host_arm() {
     fi
   done
   for symbol in \
-      'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)' \
+      'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::WCollector::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
