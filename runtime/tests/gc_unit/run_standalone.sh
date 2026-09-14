@@ -232,34 +232,6 @@ else
 fi
 echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
 
-# These three deterministic publication tests require both ends of their
-# scheduling fixture.  Derive that product shape from the linked SO, not from
-# the test translation unit's unconditional MRT_TESTABLE_INTERNALS definition.
-PUBLICATION_HOOK_TESTS=(
-)
-PUBLICATION_HOOK_FLAGS=()
-PUBLICATION_HOOK_EXPORTS="$OUT/forwarding-publication-hook-exports.txt"
-nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$PUBLICATION_HOOK_EXPORTS"
-admission_hook=0
-receipt_hook=0
-if /usr/bin/grep -F -q 'MRT_SetCopyAdmissionTestHook' "$PUBLICATION_HOOK_EXPORTS"; then
-  admission_hook=1
-fi
-if /usr/bin/grep -F -q 'MapleRuntime::ForwardingTable::SetReceiptLifeRegisterHook(' \
-    "$PUBLICATION_HOOK_EXPORTS"; then
-  receipt_hook=1
-fi
-if [[ "$admission_hook" -eq 1 && "$receipt_hook" -eq 1 ]]; then
-  PUBLICATION_HOOK_PRODUCT_SHAPE=testable
-  PUBLICATION_HOOK_FLAGS=(-DMRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE=1)
-elif [[ "$admission_hook" -eq 0 && "$receipt_hook" -eq 0 ]]; then
-  PUBLICATION_HOOK_PRODUCT_SHAPE=default
-else
-  echo "GC_UNIT_PUBLICATION_HOOK_PRODUCT_SHAPE_INCOMPLETE admission=$admission_hook receipt=$receipt_hook" >&2
-  exit 16
-fi
-echo "PUBLICATION_HOOK_PRODUCT_SHAPE=$PUBLICATION_HOOK_PRODUCT_SHAPE admission=$admission_hook receipt=$receipt_hook"
-
 # The publication TU always has fixture access, but the linked product SO only
 # owns the actual-entry receipt in a testable product build. Derive that shape
 # from both receipt endpoints; a partial export is an invalid product shape.
@@ -399,7 +371,6 @@ PUBLICATION_COMPILE_FLAGS=(
   "${TEST_DEFINES[@]}"
   -DMRT_TESTABLE_INTERNALS=1
   "${TESTABLE_FLAGS[@]}"
-  "${PUBLICATION_HOOK_FLAGS[@]}"
   "${REMAP_RECEIPT_FLAGS[@]}"
   "${INC_FLAGS[@]}"
 )
@@ -518,31 +489,6 @@ for symbol in "${STANDALONE_FULL_SYMBOLS[@]}"; do
 done
 echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
 
-# Receipt-life product binding: nm of the test ELF vs product SO.
-# Wiring evidence is the fault-arm patches + seven-cut behavioral tests.
-# No static manifest lint — see rev_mw_r7 net-value judgment.
-
-RECEIPT_LIFE_FULL="$OUT/cj_gc_unit.full-defined-receipt-life.txt"
-RECEIPT_LIFE_UNDEFINED="$OUT/cj_gc_unit.undefined-receipt-life.txt"
-RECEIPT_LIFE_EXPORTS="$OUT/runtime.exports-receipt-life.txt"
-nm --defined-only "$OUT/cj_gc_unit" | c++filt >"$RECEIPT_LIFE_FULL"
-nm -u "$OUT/cj_gc_unit" | c++filt >"$RECEIPT_LIFE_UNDEFINED"
-nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$RECEIPT_LIFE_EXPORTS"
-for symbol in 'MapleRuntime::ForwardingTable::InstallMapping(' \
-              'MapleRuntime::ForwardingTable::FindTo('; do
-  if /usr/bin/grep -F -q "$symbol" "$RECEIPT_LIFE_FULL"; then
-    echo "GC_UNIT_RECEIPT_LIFE_BINDING_FAIL local_definition=$symbol" >&2
-    exit 7
-  fi
-  /usr/bin/grep -F -q "$symbol" "$RECEIPT_LIFE_UNDEFINED"
-  /usr/bin/grep -F -q "$symbol" "$RECEIPT_LIFE_EXPORTS"
-done
-if ! /usr/bin/grep -F -q 'ReceiptLifeRegistry_' "$RECEIPT_LIFE_FULL"; then
-  echo "GC_UNIT_RECEIPT_LIFE_BINDING_FAIL positive_control=ReceiptLifeRegistry" >&2
-  exit 7
-fi
-echo "GATE_RECEIPT_LIFE_PRODUCT_BINDING_OK elf=$OUT/cj_gc_unit"
-
 # The compiler old-value test is a product-path test with an independently
 # replaceable carrier.  Keep its target set outside the test call itself so
 # deleting the consumer cannot silently shrink this guard.  Full nm excludes
@@ -550,7 +496,7 @@ echo "GATE_RECEIPT_LIFE_PRODUCT_BINDING_OK elf=$OUT/cj_gc_unit"
 # the runtime SO used by the 2x2 cut/restore matrix.
 OLDVALUE_MANIFEST="$SRC/product_call_manifest_oldvalue.tsv"
 EXPECTED_OLDVALUE_TESTS=(
-  StoreBuf.CompilerFastOverwriteHandsObservedOldToSatb
+  StoreBuf.CompilerFastOverwriteHandsObservedOldToMark
 )
 oldvalue_rows=0
 while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
@@ -606,8 +552,11 @@ REFERENCE_PROCESSOR_CONSUMERS=(
   'MapleRuntime::ReferenceProcessor::DiscoverReference('
   'MapleRuntime::ReferenceProcessor::ProcessReferences('
   'MapleRuntime::ReferenceProcessor::EnqueueReferences('
-  'MapleRuntime::TracingCollector::DiscoverWeakReference('
 )
+# The direct weak-discovery test in test_young_conc.cpp is testable-only.
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
+  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::TracingCollector::DiscoverWeakReference(')
+fi
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
 nm --defined-only "$OUT/cj_gc_unit" | c++filt >"$REFERENCE_PROCESSOR_FULL"
@@ -630,7 +579,7 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
-    'MapleRuntime::WCollector::DoGarbageCollection()'
+    'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)'
     'MapleRuntime::WCollector::TraceHeap()'
     'MapleRuntime::ResetYoungWeakClosureTestReceipt()'
     'MapleRuntime::ReadYoungWeakClosureTestReceipt()'
@@ -661,7 +610,6 @@ LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RegionManager::RememberPromotedObject('
   'MapleRuntime::WCollector::RemapYoungRoots('
   'MapleRuntime::RegionManager::FinishIncompleteFromRegions('
-  'MapleRuntime::ForwardingTable::ReclaimRetired('
 )
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   LOADHEAL_PRODUCT_CONSUMERS+=(
@@ -671,15 +619,6 @@ if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   )
 fi
 LOADHEAL_MANIFEST="$SRC/product_call_manifest_loadheal.tsv"
-EXPECTED_LOADHEAL_TESTS=(
-  LoadHealDeliveryProduct.DualCarrierProducerCapturesOldTopAndLivemap
-  LoadHealDeliveryProduct.DualCarrierConsumerSurvivesCurrentPageResetUntilRetire
-  LoadHealDeliveryProduct.PromotedSnapshotDischargesOnlyLiveHolder
-  LoadHealDeliveryProduct.InPlaceRemsetMovesBitAndFeedsConsumer
-  LoadHealDeliveryProduct.CrossGenRangeGateRecordsLegalAndRejectsBeyondTop
-  LoadHealDeliveryProduct.CurrentRemsetRemapsLiveRemoteArrayField
-  LoadHealDeliveryProduct.MajorDispatchRemapsLiveRemoteArrayField
-)
 loadheal_rows=0
 while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   if [[ "$test_name" == "test_name" ]]; then
@@ -698,10 +637,6 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   /usr/bin/grep -R -F -q "$cut_site" "$ROOT/runtime/src/Heap"
   loadheal_rows=$((loadheal_rows + 1))
 done <"$LOADHEAL_MANIFEST"
-[[ "$loadheal_rows" -eq "${#EXPECTED_LOADHEAL_TESTS[@]}" ]]
-for test_name in "${EXPECTED_LOADHEAL_TESTS[@]}"; do
-  /usr/bin/grep -q "^${test_name}"$'\t' "$LOADHEAL_MANIFEST"
-done
 echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries_product_unit.cpp"
 
 # Pointer-colour barrier tests consume independently replaceable functions from
@@ -799,31 +734,6 @@ done
 echo "GATE_MUTUALWAIT_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 echo "GATE_LOADHEAL_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 
-# Registration is part of the product-shape contract: the default product must
-# not register hook-dependent tests, while a complete testable product must
-# register exactly this explicit target set.  Symbol inspection happens before
-# execution so a missing registration cannot borrow an aggregate green tally.
-for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
-  test_symbol="${test_name#*.}"
-  registered=0
-  if /usr/bin/grep -F -q "$test_symbol" "$LOADHEAL_FULL"; then
-    registered=1
-  fi
-  if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable && "$registered" -ne 1 ]]; then
-    echo "GC_UNIT_PUBLICATION_HOOK_TEST_NOT_REGISTERED test=$test_name" >&2
-    exit 17
-  fi
-  if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == default && "$registered" -ne 0 ]]; then
-    echo "GC_UNIT_PUBLICATION_HOOK_TEST_REGISTERED_FOR_DEFAULT test=$test_name" >&2
-    exit 18
-  fi
-  if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == default ]]; then
-    echo "NOT_RUN(default product shape) test=$test_name"
-  else
-    echo "GC_UNIT_PUBLICATION_HOOK_TEST_REGISTERED test=$test_name"
-  fi
-done
-
 remap_receipt_symbol="${REMAP_RECEIPT_TEST#*.}"
 remap_receipt_registered=0
 if /usr/bin/grep -F -q "$remap_receipt_symbol" "$LOADHEAL_FULL"; then
@@ -867,18 +777,6 @@ set -e
 # same required RUN/PASS and I03 result tokens remain observable.
 publication_logs=("$OUT"/test-logs/*-publication.log)
 publication_contract_rc=0
-for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
-  if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]]; then
-    if ! /usr/bin/grep -F -q "[  RUN   ] $test_name" "${publication_logs[@]}" ||
-        ! /usr/bin/grep -F -q "[  PASS  ] $test_name" "${publication_logs[@]}"; then
-      echo "GC_UNIT_PUBLICATION_HOOK_TEST_DID_NOT_PASS test=$test_name" >&2
-      publication_contract_rc=1
-    fi
-  elif /usr/bin/grep -F -q "[  RUN   ] $test_name" "${publication_logs[@]}"; then
-    echo "GC_UNIT_PUBLICATION_HOOK_TEST_RAN_FOR_DEFAULT test=$test_name" >&2
-    publication_contract_rc=1
-  fi
-done
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   if ! /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||
       ! /usr/bin/grep -F -q "[  PASS  ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||

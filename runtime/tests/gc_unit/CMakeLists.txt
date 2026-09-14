@@ -191,10 +191,9 @@ target_compile_definitions(cj_gc_clear_entries_unit PRIVATE MRT_TESTABLE_INTERNA
 if (MRT_TESTABLE_INTERNALS)
     # This macro describes the linked product shape.  MRT_TESTABLE_INTERNALS on
     # the test target itself only exposes fixture access; the product SO owns
-    # both the publication scheduling hooks and the remap receipt endpoints.
+    # the remap receipt endpoints.
     target_compile_definitions(cj_gc_clear_entries_unit PRIVATE
         MRT_PRODUCT_TESTABLE_INTERNALS=1
-        MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE=1
         MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE=1)
 endif()
 if (TARGET cangjie-runtime)
