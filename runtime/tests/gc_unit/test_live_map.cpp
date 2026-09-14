@@ -511,6 +511,7 @@ GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
 GC_TEST(ZLiveMapPort, DuplicatePublicationConvergesAtStrongMark)
 {
     GcHeapFixture fx;
+    fx.region0->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     RegionBitmap* bitmap = fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
@@ -522,6 +523,9 @@ GC_TEST(ZLiveMapPort, DuplicatePublicationConvergesAtStrongMark)
     bool secondIncLive = false;
     const bool firstAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), firstIncLive);
     const bool secondAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), secondIncLive);
+    // zLiveMap.inline.hpp: set() returns inc_live; the caller accounts bytes.
+    if (firstIncLive) bitmap->AddLiveCounts(1, 8);
+    if (secondIncLive) bitmap->AddLiveCounts(1, 8);
     const size_t liveBytes = bitmap->GetLiveBytes();
     const bool receiptOnce = !firstAlready && secondAlready;
     const bool incLiveOnce = firstIncLive && !secondIncLive;
