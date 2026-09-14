@@ -781,10 +781,14 @@ BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const v
         ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
         ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
     };
-    // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-72) uses
-    // the root's identity, not the generation currently visiting it. The
-    // uncolored Cangjie ABI keeps that identity on the source page (D03a).
-    // zRelocate.cpp:382-410: find the published target before relocating.
+    // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-69)
+    // preserves load-good identity. IncomingNew carries the caller's current
+    // identity; a page owner alone cannot distinguish overlapping from/to keys.
+    if (stage == ForwardingStage::IncomingNew) {
+        return ValidateCurrentValue(value, provenance);
+    }
+    // Stored roots still need remapping using their source page's generation,
+    // which can differ from the generation currently visiting the roots.
     (void)generation;
     const auto forwarding = ForwardingTable::RetainPageOwner(
         RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(value)));

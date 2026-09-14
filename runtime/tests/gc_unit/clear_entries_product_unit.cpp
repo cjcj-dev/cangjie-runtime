@@ -713,10 +713,12 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LateBackfillState state = PrepareValueRootForwarding(fx, collector);
 
+    // Incoming registration receives a current value (ZGC load-good root).
+    // The stored-root rekey below independently retains OLD-source coverage.
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    collector.ResurrectExportObject(state.from);
+    collector.ResurrectExportObject(state.to);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
-    collector.ResurrectExportObject(state.from);
+    collector.ResurrectExportObject(state.to);
     const bool insertCurrent =
         RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, state.to);
 
@@ -3397,3 +3399,64 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
 }
 #endif
+
+#include "b09_runtime_fixture.hpp"
+
+static void CheckCompactIncoming(bool overlapping, bool external = false)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    auto* region = fx.region0;
+    const MAddress start = region->GetRegionStart();
+    auto* dead = fx.PlaceObject(start);
+    const size_t size = dead->GetSize();
+    auto* first = fx.PlaceObject(start + size);
+    auto* second = fx.PlaceObject(start + 2 * size);
+    region->SetRegionAllocPtr(start + 3 * size);
+    fx.region1->SetRegionAllocPtr(fx.region1->GetRegionEnd());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(first));
+    (void)live->GetMarkFace().bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(second)), size, region->GetRegionSize());
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    auto& queue = manager.GetRelocationRequestQueue();
+    queue.BeginWorkers(1);
+    const auto request = queue.Add(region, reinterpret_cast<MAddress>(second));
+    GC_EXPECT_TRUE(request.accepted);
+    manager.CompactRegion(region);
+    region->MarkForwardingDone();
+    (void)queue.Wait(request.request);
+    auto* forwarding = request.request->page_forwarding();
+    const MAddress firstTo = forwarding->find(start + size);
+    const MAddress secondTo = forwarding->find(start + 2 * size);
+    std::fprintf(stderr, "B09_OVERLAP_PRECONDITION size=%zu first_delta=%zu second_delta=%zu\n", size, firstTo-start, secondTo-start);
+    GC_EXPECT_EQ(firstTo, start);
+    GC_EXPECT_EQ(secondTo, start + size);
+    auto* current = external ? fx.PlaceObject(fx.region1->GetRegionStart()) : reinterpret_cast<BaseObject*>(overlapping ? secondTo : firstTo);
+    GC_EXPECT_TRUE(current->IsValidObject());
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    collector.ResurrectExportObject(current);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+    collector.ResurrectExportObject(current);
+    const bool identity = RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, current);
+    std::fprintf(stderr, "B09_OVERLAP_TARGET_ASSERT current_identity=%d\n", identity);
+    GC_EXPECT_TRUE(identity);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, IncomingCurrentCompactDestinationKeepsIdentity)
+{
+    CheckCompactIncoming(true);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, NonOverlappingCurrentDestinationKeepsIdentity)
+{
+    CheckCompactIncoming(false);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, ExternalCurrentDestinationKeepsIdentity)
+{
+    CheckCompactIncoming(false, true);
+}
