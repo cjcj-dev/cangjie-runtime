@@ -20,6 +20,7 @@
 
 #include "gc_heap_fixture.hpp"
 #include "Concurrency/Concurrency.h"
+#include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zForwardingTable.hpp"
@@ -46,6 +47,8 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" int CJ_ScheduleManagerInit();
+extern "C" void* CJ_MCC_AcquireRawData(MArray* array, bool* isCopy);
+extern "C" void CJ_MCC_ReleaseRawData(MArray* array, void* rawPtr);
 
 namespace MapleRuntime {
 
@@ -2982,3 +2985,153 @@ GC_TEST(RawPinProduct, PreforwardCopiesBeforePin) { ExerciseRawPin(GCPhase::GC_P
 GC_TEST(RawPinProduct, ForwardCopiesBeforePin) { ExerciseRawPin(GCPhase::GC_PHASE_FORWARD, false, false); }
 GC_TEST(RawPinProduct, PreforwardUsesYoungCarrierAfterPromotion) { ExerciseRawPin(GCPhase::GC_PHASE_PREFORWARD, true, true); }
 GC_TEST(RawPinProduct, ForwardUsesYoungCarrierAfterPromotion) { ExerciseRawPin(GCPhase::GC_PHASE_FORWARD, true, true); }
+
+namespace {
+struct RawPinArrayTypes {
+    alignas(TypeInfo) unsigned char byteStorage[sizeof(TypeInfo)] {};
+    alignas(TypeInfo) unsigned char arrayStorage[sizeof(TypeInfo)] {};
+    TypeInfo* array = reinterpret_cast<TypeInfo*>(arrayStorage);
+    RawPinArrayTypes()
+    {
+        auto* byte = reinterpret_cast<TypeInfo*>(byteStorage);
+        byte->SetType(TypeKind::TYPE_KIND_UINT8);
+        byte->SetInstanceSize(1);
+        array->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+        array->SetComponentTypeInfo(byte);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(this), sizeof(*this));
+    }
+};
+
+// Keep the Heap-owned collector: its vtable and Pin implementation were
+// constructed in the product SO, unlike a test-local WCollector instance.
+enum class RawPinBypass { None, MissingCarrier, Unmovable };
+
+void ExerciseRawAcquire(GCPhase sourcePhase, bool compact, MIndex length,
+                        RawPinBypass bypass = RawPinBypass::None)
+{
+    GcHeapFixture& fx = ProductFixture();
+    static RawPinArrayTypes types;
+    auto& collector = Heap::GetHeap().GetCollector();
+    RegionInfo* region = ResetDeliveryUnit(fx, 4);
+    region->SetYoungRegionFlag(compact ? 1 : 0);
+    const MAddress start = region->GetRegionStart();
+    auto* array = reinterpret_cast<MArray*>(start);
+    array->SetClassInfo(types.array);
+    array->SetLength(length);
+    const size_t size = array->GetSize();
+    if (compact) {
+        // Equal-sized dead prefix: after genuine in-place copying the product
+        // filler starts exactly at from. Acquire's pre-pin header reads are
+        // valid on this layout; do not repair or manufacture the old header.
+        array = reinterpret_cast<MArray*>(start + size);
+        array->SetClassInfo(types.array);
+        array->SetLength(length);
+    }
+    std::memset(array->ConvertToCArray(), 0x5a, length);
+    const MAddress from = reinterpret_cast<MAddress>(array);
+    region->SetRegionAllocPtr(from + size);
+    const auto oldYoungPhase = collector.GetGCPhase(GCCycleGeneration::YOUNG);
+    const auto oldOldPhase = collector.GetGCPhase(GCCycleGeneration::OLD);
+    auto& stats = collector.GetGCStats(GCCycleGeneration::YOUNG);
+    const auto oldThreshold = stats.tenuringThreshold;
+    stats.tenuringThreshold = 0;
+    RegionManager manager;
+    if (compact) {
+        (void)PrepareForwardable(fx, region, from);
+        RelocationReceiptTestAccess::ParkFrom(manager, region);
+        ForwardingTable::RetainPageOwner(region)->set_in_place();
+        manager.CompactRegion(region);
+        if (bypass == RawPinBypass::MissingCarrier) {
+            ForwardingTable::ResetRelocationSet(Generation::Young);
+        } else if (bypass == RawPinBypass::Unmovable) {
+            RelocationReceiptTestAccess::ReleaseListOwnership(region);
+            RelocationReceiptTestAccess::Exempt(manager, region);
+        }
+    }
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, sourcePhase);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
+    const bool shouldResolve = compact && bypass == RawPinBypass::None && (sourcePhase == GCPhase::GC_PHASE_PREFORWARD ||
+                                           sourcePhase == GCPhase::GC_PHASE_FORWARD);
+    const MAddress expected = (shouldResolve ? start : from) + MArray::GetContentOffset();
+    const bool promoted = !region->IsYoungRegion();
+    const bool filler = compact && HeapFiller::IsFiller(array);
+    const MAddress receipt = compact ? ForwardingTable::FindTo(from, Generation::Young) : 0;
+    const auto countBefore = region->GetRawPointerObjectCount();
+    Dl_info identity {};
+    void* productVtable = *reinterpret_cast<void**>(&collector);
+    const bool productIdentity = dladdr(productVtable, &identity) != 0 &&
+        identity.dli_fname != nullptr && std::strstr(identity.dli_fname, "libcangjie-runtime.so") != nullptr;
+    Mutator mutator;
+    Mutator* previous = ThreadLocal::GetMutator();
+    mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
+    ThreadLocal::SetMutator(&mutator);
+    bool isCopy = true;
+    void* payload = CJ_MCC_AcquireRawData(array, &isCopy);
+    const auto countPinned = region->GetRawPointerObjectCount();
+    const std::vector<unsigned char> expectedBytes(length, 0x5a);
+    const bool bytesPreserved = !shouldResolve ||
+        std::memcmp(payload, expectedBytes.data(), length) == 0;
+    const bool markerPreserved = !shouldResolve || *static_cast<unsigned char*>(payload) == 0x5a;
+    CJ_MCC_ReleaseRawData(array, payload);
+    const auto countReleased = region->GetRawPointerObjectCount();
+    ThreadLocal::SetMutator(previous);
+    std::fprintf(stderr, "RAW_ACQUIRE_ASSERT length=%zu phase=%u compact=%u from=%zx to=%zx "
+                         "receipt=%zx filler=%u promoted=%u payload=%zx expected=%zx "
+                         "before=%d pinned=%d released=%d marker=%u product=%s\n",
+                 static_cast<size_t>(length), static_cast<unsigned>(sourcePhase), compact,
+                 from, start, receipt, filler, promoted, reinterpret_cast<MAddress>(payload), expected,
+                 countBefore, countPinned, countReleased, markerPreserved,
+                 productIdentity ? identity.dli_fname : "INVALID");
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, oldYoungPhase);
+    collector.SetGCPhase(GCCycleGeneration::OLD, oldOldPhase);
+    stats.tenuringThreshold = oldThreshold;
+    if (compact) {
+        RelocationReceiptTestAccess::ReleaseListOwnership(region);
+        ForwardingTable::ResetRelocationSet(Generation::Young);
+        region->DispelGhostFromRegion();
+        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region);
+        region->metadata.liveInfo = nullptr;
+    }
+    // Separate product-state and consumer assertions after cleanup. Every
+    // observation is printed even if a producer cut changes page generation.
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(payload), expected);
+    GC_EXPECT_EQ(countPinned, countBefore + 1);
+    GC_EXPECT_EQ(countReleased, countBefore);
+    GC_EXPECT_FALSE(isCopy);
+    GC_EXPECT_TRUE(productIdentity);
+    GC_EXPECT_TRUE(bytesPreserved && markerPreserved);
+    if (compact) {
+        GC_EXPECT_TRUE(promoted);
+        GC_EXPECT_TRUE(filler);
+        GC_EXPECT_EQ(receipt, bypass == RawPinBypass::MissingCarrier ? 0u : start);
+        GC_EXPECT_TRUE(from != start);
+    }
+}
+}
+
+GC_TEST(RawPinProduct, AcquireAfterCompactPreforward)
+{
+    for (MIndex length : {16, 32, 48}) ExerciseRawAcquire(GCPhase::GC_PHASE_PREFORWARD, true, length);
+}
+GC_TEST(RawPinProduct, AcquireAfterCompactForward)
+{
+    for (MIndex length : {16, 32, 48}) ExerciseRawAcquire(GCPhase::GC_PHASE_FORWARD, true, length);
+}
+GC_TEST(RawPinProduct, AcquireSourceIdleOtherForward)
+{
+    for (MIndex length : {16, 32, 48}) ExerciseRawAcquire(GCPhase::GC_PHASE_IDLE, true, length);
+}
+GC_TEST(RawPinProduct, AcquireWithoutForwarding)
+{
+    ExerciseRawAcquire(GCPhase::GC_PHASE_IDLE, false, 32);
+}
+
+GC_TEST(RawPinProduct, AcquireGhostWithoutCarrier)
+{
+    ExerciseRawAcquire(GCPhase::GC_PHASE_FORWARD, true, 32, RawPinBypass::MissingCarrier);
+}
+GC_TEST(RawPinProduct, AcquireUnmovableGhost)
+{
+    ExerciseRawAcquire(GCPhase::GC_PHASE_FORWARD, true, 32, RawPinBypass::Unmovable);
+}
