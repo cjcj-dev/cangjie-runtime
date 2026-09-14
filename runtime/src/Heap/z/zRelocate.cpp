@@ -90,6 +90,7 @@
 
 namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
+void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before);
 void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
                                            bool storeGoodAfter);
 #endif
@@ -301,7 +302,20 @@ void WCollector::RemapYoungRoots()
 #endif
     }
     VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root, Generation::Young); };
+    RootVisitor visitor = [this](ObjectRef& root) {
+        const zaddress_unsafe observed = root.LoadPlain();
+        // ZGeneration::remap_object (zGeneration.inline.hpp:142-151): only
+        // the selected generation's forwarding table qualifies this root.
+        // Old relocation may already have installed its table before this
+        // young-remap pass. Conversely a promoted source can still belong
+        // to the young table, so the page's current generation is not a gate.
+        if (ForwardingTable::EntriesArmed(raw(observed), Generation::Young)) {
+            ForwardUpdateRawRef(root, Generation::Young);
+        }
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteRawRemapYoungRootsTestReceipt(root, raw(observed));
+#endif
+    };
     VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
         DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
         size_t frames = 0;

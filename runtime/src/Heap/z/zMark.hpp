@@ -238,8 +238,11 @@ struct RemapYoungRootsTestReceipt {
     uint64_t visits = 0;
     uint64_t heals = 0;
     bool storeGoodAfter = false;
+    uint64_t oldPendingVisits = 0;
 };
 
+// Colored fields select a physical slot; raw roots also accept a source
+// address so derived temporary base slots can be observed. Zero disables it.
 void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot);
 RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt();
 #endif
