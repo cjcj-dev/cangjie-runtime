@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 
 #include "gc_unittest.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Heap/Allocator/CartesianTree.h"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -113,6 +114,8 @@ GC_TEST(MappedCache, NativeBackingSurvivesVirtualShuffle)
 
 static void ProductFragmentedAllocation(bool provideContiguousVirtual)
 {
+    // Match CollectorResources::Init before allocation-rate sampling.
+    ZStat::Initialize();
     const size_t unit = RegionInfo::UNIT_SIZE;
     const size_t metadata = RegionManager::GetMetadataSize(8);
     MemMap* map = MemMap::MapMemory(metadata + 8 * unit, metadata, MemMap::DEFAULT_OPTIONS,
@@ -174,6 +177,8 @@ GC_OTHER_VM_TEST(MappedCache, ProductFailedVirtualClaimRestoresOwners)
 // room of two units, a four-unit request harvests only two of six cached units.
 static void ProductPartialGrowth(bool provideContiguousVirtual)
 {
+    // Match CollectorResources::Init before allocation-rate sampling.
+    ZStat::Initialize();
     const size_t unit = RegionInfo::UNIT_SIZE;
     const size_t metadata = RegionManager::GetMetadataSize(12);
     MemMap* map = MemMap::MapMemory(metadata + 12 * unit, metadata, MemMap::DEFAULT_OPTIONS,
