@@ -435,15 +435,12 @@ void WCollector::DoYoungGarbageCollection()
 #if defined(MRT_TESTABLE_INTERNALS)
         const size_t y2yBatchAtMarkEnd = pendingY2yDirtyWorkCount();
 #endif
-        theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
-            // Frozen leftovers only. Concurrent FollowYoungMark already
-            // merged live alloc-buffer roots / allocate-black / y2y into the
-            // termination domain. Pause must not become the first consumer.
+        theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) {
 #if defined(MRT_TESTABLE_INTERNALS)
-            NoteMarkTerminatePauseProducers(buffer.YoungAllocBlackCount(),
-                                            buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
+            NoteMarkTerminatePauseProducers(buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
+#else
+            (void)buffer;
 #endif
-            buffer.MergeYoungAllocBlackFollow(workStack);
         });
         mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)

@@ -4,6 +4,9 @@
 
 #if defined(MRT_GC_UNIT_TESTS)
 
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -685,6 +688,88 @@ void* RunLargeYoungClosureCase(void*)
 }
 #endif
 
+#if defined(MRT_TESTABLE_INTERNALS)
+// The observer stops the real concurrent collector after its first closure.
+// The managed task allocates through MCC_NewObjArray while that TRACE window
+// is held open; no fixture changes a page generation, mark bit, or phase.
+struct MarkAllocationWindow {
+    inline static std::atomic<bool> entered{false};
+    inline static std::atomic<bool> released{false};
+    inline static std::atomic<bool> completed{false};
+    inline static bool timedOut = false;
+    static bool Wait(const std::atomic<bool>& flag)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!flag.load(std::memory_order_acquire)) {
+            if (std::chrono::steady_clock::now() >= deadline) return false;
+            std::this_thread::yield();
+        }
+        return true;
+    }
+    static void Observe(const std::vector<BaseObject*>* objects)
+    {
+        if (objects == nullptr || entered.exchange(true)) return;
+        timedOut = !Wait(released);
+        completed.store(true, std::memory_order_release);
+    }
+};
+
+void* RunMarkAllocationCase(void* rawExisting)
+{
+    const bool existing = reinterpret_cast<uintptr_t>(rawExisting) != 0;
+    auto& heap = Heap::GetHeap();
+    auto& collector = heap.GetCollector();
+    Mutator* mutator = Mutator::GetMutator();
+    MArray* target = existing ? MCC_NewArray8(GetByteArrayTypeInfos().array, 16) : nullptr;
+    const U64 targetRoot = target != nullptr ? heap.RegisterExportRoot(target) : 0;
+    MarkAllocationWindow::entered = false;
+    MarkAllocationWindow::released = false;
+    MarkAllocationWindow::completed = false;
+    MarkAllocationWindow::timedOut = false;
+    SetMarkClosureObserverForTest(MarkAllocationWindow::Observe);
+    mutator->SetManagedContext(false);
+    collector.RequestGC(GC_REASON_YOUNG, true);
+    if (!MarkAllocationWindow::Wait(MarkAllocationWindow::entered)) {
+        MarkAllocationWindow::released = true;
+        SetMarkClosureObserverForTest(nullptr);
+        mutator->SetManagedContext(true);
+        return reinterpret_cast<void*>(2);
+    }
+    mutator->SetManagedContext(true);
+    MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    if (!existing) target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
+    const U64 holderRoot = heap.RegisterExportRoot(holder);
+    auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
+    Heap::GetBarrier().WriteReference(holder, field, target);
+    RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
+    RegionInfo* targetPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
+    const bool implicit = page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
+    const bool live = page->IsMarkedObject(page->GetMarkView<Generation::Young>(), holder);
+    const bool targetLive = targetPage->IsMarkedObject(targetPage->GetMarkView<Generation::Young>(), target);
+    const bool excluded = page->HasMarkStartAllocGap() && !page->IsKnownYoungEmpty(page->GetMarkView<Generation::Young>());
+    const auto phase = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).phase;
+    std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
+                 "implicit=%d live=%d target_live=%d excluded=%d\n", existing, unsigned(phase),
+                 page->IsYoungRegion(), page->IsLargeRegion(), implicit, live, targetLive, excluded);
+    if (existing) heap.RemoveExportObject(targetRoot);
+    mutator->SetManagedContext(false);
+    MarkAllocationWindow::released.store(true, std::memory_order_release);
+    const bool completed = MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
+    // Wait through the real driver's acknowledgement, then check next-cycle
+    // watermark resampling using the same rooted holder.
+    collector.RequestGC(GC_REASON_YOUNG, false);
+    SetMarkClosureObserverForTest(nullptr);
+    holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
+    page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
+    const bool resampled = !page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
+    std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED resampled=%d\n", resampled);
+    heap.RemoveExportObject(holderRoot);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>((completed && !MarkAllocationWindow::timedOut &&
+        phase == GC_PHASE_TRACE && implicit && live && targetLive && excluded && resampled) ? 0 : 1);
+}
+#endif
+
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
 {
 #if defined(__linux__)
@@ -725,6 +810,17 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
 #endif
 }
 } // namespace
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(MarkAllocation, LargeHolderAndNewTargetAreImplicitlyLive)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 0), 0);
+}
+GC_OTHER_VM_TEST(MarkAllocation, LargeHolderKeepsRootedExistingTargetLive)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunMarkAllocationCase, 1), 0);
+}
+#endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)

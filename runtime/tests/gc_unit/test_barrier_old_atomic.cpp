@@ -69,8 +69,8 @@ class BarrierCollector final : public Collector {
 public:
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
     { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }
-    void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override
-    { MarkPublicationFixture::Current().collector.MarkYoungObjectIfActive(object, followOnly); }
+    void MarkYoungObjectIfActive(BaseObject* object) const override
+    { MarkPublicationFixture::Current().collector.MarkYoungObjectIfActive(object); }
     GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
     { return MarkPublicationFixture::Current().collector.GetCycleSnapshot(generation); }
     void Init() override {}

@@ -487,11 +487,6 @@ public:
     void SetManagedContext(bool isManagedContext);
 
     // An already painted allocation still owes a field-follow entry.
-    ATTR_NO_INLINE void PublishYoungAllocBlack(BaseObject* target)
-    {
-        Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target, true);
-    }
-
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
     inline uintptr_t GetStackSize() { return stackSize; }

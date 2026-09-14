@@ -56,9 +56,9 @@ public:
                                            : wCollector.GetCycleSnapshot(generation);
     }
 
-    void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override
+    void MarkYoungObjectIfActive(BaseObject* object) const override
     {
-        currentCollector->MarkYoungObjectIfActive(object, followOnly);
+        currentCollector->MarkYoungObjectIfActive(object);
     }
 
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override

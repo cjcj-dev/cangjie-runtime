@@ -1054,21 +1054,21 @@ void WCollector::StartYoungMarkWork()
     MarkingStacks::VerifyEmpty(youngMarkDomain->Stripes().Population());
 }
 
-void WCollector::MarkYoungObjectIfActive(BaseObject* object, bool followOnly) const
+void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
 {
     const GCCycleSnapshot young = GetCycleSnapshot(GCCycleGeneration::YOUNG);
     if (!young.active || (young.phase != GC_PHASE_ENUM && young.phase != GC_PHASE_TRACE &&
                           young.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
         return;
     }
-    if (!Heap::IsHeapAddress(object) || (!followOnly && IsMarkedObject<Generation::Young>(object))) {
+    if (!Heap::IsHeapAddress(object) || IsMarkedObject<Generation::Young>(object)) {
         return;
     }
     CHECK_DETAIL(youngMarkDomain != nullptr, "young mark domain must start before publication");
     MarkStripeSet& stripes = youngMarkDomain->Stripes();
     MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*youngMarkDomain);
     publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-                     followOnly ? MarkStackEntry::FollowOnly(object) : MarkStackEntry::MarkAndFollow(object), true);
+                     MarkStackEntry::MarkAndFollow(object), true);
 }
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
@@ -1289,7 +1289,6 @@ void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& w
     if (!young) {
         return;
     }
-    buffer->MergeYoungAllocBlackFollow(work);
     buffer->MergeY2yDirtyHolders(work);
     buffer->MergeY2yDirtySlots([this, &work](MAddress slot) {
         RefField<>& field = HeapSlotAt<>(slot);
