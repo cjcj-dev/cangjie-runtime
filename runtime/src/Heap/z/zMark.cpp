@@ -106,12 +106,20 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
 void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 {
     RefField<> oldField(field);
+    // The major root iterator bypasses ReadStaticRef. Enforce the same
+    // colored-carrier contract before its mark-good shortcut or RootSet push
+    // (ZPointer::assert_is_valid, zAddress.inline.hpp:320-393).
+    // Non-heap ELF literals are not GC roots and keep the skip below.
+    CHECK_DETAIL(!Heap::IsHeapAddress(to_object(oldField.GetTargetObject())) ||
+                     (raw(oldField.GetFieldValue()) &
+                      (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
+                 "NativeSlot requires colored value at EnumRefFieldRoot slot=%p word=%#zx",
+                 &field, raw(oldField.GetFieldValue()));
     // A mark-good root has passed this mark epoch and is necessarily load-good
     // (OpenJDK zAddress.inline.hpp:658-664).
     if (is_mark_good(oldField)) {
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
         BaseObject* target = to_object(oldField.GetTargetObject());
-        // Plain/uncoloured non-null is mark-good under g_cjMarkBadMask; mirror the slow path.
         // Reject non-heap: do not call make_load_good (remap would touch non-heap).
         if (!Heap::IsHeapAddress(target)) {
             return;
