@@ -4,13 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC's load barrier resolves a load-bad from-address before self-healing, while
-// a load-good word naming a from-copy is an assertion state
-// (zBarrier.inline.hpp:294-343, zAddress.inline.hpp:609-624).
-
-#include <csignal>
-#include <sys/wait.h>
-#include <unistd.h>
+// ZGC selects load-barrier paths from the word colour. Load-bad words resolve
+// before self-healing; load-good words bypass forwarding-header inspection
+// (zBarrier.inline.hpp:319-343).
 
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zRememberedSet.hpp"
@@ -79,36 +75,27 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
                  reinterpret_cast<uintptr_t>(fx.obj1));
 }
 
-GC_TEST(I2ReadRef, ForgedLoadGoodForwardedFromIsRejected)
+// zBarrier.inline.hpp:322-324: a load-good colour takes the fast path;
+// the forwarding state in an object header does not select the slow path.
+GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
 {
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        (void)signal(SIGABRT, SIG_DFL);
-        GcHeapFixture fx;
-        ToCollector collector;
-        collector.from = fx.obj0;
-        collector.to = fx.obj1;
-        fx.obj0->SetStateCode(ObjectState::FORWARDED);
-
-        RememberedSet rs;
-        rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-        Barrier barrier(collector, rs);
-        auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-        const uintptr_t remap =
-            ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
-        field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj0) | remap));
-        (void)barrier.ReadReference(fx.obj0, *field);
-        _exit(0);
-    }
-
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    GcHeapFixture fx;
+    ToCollector collector;
+    collector.from = fx.obj0;
+    collector.to = fx.obj1;
+    fx.obj0->SetStateCode(ObjectState::FORWARDED);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    const uintptr_t remap = ColourPredicates::current_remapped(::g_cjLoadBadMask);
+    const auto good = GcUnit::ColouredPointer(fx.obj0, remap);
+    field.StoreColoured(good);
+    GC_EXPECT_TRUE(barrier.ReadReference(fx.obj1, field) == fx.obj0);
+    GC_EXPECT_EQ(raw(field.GetFieldValue()), raw(good));
 }
 
-GC_TEST(I2ReadRef, PlainHeapSlotIsHealedToCurrentColour)
+GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)
 {
     GcHeapFixture fx;
     ToCollector collector;
@@ -117,12 +104,14 @@ GC_TEST(I2ReadRef, PlainHeapSlotIsHealedToCurrentColour)
     Barrier barrier(collector, rs);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    const uintptr_t plain = reinterpret_cast<uintptr_t>(fx.obj0);
-    std::memcpy(field, &plain, sizeof(plain));
+    const uintptr_t stale = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    GC_EXPECT_TRUE(stale != 0);
+    const auto previous = GcUnit::ColouredPointer(fx.obj0, stale & (~stale + 1));
+    field->StoreColoured(previous);
 
     BaseObject* got = barrier.ReadReference(fx.obj1, *field);
     GC_EXPECT_TRUE(got == fx.obj0);
     GC_EXPECT_TRUE(ClassifySlotWord(static_cast<uintptr_t>(raw(field->GetFieldValue()))) ==
                    SlotWordVerdict::kColoured);
-    GC_EXPECT_TRUE(static_cast<uintptr_t>(raw(field->GetFieldValue())) != plain);
+    GC_EXPECT_TRUE(static_cast<uintptr_t>(raw(field->GetFieldValue())) != raw(previous));
 }

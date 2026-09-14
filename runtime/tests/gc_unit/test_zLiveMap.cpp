@@ -59,7 +59,12 @@ GC_TEST(ZBitMapPort, StrongPairSet)
     for (size_t bitSize : bitSizes) {
         const size_t logicalSize = bitSize * kMarkedBytesPerBit;
         RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kBackingRegionSize);
-        GC_EXPECT_FALSE(bitmap->MarkBits(0, logicalSize, kBackingRegionSize));
+        // test_zBitMap.cpp::test_set_pair_set premarks every pair. MarkBits
+        // marks one object start; byteCnt accounts its size, not a bit range.
+        for (size_t i = 0; i < bitSize; ++i) {
+            GC_EXPECT_FALSE(bitmap->MarkBits(i * kMarkedBytesPerBit,
+                                            kMarkedBytesPerBit, kBackingRegionSize));
+        }
         GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
 
         for (size_t i = 0; i < bitSize - 1; ++i) {
@@ -69,7 +74,7 @@ GC_TEST(ZBitMapPort, StrongPairSet)
             const size_t offset = i * kMarkedBytesPerBit;
             GC_EXPECT_TRUE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
             GC_EXPECT_TRUE(bitmap->IsMarked(offset));
-            GC_EXPECT_FALSE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
+            GC_EXPECT_TRUE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
             GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
         }
         GcHeapFixture::FreePlantedBitmap(bitmap);

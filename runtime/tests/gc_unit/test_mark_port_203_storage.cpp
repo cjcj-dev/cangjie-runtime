@@ -190,7 +190,7 @@ GC_OTHER_VM_TEST(MarkPort203Storage, YoungCollectionReturnsActualSegments)
     void (*runFixture)() = nullptr;
     for (const auto& test : Registry()) {
         if (std::strcmp(test.suite, "YoungWeakClosure") == 0 &&
-            std::strcmp(test.name, "StripedDiscoversWithoutStrongReferentClosure") == 0) {
+            std::strcmp(test.name, "StripedKeepsYoungReferentStrong") == 0) {
             runFixture = test.fn;
         }
     }

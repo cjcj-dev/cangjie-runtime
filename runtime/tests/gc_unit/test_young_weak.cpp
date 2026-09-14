@@ -67,6 +67,18 @@ struct RelocationReceiptTestAccess {
         }
     }
 
+    // Unique peer method: other TUs define BindCollector with the same signature.
+    // Do not put this file's teardown into a coalesced inline peer definition.
+    static void StopWeakFixtureWorkersAndUnbind(CollectorResources& resources)
+    {
+        auto* previous = resources.collectorProxy.currentCollector;
+        if (previous != nullptr) {
+            previous->GetGenerationCycle(GCCycleGeneration::YOUNG).StopWorkers();
+            previous->GetGenerationCycle(GCCycleGeneration::OLD).StopWorkers();
+        }
+        resources.collectorProxy.currentCollector = nullptr;
+    }
+
     static void BindRuntimeWorkers(CollectorResources& resources, RuntimeWorkers* threadPool, int32_t threadCount = 1)
     {
         resources.runtimeWorkers = threadPool;
@@ -82,12 +94,28 @@ struct RelocationReceiptTestAccess {
         collector.DoGarbageCollection(GCCycleGeneration::YOUNG);
     }
 
+    static void PrepareMajorRoots(WCollector& collector)
+    {
+        auto& young = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+        if (young.Workers() == nullptr) young.InitializeWorkers(1);
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        auto& remembered = Heap::GetHeap().GetRememberedSet();
+        if (!remembered.IsInitialized()) {
+            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        }
+        // ZDriver::gc_major runs the young roots collection before old marking.
+        YoungTypeSetter type(young, ZYoungType::major_partial_roots);
+        collector.RunGarbageCollection(1, GC_REASON_YOUNG);
+    }
+
     static void RunMajorMark(WCollector& collector)
     {
+        PrepareMajorRoots(collector);
         auto& cycle = collector.GetGenerationCycle(GCCycleGeneration::OLD);
         cycle.SelectReason(GC_REASON_USER);
         if (!cycle.Snapshot().active) cycle.Begin(1);
         collector.StartOldMarkWork();
+
         collector.TraceHeap();
     }
 
@@ -160,9 +188,9 @@ struct RelocationReceiptTestAccess {
 
     static void RunMajorCollection(WCollector& collector)
     {
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        PrepareMajorRoots(collector);
         DriverLocker locker(Heap::GetHeap().GetCollectorResources());
-        collector.DoGarbageCollection(GCCycleGeneration::OLD);
+        collector.RunGarbageCollection(2, GC_REASON_USER);
     }
 };
 
@@ -180,6 +208,8 @@ public:
         manager.Init();
         const ConcurrencyParam concurrencyParam = { 1024, 64, 1 };
         concurrency.Init(concurrencyParam);
+        // CollectorResources::Init initializes statistics before any phase timer.
+        ZStat::Initialize();
     }
 
     ~WeakClosureTestRuntime() override { runtime = nullptr; }
@@ -189,6 +219,29 @@ public:
 
 private:
     Concurrency concurrency;
+};
+
+// Observe the existing product closure boundary before promotion replaces its map.
+// ZGenerationYoung completes marking before selecting/relocating pages.
+class ValueRootMarkObservation {
+public:
+    explicit ValueRootMarkObservation(std::function<void()> observe) : observe(std::move(observe))
+    {
+        current = this;
+        SetMarkClosureObserverForTest([](const std::vector<BaseObject*>*) {
+            ++current->calls;
+            current->observe();
+        });
+    }
+    ~ValueRootMarkObservation()
+    {
+        SetMarkClosureObserverForTest(nullptr);
+        current = nullptr;
+    }
+    size_t calls = 0;
+private:
+    std::function<void()> observe;
+    inline static ValueRootMarkObservation* current = nullptr;
 };
 
 struct ValueRootRoute {
@@ -207,8 +260,8 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     route.destination = fx.region1;
     route.from = fx.PlaceObject(route.source->GetRegionStart());
     route.to = fx.PlaceObject(route.destination->GetRegionStart());
-    route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + 64);
-    route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + 64);
+    route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + route.from->GetSize());
+    route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + route.to->GetSize());
     route.source->SetYoungRegionFlag(0);
     route.destination->SetYoungRegionFlag(destinationYoung ? 1 : 0);
     if (destinationYoung) {
@@ -216,11 +269,15 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     }
 
     route.source->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    route.sourceLive = fx.PlantLiveInfo(route.source);
+    route.sourceLive = route.source->GetLiveInfo();
     RegionBitmap* sourceBitmap =
         fx.PlantMarkBitmap<Generation::Old>(route.sourceLive, route.source->GetRegionSize());
     const size_t sourceOffset = route.source->GetAddressOffset(reinterpret_cast<MAddress>(route.from));
     (void)sourceBitmap->MarkBits(sourceOffset, route.from->GetSize(), route.source->GetRegionSize());
+    RegionList selected("old-source-value-root");
+    selected.PrependRegion(route.source, RegionInfo::RegionType::FROM_REGION);
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    (void)selected.TakeHeadRegion();
     route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
     route.from->SetStateCode(ObjectState::FORWARDED);
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
@@ -230,10 +287,10 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
                      publication, reinterpret_cast<MAddress>(route.from),
                      reinterpret_cast<MAddress>(route.to)),
                  reinterpret_cast<MAddress>(route.to));
-    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(route.from), Generation::Young),
+    GC_EXPECT_EQ(ForwardingTable::RetainPageOwner(route.source)->find(reinterpret_cast<MAddress>(route.from)),
                  reinterpret_cast<MAddress>(route.to));
 
-    route.destinationLive = fx.PlantLiveInfo(route.destination);
+    route.destinationLive = route.destination->GetLiveInfo();
     (void)fx.PlantMarkBitmap<Generation::Young>(route.destinationLive,
                                                 route.destination->GetRegionSize());
     return route;
@@ -348,12 +405,15 @@ void RunYoungWeakVariant(size_t helpers)
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    // Promotion transfers arena-owned page metadata (ZPage::clone_for_promotion).
+    LiveInfo* live = fx.region1->GetLiveInfo();
     (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     WeakGraph graph(fx, fx.region1);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    // zGeneration.cpp: each generation owns its worker pool before collection.
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->SetActiveWorkers(helpers + 1u);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
@@ -381,11 +441,12 @@ void RunYoungWeakVariant(size_t helpers)
     const bool childMarked = closure.Saw(graph.child);
     std::fprintf(stderr, "TARGET_YOUNG_STRONG_CLOSURE workers=%zu root=%d weak=%d referent=%d child=%d\n",
                  helpers + 1, strongMarked, weakMarked, referentMarked, childMarked);
+
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
     GC_EXPECT_TRUE(strongMarked);
     GC_EXPECT_TRUE(weakMarked);
@@ -459,7 +520,7 @@ void RunYoungWeakRemsetFlow()
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
     GC_EXPECT_TRUE(referentMarked);
@@ -486,6 +547,8 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    // zGeneration.cpp: each generation owns its worker pool before collection.
+    collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RuntimeWorkers threadPool(helpers + 1u);
@@ -557,7 +620,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
         Heap::GetHeap().RemoveExportObject(exportHandle);
     }
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
     if (runtimeEntry) {
         // The receipt matrix was removed with the old verifier. Observe actual
@@ -702,7 +765,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
 
     Heap::GetHeap().RemoveExportObject(handle);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
 }
@@ -717,6 +780,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RuntimeWorkers threadPool(1u);
@@ -734,9 +798,10 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
+    bool currentMarked = false;
+    ValueRootMarkObservation closure([&] { currentMarked |= IsValueRootMarked(route); });
     RelocationReceiptTestAccess::RunYoungCollection(collector);
-
-    const bool currentMarked = IsValueRootMarked(route);
+    GC_EXPECT_TRUE(closure.calls > 0);
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
@@ -754,7 +819,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(currentMarked);
     GC_EXPECT_TRUE(carrierCurrent);
     GC_EXPECT_TRUE(independentAfterCoverage);
@@ -840,7 +905,7 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
         GC_EXPECT_TRUE(visitedReferent);
     }
     Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(strong.count(graph.weak) == 1);
     GC_EXPECT_TRUE(strong.count(graph.referent) == 0);
     GC_EXPECT_TRUE(strong.count(graph.child) == 0);
@@ -871,7 +936,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
         HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
     }
     Heap::GetHeap().RemoveExportObject(handle);
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(strong.count(graph.weak) == 0);
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);

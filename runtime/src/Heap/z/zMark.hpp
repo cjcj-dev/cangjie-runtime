@@ -316,12 +316,16 @@ public:
         auto phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
         if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
-            resurrectedExportObjectes.insert(ResolveCurrentValueRoot(
-                obj, &resurrectedExportObjectes, ObjectGeneration(obj), ForwardingStage::IncomingNew));
+            resurrectedExportObjectes.erase(obj);
+            resurrectedExportObjectes.insert(ValueRoot(ResolveCurrentValueRoot(
+                obj, &resurrectedExportObjectes, ObjectGeneration(obj), ForwardingStage::IncomingNew),
+                ForwardingStage::IncomingNew));
         } else {
-            resurrectedExportObjectesForwardPhase.insert(
+            resurrectedExportObjectesForwardPhase.erase(obj);
+            resurrectedExportObjectesForwardPhase.insert(ValueRoot(
                 ResolveCurrentValueRoot(
-                    obj, &resurrectedExportObjectesForwardPhase, ObjectGeneration(obj), ForwardingStage::IncomingNew));
+                    obj, &resurrectedExportObjectesForwardPhase, ObjectGeneration(obj), ForwardingStage::IncomingNew),
+                ForwardingStage::IncomingNew));
         }
     }
 
@@ -428,29 +432,58 @@ protected:
     std::atomic<size_t> markedObjectCount = { 0 };
     std::unique_ptr<MarkDomain> majorMarkDomain;
     std::mutex externMtx;
-    std::unordered_map<BaseObject*, std::list<BaseObject*>> discoveredExternObjects;
+    // ZGC zUncoloredRoot.hpp:46-49: uncolored roots keep their color in
+    // the container. A current address must not be interpreted as a from-key.
+    struct ValueRoot {
+        BaseObject* object;
+        ForwardingStage stage;
+        uintptr_t color;
+        Generation generation;
+        ValueRoot(BaseObject* value, ForwardingStage source = ForwardingStage::OverwritePrevious)
+            : object(value), stage(source), color(::g_cjLoadGoodMask),
+              generation(source == ForwardingStage::IncomingNew && Heap::IsHeapAddress(value)
+                  ? RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(value))->GetOwnerGeneration()
+                  : Generation::Old) {}
+        operator BaseObject*() const { return object; }
+        ForwardingStage Stage() const
+        {
+            // ZGC zUncoloredRoot.inline.hpp:64-65 selects the remap generation.
+            // An unrelated generation flip cannot invalidate this current root.
+            const uintptr_t mask = generation == Generation::Young
+                ? ColourPredicates::current_remapped_young_mask(::g_cjLoadBadMask)
+                : ColourPredicates::current_remapped_old_mask(::g_cjLoadBadMask);
+            return (color & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
+        }
+    };
+    struct ValueRootHash {
+        size_t operator()(const ValueRoot& root) const { return std::hash<BaseObject*>{}(root.object); }
+    };
+    using ValueRootSet = std::unordered_set<ValueRoot, ValueRootHash>;
+    using ValueRootList = std::list<ValueRoot>;
+    using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>;
+    ValueRootMap discoveredExternObjects;
     // Resolver callbacks may enter managed code and therefore must not own the
     // root-carrier mutex.  Keep resolver serialization separate from the mutex
     // used by GC root and preforward consumers.
     std::mutex cycleResolverMtx;
     std::mutex cycleWorkStackMtx;
-    std::unordered_map<BaseObject*, std::list<BaseObject*>> cycleRefWorkStack;
+    ValueRootMap cycleRefWorkStack;
     // Number of callbacks already delivered for each stable export id. A
     // resolver can be reposted when PREFORWARD is published while a managed
     // callback is running, so progress must outlive one ResolveCycleRef call.
     // Protected by cycleWorkStackMtx together with the root carrier.
     std::unordered_map<U32, size_t> cycleRefProgress;
     std::mutex resurrectExportMtx;
-    std::unordered_set<BaseObject*> resurrectedExportObjectes;
-    std::unordered_set<BaseObject*> resurrectedExportObjectesForwardPhase;
+    ValueRootSet resurrectedExportObjectes;
+    ValueRootSet resurrectedExportObjectesForwardPhase;
 
     // Value-only root containers have no addressable RootSlot to heal. Keep
     // their RootObligation on the existing ResolveStoreValue authority and
     // rebuild key-bearing containers while their owner lock is held.
     BaseObject* ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
                                         ForwardingStage stage = ForwardingStage::OverwritePrevious) const;
-    void CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots, Generation generation) const;
-    void CurrentizeValueRootMap(std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots, Generation generation) const;
+    void CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const;
+    void CurrentizeValueRootMap(ValueRootMap& roots, Generation generation) const;
 
     int32_t GetGCThreadCount(const bool isConcurrent) const
     {

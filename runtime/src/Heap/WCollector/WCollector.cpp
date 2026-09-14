@@ -156,7 +156,7 @@ void WCollector::ResolveCycleRef()
             // fetch the current addresses before each managed invocation.
             it = std::find_if(cycleRefWorkStack.begin(), cycleRefWorkStack.end(),
                 [id](const auto& entry) {
-                    return static_cast<ExportObject*>(entry.first)->GetId() == id;
+                    return static_cast<ExportObject*>(entry.first.object)->GetId() == id;
                 });
             if (it == cycleRefWorkStack.end() || externIndex >= it->second.size()) {
                 break;
