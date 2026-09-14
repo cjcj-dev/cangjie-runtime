@@ -593,7 +593,8 @@ struct LateBackfillState {
     Generation generation;
 };
 
-LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector, Generation generation = Generation::Old)
+LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector,
+                                    Generation generation = Generation::Old, bool publishMapping = true)
 {
     RegionInfo* region = ResetDeliveryUnit(fx, 5);
     RegionInfo* destination = ResetDeliveryUnit(fx, 2);
@@ -609,10 +610,12 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector, 
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
-    const auto publication = ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
-    collector.CopyObject(*from, *to, from->GetSize());
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, reinterpret_cast<MAddress>(from),
-                                               reinterpret_cast<MAddress>(to)), reinterpret_cast<MAddress>(to));
+    if (publishMapping) {
+        const auto publication = ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+        collector.CopyObject(*from, *to, from->GetSize());
+        GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, reinterpret_cast<MAddress>(from),
+                                                   reinterpret_cast<MAddress>(to)), reinterpret_cast<MAddress>(to));
+    }
     region->MarkForwardingDone();
     from->SetStateCode(ObjectState::FORWARDED);
     ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from), generation);
@@ -1222,7 +1225,7 @@ void CheckLookupWitness(bool publishReceipt)
 {
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    LateBackfillState state = PrepareLateBackfill(fx, collector, Generation::Old, false);
     const MAddress from = reinterpret_cast<MAddress>(state.from);
     const MAddress to = reinterpret_cast<MAddress>(state.to);
     const auto expected = ReadLookupWitnessIdentity(ForwardingTable::GetEntries(from, state.generation));
