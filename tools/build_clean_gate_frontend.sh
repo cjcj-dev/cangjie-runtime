@@ -81,3 +81,42 @@ rc=$?
 set -e
 echo "$rc" > evidence/minimal-run.rc
 test "$rc" = 0
+python3 - "$root" "$source_sha" "$tuple" "${BASH_SOURCE[0]}" <<'PY'
+import hashlib, json, pathlib, shutil, sys
+root, source, tuple_dir, recipe = sys.argv[1:]
+root = pathlib.Path(root)
+def digest(p):
+    with open(p, 'rb') as f:
+        h = hashlib.sha256()
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+        return h.hexdigest()
+for receipt in ['minimal-build.rc', 'minimal-run.rc']:
+    assert (root / 'evidence' / receipt).read_text().strip() == '0', receipt
+files = {str(p.relative_to(root / 'host')): digest(p)
+         for p in sorted((root / 'host').rglob('*')) if p.is_file()}
+manifest = {'format': 'clean-frontend-v1', 'source_commit': source,
+            'source_diff': '', 'source_bundle_sha256': digest(root / 'cjcj.bundle'),
+            'compiler_sha256': digest(root / 'cjcj-stage1'),
+            'recipe_sha256': digest(recipe), 'seed_optimization': 'O1',
+            'host_sdk_files': files, 'minimal_build_rc': 0, 'minimal_run_rc': 0,
+            'colored_std_qualified': False,
+            'llvm_tuple_manifest': pathlib.Path(tuple_dir, 'MANIFEST').read_text()}
+payload = json.dumps(manifest, sort_keys=True, indent=2) + '\n'
+key = hashlib.sha256(payload.encode()).hexdigest()
+depot = pathlib.Path('/root/stage0depot')
+slot = depot / key
+if slot.exists():
+    raise RuntimeError(f'refusing to overwrite existing depot slot {slot}')
+incoming = depot / ('.incoming-' + key)
+incoming.mkdir()
+shutil.copy2(root / 'cjcj-stage1', incoming / 'cjcj-stage1')
+shutil.copy2(root / 'cjcj.bundle', incoming / 'source.bundle')
+shutil.copy2(recipe, incoming / 'build.sh')
+shutil.copytree(root / 'host', incoming / 'host', symlinks=True)
+shutil.copytree(root / 'evidence', incoming / 'evidence')
+(incoming / 'MANIFEST').write_text(payload)
+incoming.rename(slot)
+(root / 'evidence' / 'depot-slot.txt').write_text(str(slot) + '\n')
+print(f'CLEAN_FRONTEND_DEPOT={slot}')
+PY
