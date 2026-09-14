@@ -992,7 +992,6 @@ private:
             return;
         }
         auto& localObjects = output.objects;
-        auto& localWeaks = output.weaks;
         WCollector* collector = shared.collector;
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
@@ -1004,7 +1003,7 @@ private:
                     return;
                 }
 
-                if (object->HasRefField() && !object->IsWeakRef()) {
+                if (object->HasRefField()) {
                     object->ForEachRefField([this, &ctx, object](RefField<>& field) {
                         PushResidualYoungChild(ctx, field, object, "ghostroute.striped.bitmap");
                     });
@@ -1025,14 +1024,9 @@ private:
         if (!entry.follow()) {
             return;
         }
-        if (UNLIKELY(object->IsWeakRef())) {
-            HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            localWeaks.push_back(reinterpret_cast<MAddress>(&referentField));
-#if defined(MRT_TESTABLE_INTERNALS)
-            NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::STRIPED);
-#endif
-            return;
-        }
+        // ZReferenceProcessor::should_discover rejects young references
+        // (zReferenceProcessor.cpp:175-185). Their referents are followed
+        // strongly by the ordinary object-field closure.
         MarkPartialArray::FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
     }
 

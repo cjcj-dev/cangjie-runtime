@@ -20,6 +20,12 @@ struct MarkPublicationFixture {
         resources.collectorProxy.currentCollector = &collector;
         collector.youngCycle.SelectReason(GC_REASON_YOUNG);
         collector.youngCycle.Begin(1);
+        // ZGenerationYoung::mark_start advances the sequence with the remset
+        // flip (zGeneration.cpp:855-881), before mark work can be published.
+        alignas(8) uint64_t storage[16] {};
+        RememberedSet remembered;
+        remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
+        collector.youngCycle.StartYoungMark(remembered);
         collector.StartYoungMarkWork();
         collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         collector.oldCycle.SelectReason(GC_REASON_USER);

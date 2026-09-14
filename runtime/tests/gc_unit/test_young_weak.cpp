@@ -41,6 +41,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 #if defined(MRT_TESTABLE_INTERNALS)
+#include "young_closure_observation.hpp"
 
 extern "C" int CJ_ScheduleManagerInit();
 
@@ -49,7 +50,21 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, TracingCollector* collector)
     {
+        if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
+            // Worker TLS teardown flushes through the still-bound collector.
+            for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+                resources.collectorProxy.currentCollector->GetGenerationCycle(generation).StopWorkers();
+            }
+        }
         resources.collectorProxy.currentCollector = collector;
+        if (collector != nullptr) {
+            // Product driver startup owns one worker set per generation
+            // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).
+            for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+                auto& cycle = collector->GetGenerationCycle(generation);
+                if (cycle.Workers() == nullptr) cycle.InitializeWorkers(2);
+            }
+        }
     }
 
     static void BindRuntimeWorkers(CollectorResources& resources, RuntimeWorkers* threadPool, int32_t threadCount = 1)
@@ -69,7 +84,10 @@ struct RelocationReceiptTestAccess {
 
     static void RunMajorMark(WCollector& collector)
     {
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        auto& cycle = collector.GetGenerationCycle(GCCycleGeneration::OLD);
+        cycle.SelectReason(GC_REASON_USER);
+        if (!cycle.Snapshot().active) cycle.Begin(1);
+        collector.StartOldMarkWork();
         collector.TraceHeap();
     }
 
@@ -320,11 +338,10 @@ struct ExportForeignGraph {
     TypeInfo* foreignType = nullptr;
 };
 
-void RunYoungWeakVariant(const char* variant, size_t helpers,
-                         uint64_t expectedSerial, uint64_t expectedLegacyParallel, uint64_t expectedStriped)
+void RunYoungWeakVariant(size_t helpers)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", variant, 1), 0);
+
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -338,6 +355,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->SetActiveWorkers(helpers + 1u);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RuntimeWorkers threadPool(helpers + 1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
@@ -353,40 +371,33 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
-    ResetYoungWeakClosureTestReceipt();
 
+    YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
-    const YoungWeakClosureTestReceipt receipt = ReadYoungWeakClosureTestReceipt();
-    const bool strongMarked = graph.IsMarked(graph.strongRoot);
-    const bool weakMarked = graph.IsMarked(graph.weak);
-    const bool referentMarked = graph.IsMarked(graph.referent);
-    const bool childMarked = graph.IsMarked(graph.child);
-    std::fprintf(stderr,
-                 "DETAIL young_weak variant=%s serial=%zu legacy_parallel=%zu striped=%zu "
-                 "strong_mark=%d weak_mark=%d referent_mark=%d child_mark=%d\n",
-                 variant, static_cast<size_t>(receipt.serial), static_cast<size_t>(receipt.legacyParallel),
-                 static_cast<size_t>(receipt.striped), static_cast<int>(strongMarked),
-                 static_cast<int>(weakMarked), static_cast<int>(referentMarked), static_cast<int>(childMarked));
+    GC_EXPECT_TRUE(closure.Calls() > 0);
+    const bool strongMarked = closure.Saw(graph.strongRoot);
+    const bool weakMarked = closure.Saw(graph.weak);
+    const bool referentMarked = closure.Saw(graph.referent);
+    const bool childMarked = closure.Saw(graph.child);
+    std::fprintf(stderr, "TARGET_YOUNG_STRONG_CLOSURE workers=%zu root=%d weak=%d referent=%d child=%d\n",
+                 helpers + 1, strongMarked, weakMarked, referentMarked, childMarked);
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
-    GC_EXPECT_EQ(receipt.serial, expectedSerial);
-    GC_EXPECT_EQ(receipt.legacyParallel, expectedLegacyParallel);
-    GC_EXPECT_EQ(receipt.striped, expectedStriped);
     GC_EXPECT_TRUE(strongMarked);
     GC_EXPECT_TRUE(weakMarked);
-    GC_EXPECT_FALSE(referentMarked);
-    GC_EXPECT_FALSE(childMarked);
+    GC_EXPECT_TRUE(referentMarked);
+    GC_EXPECT_TRUE(childMarked);
     (void)live;
 }
 
 void RunYoungWeakRemsetFlow()
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", "serial", 1), 0);
+
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -412,20 +423,18 @@ void RunYoungWeakRemsetFlow()
     rememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rememberedSet);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
+    referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ MARKED_YOUNG_MASK));
     barrier.WriteReference(graph.weak, referentField, graph.referent);
     const MAddress weakSlot = reinterpret_cast<MAddress>(&referentField);
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
     LiveInfo* holderLive = fx.PlantLiveInfo(fx.region0);
     LiveInfo* targetLive = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(holderLive, fx.region0->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Old>(holderLive, fx.region0->GetRegionSize());
     (void)fx.PlantMarkBitmap<Generation::Young>(targetLive, fx.region1->GetRegionSize());
     RuntimeWorkers threadPool(1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
     space.GetRegionManager().AddRawPointerObject(graph.child);
@@ -437,8 +446,10 @@ void RunYoungWeakRemsetFlow()
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
+    YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
-    const bool referentMarked = graph.IsMarked(graph.referent);
+    GC_EXPECT_TRUE(closure.Calls() > 0);
+    const bool referentMarked = closure.Saw(graph.referent);
     std::fprintf(stderr,
                  "DETAIL young_weak_remset slot=%#zx recorded_before_minor=%d referent_mark=%d\n",
                  static_cast<size_t>(weakSlot), static_cast<int>(recordedBeforeMinor),
@@ -451,7 +462,8 @@ void RunYoungWeakRemsetFlow()
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
-    GC_EXPECT_FALSE(referentMarked);
+    GC_EXPECT_TRUE(referentMarked);
+    GC_EXPECT_TRUE(closure.Saw(graph.child));
     (void)holderLive;
     (void)targetLive;
 }
@@ -564,22 +576,20 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
 
 } // namespace
 
-GC_OTHER_VM_TEST(YoungWeakClosure, SerialDiscoversWithoutStrongReferentClosure)
+GC_OTHER_VM_TEST(YoungWeakClosure, SingleWorkerKeepsYoungReferentStrong)
 {
-    RunYoungWeakVariant("serial", 0, 1, 0, 0);
+    RunYoungWeakVariant(0);
 }
 
-GC_OTHER_VM_TEST(YoungWeakClosure, LegacyParallelDiscoversWithoutStrongReferentClosure)
+// Removed legacy parallel selector: ZGC uses one marking worker task.
+// One-worker and two-worker cases retain the weak referent closure assertions.
+
+GC_OTHER_VM_TEST(YoungWeakClosure, StripedKeepsYoungReferentStrong)
 {
-    RunYoungWeakVariant("legacy-parallel", 1, 0, 1, 0);
+    RunYoungWeakVariant(1);
 }
 
-GC_OTHER_VM_TEST(YoungWeakClosure, StripedDiscoversWithoutStrongReferentClosure)
-{
-    RunYoungWeakVariant("striped", 1, 0, 0, 1);
-}
-
-GC_OTHER_VM_TEST(YoungWeakClosure, WeakRemsetSlotFlowsFromClosureToConsumer)
+GC_OTHER_VM_TEST(YoungWeakClosure, OldWeakSlotKeepsYoungReferentStrong)
 {
     RunYoungWeakRemsetFlow();
 }

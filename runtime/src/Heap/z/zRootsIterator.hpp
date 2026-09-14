@@ -130,9 +130,9 @@ public:
 private:
     static void PublishRegisteredRoot(ExportObjectInfo& slot, BaseObject* exportObj)
     {
-        // ZGC zBarrier.inline.hpp:735-740: inserting a reference after its
-        // container may have been scanned is mark-and-remember work.  Export
-        // handles are root membership, so publish before returning the handle.
+        // ZGC native stores preserve the slot's previous value, not the
+        // incoming reference (zBarrier.inline.hpp:709-715). The caller already
+        // holds the incoming object; publish its handle before returning.
         Heap::GetBarrier().WriteStaticRef(slot.exportObj, exportObj);
     }
 
