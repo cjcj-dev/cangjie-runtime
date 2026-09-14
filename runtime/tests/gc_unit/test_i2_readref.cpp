@@ -4,13 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC's load barrier resolves a load-bad from-address before self-healing, while
-// a load-good word naming a from-copy is an assertion state
-// (zBarrier.inline.hpp:294-343, zAddress.inline.hpp:609-624).
-
-#include <csignal>
-#include <sys/wait.h>
-#include <unistd.h>
+// ZGC selects load-barrier paths from the word colour. Load-bad words resolve
+// before self-healing; load-good words bypass forwarding-header inspection
+// (zBarrier.inline.hpp:319-343).
 
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zRememberedSet.hpp"

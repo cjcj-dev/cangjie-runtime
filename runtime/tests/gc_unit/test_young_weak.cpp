@@ -240,8 +240,8 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     route.destination = fx.region1;
     route.from = fx.PlaceObject(route.source->GetRegionStart());
     route.to = fx.PlaceObject(route.destination->GetRegionStart());
-    route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + 64);
-    route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + 64);
+    route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + route.from->GetSize());
+    route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + route.to->GetSize());
     route.source->SetYoungRegionFlag(0);
     route.destination->SetYoungRegionFlag(destinationYoung ? 1 : 0);
     if (destinationYoung) {
@@ -249,11 +249,15 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     }
 
     route.source->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    route.sourceLive = fx.PlantLiveInfo(route.source);
+    route.sourceLive = route.source->GetLiveInfo();
     RegionBitmap* sourceBitmap =
         fx.PlantMarkBitmap<Generation::Old>(route.sourceLive, route.source->GetRegionSize());
     const size_t sourceOffset = route.source->GetAddressOffset(reinterpret_cast<MAddress>(route.from));
     (void)sourceBitmap->MarkBits(sourceOffset, route.from->GetSize(), route.source->GetRegionSize());
+    RegionList selected("old-source-value-root");
+    selected.PrependRegion(route.source, RegionInfo::RegionType::FROM_REGION);
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    (void)selected.TakeHeadRegion();
     route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
     route.from->SetStateCode(ObjectState::FORWARDED);
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
@@ -263,10 +267,10 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
                      publication, reinterpret_cast<MAddress>(route.from),
                      reinterpret_cast<MAddress>(route.to)),
                  reinterpret_cast<MAddress>(route.to));
-    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(route.from), Generation::Young),
+    GC_EXPECT_EQ(ForwardingTable::RetainPageOwner(route.source)->find(reinterpret_cast<MAddress>(route.from)),
                  reinterpret_cast<MAddress>(route.to));
 
-    route.destinationLive = fx.PlantLiveInfo(route.destination);
+    route.destinationLive = route.destination->GetLiveInfo();
     (void)fx.PlantMarkBitmap<Generation::Young>(route.destinationLive,
                                                 route.destination->GetRegionSize());
     return route;
@@ -767,6 +771,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RuntimeWorkers threadPool(1u);
@@ -784,9 +789,10 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
+    bool currentMarked = false;
+    YoungClosureObservation closure([&] { currentMarked |= IsValueRootMarked(route); });
     RelocationReceiptTestAccess::RunYoungCollection(collector);
-
-    const bool currentMarked = IsValueRootMarked(route);
+    GC_EXPECT_TRUE(closure.calls > 0);
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
@@ -804,7 +810,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(currentMarked);
     GC_EXPECT_TRUE(carrierCurrent);
     GC_EXPECT_TRUE(independentAfterCoverage);
