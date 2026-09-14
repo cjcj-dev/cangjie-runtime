@@ -1,6 +1,8 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
+// Private table observations are available only in the matching product configuration.
+#if defined(MRT_TESTABLE_INTERNALS)
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/Collector/StringDedup.h"
@@ -63,10 +65,10 @@ struct ByteArrays {
 GC_TEST(StringDedup, SameLengthKeepsDistinctBacking)
 {
     ByteArrays arrays;
-    arrays.first->SetPrimitiveElement<U8>(0, 0);
-    arrays.first->SetPrimitiveElement<U8>(1, 31);
-    arrays.second->SetPrimitiveElement<U8>(0, 1);
-    arrays.second->SetPrimitiveElement<U8>(1, 0);
+    arrays.first->SetPrimitiveElement<I8>(0, 0);
+    arrays.first->SetPrimitiveElement<I8>(1, 31);
+    arrays.second->SetPrimitiveElement<I8>(0, 1);
+    arrays.second->SetPrimitiveElement<I8>(1, 0);
     CJ_MRT_RequestStringDedup(arrays.first->ConvertToCArray(), arrays.first->GetLength());
     CJ_MRT_RequestStringDedup(arrays.second->ConvertToCArray(), arrays.second->GetLength());
     GC_EXPECT_EQ(StringDedupTestAccess::Pending(), 2U);
@@ -80,8 +82,8 @@ GC_TEST(StringDedup, ExplicitEqualStringBackingFindsEntry)
 {
     ByteArrays arrays;
     for (auto* array : {arrays.first, arrays.second}) {
-        array->SetPrimitiveElement<U8>(0, 7);
-        array->SetPrimitiveElement<U8>(1, 9);
+        array->SetPrimitiveElement<I8>(0, 7);
+        array->SetPrimitiveElement<I8>(1, 9);
         CJ_MRT_RequestStringDedup(array->ConvertToCArray(), array->GetLength());
     }
     GC_EXPECT_EQ(StringDedupTestAccess::Pending(), 2U);
@@ -95,8 +97,8 @@ GC_TEST(StringDedup, CleanDeadTableAndRequest)
 {
     ByteArrays arrays;
     auto& dedup = StringDedup::Instance();
-    arrays.first->SetPrimitiveElement<U8>(0, 7);
-    arrays.first->SetPrimitiveElement<U8>(1, 9);
+    arrays.first->SetPrimitiveElement<I8>(0, 7);
+    arrays.first->SetPrimitiveElement<I8>(1, 9);
     CJ_MRT_RequestStringDedup(arrays.first->ConvertToCArray(), arrays.first->GetLength());
     StringDedupTestAccess::ProcessRequests();
     GC_EXPECT_EQ(StringDedupTestAccess::Entries(), 1U);
@@ -136,3 +138,5 @@ GC_TEST(StringDedup, HalfSipHashByteArrayReference)
     arrays.first->SetLength(sizeof(hashes));
     GC_EXPECT_EQ(StringDedupTestAccess::Hash(arrays.first, 0), 0xd2be7fd8U);
 }
+
+#endif // MRT_TESTABLE_INTERNALS

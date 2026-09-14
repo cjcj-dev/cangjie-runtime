@@ -13,7 +13,7 @@ using MapleRuntime::ConcurrentGCBreakpoints;
 GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, SimpleCycle)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MRT_CjRuntimeInit();
+    MapleRuntime::MRT_CjRuntimeInit();
     ConcurrentGCBreakpoints::AcquireControl();
     for (int cycle = 0; cycle < 2; ++cycle) {
         GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"));
@@ -26,7 +26,7 @@ GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, SimpleCycle)
 GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, EndBeforeBreakpoint)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MRT_CjRuntimeInit();
+    MapleRuntime::MRT_CjRuntimeInit();
     ConcurrentGCBreakpoints::AcquireControl();
     GC_EXPECT_TRUE(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"));
     GC_EXPECT_FALSE(ConcurrentGCBreakpoints::RunTo("AFTER MARKING STARTED"));
@@ -36,7 +36,7 @@ GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, EndBeforeBreakpoint)
 GC_OTHER_VM_TEST(ConcurrentGCBreakpoints, UnknownBreakpoint)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MRT_CjRuntimeInit();
+    MapleRuntime::MRT_CjRuntimeInit();
     ConcurrentGCBreakpoints::AcquireControl();
     GC_EXPECT_FALSE(ConcurrentGCBreakpoints::RunTo("UNKNOWN BREAKPOINT"));
     ConcurrentGCBreakpoints::RunToIdle();

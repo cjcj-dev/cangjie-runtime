@@ -92,7 +92,7 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     to = reinterpret_cast<MAddress>(fx.obj1);
     (void)bitmap->MarkBits(region->GetAddressOffset(from), fx.obj0->GetSize(), region->GetRegionSize());
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
-    ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart());
+    ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
     }

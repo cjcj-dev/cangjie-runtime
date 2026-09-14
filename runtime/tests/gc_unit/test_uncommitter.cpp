@@ -120,6 +120,7 @@ GC_OTHER_VM_TEST(Uncommitter, StartStopRestartPartitionWorker)
 
 // Native counterpart of ZUncommitter's suspendible-thread membership:
 // the real worker is registered while waiting and removed before Stop returns.
+#if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(Uncommitter, PartitionWorkerParticipatesInSafepoints)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -139,6 +140,8 @@ GC_OTHER_VM_TEST(Uncommitter, PartitionWorkerParticipatesInSafepoints)
     GC_EXPECT_EQ(registered, before + 1);
     GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), before);
 }
+
+#endif // MRT_TESTABLE_INTERNALS
 
 GC_TEST(Uncommitter, ChunkLimitAtLeastPageAndAtMost256M)
 {
@@ -368,13 +371,14 @@ GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
     GC_EXPECT_EQ(frm.GetDirtyUnitCount(), 1U);
     GC_EXPECT_EQ(frm.partitions.front()->cache.RemoveContiguous(1).count, 1U);
 
-    if (!ForwardingTable::InsertProvisional(region->GetRegionStart(), region->GetRegionSize(), region)) {
-        GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
-            region->GetRegionStart(), region->GetRegionSize()));
-        GC_EXPECT_TRUE(ForwardingTable::InsertProvisional(
-            region->GetRegionStart(), region->GetRegionSize(), region));
-    }
-    GC_EXPECT_TRUE(ForwardingTable::GetEntries(region->GetRegionStart()) != nullptr);
+    const Generation generation = region->GetOwnerGeneration();
+    RegionList selected("uncommit-forwarding");
+    selected.PrependRegion(region, region->GetRegionType());
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(generation, selected));
+    (void)selected.TakeHeadRegion();
+    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+        region->GetRegionStart(), region->GetRegionSize(), region, generation));
+    GC_EXPECT_TRUE(ForwardingTable::GetEntries(region->GetRegionStart(), generation) != nullptr);
     GC_EXPECT_FALSE(FreeRegionManager::ExtentReadyForReleasedCache(region));
 
     frm.AddReleaseUnits(0, 1);
@@ -384,9 +388,7 @@ GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
     GC_EXPECT_EQ(taken.index, 0U);
     frm.partitions.front()->cache.Insert({0, 1});
 
-    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::ReclaimRetired("Uncommitter.LiveForwardingTableBlocksReleasedCache.cleanup");
-    ForwardingTable::Remove(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ResetRelocationSet(generation);
     MemMap::DestroyMemMap(map);
 }
 
@@ -410,7 +412,6 @@ GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
     ZForwarding* owner = ZForwarding::alloc(1, region->GetRegionStart(), region->GetRegionStart(),
                                           region->GetRegionSize(), region, region->GetRegionLifeId());
     GC_EXPECT_TRUE(owner != nullptr);
-    owner->retain_owner();
     region->metadata.fwdOwner.store(owner, std::memory_order_release);
     GC_EXPECT_TRUE(region->RetainForwarding());
     GC_EXPECT_TRUE(region->ForwardingRefCount() != 0);

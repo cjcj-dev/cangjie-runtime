@@ -347,6 +347,7 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
     }
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
 namespace {
 std::atomic<bool> rememberedWaitEntered{ false };
 void RememberedWaitEntered(ZForwarding*)
@@ -391,3 +392,5 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     GC_EXPECT_FALSE(returnedAfterRelease);
     GC_EXPECT_FALSE(retained);
 }
+
+#endif // MRT_TESTABLE_INTERNALS

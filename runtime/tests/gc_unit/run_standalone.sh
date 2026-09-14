@@ -213,11 +213,11 @@ fi
 
 # Keep the standalone test translation units in the same compile-time
 # configuration as the product SO they bind. The default SO deliberately has
-# neither test-only export; an MRT_GC_UNIT_TESTS SO must compile both integration
+# no GC-unit-only array hook; an MRT_GC_UNIT_TESTS SO must compile both integration
 # suites into this executable so a partial product configuration fails at link.
 nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
 if /usr/bin/grep -Eq \
-    'ShouldWaitForIgnoredGcRequest|CJ_MRT_SetLargeArrayInitTestHooks|SetAllocationStallTestHooks|PendingStalledAllocations' \
+    'CJ_MRT_SetLargeArrayInitTestHooks' \
     "$OUT/runtime-dynamic-symbols.txt"; then
   TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
   echo "GC_UNIT_PRODUCT_CONFIGURATION=MRT_GC_UNIT_TESTS"
@@ -231,17 +231,6 @@ else
   STALL_PRODUCT_OBSERVE=0
 fi
 echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
-
-# Compile the publication TU with the same testability shape as the linked
-# product SO. The default (OFF) SO has no retain hook, so it must not silently
-# register a test that can only skip; the ON arm keeps the explicit precondition
-# assertion in clear_entries_product_unit.cpp.
-PUBLICATION_TESTABLE_FLAGS=()
-if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null |
-    c++filt | /usr/bin/grep 'ForwardingTable::SetLookupRetainHook' >/dev/null; then
-  PUBLICATION_TESTABLE_FLAGS=(-DMRT_FINDTO_RETAIN_TEST=1)
-fi
-echo "PUBLICATION_TESTABLE=$((${#PUBLICATION_TESTABLE_FLAGS[@]} != 0))"
 
 # These three deterministic publication tests require both ends of their
 # scheduling fixture.  Derive that product shape from the linked SO, not from
@@ -300,7 +289,7 @@ echo "REMAP_RECEIPT_PRODUCT_SHAPE=$REMAP_RECEIPT_PRODUCT_SHAPE reset=$remap_rece
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  TESTABLE_FLAGS+=(-DMRT_TESTABLE_INTERNALS=1)
+  TESTABLE_FLAGS+=(-DMRT_TESTABLE_INTERNALS=1 -DMRT_PRODUCT_TESTABLE_INTERNALS=1)
 fi
 INC_FLAGS=(
   -I"$SRC"
@@ -409,7 +398,7 @@ PUBLICATION_COMPILE_FLAGS=(
   -fvisibility-inlines-hidden
   "${TEST_DEFINES[@]}"
   -DMRT_TESTABLE_INTERNALS=1
-  "${PUBLICATION_TESTABLE_FLAGS[@]}"
+  "${TESTABLE_FLAGS[@]}"
   "${PUBLICATION_HOOK_FLAGS[@]}"
   "${REMAP_RECEIPT_FLAGS[@]}"
   "${INC_FLAGS[@]}"
