@@ -47,9 +47,9 @@ set -e
 echo "$analyzer_unit_rc" >"$OUT/schema_ledger.unit.rc"
 
 if [[ "${PHASE_ENTRY_REUSE_ELFS:-0}" != 1 ]]; then
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to the compiler host runtime}:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "$CJC_BIN" "$MINOR_SRC" -O0 --static-std -o "$MINOR_BIN" >"$BUILD_LOG" 2>&1
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to the compiler host runtime}:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "$CJC_BIN" "$MAJOR_SRC" -O0 --static-std -o "$MAJOR_BIN" >>"$BUILD_LOG" 2>&1
   "$CXX_BIN" -std=gnu++17 -O0 -I"$ROOT/runtime/src" -I"$ROOT/runtime/include" \
     -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" "$TIMER_SRC" \
