@@ -114,21 +114,8 @@ struct YoungConcWindowStats {
 };
 
 #if defined(MRT_TESTABLE_INTERNALS)
-enum class YoungWeakClosureVariant : uint8_t {
-    SERIAL,
-    LEGACY_PARALLEL,
-    STRIPED,
-};
 
-struct YoungWeakClosureTestReceipt {
-    uint64_t serial = 0;
-    uint64_t legacyParallel = 0;
-    uint64_t striped = 0;
-};
 
-void ResetYoungWeakClosureTestReceipt();
-void NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant variant);
-YoungWeakClosureTestReceipt ReadYoungWeakClosureTestReceipt();
 #endif
 
 class ForwardTable {

@@ -11,8 +11,14 @@
 #include <thread>
 
 #include "gc_unittest.hpp"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
+#include "Mutator/MutatorManager.h"
+#include "CjScheduler.h"
+extern "C" int CJ_ScheduleManagerInit();
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 
@@ -23,8 +29,30 @@ namespace {
 
 constexpr auto kHangLimit = std::chrono::seconds(30);
 
+// The production mutator/TLS callbacks are installed by Concurrency::Init.
+class StallTestRuntime final : public Runtime {
+public:
+    StallTestRuntime()
+    {
+        GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+        mutatorManager = &manager;
+        concurrencyModel = &concurrency;
+        runtime = this;
+        manager.Init();
+        const ConcurrencyParam params = { 1024, 64, 1 };
+        concurrency.Init(params);
+    }
+    ~StallTestRuntime() override { runtime = nullptr; }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
+    void SetGCThreshold(uint64_t) override {}
+private:
+    MutatorManager manager;
+    Concurrency concurrency;
+};
+
 class OneUnitStallFixture {
 private:
+    StallTestRuntime runtime;
     struct MapOwner {
         ~MapOwner() { MemMap::DestroyMemMap(value); }
         MemMap* value{ nullptr };
@@ -34,6 +62,8 @@ private:
 public:
     OneUnitStallFixture()
     {
+        // ZInitialize: allocator sampling starts only after statistics initialization.
+        ZStat::Initialize();
         constexpr size_t units = 1;
         const size_t metadataSize = RegionManager::GetMetadataSize(units);
         map.value = MemMap::MapMemory(metadataSize + RegionInfo::UNIT_SIZE, metadataSize);

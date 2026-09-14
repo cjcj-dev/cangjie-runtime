@@ -40,6 +40,7 @@
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
+#include "Mutator/Handshake.h"
 #include "TypeInfoManager.h"
 #include "Heap/WCollector/WCollectorInternal.h"
 
@@ -642,6 +643,15 @@ void WCollector::DoYoungGarbageCollection()
 
 
 namespace MapleRuntime {
+// ZGeneration's rendezvous only waits for in-flight mutator accesses. It
+// must not start another root scan after old marking has completed
+// (zGeneration.cpp:114-122,1343-1353).
+class ZRendezvousHandshakeClosure final : public HandshakeClosure {
+public:
+    ZRendezvousHandshakeClosure() : HandshakeClosure("ZRendezvous") {}
+    void do_thread(ThreadLocalData*) override {}
+};
+
 void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
 {
     ZBreakpoint::AtAfterReferenceProcessingStarted();
@@ -667,7 +677,8 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     // A serial driver and synchronous GCWorkers::Run have already joined GC
     // work here; mutators (including the finalizer thread) need a rendezvous.
-    MutatorManager::Instance().RunEpochHandshake("old non-strong references", false);
+    ZRendezvousHandshakeClosure rendezvous;
+    Handshake::execute(&rendezvous);
     collectorResources.UnblockResurrection();
     collectorResources.GetFinalizerProcessor().EnqueueReferences();
     // zGeneration.cpp:1147-1168: the serial driver excludes young collections
