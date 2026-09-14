@@ -1,7 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
-#include "gc_heap_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Mutator/Mutator.h"
@@ -15,7 +15,7 @@ void SetRootWord(RootSlot& slot, uintptr_t word) { std::memcpy(&slot, &word, siz
 // zVerify.cpp:119-128: positive counterpart to the invalid-address cases.
 GC_OTHER_VM_TEST(ZVerify, AcceptsActualObjectAddress)
 {
-    GcHeapFixture fixture;
+    GcVerifyFixture fixture;
     ZVerify::Object(fixture.obj0, &fixture.obj0);
     GC_EXPECT_TRUE(fixture.obj0->IsValidObject());
 }
@@ -24,7 +24,7 @@ GC_OTHER_VM_TEST(ZVerify, AcceptsActualObjectAddress)
 // Cangjie stack maps also name stack objects and headerless ABI records.
 GC_OTHER_VM_TEST(ZVerify, StackRootExpandsToActualHeapSlot)
 {
-    GcHeapFixture fixture;
+    GcVerifyFixture fixture;
     alignas(16) uintptr_t storage[8] {};
     auto* object = reinterpret_cast<BaseObject*>(&storage[2]);
     object->SetClassInfo(fixture.typeInfo);
@@ -48,7 +48,7 @@ GC_OTHER_VM_TEST(ZVerify, StackRootExpandsToActualHeapSlot)
 
 GC_OTHER_VM_TEST(ZVerify, StackRootCycleTerminatesWithoutEmittingStackObject)
 {
-    GcHeapFixture fixture;
+    GcVerifyFixture fixture;
     alignas(16) uintptr_t storage[6] {};
     auto* object = reinterpret_cast<BaseObject*>(&storage[2]);
     object->SetClassInfo(fixture.typeInfo);
