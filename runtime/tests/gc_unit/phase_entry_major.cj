@@ -1,7 +1,8 @@
 // End-to-end major forwarding-carrier entry regression.  The bounded escaped
 // object wave reaches WCollector::PostTrace through an explicit heavy collect.
 // The bounded wave stays well below the product's 32 MiB automatic-minor
-// waterline, so the only young cycle is the major driver's owned prelude.
+// waterline. The major request owns preclean, full-roots, and old spans under
+// one cycle id (ZGC zDriver.cpp:416-451).
 import std.runtime.*
 
 class MajorEntryPayload {
