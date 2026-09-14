@@ -801,7 +801,11 @@ static bool IsHeaderedStackObject(BaseObject* obj)
     }
     TypeInfo* tip = obj->GetTypeInfo();
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
-    if (tip == nullptr || tipAddr < 4096 || (tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
+    // zVerify.cpp:169 / zHeapIterator.cpp:145 consume oop slots. The Cangjie
+    // ABI also supplies headerless records whose first word is a heap oop,
+    // never a TypeInfo. Classify that form before interpreting its payload.
+    if (tip == nullptr || tipAddr < 4096 || (tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0 ||
+        Heap::IsHeapAddress(tipAddr)) {
         return false;
     }
     return tip->IsVaildType();

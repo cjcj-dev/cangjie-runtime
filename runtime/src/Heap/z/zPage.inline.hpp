@@ -1179,7 +1179,9 @@ inline __attribute__((always_inline)) void RegionInfo::PublishForwardingCarrier(
         // after detach (count 0) is refused; carrier and token are published
         // by this single product operation.
 
-        ClearCurrentMarkFace();
+        // zRelocationSet.cpp:110-118 / zVerify.cpp:601: the forwarding still
+        // reads this source page's livemap. Publication does not reset it;
+        // detach/reuse owns that transition after source-page consumers finish.
         metadata._generation_id = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
         // Always install ghost membership, including a zero-live page. This is
         // what keeps the from-page carrier reachable until forwarding drain.
