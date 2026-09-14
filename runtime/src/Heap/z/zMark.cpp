@@ -109,7 +109,8 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     // The major root iterator bypasses ReadStaticRef. Enforce the same
     // colored-carrier contract before its mark-good shortcut or RootSet push
     // (ZPointer::assert_is_valid, zAddress.inline.hpp:320-393).
-    CHECK_DETAIL(!ColourPredicates::has_address(raw(oldField.GetFieldValue())) ||
+    // Non-heap ELF literals are not GC roots and keep the skip below.
+    CHECK_DETAIL(!Heap::IsHeapAddress(to_object(oldField.GetTargetObject())) ||
                      (raw(oldField.GetFieldValue()) &
                       (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
                  "NativeSlot requires colored value at EnumRefFieldRoot slot=%p word=%#zx",

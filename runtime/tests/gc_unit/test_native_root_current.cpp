@@ -198,6 +198,56 @@ GC_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
 GC_OTHER_VM_TEST(NativeRootCurrent, MajorSeed) { CheckNativeRoot(false); }
 GC_OTHER_VM_TEST(NativeRootCurrent, PlainMinorRejected) { CheckPlainRejected(true); }
 GC_OTHER_VM_TEST(NativeRootCurrent, PlainMajorRejected) { CheckPlainRejected(false); }
+// Static literals live outside the GC heap, including ELF .data.rel.ro roots.
+// Preserve the pre-existing non-heap path and never attempt to heal read-only
+// storage. The heap root is a positive control for actual major enumeration.
+GC_OTHER_VM_TEST(NativeRootCurrent, ReadOnlyNonHeapBoundary)
+{
+    PrintNativeRootMaps();
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    WCollector collector(heap.GetAllocator(), heap.GetCollectorResources());
+    RuntimeWorkers pool(1);
+    RelocationReceiptTestAccess::BindNativeRootFixture(heap.GetCollectorResources(), collector, pool);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    const size_t pageSize = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    void* page = mmap(nullptr, pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    GC_EXPECT_TRUE(page != MAP_FAILED);
+    BaseObject* literal = fx.PlaceObject(reinterpret_cast<MAddress>(page) + 128);
+    const uintptr_t literalWord = reinterpret_cast<uintptr_t>(literal);
+    std::memcpy(page, &literalWord, sizeof(literalWord));
+    NativeSlot& literalRoot = NativeSlotAt(page);
+    NativeSlot movingRoot(StoreGoodPointer(fx.obj0));
+    NativeSlot* roots[] = {&literalRoot, &movingRoot};
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
+    GC_EXPECT_EQ(mprotect(page, pageSize, PROT_READ), 0);
+    const bool readCurrent = heap.GetBarrier().ReadStaticRef(literalRoot) == literal;
+    bool enumerated = false;
+    bool heapPresent = false;
+    bool literalPresent = false;
+    collector.testRootsResult = [&](GCWorkers::Generation, TracingCollector::RootSet& set) {
+        enumerated = true;
+        for (auto* node = set.head(); node != nullptr; node = node->next) {
+            auto copy = *node;
+            while (!copy.empty()) {
+                const auto value = copy.back().object();
+                heapPresent |= value == fx.obj0;
+                literalPresent |= value == literal;
+                copy.pop_back();
+            }
+        }
+    };
+    RelocationReceiptTestAccess::NativeRootTrace(collector);
+    collector.testRootsResult = nullptr;
+    const bool unchanged = raw(literalRoot.GetFieldValue()) == literalWord;
+    std::fprintf(stderr, "native_root_readonly_boundary executed=1 read=%u enum=%u heap=%u literal=%u unchanged=%u\n",
+                 unsigned(readCurrent), unsigned(enumerated), unsigned(heapPresent), unsigned(literalPresent), unsigned(unchanged));
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
+    munmap(page, pageSize);
+    GC_EXPECT_TRUE(readCurrent && enumerated && heapPresent && !literalPresent && unchanged);
+}
+
 GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
 {
     PrintNativeRootMaps();

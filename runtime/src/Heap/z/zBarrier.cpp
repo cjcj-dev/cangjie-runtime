@@ -267,7 +267,9 @@ BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
     // ZPointer::assert_is_valid (zAddress.inline.hpp:320-393): colored roots
     // must carry their own epoch. A plain non-null word passes a bad-mask
     // test, but has no remap history and cannot be handed to a marker.
-    CHECK_DETAIL(!ColourPredicates::has_address(raw(observed)) ||
+    // Cangjie also registers read-only ELF literals. Their non-heap payloads
+    // never relocate and retain the existing uncolored read-only contract.
+    CHECK_DETAIL(!Heap::IsHeapAddress(to_object(RefField<>(observed).GetTargetObject())) ||
                      (raw(observed) & (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
                  "NativeSlot requires colored value at ReadStaticRef slot=%p word=%#zx", &field, raw(observed));
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
