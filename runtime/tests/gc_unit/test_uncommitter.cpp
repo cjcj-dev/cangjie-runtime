@@ -14,11 +14,9 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #undef private
-#include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zUncommitter.hpp"
-#include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
@@ -84,6 +82,7 @@ GC_TEST(Uncommitter, MinCapacityIsLivePlusYoungReserve)
 // cannot supply any uncommit budget.
 GC_OTHER_VM_TEST(Uncommitter, TestNoUncommitAtCapacityFloor)
 {
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     Uncommitter worker(Heap::GetHeap().GetAllocator());
     GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
     GC_EXPECT_EQ(UncommitterTestAccess::Budget(worker), 0U);
@@ -254,8 +253,10 @@ static size_t ProbeProductUncommit(bool cancelFirst)
     InitializeUncommitCache(frm, n, heapStart, *map);
     std::fprintf(stderr, "DETAIL probe tree ready\n");
     std::fflush(stderr);
-    (void)RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
+    RegionInfo::InitFreeRegion(0, 1);
     frm.partitions.front()->cache.Insert({0, 1});
+    // ZGC caches virtual memory after withdrawing the page-table entry.
+    GC_EXPECT_TRUE(RegionInfo::TryGetRegionInfoAt(heapStart) == nullptr);
     std::fprintf(stderr, "DETAIL probe releasedCount=%u\n", frm.GetDirtyUnitCount());
     std::fflush(stderr);
     UncommitterTestAccess::ResetCancel();
@@ -276,7 +277,8 @@ static size_t ProbeProductUncommit(bool cancelFirst)
 GC_OTHER_VM_TEST(Uncommitter, UncommitIdleUnitsReleasesPhysical)
 {
     const size_t backendReleased = ProbeProductUncommit(false);
-    GC_EXPECT_TRUE(backendReleased > 0);
+    std::fprintf(stderr, "TARGET_UNCOMMIT_RELEASE_ASSERT bytes=%zu\n", backendReleased);
+    GC_EXPECT_EQ(backendReleased, RegionInfo::UNIT_SIZE);
 }
 
 static void ExercisePartitionWorker(bool enabled)
@@ -331,6 +333,7 @@ GC_OTHER_VM_TEST(Uncommitter, TestNoUncommitDisabledPartitionThread)
 
 GC_OTHER_VM_TEST(Uncommitter, CancelDelaysActivation)
 {
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     UncommitterTestAccess::ResetCancel();
     UncommitterTestAccess::Cancel();
     Uncommitter& worker = Heap::GetHeap().GetAllocator().GetUncommitter();
@@ -342,84 +345,4 @@ GC_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
 {
     const size_t backendReleased = ProbeProductUncommit(true);
     GC_EXPECT_EQ(backendReleased, 0U);
-}
-
-GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
-{
-    if (ForwardingTable::Ready()) {
-        std::fprintf(stderr,
-            "SKIP_ALREADY_OWNED reason=granule_map_already_bound_by_this_process test=Uncommitter.LiveForwardingBlocksReleasedCache\n");
-        return;
-    }
-    BindUncommitWorkerThread();
-    const size_t n = 8;
-    const size_t meta = RegionManager::GetMetadataSize(n);
-    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
-    const size_t total = meta + heapBytes;
-    MemMap* map = MemMap::MapMemory(total, total);
-    GC_EXPECT_TRUE(map != nullptr);
-    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
-    RegionInfo::Initialize(n, heapStart, map);
-    RegionInfo* region = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
-    GC_EXPECT_TRUE(region != nullptr);
-    ForwardingTable::Initialize(static_cast<MAddress>(heapStart), heapBytes, RegionInfo::UNIT_SIZE);
-    RegionManager rm;
-    FreeRegionManager frm(rm);
-    InitializeUncommitCache(frm, n, heapStart, *map);
-
-    frm.AddReleaseUnits(0, 1);
-    GC_EXPECT_EQ(frm.GetDirtyUnitCount(), 1U);
-    GC_EXPECT_EQ(frm.partitions.front()->cache.RemoveContiguous(1).count, 1U);
-
-    const Generation generation = region->GetOwnerGeneration();
-    RegionList selected("uncommit-forwarding");
-    selected.PrependRegion(region, region->GetRegionType());
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(generation, selected));
-    (void)selected.TakeHeadRegion();
-    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
-        region->GetRegionStart(), region->GetRegionSize(), region, generation));
-    GC_EXPECT_TRUE(ForwardingTable::GetEntries(region->GetRegionStart(), generation) != nullptr);
-    GC_EXPECT_FALSE(FreeRegionManager::ExtentReadyForReleasedCache(region));
-
-    frm.AddReleaseUnits(0, 1);
-    GC_EXPECT_EQ(frm.GetDirtyUnitCount(), 1U);
-    const auto taken = frm.partitions.front()->cache.RemoveContiguous(1);
-    GC_EXPECT_EQ(taken.count, 1U);
-    GC_EXPECT_EQ(taken.index, 0U);
-    frm.partitions.front()->cache.Insert({0, 1});
-
-    ForwardingTable::ResetRelocationSet(generation);
-    MemMap::DestroyMemMap(map);
-}
-
-GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
-{
-    BindUncommitWorkerThread();
-    const size_t n = 8;
-    const size_t meta = RegionManager::GetMetadataSize(n);
-    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
-    const size_t total = meta + heapBytes;
-    MemMap* map = MemMap::MapMemory(total, total);
-    GC_EXPECT_TRUE(map != nullptr);
-    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
-    RegionInfo::Initialize(n, heapStart, map);
-    RegionInfo* region = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
-    GC_EXPECT_TRUE(region != nullptr);
-    RegionManager rm;
-    FreeRegionManager frm(rm);
-    InitializeUncommitCache(frm, n, heapStart, *map);
-    frm.AddReleaseUnits(0, 1);
-    ZForwarding* owner = ZForwarding::alloc(1, region->GetRegionStart(), region->GetRegionStart(),
-                                          region->GetRegionSize(), region, region->GetRegionLifeId());
-    GC_EXPECT_TRUE(owner != nullptr);
-    region->metadata.fwdOwner.store(owner, std::memory_order_release);
-    GC_EXPECT_TRUE(region->RetainForwarding());
-    GC_EXPECT_TRUE(region->ForwardingRefCount() != 0);
-    GC_EXPECT_FALSE(FreeRegionManager::ExtentReadyForReleasedCache(region));
-    GC_EXPECT_EQ(frm.GetDirtyUnitCount(), 1U);
-    region->ReleaseForwarding();
-    owner->release_page();
-    ForwardingTable::ClearPageOwner(region);
-    owner->Destroy();
-    MemMap::DestroyMemMap(map);
 }

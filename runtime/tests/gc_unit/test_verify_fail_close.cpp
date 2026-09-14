@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "gc_heap_fixture.hpp"
+#include "gc_verify_fixture.hpp"
 #include "gc_unittest.hpp"
 
 #include <csignal>
@@ -66,7 +66,7 @@ void ExpectSceneAbort(const char* expectedDiagnostic, Fn&& fn)
 // rejected before metadata access; no region inventory or scene counters.
 GC_OTHER_VM_TEST(ZVerify, RejectsColoredAddressWithoutUncoloring)
 {
-    GcHeapFixture fixture;
+    GcVerifyFixture fixture;
     const uintptr_t colored = reinterpret_cast<uintptr_t>(fixture.obj0) | ZPointerRemapped00;
     ExpectSceneAbort("Bad object", [&] {
         ZVerify::Object(reinterpret_cast<BaseObject*>(colored), &colored);
@@ -76,7 +76,7 @@ GC_OTHER_VM_TEST(ZVerify, RejectsColoredAddressWithoutUncoloring)
 
 GC_OTHER_VM_TEST(ZVerify, RejectsUnmanagedAddress)
 {
-    GcHeapFixture fixture;
+    GcVerifyFixture fixture;
     ExpectSceneAbort("Bad object", [&] {
         ZVerify::Object(reinterpret_cast<BaseObject*>(0x1000), nullptr);
     });
@@ -85,7 +85,7 @@ GC_OTHER_VM_TEST(ZVerify, RejectsUnmanagedAddress)
 
 GC_OTHER_VM_TEST(ZVerify, RememberedCurrentAndPreviousFaces)
 {
-    GcHeapFixture fixture;
+    GcVerifyFixture fixture;
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     remset.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
@@ -99,16 +99,27 @@ GC_OTHER_VM_TEST(ZVerify, RememberedCurrentAndPreviousFaces)
     GC_EXPECT_TRUE(remset.IsClearInRange(fixture.heapStart, RegionInfo::UNIT_SIZE, true));
 }
 
+// zForwarding.inline.hpp:116-119 / zVerify.cpp:601: installing a forwarding
+// must leave the selected source object's start bit visible to iteration.
+GC_OTHER_VM_TEST(ZVerify, SourcePreparationPreservesMarkedObjects)
+{
+    GcVerifyFixture fixture;
+    fixture.PrepareOldSource();
+    size_t visits = 0;
+    fixture.region0->VisitLiveObjectsUntilFalse([&](BaseObject* object) {
+        GC_EXPECT_TRUE(object == fixture.obj0);
+        ++visits;
+        return true;
+    });
+    GC_EXPECT_EQ(visits, size_t(1));
+    std::fprintf(stderr, "SOURCE_MARKED_OBJECT_ASSERT_EXECUTED visits=%zu\n", visits);
+}
+
 // test_zForwarding.cpp:ZForwardingTest.find_full plus zForwarding.cpp:369-409.
 GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
 {
-    GcHeapFixture fixture;
-    fixture.region0->SetYoungRegionFlag(0);
-    fixture.region1->SetYoungRegionFlag(0);
-    LiveInfo* live = fixture.PlantLiveInfo(fixture.region0);
-    (void)fixture.PlantMarkBitmap<Generation::Old>(live, fixture.region0->GetRegionSize());
-    (void)RegionSpace::MarkObject<Generation::Old>(fixture.obj0);
-    fixture.region0->PrepareForwardableRegion(fixture.region0->GetMarkView<Generation::Old>());
+    GcVerifyFixture fixture;
+    fixture.PrepareOldSource();
     auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
         fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
@@ -139,13 +150,8 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
         RunInOtherVm("ZVerify.BeforeRelocationRejectsMissingRememberedField");
         return;
     }
-    GcHeapFixture fixture;
-    fixture.region0->SetYoungRegionFlag(0);
-    fixture.region1->SetYoungRegionFlag(0);
-    LiveInfo* live = fixture.PlantLiveInfo(fixture.region0);
-    (void)fixture.PlantMarkBitmap<Generation::Old>(live, fixture.region0->GetRegionSize());
-    (void)RegionSpace::MarkObject<Generation::Old>(fixture.obj0);
-    fixture.region0->PrepareForwardableRegion(fixture.region0->GetMarkView<Generation::Old>());
+    GcVerifyFixture fixture;
+    fixture.PrepareOldSource();
     auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
         fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
@@ -164,7 +170,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
 // zVerify.cpp:131-138 distinguishes raw null from metadata-bearing null.
 GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
 {
-    GcHeapFixture fixture;
+    GcVerifyFixture fixture;
     auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
     cycle.PublishPhase(GC_PHASE_TRACE);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
@@ -180,7 +186,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
 
 GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
 {
-    GcHeapFixture fixture;
+    GcVerifyFixture fixture;
     auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
     cycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);

@@ -11,12 +11,35 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/zStat.hpp"
 #include <cstring>
+#if defined(__linux__)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
 const ZStatSampler unobserved("Test", "Unobserved", ZStatUnit::TIME);
+
+#if defined(__linux__)
+// ZStatIterableValue::sort rewrites registration links during initialization.
+// Keep the parent assertion observable if a const registry node is read-only.
+GC_TEST(ZStat, RegistryInitializationWritesConstLinks)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        ZStat::Initialize();
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool initialized = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    std::fprintf(stderr, "ZSTAT_INIT_TARGET executed=1 status=%d initialized=%d\n", status, initialized);
+    GC_EXPECT_TRUE(initialized);
+}
+#endif
 
 GC_TEST(ZStat, RegistrySortedWithoutChangingIdentity)
 {
