@@ -273,6 +273,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     GcHeapFixture fx;
     // An actual multi-unit page keeps all array slots in the mapped heap;
     // each subordinate unit resolves back to the same owning region.
+    // ZPageTable::remove/insert (zPageTable.cpp:44-65): retire before reuse.
+    RegionInfo::RetirePage(fx.region1, [] {});
     fx.region1 = RegionInfo::InitRegion(1, 4, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     fx.region1->SetYoungRegionFlag(major ? 0 : 1);
     fx.region1->SetYoungAge(1);
