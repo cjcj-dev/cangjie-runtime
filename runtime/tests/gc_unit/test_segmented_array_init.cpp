@@ -777,6 +777,15 @@ void* RunMarkAllocationCase(void* rawExisting)
     SetMarkClosureObserverForTest(nullptr);
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
+    auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
+    BaseObject* completedTarget = Heap::GetBarrier().ReadReference(holder, completedField);
+    RegionInfo* completedPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(completedTarget));
+    // Old targets are outside an independent young collection's reclaim domain.
+    // A remaining young target must pass the product mark predicate after ack.
+    const bool completedLive = !completedPage->IsYoungRegion() ||
+        productLive(completedPage, completedPage->GetMarkView<Generation::Young>(), completedTarget);
+    std::fprintf(stderr, "MARK_ALLOC_COMPLETED_TARGET_ASSERT_EXECUTED young=%d live=%d\n",
+                 completedPage->IsYoungRegion(), completedLive);
     const bool resampled = !page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
     const auto after = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const bool nextCycle = after.sequence > during.sequence;
@@ -787,10 +796,10 @@ void* RunMarkAllocationCase(void* rawExisting)
     mutator->SetManagedContext(true);
     const uintptr_t status = (implicit ? 0 : 1) | (live ? 0 : 2) |
         (targetLive ? 0 : 4) | (excluded ? 0 : 8) | (nextCycle ? 0 : 16) |
-        (resampled ? 0 : 32) |
+        (resampled ? 0 : 32) | (completedLive ? 0 : 128) |
         ((completed && !MarkAllocationWindow::timedOut && phase == GC_PHASE_TRACE) ? 0 : 64);
     std::fprintf(stderr, "MARK_ALLOC_ASSERT_RESULT status=%zu "
-                 "bits=implicit:1,live:2,target_live:4,excluded:8,next_cycle:16,resampled:32,window:64\n", status);
+                 "bits=implicit:1,live:2,target_live:4,excluded:8,next_cycle:16,resampled:32,window:64,completed_live:128\n", status);
     return reinterpret_cast<void*>(status);
 }
 #endif
