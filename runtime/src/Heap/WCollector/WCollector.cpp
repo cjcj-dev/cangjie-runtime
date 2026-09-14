@@ -147,7 +147,7 @@ void WCollector::ResolveCycleRef()
             return;
         }
 
-        U32 id = static_cast<ExportObject*>(it->first)->GetId();
+        U32 id = static_cast<ExportObject*>(it->first.object)->GetId();
         size_t externIndex = cycleRefProgress[id];
         void* returnUnit = nullptr;
         for (;;) {
