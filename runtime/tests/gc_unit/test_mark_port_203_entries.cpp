@@ -156,6 +156,11 @@ struct MarkPort203TestAccess {
     }
     static void Collect(WCollector& collector, bool major)
     {
+        // The major driver normally initializes old marking in its young prelude.
+        // This focused old-body fixture supplies the same product initialization.
+        if (major) {
+            collector.StartOldMarkWork();
+        }
         collector.DoGarbageCollection(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
     }
 };
@@ -279,12 +284,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     fx.region1 = RegionInfo::InitRegion(1, 4, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     fx.region1->SetYoungRegionFlag(major ? 0 : 1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    if (major) {
-        (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region1->GetRegionSize());
-    } else {
-        (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
-    }
+    // Let the product allocate and own this page's livemap. Promotion transfers
+    // that ownership (ZPage::clone_for_promotion, zPage.cpp:64); a bitmap
+    // planted outside LiveInfoArena cannot participate in a real collection.
 
     alignas(TypeInfo) unsigned char arrayTypeStorage[sizeof(TypeInfo)]{};
     auto* arrayType = reinterpret_cast<TypeInfo*>(arrayTypeStorage);
@@ -449,7 +451,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     }
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG).reason = oldReason;
-    MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
     if (result.allocationBuffer != nullptr) {
         result.allocationBuffer->SetRegion(result.previousRegion);
         if (result.previousBuffer == nullptr) {
@@ -459,6 +460,11 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
             delete result.allocationBuffer;
         }
     }
+    // Worker TLS cleanup must finish while its collector still owns publication.
+    for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+        collector.GetGenerationCycle(generation).StopWorkers();
+    }
+    MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
     std::fprintf(stderr, "M2_ALLOC_RESULT attempted=%d objects=%u bytes=%zu\n",
                  result.allocationAttempted, result.allocatedObjects, static_cast<size_t>(result.allocatedBytes));
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",
