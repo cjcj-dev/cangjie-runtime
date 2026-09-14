@@ -325,6 +325,7 @@ MAIN_SOURCES=(
   "$SRC/test_tlab_usage.cpp"
   "$SRC/test_shared_small_page.cpp"
   "$SRC/test_young_weak.cpp"
+  "$SRC/test_native_root_current.cpp"
   "$SRC/test_relocation_set_selector.cpp"
   "$SRC/test_store_barrier_buffer.cpp"
   "$SRC/test_barrier_old_atomic.cpp"
