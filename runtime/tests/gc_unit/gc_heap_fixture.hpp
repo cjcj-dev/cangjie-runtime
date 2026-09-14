@@ -100,6 +100,8 @@ struct GcHeapFixture {
         }
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
         EnsureHeapRange(heapStart);
+        // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
+        Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * RegionInfo::UNIT_SIZE}});
         for (Generation generation : {Generation::Young, Generation::Old}) {
             if (LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation).Sequence() == 0) {
                 AdvanceGeneration(generation);
