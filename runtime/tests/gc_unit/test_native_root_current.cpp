@@ -11,7 +11,9 @@
 #include "ObjectModel/RefField.inline.h"
 #include <atomic>
 #include <cstdio>
+#include <dlfcn.h>
 #include <string>
+#include <fstream>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -47,11 +49,24 @@ struct RelocationReceiptTestAccess {
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 namespace {
+void PrintNativeRootMaps()
+{
+    std::ifstream maps("/proc/self/maps");
+    std::string line;
+    while (std::getline(maps, line)) {
+        if (line.find("libcangjie-runtime.so") != std::string::npos ||
+            line.find("libboundscheck.so") != std::string::npos) {
+            std::fprintf(stderr, "NATIVE_ROOT_MAPS %s\n", line.c_str());
+        }
+    }
+}
+
 // ZMarkOldRootsTask -> ZMarkOopClosure (zMark.cpp:798-829): colored roots
 // resolve before marker publication. CompactRegion supplies the actual to;
 // no forwarding mapping or consumer argument is manufactured by this test.
 void CheckNativeRoot(bool minor, bool plain = false)
 {
+    PrintNativeRootMaps();
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
@@ -93,7 +108,19 @@ void CheckNativeRoot(bool minor, bool plain = false)
     selected.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
-    region->PrepareForwardableRegion(region->GetMarkView<Generation::Young>());
+    // Invoke the explicit product instantiation, not a header-instantiated
+    // fixture copy of the forwarding publication mechanism.
+    using Prepare = void (*)(RegionInfo*, MarkView<Generation::Young>);
+    void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    GC_EXPECT_TRUE(product != nullptr);
+    auto prepare = reinterpret_cast<Prepare>(dlsym(product,
+        "_ZN12MapleRuntime10RegionInfo24PrepareForwardableRegionILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE"));
+    GC_EXPECT_TRUE(prepare != nullptr);
+    Dl_info identity{};
+    GC_EXPECT_TRUE(dladdr(reinterpret_cast<void*>(prepare), &identity) != 0 &&
+                   identity.dli_fname != nullptr && std::strstr(identity.dli_fname, "libcangjie-runtime.so") != nullptr);
+    prepare(region, region->GetMarkView<Generation::Young>());
+    dlclose(product);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_PREFORWARD);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
@@ -173,6 +200,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, PlainMinorRejected) { CheckPlainRejected(tru
 GC_OTHER_VM_TEST(NativeRootCurrent, PlainMajorRejected) { CheckPlainRejected(false); }
 GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
 {
+    PrintNativeRootMaps();
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
