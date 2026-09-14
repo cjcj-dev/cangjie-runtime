@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -22,11 +23,14 @@ def compile_one(item):
     arm, level = item
     sdk = old / 'gate-sdk' if arm == 'baseline' else root / 'gate-sdk'
     out = root / arm / 'replay' / level
+    if out.exists():
+        shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
     (out / 'temps').mkdir(exist_ok=True)
     (out / source.name).write_bytes(source.read_bytes())
     env = os.environ.copy()
     env['CANGJIE_HOME'] = str(sdk)
+    env['cjHeapSize'] = '24GB'
     env['LD_LIBRARY_PATH'] = f'{old}/host/runtime/lib/linux_x86_64_cjnative:{sdk}/tools/lib:{old}/host/third_party/llvm/lib'
     argv = [str(sdk / 'bin/cjc'), source.name, '-' + level, '-g', '--static-std',
             '--save-temps', str(out / 'temps'), '-V', '-o', str(out / 'global_slot_probe')]
@@ -64,6 +68,7 @@ checker = checker.replace("['baseline','green','producer','consumer','restored']
 (root / 'check-replay.py').write_text(checker)
 subprocess.run([sys.executable, str(root / 'check-replay.py')], check=True)
 checks = json.loads((root / 'replay-checks.json').read_text())
+failed = False
 for result in checks:
     directory = root / result['arm'] / 'replay' / result['level']
     assemblies = {str(p): p.read_text() for p in (directory / 'temps').glob('*.s')}
@@ -81,5 +86,5 @@ for result in checks:
     assembly_pass = bool(asm_rows) and all(row['passed'] for row in asm_rows)
     passed = result['static_pass'] == expected_static and result['atomic_pass'] and assembly_pass == expected_static
     print('ASSERT_REACHED', result['arm'], result['level'], 'static_route', passed)
-    if not passed:
-        sys.exit(2)
+    failed |= not passed
+sys.exit(2 if failed else 0)
