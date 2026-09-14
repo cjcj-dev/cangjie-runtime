@@ -444,12 +444,19 @@ public:
         if (obj != nullptr) {
             RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
-                const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(ghost->GetOwnerGeneration()));
-                if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
-                    const ForwardingProvenance provenance{
-                        ForwardingHolderKind::HeapRef, this, &obj
-                    };
-                    obj = ValidateCurrentValue(obj, provenance);
+                // zGeneration.inline.hpp:131-140: relocation belongs to the
+                // installed forwarding generation, even when the page has
+                // already been promoted in place.
+                const auto owner = ForwardingTable::RetainPageOwner(ghost);
+                if (owner) {
+                    const auto generation = static_cast<ZGenerationId>(owner->table_generation());
+                    const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(generation));
+                    if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
+                        const ForwardingProvenance provenance{
+                            ForwardingHolderKind::HeapRef, this, &obj
+                        };
+                        obj = relocate_or_remap_object(obj, generation, provenance);
+                    }
                 }
             }
         }

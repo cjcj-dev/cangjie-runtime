@@ -2918,3 +2918,67 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorStoredCurrentRootRemapsAfterOldCo
 {
     CheckCompactIncoming(true, false, true, false, true);
 }
+
+// ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131-140)
+// selects the forwarding generation, not the page's post-promotion generation.
+namespace {
+void ExerciseRawPin(GCPhase phase, bool promoted, bool existingReceipt)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* source = ResetDeliveryUnit(fx, 4);
+    RegionInfo* destination = ResetDeliveryUnit(fx, 3);
+    source->SetYoungRegionFlag(promoted ? 1 : 0);
+    const Generation generation = promoted ? Generation::Young : Generation::Old;
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart());
+    source->SetRegionAllocPtr(source->GetRegionStart() + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCCycleGeneration::OLD, promoted ? GCPhase::GC_PHASE_IDLE : phase);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, promoted ? phase : GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
+    DeliverySharedPageScope allocation(destination);
+    const MAddress expected = destination->GetRegionStart();
+    if (existingReceipt) {
+        (void)RelocationReceiptTestAccess::ProductRelocateOrRemap(
+            collector, from, static_cast<ZGenerationId>(generation));
+    }
+    // Model the page-generation publication after promotion while retaining
+    // the young set's installed carrier. The pin input is still the from address.
+    if (promoted) source->SetYoungRegionFlag(0);
+    // A detached source allows a broken pin to reach the result assertion,
+    // rather than stopping earlier at the independent FROM-list guard.
+    source->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    GC_EXPECT_TRUE(handle != nullptr);
+    void* symbol = dlsym(handle, "_ZN12MapleRuntime10WCollector19PinRawPointerObjectEPNS_10BaseObjectE");
+    GC_EXPECT_TRUE(symbol != nullptr);
+    Dl_info identity {};
+    GC_EXPECT_TRUE(dladdr(symbol, &identity) != 0 && identity.dli_fname != nullptr &&
+                   std::strstr(identity.dli_fname, "libcangjie-runtime.so") != nullptr);
+    using Pin = BaseObject* (*)(WCollector*, BaseObject*);
+    BaseObject* result = reinterpret_cast<Pin>(symbol)(&collector, from);
+    const auto fromCount = source->GetRawPointerObjectCount();
+    const auto toCount = destination->GetRawPointerObjectCount();
+    std::fprintf(stderr, "RAW_PIN_ASSERT phase=%u promoted=%u receipt=%u result=%zx expected=%zx "
+                         "from_count=%d to_count=%d product=%s\n",
+                 static_cast<unsigned>(phase), promoted, existingReceipt,
+                 reinterpret_cast<MAddress>(result), expected, fromCount, toCount, identity.dli_fname);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(result), expected);
+    GC_EXPECT_EQ(fromCount, 0);
+    GC_EXPECT_EQ(toCount, 1);
+    collector.RemoveRawPointerObject(result);
+    GC_EXPECT_EQ(destination->GetRawPointerObjectCount(), 0);
+    dlclose(handle);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    ForwardingTable::ResetRelocationSet(generation);
+    source->DispelGhostFromRegion();
+    source->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+}
+GC_TEST(RawPinProduct, PreforwardCopiesBeforePin) { ExerciseRawPin(GCPhase::GC_PHASE_PREFORWARD, false, false); }
+GC_TEST(RawPinProduct, ForwardCopiesBeforePin) { ExerciseRawPin(GCPhase::GC_PHASE_FORWARD, false, false); }
+GC_TEST(RawPinProduct, PreforwardUsesYoungCarrierAfterPromotion) { ExerciseRawPin(GCPhase::GC_PHASE_PREFORWARD, true, true); }
+GC_TEST(RawPinProduct, ForwardUsesYoungCarrierAfterPromotion) { ExerciseRawPin(GCPhase::GC_PHASE_FORWARD, true, true); }
