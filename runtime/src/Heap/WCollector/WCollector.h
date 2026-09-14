@@ -210,7 +210,7 @@ public:
         CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
         CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
         for (auto& entry : discoveredExternObjects) {
-            std::list<BaseObject*>& destination = cycleRefWorkStack[entry.first];
+            ValueRootList& destination = cycleRefWorkStack[entry.first];
             destination.splice(destination.end(), entry.second);
         }
         discoveredExternObjects.clear();

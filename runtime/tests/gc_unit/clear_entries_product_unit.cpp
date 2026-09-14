@@ -3402,7 +3402,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
 
 #include "b09_runtime_fixture.hpp"
 
-static void CheckCompactIncoming(bool overlapping, bool external = false)
+static void CheckCompactIncoming(bool overlapping, bool external = false, bool major = false)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture& fx = ProductFixture();
@@ -3444,6 +3444,14 @@ static void CheckCompactIncoming(bool overlapping, bool external = false)
     const bool identity = RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, current);
     std::fprintf(stderr, "B09_OVERLAP_TARGET_ASSERT current_identity=%d\n", identity);
     GC_EXPECT_TRUE(identity);
+    const auto visited = major ? RelocationReceiptTestAccess::EnumMajorValueRoots(collector)
+                               : RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
+    const bool consumerIdentity = visited.size() == 2 &&
+        std::all_of(visited.begin(), visited.end(), [current](BaseObject* p) { return p == current; }) &&
+        RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, current);
+    std::fprintf(stderr, "B09_CONSUMER_TARGET_ASSERT mode=%s count=%zu identity=%d\n",
+                 major ? "major" : "minor", visited.size(), consumerIdentity);
+    GC_EXPECT_TRUE(consumerIdentity);
 }
 
 GC_OTHER_VM_TEST(ValueRootCurrentization, IncomingCurrentCompactDestinationKeepsIdentity)
@@ -3459,4 +3467,14 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, NonOverlappingCurrentDestinationKeepsI
 GC_OTHER_VM_TEST(ValueRootCurrentization, ExternalCurrentDestinationKeepsIdentity)
 {
     CheckCompactIncoming(false, true);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MajorIncomingCurrentCompactDestinationKeepsIdentity)
+{
+    CheckCompactIncoming(true, false, true);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MajorExternalCurrentDestinationKeepsIdentity)
+{
+    CheckCompactIncoming(false, true, true);
 }

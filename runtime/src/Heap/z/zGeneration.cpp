@@ -805,26 +805,29 @@ BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const v
     return current;
 }
 
-void TracingCollector::CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots, Generation generation) const
+void TracingCollector::CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const
 {
-    std::unordered_set<BaseObject*> current;
+    ValueRootSet current;
     current.reserve(roots.size());
-    for (BaseObject* value : roots) {
-        current.insert(ResolveCurrentValueRoot(value, &roots, generation));
+    for (const ValueRoot& value : roots) {
+        current.insert(ValueRoot(ResolveCurrentValueRoot(value, &roots, generation, value.Stage()),
+                                 ForwardingStage::IncomingNew));
     }
     roots.swap(current);
 }
 
 void TracingCollector::CurrentizeValueRootMap(
-    std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots, Generation generation) const
+    ValueRootMap& roots, Generation generation) const
 {
-    std::unordered_map<BaseObject*, std::list<BaseObject*>> current;
+    ValueRootMap current;
     current.reserve(roots.size());
     for (const auto& entry : roots) {
-        BaseObject* key = ResolveCurrentValueRoot(entry.first, &roots, generation);
-        std::list<BaseObject*>& values = current[key];
-        for (BaseObject* value : entry.second) {
-            values.push_back(ResolveCurrentValueRoot(value, &roots, generation));
+        ValueRoot key(ResolveCurrentValueRoot(entry.first, &roots, generation, entry.first.Stage()),
+                      ForwardingStage::IncomingNew);
+        ValueRootList& values = current[key];
+        for (const ValueRoot& value : entry.second) {
+            values.emplace_back(ResolveCurrentValueRoot(value, &roots, generation, value.Stage()),
+                                ForwardingStage::IncomingNew);
         }
     }
     roots.swap(current);
@@ -840,10 +843,10 @@ void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
         CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Old);
         CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Old);
-        for (auto* obj : resurrectedExportObjectes) {
+        for (BaseObject* obj : resurrectedExportObjectes) {
             rootSet.push_back(obj);
         }
-        for (auto* obj : resurrectedExportObjectesForwardPhase) {
+        for (BaseObject* obj : resurrectedExportObjectesForwardPhase) {
             rootSet.push_back(obj);
         }
     }
@@ -854,7 +857,7 @@ void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
         BaseObject* exportObj = it->first;
         rootSet.push_back(exportObj);
         for (auto &externObj : it->second) {
-            rootSet.push_back(externObj);
+            rootSet.push_back(externObj.object);
         }
         it++;
     }
