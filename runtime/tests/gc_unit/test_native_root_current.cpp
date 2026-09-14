@@ -68,7 +68,12 @@ void CheckNativeRoot(bool minor, bool plain = false)
     resources.GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold = 1;
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    // Keep a second live object after the root object. In-place compaction
+    // reuses the root's old address for that object. A broken remap therefore
+    // reaches the address invariant with a valid, but wrong, object instead
+    // of being hidden by an earlier object-header check.
+    BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(from) + from->GetSize());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
     NativeSlot slot(StoreGoodPointer(from));
     NativeSlot nullSlot(zpointer::null);
     NativeSlot* roots[] = {&slot, &nullSlot};
@@ -83,6 +88,7 @@ void CheckNativeRoot(bool minor, bool plain = false)
     LiveInfo* live = fx.PlantLiveInfo(region);
     auto* bitmap = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(from)), from->GetSize(), region->GetRegionSize());
+    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(second)), second->GetSize(), region->GetRegionSize());
     RegionList selected("native-root-relocation");
     selected.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
