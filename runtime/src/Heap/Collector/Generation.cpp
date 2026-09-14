@@ -60,9 +60,7 @@ std::atomic<Mutator*> g_markBeforeMarkEndProducer { nullptr };
 std::atomic<BaseObject*> g_markBeforeMarkEndFirst { nullptr };
 std::atomic<BaseObject*> g_markBeforeMarkEndSecond { nullptr };
 std::atomic<uint64_t> g_markBeforeMarkEndPublications { 0 };
-std::atomic<BaseObject*> g_allocBlackDuringConcurrent { nullptr };
 std::atomic<BaseObject*> g_y2yDuringConcurrent { nullptr };
-std::atomic<BaseObject*> g_leftoverAllocBlackBeforePause { nullptr };
 std::atomic<BaseObject*> g_leftoverY2yBeforePause { nullptr };
 std::atomic<Mutator*> g_exportRootAfterT1Producer { nullptr };
 std::atomic<BaseObject*> g_exportRootAfterT1Holder { nullptr };
@@ -166,11 +164,6 @@ void PublishMarkBeforeMarkEndTestReceipt()
     producer->FlushStoreBarrierBuffer();
 }
 
-void ArmAllocBlackDuringConcurrentTestReceipt(BaseObject* object)
-{
-    g_allocBlackDuringConcurrent.store(object, std::memory_order_release);
-}
-
 void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder)
 {
     g_y2yDuringConcurrent.store(holder, std::memory_order_release);
@@ -178,28 +171,19 @@ void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder)
 
 void PublishConcurrentYoungProducersTestReceipt()
 {
-    BaseObject* allocBlack = g_allocBlackDuringConcurrent.exchange(nullptr, std::memory_order_acq_rel);
-    if (allocBlack != nullptr) {
-        AllocBuffer::GetOrCreateAllocBuffer()->PushYoungAllocBlack(allocBlack);
-    }
     BaseObject* y2y = g_y2yDuringConcurrent.exchange(nullptr, std::memory_order_acq_rel);
     if (y2y != nullptr) {
         AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);
     }
 }
 
-void ArmLeftoverBeforePauseTestReceipt(BaseObject* allocBlack, BaseObject* y2yHolder)
+void ArmLeftoverBeforePauseTestReceipt(BaseObject* y2yHolder)
 {
-    g_leftoverAllocBlackBeforePause.store(allocBlack, std::memory_order_release);
     g_leftoverY2yBeforePause.store(y2yHolder, std::memory_order_release);
 }
 
 void PublishLeftoverBeforePauseTestReceipt()
 {
-    BaseObject* allocBlack = g_leftoverAllocBlackBeforePause.exchange(nullptr, std::memory_order_acq_rel);
-    if (allocBlack != nullptr) {
-        AllocBuffer::GetOrCreateAllocBuffer()->PushYoungAllocBlack(allocBlack);
-    }
     BaseObject* y2y = g_leftoverY2yBeforePause.exchange(nullptr, std::memory_order_acq_rel);
     if (y2y != nullptr) {
         AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);

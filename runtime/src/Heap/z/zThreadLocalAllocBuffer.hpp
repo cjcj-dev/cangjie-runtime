@@ -50,54 +50,6 @@ public:
     }
     void CommitRawPointerRegions();
 
-    // youngconc: TRACE-window allocate-black greys (mutator-only push; GC merges at STW2).
-    // Paint alone makes MarkObject claim skip TraceYoungClosure → never reachableVec/fields.
-    void PushYoungAllocBlack(BaseObject* obj)
-    {
-        std::lock_guard<std::mutex> lock(handoffLock);
-        youngAllocBlack.emplace_back(obj);
-    }
-    size_t YoungAllocBlackCount() const
-    {
-        std::lock_guard<std::mutex> lock(handoffLock);
-        return youngAllocBlack.size();
-    }
-
-    template<class WorkStack>
-    inline void MergeYoungAllocBlack(WorkStack& workStack)
-    {
-        std::list<BaseObject*> pending;
-        {
-            std::lock_guard<std::mutex> lock(handoffLock);
-            pending.swap(youngAllocBlack);
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        FireHandoffHook(youngAllocBlackHandoffHook, youngAllocBlackHandoffHookContext);
-#endif
-        for (BaseObject* obj : pending) {
-            workStack.push_back(obj);
-        }
-    }
-
-    // Already-painted allocate-black work must keep the Follow bit. A plain
-    // MarkAndFollow push would skip children once the mark bit is claimed.
-    template<class WorkStack>
-    inline void MergeYoungAllocBlackFollow(WorkStack& workStack)
-    {
-        std::list<BaseObject*> pending;
-        {
-            std::lock_guard<std::mutex> lock(handoffLock);
-            pending.swap(youngAllocBlack);
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        FireHandoffHook(youngAllocBlackHandoffHook, youngAllocBlackHandoffHookContext);
-#endif
-        for (BaseObject* obj : pending) {
-            workStack.push_back(MarkStackEntry::FollowOnly(obj));
-        }
-    }
-
-
     // h3seed2: young→young write dirties the *holder object* (not the field slot).
     // Minor root enum merges these into the product work stack so FYS closure reaches
     // ArrayList/HashMap containers without recording every y2y field in remset.
@@ -178,7 +130,6 @@ public:
     // container.  A publication that lands in this interval is dropped by the
     // following clear() and never reaches any batch.
     using HandoffHook = void (*)(void*);
-    void SetYoungAllocBlackHandoffHookForTest(HandoffHook hook, void* context);
 #endif
 
     void FlushRegion();
@@ -215,8 +166,6 @@ private:
     // allocation context is responsible to notify collector when these objects are safe to be collected.
     RegionList tlRawPointerRegions;
     RegionList tlLargeRawPointerRegions;
-    // youngconc allocate-black greys (see PushYoungAllocBlack)
-    std::list<BaseObject*> youngAllocBlack;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
     mutable std::mutex y2yDirtyLock;
     std::unordered_set<BaseObject*> y2yDirtyHolders;
@@ -228,8 +177,6 @@ private:
 #endif
 #if defined(MRT_GC_UNIT_TESTS)
     // Last, so tlRegion keeps offset 0 (RegionSpace.cpp:255 static_assert).
-    HandoffHook youngAllocBlackHandoffHook{ nullptr };
-    void* youngAllocBlackHandoffHookContext{ nullptr };
 #endif
 };
 } // namespace MapleRuntime

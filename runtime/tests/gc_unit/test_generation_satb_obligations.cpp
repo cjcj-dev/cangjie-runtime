@@ -85,20 +85,6 @@ GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
     GC_EXPECT_TRUE(oldObjects.front() == fx.obj0);
 }
 
-GC_TEST(GenerationMark, AllocatedBlackPublishesFollowWithoutSatbNode)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture mark;
-    fx.region0->SetYoungRegionFlag(1);
-    Mutator mutator;
-    mutator.PublishYoungAllocBlack(fx.obj0);
-    GC_EXPECT_EQ(mark.YoungPending(), 1u);
-    BaseObject* observed = nullptr;
-    bool follow = false;
-    mark.Drain([&](BaseObject* object, bool value) { observed = object; follow = value; });
-    GC_EXPECT_TRUE(observed == fx.obj0);
-    GC_EXPECT_TRUE(follow);
-}
 // Migrated weak-get cases from gc.TestReferenceRefersToDuringConcMark and
 // ZBarrier::blocking_keep_alive_on_weak_slow_path. These are admission tests;
 // the fixture does not execute the old mark-end pause or the rendezvous.

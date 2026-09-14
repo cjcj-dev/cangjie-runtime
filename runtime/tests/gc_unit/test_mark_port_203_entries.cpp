@@ -195,55 +195,14 @@ struct ArrayClosureResult {
     uint32_t objects = 0;
     uint64_t bytes = 0;
     size_t publishedObjects = 0;
-    bool allocateBlack = false;
-    bool allocationAttempted = false;
-    RegionInfo* allocationRegion = nullptr;
-    TypeInfo* allocationType = nullptr;
-    AllocBuffer* allocationBuffer = nullptr;
-    AllocBuffer* previousBuffer = nullptr;
-    RegionInfo* previousRegion = nullptr;
-    BaseObject* allocated = nullptr;
-    uint32_t allocatedObjects = 0;
-    uint64_t allocatedBytes = 0;
+
 };
 ArrayClosureResult* arrayClosureResult = nullptr;
 void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
 {
     auto& result = *arrayClosureResult;
-    if (result.allocateBlack && !result.allocationAttempted) {
-        result.allocationAttempted = true;
-        // Inject a real mutator allocation after the initial GC closure.
-        // Allocate itself claims live and publishes its private Follow work;
-        // the test only initializes the returned object's header and field.
-        result.previousBuffer = AllocBuffer::GetAllocBuffer();
-        result.allocationBuffer = AllocBuffer::GetOrCreateAllocBuffer();
-        result.previousRegion = result.allocationBuffer->GetRegion();
-        result.allocationRegion->SetYoungRegionFlag(1);
-        result.allocationRegion->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        result.allocationBuffer->SetRegion(result.allocationRegion);
-        // Exercise the mutator allocation producer, including its managed-context
-        // publication condition, rather than allocating on the GC coordinator.
-        Mutator allocationMutator;
-        Mutator* previousMutator = ThreadLocal::GetMutator();
-        allocationMutator.SetManagedContext(true);
-        ThreadLocal::SetMutator(&allocationMutator);
-        const MAddress address = result.allocationBuffer->Allocate(2 * sizeof(MAddress), AllocType::MOVEABLE_OBJECT);
-        if (address != 0) {
-            result.allocated = reinterpret_cast<BaseObject*>(address);
-            *reinterpret_cast<uintptr_t*>(address) = reinterpret_cast<uintptr_t>(result.allocationType);
-            HeapSlotAt<>(address + TYPEINFO_PTR_SIZE).StoreColoured(StoreGoodPointer((*result.children)[0]));
-        }
-        ThreadLocal::SetMutator(previousMutator);
-        allocationMutator.SetManagedContext(false);
-        // The mapped fixture page is not in the allocator's intrusive TL
-        // list. Restore the buffer shortcut before the GC's ordinary flush;
-        // the real private Follow queue remains registered for consumption.
-        result.allocationBuffer->SetRegion(result.previousRegion);
-    }
-    if (result.allocated != nullptr) {
-        result.allocatedObjects = result.allocationRegion->GetLiveObjectCount();
-        result.allocatedBytes = result.allocationRegion->GetLiveByteCount();
-    }
+
+
     auto isMarked = [&](BaseObject* object) {
         return result.region->IsYoungRegion()
             ? result.region->IsMarkedObject(result.region->GetMarkView<Generation::Young>(), object)
@@ -268,7 +227,7 @@ void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
     result.publishedObjects = reachable == nullptr ? 0 : reachable->size();
 }
 
-void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack = false, bool markOnly = false,
+void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = false,
                         size_t length = 3 * MarkPartialArray::MIN_LENGTH + 17, bool structArray = false,
                         int duplicateRootOrder = 0)
 {
@@ -342,9 +301,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     const size_t tail0 = referenceSlots > 2 * MarkPartialArray::MIN_LENGTH ? MarkPartialArray::MIN_LENGTH - 1 : referenceSlots - 4;
     const size_t tail1 = referenceSlots > 2 * MarkPartialArray::MIN_LENGTH ? MarkPartialArray::MIN_LENGTH : referenceSlots - 3;
     const size_t tail2 = referenceSlots > 2 * MarkPartialArray::MIN_LENGTH ? 2 * MarkPartialArray::MIN_LENGTH : referenceSlots - 2;
-    if (!allocateBlack) {
-        slots[tail0].StoreColoured(StoreGoodPointer(children[0]));
-    }
+    slots[tail0].StoreColoured(StoreGoodPointer(children[0]));
     slots[tail1].StoreColoured(StoreGoodPointer(children[1]));
     slots[tail2].StoreColoured(StoreGoodPointer(children[2]));
     slots[referenceSlots - 1].StoreColoured(StoreGoodPointer(children[3]));
@@ -424,9 +381,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     result.array = array;
     result.children = &children;
     result.finalizable = finalizable;
-    result.allocateBlack = allocateBlack;
-    result.allocationRegion = fx.region0;
-    result.allocationType = fx.typeInfo;
     arrayClosureResult = &result;
     SetMarkClosureObserverForTest(ObserveArrayClosure);
     MarkPort203TestAccess::Collect(collector, major);
@@ -459,22 +413,12 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     }
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG).reason = oldReason;
-    if (result.allocationBuffer != nullptr) {
-        result.allocationBuffer->SetRegion(result.previousRegion);
-        if (result.previousBuffer == nullptr) {
-            result.allocationBuffer->SetRegion(nullptr);
-            result.allocationBuffer->Fini();
-            ThreadLocal::SetAllocBuffer(nullptr);
-            delete result.allocationBuffer;
-        }
-    }
+
     // Worker TLS cleanup must finish while its collector still owns publication.
     for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
         collector.GetGenerationCycle(generation).StopWorkers();
     }
     MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
-    std::fprintf(stderr, "M2_ALLOC_RESULT attempted=%d objects=%u bytes=%zu\n",
-                 result.allocationAttempted, result.allocatedObjects, static_cast<size_t>(result.allocatedBytes));
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",
                  variant, arrayMarked, markedChildren, objects, static_cast<size_t>(bytes), expectedBytes);
     GC_EXPECT_EQ(markedChildren, expectedChildren);
@@ -486,12 +430,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
         GC_EXPECT_FALSE(result.arrayStrong);
     }
     if (!major) {
-        GC_EXPECT_EQ(result.publishedObjects, expectedChildren + 1 + (allocateBlack ? 1 : 0));
+        GC_EXPECT_EQ(result.publishedObjects, expectedChildren + 1);
     }
-    if (allocateBlack) {
-        GC_EXPECT_EQ(result.allocatedObjects, 1u);
-        GC_EXPECT_EQ(result.allocatedBytes, static_cast<uint64_t>(2 * sizeof(MAddress)));
-    }
+
 }
 }
 
@@ -524,21 +465,16 @@ GC_OTHER_VM_TEST(MarkPort203Entries, MajorExportCollectionConsumesArrayTails)
 }
 #endif
 
-#if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(MarkPort203Entries, AllocateBlackFollowKeepsSingleLiveCount)
-{
-    RunArrayCollection("striped", 1, true);
-}
-#endif
+
 
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialInvisibleRootIsLiveWithoutFollowingFields)
 {
-    RunArrayCollection("serial", 0, false, true);
+    RunArrayCollection("serial", 0, true);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, StripedInvisibleRootIsLiveWithoutFollowingFields)
 {
-    RunArrayCollection("striped", 1, false, true);
+    RunArrayCollection("striped", 1, true);
 }
 #endif
 
@@ -552,44 +488,44 @@ GC_OTHER_VM_TEST(MarkPort203Entries, FinalizableArrayClosureAccountsWithoutStron
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialCollectionHandlesExactArrayThreshold)
 {
-    RunArrayCollection("serial", 0, false, false, MarkPartialArray::MIN_LENGTH);
+    RunArrayCollection("serial", 0, false, MarkPartialArray::MIN_LENGTH);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialCollectionHandlesOnePastArrayThreshold)
 {
-    RunArrayCollection("serial", 0, false, false, MarkPartialArray::MIN_LENGTH + 1);
+    RunArrayCollection("serial", 0, false, MarkPartialArray::MIN_LENGTH + 1);
 }
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(MarkPort203Entries, StructArrayCollectionVisitsBothFields)
 {
-    RunArrayCollection("striped", 1, false, false, MarkPartialArray::MIN_LENGTH + 1, true);
+    RunArrayCollection("striped", 1, false, MarkPartialArray::MIN_LENGTH + 1, true);
 }
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialInvisibleThenNormalAccountsOnce)
 {
-    RunArrayCollection("serial", 0, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
+    RunArrayCollection("serial", 0, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialNormalThenInvisibleAccountsOnce)
 {
-    RunArrayCollection("serial", 0, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
+    RunArrayCollection("serial", 0, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, ParallelInvisibleThenNormalAccountsOnce)
 {
-    RunArrayCollection("legacy-parallel", 1, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
+    RunArrayCollection("legacy-parallel", 1, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, ParallelNormalThenInvisibleAccountsOnce)
 {
-    RunArrayCollection("legacy-parallel", 1, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
+    RunArrayCollection("legacy-parallel", 1, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, StripedInvisibleThenNormalAccountsOnce)
 {
-    RunArrayCollection("striped", 1, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
+    RunArrayCollection("striped", 1, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, StripedNormalThenInvisibleAccountsOnce)
 {
-    RunArrayCollection("striped", 1, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
+    RunArrayCollection("striped", 1, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
 }
 #endif

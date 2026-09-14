@@ -228,56 +228,6 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                 reg->SetNotRelocatableThisCycle(1);
             }
         }
-        // youngconc allocate-black: paint mark bits + grey-list for TRACE/CLEAR
-        // window young allocs. Ordinary MOVEABLE alloc never MarkNewObject; pin reuse did
-        // MarkObject. GetRoute reads ghost liveInfo0, so also mark that face when present.
-        // The Follow receipt below makes the object part of mark termination rather than
-        // relying on a pause-local post-mark scan.
-        // isTraceRegion alone makes ShouldEnqueue skip SATB; without
-        // paint those objects stay live0Surv=0 at route under concurrent young mark.
-        {
-            if (reg != nullptr && !reg->IsLargeRegion()) {
-                GCPhase heapP = Heap::GetHeap().GetGCPhase(reg->IsYoungRegion()
-                    ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-                // concurrent mark window (TRACE/CLEAR) + young region.
-                // Also paint when isTraceRegion (ShouldEnqueue skip) even if mutator phase lags.
-                // Do not paint POST_TRACE/FORWARD (evacuate STW; csetalloc owns that surface).
-                const bool inConcMark = (heapP == GCPhase::GC_PHASE_TRACE ||
-                                         heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-                                         heapP == GCPhase::GC_PHASE_ENUM);
-                const bool needBlack = reg->IsYoungRegion() && (inConcMark || reg->IsTraceRegion());
-                if (needBlack) {
-                    MAddress regionStart = reg->GetRegionStart();
-                    MAddress regionEnd = reg->GetRegionEnd();
-                    size_t offset = static_cast<size_t>(addr - regionStart);
-                    size_t regionSize = static_cast<size_t>(regionEnd - regionStart);
-                    if (totalSize > 0 && (totalSize % 8) == 0 && offset + totalSize <= regionSize) {
-
-                        MarkView<Generation::Young> view = reg->GetMarkView<Generation::Young>();
-                        reg->VerifyMarkFaceOwner<Generation::Young>(
-                            reinterpret_cast<BaseObject*>(addr), "RegionSpace::AllocBlack.live");
-                        bool incLive = false;
-                        (void)reg->GetOrAllocMarkBitmap(view)->MarkBits(offset, totalSize, regionSize, incLive);
-                        if (incLive) {
-                            reg->AddLiveCounts(1, totalSize);
-                        }
-                        LiveInfo* ghost = reg->GetLiveInfo0ForProbe();
-                        RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : reg->GetOwnerMarkBitmap(ghost);
-                        if (ghost != nullptr && ghostBitmap != nullptr) {
-
-                            (void)ghostBitmap->MarkBits(offset, totalSize, regionSize);
-                        }
-                        // Paint claims the mark bit, so publish an explicit Follow
-                        // receipt into the same termination domain as barrier work.
-                        BaseObject* allocated = reinterpret_cast<BaseObject*>(addr);
-                        Mutator* m = Mutator::GetMutator();
-                        if (m != nullptr && m->IsManagedContext()) {
-                            m->PublishYoungAllocBlack(allocated);
-                        }
-                    }
-                }
-            }
-        }
     }
     DLOG(ALLOC, "alloc 0x%zx(%zu)", addr, totalSize);
     return addr;

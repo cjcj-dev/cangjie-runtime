@@ -87,6 +87,7 @@ public:
 
     // ZPage::generation()->seqnum(), shared by all pages in that generation.
     uint64_t GetSnapshotEpoch() const;
+    void InitializeAllocationWatermark();
 
     uint8_t GetRegionLifeSeq() const
     {

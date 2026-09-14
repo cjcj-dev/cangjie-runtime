@@ -250,6 +250,19 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         region = next;
     }
     stats.recentFullNs = TimeUtil::NanoSeconds() - subStart;
+    // ZPage::is_allocating (zPage.inline.hpp:180-185) expires at the next
+    // owning-generation sequence. LARGE pages stay on their existing lists;
+    // their allocation watermark must nevertheless advance at young mark-start.
+    auto snapshotYoungLarge = [](RegionList& list) {
+        list.VisitAllRegions([](RegionInfo* page) {
+            if (page->IsYoungRegion()) {
+                page->ClearLiveInfo(page->GetMarkView<Generation::Young>());
+            }
+        });
+    };
+    snapshotYoungLarge(recentLargeRegionList);
+    snapshotYoungLarge(oldLargeRegionList);
+    snapshotYoungLarge(largeTraceRegions);
     return stats;
 }
 

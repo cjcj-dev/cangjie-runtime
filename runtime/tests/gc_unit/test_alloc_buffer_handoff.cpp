@@ -55,16 +55,6 @@ struct LatePublication {
     bool fired{ false };
 };
 
-void PublishAllocBlackDuringMerge(void* context)
-{
-    auto& pub = *static_cast<LatePublication*>(context);
-    if (pub.fired) {
-        return;
-    }
-    pub.fired = true;
-    pub.buffer->PushYoungAllocBlack(pub.late);
-}
-
 size_t CountEntry(const std::vector<MarkStackEntry>& stack, BaseObject* obj)
 {
     size_t seen = 0;
@@ -118,74 +108,6 @@ GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
     }
     GC_EXPECT_EQ(CountEntry(delivered, fx.obj0), 1u);
     GC_EXPECT_EQ(CountEntry(delivered, fx.obj1), 1u);
-}
-
-// Row 2: AllocBuffer::youngAllocBlack.  Producer Barrier.cpp:436 and
-// RegionSpace.cpp:389 (PushYoungAllocBlack -> AllocBuffer.h:76).  Consumer
-// Mark.cpp:2243 (MergeYoungAllocBlackFollow -> AllocBuffer.h:94).  Allocate-black
-// has already claimed the mark bit, so a dropped entry is an object whose
-// children are never traced.
-GC_TEST(AllocBufferHandoff, AllocBlackPublishedDuringMergeIsDelivered)
-{
-    GcHeapFixture fx;
-    AllocBuffer* bufferOwner = new AllocBuffer();
-    AllocBuffer& buffer = *bufferOwner;
-    LatePublication pub{ &buffer, fx.obj1, false };
-
-    buffer.PushYoungAllocBlack(fx.obj0);
-    buffer.SetYoungAllocBlackHandoffHookForTest(PublishAllocBlackDuringMerge, &pub);
-
-    std::vector<MarkStackEntry> firstBatch;
-    buffer.MergeYoungAllocBlackFollow(firstBatch);
-    buffer.SetYoungAllocBlackHandoffHookForTest(nullptr, nullptr);
-    GC_EXPECT_TRUE(pub.fired);
-
-    std::vector<MarkStackEntry> secondBatch;
-    buffer.MergeYoungAllocBlackFollow(secondBatch);
-
-    GC_EXPECT_EQ(CountEntry(firstBatch, fx.obj0), 1u);
-    GC_EXPECT_EQ(CountEntry(firstBatch, fx.obj1) + CountEntry(secondBatch, fx.obj1), 1u);
-}
-
-// The allocator-level consequence of the same window.  std::list::clear() walks
-// _M_next and frees each node; emplace_back links a node onto the tail it read.
-// Overlapping them frees a pointer read from a torn chain, which is what glibc
-// reports as an unaligned fastbin chunk.  Other-VM so a glibc abort is this
-// test's failure and not the suite's.
-GC_OTHER_VM_TEST(AllocBufferHandoff, AllocBlackPublishDuringRetireKeepsHeapIntact)
-{
-    GcHeapFixture fx;
-    AllocBuffer* bufferOwner = new AllocBuffer();
-    AllocBuffer& buffer = *bufferOwner;
-    BurstGate gate;
-
-    for (size_t i = 0; i < kBurst; ++i) {
-        buffer.PushYoungAllocBlack(fx.obj0);
-    }
-    buffer.SetYoungAllocBlackHandoffHookForTest(ReleaseBurstAtRetire, &gate);
-
-    std::thread producer([&buffer, &gate, &fx]() {
-        {
-            std::unique_lock<std::mutex> lock(gate.lock);
-            gate.changed.wait(lock, [&gate]() { return gate.consumerAtRetire; });
-        }
-        for (size_t i = 0; i < kBurst; ++i) {
-            buffer.PushYoungAllocBlack(fx.obj1);
-        }
-    });
-    JoinGuard join(producer);
-
-    std::vector<MarkStackEntry> batch;
-    buffer.MergeYoungAllocBlackFollow(batch);
-    producer.join();
-    buffer.SetYoungAllocBlackHandoffHookForTest(nullptr, nullptr);
-
-    std::vector<MarkStackEntry> drain;
-    buffer.MergeYoungAllocBlackFollow(drain);
-
-    // Every published object must be accounted for exactly once across batches.
-    GC_EXPECT_EQ(CountEntry(batch, fx.obj0) + CountEntry(drain, fx.obj0), kBurst);
-    GC_EXPECT_EQ(CountEntry(batch, fx.obj1) + CountEntry(drain, fx.obj1), kBurst);
 }
 
 // The owner remains the OS thread even when two threads exchange allocator
