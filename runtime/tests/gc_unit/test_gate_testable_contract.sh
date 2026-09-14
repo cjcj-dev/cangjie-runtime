@@ -200,6 +200,7 @@ PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/only.trace" GC_UNIT_OUT="
   CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
   GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/only.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/only.log" 2>&1
+echo "LANGUAGE_ENTRY_ASSERT mode=only trace=$(paste -sd, "$fixture/only.trace")"
 [[ "$(cat "$fixture/only.trace")" == $'FINALIZER_TRIGGER\nPHASE_ENTRY_TRIGGER\nSEGMENTED_ARRAY_MANAGED' ]]
 /usr/bin/grep -qx 'LANGUAGE_TESTS=LANGUAGE_DONE' "$fixture/only.status"
 
@@ -254,7 +255,8 @@ for component in cjc llc opt std; do
   if [[ "$component" != std ]]; then
     [[ "$actual" == "$(sha256sum "$fixture/sdk/$file" | awk '{print $1}')" ]]
   fi
-  [[ "$(cat "$fixture/all.trace")" == $'FINALIZER_TRIGGER\nPHASE_ENTRY_TRIGGER\nSEGMENTED_ARRAY_MANAGED' ]]
+  echo "LANGUAGE_REEXEC_ASSERT component=$component trace=$(test ! -f "$fixture/all.trace" || paste -sd, "$fixture/all.trace")"
+  [[ "$(cat "$fixture/all.trace" 2>/dev/null || true)" == $'FINALIZER_TRIGGER\nPHASE_ENTRY_TRIGGER\nSEGMENTED_ARRAY_MANAGED' ]]
   /usr/bin/grep -qx 'CPP_SUITE_SOURCE=CACHE' "$fixture/all.status"
   /usr/bin/grep -qx 'LANGUAGE_TESTS=LANGUAGE_DONE' "$fixture/all.status"
 done
@@ -266,3 +268,20 @@ PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/all.trace" GC_UNIT_OUT="$
 [[ ! -f "$fixture/all.trace" ]]
 /usr/bin/grep -qx 'REASON=CACHED_PASS' "$fixture/all.status"
 echo 'LANGUAGE_CACHE_ASSERT unchanged=cache changed=fresh'
+
+# Identity collection must not allow an incomplete SDK or a missing compiler
+# host to reach a managed consumer. Both all and only use the same binding.
+for mode in all only; do
+  set +e
+  PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+    GC_UNIT_GATE_LANGUAGE_TESTS="$mode" GC_UNIT_OUT="$fixture/host-missing-$mode" \
+    CANGJIE_HOME="$fixture/sdk" CJC="$fixture/sdk/bin/cjc" \
+    GC_UNIT_CJC_RUNTIME_LIB_DIR="$fixture/missing-host" \
+    GCV2_RUNTIME_LIB_DIR="$fixture/lib" GC_UNIT_GATE_STATUS="$fixture/host-missing-$mode.status" \
+    bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/host-missing-$mode.log" 2>&1
+  host_rc=$?
+  set -e
+  echo "LANGUAGE_HOST_ASSERT mode=$mode rc=$host_rc"
+  [[ "$host_rc" -eq 2 ]]
+  /usr/bin/grep -qx 'REASON=LANGUAGE_HOST_RUNTIME_MISSING' "$fixture/host-missing-$mode.status"
+done

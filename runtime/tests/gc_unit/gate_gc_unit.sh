@@ -359,7 +359,7 @@ if [[ "$LANGUAGE_TEST_MODE" != "defer" && $FINALIZER_CAN_RUN -eq 1 ]]; then
   CJC_SHA256=$(sha256sum "$CJC_BIN" | awk '{print $1}')
   LLC_SHA256=$(sha256sum "$LANGUAGE_SDK/third_party/llvm/bin/llc" | awk '{print $1}')
   OPT_SHA256=$(sha256sum "$LANGUAGE_SDK/third_party/llvm/bin/opt" | awk '{print $1}')
-  STD_SHA256=$(cd "$LANGUAGE_SDK" && find lib/linux_x86_64_cjnative -maxdepth 1 \
+  STD_SHA256=$(cd "$LANGUAGE_SDK" && find -L lib/linux_x86_64_cjnative -maxdepth 1 \
     -name 'libcangjie-std-*.a' -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
   echo "GC_UNIT_LANGUAGE_IDENTITY sdk=$LANGUAGE_SDK cjc=$CJC_SHA256 llc=$LLC_SHA256 opt=$OPT_SHA256 std=$STD_SHA256"
 fi
