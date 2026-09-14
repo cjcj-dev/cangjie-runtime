@@ -153,19 +153,19 @@ struct RelocationReceiptTestAccess {
             it->second.size() == 1 && it->second.front() == value;
     }
 
-    static bool CycleHandoffEquals(WCollector& collector, BaseObject* key, BaseObject* value)
+    static bool CycleHandoffEquals(WCollector& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
     {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
         auto it = collector.cycleRefWorkStack.find(key);
-        return collector.discoveredExternObjects.empty() && collector.cycleRefWorkStack.size() == 1 &&
+        return collector.discoveredExternObjects.empty() && collector.cycleRefWorkStack.size() == owners &&
             it != collector.cycleRefWorkStack.end() && it->second.size() == 1 && it->second.front() == value;
     }
 
-    static bool DiscoveredCarrierEquals(WCollector& collector, BaseObject* key, BaseObject* value)
+    static bool DiscoveredCarrierEquals(WCollector& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
     {
         std::lock_guard<std::mutex> lock(collector.externMtx);
         auto it = collector.discoveredExternObjects.find(key);
-        return collector.discoveredExternObjects.size() == 1 &&
+        return collector.discoveredExternObjects.size() == owners &&
             it != collector.discoveredExternObjects.end() && it->second.size() == 1 &&
             it->second.front() == value;
     }
@@ -826,7 +826,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     (void)route;
 }
 
-GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBeforeMark)
+void RunMajorExportOwnership(bool sharedCycle)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager mutatorManager;
@@ -834,6 +834,15 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBefore
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     ExportForeignGraph graph(fx);
+
+    BaseObject* secondRoot = nullptr;
+    if (sharedCycle) {
+        secondRoot = fx.PlaceObject(graph.owner->GetRegionStart() + 192);
+        graph.owner->SetRegionAllocPtr(reinterpret_cast<MAddress>(secondRoot) + 64);
+        WeakGraph::Field(secondRoot).StoreColoured(GcUnit::StoreGoodPointer(graph.root));
+        WeakGraph::Field(graph.foreign).StoreColoured(GcUnit::StoreGoodPointer(graph.root));
+    }
+    const size_t owners = sharedCycle ? 2 : 1;
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
@@ -846,14 +855,19 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBefore
     space.GetRegionManager().AddRawPointerObject(graph.foreign);
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(graph.root);
 
+    const U64 secondHandle = sharedCycle ? Heap::GetHeap().RegisterExportRoot(secondRoot) : 0;
     RelocationReceiptTestAccess::RunMajorMark(collector);
     const bool producerCarrier =
-        RelocationReceiptTestAccess::DiscoveredCarrierEquals(collector, graph.root, graph.foreign);
+        RelocationReceiptTestAccess::DiscoveredCarrierEquals(collector, graph.root, graph.foreign, owners) &&
+        (!sharedCycle || RelocationReceiptTestAccess::DiscoveredCarrierEquals(
+            collector, secondRoot, graph.foreign, owners));
     const bool rootMarked = graph.IsMarked(graph.root);
     const bool consumerMarked = graph.IsMarked(graph.foreign);
     RelocationReceiptTestAccess::RunPostTrace(collector);
     const bool handoffCurrent =
-        RelocationReceiptTestAccess::CycleHandoffEquals(collector, graph.root, graph.foreign);
+        RelocationReceiptTestAccess::CycleHandoffEquals(collector, graph.root, graph.foreign, owners) &&
+        (!sharedCycle || RelocationReceiptTestAccess::CycleHandoffEquals(
+            collector, secondRoot, graph.foreign, owners));
     std::fprintf(stderr,
                  "VALUE_ROOT_RUNTIME_ASSERT major producer_carrier=%d root_marked=%d "
                  "consumer_marked=%d handoff_current=%d\n",
@@ -861,16 +875,26 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBefore
                  static_cast<int>(consumerMarked), static_cast<int>(handoffCurrent));
 
     Heap::GetHeap().RemoveExportObject(exportHandle);
+    if (sharedCycle) Heap::GetHeap().RemoveExportObject(secondHandle);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(producerCarrier);
     GC_EXPECT_TRUE(rootMarked);
-    // This is the target invariant: only the real FindUselessExternObjects
-    // consumer paints the foreign value recorded by the export ABI view.
+    // Marking and export ownership are independent product results.
     GC_EXPECT_TRUE(consumerMarked);
     GC_EXPECT_TRUE(handoffCurrent);
 }
 
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBeforeMark)
+{
+    RunMajorExportOwnership(false);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MajorExportOwnersSharePremarkedCycle)
+{
+    RunMajorExportOwnership(true);
+}
 
 // Directed port test for zHeapIterator.cpp:195-229 (no upstream standalone graph test):
 // W --weak--> R --strong--> C. The public iterator must report R itself.

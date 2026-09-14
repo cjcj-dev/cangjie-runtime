@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/WCollector/WCollector.h"
 
@@ -1349,7 +1350,6 @@ struct MajorMarkShared {
     size_t workerCount = 0;
     MarkDomain* domain = nullptr;
     bool partial = false;
-    BaseObject* exportOwner = nullptr;
     std::atomic<size_t> newlyMarked{ 0 };
 
     MarkStripeSet& Stripes() { return domain->Stripes(); }
@@ -1420,13 +1420,6 @@ private:
         }
         BaseObject* obj = entry.object();
         const bool wasMarked = collector.MarkEntryObject(obj, entry, &ctx.Cache());
-        if (shared.exportOwner != nullptr && entry.mark() && !wasMarked) {
-            TypeInfo* typeInfo = obj->GetTypeInfo();
-            if (typeInfo != nullptr && typeInfo->IsForeignType()) {
-                std::lock_guard<std::mutex> lock(collector.externMtx);
-                collector.discoveredExternObjects[shared.exportOwner].push_back(obj);
-            }
-        }
         if ((!entry.mark() || !wasMarked) && entry.follow()) {
             if (entry.mark()) {
                 nNewlyMarked++;
@@ -1509,7 +1502,7 @@ void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) 
                      gcThread ? MarkStackEntry::FollowOnly(object) : MarkStackEntry::MarkAndFollow(object), true);
 }
 
-size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, BaseObject* exportOwner)
+size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
 {
     GCWorkers& workersSet = GetWorkers(GCCycleGeneration::OLD);
     const uint32_t workers = workersSet.ActiveWorkers();
@@ -1523,7 +1516,6 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, 
     shared.collector = this;
     shared.workerCount = workers;
     shared.partial = partial;
-    shared.exportOwner = exportOwner;
     shared.domain = majorMarkDomain.get();
 
     MarkThreadLocalStacks& seed = majorMarkDomain->Stacks();
@@ -1572,16 +1564,39 @@ void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
         if (exportObj == nullptr) {
             continue;
         }
-        if (IsMarkedObject<Generation::Old>(exportObj)) {
-            continue;
-        }
         {
             std::lock_guard<std::mutex> lock(externMtx);
             (void)discoveredExternObjects[exportObj];
         }
         WorkStack exportSeed;
         exportSeed.push_back(entry);
-        markedObjectCount.fetch_add(RunMajorStripeMark(exportSeed, false, exportObj), std::memory_order_relaxed);
+        markedObjectCount.fetch_add(RunMajorStripeMark(exportSeed), std::memory_order_relaxed);
+
+        // ZMark::mark_and_follow (zMark.cpp:412-415) deduplicates GC liveness,
+        // not ownership. Cangjie's foreign-cycle handoff has no JNI equivalent:
+        // every export owner needs its own strong reachable foreign set, even
+        // when the young-roots prelude or another owner already marked it.
+        std::unordered_set<BaseObject*> visited;
+        std::vector<BaseObject*> pending{exportObj};
+        while (!pending.empty()) {
+            BaseObject* object = pending.back();
+            pending.pop_back();
+            if (!visited.insert(object).second) {
+                continue;
+            }
+            if (object->GetTypeInfo()->IsForeignType()) {
+                std::lock_guard<std::mutex> lock(externMtx);
+                discoveredExternObjects[exportObj].push_back(object);
+            }
+            // Discovery is not keep-alive (zReferenceProcessor.cpp:175-203):
+            // do not turn a weak referent into an export ownership edge.
+            HeapIterator::Fields(object, false, [&](BaseObject* holder, RefField<>& field) {
+                BaseObject* target = GetAndTryTagObj(RefSlotKind::STRONG, holder, field);
+                if (target != nullptr) {
+                    pending.push_back(target);
+                }
+            });
+        }
     }
 }
 

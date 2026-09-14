@@ -529,7 +529,7 @@ protected:
     void FindUselessExternObjects();
 
 private:
-    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false, BaseObject* exportOwner = nullptr);
+    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
 
