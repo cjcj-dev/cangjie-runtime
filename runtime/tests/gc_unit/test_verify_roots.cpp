@@ -44,6 +44,7 @@ GC_OTHER_VM_TEST(ZVerify, StackRootExpandsToActualHeapSlot)
         ZVerify::Object(reinterpret_cast<BaseObject*>(raw(slot.LoadPlain())), &slot);
     });
     GC_EXPECT_EQ(visits, size_t(1));
+    std::fprintf(stderr, "STACK_HEAP_SLOT_ASSERT_EXECUTED visits=%zu\n", visits);
 }
 
 GC_OTHER_VM_TEST(ZVerify, StackRootCycleTerminatesWithoutEmittingStackObject)

@@ -99,6 +99,22 @@ GC_OTHER_VM_TEST(ZVerify, RememberedCurrentAndPreviousFaces)
     GC_EXPECT_TRUE(remset.IsClearInRange(fixture.heapStart, RegionInfo::UNIT_SIZE, true));
 }
 
+// zForwarding.inline.hpp:116-119 / zVerify.cpp:601: installing a forwarding
+// must leave the selected source object's start bit visible to iteration.
+GC_OTHER_VM_TEST(ZVerify, SourcePreparationPreservesMarkedObjects)
+{
+    GcVerifyFixture fixture;
+    fixture.PrepareOldSource();
+    size_t visits = 0;
+    fixture.region0->VisitLiveObjectsUntilFalse([&](BaseObject* object) {
+        GC_EXPECT_TRUE(object == fixture.obj0);
+        ++visits;
+        return true;
+    });
+    GC_EXPECT_EQ(visits, size_t(1));
+    std::fprintf(stderr, "SOURCE_MARKED_OBJECT_ASSERT_EXECUTED visits=%zu\n", visits);
+}
+
 // test_zForwarding.cpp:ZForwardingTest.find_full plus zForwarding.cpp:369-409.
 GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
 {
