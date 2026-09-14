@@ -3050,7 +3050,8 @@ void ExerciseRawAcquire(GCPhase sourcePhase, bool compact, MIndex length,
         }
     }
     collector.SetGCPhase(GCCycleGeneration::YOUNG, sourcePhase);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, sourcePhase == GCPhase::GC_PHASE_IDLE
+        ? GCPhase::GC_PHASE_FORWARD : GCPhase::GC_PHASE_IDLE);
     const bool shouldResolve = compact && bypass == RawPinBypass::None && (sourcePhase == GCPhase::GC_PHASE_PREFORWARD ||
                                            sourcePhase == GCPhase::GC_PHASE_FORWARD);
     const MAddress expected = (shouldResolve ? start : from) + MArray::GetContentOffset();
