@@ -334,18 +334,9 @@ bool FreeRegionManager::TakeUncommitMemory(size_t maxBytes, uint64_t idleBeforeN
             InsertCommitted(*partition, extents[i].index, extents[i].count);
         }
         const auto& extent = extents.front();
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(extent.index));
-        bool inRelocate = false;
-        if (Heap::GetHeap().IsGcStarted()) {
-            const GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-            inRelocate = phase == GCPhase::GC_PHASE_POST_TRACE ||
-                         phase == GCPhase::GC_PHASE_PREFORWARD ||
-                         phase == GCPhase::GC_PHASE_FORWARD;
-        }
-        if (inRelocate || !ExtentReadyForReleasedCache(region)) {
-            InsertCommitted(*partition, extent.index, extent.count);
-            return false;
-        }
+        // zUncommitter.cpp:392-406: the mapped cache owns free memory, not
+        // a live page descriptor. Page retirement has already withdrawn its
+        // page-table entry before returning this extent to the cache.
         memory = PageMemory{extent.index, extent.count, 0, false};
         return true;
     }

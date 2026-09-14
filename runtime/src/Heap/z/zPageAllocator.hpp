@@ -285,17 +285,6 @@ public:
         return markQuarantineTree.GetTotalCount();
     }
 
-    static bool ExtentReadyForReleasedCache(RegionInfo* region)
-    {
-        if (region == nullptr) {
-            return true;
-        }
-        if (region->ForwardingRefCount() != 0) {
-            return false;
-        }
-        return true;
-    }
-
     void AddReleaseUnits(UnitIndex idx, UnitCount num, bool allowSaferegion = true);
     UnitCount GetDirtyUnitCount() const;
     UnitCount GetVirtualUnitCount() const;
