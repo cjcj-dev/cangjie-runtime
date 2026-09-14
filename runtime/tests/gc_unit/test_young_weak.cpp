@@ -49,6 +49,12 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, TracingCollector* collector)
     {
+        if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
+            // Worker TLS drains mark stacks through the collector during exit.
+            auto* previous = resources.collectorProxy.currentCollector;
+            previous->GetGenerationCycle(GCCycleGeneration::YOUNG).StopWorkers();
+            previous->GetGenerationCycle(GCCycleGeneration::OLD).StopWorkers();
+        }
         resources.collectorProxy.currentCollector = collector;
     }
 
@@ -187,6 +193,29 @@ public:
 
 private:
     Concurrency concurrency;
+};
+
+// Observe the existing product closure boundary before promotion replaces its map.
+// ZGenerationYoung completes marking before selecting/relocating pages.
+class YoungClosureObservation {
+public:
+    explicit YoungClosureObservation(std::function<void()> observe) : observe(std::move(observe))
+    {
+        current = this;
+        SetMarkClosureObserverForTest([](const std::vector<BaseObject*>*) {
+            ++current->calls;
+            current->observe();
+        });
+    }
+    ~YoungClosureObservation()
+    {
+        SetMarkClosureObserverForTest(nullptr);
+        current = nullptr;
+    }
+    size_t calls = 0;
+private:
+    std::function<void()> observe;
+    inline static YoungClosureObservation* current = nullptr;
 };
 
 struct ValueRootRoute {
@@ -384,12 +413,16 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
     ResetYoungWeakClosureTestReceipt();
 
+    bool strongMarked = false, weakMarked = false, referentMarked = false, childMarked = false;
+    YoungClosureObservation closure([&] {
+        strongMarked |= graph.IsMarked(graph.strongRoot);
+        weakMarked |= graph.IsMarked(graph.weak);
+        referentMarked |= graph.IsMarked(graph.referent);
+        childMarked |= graph.IsMarked(graph.child);
+    });
     RelocationReceiptTestAccess::RunYoungCollection(collector);
     const YoungWeakClosureTestReceipt receipt = ReadYoungWeakClosureTestReceipt();
-    const bool strongMarked = graph.IsMarked(graph.strongRoot);
-    const bool weakMarked = graph.IsMarked(graph.weak);
-    const bool referentMarked = graph.IsMarked(graph.referent);
-    const bool childMarked = graph.IsMarked(graph.child);
+    GC_EXPECT_TRUE(closure.calls > 0);
     std::fprintf(stderr,
                  "DETAIL young_weak variant=%s serial=%zu legacy_parallel=%zu striped=%zu "
                  "strong_mark=%d weak_mark=%d referent_mark=%d child_mark=%d\n",
@@ -756,9 +789,10 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
+    bool currentMarked = false;
+    YoungClosureObservation closure([&] { currentMarked |= IsValueRootMarked(route); });
     RelocationReceiptTestAccess::RunYoungCollection(collector);
-
-    const bool currentMarked = IsValueRootMarked(route);
+    GC_EXPECT_TRUE(closure.calls > 0);
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
