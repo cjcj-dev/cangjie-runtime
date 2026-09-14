@@ -35,6 +35,8 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void DrainDomain(MarkDomain& domain, Visitor&& visitor)
     {
+        // ZMark::flush publishes the mutator's partial stack before workers drain it.
+        ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
         MarkStackEntry entry;
         for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
             while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {

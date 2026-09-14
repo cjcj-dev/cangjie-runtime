@@ -770,7 +770,10 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     // ZBarrier::heap_store_slow_path (zBarrier.cpp:253-261): buffer (p, prev)
     // when possible; otherwise mark(addr) and remember(p) directly.
     const bool heapSlot = Heap::IsHeapAddress(fieldAddress);
-    if (kBufferStoreBarriers && !IsGcThread() && Mutator::GetMutator() != nullptr && heapSlot && obj != nullptr) {
+    // ZStoreBarrierBuffer::make_load_good (zStoreBarrierBuffer.cpp:121-140)
+    // requires a heap base. Otherwise use the existing mark-and-remember path.
+    if (kBufferStoreBarriers && heapSlot && Heap::IsHeapAddress(obj) &&
+        !IsGcThread() && Mutator::GetMutator() != nullptr) {
         ThreadLocal::GetGCData().storeBarrierBuffer.Add(fieldAddress, obj, prev, theRememberedSet);
         return;
     }
