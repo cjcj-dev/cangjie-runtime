@@ -5,6 +5,8 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Mutator/ThreadLocal.h"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Allocator/CartesianTree.h"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -130,6 +132,8 @@ static void ProductFragmentedAllocation(bool provideContiguousVirtual)
         parameters.regionSize = unit / 1024;
         parameters.exemptionThreshold = 0.8;
         manager.Initialize(8, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, parameters, 0.5);
+        Heap::GetHeap().GetRememberedSet().Initialize(
+            reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + metadata, 8 * unit);
         const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
         RegionInfo* first = manager.TakeRegion(2, role, false, false, false);
         RegionInfo* second = manager.TakeRegion(2, role, false, false, false);
@@ -143,7 +147,7 @@ static void ProductFragmentedAllocation(bool provideContiguousVirtual)
         GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 4U);
         if (provideContiguousVirtual) { manager.ReleaseRegion(second); }
         const size_t capacity = map->GetCommittedSize();
-        RegionInfo* result = manager.TakeRegion(provideContiguousVirtual ? 6 : 4, role, false, true, false);
+        RegionInfo* result = manager.TakeRegion(provideContiguousVirtual ? 6 : 4, role, false, false, false);
         if (provideContiguousVirtual) {
             GC_EXPECT_TRUE(result != nullptr);
             GC_EXPECT_EQ(result->GetRegionStart(), firstAddress);
@@ -195,6 +199,8 @@ static void ProductPartialGrowth(bool provideContiguousVirtual)
         parameters.regionSize = unit / 1024;
         parameters.exemptionThreshold = 0.8;
         manager.Initialize(12, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, parameters, 0.5);
+        Heap::GetHeap().GetRememberedSet().Initialize(
+            reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + metadata, 12 * unit);
         const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
         RegionInfo* regions[6];
         for (auto& region : regions) {
