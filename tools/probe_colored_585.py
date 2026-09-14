@@ -4,6 +4,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -49,14 +50,36 @@ def compile_one(item):
     (out / 'wall.txt').write_text(str(time.monotonic() - start) + '\n')
     return arm, level, rc
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-    results = list(pool.map(compile_one, [(a, o) for a in ['baseline', 'green'] for o in ['O0', 'O2']]))
-(root / 'evidence/probe-build.json').write_text(json.dumps(results, indent=2) + '\n')
-print(results)
-if any(rc for _, _, rc in results):
-    sys.exit(1)
+if '--check-only' not in sys.argv:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        arms = ['green'] if '--green-only' in sys.argv else ['baseline', 'green']
+        results = list(pool.map(compile_one, [(a, o) for a in arms for o in ['O0', 'O2']]))
+    (root / 'evidence/probe-build.json').write_text(json.dumps(results, indent=2) + '\n')
+    print(results)
+    if any(rc for _, _, rc in results):
+        sys.exit(1)
 # Preserve the reviewed function-level checker, changing only its input root/arms.
 checker = (reference / 'check-replay.py').read_text().replace(str(reference), str(root))
 checker = checker.replace("['baseline','green','producer','consumer','restored']", "['baseline','green']")
 (root / 'check-replay.py').write_text(checker)
 subprocess.run([sys.executable, str(root / 'check-replay.py')], check=True)
+checks = json.loads((root / 'replay-checks.json').read_text())
+for result in checks:
+    directory = root / result['arm'] / 'replay' / result['level']
+    assemblies = {str(p): p.read_text() for p in (directory / 'temps').glob('*.s')}
+    asm_rows = []
+    for row in result['static']:
+        name = re.escape(row['function'])
+        bodies = [(path, match.group(1)) for path, text in assemblies.items()
+                  for match in re.finditer(r'^"?' + name + r'"?:\s*\n(.*?)^\.Lfunc_end\d+:', text, re.M | re.S)]
+        calls = sum(len(re.findall(r'\b(?:callq?|jmpq?)\s+CJ_MCC_WriteStaticRef\b', body)) for _, body in bodies)
+        guards = [line for _, body in bodies for line in body.splitlines() if re.search(r'\bcmp[lq]?\s+\$(?:8|9|0x8|0x9),', line)]
+        asm_rows.append(dict(function=row['function'], files=[p for p, _ in bodies], runtime_calls=calls,
+                             phase_compares=guards, passed=len(bodies) == 1 and calls == row['expected'] and not guards))
+    (directory / 'assembly-checks.json').write_text(json.dumps(asm_rows, indent=2) + '\n')
+    expected_static = result['arm'] == 'green'
+    assembly_pass = bool(asm_rows) and all(row['passed'] for row in asm_rows)
+    passed = result['static_pass'] == expected_static and result['atomic_pass'] and assembly_pass == expected_static
+    print('ASSERT_REACHED', result['arm'], result['level'], 'static_route', passed)
+    if not passed:
+        sys.exit(2)
