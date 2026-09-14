@@ -112,7 +112,7 @@ struct RelocationReceiptTestAccess {
     {
         PrepareMajorRoots(collector);
         auto& cycle = collector.GetGenerationCycle(GCCycleGeneration::OLD);
-        cycle.SelectReason(GC_REASON_USER);
+        if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_USER);
         if (!cycle.Snapshot().active) cycle.Begin(1);
         collector.StartOldMarkWork();
 
