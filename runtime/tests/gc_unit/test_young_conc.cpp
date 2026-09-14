@@ -13,6 +13,7 @@
 // standalone gate supplies MRT_TESTABLE_INTERNALS only when those product
 // hooks exist; the top-level guard makes the default build an empty TU.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -322,7 +323,6 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorCreateDuringActiveEpochIsBornClean)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MRT_CjRuntimeInit();
     MutatorManager& manager = MutatorManager::Instance();
-    const size_t registeredBefore = manager.RuntimeMutatorRegistrySizeForTest();
     Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
     GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
     std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_begin\n");
@@ -333,7 +333,9 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorCreateDuringActiveEpochIsBornClean)
     std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_create mutator=%p\n", mutator);
     GC_EXPECT_TRUE(mutator != nullptr);
     GC_EXPECT_TRUE(mutator->FinishedEpochHandshake(epoch));
-    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), registeredBefore + 1u);
+    std::vector<Mutator*> registered;
+    manager.GetAllMutators(registered);
+    GC_EXPECT_EQ(std::count(registered.begin(), registered.end(), mutator), 1);
     manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
     std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_destroy\n");
     manager.EndEpochHandshakeLifecycleTest();
@@ -346,18 +348,22 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyDuringActiveEpochDefersStorage)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MRT_CjRuntimeInit();
     MutatorManager& manager = MutatorManager::Instance();
-    const size_t registeredBefore = manager.RuntimeMutatorRegistrySizeForTest();
     Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
     GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
     std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_begin\n");
     (void)manager.BeginEpochHandshakeLifecycleTest();
     std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_create\n");
-    (void)manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    Mutator* target = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    std::vector<Mutator*> registered;
+    manager.GetAllMutators(registered);
+    GC_EXPECT_EQ(std::count(registered.begin(), registered.end(), target), 1);
     std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_destroy\n");
     manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
     std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=after_destroy deferred=%zu\n",
                  manager.EpochHandshakeDestroyDeferredForTest());
-    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), registeredBefore);
+    registered.clear();
+    manager.GetAllMutators(registered);
+    GC_EXPECT_EQ(std::count(registered.begin(), registered.end(), target), 0);
     GC_EXPECT_EQ(manager.EpochHandshakeDestroyDeferredForTest(), 1u);
     manager.EndEpochHandshakeLifecycleTest();
     GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
