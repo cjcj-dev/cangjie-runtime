@@ -271,6 +271,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     MutatorManager manager;
     MarkPortRuntime runtime(manager);
     GcHeapFixture fx;
+    // Install the synthetic payload reservation before publishing GC roots.
+    Heap::OnHeapCreated(fx.heapStart);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     // An actual multi-unit page keeps all array slots in the mapped heap;
     // each subordinate unit resolves back to the same owning region.
     // ZPageTable::remove/insert (zPageTable.cpp:44-65): retire before reuse.
