@@ -114,6 +114,9 @@ GC_TEST(StayYoung, InitRegionClearsGhostSuccessor)
     GcHeapFixture fx;
     RegionInfo* r = fx.region0;
     r->metadata.nextRegionIdx0 = 1;
-    r->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    // zHeap.cpp:275-280: remove the old page before descriptor reuse.
+    RegionInfo::RetirePage(r, [&]() {
+        r->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    });
     GC_EXPECT_EQ(r->metadata.nextRegionIdx0, RegionInfo::NULLPTR_IDX);
 }

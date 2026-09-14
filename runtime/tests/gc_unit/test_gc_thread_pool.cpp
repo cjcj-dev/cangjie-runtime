@@ -66,20 +66,36 @@ void EnterIsolatedChild()
     (void)signal(SIGABRT, SIG_DFL);
 }
 
+// zPage.inline.hpp object_iterate walks a dense allocation interval.
+void PlaceOwnerObjects(GcHeapFixture& fx)
+{
+    fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
+    fx.obj1 = fx.PlaceObject(fx.region1->GetRegionStart());
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj0) + fx.obj0->GetSize());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj1) + fx.obj1->GetSize());
+}
+
 void PrepareOwnerRegion(GcHeapFixture& fx)
 {
+    PlaceOwnerObjects(fx);
     RegionInfo* region = fx.region0;
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     LiveInfo* live = fx.PlantLiveInfo(region);
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0)),
                            fx.obj0->GetSize(), region->GetRegionSize());
+    // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
+    RegionList selected("runtime-workers-selected");
+    selected.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    (void)selected.TakeHeadRegion();
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->MarkForwardingDone();
 }
 
 bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
 {
+    PlaceOwnerObjects(fx);
     // CompleteRelocationRequests consumes the current relocation set through
     // ForwardingTable::FindTo.  Build that exact active product state instead
     // of planting a retired table (which FindTo deliberately stopped scanning
@@ -91,6 +107,11 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     from = reinterpret_cast<MAddress>(fx.obj0);
     to = reinterpret_cast<MAddress>(fx.obj1);
     (void)bitmap->MarkBits(region->GetAddressOffset(from), fx.obj0->GetSize(), region->GetRegionSize());
+    // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
+    RegionList selected("runtime-workers-selected");
+    selected.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    (void)selected.TakeHeadRegion();
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration());
     if (entries == nullptr || entries->insert(from, to) != to) {
