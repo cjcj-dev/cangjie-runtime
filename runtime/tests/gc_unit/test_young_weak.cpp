@@ -67,9 +67,19 @@ struct RelocationReceiptTestAccess {
         collector.DoGarbageCollection(GCCycleGeneration::YOUNG);
     }
 
+    static void PrepareMajorRoots(WCollector& collector)
+    {
+        auto& young = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+        if (young.Workers() == nullptr) young.InitializeWorkers(1);
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        // ZDriver::gc_major runs the young roots collection before old marking.
+        YoungTypeSetter type(young, ZYoungType::major_partial_roots);
+        collector.RunGarbageCollection(1, GC_REASON_YOUNG);
+    }
+
     static void RunMajorMark(WCollector& collector)
     {
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        PrepareMajorRoots(collector);
         collector.TraceHeap();
     }
 
@@ -142,7 +152,7 @@ struct RelocationReceiptTestAccess {
 
     static void RunMajorCollection(WCollector& collector)
     {
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        PrepareMajorRoots(collector);
         DriverLocker locker(Heap::GetHeap().GetCollectorResources());
         collector.DoGarbageCollection(GCCycleGeneration::OLD);
     }
@@ -162,6 +172,8 @@ public:
         manager.Init();
         const ConcurrencyParam concurrencyParam = { 1024, 64, 1 };
         concurrency.Init(concurrencyParam);
+        // CollectorResources::Init initializes statistics before any phase timer.
+        ZStat::Initialize();
     }
 
     ~WeakClosureTestRuntime() override { runtime = nullptr; }

@@ -22,11 +22,17 @@ GC_TEST(ZStat, RegistrySortedWithoutChangingIdentity)
 {
     const auto id = unobserved.Id();
     ZStat::Initialize();
+    bool sorted = true;
+    size_t comparisons = 0;
     for (const auto* value = ZStatSampler::First(); value != nullptr && value->Next() != nullptr;
          value = value->Next()) {
         const int group = std::strcmp(value->Group(), value->Next()->Group());
-        GC_EXPECT_TRUE(group < 0 || (group == 0 && std::strcmp(value->Name(), value->Next()->Name()) <= 0));
+        sorted &= group < 0 || (group == 0 && std::strcmp(value->Name(), value->Next()->Name()) <= 0);
+        ++comparisons;
     }
+    std::fprintf(stderr, "ZSTAT_SORT_ASSERT_EXECUTED comparisons=%zu sorted=%d\n", comparisons, sorted);
+    GC_EXPECT_TRUE(comparisons > 0);
+    GC_EXPECT_TRUE(sorted);
     GC_EXPECT_EQ(unobserved.Id(), id);
 }
 
