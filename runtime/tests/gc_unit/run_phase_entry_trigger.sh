@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end minor/major/Timer entry contract through one product runtime SO.
+# Explicit fixture requests: this runner does not test automatic allocation policy.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -27,6 +28,7 @@ mkdir -p "$OUT"
 MINOR_BIN="$OUT/phase_entry_minor"
 MAJOR_BIN="$OUT/phase_entry_major"
 TIMER_BIN="$OUT/timer_ledger_contract"
+REQUEST_LIB="$OUT/libphase_entry_request.so"
 BUILD_LOG="$OUT/phase_entry_trigger.build.log"
 MINOR_RUN_LOG="$OUT/phase_entry_minor.run.log"
 MAJOR_RUN_LOG="$OUT/phase_entry_major.run.log"
@@ -41,14 +43,23 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   "$ROOT/runtime/tests/perf_vs_official/test_gclog_schema.py" \
   "$ROOT/runtime/tests/perf_vs_official/test_phase_leaf_ledger.py" \
   "$ROOT/runtime/tests/perf_vs_official/test_phase_entry_guard.py" \
+  "$ROOT/runtime/tests/perf_vs_official/test_wait_phase_entry_cycle.py" \
   >"$OUT/schema_ledger.unit.log" 2>&1
 analyzer_unit_rc=$?
 set -e
 echo "$analyzer_unit_rc" >"$OUT/schema_ledger.unit.rc"
 
 if [[ "${PHASE_ENTRY_REUSE_ELFS:-0}" != 1 ]]; then
+  "$CXX_BIN" -std=gnu++17 -O0 -fPIC -shared -I"$ROOT/runtime/src" -I"$ROOT/runtime/include" \
+    -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+    -I"$RUNTIME_LIB_DIR/../../include" \
+    -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
+    "$ROOT/runtime/tests/gc_unit/phase_entry_request.cpp" \
+    -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -lcangjie-runtime -lboundscheck \
+    -o "$REQUEST_LIB" >"$BUILD_LOG" 2>&1
   LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to the compiler host runtime}:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "$CJC_BIN" "$MINOR_SRC" -O0 --static-std -o "$MINOR_BIN" >"$BUILD_LOG" 2>&1
+    "$CJC_BIN" "$MINOR_SRC" -O0 --static-std -L"$OUT" -lphase_entry_request \
+    -o "$MINOR_BIN" >>"$BUILD_LOG" 2>&1
   LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to the compiler host runtime}:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     "$CJC_BIN" "$MAJOR_SRC" -O0 --static-std -o "$MAJOR_BIN" >>"$BUILD_LOG" 2>&1
   "$CXX_BIN" -std=gnu++17 -O0 -I"$ROOT/runtime/src" -I"$ROOT/runtime/include" \
@@ -56,6 +67,10 @@ if [[ "${PHASE_ENTRY_REUSE_ELFS:-0}" != 1 ]]; then
     -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--no-as-needed \
     -lcangjie-runtime -lboundscheck -ldl -lpthread -o "$TIMER_BIN" >>"$BUILD_LOG" 2>&1
 else
+  if [[ ! -f "$REQUEST_LIB" ]]; then
+    echo "PHASE_ENTRY_TRIGGER_FAIL: missing $REQUEST_LIB" >&2
+    exit 2
+  fi
   for binary in "$MINOR_BIN" "$MAJOR_BIN" "$TIMER_BIN"; do
     if [[ ! -x "$binary" ]]; then
       echo "PHASE_ENTRY_TRIGGER_FAIL: PHASE_ENTRY_REUSE_ELFS=1 but missing $binary" >&2
@@ -66,16 +81,16 @@ else
 fi
 
 sha256sum "$RUNTIME_LIB_DIR/libcangjie-runtime.so" "$RUNTIME_LIB_DIR/libboundscheck.so" \
-  "$MINOR_BIN" "$MAJOR_BIN" "$TIMER_BIN" >"$OUT/product-and-three-elf.sha256"
+  "$MINOR_BIN" "$MAJOR_BIN" "$TIMER_BIN" "$REQUEST_LIB" >"$OUT/product-and-three-elf.sha256"
 for binary in "$MINOR_BIN" "$MAJOR_BIN" "$TIMER_BIN"; do
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  LD_LIBRARY_PATH="$OUT:$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     ldd "$binary" >"$OUT/$(basename "$binary").ldd.txt"
 done
 
 set +e
-LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+LD_LIBRARY_PATH="$OUT:$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
-  timeout 60s "$MINOR_BIN" >"$MINOR_RUN_LOG" 2>&1
+  python3 "$ROOT/runtime/tests/gc_unit/wait_phase_entry_cycle.py" "$MINOR_BIN" "$MINOR_RUN_LOG"
 minor_rc=$?
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
