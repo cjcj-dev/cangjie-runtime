@@ -490,14 +490,14 @@ void* RunSegmentedCase(void* rawMode)
         status += phaseObserved ? 0 : 1;
         uint32_t required = RequiredPhaseRootVisits(gc, watermarkDone) |
             RootVisitBit(LargeArrayRootVisitSite::ITERATOR_SKIP);
-        if (gc == YieldGc::YOUNG) {
-            // Relocation's grant pass independently enumerates the native side
-            // root before MINOR_RELOCATE consumes it. This remains required even
-            // when mark used the completed watermark path.
-            required |= RootVisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE) |
-                RootVisitBit(LargeArrayRootVisitSite::MINOR_RELOCATE);
-        }
-        status += (ctx.rootVisitSites & required) == required ? 0 : 1;
+        // ZStackWatermark::process_head (zStackWatermark.cpp:171-173) owns
+        // invisible-root processing. The unified phase path removed the second
+        // native stack walk from FixMinorRootSlots (b4b43df103); requiring its
+        // MUTATOR_STACK_NATIVE/MINOR_RELOCATE observations tests a removed path.
+        const bool rootVisitsComplete = (ctx.rootVisitSites & required) == required;
+        status += rootVisitsComplete ? 0 : 1;
+        std::fprintf(stderr, "[SEGMENTED_ROOT_ASSERT] required=%#x actual=%#x pass=%d\n",
+                     required, ctx.rootVisitSites, rootVisitsComplete);
         const uint32_t forbidden = RootVisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED) |
             RootVisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED);
         status += (ctx.rootVisitSites & forbidden) == 0 ? 0 : 1;
