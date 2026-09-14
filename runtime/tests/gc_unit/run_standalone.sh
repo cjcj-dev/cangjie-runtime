@@ -552,8 +552,11 @@ REFERENCE_PROCESSOR_CONSUMERS=(
   'MapleRuntime::ReferenceProcessor::DiscoverReference('
   'MapleRuntime::ReferenceProcessor::ProcessReferences('
   'MapleRuntime::ReferenceProcessor::EnqueueReferences('
-  'MapleRuntime::TracingCollector::DiscoverWeakReference('
 )
+# The direct weak-discovery test in test_young_conc.cpp is testable-only.
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
+  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::TracingCollector::DiscoverWeakReference(')
+fi
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
 nm --defined-only "$OUT/cj_gc_unit" | c++filt >"$REFERENCE_PROCESSOR_FULL"
@@ -576,7 +579,7 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
-    'MapleRuntime::WCollector::DoGarbageCollection()'
+    'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)'
     'MapleRuntime::WCollector::TraceHeap()'
     'MapleRuntime::ResetYoungWeakClosureTestReceipt()'
     'MapleRuntime::ReadYoungWeakClosureTestReceipt()'
