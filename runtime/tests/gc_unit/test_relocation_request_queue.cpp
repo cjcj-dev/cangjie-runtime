@@ -11,6 +11,8 @@
 #include "gc_unittest.hpp"
 #include "Mutator/Handshake.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
+#include "Common/Runtime.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -57,12 +59,25 @@ struct PageQueueFixture {
 // with the runtime's global thread list. The two states are the actual inputs
 // to EnsurePhaseTransition and HandshakeState::try_process respectively.
 #if defined(MRT_TESTABLE_INTERNALS)
+class PageQueueRuntime final : public Runtime {
+public:
+    explicit PageQueueRuntime(MutatorManager& manager)
+    {
+        mutatorManager = &manager;
+        runtime = this;
+    }
+    ~PageQueueRuntime() override { runtime = nullptr; }
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam{}; }
+    void SetGCThreshold(uint64_t) override {}
+};
+
 struct WaitContext {
+    MutatorManager manager;
+    PageQueueRuntime runtime{manager};
     Mutator mutator;
     Mutator* savedMutator = ThreadLocal::GetMutator();
     ThreadType savedType = ThreadLocal::GetThreadType();
-    HandshakeState& handshake = Handshake::Current();
-    bool savedSafe = handshake.observed_safe();
+    HandshakeState handshake{ThreadLocal::GetThreadLocalData()};
     bool entered = false;
     bool mutatorSafe = true;
     bool handshakeSafe = true;
@@ -71,6 +86,7 @@ struct WaitContext {
 
     WaitContext()
     {
+        Handshake::BindCurrent(&handshake);
         ThreadLocal::SetMutator(&mutator);
         ThreadLocal::SetThreadType(ThreadType::CJ_PROCESSOR);
         mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
@@ -82,8 +98,8 @@ struct WaitContext {
     {
         RelocationRequestQueue::SetWaitEnterHook(nullptr);
         current = nullptr;
-        if (savedSafe) handshake.enter_safe();
         ThreadLocal::SetMutator(savedMutator);
+        Handshake::BindCurrent(nullptr);
         ThreadLocal::SetThreadType(savedType);
     }
     static void Observe(ZForwarding* forwarding)
@@ -102,7 +118,8 @@ thread_local WaitContext* WaitContext::current = nullptr;
 // JRT_LEAF barrier (zBarrierSetRuntime.cpp:29): waiting preserves the context
 // that prevents reset until the final forwarding lookup has returned.
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
+// A fresh VM owns this synthetic thread context; no runtime registration is needed.
+GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
 {
     PageQueueFixture f;
     f.queue.BeginWorkers(1);
