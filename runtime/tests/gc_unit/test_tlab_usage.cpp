@@ -14,6 +14,10 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
+#if defined(__linux__)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -38,6 +42,51 @@ GC_TEST(TLABUsage, BoundsAndDemand)
     GC_EXPECT_EQ(buffer.ComputeTLABSize(std::numeric_limits<size_t>::max(), maximum), size_t{0});
     GC_EXPECT_EQ(buffer.ComputeTLABSize(1, 0), size_t{0});
 }
+
+#if defined(__linux__)
+namespace {
+void NativeFrameProbe() {}
+
+void CheckNativeFrameScan(bool derived)
+{
+    const auto* pc = reinterpret_cast<const uint32_t*>(&NativeFrameProbe);
+    GC_EXPECT_TRUE(MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(pc)) == nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        FrameInfo frame(pc);
+        frame.mFrame.SetIP(pc);
+        Mutator mutator;
+        RegSlotsMap registers;
+        size_t visits = 0;
+        const RootVisitor roots = [&](RootSlot&) { ++visits; };
+        const DerivedPtrVisitor derivedRoots = [&](BasePtrType, DerivedSlot&) { ++visits; };
+        if (derived) {
+            TracingCollector::VisitHeapReferencesOnStack(roots, derivedRoots, registers, frame, mutator, true);
+        } else {
+            TracingCollector::VisitStackRoots(roots, registers, frame, mutator);
+        }
+        _exit(visits == 0 ? 0 : 1);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const bool completed = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    std::fprintf(stderr, "NATIVE_FRAME_TARGET executed=1 derived=%d status=%d completed=%d\n",
+                 derived, status, completed);
+    GC_EXPECT_TRUE(completed);
+}
+}
+
+GC_TEST(TLABUsage, NativeFrameRootScan)
+{
+    CheckNativeFrameScan(false);
+}
+
+GC_TEST(TLABUsage, NativeFrameDerivedScan)
+{
+    CheckNativeFrameScan(true);
+}
+#endif
 
 // ZPageAllocator::increase_used_generation/decrease_used_generation:
 // occupancy changes by the page extent, independently of the TLAB maximum.
