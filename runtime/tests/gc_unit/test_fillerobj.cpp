@@ -16,6 +16,8 @@ GC_TEST(FillerObj, EnabledWalkCrossesFilledGap)
     BaseObject* b = fx.PlaceObject(gap + 64);
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(b) + 16);
     HeapFiller::ZeroAndFill(gap, 64);
+    // Check the product result before the heap walk consumes its object header.
+    GC_EXPECT_TRUE(HeapFiller::IsFiller(reinterpret_cast<BaseObject*>(gap)));
     BaseObject* seen[8] = {};
     size_t n = 0;
     fx.region0->VisitAllObjects([&](BaseObject* o) {

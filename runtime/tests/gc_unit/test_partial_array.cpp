@@ -153,8 +153,8 @@ public:
     {
         Heap::SetHeapStartForTesting(savedStart);
         if (savedEnd != 0) {
-        Heap::OnHeapExtended(savedEnd);
-    }
+            Heap::OnHeapExtended(savedEnd);
+        }
     }
 
 private:
