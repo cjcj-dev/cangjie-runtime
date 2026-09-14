@@ -25,6 +25,7 @@ set(GC_UNIT_SOURCES
     test_zLiveMap.cpp
     test_region_age.cpp
     test_unwind_regressions.cpp
+    test_stackmap_base_capture.cpp
     test_gctibzero.cpp
     test_pinroot.cpp
     test_followedge.cpp

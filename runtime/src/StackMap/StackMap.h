@@ -132,8 +132,13 @@ public:
     {
         std::list<BasePtrType> rootsList;
         RootVisitor capture = [](ObjectRef&) {};
-        regRoot.VisitGCRoots(capture, nullptr, regSlotsMap, &rootsList);
-        oopRegRoot.VisitGCRoots(capture, nullptr, regSlotsMap, &rootsList);
+        // oopMap.inline.hpp:57-112 keeps saved locations available to both
+        // derived and ordinary roots. Capture base values without consuming
+        // the frame's register locations; actual derived roots still consume
+        // the original map below.
+        RegSlotsMap captureSlotsMap = regSlotsMap;
+        regRoot.VisitGCRoots(capture, nullptr, captureSlotsMap, &rootsList);
+        oopRegRoot.VisitGCRoots(capture, nullptr, captureSlotsMap, &rootsList);
         slotRoot.VisitGCRoots(capture, nullptr, stackBase, &rootsList);
         oopSlotRoot.VisitGCRoots(capture, nullptr, stackBase, &rootsList);
         DerivedPtr derived = derivedPtr;
