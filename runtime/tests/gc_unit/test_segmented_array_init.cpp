@@ -26,6 +26,7 @@
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
+#include "Heap/z/zMarkStack.hpp"
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
@@ -218,8 +219,7 @@ struct SegmentedArrayContext {
             ctx.requestingMutator = mutator;
             U64 youngSeedRoot = 0;
             if (ctx.gc == YieldGc::YOUNG) {
-                // Large arrays are old-generation regions. Plant one genuine
-                // young allocation so this request cannot take the empty-young
+                // Also plant a small young allocation so this request cannot take the empty-young
                 // fast path before VisitMinorRootSlots/FixMinorRootSlots.
                 ScopedObjectAccess access;
                 MArray* youngSeed = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 16);
@@ -598,6 +598,92 @@ void* RunTwoGcReferenceCase(void*)
     return reinterpret_cast<void*>(status);
 }
 
+// ZPage::reset(age), zPage.cpp:103-108. Observe the product allocation at
+// array publication, before the mutator can consume the descriptor.
+struct LargePageIdentityObservation {
+    inline static bool publishedYoung = false;
+    inline static uint8_t publishedAge = 255;
+    inline static size_t publications = 0;
+    static void Published(MArray* array)
+    {
+        RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(array));
+        publishedYoung = page->IsYoungRegion();
+        publishedAge = page->GetYoungAge();
+        ++publications;
+    }
+};
+
+void* RunLargePageIdentityCase(void* rawNative)
+{
+    LargePageIdentityObservation::publications = 0;
+    LargeArrayInitTestHooks hooks;
+    hooks.onPublish = LargePageIdentityObservation::Published;
+    CJ_MRT_SetLargeArrayInitTestHooks(&hooks);
+    Mutator* mutator = Mutator::GetMutator();
+    const bool native = reinterpret_cast<uintptr_t>(rawNative) != 0;
+    if (native) mutator->SetManagedContext(false);
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    if (native) mutator->SetManagedContext(true);
+    CJ_MRT_SetLargeArrayInitTestHooks(nullptr);
+    if (array == nullptr || LargePageIdentityObservation::publications != 1) {
+        std::fprintf(stderr, "LARGE_PAGE_IDENTITY_SETUP_FAILED publications=%zu\n",
+                     LargePageIdentityObservation::publications);
+        return reinterpret_cast<void*>(2);
+    }
+    RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(array));
+    const bool young = LargePageIdentityObservation::publishedYoung;
+    const uint8_t age = LargePageIdentityObservation::publishedAge;
+    std::fprintf(stderr, "LARGE_PAGE_YOUNG_ASSERT_EXECUTED native=%d published_young=%d "
+                 "published_age=%u final_young=%d large=%d\n", native, young, age,
+                 page->IsYoungRegion(), page->IsLargeRegion());
+    return reinterpret_cast<void*>((young && age == 0 && page->IsYoungRegion() &&
+                                    page->IsLargeRegion()) ? 0 : 1);
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+struct LargeYoungClosureResult {
+    inline static BaseObject* target = nullptr;
+    inline static bool live = false;
+    inline static bool followed = false;
+    inline static size_t observations = 0;
+    static void Observe(const std::vector<BaseObject*>* objects)
+    {
+        if (objects == nullptr || target == nullptr) return;
+        RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
+        ++observations;
+        live |= page->IsMarkedObject(page->GetMarkView<Generation::Young>(), target);
+        for (BaseObject* object : *objects) followed |= object == target;
+    }
+};
+
+void* RunLargeYoungClosureCase(void*)
+{
+    // Construct the sole strong path before requesting GC. No unregistered
+    // C++ reference is used to publish a target after marking has begun.
+    MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    MArray* target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
+    auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
+    Heap::GetBarrier().WriteReference(holder, field, target);
+    const U64 holderRoot = Heap::GetHeap().RegisterExportRoot(holder);
+    LargeYoungClosureResult::target = target;
+    LargeYoungClosureResult::live = false;
+    LargeYoungClosureResult::followed = false;
+    LargeYoungClosureResult::observations = 0;
+    SetMarkClosureObserverForTest(LargeYoungClosureResult::Observe);
+    Mutator* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+    SetMarkClosureObserverForTest(nullptr);
+    LargeYoungClosureResult::target = nullptr;
+    std::fprintf(stderr, "LARGE_YOUNG_TARGET_LIVE_ASSERT_EXECUTED observations=%zu live=%d followed=%d\n",
+                 LargeYoungClosureResult::observations, LargeYoungClosureResult::live,
+                 LargeYoungClosureResult::followed);
+    Heap::GetHeap().RemoveExportObject(holderRoot);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>((LargeYoungClosureResult::live && LargeYoungClosureResult::followed) ? 0 : 1);
+}
+#endif
+
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
 {
 #if defined(__linux__)
@@ -638,6 +724,23 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
 #endif
 }
 } // namespace
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunLargeYoungClosureCase, 0), 0);
+}
+#endif
+
+GC_OTHER_VM_TEST(LargePageGeneration, ManagedAllocationPublishesYoungEden)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunLargePageIdentityCase, 0), 0);
+}
+
+GC_OTHER_VM_TEST(LargePageGeneration, NativeAllocationPublishesYoungEden)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunLargePageIdentityCase, 1), 0);
+}
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
 {
