@@ -25,6 +25,7 @@
 #include "gc_heap_fixture.hpp"
 #include "Concurrency/ConcurrencyModel.h"
 #include "gc_unittest.hpp"
+#include "b09_runtime_fixture.hpp"
 
 #define private public
 #include "Heap/z/zRememberedSet.hpp"
@@ -888,6 +889,7 @@ GC_TEST(StoreBuf, ReRememberDoesNotFightBuffer)
 // including non-full chunks, even when this OS thread owns no allocator.
 GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAllocator)
 {
+    MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     GcHeapFixture heap;
     MarkPublicationFixture marking;
     std::thread owner([&] {

@@ -12,6 +12,7 @@
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "gc_unittest.hpp"
+#include "b09_runtime_fixture.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -279,6 +280,7 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 // retaining unpublished work until the worker flushes and the phase joins.
 GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
 {
+    MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     ZAbort abort;
     MarkDomain domain(4, MarkingStacks::MarkingGeneration::MAJOR);
     domain.BindAbort(&abort);
