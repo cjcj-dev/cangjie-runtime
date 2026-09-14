@@ -3074,7 +3074,10 @@ void ExerciseRawAcquire(GCPhase sourcePhase, bool compact, MIndex length,
     const bool bytesPreserved = !shouldResolve ||
         std::memcmp(payload, expectedBytes.data(), length) == 0;
     const bool markerPreserved = !shouldResolve || *static_cast<unsigned char*>(payload) == 0x5a;
-    CJ_MCC_ReleaseRawData(array, payload);
+    // A missing product pin must fail the count assertion below, not the
+    // release precondition first. Release only a pin actually acquired; do
+    // not manufacture a count to make fault-injection cleanup succeed.
+    if (countPinned > countBefore) CJ_MCC_ReleaseRawData(array, payload);
     const auto countReleased = region->GetRawPointerObjectCount();
     ThreadLocal::SetMutator(previous);
     std::fprintf(stderr, "RAW_ACQUIRE_ASSERT length=%zu phase=%u compact=%u from=%zx to=%zx "
