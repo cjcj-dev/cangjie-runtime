@@ -40,6 +40,8 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
+#include "Heap/Collector/ExportOwnershipTestObservations.h"
+
 void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
@@ -49,7 +51,13 @@ void WCollector::PostTrace()
     // Value-only cycle roots still depend on the preceding relocation receipts.
     // Complete their owner handoff while that authority is queryable.
     // zGeneration.cpp:1261 mark_end does not reset forwarding.
+#if defined(MRT_TESTABLE_INTERNALS)
+    ObserveExportOwnershipForTest(false);
+#endif
     PrepareCycleRef();
+#if defined(MRT_TESTABLE_INTERNALS)
+    ObserveExportOwnershipForTest(true);
+#endif
     // reclaim large objects immediately after tracing is done.
     CollectLargeGarbage();
     CollectPinnedGarbage();

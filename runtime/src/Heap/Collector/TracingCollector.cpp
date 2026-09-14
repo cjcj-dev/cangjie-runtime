@@ -27,6 +27,7 @@ namespace MapleRuntime {
 std::function<void(GCWorkers::Generation, TracingCollector::RootSet&)> TracingCollector::testRootsResult;
 std::function<void()> TracingCollector::testCyclePrepared;
 std::function<void()> TracingCollector::testYoungMarkStarted;
+std::function<void(const ExportOwnershipTestObservation&)> TracingCollector::testExportOwnershipResult;
 #endif
 
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
