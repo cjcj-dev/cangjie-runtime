@@ -499,7 +499,7 @@ echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
 # the runtime SO used by the 2x2 cut/restore matrix.
 OLDVALUE_MANIFEST="$SRC/product_call_manifest_oldvalue.tsv"
 EXPECTED_OLDVALUE_TESTS=(
-  StoreBuf.CompilerFastOverwriteHandsObservedOldToMark
+  StoreBuf.CompilerStoreBadOverwriteHandsObservedOldToMark
 )
 oldvalue_rows=0
 while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do

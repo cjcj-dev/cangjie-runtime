@@ -64,6 +64,12 @@ struct RelocationReceiptTestAccess {
 
 namespace {
 
+// A store-bad / load-good previous value exercises the ZGC store slow path.
+zpointer StoreBadPointer(BaseObject* object)
+{
+    return to_zpointer(raw(StoreGoodPointer(object)) ^ MARKED_OLD_MASK);
+}
+
 class StoreBufferCollector final : public Collector {
 public:
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
@@ -138,6 +144,17 @@ private:
     AllocBuffer* saved;
 };
 
+// Establish the barrier's TLS input without registering a synthetic thread in
+// the global safepoint manager. Thread registration is outside this fixture.
+class InstalledMutatorScope final {
+public:
+    explicit InstalledMutatorScope(Mutator& mutator) : saved(ThreadLocal::GetMutator())
+    { ThreadLocal::GetThreadLocalData()->mutator = &mutator; }
+    ~InstalledMutatorScope() { ThreadLocal::GetThreadLocalData()->mutator = saved; }
+private:
+    Mutator* saved;
+};
+
 class InstalledBarrierScope final {
 public:
     explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
@@ -186,7 +203,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     AllocBufferScope allocScope(alloc);
 
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    const zpointer prev = RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue();
+    const zpointer prev = StoreBadPointer(fx.obj0);
     field.StoreColoured(prev);
 
     Heap& heap = Heap::GetHeap();
@@ -203,10 +220,8 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    Mutator* const mutatorBefore = ThreadLocal::GetMutator();
-    ThreadLocal::SetMutator(&mutator);
+    InstalledMutatorScope mutatorScope(mutator);
     barrier.WriteReference(fx.obj0, field, fx.obj1);
-    ThreadLocal::SetMutator(mutatorBefore);
     heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
@@ -214,8 +229,8 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     StoreBarrierBuffer& buf = ThreadLocal::GetGCData().storeBarrierBuffer;
     const size_t pending = buf.Pending();
     std::vector<BaseObject*> retired;
-    // The independently required new-value closure is still in the mutator's
-    // direct node.  GetRetiredObjects therefore measures only the paired flush.
+    // No new-value marking is part of the ZGC SATB store barrier.
+    // Draining before the flush must therefore find no old-value work.
     DrainPublishedMarkObjects(retired);
     retired.clear();
     GC_EXPECT_EQ(pending, 1u);
@@ -255,7 +270,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     AllocBufferScope allocScope(alloc);
 
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    field.StoreColoured(RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue());
+    field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
@@ -278,13 +293,11 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif
-    Mutator* const mutatorBefore = ThreadLocal::GetMutator();
-    ThreadLocal::SetMutator(&mutator);
+    InstalledMutatorScope mutatorScope(mutator);
     barrier.WriteReference(fx.obj0, field, fx.obj1);
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 1u);
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
-    ThreadLocal::SetMutator(mutatorBefore);
     heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
@@ -297,7 +310,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
         newCount += object == fx.obj1 ? 1u : 0u;
     }
     GC_EXPECT_EQ(oldCount, 1u);
-    GC_EXPECT_TRUE(newCount >= 1u);
+    GC_EXPECT_EQ(newCount, 0u);
 }
 
 // A2: an empty holder must never create the pBase=null pending form that skips
@@ -314,13 +327,20 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
+    Mutator mutator;
+    InstalledMutatorScope mutatorScope(mutator);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    field.StoreColoured(StoreGoodPointer(fx.obj0));
+    field.StoreColoured(StoreBadPointer(fx.obj0));
 
     barrier.WriteReference(nullptr, field, fx.obj1);
 
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
     GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
+    std::vector<BaseObject*> marked;
+    markFixture.DrainObjects(marked);
+    GC_EXPECT_EQ(marked.size(), 1u);
+    GC_EXPECT_TRUE(marked[0] == fx.obj0);
+    std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
 
 // B2: a non-null non-heap holder has the same immediate discipline as null;
@@ -337,9 +357,12 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
+    Mutator mutator;
+    InstalledMutatorScope mutatorScope(mutator);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    field.StoreColoured(StoreGoodPointer(fx.obj0));
-    BaseObject* nonHeapHolder = reinterpret_cast<BaseObject*>(fx.typeInfo);
+    field.StoreColoured(StoreBadPointer(fx.obj0));
+    alignas(8) unsigned char nativeStorage[128] {};
+    BaseObject* nonHeapHolder = fx.PlaceObject(reinterpret_cast<MAddress>(nativeStorage));
     GC_EXPECT_TRUE(nonHeapHolder != nullptr);
     GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
 
@@ -347,13 +370,18 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
     GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
+    std::vector<BaseObject*> marked;
+    markFixture.DrainObjects(marked);
+    GC_EXPECT_EQ(marked.size(), 1u);
+    GC_EXPECT_TRUE(marked[0] == fx.obj0);
+    std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
 
 // Deterministic compiler-hit object graph: oldReferent is reachable only from
 // holder.field before the overwrite; newReferent is reachable from that field
-// afterwards. The compiler ABI must carry the pre-store word so the current
+// afterwards. A store-bad old word sends the compiler ABI through the slow path; the current
 // old-mark epoch retires oldReferent when the paired store buffer is flushed.
-GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
+GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
@@ -373,7 +401,7 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
-    const zpointer oldWord = StoreGoodPointer(oldReferent);
+    const zpointer oldWord = StoreBadPointer(oldReferent);
     field.StoreColoured(oldWord);
     const uintptr_t observedPrev = raw(field.GetFieldValue());
     const bool compilerHit = (observedPrev & static_cast<uintptr_t>(::g_cjStoreBadMask)) == 0;
@@ -400,16 +428,14 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif
-    Mutator* const mutatorBefore = ThreadLocal::GetMutator();
-    ThreadLocal::SetMutator(&mutator);
+    InstalledMutatorScope mutatorScope(mutator);
 
-    // This is the compiler hit-arm ordering: capture, overwrite, then ABI exit.
+    // This is the compiler slow-arm ordering: capture, overwrite, then ABI exit.
     field.StoreColoured(newWord);
     CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev);
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer.Pending();
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
 
-    ThreadLocal::SetMutator(mutatorBefore);
     heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
@@ -422,18 +448,18 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
         newReceipts += object == newReferent ? 1u : 0u;
     }
     std::fprintf(stderr,
-                 "DETAIL arm=compiler_fast_overwrite compiler_hit=%u observed_prev=0x%zx installed=0x%zx "
+                 "DETAIL arm=compiler_store_bad_overwrite compiler_hit=%u observed_prev=0x%zx installed=0x%zx "
                  "pending=%zu old_receipts=%zu new_receipts=%zu field_target=%p\n",
                  static_cast<unsigned>(compilerHit), static_cast<size_t>(observedPrev),
                  static_cast<size_t>(raw(field.GetFieldValue())), pending, oldReceipts, newReceipts,
                  static_cast<void*>(to_object(field.GetTargetObject())));
     std::fflush(stderr);
 
-    GC_EXPECT_TRUE(compilerHit);
+    GC_EXPECT_FALSE(compilerHit);
     GC_EXPECT_EQ(pending, 1u);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
     GC_EXPECT_EQ(oldReceipts, 1u);
-    GC_EXPECT_TRUE(newReceipts >= 1u);
+    GC_EXPECT_EQ(newReceipts, 0u);
     GC_EXPECT_EQ(raw(field.GetTargetObject()), reinterpret_cast<MAddress>(newReferent));
 }
 
@@ -452,7 +478,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     AllocBufferScope allocScope(alloc);
 
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    field.StoreColoured(RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue());
+    field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
@@ -472,8 +498,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif
-    Mutator* const mutatorBefore = ThreadLocal::GetMutator();
-    ThreadLocal::SetMutator(&mutator);
+    InstalledMutatorScope mutatorScope(mutator);
     barrier.WriteReference(fx.obj0, field, fx.obj1);
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 1u);
 
@@ -485,7 +510,6 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
 
-    ThreadLocal::SetMutator(mutatorBefore);
     heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
@@ -1012,4 +1036,27 @@ GC_TEST(StoreBuf, ThreadRootVisitorIncludesExecuteClosure)
     MRT_VisitorCaller(&data, &visitor);
     GC_EXPECT_EQ(executeVisits, 1u);
     GC_EXPECT_TRUE(data.execute == static_cast<void*>(fx.obj1));
+}
+
+// ZBarrier::store_barrier_on_heap_oop_field: a store-good old word is a fast exit.
+// Paired with CompilerStoreBadOverwriteHandsObservedOldToMark as its control.
+GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture marking;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    StoreBufferCollector collector;
+    Barrier barrier(collector, rs);
+    InstalledBarrierScope installed(barrier);
+    HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const zpointer previous = StoreGoodPointer(fx.obj0);
+    field.StoreColoured(StoreGoodPointer(fx.obj1));
+    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, &field, raw(previous));
+    std::vector<BaseObject*> marked;
+    marking.DrainObjects(marked);
+    GC_EXPECT_TRUE(marked.empty());
+    GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
+    GC_EXPECT_FALSE(rs.Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj1));
 }

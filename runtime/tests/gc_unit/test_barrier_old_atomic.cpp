@@ -145,14 +145,15 @@ private:
     AllocBuffer* saved;
 };
 
+// Supply the barrier TLS context; do not register this fixture with global safepoints.
 class MutatorScope final {
 public:
     explicit MutatorScope(Mutator& mutator) : saved(ThreadLocal::GetMutator())
     {
         mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-        ThreadLocal::SetMutator(&mutator);
+        ThreadLocal::GetThreadLocalData()->mutator = &mutator;
     }
-    ~MutatorScope() { ThreadLocal::SetMutator(saved); }
+    ~MutatorScope() { ThreadLocal::GetThreadLocalData()->mutator = saved; }
 
 private:
     Mutator* saved;
@@ -225,12 +226,13 @@ struct StoreFixture {
         newValue = heap.obj1;
         regionOld->SetRegionAllocPtr(reinterpret_cast<MAddress>(oldValue) + oldValue->GetSize());
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
-        field->StoreColoured(GcUnit::StoreGoodPointer(oldValue));
+        field->StoreColoured(to_zpointer(raw(GcUnit::StoreGoodPointer(oldValue)) ^ MARKED_OLD_MASK));
         remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
         (void)DrainReceipts(oldValue, newValue);
     }
 
     GcHeapFixture heap;
+    MarkPublicationFixture marking;
     BarrierCollector collector;
     RememberedSet remembered;
     Barrier barrier;
@@ -254,7 +256,7 @@ GC_TEST(BarrierOldAtomic, NoAllocBufferOverwriteRetiresOldValue)
     AllocBufferScope noBuffer(nullptr);
 
     fixture.barrier.WriteReference(fixture.holder, *fixture.field, fixture.newValue);
-    mutator.FlushStoreBarrierBuffer(false);
+    ThreadLocal::GetGCData().storeBarrierBuffer.Flush(fixture.remembered, fixture.collector);
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
     const bool slotRemembered = fixture.remembered.Contains(reinterpret_cast<MAddress>(fixture.field));
     std::fprintf(stderr,
@@ -264,7 +266,7 @@ GC_TEST(BarrierOldAtomic, NoAllocBufferOverwriteRetiresOldValue)
     std::fflush(stderr);
 
     GC_EXPECT_EQ(receipts.oldValue, 1u);
-    GC_EXPECT_TRUE(receipts.newValue >= 1u);
+    GC_EXPECT_EQ(receipts.newValue, 0u);
     GC_EXPECT_TRUE(slotRemembered);
     GC_EXPECT_TRUE(to_object(fixture.field->GetTargetObject()) == fixture.newValue);
 }
@@ -292,7 +294,7 @@ GC_TEST(BarrierOldAtomic, AllocBufferOverwriteRetiresOldValueControl)
 
     GC_EXPECT_EQ(pending, 1u);
     GC_EXPECT_EQ(receipts.oldValue, 1u);
-    GC_EXPECT_TRUE(receipts.newValue >= 1u);
+    GC_EXPECT_EQ(receipts.newValue, 0u);
     GC_EXPECT_TRUE(slotRemembered);
 }
 
@@ -373,10 +375,9 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
         std::thread writer([&]() {
             std::unique_lock<std::mutex> lock(collector.hookMutex);
             collector.hookCv.wait(lock, [&]() { return collector.slowLoadObserved; });
-            // Keep the concurrent winner load-bad. The old unbounded self-heal retries
-            // against this word and overwrites it on its second CAS; the one-shot path
-            // must stop after losing its single CAS.
-            field.StoreColoured(LoadBadPointer(winner), std::memory_order_release);
+            // ZBarrier::self_heal (zBarrier.inline.hpp:98) preserves a winner
+            // satisfying the fast path. A real mutator store publishes store-good.
+            field.StoreColoured(StoreGoodPointer(winner), std::memory_order_release);
             collector.winnerStored = true;
             lock.unlock();
             collector.hookCv.notify_all();
@@ -388,10 +389,10 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
         RefField<> terminal(field.GetFieldValue());
         GC_EXPECT_TRUE(returned == heap.obj0);
         GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == winner);
-        GC_EXPECT_FALSE(collector.is_load_good(terminal));
+        GC_EXPECT_TRUE(collector.is_load_good(terminal));
     }
     std::fprintf(stderr,
-                 "DETAIL arm=atomic_cas_lost forced_failures=%zu max_heal_cas_per_read=1 winner=%p\n",
+                 "DETAIL arm=atomic_cas_lost forced_failures=%zu winner_store_good=1 winner=%p\n",
                  kForcedCasFailures, winner);
     std::fflush(stderr);
 }
@@ -438,7 +439,13 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
         remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
         Barrier barrier(collector, remembered);
         InstalledBarrierScope installed(barrier);
+        alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};
+        auto* component = reinterpret_cast<TypeInfo*>(componentStorage);
+        component->SetType(TypeKind::TYPE_KIND_CLASS);
         heap.typeInfo->SetType(kind);
+        if (kind == TypeKind::TYPE_KIND_VARRAY) {
+            heap.typeInfo->SetComponentTypeInfo(component);
+        }
         HeapSlot<>& source = HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
         source.StoreColoured(StoreGoodPointer(heap.obj1));
         NativeSlot destination(LoadBadPointer(heap.obj0));
