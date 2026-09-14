@@ -2830,6 +2830,8 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
 
     collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(2);
     collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(2);
+    // The real major driver prepares the mark engine before entering its body.
+    collector.StartOldMarkWork();
     {
         DriverLocker driver(resources);
         collector.RunGarbageCollection(1, GC_REASON_USER);

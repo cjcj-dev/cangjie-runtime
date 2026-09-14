@@ -34,6 +34,7 @@ extern "C" void CJ_MCC_PostWriteRefField(const MapleRuntime::ObjectPtr ref, cons
 #include "gc_unittest.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/WCollector/WCollector.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -183,6 +184,17 @@ struct ExportHandleFixture {
     InstalledExportHandleBarrier installed;
 };
 
+struct CompilerStoreFixture {
+    CompilerStoreFixture()
+        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()),
+          barrier(collector, rememberedSet), installed(barrier) {}
+    GcHeapFixture heap;
+    WCollector collector;
+    RememberedSet rememberedSet;
+    Barrier barrier;
+    InstalledExportHandleBarrier installed;
+};
+
 } // namespace
 
 // ① iorfix 8baacb1e — pregrant before RouteRegion freezes domain.
@@ -293,7 +305,7 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
-    ExportHandleFixture fx;
+    CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     fx.heap.region0->SetYoungRegionFlag(0);
     fx.heap.region1->SetYoungRegionFlag(1);
@@ -324,7 +336,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
-    ExportHandleFixture fx;
+    CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     fx.heap.region0->SetYoungRegionFlag(0);
     fx.heap.region1->SetYoungRegionFlag(1);
@@ -366,7 +378,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
-    ExportHandleFixture fx;
+    CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     fx.heap.region0->SetYoungRegionFlag(0);
     fx.heap.region1->SetYoungRegionFlag(1);
@@ -380,7 +392,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     AllocBuffer alloc;
     InstalledExportAllocBuffer installedAlloc(alloc);
 
-    auto* nonHeapHolder = reinterpret_cast<BaseObject*>(fx.heap.typeInfo);
+    auto* nonHeapHolder = reinterpret_cast<BaseObject*>(uintptr_t(1));
     GC_EXPECT_TRUE(nonHeapHolder != nullptr);
     GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
@@ -394,6 +406,8 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
         field->StoreColoured(StoreGoodPointer(fx.heap.obj1));
         CJ_MCC_PostWriteRefField(fx.heap.obj1, nonHeapHolder,
                                 reinterpret_cast<RefField<false>*>(field), initial);
+        std::fprintf(stderr, "POST_BUFFER_TARGET_ASSERT_EXECUTED pending=%zu\n",
+                     ThreadLocal::GetGCData().storeBarrierBuffer.Pending());
         GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
         GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
@@ -410,7 +424,7 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
-    ExportHandleFixture fx;
+    CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     fx.heap.region0->SetYoungRegionFlag(0);
     fx.heap.region1->SetYoungRegionFlag(1);
