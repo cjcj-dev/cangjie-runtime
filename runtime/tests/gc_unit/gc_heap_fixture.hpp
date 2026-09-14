@@ -241,7 +241,8 @@ struct GcHeapFixture {
     // longer selects storage.
     LiveInfo* PlantLiveInfo(RegionInfo* region)
     {
-        auto* live = new LiveInfo();
+        // Match page ownership: promotion may transfer this livemap.
+        auto* live = LiveInfoArena::GetLiveInfoArena().AllocateLiveInfo(region);
         live->bindedRegion = region;
         live->GetMarkFace().epoch.store(region->GetSnapshotEpoch(), std::memory_order_relaxed);
         live->GetMarkFace().bitmap = nullptr;
@@ -268,14 +269,8 @@ struct GcHeapFixture {
         if (live == nullptr) {
             return;
         }
-        RegionBitmap* mark = live->GetMarkFace().bitmap;
-        if (mark != nullptr) {
-            FreePlantedBitmap(mark);
-            live->GetMarkFace().bitmap = nullptr;
-        }
-        FreePlantedBitmap(live->enqueueBitmap);
-        FreePlantedBitmap(live->resurrectBitmap);
-        delete live;
+        // Remove the same owner registration before destroying its bitmaps.
+        auto owned = LiveInfoArena::GetLiveInfoArena().TakePageLiveInfo(live->bindedRegion, live);
     }
 
     MemMap* memoryOwner = nullptr;
