@@ -781,8 +781,19 @@ BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const v
         ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
         ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
     };
-    BaseObject* current = stage == ForwardingStage::IncomingNew
-        ? ValidateCurrentValue(value, provenance) : ResolveStoreValue(value, provenance, generation);
+    // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-72) uses
+    // the root's identity, not the generation currently visiting it. The
+    // uncolored Cangjie ABI keeps that identity on the source page (D03a).
+    // zRelocate.cpp:382-410: find the published target before relocating.
+    (void)generation;
+    const auto forwarding = ForwardingTable::RetainPageOwner(
+        RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(value)));
+    BaseObject* current = value;
+    if (forwarding) {
+        const MAddress target = forwarding->find(reinterpret_cast<MAddress>(value));
+        current = target != 0 ? reinterpret_cast<BaseObject*>(target)
+            : ResolveStoreValue(value, provenance, static_cast<Generation>(forwarding->table_generation()));
+    }
     CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
                  "value root resolve requires a heap to-address from=%p current=%p", value, current);
     CHECK_DETAIL(Collector::JudgeHandOutTarget(current) == HandVerdict::Usable,
