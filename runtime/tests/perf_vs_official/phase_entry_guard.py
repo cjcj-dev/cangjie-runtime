@@ -46,7 +46,7 @@ if mode in ("minor", "major"):
                 continue
             names = ("major.preclean", "major.full_roots", "major.old")
             spans = [record for record in records.phases
-                     if record.seq == cycle.seq and record.name in names]
+                     if record.seq == cycle.seq and record.name.startswith("major.")]
             if [record.name for record in spans] != list(names):
                 errors.append(f"major_spans_seq={cycle.seq}")
                 continue

@@ -94,6 +94,12 @@ class PhaseEntryGuardTest(unittest.TestCase):
                 self.check_guard([row for row in major_log() if f"name={name} " not in row],
                                  mode="major", errors="major_spans_seq=1")
 
+    def test_extra_major_generation_span_is_rejected(self):
+        rows = major_log()
+        rows.append("[GCLOG] v=4 rec=phase seq=1 gc_tag=Y name=major.partial_roots "
+                    "kind=unknown start_ns=70 ns=10")
+        self.check_guard(rows, mode="major", errors="major_spans_seq=1")
+
     def test_major_spans_must_be_ordered(self):
         rows = major_log()
         rows[-1] = rows[-1].replace("start_ns=50", "start_ns=20")

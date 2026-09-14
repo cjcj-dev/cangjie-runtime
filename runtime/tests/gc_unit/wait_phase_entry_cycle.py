@@ -6,6 +6,7 @@ from pathlib import Path
 import selectors
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "perf_vs_official"))
@@ -16,8 +17,10 @@ def run(binary, log_path):
     deadline = time.monotonic() + 60
     acknowledged = False
     pending = b""
-    with open(log_path, "wb") as log, subprocess.Popen(
-        [binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    with tempfile.TemporaryDirectory(prefix="cycle-ack-", dir=Path(log_path).parent) as directory, \
+            open(log_path, "wb") as log, subprocess.Popen(
+        [binary, str(Path(directory) / "completed")], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     ) as process, selectors.DefaultSelector() as selector:
         selector.register(process.stdout, selectors.EVENT_READ)
         try:
@@ -40,8 +43,7 @@ def run(binary, log_path):
                         records = parse_gclog(line.decode("utf-8"))
                         for cycle in records.cycles:
                             if cycle.kind == "minor" and cycle.seq > 0:
-                                process.stdin.write(b"\n")
-                                process.stdin.flush()
+                                (Path(directory) / "completed").write_text(f"seq={cycle.seq}\n")
                                 acknowledged = True
                                 log.write(f"PHASE_ENTRY_CYCLE_ACK seq={cycle.seq}\n".encode())
                                 log.flush()
