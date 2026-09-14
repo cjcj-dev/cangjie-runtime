@@ -12,6 +12,7 @@
 #include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
 #if defined(__linux__)
