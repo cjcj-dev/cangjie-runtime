@@ -117,12 +117,9 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
     }
-    // This station owns queue completion, not object copying.  A marked old
-    // page with a completed in-place route takes ForwardRegion's region
-    // exit, after which the real task must consume this active receipt through
-    // CompleteRelocationRequests.
+    // The mapping is ready, but page completion belongs to the worker.
+    // ZRelocateTask marks done after processing the claimed forwarding.
     region->SetInGhostRegion(1);
-    region->MarkForwardingDone();
     return true;
 }
 
@@ -150,7 +147,11 @@ bool RunSerialProductEntryClosesGeneration()
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
-    manager.ForwardFromRegions<Generation::Old>();
+    // ZRelocate uses the generation worker entry even with one participant.
+    GCWorkers workers(GCWorkers::Generation::OLD, 1);
+    workers.SetActive();
+    manager.ForwardFromRegions<Generation::Old>(workers);
+    workers.SetInactive();
     return !queue.IsActive() && queue.PendingCount() == 0;
 }
 
@@ -200,6 +201,8 @@ bool RunYoungRuntimeProductEntry()
 #if defined(MRT_TESTABLE_INTERNALS)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), collector);
 #endif
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(1);
+    ZStat::Initialize();
     collector.ForwardYoungFromRuntimeEntry();
 
     return !queue.IsActive() && queue.PendingCount() == 0;
