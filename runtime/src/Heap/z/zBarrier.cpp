@@ -179,7 +179,7 @@ void Barrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
-    const bool weakReferent = obj != nullptr && obj->IsWeakRef() &&
+    const bool weakReferent = obj != nullptr && Heap::IsHeapAddress(obj) && obj->IsWeakRef() &&
         reinterpret_cast<MAddress>(&field) == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     StoreBarrier(obj, field, false, weakReferent ? ReferenceStrength::Weak : ReferenceStrength::Strong);
     WriteReferenceImpl(obj, field, ref);
@@ -189,7 +189,7 @@ void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseOb
 {
     RefField<> previous(prev);
     const MAddress address = reinterpret_cast<MAddress>(&field);
-    const bool weakReferent = obj != nullptr && obj->IsWeakRef() &&
+    const bool weakReferent = obj != nullptr && Heap::IsHeapAddress(obj) && obj->IsWeakRef() &&
         address == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     // ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field uses store-good,
     // including raw null in the slow path so that remember(p) is not skipped.

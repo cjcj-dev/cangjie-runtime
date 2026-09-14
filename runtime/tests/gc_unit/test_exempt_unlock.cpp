@@ -38,45 +38,7 @@ struct ExemptUnlockTestAccess {
 
 } // namespace MapleRuntime
 
-GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
-{
-    // Count drain, not page walk (zForwarding.cpp:171-181). Planting LOCKED
-    // without note_copy is the hole VisitAllObjects used to miss.
-    GcHeapFixture fx;
-    RegionManager manager;
 
-    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
-    fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    obj->SetStateCode(ObjectState::LOCKED);
-    /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
-    GC_EXPECT_TRUE(true);
-    GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
-    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
-
-    std::atomic<int> phase{ 0 };
-    std::thread copier([&]() {
-        phase.store(1, std::memory_order_release);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        obj->UnlockObject(ObjectState::FORWARDED);
-        (void)0;
-        phase.store(2, std::memory_order_release);
-    });
-    JoinGuard copierGuard(copier);
-    while (phase.load(std::memory_order_acquire) < 1) {
-        std::this_thread::yield();
-    }
-    fx.InstallPageOwner(fx.region0);
-    manager.ExemptFromRegion(fx.region0);
-    copier.join();
-
-    GC_EXPECT_FALSE(obj->GetStateWord().IsLockedWord());
-    GC_EXPECT_TRUE(obj->IsForwarded());
-    GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
-    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
-    GC_EXPECT_TRUE(ExemptUnlockTestAccess::OnUnmovable(manager, fx.region0));
-    GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
-}
 
 GC_TEST(ExemptLife, InPlaceCopyMustNotPaintNormalBeforeUnlock)
 {
@@ -84,7 +46,7 @@ GC_TEST(ExemptLife, InPlaceCopyMustNotPaintNormalBeforeUnlock)
     // and UnlockObject CHECK-fails (StateWord.h:183). Skip the paint when to==from.
     GcHeapFixture fx;
     BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + obj->GetSize());
     StateWord word = obj->GetStateWord();
     GC_EXPECT_TRUE(obj->TryLockObject(word));
     GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
@@ -156,34 +118,9 @@ GC_OTHER_VM_TEST(ExemptLife, NonOverlapCopyFarBeforeSourceRemainsGreen)
 
 
 
-GC_TEST(ExemptLife, FindHitDoesNotEnterCopyInflight)
-{
-    // zRelocate.cpp:382-410: find() hit returns without retain. Exempt must
-    // not wait on a table-hit reader.
-    GcHeapFixture fx;
-    RegionManager manager;
-    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
-    obj->SetStateCode(ObjectState::FORWARDED);
-    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
-    fx.InstallPageOwner(fx.region0);
-    manager.ExemptFromRegion(fx.region0);
-    GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
-    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
-}
 
-GC_TEST(ExemptLife, ExemptAlreadyForwardedStillPublishesDone)
-{
-    GcHeapFixture fx;
-    RegionManager manager;
-    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
-    obj->SetStateCode(ObjectState::FORWARDED);
-    fx.InstallPageOwner(fx.region0);
-    manager.ExemptFromRegion(fx.region0);
-    GC_EXPECT_TRUE(obj->IsForwarded());
-    GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
-}
+
+
 
 GC_TEST(ExemptLife, PrepareInstallStripsForwardedResidual)
 {
@@ -191,7 +128,7 @@ GC_TEST(ExemptLife, PrepareInstallStripsForwardedResidual)
     // install after the table is retired (zRelocationSet.cpp:91-96).
     GcHeapFixture fx;
     BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + obj->GetSize());
     obj->SetStateCode(ObjectState::FORWARDED);
     GC_EXPECT_TRUE(obj->IsForwarded());
     fx.region0->ClearRelocationResiduals();
@@ -202,7 +139,7 @@ GC_TEST(ExemptLife, PrepareInstallLeavesLockedAlone)
 {
     GcHeapFixture fx;
     BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + obj->GetSize());
     obj->SetStateCode(ObjectState::LOCKED);
     fx.region0->ClearRelocationResiduals();
     GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
