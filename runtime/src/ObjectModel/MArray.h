@@ -76,6 +76,8 @@ enum class LargeArrayRootVisitSite : uint8_t {
     ITERATOR_SKIP,
 };
 
+enum class LargeArrayRootWorkPhase : uint8_t { MARK, REMAP };
+
 enum class LargeArrayRootPhase : uint8_t {
     MAJOR_MARK,
     MINOR_MARK,
@@ -94,7 +96,8 @@ struct LargeArrayInitTestHooks {
 
 extern "C" MRT_EXPORT void CJ_MRT_SetLargeArrayInitTestHooks(const LargeArrayInitTestHooks* hooks);
 extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, AllocType allocType);
-void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* object);
+void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* object,
+    LargeArrayRootWorkPhase workPhase = LargeArrayRootWorkPhase::MARK);
 void NoteLargeArrayInitRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone);
 #endif
 } // namespace MapleRuntime

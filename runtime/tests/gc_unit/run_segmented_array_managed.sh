@@ -65,8 +65,12 @@ if [[ "$MODE" == both || "$MODE" == young ]]; then
   set -e
   young_branch=$(/usr/bin/grep -c '\[SEGMENTED_MANAGED_OK\] mode=young ' "$YOUNG_LOG" || true)
   young_done=$(/usr/bin/grep -c '^SEGMENTED_ARRAY_MANAGED_FIXTURE_OK checksum=37$' "$YOUNG_LOG" || true)
-  if [[ $young_rc -ne 0 || $young_branch -ne 1 || $young_done -ne 1 ]]; then
-    echo "SEGMENTED_ARRAY_MANAGED_FAIL mode=young rc=$young_rc branch=$young_branch done=$young_done" >&2
+  young_roots=$(/usr/bin/grep -c '^\[SEGMENTED_YOUNG_ROOT_ASSERT\] mark=1 remap=1 ' "$YOUNG_LOG" || true)
+  young_skip=$(/usr/bin/grep -c '^\[SEGMENTED_YOUNG_ITERATOR\] incomplete full=0 range=0$' "$YOUNG_LOG" || true)
+  young_complete=$(/usr/bin/grep -c '^\[SEGMENTED_YOUNG_ITERATOR\] complete ' "$YOUNG_LOG" || true)
+  if [[ $young_rc -ne 0 || $young_branch -ne 1 || $young_done -ne 1 ||
+        $young_roots -ne 1 || $young_skip -ne 1 || $young_complete -ne 1 ]]; then
+    echo "SEGMENTED_ARRAY_MANAGED_FAIL mode=young rc=$young_rc branch=$young_branch done=$young_done roots=$young_roots skip=$young_skip complete=$young_complete" >&2
     tail -30 "$YOUNG_LOG" >&2
     exit 1
   fi

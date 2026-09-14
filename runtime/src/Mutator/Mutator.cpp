@@ -929,11 +929,13 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     scannedFrames = 0;
     MutatorLock();
 #if defined(MRT_GC_UNIT_TESTS)
-    RootVisitor observedInvisibleRootVisitor = [this, &invisibleRootVisitor](ObjectRef& root) {
+    RootVisitor observedInvisibleRootVisitor = [this, &invisibleRootVisitor, workPhase](ObjectRef& root) {
+        invisibleRootVisitor(root);
         NoteLargeArrayInitRootVisit(IsManagedContext() ? LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED
                                                       : LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE,
-                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
-        invisibleRootVisitor(root);
+                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))),
+                                    workPhase == StackWatermark::ProcessingPhase::MARK
+                                        ? LargeArrayRootWorkPhase::MARK : LargeArrayRootWorkPhase::REMAP);
     };
     const RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
 #else

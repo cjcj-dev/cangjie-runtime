@@ -38,6 +38,12 @@ enum class ManagedSegmentedGc : uint8_t {
 
 std::atomic<bool> g_managedSegmentedActive { false };
 std::atomic<uint32_t> g_managedSegmentedVisitSites { 0 };
+std::atomic<uint32_t> g_managedSegmentedMarkSites { 0 };
+std::atomic<uint32_t> g_managedSegmentedRemapSites { 0 };
+std::atomic<BaseObject*> g_managedSegmentedRemapRoot { nullptr };
+std::atomic<Mutator*> g_managedSegmentedMutator { nullptr };
+std::atomic<size_t> g_managedSegmentedMarkPhases { 0 };
+std::atomic<bool> g_managedSegmentedMarkDone { false };
 
 ManagedSegmentedGc GetManagedSegmentedGc()
 {
@@ -70,11 +76,18 @@ extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, Allo
     return HeapManager::Allocate(size, allocType);
 }
 
-void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* object)
+void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* object,
+                                 LargeArrayRootWorkPhase workPhase)
 {
     if (g_managedSegmentedActive.load(std::memory_order_acquire) && object != nullptr &&
         object->IsInvisibleObject()) {
         g_managedSegmentedVisitSites.fetch_or(VisitBit(site), std::memory_order_acq_rel);
+        if (workPhase == LargeArrayRootWorkPhase::MARK) {
+            g_managedSegmentedMarkSites.fetch_or(VisitBit(site), std::memory_order_acq_rel);
+        } else {
+            g_managedSegmentedRemapSites.fetch_or(VisitBit(site), std::memory_order_acq_rel);
+            g_managedSegmentedRemapRoot.store(object, std::memory_order_release);
+        }
     }
     if (g_largeArrayInitTestHooks.onRootVisit != nullptr) {
         g_largeArrayInitTestHooks.onRootVisit(site, object);
@@ -83,6 +96,12 @@ void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* objec
 
 void NoteLargeArrayInitRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone)
 {
+    if (g_managedSegmentedActive.load(std::memory_order_acquire) &&
+        phase == LargeArrayRootPhase::MINOR_MARK &&
+        mutator == g_managedSegmentedMutator.load(std::memory_order_acquire)) {
+        g_managedSegmentedMarkDone.store(watermarkDone, std::memory_order_release);
+        g_managedSegmentedMarkPhases.fetch_add(1, std::memory_order_acq_rel);
+    }
     if (g_largeArrayInitTestHooks.onRootPhase != nullptr) {
         g_largeArrayInitTestHooks.onRootPhase(phase, mutator, watermarkDone);
     }
@@ -104,6 +123,12 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                          expectedInactive, true, std::memory_order_acq_rel),
                      "managed segmented-array test permits one active initializer");
         g_managedSegmentedVisitSites.store(0, std::memory_order_release);
+        g_managedSegmentedMarkSites.store(0, std::memory_order_release);
+        g_managedSegmentedRemapSites.store(0, std::memory_order_release);
+        g_managedSegmentedRemapRoot.store(nullptr, std::memory_order_release);
+        g_managedSegmentedMutator.store(Mutator::GetMutator(), std::memory_order_release);
+        g_managedSegmentedMarkPhases.store(0, std::memory_order_release);
+        g_managedSegmentedMarkDone.store(false, std::memory_order_release);
     }
 #endif
     // Publish a complete boundary before the first yield. The invisible-root
@@ -198,6 +223,23 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
         CHECK_DETAIL(complete, "array initialization must complete on the second pass");
     }
 
+#if defined(MRT_GC_UNIT_TESTS)
+    if (managedTestGc == ManagedSegmentedGc::YOUNG && managedTest) {
+        // zIterator.inline.hpp:56-70: skip incomplete payloads. Exercise both
+        // iterator entries explicitly; DontFollow marking need not visit either.
+        MArray* current = static_cast<MArray*>(mutator->LoadInvisibleRoot());
+        size_t fullVisits = 0;
+        size_t rangeVisits = 0;
+        current->ForEachRefField([&](RefField<>&) { ++fullVisits; });
+        current->ForEachRefFieldInRange([&](RefField<>&) { ++rangeVisits; },
+            reinterpret_cast<MAddress>(current->ConvertToCArray()),
+            reinterpret_cast<MAddress>(current->ConvertToCArray()) + nElems * sizeof(RefField<>));
+        CHECK_DETAIL(fullVisits == 0 && rangeVisits == 0,
+                     "managed young incomplete array iterator: full=%zu range=%zu", fullVisits, rangeVisits);
+        std::fprintf(stderr, "[SEGMENTED_YOUNG_ITERATOR] incomplete full=%zu range=%zu\n",
+                     fullVisits, rangeVisits);
+    }
+#endif
     MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());
     complete->SetInvisibleObject(false);
 #if defined(MRT_GC_UNIT_TESTS)
@@ -209,9 +251,50 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
         const uint32_t sites = g_managedSegmentedVisitSites.load(std::memory_order_acquire);
         const uint32_t forbidden = VisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE) |
             VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE);
-        CHECK_DETAIL((sites & required) == required,
-                     "language-level segmented-array GC missed managed root consumer: required=%#x actual=%#x",
-                     required, sites);
+        if (managedTestGc == ManagedSegmentedGc::YOUNG) {
+            // zStackWatermark.cpp:171-173 and zUncoloredRoot.inline.hpp:79-100:
+            // MARK and REMAP each consume the invisible root, without requiring
+            // a second stack walk or a payload walk from DontFollow marking.
+            const uint32_t markSites = g_managedSegmentedMarkSites.load(std::memory_order_acquire);
+            const uint32_t remapSites = g_managedSegmentedRemapSites.load(std::memory_order_acquire);
+            const bool markDone = g_managedSegmentedMarkDone.load(std::memory_order_acquire);
+            const size_t markPhases = g_managedSegmentedMarkPhases.load(std::memory_order_acquire);
+            const uint32_t markRequired = markDone ? VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED)
+                : VisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED) |
+                  VisitBit(LargeArrayRootVisitSite::MINOR_MARK);
+            const uint32_t remapRequired = VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED);
+            BaseObject* remapRoot = g_managedSegmentedRemapRoot.load(std::memory_order_acquire);
+            // Keep both assertions reachable independently when one phase is cut.
+            const bool markConsumed = markPhases == 1 && (markSites & markRequired) == markRequired;
+            const bool remapConsumed = (remapSites & remapRequired) == remapRequired && remapRoot == complete;
+            std::fprintf(stderr,
+                "[SEGMENTED_YOUNG_ROOT_ASSERT] mark=%d remap=%d mark_sites=%#x remap_sites=%#x "
+                "mark_required=%#x mark_phase_n=%zu watermark_done=%d remap_root=%p complete=%p\n",
+                markConsumed, remapConsumed, markSites, remapSites, markRequired, markPhases,
+                markDone, static_cast<void*>(remapRoot), static_cast<void*>(complete));
+            CHECK_DETAIL(markConsumed && remapConsumed,
+                         "managed young root consumer: mark=%d remap=%d", markConsumed, remapConsumed);
+            // Positive iterator control and complete raw-null payload check.
+            size_t fullVisits = 0;
+            size_t rangeVisits = 0;
+            size_t nonNull = 0;
+            complete->ForEachRefField([&](RefField<>& slot) {
+                ++fullVisits;
+                nonNull += !is_null(slot.GetFieldValue()) ? 1 : 0;
+            });
+            complete->ForEachRefFieldInRange([&](RefField<>&) { ++rangeVisits; },
+                reinterpret_cast<MAddress>(complete->ConvertToCArray()),
+                reinterpret_cast<MAddress>(complete->ConvertToCArray()) + nElems * sizeof(RefField<>));
+            CHECK_DETAIL(fullVisits == nElems && rangeVisits == nElems && nonNull == 0,
+                         "managed young complete array: full=%zu range=%zu length=%zu nonnull=%zu",
+                         fullVisits, rangeVisits, static_cast<size_t>(nElems), nonNull);
+            std::fprintf(stderr, "[SEGMENTED_YOUNG_ITERATOR] complete full=%zu range=%zu nonnull=%zu\n",
+                         fullVisits, rangeVisits, nonNull);
+        } else {
+            CHECK_DETAIL((sites & required) == required,
+                         "language-level segmented-array GC missed managed root consumer: required=%#x actual=%#x",
+                         required, sites);
+        }
         CHECK_DETAIL((sites & forbidden) == 0,
                      "language-level segmented-array GC entered native root consumer: forbidden=%#x actual=%#x",
                      forbidden, sites);
