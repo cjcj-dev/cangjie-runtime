@@ -248,14 +248,14 @@ GC_TEST(MemMapContract, TwoNodeOwnershipRejectsCrossNodeFree)
     GC_EXPECT_TRUE(ownsNode3);
     GC_EXPECT_TRUE(ownsNode7);
 
+    // zPhysicalMemoryManager.cpp:254-276: uncommit operates on committed
+    // segments. Both rejected and accepted frees use the same live backing.
+    GC_EXPECT_EQ(map->CommitMemory(reinterpret_cast<void*>(base), 2U * ALLOC_UTIL_PAGE_SIZE, 3),
+                 2U * ALLOC_UTIL_PAGE_SIZE);
     GC_EXPECT_FALSE(map->ReleaseMemory(reinterpret_cast<void*>(base), ALLOC_UTIL_PAGE_SIZE, 7));
     GC_EXPECT_FALSE(map->ReleaseMemory(reinterpret_cast<void*>(base + ALLOC_UTIL_PAGE_SIZE),
                                       2U * ALLOC_UTIL_PAGE_SIZE, 3));
     GC_EXPECT_EQ(backend.releases.size(), 0U);
-    // zPhysicalMemoryManager.cpp:295-312: uncommit operates on committed
-    // segments. Establish backing before expecting the backend release call.
-    GC_EXPECT_EQ(map->CommitMemory(reinterpret_cast<void*>(base), 2U * ALLOC_UTIL_PAGE_SIZE, 3),
-                 2U * ALLOC_UTIL_PAGE_SIZE);
     GC_EXPECT_EQ(map->ReleaseMemory(reinterpret_cast<void*>(base), 2U * ALLOC_UTIL_PAGE_SIZE, 3),
                  2U * ALLOC_UTIL_PAGE_SIZE);
     backend.commits.clear();
