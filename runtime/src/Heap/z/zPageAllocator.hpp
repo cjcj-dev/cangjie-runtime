@@ -233,7 +233,8 @@ public:
     // zPageAllocator.cpp:1470-1515: consume the already-owned vmem outside
     // the allocator lock. A02p owns partial-commit results and suffix cleanup.
     RegionInfo* MaterializePageMemory(PageMemory& memory, RegionInfo::UnitRole role,
-                                     bool expectPhysicalMem, bool clearPayload, size_t& committedUnits)
+                                     bool expectPhysicalMem, bool clearPayload, size_t& committedUnits,
+                                     PageAge age = PageAge::old)
     {
         (void)expectPhysicalMem;
         committedUnits = 0;
@@ -254,7 +255,7 @@ public:
         if ((wasCommitted || memory.harvestedUnits != 0) && clearPayload) {
             RegionInfo::ClearUnits(idx, num);
         }
-        RegionInfo* region = RegionInfo::InitRegion(idx, num, role);
+        RegionInfo* region = RegionInfo::InitRegion(idx, num, role, age);
         if (!wasCommitted) {
             PrehandleReleasedUnit(clearPayload, idx, num);
         }
@@ -603,7 +604,7 @@ public:
     // take a region with *num* units for allocation
     // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
     RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false,
-                           bool allowSaferegion = true, bool clearPayload = true);
+                           bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old);
 
     uintptr_t AllocPinnedFromFreeList(size_t size);
 

@@ -914,10 +914,10 @@ inline void RegionInfo::InitFreeRegion(size_t unitIdx, size_t nUnit)
         region->InitRegionInfo(nUnit, UnitRole::FREE_UNITS);
     }
 
-inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, RegionInfo::UnitRole uclass)
+inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, RegionInfo::UnitRole uclass, PageAge age)
     {
         RegionInfo* region = reinterpret_cast<RegionInfo*>(RegionInfo::UnitInfo::GetUnitInfo(unitIdx));
-        region->InitRegion(nUnit, uclass);
+        region->InitRegion(nUnit, uclass, age);
         return region;
     }
 
@@ -1842,7 +1842,7 @@ inline void RegionInfo::BumpRegionLifeId()
         }
     }
 
-inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass)
+inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge age)
     {
         CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
         CHECK(TryGetRegionInfoAt(GetRegionStart()) == nullptr);
@@ -1865,6 +1865,9 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass)
         SetYoungRegionFlag(0);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
+        // ZPage::reset(age), zPage.cpp:103-108: establish identity before page-table publication.
+        SetYoungRegionFlag(age != PageAge::old);
+        SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
         // Unset until ClearLiveInfo starts a mark. 0 so idle / test regions do
         // not treat every object as allocate-black.
         metadata.markStartAllocPtr = 0;
@@ -1903,9 +1906,9 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass)
         SetUnitRole(uClass);
     }
 
-inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass)
+inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass, PageAge age)
     {
-        InitRegionInfo(nUnit, uClass);
+        InitRegionInfo(nUnit, uClass, age);
 
 
 

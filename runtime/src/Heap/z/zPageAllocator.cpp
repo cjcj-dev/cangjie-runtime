@@ -694,7 +694,7 @@ void RegionManager::PromoteAllRegions()
 }
 
 RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem,
-                                      bool allowSaferegion, bool clearPayload)
+                                      bool allowSaferegion, bool clearPayload, PageAge age)
 {
     // check for allocation since we do not want gc threads and mutators do any harm to each other.
     size_t size = num * RegionInfo::UNIT_SIZE;
@@ -729,7 +729,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     if (claimed) {
         size_t committedUnits = 0;
         RegionInfo* region = freeRegionManager.MaterializePageMemory(
-            request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedUnits);
+            request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedUnits, age);
         if (request.Memory().virtualClaimed) {
             // The address is known only after materialization; keep the existing
             // diagnostic envelope update under its allocator lock.
