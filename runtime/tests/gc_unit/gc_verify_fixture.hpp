@@ -13,7 +13,6 @@ namespace MapleRuntime::GcUnit {
 struct GcVerifyFixture : GcHeapFixture {
     GcVerifyFixture()
     {
-        Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * RegionInfo::UNIT_SIZE}});
         // Relocation preparation walks allocated objects from the page start.
         // Use a dense one-object page, without the shared fixture's empty prefix.
         obj0 = PlaceObject(region0->GetRegionStart());
