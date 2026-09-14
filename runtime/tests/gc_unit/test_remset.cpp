@@ -22,8 +22,8 @@
 #include <unistd.h>
 #endif
 
-// RememberedSet::Record is private with `friend class Barrier` -- friendship a derived TestBarrier
-// does not inherit.  The minor's own consumer (WCollector::RescanRememberedSet) calls Record
+// RememberedSet::Record is private. The minor's consumer
+// (WCollector::RescanRememberedSet) calls Record
 // directly when it re-arms a scanned slot, so a test that cannot call it cannot model the re-arm at
 // all.  Same idiom the fixture already uses for RegionInfo; scoped to this one header.
 #ifndef MRT_TESTABLE_INTERNALS
@@ -205,34 +205,6 @@ private:
     Barrier* previous;
 };
 
-class TestCollector final : public Collector {
-public:
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*, Generation) const override
-    {
-        return FindToVersionResult::NotForwarded();
-    }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>&) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
-    {
-        return RefField<>(GcUnit::StoreGoodPointer(obj));
-    }
-};
-
-class TestBarrier final : public Barrier {
-public:
-    TestBarrier(Collector& collector, RememberedSet& rememberedSet) : Barrier(collector, rememberedSet) {}
-
-protected:
-    void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
-    {
-        field.StoreColoured(GcUnit::StoreGoodPointer(ref));
-    }
-};
-
 // ZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706):
 // a previous-epoch, non-null slot takes the ordinary store slow path. Raw null
 // and store-good slots intentionally do not. Keep all other colour families good.
@@ -292,10 +264,10 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -313,7 +285,7 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -341,7 +313,7 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -548,7 +520,7 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -574,7 +546,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -606,7 +578,7 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
     fx.region1->SetYoungAge(1);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -624,7 +596,7 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
     fx.region1->SetYoungAge(1);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -643,7 +615,7 @@ GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
     fx.region1->SetYoungAge(1);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -672,7 +644,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier idle(collector, rs);
@@ -690,7 +662,7 @@ GC_TEST(Remset, StaticRootNotRecorded)
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
 
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -713,10 +685,10 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
 
     field->StoreColoured(zpointer::null);
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -753,10 +725,10 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -795,10 +767,10 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
     fx.region1->SetYoungAge(1);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -823,10 +795,10 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
