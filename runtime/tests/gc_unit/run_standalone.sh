@@ -50,6 +50,7 @@ run_ohos_host_arm() {
   for symbol in \
       'MRT_GC_UNIT_OHOS_HOST_RECEIPT' \
       'CJ_MRT_RolveCycleRef' \
+      'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)' \
       'MapleRuntime::WCollector::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
@@ -97,6 +98,7 @@ run_ohos_host_arm() {
   fi
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
+      'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)' \
       'MapleRuntime::WCollector::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
@@ -105,7 +107,7 @@ run_ohos_host_arm() {
     fi
   done
   for symbol in \
-      'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)' \
+      'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::WCollector::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
