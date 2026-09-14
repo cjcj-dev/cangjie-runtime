@@ -1,0 +1,163 @@
+{
+ "repo": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_581_implement_r5668277053",
+ "base": "333d3216762495d49d34594390c3afa05378010f",
+ "head": "4ae08d2033af7d35d0466264b5b601313527dc48",
+ "mode": "product",
+ "ok": true,
+ "verdicts": [
+  {
+   "cut": "lane-evidence/cut-producer.diff",
+   "file": "runtime/src/Heap/z/zRelocate.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/z/zRelocate.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "333d3216762495d49d34594390c3afa05378010f:runtime/src/Heap/z/zRelocate.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [
+    "TryMutatorRelocate（所在函数）"
+   ],
+   "ok": true
+  },
+  {
+   "cut": "lane-evidence/cut-promotion.diff",
+   "file": "runtime/src/Heap/z/zRelocate.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/z/zRelocate.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "333d3216762495d49d34594390c3afa05378010f:runtime/src/Heap/z/zRelocate.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [],
+   "ok": true
+  },
+  {
+   "cut": "lane-evidence/cut-phase.diff",
+   "file": "runtime/src/Heap/WCollector/WCollector.h",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/WCollector/WCollector.h"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "333d3216762495d49d34594390c3afa05378010f:runtime/src/Heap/WCollector/WCollector.h"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [],
+   "ok": true
+  },
+  {
+   "cut": "lane-evidence/cut-consumer.diff",
+   "file": "runtime/src/Heap/WCollector/WCollector.h",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/WCollector/WCollector.h"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "333d3216762495d49d34594390c3afa05378010f:runtime/src/Heap/WCollector/WCollector.h"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [],
+   "ok": true
+  },
+  {
+   "cut": "lane-evidence/cut-entry.diff",
+   "file": "runtime/src/CompilerCalls.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/CompilerCalls.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "333d3216762495d49d34594390c3afa05378010f:runtime/src/CompilerCalls.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [],
+   "ok": true
+  },
+  {
+   "cut": "*",
+   "file": "*",
+   "checks": [
+    {
+     "name": "至少一处断线落在真实相位入口函数",
+     "ok": true,
+     "detail": "RunGarbageCollection, RequestGC, DoGarbageCollection, PushYoungObject, FindUselessExternObjects, Preforward, PostTrace, PublishMarkCoverage, ReclaimRetired, RehomeCompactedInPlaceRegion, TryAllocateForRelocation, SetRelocationRegion, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, PostResolveCycleTask, VerifyFaceEnabled, VerifyPhaseEnter, GCPhasePreForward, TransitionToGCPhaseExclusive, ForwardObjectImpl, ForwardObjectExclusive, RelocateObjectInner, TryMutatorRelocate, WaitForPageForwarding, RunCycle, Uncommit, VisitHeapRootSlots, WriteReference, RecordCrossGenEdge, ZeroAndFill, runtime/src/Heap/z/zStat.cpp:Sort, PublishForwardingCarrier, PrepareForwardableRegion, DoYoungGarbageCollection, DoTracing, ProcessOldNonStrongReferences, PostWriteReference, WaitForAck, ProcessDriverRequest, RequestGCAndWait, DrainStackWatermark, VisitRawObjects, NoteLargeArrayInitRootVisit"
+    }
+   ],
+   "ok": true
+  }
+ ]
+}

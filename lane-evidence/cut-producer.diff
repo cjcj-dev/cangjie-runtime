@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRelocate.cpp
++++ b/runtime/src/Heap/z/zRelocate.cpp
+@@ -1369,7 +1369,7 @@
+     if (toVersion == obj) {
+         return nullptr;
+     }
+-    return toVersion;
++    return obj;
+ }
+ 
+ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,

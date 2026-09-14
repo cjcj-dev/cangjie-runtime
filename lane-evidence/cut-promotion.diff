@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRelocate.cpp
++++ b/runtime/src/Heap/z/zRelocate.cpp
+@@ -2062,7 +2062,7 @@
+     if (fromYoung) {
+         if (toAge == PageAge::old) {
+             MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+-            (void)region->PromoteYoungRegion(view);
++            (void)view;
+         } else {
+             region->SetYoungAge(untype(toAge));
+         }

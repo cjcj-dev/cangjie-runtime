@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/WCollector/WCollector.h
++++ b/runtime/src/Heap/WCollector/WCollector.h
+@@ -461,7 +461,7 @@
+             }
+         }
+         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+-        space.AddRawPointerObject(obj);
++        (void)obj;
+         return obj;
+     }
+ 

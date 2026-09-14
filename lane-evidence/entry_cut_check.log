@@ -1,0 +1,29 @@
+✅ lane-evidence/cut-producer.diff :: runtime/src/Heap/z/zRelocate.cpp
+   ✅ 产品树文件 —— runtime/src/Heap/z/zRelocate.cpp
+   ✅ 文件在基线存在 —— 333d3216762495d49d34594390c3afa05378010f:runtime/src/Heap/z/zRelocate.cpp
+   ✅ 被断开的行在基线逐字存在 —— 1 行全在基线
+   ✅ 没有断在候选自己新增的行上 —— 无
+   ⭐ 相位入口命中: TryMutatorRelocate（所在函数）
+✅ lane-evidence/cut-promotion.diff :: runtime/src/Heap/z/zRelocate.cpp
+   ✅ 产品树文件 —— runtime/src/Heap/z/zRelocate.cpp
+   ✅ 文件在基线存在 —— 333d3216762495d49d34594390c3afa05378010f:runtime/src/Heap/z/zRelocate.cpp
+   ✅ 被断开的行在基线逐字存在 —— 1 行全在基线
+   ✅ 没有断在候选自己新增的行上 —— 无
+✅ lane-evidence/cut-phase.diff :: runtime/src/Heap/WCollector/WCollector.h
+   ✅ 产品树文件 —— runtime/src/Heap/WCollector/WCollector.h
+   ✅ 文件在基线存在 —— 333d3216762495d49d34594390c3afa05378010f:runtime/src/Heap/WCollector/WCollector.h
+   ✅ 被断开的行在基线逐字存在 —— 1 行全在基线
+   ✅ 没有断在候选自己新增的行上 —— 无
+✅ lane-evidence/cut-consumer.diff :: runtime/src/Heap/WCollector/WCollector.h
+   ✅ 产品树文件 —— runtime/src/Heap/WCollector/WCollector.h
+   ✅ 文件在基线存在 —— 333d3216762495d49d34594390c3afa05378010f:runtime/src/Heap/WCollector/WCollector.h
+   ✅ 被断开的行在基线逐字存在 —— 1 行全在基线
+   ✅ 没有断在候选自己新增的行上 —— 无
+✅ lane-evidence/cut-entry.diff :: runtime/src/CompilerCalls.cpp
+   ✅ 产品树文件 —— runtime/src/CompilerCalls.cpp
+   ✅ 文件在基线存在 —— 333d3216762495d49d34594390c3afa05378010f:runtime/src/CompilerCalls.cpp
+   ✅ 被断开的行在基线逐字存在 —— 1 行全在基线
+   ✅ 没有断在候选自己新增的行上 —— 无
+✅ * :: *
+   ✅ 至少一处断线落在真实相位入口函数 —— RunGarbageCollection, RequestGC, DoGarbageCollection, PushYoungObject, FindUselessExternObjects, Preforward, PostTrace, PublishMarkCoverage, ReclaimRetired, RehomeCompactedInPlaceRegion, TryAllocateForRelocation, SetRelocationRegion, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, PostResolveCycleTask, VerifyFaceEnabled, VerifyPhaseEnter, GCPhasePreForward, TransitionToGCPhaseExclusive, ForwardObjectImpl, ForwardObjectExclusive, RelocateObjectInner, TryMutatorRelocate, WaitForPageForwarding, RunCycle, Uncommit, VisitHeapRootSlots, WriteReference, RecordCrossGenEdge, ZeroAndFill, runtime/src/Heap/z/zStat.cpp:Sort, PublishForwardingCarrier, PrepareForwardableRegion, DoYoungGarbageCollection, DoTracing, ProcessOldNonStrongReferences, PostWriteReference, WaitForAck, ProcessDriverRequest, RequestGCAndWait, DrainStackWatermark, VisitRawObjects, NoteLargeArrayInitRootVisit
+⇒ 断线补丁合法

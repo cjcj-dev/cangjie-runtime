@@ -1,0 +1,121 @@
+  2994	    RawPinArrayTypes()
+  2995	    {
+  2996	        auto* byte = reinterpret_cast<TypeInfo*>(byteStorage);
+  2997	        byte->SetType(TypeKind::TYPE_KIND_UINT8);
+  2998	        byte->SetInstanceSize(1);
+  2999	        array->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+  3000	        array->SetComponentTypeInfo(byte);
+  3001	        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+  3002	            reinterpret_cast<uintptr_t>(this), sizeof(*this));
+  3003	    }
+  3004	};
+  3005	
+  3006	// Keep the Heap-owned collector: its vtable and Pin implementation were
+  3007	// constructed in the product SO, unlike a test-local WCollector instance.
+  3008	enum class RawPinBypass { None, MissingCarrier, Unmovable };
+  3009	
+  3010	void ExerciseRawAcquire(GCPhase sourcePhase, bool compact, MIndex length,
+  3011	                        RawPinBypass bypass = RawPinBypass::None)
+  3012	{
+  3013	    GcHeapFixture& fx = ProductFixture();
+  3014	    static RawPinArrayTypes types;
+  3015	    auto& collector = Heap::GetHeap().GetCollector();
+  3016	    RegionInfo* region = ResetDeliveryUnit(fx, 4);
+  3017	    region->SetYoungRegionFlag(compact ? 1 : 0);
+  3018	    const MAddress start = region->GetRegionStart();
+  3019	    auto* array = reinterpret_cast<MArray*>(start);
+  3020	    array->SetClassInfo(types.array);
+  3021	    array->SetLength(length);
+  3022	    const size_t size = array->GetSize();
+  3023	    if (compact) {
+  3024	        // Equal-sized dead prefix: after genuine in-place copying the product
+  3025	        // filler starts exactly at from. Acquire's pre-pin header reads are
+  3026	        // valid on this layout; do not repair or manufacture the old header.
+  3027	        array = reinterpret_cast<MArray*>(start + size);
+  3028	        array->SetClassInfo(types.array);
+  3029	        array->SetLength(length);
+  3030	    }
+  3031	    std::memset(array->ConvertToCArray(), 0x5a, length);
+  3032	    const MAddress from = reinterpret_cast<MAddress>(array);
+  3033	    region->SetRegionAllocPtr(from + size);
+  3034	    const auto oldYoungPhase = collector.GetGCPhase(GCCycleGeneration::YOUNG);
+  3035	    const auto oldOldPhase = collector.GetGCPhase(GCCycleGeneration::OLD);
+  3036	    auto& stats = collector.GetGCStats(GCCycleGeneration::YOUNG);
+  3037	    const auto oldThreshold = stats.tenuringThreshold;
+  3038	    stats.tenuringThreshold = 0;
+  3039	    RegionManager manager;
+  3040	    if (compact) {
+  3041	        (void)PrepareForwardable(fx, region, from);
+  3042	        RelocationReceiptTestAccess::ParkFrom(manager, region);
+  3043	        ForwardingTable::RetainPageOwner(region)->set_in_place();
+  3044	        manager.CompactRegion(region);
+  3045	        if (bypass == RawPinBypass::MissingCarrier) {
+  3046	            ForwardingTable::ResetRelocationSet(Generation::Young);
+  3047	        } else if (bypass == RawPinBypass::Unmovable) {
+  3048	            RelocationReceiptTestAccess::ReleaseListOwnership(region);
+  3049	            RelocationReceiptTestAccess::Exempt(manager, region);
+  3050	        }
+  3051	    }
+  3052	    collector.SetGCPhase(GCCycleGeneration::YOUNG, sourcePhase);
+  3053	    collector.SetGCPhase(GCCycleGeneration::OLD, sourcePhase == GCPhase::GC_PHASE_IDLE
+  3054	        ? GCPhase::GC_PHASE_FORWARD : GCPhase::GC_PHASE_IDLE);
+  3055	    const bool shouldResolve = compact && bypass == RawPinBypass::None && (sourcePhase == GCPhase::GC_PHASE_PREFORWARD ||
+  3056	                                           sourcePhase == GCPhase::GC_PHASE_FORWARD);
+  3057	    const MAddress expected = (shouldResolve ? start : from) + MArray::GetContentOffset();
+  3058	    const bool promoted = !region->IsYoungRegion();
+  3059	    const bool filler = compact && HeapFiller::IsFiller(array);
+  3060	    const MAddress receipt = compact ? ForwardingTable::FindTo(from, Generation::Young) : 0;
+  3061	    const auto countBefore = region->GetRawPointerObjectCount();
+  3062	    Dl_info identity {};
+  3063	    void* productVtable = *reinterpret_cast<void**>(&collector);
+  3064	    const bool productIdentity = dladdr(productVtable, &identity) != 0 &&
+  3065	        identity.dli_fname != nullptr && std::strstr(identity.dli_fname, "libcangjie-runtime.so") != nullptr;
+  3066	    Mutator mutator;
+  3067	    Mutator* previous = ThreadLocal::GetMutator();
+  3068	    mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
+  3069	    ThreadLocal::SetMutator(&mutator);
+  3070	    bool isCopy = true;
+  3071	    void* payload = CJ_MCC_AcquireRawData(array, &isCopy);
+  3072	    const auto countPinned = region->GetRawPointerObjectCount();
+  3073	    const std::vector<unsigned char> expectedBytes(length, 0x5a);
+  3074	    const bool bytesPreserved = !shouldResolve ||
+  3075	        std::memcmp(payload, expectedBytes.data(), length) == 0;
+  3076	    const bool markerPreserved = !shouldResolve || *static_cast<unsigned char*>(payload) == 0x5a;
+  3077	    CJ_MCC_ReleaseRawData(array, payload);
+  3078	    const auto countReleased = region->GetRawPointerObjectCount();
+  3079	    ThreadLocal::SetMutator(previous);
+  3080	    std::fprintf(stderr, "RAW_ACQUIRE_ASSERT length=%zu phase=%u compact=%u from=%zx to=%zx "
+  3081	                         "receipt=%zx filler=%u promoted=%u payload=%zx expected=%zx "
+  3082	                         "before=%d pinned=%d released=%d marker=%u product=%s\n",
+  3083	                 static_cast<size_t>(length), static_cast<unsigned>(sourcePhase), compact,
+  3084	                 from, start, receipt, filler, promoted, reinterpret_cast<MAddress>(payload), expected,
+  3085	                 countBefore, countPinned, countReleased, markerPreserved,
+  3086	                 productIdentity ? identity.dli_fname : "INVALID");
+  3087	    collector.SetGCPhase(GCCycleGeneration::YOUNG, oldYoungPhase);
+  3088	    collector.SetGCPhase(GCCycleGeneration::OLD, oldOldPhase);
+  3089	    stats.tenuringThreshold = oldThreshold;
+  3090	    if (compact) {
+  3091	        RelocationReceiptTestAccess::ReleaseListOwnership(region);
+  3092	        ForwardingTable::ResetRelocationSet(Generation::Young);
+  3093	        region->DispelGhostFromRegion();
+  3094	        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region);
+  3095	        region->metadata.liveInfo = nullptr;
+  3096	    }
+  3097	    // Separate product-state and consumer assertions after cleanup. Every
+  3098	    // observation is printed even if a producer cut changes page generation.
+  3099	    GC_EXPECT_EQ(reinterpret_cast<MAddress>(payload), expected);
+  3100	    GC_EXPECT_EQ(countPinned, countBefore + 1);
+  3101	    GC_EXPECT_EQ(countReleased, countBefore);
+  3102	    GC_EXPECT_FALSE(isCopy);
+  3103	    GC_EXPECT_TRUE(productIdentity);
+  3104	    GC_EXPECT_TRUE(bytesPreserved && markerPreserved);
+  3105	    if (compact) {
+  3106	        GC_EXPECT_TRUE(promoted);
+  3107	        GC_EXPECT_TRUE(filler);
+  3108	        GC_EXPECT_EQ(receipt, bypass == RawPinBypass::MissingCarrier ? 0u : start);
+  3109	        GC_EXPECT_TRUE(from != start);
+  3110	    }
+  3111	}
+  3112	}
+  3113	
+  3114	GC_TEST(RawPinProduct, AcquireAfterCompactPreforward)

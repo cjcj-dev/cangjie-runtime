@@ -1,0 +1,126 @@
+{
+  "unit-default": {
+    "rc": "0",
+    "totals": [
+      [
+        "536",
+        "536",
+        "0"
+      ]
+    ],
+    "failed": []
+  },
+  "unit-filler": {
+    "rc": "0",
+    "totals": [
+      [
+        "536",
+        "536",
+        "0"
+      ]
+    ],
+    "failed": []
+  },
+  "run-producer": {
+    "rc": "1",
+    "totals": [
+      [
+        "536",
+        "533",
+        "3"
+      ]
+    ],
+    "failed": [
+      "ForwardingPublicationProduct.MutatorRuntimeEntryReachesCopyAdmission",
+      "RawPinProduct.PreforwardCopiesBeforePin",
+      "RawPinProduct.ForwardCopiesBeforePin"
+    ]
+  },
+  "run-promotion": {
+    "rc": "1",
+    "totals": [
+      [
+        "536",
+        "531",
+        "5"
+      ]
+    ],
+    "failed": [
+      "RawPinProduct.AcquireAfterCompactPreforward",
+      "RawPinProduct.AcquireAfterCompactForward",
+      "RawPinProduct.AcquireSourceIdleOtherForward",
+      "RawPinProduct.AcquireGhostWithoutCarrier",
+      "RawPinProduct.AcquireUnmovableGhost"
+    ]
+  },
+  "run-phase": {
+    "rc": "1",
+    "totals": [
+      [
+        "536",
+        "531",
+        "5"
+      ]
+    ],
+    "failed": [
+      "RawPinProduct.PreforwardUsesYoungCarrierAfterPromotion",
+      "RawPinProduct.ForwardUsesYoungCarrierAfterPromotion",
+      "RawPinProduct.AcquireAfterCompactPreforward",
+      "RawPinProduct.AcquireAfterCompactForward",
+      "RawPinProduct.AcquireSourceIdleOtherForward"
+    ]
+  },
+  "run-consumer": {
+    "rc": "1",
+    "totals": [
+      [
+        "536",
+        "526",
+        "10"
+      ]
+    ],
+    "failed": [
+      "RawPinProduct.PreforwardCopiesBeforePin",
+      "RawPinProduct.ForwardCopiesBeforePin",
+      "RawPinProduct.PreforwardUsesYoungCarrierAfterPromotion",
+      "RawPinProduct.ForwardUsesYoungCarrierAfterPromotion",
+      "RawPinProduct.AcquireAfterCompactPreforward",
+      "RawPinProduct.AcquireAfterCompactForward",
+      "RawPinProduct.AcquireSourceIdleOtherForward",
+      "RawPinProduct.AcquireWithoutForwarding",
+      "RawPinProduct.AcquireGhostWithoutCarrier",
+      "RawPinProduct.AcquireUnmovableGhost"
+    ]
+  },
+  "run-entry": {
+    "rc": "1",
+    "totals": [
+      [
+        "536",
+        "534",
+        "2"
+      ]
+    ],
+    "failed": [
+      "RawPinProduct.AcquireAfterCompactPreforward",
+      "RawPinProduct.AcquireAfterCompactForward"
+    ]
+  },
+  "run-restored": {
+    "rc": "0",
+    "totals": [
+      [
+        "536",
+        "536",
+        "0"
+      ]
+    ],
+    "failed": []
+  },
+  "unit-ohos": {
+    "rc": "0",
+    "totals": [],
+    "failed": []
+  }
+}
+ARCHIVE_BYTES 2647846

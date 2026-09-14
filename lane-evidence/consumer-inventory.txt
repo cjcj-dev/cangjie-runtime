@@ -1,0 +1,58 @@
+HEAD:runtime/src/CommonAlias.h:68:extern "C" MRT_EXPORT void CJ_MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
+HEAD:runtime/src/CommonAlias.h:69:    __attribute__((alias("MCC_ReleaseRawData")));
+HEAD:runtime/src/CompilerCalls.cpp:928:static ArrayRef PinArray(const ArrayRef array)
+HEAD:runtime/src/CompilerCalls.cpp:935:    // the caller must hand out the RESOLVED payload, and MCC_ReleaseRawData will Dec the
+HEAD:runtime/src/CompilerCalls.cpp:937:    BaseObject* pinned = Heap::GetHeap().GetCollector().PinRawPointerObject(array);
+HEAD:runtime/src/CompilerCalls.cpp:945:extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
+HEAD:runtime/src/CompilerCalls.cpp:964:    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
+HEAD:runtime/src/CompilerCalls.cpp:969:    ArrayRef pArray = PinArray(plain);
+HEAD:runtime/src/CompilerCalls.cpp:995:extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
+HEAD:runtime/src/CompilerCalls.cpp:1001:    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
+HEAD:runtime/src/CompilerCalls.h:110:extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy);
+HEAD:runtime/src/CompilerCalls.h:111:extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr);
+HEAD:runtime/src/Heap/WCollector/WCollector.h:424:        (void)PinRawPointerObject(obj);
+HEAD:runtime/src/Heap/WCollector/WCollector.h:432:    BaseObject* PinRawPointerObject(BaseObject* obj) override
+HEAD:runtime/src/Heap/WCollector/WCollector.h:440:        // caller. Inc lands on region(to); MCC_ReleaseRawData Decs the region of the
+HEAD:runtime/src/Heap/z/zCollectedHeap.hpp:315:    // Pin for callers that hand the pinned payload out (MCC_AcquireRawData): the pin may
+HEAD:runtime/src/Heap/z/zCollectedHeap.hpp:320:    virtual BaseObject* PinRawPointerObject(BaseObject* obj)
+HEAD:runtime/src/Heap/z/zPage.cpp:197:    (void)PromoteYoungRegion(youngView);
+HEAD:runtime/src/Heap/z/zPage.hpp:762:    MarkView<Generation::Old> PromoteYoungRegion(MarkView<Generation::Young> youngView);
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1423:inline MarkView<Generation::Old> RegionInfo::PromoteYoungRegion(MarkView<Generation::Young> youngView)
+HEAD:runtime/src/Heap/z/zPageAllocator.cpp:687:                (void)region->PromoteYoungRegion(youngView);
+HEAD:runtime/src/Heap/z/zPageAllocator.hpp:553:    // CompactRegion's list-ownership tail. A concurrent stay-young path may
+HEAD:runtime/src/Heap/z/zPageAllocator.hpp:557:    // will find it; CompactRegion leaves it on tlRegionList, which no builder walks.
+HEAD:runtime/src/Heap/z/zPageAllocator.hpp:559:    void CompactRegion(RegionInfo* region);
+HEAD:runtime/src/Heap/z/zRelocate.cpp:1763:        CompactRegion(region);
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2019:        CompactRegion(region);
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2026:void RegionManager::CompactRegion(RegionInfo* region)
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2061:    // not the new destination LiveInfo allocated by PromoteYoungRegion.
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2065:            (void)region->PromoteYoungRegion(view);
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2100:    VerifyRelocatedPage(region, "CompactRegion.whole");
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2138:// builder, and CompactRegion leaves it on tlRegionList, which no builder walks.
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2241:        // CompactRegion's ownership tail may win first. Transfer that completed
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2300:            (void)region->PromoteYoungRegion(promotionView);
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2399:        // age for both the page and its remembered fields. CompactRegion already
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2427:                (void)region->PromoteYoungRegion(promotionView);
+HEAD:runtime/src/MacAlias.h:89:extern "C" MRT_EXPORT void CJ_MCC_ReleaseRawData(ArrayRef array, void* rawPtr);
+HEAD:runtime/src/MacAlias.h:90:__asm__(".global _CJ_MCC_ReleaseRawData\n\t.set _CJ_MCC_ReleaseRawData, _MCC_ReleaseRawData");
+HEAD:runtime/src/arch/aarch64_ios/CalleeSavedStub.S:266:    .global _CJ_MCC_AcquireRawData
+HEAD:runtime/src/arch/aarch64_ios/CalleeSavedStub.S:267:_CJ_MCC_AcquireRawData:
+HEAD:runtime/src/arch/aarch64_ios/CalleeSavedStub.S:268:    CalleeSavedRegistersStub MCC_AcquireRawData
+HEAD:runtime/src/arch/aarch64_linux/CalleeSavedStub.S:216:    CalleeSavedRegistersStub MCC_AcquireRawData CJ_MCC_AcquireRawData
+HEAD:runtime/src/arch/aarch64_macos/CalleeSavedStub.S:266:    .global _CJ_MCC_AcquireRawData
+HEAD:runtime/src/arch/aarch64_macos/CalleeSavedStub.S:267:_CJ_MCC_AcquireRawData:
+HEAD:runtime/src/arch/aarch64_macos/CalleeSavedStub.S:268:    CalleeSavedRegistersStub MCC_AcquireRawData
+HEAD:runtime/src/arch/arm_linux/CalleeSavedStub.S:228:    CalleeSavedRegistersStub MCC_AcquireRawData CJ_MCC_AcquireRawData
+HEAD:runtime/src/arch/x86_64_ios/CalleeSavedStub.S:161:    .global _CJ_MCC_AcquireRawData
+HEAD:runtime/src/arch/x86_64_ios/CalleeSavedStub.S:162:_CJ_MCC_AcquireRawData:
+HEAD:runtime/src/arch/x86_64_ios/CalleeSavedStub.S:163:    CalleeSavedRegistersStub MCC_AcquireRawData
+HEAD:runtime/src/arch/x86_64_linux/CalleeSavedStub.S:94:CalleeSavedRegistersStub MCC_AcquireRawData CJ_MCC_AcquireRawData
+HEAD:runtime/src/arch/x86_64_macos/CalleeSavedStub.S:161:    .global _CJ_MCC_AcquireRawData
+HEAD:runtime/src/arch/x86_64_macos/CalleeSavedStub.S:162:_CJ_MCC_AcquireRawData:
+HEAD:runtime/src/arch/x86_64_macos/CalleeSavedStub.S:163:    CalleeSavedRegistersStub MCC_AcquireRawData
+HEAD:runtime/src/arch/x86_64_windows/CalleeSavedStub.S:143:CalleeSavedRegistersStub MCC_AcquireRawData CJ_MCC_AcquireRawData
+HEAD:runtime/src/windows_x86_64_exports.def:121:    CJ_MCC_AcquireRawData @115
+HEAD:runtime/src/windows_x86_64_exports.def:292:    CJ_MCC_ReleaseRawData @286
+HEAD:runtime/src/windows_x86_64_exports.def:587:    MCC_AcquireRawData @580
+HEAD:runtime/src/windows_x86_64_exports.def:730:    MCC_ReleaseRawData @723
+HEAD:runtime/src/windows_x86_64_exports.def:1332:    _ZN12MapleRuntime13RegionManager13CompactRegionEPNS_10RegionInfoE @1414

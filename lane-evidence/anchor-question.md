@@ -1,0 +1,2 @@
+LANE=sym_cangjie_runtime_581_implement_r5668277053
+任务冻结 cjcjdev/main=333d3216762495d49d34594390c3afa05378010f，但指定仓 git -C /root/cj_build/cangjie_runtime rev-parse cjcjdev/main 回读=e26fcb34329464aefefb08873795faae80f51366，rc=0。候选HEAD=333d3216762495d49d34594390c3afa05378010f。请确认冻结值实际指候选HEAD，允许在现候选上补审查B1并交付前fetch/merge主线。未改产品码，继续只读夹具。

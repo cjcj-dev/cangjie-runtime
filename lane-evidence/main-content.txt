@@ -1,0 +1,68 @@
+git grep -c PageGeneration579 fca1c8ce77f139b14cef9117c1246fe01b0aa084 -- runtime/src runtime/tests/gc_unit/clear_entries_product_unit.cpp
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/tests/gc_unit/clear_entries_product_unit.cpp:2
+rc=0
+git grep -c PageGeneration579 4ae08d2033af7d35d0466264b5b601313527dc48 -- runtime/src runtime/tests/gc_unit/clear_entries_product_unit.cpp
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/tests/gc_unit/clear_entries_product_unit.cpp:2
+rc=0
+git grep -c generation_id fca1c8ce77f139b14cef9117c1246fe01b0aa084 -- runtime/src runtime/tests/gc_unit/clear_entries_product_unit.cpp
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/Collector/Collector.cpp:2
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zLiveMap.hpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zPage.cpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zPage.hpp:2
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zPage.inline.hpp:3
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zRelocate.cpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/tests/gc_unit/clear_entries_product_unit.cpp:8
+rc=0
+git grep -c generation_id 4ae08d2033af7d35d0466264b5b601313527dc48 -- runtime/src runtime/tests/gc_unit/clear_entries_product_unit.cpp
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/Collector/Collector.cpp:2
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zLiveMap.hpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zPage.cpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zPage.hpp:2
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zPage.inline.hpp:3
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zRelocate.cpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/tests/gc_unit/clear_entries_product_unit.cpp:8
+rc=0
+git grep -c CloneForPromotion fca1c8ce77f139b14cef9117c1246fe01b0aa084 -- runtime/src runtime/tests/gc_unit/clear_entries_product_unit.cpp
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zPage.cpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zPage.hpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zRelocationSet.cpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/tests/gc_unit/clear_entries_product_unit.cpp:1
+rc=0
+git grep -c CloneForPromotion 4ae08d2033af7d35d0466264b5b601313527dc48 -- runtime/src runtime/tests/gc_unit/clear_entries_product_unit.cpp
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zPage.cpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zPage.hpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zRelocationSet.cpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/tests/gc_unit/clear_entries_product_unit.cpp:1
+rc=0
+git grep -c RetainPageOwner fca1c8ce77f139b14cef9117c1246fe01b0aa084 -- runtime/src runtime/tests/gc_unit/clear_entries_product_unit.cpp
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/Allocator/RegionInfo.h:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/Allocator/zForwardingTable.cpp:4
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/WCollector/WCollector.h:2
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zForwarding.cpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zForwardingTable.hpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zGeneration.cpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zPage.hpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zPage.inline.hpp:11
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zPageAllocator.inline.hpp:2
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zRelocate.cpp:12
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:1
+fca1c8ce77f139b14cef9117c1246fe01b0aa084:runtime/tests/gc_unit/clear_entries_product_unit.cpp:8
+rc=0
+git grep -c RetainPageOwner 4ae08d2033af7d35d0466264b5b601313527dc48 -- runtime/src runtime/tests/gc_unit/clear_entries_product_unit.cpp
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/Allocator/RegionInfo.h:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/Allocator/zForwardingTable.cpp:4
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/WCollector/WCollector.h:3
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zForwarding.cpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zForwardingTable.hpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zGeneration.cpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zPage.hpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zPage.inline.hpp:11
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zPageAllocator.inline.hpp:2
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zRelocate.cpp:12
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:1
+4ae08d2033af7d35d0466264b5b601313527dc48:runtime/tests/gc_unit/clear_entries_product_unit.cpp:9
+rc=0
+runtime/src/Heap/Allocator/zForwardingTable.cpp main_equals_head=True
+runtime/src/Heap/Collector/Collector.cpp main_equals_head=True
+runtime/src/Heap/z/zPage.cpp main_equals_head=True
+runtime/src/Heap/z/zPage.inline.hpp main_equals_head=True

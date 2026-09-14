@@ -1,0 +1,2 @@
+LANE=sym_cangjie_runtime_581_implement_r5668277053
+补充前问题175558Z：进一步读HeapFiller.cpp:72-83发现Overlay本树始终启用（非构型开关）；若构造dead prefix大小恰等于live数组整体大小，则压缩后的filler头正好位于原from，且filler是primitive array，size>16时GetContentSize可非零。因此存在无需恢复旧头、无需改产品的真实输入：同大小死前缀+活primitive数组，压缩后from指向产品生成的filler，Acquire可到Pin并验证from->to。前问题“不可能直达”的概括过强，修正为只对from落在filler内部时成立。本轮拟用该确定布局补B1，前置读取的一般问题只记后续，不扩范围。请连同175403Z坐标问题确认。

@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/WCollector/WCollector.h
++++ b/runtime/src/Heap/WCollector/WCollector.h
+@@ -450,7 +450,7 @@
+                 const auto owner = ForwardingTable::RetainPageOwner(ghost);
+                 if (owner) {
+                     const auto generation = static_cast<ZGenerationId>(owner->table_generation());
+-                    const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(generation));
++                    const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(ghost->GetOwnerGeneration()));
+                     if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
+                         const ForwardingProvenance provenance{
+                             ForwardingHolderKind::HeapRef, this, &obj

@@ -1,0 +1,29 @@
+{
+  "base": "333d3216762495d49d34594390c3afa05378010f",
+  "head": "4ae08d2033af7d35d0466264b5b601313527dc48",
+  "main": "fca1c8ce77f139b14cef9117c1246fe01b0aa084",
+  "added_vs_previous": [
+    "PageGeneration579.PromotionAndCarrierRouting",
+    "PageGeneration579.ResetAndReuseCurrentGeneration",
+    "RawPinProduct.AcquireAfterCompactForward",
+    "RawPinProduct.AcquireAfterCompactPreforward",
+    "RawPinProduct.AcquireGhostWithoutCarrier",
+    "RawPinProduct.AcquireSourceIdleOtherForward",
+    "RawPinProduct.AcquireUnmovableGhost",
+    "RawPinProduct.AcquireWithoutForwarding"
+  ],
+  "deleted_vs_previous": [],
+  "added_vs_main": [
+    "RawPinProduct.AcquireAfterCompactForward",
+    "RawPinProduct.AcquireAfterCompactPreforward",
+    "RawPinProduct.AcquireGhostWithoutCarrier",
+    "RawPinProduct.AcquireSourceIdleOtherForward",
+    "RawPinProduct.AcquireUnmovableGhost",
+    "RawPinProduct.AcquireWithoutForwarding",
+    "RawPinProduct.ForwardCopiesBeforePin",
+    "RawPinProduct.ForwardUsesYoungCarrierAfterPromotion",
+    "RawPinProduct.PreforwardCopiesBeforePin",
+    "RawPinProduct.PreforwardUsesYoungCarrierAfterPromotion"
+  ],
+  "main_missing": []
+}
