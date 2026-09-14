@@ -1093,7 +1093,6 @@ void RegionManager::DumpRegionStats(const char* msg) const
     TRACE_COUNT("CJRT_GC_recentLargeSize", recentLargeSize);
     TRACE_COUNT("CJRT_GC_allocRecentLargeSize", allocRecentLargeSize);
     TRACE_COUNT("CJRT_GC_usedUnits", usedUnitCount);
-    TRACE_COUNT("CJRT_GC_releasedUnits", releasedUnits);
     TRACE_COUNT("CJRT_GC_dirtyUnits", dirtyUnits);
     TRACE_COUNT("CJRT_GC_listedUnits", totalUnitCount);
     [[maybe_unused]] constexpr size_t decimalPrecision = 10000;

@@ -37,9 +37,15 @@ GC_TEST(FnlzRoots, VisitFinalizersCountMatchesRegister)
     GC_EXPECT_EQ(finalizers, static_cast<U32>(2));
 }
 
-GC_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
+GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
 {
     GcHeapFixture fx;
+    // ZReferenceProcessor::is_strongly_live (zReferenceProcessor.cpp:157):
+    // reference processing operates on objects belonging to the installed heap.
+    // This test owns the synthetic reservation only inside its child VM.
+    Heap::OnHeapCreated(fx.heapStart);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
     FinalizerProcessor fp;
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
@@ -57,9 +63,15 @@ GC_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
     GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(0));
 }
 
-GC_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
+GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
 {
     GcHeapFixture fx;
+    // ZReferenceProcessor::is_strongly_live (zReferenceProcessor.cpp:157):
+    // reference processing operates on objects belonging to the installed heap.
+    // This test owns the synthetic reservation only inside its child VM.
+    Heap::OnHeapCreated(fx.heapStart);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
     FinalizerProcessor fp;
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     fp.RegisterFinalizer(fx.obj0);
