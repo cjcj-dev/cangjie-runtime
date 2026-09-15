@@ -27,8 +27,10 @@ namespace MapleRuntime {
 // This fixture checks root scanning, not finalizer scheduling or invocation.
 //
 // Strong native roots are the entries of the strong OopStorage
-// (zRootsIterator.cpp:194-198 ZRootsIteratorStrongColored::apply ->
-// OopStorageSet::strong_iterator; ours OopStorageSetIteratorStrong over
+// (zRootsIterator.cpp:159-162 ZRootsIteratorStrongColored::apply ->
+// :102-105 ZOopStorageSetIteratorStrong::apply ->
+// oopStorageSetParState.inline.hpp:38-42 OopStorageSetStrongParState::oops_do;
+// ours OopStorageSetIteratorStrong over
 // FinalizerProcessor::StrongRootStorage()). The storage is the root truth; the
 // processor's finalizables/workingFinalizables lists own no slots and are its
 // private scheduling state, guarded by the predicate CHECK in
