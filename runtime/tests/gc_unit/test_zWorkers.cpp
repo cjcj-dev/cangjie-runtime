@@ -163,10 +163,12 @@ GC_TEST(ZWorkers, IndependentGenerationSets)
 
 // workerThread.cpp:41-61: the coordinator returns only after the last worker
 // has decremented _not_finished to zero and signalled the end semaphore.
-GC_TEST(ZWorkers, CoordinatorReturnsAfterEveryWorkerCompleted)
+GC_OTHER_VM_TEST(ZWorkers, CoordinatorReturnsAfterEveryWorkerCompleted)
 {
-    Fixture fx(GCCycleGeneration::OLD, 3);
-    Latch entered, releaseFirst, releaseOthers;
+    // Isolate a broken completion protocol: a failing pool cannot safely run
+    // its destructor's next dispatch. The child process owns that lifetime.
+    auto fx = std::make_unique<Fixture>(GCCycleGeneration::OLD, 3);
+    Latch entered, releaseFirst, releaseOthers, finished;
     std::atomic<unsigned> completed{0};
     std::atomic<bool> returned{false};
     unsigned completedAtReturn = 0;
@@ -174,25 +176,33 @@ GC_TEST(ZWorkers, CoordinatorReturnsAfterEveryWorkerCompleted)
         entered.Add();
         if (!(WorkerThread::worker_id() == 0 ? releaseFirst : releaseOthers).Wait(1)) return;
         ++completed;
+        finished.Add();
     });
     std::thread coordinator([&] {
-        fx.workers.run(&task);
+        fx->workers.run(&task);
         completedAtReturn = completed.load();
         returned = true;
     });
     JoinGuard guard(coordinator);
-    GC_EXPECT_TRUE(entered.Wait(3));
+    const bool allEntered = entered.Wait(3);
     releaseFirst.Add();
-    // One worker has finished; the coordinator must still be waiting for the
-    // other two. The pause is a harness escape only in the failing direction.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
     while (completed.load() < 1 && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     const bool stillWaiting = !returned.load();
     releaseOthers.Add();
+    const bool allFinished = finished.Wait(3);
     coordinator.join();
+    // Record the actual product result before cleanup or any assertion. Keep
+    // the original target predicates; the setup predicate is independent.
+    std::fprintf(stderr, "WORKER_COMPLETION_TARGET entered=%u finished=%u stillWaiting=%u completedAtReturn=%u\n",
+                 unsigned(allEntered), unsigned(allFinished), unsigned(stillWaiting), completedAtReturn);
+    if (!stillWaiting || completedAtReturn != 3) {
+        (void)fx.release(); // process exit reclaims a pool whose protocol failed
+    }
     GC_EXPECT_TRUE(stillWaiting);
     GC_EXPECT_EQ(completedAtReturn, 3u);
+    GC_EXPECT_TRUE(allEntered && allFinished);
     std::puts("OBSERVED coordinator blocked until the third worker completed");
 }
 

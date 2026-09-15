@@ -14,6 +14,7 @@
 
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zTask.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zStat.hpp"
 #include "gc_unittest.hpp"
