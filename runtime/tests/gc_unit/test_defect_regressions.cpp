@@ -345,7 +345,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
         MCC_WriteRefField(fx.heap.obj1, nonHeapHolder, reinterpret_cast<RefField<false>*>(field));
-        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
+        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 0u);
         GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);
@@ -390,8 +390,8 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
         CJ_MCC_PostWriteRefField(fx.heap.obj1, nonHeapHolder,
                                 reinterpret_cast<RefField<false>*>(field), initial);
         std::fprintf(stderr, "POST_BUFFER_TARGET_ASSERT_EXECUTED pending=%zu\n",
-                     ThreadLocal::GetGCData().storeBarrierBuffer.Pending());
-        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
+                     ThreadLocal::GetGCData().storeBarrierBuffer->Pending());
+        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 0u);
         GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);
@@ -433,7 +433,7 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
         MCC_WriteRefField(fx.heap.obj1, nonHeapHolder, reinterpret_cast<RefField<false>*>(field));
-        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 1u);
+        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 1u);
         GC_EXPECT_FALSE(fx.rememberedSet.Contains(slot));
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);

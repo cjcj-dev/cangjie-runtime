@@ -690,7 +690,7 @@ bool FlushTlsMarkProducers(ThreadLocalData* tls, MarkDomain* domain)
     bool published = false;
     RememberedSet* rememberedSet = &Heap::GetHeap().GetRememberedSet();
     if (tls->gcData != nullptr && rememberedSet->IsInitialized()) {
-        tls->gcData->storeBarrierBuffer.Flush(*rememberedSet);
+        tls->gcData->storeBarrierBuffer->Flush(*rememberedSet);
     }
     {
         auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
@@ -710,7 +710,7 @@ bool FlushTlsMarkProducersDetach(ThreadLocalData* tls)
     bool published = false;
     RememberedSet* rememberedSet = &Heap::GetHeap().GetRememberedSet();
     if (tls->gcData != nullptr && rememberedSet->IsInitialized()) {
-        tls->gcData->storeBarrierBuffer.Flush(*rememberedSet);
+        tls->gcData->storeBarrierBuffer->Flush(*rememberedSet);
     }
     {
         auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
@@ -752,7 +752,7 @@ void MutatorManager::VisitStoreBarrierBuffers(const std::function<void(MAddress)
         ThreadLocalData* tls = entry.first;
         if (tls == nullptr || entry.second->bufferLive.load(std::memory_order_acquire) == 0 ||
             tls->gcData == nullptr) { continue; }
-        tls->gcData->storeBarrierBuffer.VisitEntries([&](const StoreBarrierEntry& store) { visitor(store.p); });
+        tls->gcData->storeBarrierBuffer->VisitEntries([&](const StoreBarrierEntry& store) { visitor(store.p); });
     }
 }
 

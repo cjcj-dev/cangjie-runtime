@@ -48,11 +48,7 @@ ThreadGCData& ThreadLocal::GetGCData()
 MarkThreadLocalStacks& ThreadLocal::GetMarkStacks(MarkDomain& domain)
 {
     const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
-    auto& stacks = GetGCData().markStacks[index];
-    if (stacks == nullptr) {
-        stacks = std::make_unique<MarkThreadLocalStacks>(64);
-    }
-    return *stacks;
+    return GetGCData().markStacks[index];
 }
 
 bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain)
@@ -62,7 +58,7 @@ bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain)
     }
     const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
     auto& stacks = tls->gcData->markStacks[index];
-    return stacks != nullptr && stacks->Flush(domain.Stripes(), true);
+    return stacks.Flush(domain.Stripes(), true);
 }
 
 void ThreadLocal::FlushCurrentThreadMarkStacks()

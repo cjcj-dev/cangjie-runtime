@@ -1957,7 +1957,7 @@ void VerifyAllEmpty(MarkDomain& domain)
     MutatorManager::Instance().VisitMarkingThreads([&](const ThreadLocalData* tls) {
         if (tls == nullptr || tls->gcData == nullptr) { return; }
         const auto& stacks = tls->gcData->markStacks[index];
-        CHECK_DETAIL(stacks == nullptr || stacks->IsEmpty(),
+        CHECK_DETAIL(stacks.IsEmpty(),
                      "Thread marking stack is not empty: thread=%p generation=%zu", tls, index);
     });
     CHECK_DETAIL(domain.Stripes().IsEmpty(), "Shared marking stripes are not empty");

@@ -624,7 +624,7 @@ public:
         if (flushStoreBarrier && Mutator::GetMutator() == this) {
             ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
             if (tls->gcData != nullptr && rememberedSet->IsInitialized()) {
-                tls->gcData->storeBarrierBuffer.Flush(*rememberedSet);
+                tls->gcData->storeBarrierBuffer->Flush(*rememberedSet);
             }
         }
     }
