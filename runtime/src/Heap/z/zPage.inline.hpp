@@ -549,6 +549,25 @@ inline bool RegionInfo::MarkObjectWithLiveClaim(MarkView<G> view, const BaseObje
         return !already;
     }
 
+// ZPage::mark_object / is_object_marked (zPage.inline.hpp:280-294).
+inline bool RegionInfo::MarkObject(zaddress address, bool finalizable, bool& incLive)
+{
+    BaseObject* object = to_object(address);
+    return finalizable
+        ? ResurrectObjectWithLiveClaim(object, GetAddressOffset(raw(address)), false, incLive)
+        : MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, incLive);
+}
+
+inline bool RegionInfo::IsObjectMarked(zaddress address, bool finalizable)
+{
+    BaseObject* object = to_object(address);
+    if (IsYoungRegion()) {
+        return IsMarkedObject(GetMarkView<Generation::Young>(), object);
+    }
+    return finalizable ? IsSurvivedObject(GetMarkView<Generation::Old>(), GetAddressOffset(raw(address)))
+                       : IsMarkedObject(GetMarkView<Generation::Old>(), object);
+}
+
 inline bool RegionInfo::MarkObjectByOwner(const BaseObject* obj)
     {
         if (IsYoungRegion()) {

@@ -278,6 +278,9 @@ public:
     void VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const;
 
 
+    bool MarkObject(zaddress address, bool finalizable, bool& incLive);
+    bool IsObjectMarked(zaddress address, bool finalizable);
+
     // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
     // Page mark primitives return true on a new mark (ZPage::mark_object).
     // The bitmap RMW still reports already-marked internally.

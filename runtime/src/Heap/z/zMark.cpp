@@ -1615,12 +1615,7 @@ bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& en
     bool firstLive = entry.incLive();
     bool already = false;
     if (entry.mark()) {
-        if (entry.finalizable()) {
-            already = !region->ResurrectObjectWithLiveClaim(
-                obj, region->GetAddressOffset(reinterpret_cast<MAddress>(obj)), false, firstLive);
-        } else {
-            already = !region->MarkObjectByOwnerWithLiveClaim(obj, obj->GetSize(), false, firstLive);
-        }
+        already = !region->MarkObject(from_object(obj), entry.finalizable(), firstLive);
     }
     if (!already && firstLive) {
         if (cache != nullptr) {

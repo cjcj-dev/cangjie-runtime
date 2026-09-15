@@ -15,7 +15,6 @@ namespace MapleRuntime {
 template<bool resurrect, bool gcThread, bool follow, bool finalizable>
 inline void MarkDomain::MarkObject(zaddress address)
 {
-    BaseObject* object = to_object(address);
     RegionInfo* page = RegionInfo::GetRegionInfoAt(raw(address));
     if (page->IsAllocating()) {
         return;
@@ -24,19 +23,11 @@ inline void MarkDomain::MarkObject(zaddress address)
     const bool markBeforePush = gcThread;
     bool incLive = false;
     if (markBeforePush) {
-        const bool marked = finalizable
-            ? page->ResurrectObjectWithLiveClaim(object, page->GetAddressOffset(raw(address)), false, incLive)
-            : page->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, incLive);
-        if (!marked) {
+        if (!page->MarkObject(address, finalizable, incLive)) {
             return;
         }
     } else {
-        const bool marked = page->IsYoungRegion()
-            ? page->IsMarkedObject(page->GetMarkView<MapleRuntime::Generation::Young>(), object)
-            : (finalizable ? page->IsSurvivedObject(page->GetMarkView<MapleRuntime::Generation::Old>(),
-                                                   page->GetAddressOffset(raw(address)))
-                           : page->IsMarkedObject(page->GetMarkView<MapleRuntime::Generation::Old>(), object));
-        if (marked) {
+        if (page->IsObjectMarked(address, finalizable)) {
             return;
         }
     }
