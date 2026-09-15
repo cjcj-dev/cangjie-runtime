@@ -68,6 +68,10 @@ static bool Enabled(const char* name)
 
 static int RunConsumers()
 {
+    // Publication is a target assertion of its own. A short table must not
+    // turn the subsequent ninth-range allocation into an earlier setup error.
+    Expect("reservation.count", g_cjHeapRangeCount, requestedReservations);
+    if (g_cjHeapRangeCount != requestedReservations) return 1;
     ArrayTypes types;
     ZArray<ZVirtualMemory> borrowed;
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -112,7 +116,6 @@ static int RunConsumers()
         std::printf("SLOT_DOMAIN_SETUP_FAIL payload=%p ranges=%lu\n", payload, g_cjHeapRangeCount);
         return 90;
     }
-    Expect("reservation.count", g_cjHeapRangeCount, requestedReservations);
     std::printf("SLOT_DOMAIN_TARGET_RESERVATION index=%zu start=%#lx end=%#lx holder=%p\n",
                 targetReservation, g_cjHeapRangeStart[targetReservation],
                 g_cjHeapRangeEnd[targetReservation], holder);
