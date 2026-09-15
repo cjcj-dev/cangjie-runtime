@@ -14,7 +14,7 @@
 
 namespace MapleRuntime {
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 // P02's three scheduling points share this product TU. They are absent from
 // the default build; tests install them before spawning and clear after join.
 void (*BitMap::testAfterPartialClearLoad)(const volatile bm_word_t*) = nullptr;
@@ -92,7 +92,7 @@ void ZLiveMap::reset(ZGenerationId id)
     const uint64_t seqnum_initializing = (uint64_t)-1;
     bool contention = false;
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     if (testReset != nullptr) {
         testReset(this, false);
     }
@@ -110,7 +110,7 @@ void ZLiveMap::reset(ZGenerationId id)
                                                 std::memory_order_acquire)) {
                 // This thread claimed the initialization
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
                 if (testReset != nullptr) {
                     testReset(this, true);
                 }

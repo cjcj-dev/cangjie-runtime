@@ -120,7 +120,10 @@ if (MRT_GC_UNIT_TESTS OR MRT_TESTABLE_INTERNALS)
 endif()
 
 if (MRT_TESTABLE_INTERNALS)
-    add_compile_definitions(MRT_TESTABLE_INTERNALS=1)
+    # Distinguish the linked product shape from a fixture's access-only macro.
+    # The standalone publication ELF enables MRT_TESTABLE_INTERNALS even when
+    # it links the default SO; it must not import test-only scheduling hooks.
+    add_compile_definitions(MRT_TESTABLE_INTERNALS=1 MRT_PRODUCT_TESTABLE_INTERNALS=1)
 endif()
 
 

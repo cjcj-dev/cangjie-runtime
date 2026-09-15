@@ -433,7 +433,7 @@ GC_TEST(ZLiveMapTest, initial_generation_does_not_match_unmarked_map)
 
 namespace {
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 std::atomic<unsigned>* sameObjectArrived = nullptr;
 void WaitForBothStrongLoads(const ZBitMap*, BitMap::idx_t)
 {
@@ -468,7 +468,7 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
         }
         already[worker] = collector.MarkObject(object);
     };
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     std::atomic<unsigned> loaded{0};
     sameObjectArrived = &loaded;
     ZBitMap::testBeforeStrongCAS = WaitForBothStrongLoads;
@@ -477,7 +477,7 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
     std::thread second(mark, 1);
     first.join();
     second.join();
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     ZBitMap::testBeforeStrongCAS = nullptr;
     sameObjectArrived = nullptr;
     std::fprintf(stderr, "P02_STRONG_CAS_LOADS arrived=%u\n", loaded.load());
@@ -515,7 +515,7 @@ GC_TEST(ZLiveMapPage, concurrent_strong_upgrade_counts_live_once)
     ConcurrentSameObjectMark(true, true);
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
 namespace {
 
 thread_local int markWorker = -1;

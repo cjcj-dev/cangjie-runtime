@@ -30,7 +30,7 @@ public:
     ZBitMap(idx_t size_in_bits);
     ZBitMap(const ZBitMap& other);
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     // P02: pause both markers after their initial load, before the CAS retry.
     MRT_EXPORT static void (*testBeforeStrongCAS)(const ZBitMap*, idx_t);
 #endif

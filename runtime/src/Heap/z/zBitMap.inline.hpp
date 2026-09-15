@@ -52,7 +52,7 @@ inline bool ZBitMap::par_set_bit_pair_strong(idx_t bit, bool& inc_live)
     const bm_word_t pair_mask = bit_mask_pair(bit);
     bm_word_t old_val = *addr;
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     if (testBeforeStrongCAS != nullptr) {
         testBeforeStrongCAS(this, bit);
     }

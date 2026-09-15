@@ -67,7 +67,7 @@ private:
     void iterate_segment(BitMap::idx_t segment, Function function);
 
 public:
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     // P02: observe entry/claim to order real resetters, without changing state.
     MRT_EXPORT static void (*testReset)(const ZLiveMap*, bool claimed);
 #endif
