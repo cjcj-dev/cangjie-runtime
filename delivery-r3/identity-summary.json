@@ -1,0 +1,30 @@
+{
+  "product": {
+    "rc": 0,
+    "sha256": "44d8fc64c6c2c4303c9819e25e28aa48280430ec3060f465e0fab88832c0bf9f",
+    "matches": {
+      "MObject::NewPinnedObject(": [
+        "00000000004bc620 T MapleRuntime::MObject::NewPinnedObject(MapleRuntime::TypeInfo*, unsigned int)"
+      ],
+      "RegionManager::RetireSharedPages(": [
+        "00000000004fc360 T MapleRuntime::RegionManager::RetireSharedPages(MapleRuntime::PageAgeRange)"
+      ],
+      "TracingCollector::DoTracing(": [
+        "000000000052b010 T MapleRuntime::TracingCollector::DoTracing(MapleRuntime::MarkStack<MapleRuntime::MarkStackEntry>&, MapleRuntime::MarkStack<MapleRuntime::MarkStackEntry>&)"
+      ],
+      " main": []
+    }
+  },
+  "elf": {
+    "rc": 0,
+    "sha256": "aea845334e55e04e80531c42733d99a158df9a28d943be75e1dde7c47eca0817",
+    "matches": {
+      "MObject::NewPinnedObject(": [],
+      "RegionManager::RetireSharedPages(": [],
+      "TracingCollector::DoTracing(": [],
+      " main": [
+        "00000000000299b0 T main"
+      ]
+    }
+  }
+}
