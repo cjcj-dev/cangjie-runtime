@@ -20,6 +20,17 @@ if (WINDOWS_FLAG MATCHES 1)
     # to avoid "multiple definition" error.
     # Refer to offiical manual of boundscheck library for more information.
     list(APPEND SRC_FILE src/memset_s.c src/snprintf_s.c src/vsnprintf_s.c src/secureprintoutput_a.c)
+
+    include(CheckCSourceCompiles)
+    check_c_source_compiles([[
+        #include <stdarg.h>
+        #include <stdio.h>
+        int vsnprintf_s(char *dest, size_t destMax, size_t count, const char *format, va_list argList)
+        {
+            return 0;
+        }
+        int main(void) { return 0; }
+    ]] BOUNDSCHECK_CAN_DEFINE_VSNPRINTF_S)
 else()
     aux_source_directory(./src SRC_FILE)
 endif()
@@ -32,3 +43,6 @@ endif()
 
 # Build shared library.
 add_library(boundscheck SHARED ${SRC_FILE})
+if (WINDOWS_FLAG MATCHES 1 AND NOT BOUNDSCHECK_CAN_DEFINE_VSNPRINTF_S)
+    target_compile_definitions(boundscheck PRIVATE SECUREC_ENABLE_VSNPRINTF=0)
+endif()

@@ -19,11 +19,6 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/output/cj" CACHE PATH "My default install prefix" FORCE)
 endif()
 message(STATUS "install path: ${CMAKE_INSTALL_PREFIX}")
-set(CMAKE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/output/temp)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_OUTPUT_DIRECTORY}/lib)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_OUTPUT_DIRECTORY}/ar)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY  ${CMAKE_OUTPUT_DIRECTORY}/bin)
-
 if (NOT DOPRA_FLAG)
     set(DOPRA_FLAG 1 CACHE STRING "dopra default is true" FORCE)
 endif ()
@@ -227,8 +222,10 @@ if (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 O
     endif()
 endif()
 
-set(CMAKE_SYSTEM_PROCESSOR "${CMAKE_HOST_SYSTEM_PROCESSOR}" CACHE FILEPATH "" FORCE)
-if (IOS_SIMULATOR_FLAG MATCHES 2)
+set(CMAKE_SYSTEM_PROCESSOR "${cmake_host_system_processor}" CACHE FILEPATH "" FORCE)
+if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1)
+    set(CMAKE_SYSTEM_PROCESSOR "aarch64" CACHE FILEPATH "" FORCE)
+elseif (IOS_SIMULATOR_FLAG MATCHES 2)
     set(CMAKE_SYSTEM_PROCESSOR "x86_64" CACHE FILEPATH "" FORCE)
 endif()
 
@@ -264,10 +261,6 @@ endif()
 # Detect operating system and host processor
 message(STATUS "System: ${CMAKE_SYSTEM_NAME}")
 message(STATUS "Host processor:${CMAKE_HOST_SYSTEM_PROCESSOR}")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/${CMAKE_SYSTEM_PROCESSOR})
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/${CMAKE_SYSTEM_PROCESSOR})
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CMAKE_SYSTEM_PROCESSOR})
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -276,12 +269,6 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif ()
 
 string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}_${CMAKE_BUILD_TYPE})
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}_${CMAKE_BUILD_TYPE})
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}_${CMAKE_BUILD_TYPE})
-message(STATUS "CMAKE_LIBRARY_OUTPUT_DIRECTORY: ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
-message(STATUS "CMAKE_ARCHIVE_OUTPUT_DIRECTORY: ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
-message(STATUS "CMAKE_RUNTIME_OUTPUT_DIRECTORY: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 
 if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
     set(OHOS_INCLUDE
@@ -308,7 +295,12 @@ if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
         --sysroot=${OHOS_ROOT}/out/sdk/obj/third_party/musl/sysroot ${OHOS_INCLUDE}"
     )
 elseif (WINDOWS_FLAG MATCHES 1)
-    set(CMAKE_INIT_FLAGS "-Wno-unused-command-line-argument -fno-omit-frame-pointer -fvisibility=hidden -fno-exceptions \
+    # The DLL link relies on -Wl,--export-all-symbols for its export surface (the
+    # upstream toolchain is mingw gcc, where visibility attributes are inert on
+    # PE-COFF). Under clang+lld, -fvisibility=hidden excludes every symbol not
+    # marked MRT_EXPORT from auto-export, dropping the MCC_* compiler-call
+    # surface products import — keep default visibility to match upstream.
+    set(CMAKE_INIT_FLAGS "-Wno-unused-command-line-argument -fno-omit-frame-pointer -fvisibility=default -fno-exceptions \
         -fno-rtti -Wall -fstack-protector-strong -Wno-inconsistent-dllimport -fno-strict-aliasing -fno-common")
 elseif (ANDROID_FLAG MATCHES 1 OR ANDROID_FLAG MATCHES 2)
     message("android toolchain, clang version=${CLANG_VERSION_STRING}")
@@ -418,11 +410,6 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wframe-larger-than=10240")
 
 
 # Set cjthread path.
-set(OUTPUT_TEMP_PATH ${CMAKE_CURRENT_SOURCE_DIR}/output/temp CACHE FILEPATH "" FORCE)
-message(STATUS "OUTPUT_TEMP_PATH : ${OUTPUT_TEMP_PATH}")
-set(DOPRA_INCLUDE ${OUTPUT_TEMP_PATH}/include)
-set(DOPRA_LIBS ${OUTPUT_TEMP_PATH}/lib)
-
 # Provide secure functions.
 set(BOUNDSCHECK ${CMAKE_SOURCE_DIR}/third_party/third_party_bounds_checking_function)
 if(NOT EXISTS ${BOUNDSCHECK})
@@ -451,6 +438,33 @@ set(CMAKE_COV_FLAGS "-fprofile-arcs -ftest-coverage -O0 -fno-inline")
 option(BUILD_CJTHREAD "Build cjthread module" ON)
 option(BUILD_RUNTIME   "Build runtime module"   ON)
 option(BUILD_DEMANGLE  "Build demangle module"  OFF)
+# GC unit tests (HotSpot-gtest-shaped, pure invariant TUs). Default OFF so product
+# builds are byte-identical when the option is left alone.
+option(MRT_GC_UNIT_TESTS "Build GC unit tests (cj_gc_unit)" OFF)
+# Test-only Linux host configuration that compiles the product with the OHOS
+# preprocessor shape. It is not an OHOS ABI/device build: the dedicated
+# gc_unit runner supplies only the host shims needed to execute that control
+# flow on x86_64 Linux.
+option(MRT_GC_UNIT_OHOS_HOST "Build the x86_64 Linux OHOS-host GC unit arm" OFF)
+# Test-only product shape: expose selected internal entry points so gc_unit can
+# bind the implementation from libcangjie-runtime.  The default product keeps
+# those templates inline and does not grant test access.
+option(MRT_TESTABLE_INTERNALS "Build test-only exported GC internals" OFF)
+if (MRT_GC_UNIT_OHOS_HOST)
+    if (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" OR
+        NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" OR
+        CMAKE_CROSSCOMPILING)
+        message(FATAL_ERROR
+            "MRT_GC_UNIT_OHOS_HOST requires a native x86_64 Linux build; "
+            "it is not the OpenHarmony SDK cross-build arm")
+    endif()
+    set(MRT_GC_UNIT_TESTS ON CACHE BOOL "Build GC unit tests (cj_gc_unit)" FORCE)
+endif()
+if (MRT_GC_UNIT_TESTS)
+    # An in-tree gc_unit target must see the same class shape as the product SO
+    # it links.  Turning on the test suite is itself an explicit test build.
+    set(MRT_TESTABLE_INTERNALS ON)
+endif()
 
 set(TARGET_ARCH "linux_${CMAKE_HOST_SYSTEM_PROCESSOR}_cjnative")
 if (OHOS_FLAG MATCHES 1)
@@ -497,8 +511,18 @@ if (ANDROID_FLAG MATCHES 3)
     endif ()
 endif()
 if (IOS_FLAG MATCHES 1)
-    set(TARGET_ARCH "ios_${CMAKE_HOST_SYSTEM_PROCESSOR}_cjnative")
+    set(TARGET_ARCH "ios_${CMAKE_SYSTEM_PROCESSOR}_cjnative")
 endif()
 if (IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
     set(TARGET_ARCH "ios_simulator_${CMAKE_SYSTEM_PROCESSOR}_cjnative")
 endif()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/RuntimeOutputLayout.cmake)
+cj_runtime_prepare_output_layout()
+set(DOPRA_INCLUDE ${OUTPUT_TEMP_PATH}/include)
+set(DOPRA_LIBS ${OUTPUT_TEMP_PATH}/lib)
+message(STATUS "CANGJIE_RUNTIME_CONFIG_ID: ${CANGJIE_RUNTIME_CONFIG_ID}")
+message(STATUS "OUTPUT_TEMP_PATH: ${OUTPUT_TEMP_PATH}")
+message(STATUS "CMAKE_LIBRARY_OUTPUT_DIRECTORY: ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+message(STATUS "CMAKE_ARCHIVE_OUTPUT_DIRECTORY: ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
+message(STATUS "CMAKE_RUNTIME_OUTPUT_DIRECTORY: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")

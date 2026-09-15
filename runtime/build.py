@@ -73,17 +73,15 @@ def do_build(args):
     else:
         install_prefix = os.path.join(prefix_path, f"{target_platform}_{mode}")
 
-    # Remove output/temp directory before building
-    temp_dir = os.path.join(script_path, "output/temp")
+    # The configured output directory is configuration-specific.  Keep earlier
+    # configurations intact; only the CMake work directory is single-use here.
     cmakebuild_dir = os.path.join(script_path, "CMakebuild")
     try:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
         if os.path.exists(cmakebuild_dir):
             shutil.rmtree(cmakebuild_dir)
-        print(f"Removed {temp_dir} & {cmakebuild_dir} directory successfully.")
+        print(f"Removed {cmakebuild_dir} directory successfully.")
     except Exception as e:
-        print(f"Error removing {temp_dir} & {cmakebuild_dir} directory: {e}")
+        print(f"Error removing {cmakebuild_dir} directory: {e}")
         sys.exit(1)
 
     if target_args in ('native'):
@@ -137,6 +135,7 @@ def do_build(args):
             "-DCMAKE_BUILD_TYPE={}".format(mode),
             "-DCOPYGC_FLAG=1",
             "-DDOPRA_FLAG=1",
+            "-DMRT_GC_UNIT_OHOS_HOST={}".format("ON" if args.gc_unit_ohos_host else "OFF"),
             "-DOHOS_FLAG=0",
             "-DANDROID_FLAG=0",
             "-DIOS_FLAG=0",
@@ -285,6 +284,9 @@ def do_build(args):
         if args.target_toolchain == None:
             print("Please configure ios toolchain, for example '/root/workspace/ios_dep_files/'")
             sys.exit(1)
+        if args.target_sysroot == None:
+            print("Please configure ios sysroot, for example from 'xcrun --sdk iphoneos --show-sdk-path'")
+            sys.exit(1)
         os.environ["PATH"] = os.path.join(args.target_toolchain, "bin") + ":" + os.environ["PATH"]
         os.environ["SDKROOT"] = os.path.join(args.target_sysroot)
         # ios_flag: 1 means ios-aarch64 real device; 0 means ios simulator or non-ios.
@@ -318,6 +320,9 @@ def do_build(args):
             "-DDUMPADDRESS_FLAG=0",
             "-DCJ_SDK_VERSION={}".format(version),
             "-DDISABLE_VERSION_CHECK=1",
+            "-DCMAKE_SYSTEM_NAME=iOS",
+            "-DCMAKE_OSX_SYSROOT={}".format(args.target_sysroot),
+            "-DCMAKE_OSX_ARCHITECTURES={}".format("arm64" if target_arch == "aarch64" else target_arch),
             "-S", ".", "-B", "CMakebuild"
         ]
         build_target(cmake_command, args)
@@ -329,6 +334,7 @@ def do_build(args):
         sys.exit(1)
 
 def build_target(cmake_command, args=None):
+    build_jobs = os.environ.get("CANGJIE_BUILD_JOBS", str(min(64, os.cpu_count() or 1)))
     if args and args.gcc_toolchain and args.target == "native":
         cmake_command.append("-DBUILD_GCC_TOOLCHAIN={}".format(args.gcc_toolchain))
     try:
@@ -338,9 +344,9 @@ def build_target(cmake_command, args=None):
         os.makedirs(build_dir, exist_ok=True)
         os.chdir(build_dir)
 
-        subprocess.run(["make", "cangjie-runtime", "-j32", "VERBOSE=1"], check=True)
+        subprocess.run(["make", "cangjie-runtime", f"-j{build_jobs}", "VERBOSE=1"], check=True)
 
-        subprocess.run(["make", "preinstall", "-j32", "VERBOSE=1"], check=True)
+        subprocess.run(["make", "preinstall", f"-j{build_jobs}", "VERBOSE=1"], check=True)
 
         print("Build and preinstall completed successfully.")
     except subprocess.CalledProcessError as e:
@@ -444,6 +450,12 @@ if __name__ == "__main__":
     )
     b.add_argument(
         "--gcc-toolchain", dest="gcc_toolchain", help="Specify GCC toolchain for Clang to use"
+    )
+    b.add_argument(
+        "--gc-unit-ohos-host",
+        action="store_true",
+        dest="gc_unit_ohos_host",
+        help="Native x86_64 Linux product with __OHOS__ preprocessor shape for gc_unit (not OHOS ABI)."
     )
 
     i = sub.add_parser("install", help="install the project")

@@ -32,19 +32,13 @@ if [ "${platform}" == "macos_cangjie" ] || [ "${platform}" == "mac_x86_64_cangji
   done
 else
   if [ "${platform}" == "ios_simulator_aarch64_cangjie" ]; then
-    XCODE_PATH=$(xcode-select -p)
-    CMAKE_IOS_DEVELOPER_ROOT=${XCODE_PATH}/Platforms/iPhoneSimulator.platform/Developer
-    CMAKE_IOS_SDK_ROOT=${CMAKE_IOS_DEVELOPER_ROOT}/SDKs/iPhoneSimulator17.5.sdk
+    CMAKE_IOS_SDK_ROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)
     TARGET=arm64-apple-ios11-simulator
   elif [ "${platform}" == "ios_simulator_x86_64_cangjie" ]; then
-    XCODE_PATH=$(xcode-select -p)
-    CMAKE_IOS_DEVELOPER_ROOT=${XCODE_PATH}/Platforms/iPhoneSimulator.platform/Developer
-    CMAKE_IOS_SDK_ROOT=${CMAKE_IOS_DEVELOPER_ROOT}/SDKs/iPhoneSimulator17.5.sdk
+    CMAKE_IOS_SDK_ROOT=$(xcrun --sdk iphonesimulator --show-sdk-path)
     TARGET=x86_64-apple-ios11-simulator
   else
-    XCODE_PATH=$(xcode-select -p)
-    CMAKE_IOS_DEVELOPER_ROOT=${XCODE_PATH}/Platforms/iPhoneOS.platform/Developer
-    CMAKE_IOS_SDK_ROOT=${CMAKE_IOS_DEVELOPER_ROOT}/SDKs/iPhoneOS17.5.sdk
+    CMAKE_IOS_SDK_ROOT=$(xcrun --sdk iphoneos --show-sdk-path)
     TARGET=arm64-apple-ios11
   fi
   for param in "$@"; do
@@ -56,7 +50,6 @@ else
           -target ${TARGET} \
           -isysroot ${CMAKE_IOS_SDK_ROOT} \
           -Wl,-r,-rename_section,__TEXT,__text,__TEXT,__cjrt_text \
-          -Wl,-no_eh_labels \
           $obj \
           -o $obj;
       fi

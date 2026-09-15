@@ -20,7 +20,7 @@ fi
 script_abs="$(readlink -f "$0")"
 export PROJECT_PATH="$(dirname $script_abs)/../"
 export CJTHREAD_PATH="${PROJECT_PATH}/src/CJThread"
-export BUILD_PATH="${PROJECT_PATH}/build/cjthread_build"
+export BUILD_PATH="${CJTHREAD_BUILD_PATH:-${PROJECT_PATH}/build/cjthread_build}"
 
 # Example
 # 1. make static lib
@@ -48,11 +48,6 @@ elif [ "$1" = "-p" ];then
     fi
 
     # DO NOT remove install prefix directory ($7)
-
-    if [ ! -d "${PROJECT_PATH}/output" ]; then
-      mkdir -p ${PROJECT_PATH}/output/temp/lib
-      mkdir -p ${PROJECT_PATH}/output/temp/include
-    fi
 
     cd "${BUILD_PATH}"
     echo "CJTHREAD BUILDING: target:$2, build type: $3, libtype: $4, building stage: $5, other definitions: $6, path: ${CJTHREAD_PATH}"

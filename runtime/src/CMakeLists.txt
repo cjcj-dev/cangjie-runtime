@@ -228,8 +228,42 @@ elseif (WINDOWS_FLAG MATCHES 1)
         "os/Windows/WinModuleManager.cpp"
     )
 endif()
+    # RangeRegistry remains header-inline in product builds while it has no
+    # consumer. GC tests deliberately switch it to an out-of-line product-SO
+    # implementation so the test binary can prove which copy it exercises.
+    if (MRT_TESTABLE_INTERNALS)
+        list(APPEND SRC_LIST "Heap/Allocator/RangeRegistry.cpp")
+    endif()
     add_library(runtime STATIC ${SRC_LIST})
     add_library(cangjie-runtime SHARED ${SRC_LIST})
+    add_custom_target(check_heal_slot_writes ALL
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_heal_slot_writes.py"
+        COMMENT "Checking that HeapSlot compare-exchange writes stay inside HealSlot"
+        VERBATIM)
+    add_dependencies(runtime check_heal_slot_writes)
+    add_dependencies(cangjie-runtime check_heal_slot_writes)
+    add_custom_target(check_diag_not_hollow ALL
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_diag_not_hollow.py"
+        COMMENT "Checking that a diagnostic documenting a gate is not an all-no-op implementation"
+        VERBATIM)
+    add_dependencies(runtime check_diag_not_hollow)
+    add_dependencies(cangjie-runtime check_diag_not_hollow)
+    # RuntimeOutputLayout.cmake wires publication and the GC gate after every
+    # target has its final compilation shape. The gate consumes the published
+    # pair, never the mutable linker staging directory.
+    add_custom_command(TARGET cangjie-runtime POST_BUILD
+        COMMAND python3 "${CMAKE_SOURCE_DIR}/build/publish_runtime_output.py"
+            "@$<TARGET_PROPERTY:cangjie-runtime,CJ_RUNTIME_PUBLISH_ARGS>"
+        COMMENT "Publishing the configured runtime pair and checking the published products"
+        VERBATIM)
+    if (WINDOWS_FLAG MATCHES 1)
+        add_custom_command(TARGET cangjie-runtime POST_BUILD
+            COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check
+                "${CMAKE_BINARY_DIR}/windows_x86_64_exports.raw.def"
+                "${CMAKE_CURRENT_SOURCE_DIR}/windows_x86_64_exports.def"
+            COMMENT "Checking the Windows runtime export surface"
+            VERBATIM)
+    endif()
     if (((IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1) AND (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")) OR
         ((CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" AND IOS_FLAG MATCHES 1) OR IOS_SIMULATOR_FLAG MATCHES 2))
 	target_compile_options(cangjie-runtime PRIVATE -Wno-elaborated-enum-base)

@@ -161,9 +161,6 @@ set(CMAKE_C_CREATE_STATIC_LIBRARY "<CMAKE_AR> rcD <TARGET> <OBJECTS>")
 
 set(IOS_PLATFORM "SIMULATOR")
 set(IOS_PLATFORM_LOCATION "iPhoneSimulator.platform")
-set(CMAKE_IOS_DEVELOPER_ROOT "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer")
-set(CMAKE_IOS_SDK_ROOT "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator17.5.sdk")
-set(CMAKE_OSX_SYSROOT "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator17.5.sdk")
+set(CMAKE_IOS_SDK_ROOT "${CMAKE_OSX_SYSROOT}")
 # The macos minimum version
 set(CMAKE_OSX_DEPLOYMENT_TARGET "")
-set(CMAKE_OSX_ARCHITECTURES "x86_64")

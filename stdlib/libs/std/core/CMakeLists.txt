@@ -52,6 +52,7 @@ set(CANGJIE_CORE_SRCS
     array_common.cj
     string_builder.cj
     string.cj
+    string_dedup.cj
     timeout_exception.cj
     string_common.cj
     incompatible_package_exception.cj)
