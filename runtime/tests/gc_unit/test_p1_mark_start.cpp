@@ -24,6 +24,7 @@ namespace {
 struct StartState {
     uint64_t sequence = 0;
     uintptr_t color = 0;
+    uintptr_t finalizable = 0;
     unsigned face = 0;
     size_t starts = 0;
     size_t completes = 0;
@@ -75,12 +76,15 @@ extern "C" int p1MarkStartExercise()
         if (point == MarkStartPoint::Begin) {
             before.sequence = snapshot.sequence;
             before.color = color;
+            before.finalizable = ZPointerFinalizable;
             before.face = face;
             ++before.starts;
             if (index == 0) youngComplete = false;
             else Expect(youngComplete, "young_completes_before_old_starts");
         } else if (point == MarkStartPoint::BeforeRetire) {
             Expect(color != before.color, index == 0 ? "young_color_before_retire" : "old_color_before_retire");
+            Expect(ZPointerFinalizable == (before.finalizable ^ (index == 0 ? 0 : ZPointerFinalizableMask)),
+                   index == 0 ? "young_preserves_finalizable_epoch" : "old_finalizable_before_retire");
             Expect(snapshot.sequence == before.sequence, "retirement_precedes_sequence");
         } else if (point == MarkStartPoint::BeforeSequence) {
             Expect(snapshot.sequence == before.sequence, "sequence_unchanged_while_retiring");
