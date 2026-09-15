@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/WCollector/WCollector.h"
 
@@ -160,6 +161,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                       MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
                                       MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
 {
+    (void)workStack;
+    (void)stw;
     (void)reachableSlots;
     (void)currentMinorRoots;
     (void)fullYoungScan;
@@ -174,11 +177,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             if (statsOut != nullptr) ++statsOut->skippedWeak;
             continue;
         }
-        BaseObject* target = ResolveMinorReference(HeapSlotAt<>(slot), stw);
+        BaseObject* target = to_object(Heap::GetBarrier().RemsetBarrierOnOopField(HeapSlotAt<>(slot)));
         if (target == nullptr || !Heap::IsHeapAddress(target)) continue;
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (!region->IsYoungRegion()) continue;
-        PushYoungObject(target, workStack, "remset");
         remset.Record(slot);
         if (consumedOut != nullptr) consumedOut->insert(slot);
         if (statsOut != nullptr) ++statsOut->consumed;

@@ -8,6 +8,9 @@
 #define MRT_BARRIER_H
 
 #include "Common/BaseObject.h"
+#if defined(MRT_TESTABLE_INTERNALS)
+#include <functional>
+#endif
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zRememberedSet.hpp"
 #include "ObjectModel/Field.h"
@@ -27,6 +30,12 @@ public:
     Barrier& operator=(const Barrier&) = delete;
     ~Barrier() = default;
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    enum class FieldMarkKind { Old, Young, Remset };
+    // Read-only result observation after the product barrier, never a work producer.
+    static std::function<void(FieldMarkKind, RefField<>&, zpointer, zaddress)> testFieldMarkResult;
+#endif
+
     // One barrier implementation; colour, reference strength and slot kind select the path.
     void WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const;
     void WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const;
@@ -38,6 +47,9 @@ public:
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
     BaseObject* ReadStaticRef(NativeSlot& field) const;
     void MarkYoungGoodBarrierOnOopField(NativeSlot& field) const;
+    void MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field) const;
+    void MarkBarrierOnYoungOopField(RefField<>& field) const;
+    zaddress RemsetBarrierOnOopField(RefField<>& field) const;
     BaseObject* ReadPlainRoot(RootSlot& field) const;
     BaseObject* ReadPhantomRef(BaseObject* obj, RefField<false>& field) const;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const;
@@ -121,7 +133,14 @@ private:
     using MarkColor = zpointer (*)(zaddress, zpointer);
     template<typename SlowPath>
     zaddress MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
-                           NativeSlot& field, zpointer observed) const;
+                           RefField<>& field, zpointer observed, const ForwardingProvenance& provenance) const;
+    static bool IsMarkGoodFastPath(zpointer value);
+    static bool IsStoreGoodOrNullAnyFastPath(zpointer value);
+    static zpointer ColorMarkGood(zaddress address, zpointer previous);
+    static zpointer ColorStoreGood(zaddress address, zpointer previous);
+    static zpointer ColorRemsetGood(zaddress address, zpointer previous);
+    zaddress MarkFromOldSlowPath(zaddress address) const;
+    zaddress MarkFromYoungSlowPath(zaddress address) const;
     static bool IsMarkYoungGoodFastPath(zpointer value);
     static zpointer ColorMarkYoungGood(zaddress address, zpointer previous);
     zaddress MarkYoungSlowPath(zaddress address) const;

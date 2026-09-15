@@ -19,26 +19,20 @@ namespace MapleRuntime {
 // word until after marking: the color operation needs its old-generation bits.
 template<typename SlowPath>
 inline zaddress Barrier::MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
-                                 NativeSlot& field, zpointer observed) const
+                                 RefField<>& field, zpointer observed, const ForwardingProvenance& provenance) const
 {
-    // Cangjie NativeSlot tables also contain plain, read-only ELF literals.
-    // They have no ZGC heap-root counterpart and must retain their plain word.
-    BaseObject* payload = to_object(RefField<>(observed).GetTargetObject());
-    if (payload != nullptr && !Heap::IsHeapAddress(payload)) {
-        return from_object(payload);
+    // Cangjie value records may contain references to non-heap literals.
+    // This carrier adaptation preserves those words; they have no ZGC page.
+    const zaddress payload = RefField<>(observed).GetTargetObject();
+    if (!is_null(payload) && !Heap::IsHeapAddress(raw(payload))) {
+        return payload;
     }
-    // Retain the colored native-root admission invariant from ReadStaticRef.
-    // ZPointer::assert_is_valid, zAddress.inline.hpp:320-393.
-    CHECK_DETAIL(payload == nullptr ||
-                     (raw(observed) & (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
-                 "NativeSlot requires colored value at MarkYoungGoodBarrier slot=%p word=%#zx", &field,
-                 raw(observed));
     if (fast(observed)) {
         return RefField<>(observed).GetTargetObject();
     }
     RefField<> value(observed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
-    const zaddress loadGood = from_object(theCollector.make_load_good(value, provenance));
+    const zaddress loadGood = from_object(theCollector.ValidateCurrentValue(
+        theCollector.make_load_good(value, provenance), provenance));
     const zaddress good = (this->*slow)(loadGood);
     const zpointer colored = color(good, observed);
     ZgcSelfHeal(field, observed, colored, fast, HealSite::BarrierReadReference);
@@ -77,8 +71,94 @@ inline zpointer Barrier::ColorMarkYoungGood(zaddress address, zpointer previous)
 inline void Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    // Cangjie NativeSlot tables also contain plain, read-only ELF literals.
+    // They have no ZGC heap-root counterpart and must retain their plain word.
+    BaseObject* payload = to_object(RefField<>(observed).GetTargetObject());
+    if (payload != nullptr && !Heap::IsHeapAddress(payload)) {
+        return;
+    }
+    // Retain the colored native-root admission invariant from ReadStaticRef.
+    // ZPointer::assert_is_valid, zAddress.inline.hpp:320-393.
+    CHECK_DETAIL(payload == nullptr ||
+                     (raw(observed) & (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
+                 "NativeSlot requires colored value at MarkYoungGoodBarrier slot=%p word=%#zx", &field,
+                 raw(observed));
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     MarkBarrier(IsMarkYoungGoodFastPath, &Barrier::MarkYoungSlowPath,
-                       ColorMarkYoungGood, field, observed);
+                ColorMarkYoungGood, field, observed, provenance);
+}
+
+// ZBarrier fast/color functions, zBarrier.inline.hpp:379-448.
+inline bool Barrier::IsMarkGoodFastPath(zpointer value)
+{
+    return ColourPredicates::is_mark_good(raw(value), ::g_cjLoadBadMask, ::g_cjMarkBadMask);
+}
+
+inline bool Barrier::IsStoreGoodOrNullAnyFastPath(zpointer value)
+{
+    return !ColourPredicates::has_address(raw(value)) ||
+           !ColourPredicates::is_store_bad(raw(value), ::g_cjStoreBadMask);
+}
+
+inline zpointer Barrier::ColorMarkGood(zaddress address, zpointer previous)
+{
+    if (!ColourPredicates::has_address(raw(previous))) {
+        return to_zpointer(::g_cjStoreGoodMask | REMEMBERED_MASK);
+    }
+    return to_zpointer(raw(address) | (REMAP_COLOUR_MASK ^ ::g_cjLoadBadMask) |
+                      ((MARKED_YOUNG_MASK | MARKED_OLD_MASK) & ~::g_cjMarkBadMask) | REMEMBERED_MASK);
+}
+
+inline zpointer Barrier::ColorStoreGood(zaddress address, zpointer)
+{
+    return to_zpointer(MakeStoreGoodSlotWord(raw(address), ::g_cjStoreGoodMask));
+}
+
+inline zpointer Barrier::ColorRemsetGood(zaddress address, zpointer previous)
+{
+    if (is_null(address) || RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+        return ColorMarkGood(address, previous);
+    }
+    return ColorMarkYoungGood(address, previous);
+}
+
+// ZBarrier::mark_barrier_on_old_oop_field, zBarrier.inline.hpp:626-660.
+inline void Barrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field) const
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, holder, &field };
+    const zaddress result = MarkBarrier(IsMarkGoodFastPath, &Barrier::MarkFromOldSlowPath,
+                                       ColorMarkGood, field, observed, provenance);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Old, field, observed, result);
+#endif
+    (void)result;
+}
+
+// ZBarrier::mark_barrier_on_young_oop_field, zBarrier.inline.hpp:662-666.
+inline void Barrier::MarkBarrierOnYoungOopField(RefField<>& field) const
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &field };
+    const zaddress result = MarkBarrier(IsStoreGoodOrNullAnyFastPath, &Barrier::MarkFromYoungSlowPath,
+                                       ColorStoreGood, field, observed, provenance);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Young, field, observed, result);
+#endif
+    (void)result;
+}
+
+// ZBarrier::remset_barrier_on_oop_field, zBarrier.inline.hpp:681-684.
+inline zaddress Barrier::RemsetBarrierOnOopField(RefField<>& field) const
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
+    const zaddress result = MarkBarrier(IsMarkYoungGoodFastPath, &Barrier::MarkYoungSlowPath,
+                                       ColorRemsetGood, field, observed, provenance);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Remset, field, observed, result);
+#endif
+    return result;
 }
 
 template<>

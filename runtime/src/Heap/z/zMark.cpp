@@ -193,8 +193,21 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
     rootSet.push_back(root);
 }
 
-// note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
+// ZMarkOopClosure::do_oop, zMark.cpp:198-205. The field barrier owns
+// remapping and generation routing; the original colored slot is authoritative.
 void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack, bool finalizable) const
+{
+    // #608 owns Finalizable color publication/classification and its ABI.
+    // Keep the pre-existing path until that dependency can supply its color.
+    if (finalizable) {
+        TraceFinalizableRefField(obj, field, workStack);
+        return;
+    }
+    Heap::GetBarrier().MarkBarrierOnOldOopField(obj, field);
+}
+
+// Pending #608: legacy Finalizable field path; not P2 acceptance evidence.
+void WCollector::TraceFinalizableRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
 {
     RefField<> oldField(field);
     // markstale: the mark-good fast path returns without healing, which is only safe if mark-good
@@ -249,7 +262,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                      obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject<Generation::Old>(targetObj)) {
 
-            workStack.push_back(MarkStackEntry::MarkAndFollow(targetObj, finalizable));
+            workStack.push_back(MarkStackEntry::MarkAndFollow(targetObj, true));
         }
         return;
     }
@@ -313,7 +326,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
     if (!IsMarkedObject<Generation::Old>(latest)) {
 
-        workStack.push_back(MarkStackEntry::MarkAndFollow(latest, finalizable));
+        workStack.push_back(MarkStackEntry::MarkAndFollow(latest, true));
     }
 }
 
@@ -1008,11 +1021,6 @@ public:
 
 private:
 
-    void PushObject(MarkContext& ctx, BaseObject* object, bool finalizable = false)
-    {
-        PublishEntry(ctx, MarkStackEntry::MarkAndFollow(object, finalizable));
-    }
-
     void PublishEntry(MarkContext& ctx, const MarkStackEntry& entry)
     {
         MAddress address = 0;
@@ -1030,31 +1038,6 @@ private:
         }
     }
 
-    void PushFilteredYoung(MarkContext& ctx, BaseObject* object, const char* origin, bool finalizable = false)
-    {
-        if (!Heap::IsHeapAddress(object)) {
-            return;
-        }
-        if (!object->IsValidObject()) {
-            TracingCollector::WorkStack failClosed;
-            shared.collector->PushYoungObject(object, failClosed, origin);
-            return;
-        }
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (!region->IsYoungRegion()) {
-            if (shared.collector->GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
-                shared.collector->MarkOldObjectIfActive(object, true);
-            }
-            return;
-        }
-        if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
-            return;
-        }
-
-
-        PushObject(ctx, object, finalizable);
-    }
-
     void ProcessObject(MarkContext& ctx, size_t workerId, const MarkStackEntry& entry, size_t& nMarked)
     {
         YoungStripedWorkerOutput& output = *shared.outputs[workerId];
@@ -1064,10 +1047,7 @@ private:
                 output.slots.push_back(slot);
             }
             auto& field = HeapSlotAt<>(slot);
-            BaseObject* target = shared.collector->ResolveMinorReference(field);
-            if (!ScrubMinorFreeTarget(field, target, false)) {
-                PushFilteredYoung(ctx, target, "closure_edge", entry.finalizable());
-            }
+            Heap::GetBarrier().MarkBarrierOnYoungOopField(field);
         };
         auto publish = [this, &ctx](const MarkStackEntry& work) { PublishEntry(ctx, work); };
         if (entry.partialArray()) {

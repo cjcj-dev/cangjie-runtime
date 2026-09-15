@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Base/Macros.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
@@ -30,6 +31,7 @@
 #include <vector>
 
 namespace MapleRuntime {
+#include "Heap/Barrier/BarrierTestObservations.h"
 static_assert(!std::is_polymorphic<Barrier>::value, "Barrier must not regain virtual dispatch");
 
 // ZBarrier::assert_transition_monotonicity, zBarrier.inline.hpp:40-70.
@@ -273,6 +275,33 @@ BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
                      (raw(observed) & (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
                  "NativeSlot requires colored value at ReadStaticRef slot=%p word=%#zx", &field, raw(observed));
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
+}
+
+// ZBarrier::mark_from_young_slow_path, zBarrier.cpp:158-183.
+zaddress Barrier::MarkFromYoungSlowPath(zaddress address) const
+{
+    auto& young = theCollector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+    CHECK(young.IsPhaseMark());
+    if (is_null(address)) return address;
+    if (RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+        young.MarkObject<false, true, true, false>(address);
+    } else if (young.IsMajorRoots()) {
+        theCollector.GetGenerationCycle(GCCycleGeneration::OLD).MarkObject<false, true, true, false>(address);
+    }
+    return address;
+}
+
+// ZBarrier::mark_from_old_slow_path, zBarrier.cpp:185-203.
+zaddress Barrier::MarkFromOldSlowPath(zaddress address) const
+{
+    auto& old = theCollector.GetGenerationCycle(GCCycleGeneration::OLD);
+    CHECK(old.IsPhaseMark());
+    if (is_null(address)) return address;
+    if (!RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+        old.MarkObject<false, true, true, false>(address);
+        return address;
+    }
+    return zaddress::null;
 }
 
 // ZBarrier::mark_young_slow_path, zBarrier.cpp:206-215.
