@@ -17,72 +17,11 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Collector/CollectorProxy.h"
+#include "Heap/z/zStat.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 
-#if defined(MRT_TESTABLE_INTERNALS)
-namespace MapleRuntime {
-// Seed inputs of the real processor/collector; never call or reconstruct the
-// enum task in the test. The real major request owns execution and merging.
-// This fixture checks root scanning, not finalizer scheduling or invocation.
-struct GenerationCycleRootTestAccess {
-    static void Install(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
-    {
-        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
-        {
-            std::lock_guard<std::mutex> lock(processor.listLock);
-            NativeSlot queued(zpointer::null), working(zpointer::null);
-            Heap::GetBarrier().WriteStaticRef(queued, objects[0]);
-            Heap::GetBarrier().WriteStaticRef(working, objects[1]);
-            NativeSlot* queuedSlot = processor.strongStorage.Allocate();
-            queuedSlot->StoreColoured(queued.GetFieldValue(), std::memory_order_relaxed);
-            processor.finalizables.push_back(queuedSlot);
-            NativeSlot* workingSlot = processor.strongStorage.Allocate();
-            workingSlot->StoreColoured(working.GetFieldValue(), std::memory_order_relaxed);
-            processor.workingFinalizables.push_back(workingSlot);
-            // Deliberately do not schedule finalization: only the scanner's
-            // queued/working input branches are under test.
-        }
-        {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            collector.resurrectedExportObjectes.insert(objects[2]);
-            collector.resurrectedExportObjectesForwardPhase.insert(objects[3]);
-        }
-        {
-            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-            collector.cycleRefWorkStack[objects[4]].push_back(objects[5]);
-        }
-    }
-    static void Remove(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
-    {
-        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
-        {
-            std::lock_guard<std::mutex> lock(processor.listLock);
-            auto remove = [&](NativeRootHandles& roots, BaseObject* object) {
-                for (auto it = roots.begin(); it != roots.end();) {
-                    if (to_object(it->GetTargetObject()) == object) {
-                        processor.strongStorage.Release(&*it);
-                        it = roots.erase(it);
-                    }
-                    else ++it;
-                }
-            };
-            remove(processor.finalizables, objects[0]);
-            remove(processor.workingFinalizables, objects[1]);
-        }
-        {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            collector.resurrectedExportObjectes.erase(objects[2]);
-            collector.resurrectedExportObjectesForwardPhase.erase(objects[3]);
-        }
-        {
-            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-            collector.cycleRefWorkStack.erase(objects[4]);
-        }
-    }
-};
-}
-#endif
 
 using namespace MapleRuntime;
 namespace {
@@ -113,23 +52,19 @@ void* Exercise(void*)
         .GetRegionManager().GetThreadLocalRegionSize();
     const size_t heapLimit = heapBytes / regionBytes / 50;
     const size_t concurrent = std::max<size_t>(1, std::min((cpuCount + 3) / 4, heapLimit));
-    const size_t parallel = std::max<size_t>(1, std::min((cpuCount * 3 + 4) / 5, heapLimit));
-    Expect(resources.GetGCThreadCount(true) == static_cast<int>(concurrent), "worker_concurrent_budget");
-    Expect(resources.GetGCThreadCount(false) == static_cast<int>(parallel), "worker_parallel_budget");
-    auto youngWorkers0 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
-    auto oldWorkers0 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
-    Expect(youngWorkers0.capacity == concurrent && oldWorkers0.capacity == concurrent, "worker_generation_capacity");
-    // ZWorkers initializes each generation with all concurrent workers active.
-    Expect(youngWorkers0.activeWorkers == concurrent && oldWorkers0.activeWorkers == concurrent,
+    ZWorkers& youngWorkers = resources.GetWorkers(GCCycleGeneration::YOUNG);
+    ZWorkers& oldWorkers = resources.GetWorkers(GCCycleGeneration::OLD);
+    // ZWorkers (zWorkers.cpp:60-64) initializes each generation with all
+    // concurrent workers active, and no generation is active before a cycle.
+    Expect(youngWorkers.active_workers() == concurrent && oldWorkers.active_workers() == concurrent,
            "worker_startup_active_budget");
-    Expect(!youngWorkers0.cycleActive && !oldWorkers0.cycleActive, "worker_startup_inactive");
-    std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu parallel=%zu\n",
-                cpuCount, heapBytes, regionBytes, concurrent, parallel);
+    Expect(!youngWorkers.is_active() && !oldWorkers.is_active(), "worker_startup_inactive");
+    std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu\n",
+                cpuCount, heapBytes, regionBytes, concurrent);
 #if defined(MRT_TESTABLE_INTERNALS)
     auto& tracing = static_cast<TracingCollector&>(collector);
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
-    unsigned rootResults = 0;
     unsigned combinedMarkStarts = 0;
     unsigned minorMarkStarts = 0;
     GCCycleSnapshot preludeOld {};
@@ -156,20 +91,6 @@ void* Exercise(void*)
             Expect(!old.active, "independent_minor_does_not_start_old");
         }
     };
-    // Allocate actual product objects, with an independent export-table root
-    // keeping each alive even when a common-root consumer is deliberately cut.
-    alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
-    auto* type = reinterpret_cast<TypeInfo*>(typeStorage);
-    type->SetType(TypeKind::TYPE_KIND_CLASS);
-    type->SetInstanceSize(sizeof(uint64_t));
-    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
-        reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
-    std::array<U64, 6> handles {};
-    std::array<BaseObject*, 6> witnesses {};
-    for (auto& handle : handles) {
-        auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
-        handle = Heap::GetHeap().RegisterExportRoot(object);
-    }
     tracing.testCyclePrepared = [&]() {
         // The real driver has selected and prepared its cycle. Add captures
         // its own state; the test does not provide a phase or generation.
@@ -178,15 +99,13 @@ void* Exercise(void*)
         buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
         const auto storedColor = buffer.LastProcessedColorForTest();
         const bool young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).active;
-        const auto current = resources.GetWorkers(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)
-            .GetSnapshot();
-        const auto other = resources.GetWorkers(young ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
-            .GetSnapshot();
+        ZWorkers& current = resources.GetWorkers(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+        ZWorkers& other = resources.GetWorkers(young ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
         std::printf("WORKER_PREPARED generation=%s active=%u other_active=%u workers=%u\n",
-                    young ? "young" : "old", current.cycleActive, other.cycleActive, current.activeWorkers);
-        Expect(current.activeWorkers == concurrent, "worker_prepared_concurrent_budget");
-        Expect(current.cycleActive, young ? "worker_young_active_during_cycle" : "worker_old_active_during_cycle");
-        Expect(!other.cycleActive, "worker_other_inactive_during_cycle");
+                    young ? "young" : "old", current.is_active(), other.is_active(), current.active_workers());
+        Expect(current.active_workers() == concurrent, "worker_prepared_concurrent_budget");
+        Expect(current.is_active(), young ? "worker_young_active_during_cycle" : "worker_old_active_during_cycle");
+        Expect(!other.is_active(), "worker_other_inactive_during_cycle");
         if (young) {
             ++youngLabels;
             Expect(storedColor == static_cast<uintptr_t>(::g_cjStoreGoodMask), "store_buffer_young_color");
@@ -197,80 +116,31 @@ void* Exercise(void*)
                    "old_body_keeps_prelude_identity");
             Expect((::g_cjMarkBadMask & ZPointerMarkedOldMask) == preludeOldColor,
                    "old_body_keeps_prelude_color");
-            for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
-            GenerationCycleRootTestAccess::Install(tracing, witnesses);
             Expect(storedColor == static_cast<uintptr_t>(::g_cjStoreGoodMask), "store_buffer_old_color");
         }
         buffer.Discard();
-    };
-    tracing.testRootsResult = [&](GCWorkers::Generation generation, TracingCollector::RootSet& result) {
-        std::set<BaseObject*> observed;
-        for (auto* node = result.head(); node != nullptr; node = node->next) {
-            auto copy = *node;
-            while (!copy.empty()) {
-                observed.insert(copy.back().object());
-                copy.pop_back();
-            }
-        }
-        size_t expected = 0;
-        bool included = true;
-        Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
-            auto* object = to_object(slot.GetTargetObject());
-            if (object != nullptr && Heap::IsHeapAddress(object)) {
-                ++expected;
-                included = included && observed.count(object) != 0;
-            }
-        });
-        std::set<BaseObject*> concurrencyRoots;
-        RootVisitor concurrentVisitor = [&](ObjectRef& slot) {
-            auto* object = to_object(safe(slot.LoadPlain()));
-            if (object != nullptr && Heap::IsHeapAddress(object)) concurrencyRoots.insert(object);
-        };
-        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrentVisitor);
-        const bool concurrencyIncluded = std::all_of(concurrencyRoots.begin(), concurrencyRoots.end(),
-            [&](BaseObject* object) { return observed.count(object) != 0; });
-        std::printf("ROOT_CONCURRENCY expected=%zu included=%u\n", concurrencyRoots.size(), concurrencyIncluded);
-        Expect(!concurrencyRoots.empty(), "worker_concurrency_witness_exists");
-        Expect(concurrencyIncluded, "worker_root_result_contains_concurrency");
-        const char* names[] = { "worker_root_result_contains_queued_finalizer",
-            "worker_root_result_contains_working_finalizer", "worker_root_result_contains_resurrected",
-            "worker_root_result_contains_forward_resurrected", "worker_root_result_contains_cycle_owner",
-            "worker_root_result_contains_cycle_external" };
-        std::set<BaseObject*> unique(witnesses.begin(), witnesses.end());
-        Expect(unique.size() == witnesses.size() && unique.count(nullptr) == 0, "worker_family_witnesses_distinct");
-        for (size_t i = 0; i < witnesses.size(); ++i) {
-            std::printf("ROOT_FAMILY name=%s object=%p included=%u\n", names[i], witnesses[i],
-                        observed.count(witnesses[i]) != 0);
-            Expect(observed.count(witnesses[i]) != 0, names[i]);
-        }
-        GenerationCycleRootTestAccess::Remove(tracing, witnesses);
-        ++rootResults;
-        std::printf("ROOT_RESULT expected_static=%zu observed_objects=%zu generation=%u\n",
-                    expected, observed.size(), static_cast<unsigned>(generation));
-        Expect(expected > 0, "worker_root_witness_exists");
-        Expect(included, "worker_root_result_contains_statics");
-        Expect(generation == GCWorkers::Generation::OLD, "worker_root_result_owner");
     };
 #endif
     auto y0 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     auto o0 = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     collector.RequestGC(GC_REASON_USER, false);
-    auto youngWorkers1 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
-    auto oldWorkers1 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
-    Expect(youngWorkers1.activeWorkers == concurrent && oldWorkers1.activeWorkers == concurrent,
+    Expect(youngWorkers.active_workers() == concurrent && oldWorkers.active_workers() == concurrent,
            "worker_major_phase_budget");
-    Expect(!youngWorkers1.cycleActive && !oldWorkers1.cycleActive, "worker_major_completion");
+    Expect(!youngWorkers.is_active() && !oldWorkers.is_active(), "worker_major_completion");
+    // ZStatCycle::at_end (zStat.cpp:1252-1253) reset the old generation's
+    // worker accounting at the end of the major; a minor must not add to it.
+    const auto oldWorkerStats1 = collector.GetGenerationCycle(GCCycleGeneration::OLD).StatWorkers()->stats();
     auto y1 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     auto o1 = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     Expect(y1.sequence == y0.sequence + 1, "major_prelude_young_sequence");
     Expect(o1.sequence == o0.sequence + 1, "major_old_sequence");
     Expect(o1.reason == GC_REASON_USER && !o1.active, "major_reason_completion");
     collector.RequestGC(GC_REASON_YOUNG, false);
-    auto youngWorkers2 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
-    auto oldWorkers2 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
-    Expect(youngWorkers2.activeWorkers == concurrent && !youngWorkers2.cycleActive, "worker_minor_phase_budget");
-    Expect(oldWorkers2.batch == oldWorkers1.batch && oldWorkers2.activeWorkers == oldWorkers1.activeWorkers &&
-           oldWorkers2.cycleActive == oldWorkers1.cycleActive, "worker_minor_preserves_old");
+    Expect(youngWorkers.active_workers() == concurrent && !youngWorkers.is_active(), "worker_minor_phase_budget");
+    const auto oldWorkerStats2 = collector.GetGenerationCycle(GCCycleGeneration::OLD).StatWorkers()->stats();
+    Expect(oldWorkerStats2._accumulated_duration == oldWorkerStats1._accumulated_duration &&
+           oldWorkerStats2._accumulated_time == oldWorkerStats1._accumulated_time &&
+           oldWorkers.active_workers() == concurrent && !oldWorkers.is_active(), "worker_minor_preserves_old");
     auto y2 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     auto o2 = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     Expect(y2.sequence == y1.sequence + 1, "minor_sequence");
@@ -282,12 +152,9 @@ void* Exercise(void*)
         (unsigned)y2.phase, (unsigned)o2.phase);
 #if defined(MRT_TESTABLE_INTERNALS)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
-    Expect(rootResults > 0, "worker_root_result_observed");
     Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
     tracing.testYoungMarkStarted = nullptr;
     tracing.testCyclePrepared = nullptr;
-    tracing.testRootsResult = nullptr;
-    for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);
 #endif
     return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));
 }

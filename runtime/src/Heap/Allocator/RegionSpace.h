@@ -153,7 +153,7 @@ public:
     void ClearAllLiveInfo() { regionManager.ClearAllLiveInfo(); }
 
     template<Generation G>
-    void ForwardFromSpace(GCWorkers& workers)
+    void ForwardFromSpace(ZWorkers& workers)
     {
         MRT_PHASE_TIMER(G == Generation::Young ? ZStatPhases::YoungForwardFromRegions :
                         ZStatPhases::OldForwardFromRegions);

@@ -4,101 +4,61 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
-#pragma once
+#ifndef MRT_GC_Z_ZWORKERS_HPP
+#define MRT_GC_Z_ZWORKERS_HPP
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <mutex>
-#include <pthread.h>
 #include <vector>
 
 #include "Base/LogFile.h"
 #include "Base/Macros.h"
+#include "Heap/z/workerThread.hpp"
 
-#include "Heap/z/zTask.hpp"
-#include "Heap/z/zRuntimeWorkers.hpp"
 namespace MapleRuntime {
-class GCWorkers {
-public:
-    enum class Generation : uint8_t { YOUNG, OLD };
-    struct Snapshot {
-        Generation generation;
-        uint32_t capacity;
-        uint32_t activeWorkers;
-        uint32_t runningWorkers;
-        uint32_t remainingWorkers;
-        uint32_t requestedWorkers;
-        bool cycleActive;
-        bool closing;
-        bool stopped;
-        uint64_t batch;
-        uint64_t completedBatches;
-        uint64_t elapsedNanos;
-        uint64_t workerNanos; // Sum of each completed batch's duration * participants.
-    };
+enum class GCCycleGeneration : uint8_t; // zGeneration.hpp
+class ZRestartableTask;
+class ZStatWorkers;
+class ZTask;
 
-    explicit GCWorkers(Generation generation, uint32_t capacity, int32_t priority = 0);
-    ~GCWorkers();
-    GCWorkers(const GCWorkers&) = delete;
-    GCWorkers& operator=(const GCWorkers&) = delete;
-
-    // One coordinator per set. Run, RunAll, SetActiveWorkers and cycle changes
-    // serialize. Workers must not call these methods or Stop on their own set.
-    void Run(GCWorkerTask& task);
-    void Run(GCRestartableWorkerTask& task);
-    void RunAll(GCWorkerTask& task);
-    void SetActiveWorkers(uint32_t workers); // Valid range [1, capacity].
-    void SetActive(); // Begins a cycle and clears previous resize requests.
-    void SetInactive();
-    uint32_t ActiveWorkers() const;
-    bool IsActive() const;
-    void RequestResize(uint32_t workers);
-    bool ShouldWorkerResize() const;
-    Snapshot GetSnapshot() const;
-
-    // The callback runs while thread lifetime is protected; it must not reenter
-    // this set or retain thread handles past the callback.
-    void ThreadsDo(const std::function<void(pthread_t)>& visitor);
-    // Close admission, finish the borrowed task (including restart), then wake
-    // and join all threads. Concurrent/repeated Stop is safe. No cancellation.
-    void Stop();
-
+// zWorkers.hpp:38-77. The generation's view of its WorkerThreads: six fields,
+// no task state, no timing, no stop protocol. ZLock is std::mutex here (I14).
+class ZWorkers {
 private:
-    struct Worker {
-        GCWorkers* owner;
-        uint32_t id;
-        pthread_t thread;
-    };
-    static void* WorkerEntry(void* argument);
-    void WorkerLoop(uint32_t id);
-    void RunBatch(GCWorkerTask& task);
-    void CheckCount(uint32_t workers) const;
-    void CheckOpen() const;
+    WorkerThreads _workers;
+    const char* const _generation_name;
+    std::mutex _resize_lock;
+    std::atomic<uint32_t> _requested_nworkers;
+    bool _is_active;
+    ZStatWorkers* const _stats;
 
-    const Generation generation;
-    const uint32_t capacity;
-    const int32_t priority;
-    std::mutex coordinatorMutex;
-    mutable std::mutex mutex;
-    std::condition_variable dispatched;
-    std::condition_variable completed;
-    std::vector<Worker> threads;
-    uint32_t activeWorkers;
-    uint32_t runningWorkers = 0;
-    uint32_t remainingWorkers = 0;
-    uint32_t requestedWorkers = 0;
-    bool cycleActive = false;
-    bool closing = false;
-    bool shutdown = false;
-    bool stopped = false;
-    uint64_t batch = 0;
-    uint64_t completedBatches = 0;
-    uint64_t elapsedNanos = 0;
-    uint64_t workerNanos = 0;
-    GCWorkerTask* currentTask = nullptr;
-    uint64_t currentGCId = 0;
+public:
+    // zWorkers.cpp:45-65. max_nworkers is ZYoungGCThreads/ZOldGCThreads in
+    // ZGC (zArguments); this runtime passes the concurrent budget in.
+    ZWorkers(GCCycleGeneration id, uint32_t max_nworkers, ZStatWorkers* stats);
+    ZWorkers(const ZWorkers&) = delete;
+    ZWorkers& operator=(const ZWorkers&) = delete;
+
+    bool is_active() const;
+    uint32_t active_workers() const;
+    void set_active_workers(uint32_t nworkers);
+    void set_active();
+    void set_inactive();
+
+    void run(ZTask* task);
+    void run(ZRestartableTask* task);
+    void run_all(ZTask* task);
+
+    void threads_do(const std::function<void(WorkerThread*)>& tc) const;
+
+    // Worker resizing
+    std::mutex* resizing_lock();
+    void request_resize_workers(uint32_t nworkers);
+
+    bool should_worker_resize();
 };
-
-}
+} // namespace MapleRuntime
+#endif // MRT_GC_Z_ZWORKERS_HPP

@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zStat.hpp"
+#include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -134,10 +136,11 @@ bool RunParallelProductEntryClosesGeneration()
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
-    GCWorkers workers(GCWorkers::Generation::OLD, 3);
-    workers.SetActive();
+    ZStatWorkers statWorkers;
+    ZWorkers workers(GCCycleGeneration::OLD, 3, &statWorkers);
+    workers.set_active();
     manager.ForwardFromRegions<Generation::Old>(workers);
-    workers.SetInactive();
+    workers.set_inactive();
     const bool closed = !queue.IsActive() && queue.PendingCount() == 0;
     return closed;
 }
@@ -151,10 +154,11 @@ bool RunSerialProductEntryClosesGeneration()
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     // ZRelocate uses the generation worker entry even with one participant.
-    GCWorkers workers(GCWorkers::Generation::OLD, 1);
-    workers.SetActive();
+    ZStatWorkers statWorkers;
+    ZWorkers workers(GCCycleGeneration::OLD, 1, &statWorkers);
+    workers.set_active();
     manager.ForwardFromRegions<Generation::Old>(workers);
-    workers.SetInactive();
+    workers.set_inactive();
     return !queue.IsActive() && queue.PendingCount() == 0;
 }
 
@@ -232,7 +236,7 @@ bool RunActualTaskClaimedOwnerSuccess()
     }
     fromSpace.PrependRegion(fx.region0, RegionInfo::RegionType::FROM_REGION);
     ForwardTask<Generation::Old> task(manager, fromSpace);
-    task.Work(0);
+    task.work();
     return added.request->state() == RelocationRequestQueue::State::COMPLETED &&
         added.request->page_forwarding()->find(from) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
 }
@@ -252,55 +256,59 @@ void ExpectIsolatedScenarioPasses()
 
 } // namespace
 
-// ZRuntimeWorkers has no dedicated upstream gtest. These task-result checks
-// exercise WorkerTaskDispatcher's complete-before-return contract directly.
-GC_TEST(RuntimeWorkers, FixedParticipantsCompleteEachBorrowedTask)
+// ZGC has no dedicated gtest for the relocation worker entry. These
+// task-result checks exercise WorkerTaskDispatcher's complete-before-return
+// contract through the generation worker set that ZRelocate uses.
+GC_TEST(RelocateWorkers, FixedParticipantsCompleteEachBorrowedTask)
 {
     for (uint32_t count : { 1u, 3u }) {
-        RuntimeWorkers workers(count);
-        class Task : public GCWorkerTask {
+        ZStatWorkers statWorkers;
+        ZWorkers workers(GCCycleGeneration::OLD, count, &statWorkers);
+        class Task : public ZTask {
         public:
-            explicit Task(uint32_t count) : visits(count, 0), handles(count) {}
-            void Work(uint32_t id) override
+            explicit Task(uint32_t count) : ZTask("ZWorkersUnitVisits"), visits(count, 0), handles(count) {}
+            void work() override
             {
+                const uint32_t id = WorkerThread::worker_id();
                 ++visits[id];
                 handles[id] = pthread_self();
             }
             std::vector<uint32_t> visits;
             std::vector<pthread_t> handles;
         } task(count);
-        workers.Run(task);
-        workers.Run(task);
-        GC_EXPECT_EQ(workers.ActiveWorkers(), count);
+        workers.run(&task);
+        workers.run(&task);
+        GC_EXPECT_EQ(workers.active_workers(), count);
         std::vector<pthread_t> owned;
-        workers.ThreadsDo([&](pthread_t thread) { owned.push_back(thread); });
+        workers.threads_do([&](WorkerThread* thread) { owned.push_back(thread->os_thread()); });
         GC_EXPECT_EQ(owned.size(), count);
         for (uint32_t id = 0; id < count; ++id) {
             GC_EXPECT_EQ(task.visits[id], 2u);
-            GC_EXPECT_TRUE(pthread_equal(task.handles[id], owned[id]));
             GC_EXPECT_FALSE(pthread_equal(task.handles[id], pthread_self()));
+            bool owns = false;
+            for (pthread_t thread : owned) owns = owns || pthread_equal(task.handles[id], thread);
+            GC_EXPECT_TRUE(owns);
         }
     }
 }
 
-GC_TEST(RuntimeWorkers, RuntimeYoungAndOldOwnDistinctThreads)
+GC_TEST(RelocateWorkers, YoungAndOldOwnDistinctThreads)
 {
-    RuntimeWorkers runtime(2);
-    GCWorkers young(GCWorkers::Generation::YOUNG, 1);
-    GCWorkers old(GCWorkers::Generation::OLD, 1);
-    std::vector<pthread_t> runtimeThreads;
-    runtime.ThreadsDo([&](pthread_t thread) { runtimeThreads.push_back(thread); });
-    young.ThreadsDo([&](pthread_t thread) {
-        for (pthread_t other : runtimeThreads) GC_EXPECT_FALSE(pthread_equal(thread, other));
+    ZStatWorkers youngStats, oldStats;
+    ZWorkers young(GCCycleGeneration::YOUNG, 1, &youngStats);
+    ZWorkers old(GCCycleGeneration::OLD, 1, &oldStats);
+    std::vector<pthread_t> youngThreads;
+    young.threads_do([&](WorkerThread* thread) { youngThreads.push_back(thread->os_thread()); });
+    GC_EXPECT_EQ(youngThreads.size(), 1u);
+    unsigned oldThreads = 0;
+    old.threads_do([&](WorkerThread* thread) {
+        ++oldThreads;
+        for (pthread_t other : youngThreads) GC_EXPECT_FALSE(pthread_equal(thread->os_thread(), other));
     });
-    old.ThreadsDo([&](pthread_t thread) {
-        for (pthread_t other : runtimeThreads) GC_EXPECT_FALSE(pthread_equal(thread, other));
-    });
-    GC_EXPECT_EQ(young.GetSnapshot().generation, GCWorkers::Generation::YOUNG);
-    GC_EXPECT_EQ(old.GetSnapshot().generation, GCWorkers::Generation::OLD);
+    GC_EXPECT_EQ(oldThreads, 1u);
 }
 
-GC_TEST(RuntimeWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
+GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
 {
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
@@ -312,12 +320,13 @@ GC_TEST(RuntimeWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
     GC_EXPECT_TRUE(added.accepted);
     GC_EXPECT_TRUE(queue.IsActive());
     std::atomic<size_t> completionOwners{ 0 };
-    RuntimeWorkers workers(kWorkers);
-    class RequestTask : public GCWorkerTask {
+    ZStatWorkers statWorkers;
+    ZWorkers workers(GCCycleGeneration::OLD, kWorkers, &statWorkers);
+    class RequestTask : public ZTask {
     public:
         RequestTask(RelocationRequestQueue& queue, std::atomic<size_t>& owners)
-            : queue(queue), completionOwners(owners) {}
-        void Work(uint32_t) override
+            : ZTask("ZWorkersUnitRequest"), queue(queue), completionOwners(owners) {}
+        void work() override
         {
             for (;;) {
                 auto selected = queue.SelectBeforeOrdinary([]() -> void* { return nullptr; });
@@ -338,7 +347,7 @@ GC_TEST(RuntimeWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
         RelocationRequestQueue& queue;
         std::atomic<size_t>& completionOwners;
     } task(queue, completionOwners);
-    workers.Run(task);
+    workers.run(&task);
     (void)queue.Wait(added.request);
     GC_EXPECT_EQ(added.request->page_forwarding()->find(from), to);
     GC_EXPECT_EQ(completionOwners.load(), 1U);
@@ -347,7 +356,7 @@ GC_TEST(RuntimeWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(RuntimeWorkers, ActualForwardTaskPreservesExternalClaimant)
+GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
 {
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
@@ -360,7 +369,7 @@ GC_TEST(RuntimeWorkers, ActualForwardTaskPreservesExternalClaimant)
     queue.BeginWorkers(1);
     const auto request = queue.Add(owner);
     ForwardTask<Generation::Old> task(manager, empty);
-    task.Work(0);
+    task.work();
     GC_EXPECT_FALSE(owner->is_done());
     GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::CLAIMED);
     owner->release_page();
@@ -369,7 +378,7 @@ GC_TEST(RuntimeWorkers, ActualForwardTaskPreservesExternalClaimant)
     GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::COMPLETED);
 }
 
-GC_TEST(RuntimeWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
+GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
 {
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
@@ -387,7 +396,7 @@ GC_TEST(RuntimeWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
         answer.store(owner->find(from), std::memory_order_release);
     });
     ForwardTask<Generation::Old> task(manager, empty);
-    std::thread worker([&] { task.Work(0); });
+    std::thread worker([&] { task.work(); });
     while (queue.SynchronizedWorkerCount() != 1) std::this_thread::yield();
     const bool pending = !owner->is_done() && answer.load(std::memory_order_acquire) == 0;
     owner->release_page();
@@ -401,25 +410,25 @@ GC_TEST(RuntimeWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
 }
 #endif
 
-GC_TEST(RuntimeWorkers, ProductParallelEntryRegistersWorkersAndClosesGeneration)
+GC_TEST(RelocateWorkers, ProductParallelEntryRegistersWorkersAndClosesGeneration)
 {
     ExpectIsolatedScenarioPasses<RunParallelProductEntryClosesGeneration>();
 }
 
-GC_TEST(RuntimeWorkers, ProductSerialEntryRegistersWorkerAndClosesGeneration)
+GC_TEST(RelocateWorkers, ProductSerialEntryRegistersWorkerAndClosesGeneration)
 {
     ExpectIsolatedScenarioPasses<RunSerialProductEntryClosesGeneration>();
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(RuntimeWorkers, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
+GC_TEST(RelocateWorkers, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
 {
     ExpectIsolatedScenarioPasses<RunYoungRuntimeProductEntry>();
 }
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(RuntimeWorkers, ActualForwardTaskCompletesClaimedOwnerAtRegionExit)
+GC_TEST(RelocateWorkers, ActualForwardTaskCompletesClaimedOwnerAtRegionExit)
 {
     ExpectIsolatedScenarioPasses<RunActualTaskClaimedOwnerSuccess>();
 }

@@ -18,7 +18,41 @@
 #include <algorithm>
 #include <vector>
 
+#include "Heap/z/zThread.hpp"
+
 namespace MapleRuntime {
+// zStat.hpp:449-452
+struct ZStatWorkersStats {
+    double _accumulated_time;
+    double _accumulated_duration;
+};
+
+// zStat.hpp:454-479, zStat.cpp:1330-1405. Driven by ZWorkers::run before and
+// after every task; stats() also counts the batch that is still running.
+class ZStatWorkers {
+private:
+    std::mutex _stat_lock;
+    uint32_t _active_workers;
+    uint64_t _start_of_last;
+    uint64_t _accumulated_duration;
+    uint64_t _accumulated_time;
+
+    double accumulated_duration();
+    double accumulated_time();
+    uint32_t active_workers();
+
+public:
+    ZStatWorkers();
+
+    void at_start(uint32_t active_workers);
+    void at_end();
+
+    double get_and_reset_duration();
+    double get_and_reset_time();
+
+    ZStatWorkersStats stats();
+};
+
 // zStat.cpp:1226-1330: cycle inputs used by the director are always
 // collected independently of log output.
 struct ZStatCycleStats {
@@ -34,8 +68,11 @@ struct ZStatCycleStats {
 class ZStatCycle {
 public:
     void Initialize(uint64_t now);
-    void AtStart(uint64_t now, uint64_t workerDuration, uint64_t workerTime);
-    void AtEnd(uint64_t now, uint64_t workerDuration, uint64_t workerTime, bool warmup);
+    // zStat.cpp:1237-1268: the parallel share comes from ZStatWorkers'
+    // get_and_reset pair at the end of the cycle; record_stats gates the
+    // sequences, never the reset.
+    void AtStart(uint64_t now);
+    void AtEnd(uint64_t now, ZStatWorkers* statWorkers, bool warmup, bool recordStats);
     ZStatCycleStats Stats(uint64_t now) const;
 
 private:
@@ -50,8 +87,6 @@ private:
     mutable std::mutex lock;
     uint64_t start = 0;
     uint64_t end = 0;
-    uint64_t initialWorkerDuration = 0;
-    uint64_t initialWorkerTime = 0;
     uint32_t warmupCycles = 0;
     double lastActiveWorkers = 1;
     Sequence serial;
@@ -258,31 +293,36 @@ private:
 };
 
 struct GcTriggerInputs;
-class GCWorkers;
+class ZWorkers;
 class RegionManager;
 
-class ZStat {
+// zStat.hpp:385-401, zStat.cpp:1022-1095: the stat thread is a ZThread that
+// samples on a metronome tick and prints on the statistics interval. The
+// constructor starts the thread; ConcurrentGCThread::stop ends it.
+class ZStat final : public ZThread {
 public:
-    ZStat() = default;
-    ~ZStat();
-    void Start();
-    void Stop();
+    ZStat();
+    ~ZStat() override = default;
+    void run_thread() override;
+    void terminate() override;
     static void Initialize();
     static ZStatCollection& Collections();
     static ZStatHeap& YoungHeap();
     static ZStatHeap& OldHeap();
+    // zDirector.cpp:651-678 sample_worker_resize_stats: worker activity is read
+    // under ZWorkers::resizing_lock; the worker budget is the ZYoungGCThreads
+    // flag in ZGC and the caller's concurrent budget here.
     static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                              RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers);
+                                              RegionManager& regions, ZWorkers& youngWorkers, ZWorkers& oldWorkers,
+                                              uint32_t workerCapacity);
     // Existing GCLOG kind observer. It does not select sampler identity or group.
     static void EnterStwScope();
     static void ExitStwScope();
     static bool WorldStoppedNow();
 private:
-    void Run();
-    std::thread thread;
     std::mutex lock;
     std::condition_variable condition;
-    bool stopped = true;
+    bool stopped = false;
     static std::atomic<int> stwDepth;
 };
 

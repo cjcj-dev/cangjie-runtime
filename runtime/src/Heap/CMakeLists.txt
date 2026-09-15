@@ -8,8 +8,11 @@ set(SRC_LIST
     "z/zHeap.cpp"
     "z/zInitialize.cpp"
     "z/zGlobals.cpp"
+    "z/workerThread.cpp"
+    "z/zTask.cpp"
     "z/zWorkers.cpp"
-    "z/zRuntimeWorkers.cpp"
+    "z/concurrentGCThread.cpp"
+    "z/zThread.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})

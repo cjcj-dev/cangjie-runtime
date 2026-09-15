@@ -45,11 +45,17 @@ public:
     void MarkObject(zaddress address);
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
     void MarkObjectIfActive(zaddress address);
+    // zGeneration.cpp:129 constructs _workers(id, &_stat_workers) by value with
+    // the ZYoungGCThreads/ZOldGCThreads budget from zArguments. That budget is
+    // computed after this object exists here, so the set is built when the
+    // driver starts; StopWorkers is the matching end of that lifetime (see
+    // ~WorkerThreads for why a destroy path exists at all).
     void InitializeWorkers(uint32_t capacity);
     void StopWorkers();
-    GCWorkers* Workers() const { return workers.get(); }
+    ZWorkers* Workers() const { return workers.get(); }
     GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
+    ZStatWorkers* StatWorkers() { return &statWorkers; }
     GCPhase Phase() const { return phase.load(std::memory_order_acquire); }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
@@ -74,9 +80,11 @@ private:
 #endif
     MarkDomain* markDomain = nullptr;
     const GCCycleGeneration generation;
-    std::unique_ptr<GCWorkers> workers;
+    std::unique_ptr<ZWorkers> workers;
     GCStats stats;
     ZStatCycle cycleStats;
+    // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
+    ZStatWorkers statWorkers;
     mutable std::mutex mutex;
     uint64_t sequence = 0;
     uint64_t requestIndex = 0;

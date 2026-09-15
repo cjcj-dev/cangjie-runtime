@@ -10,6 +10,7 @@
 
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
@@ -265,15 +266,15 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     abort.Reset();
     GC_EXPECT_TRUE(!domain.PollStop());
 
-    GCWorkers workers(GCWorkers::Generation::YOUNG, 2);
-    workers.SetActive();
-    workers.SetActiveWorkers(1);
+    ZStatWorkers statWorkers;
+    ZWorkers workers(GCCycleGeneration::YOUNG, 2, &statWorkers);
+    workers.set_active();
+    workers.set_active_workers(1);
     domain.BindWorkers(&workers);
     domain.PrepareWork(1);
     GC_EXPECT_TRUE(!domain.PollStop());
-    workers.RequestResize(2);
+    workers.request_resize_workers(2);
     GC_EXPECT_TRUE(domain.PollStop());
-    workers.Stop();
 }
 
 // ZMark::drain/rebalance_work (zMark.cpp:468-485): stop following while

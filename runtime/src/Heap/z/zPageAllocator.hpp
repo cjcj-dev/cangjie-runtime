@@ -360,6 +360,7 @@ private:
 
 #include "Heap/z/zRangeRegistry.hpp"
 #include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/Allocator/RegionList.h"
@@ -518,7 +519,7 @@ public:
     void RetireTLABStatistics(AllocBuffer& buffer);
 
     template<Generation G>
-    void ForwardFromRegions(GCWorkers& workers);
+    void ForwardFromRegions(ZWorkers& workers);
     template<Generation G>
     void ForwardFromRegions();
     template<Generation G>
@@ -544,7 +545,7 @@ public:
     void ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed = false,
                             bool inPlace = false);
     template<Generation G>
-    void StartForwardFromRegions(GCWorkers& workers);
+    void StartForwardFromRegions(ZWorkers& workers);
     template<Generation G>
     void DrainForwardFromRegions();
     bool RelocationStarted() const { return relocationStarted; }
@@ -552,7 +553,7 @@ public:
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
     void AddFlipPromotedPage(RegionInfo* region);
-    void RememberFlipPromotedPages(GCWorkers& workers);
+    void RememberFlipPromotedPages(ZWorkers& workers);
     void ResetFlipPromotedPages();
     void StampCensusBoundaries();
     void PromoteAllRegions();
@@ -827,7 +828,7 @@ private:
     // region type must be FROM_REGION.
     RegionList fromRegionList;
     RelocationRequestQueue relocationRequestQueue;
-    GCWorkers* relocationWorkers{ nullptr };
+    ZWorkers* relocationWorkers{ nullptr };
     bool relocationStarted{ false };
     bool relocationDrained{ false };
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.

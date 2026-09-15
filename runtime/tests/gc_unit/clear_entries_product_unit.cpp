@@ -30,6 +30,7 @@
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/z/zMark.hpp"
@@ -104,11 +105,6 @@ struct RelocationReceiptTestAccess {
                 GenerationSequenceFixture::Advance(cycle);
             }
         }
-    }
-
-    static void BindRuntimeWorkers(CollectorResources& resources, RuntimeWorkers* threadPool)
-    {
-        resources.runtimeWorkers = threadPool;
     }
 
     static void Exempt(RegionManager& manager, RegionInfo* region)
@@ -1473,10 +1469,11 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         RelocationReceiptTestAccess::ParkFrom(manager, state.region);
-        GCWorkers workers(GCWorkers::Generation::OLD, 1);
-        workers.SetActive();
+        ZStatWorkers statWorkers;
+        ZWorkers workers(GCCycleGeneration::OLD, 1, &statWorkers);
+        workers.set_active();
         manager.ForwardFromRegions<Generation::Old>(workers);
-        workers.SetInactive();
+        workers.set_inactive();
         auto owner = ForwardingTable::RetainPageOwner(state.region);
         const MAddress fromAddr = reinterpret_cast<MAddress>(state.from);
         const MAddress produced = owner ? owner->find(fromAddr) : 0;
@@ -2360,10 +2357,11 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     EmptyBothRememberedFaces(remembered);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    GCWorkers workers(GCWorkers::Generation::YOUNG, 2);
-    workers.SetActive();
+    ZStatWorkers statWorkers;
+    ZWorkers workers(GCCycleGeneration::YOUNG, 2, &statWorkers);
+    workers.set_active();
     manager.RememberFlipPromotedPages(workers);
-    workers.SetInactive();
+    workers.set_inactive();
     GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(liveField)));
     GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(deadField)));
     std::unordered_set<MAddress> previous;
@@ -2527,10 +2525,11 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
             (void)bitmap->MarkBits(0, holder->GetSize(), holderRegion->GetRegionSize());
             RegionManager manager;
             manager.AddFlipPromotedPage(holderRegion);
-            GCWorkers workers(GCWorkers::Generation::YOUNG, 2);
-            workers.SetActive();
+            ZStatWorkers statWorkers;
+            ZWorkers workers(GCCycleGeneration::YOUNG, 2, &statWorkers);
+            workers.set_active();
             manager.RememberFlipPromotedPages(workers);
-            workers.SetInactive();
+            workers.set_inactive();
         } else {
             RegionManager::RememberPromotedObject(holder);
         }
@@ -2721,8 +2720,6 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     // Preforward entry must consume this remap-stale word.
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
 
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     ResetRemapYoungRootsTestReceipt(farSlot);
 
     collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(2);
@@ -2754,7 +2751,6 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     // below is reached in green, entry-cut, and holder-gate arms alike.
     GC_EXPECT_TRUE(targetResult);
 
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
 }
 #endif
 
@@ -2842,8 +2838,6 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     }
 #endif
     ResetRemapYoungRootsTestReceipt(reinterpret_cast<uintptr_t>(forwarding.from));
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(2);
     collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(2);
     // This fixture invokes the old body without the driver's young prelude.
@@ -2886,7 +2880,6 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     mutator->RemoveNativeFrameRoot(nullRoot);
     mutator->RemoveNativeFrameRoot(nonHeapRoot);
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
 }
 void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)
 {

@@ -326,7 +326,6 @@ void WCollector::DoYoungGarbageCollection()
     constexpr bool fullYoungScan = false;
     WorkStack workStack = NewWorkStack();
     MarkingStacks::VerifyEmpty(workStack.size());
-    MarkingStacks::VerifyEmpty(GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot().remainingWorkers);
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
@@ -545,7 +544,6 @@ void WCollector::DoYoungGarbageCollection()
 #endif
         if (workersTerminated && markEndSucceeded) {
             MarkingStacks::VerifyEmpty(workStack.size());
-            MarkingStacks::VerifyEmpty(GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot().remainingWorkers);
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteExportRootPublicationAtT2TestReceipt();
             if (testYoungMarkCompleted) {
@@ -768,7 +766,7 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
         return region->IsYoungRegion() || IsMarkedObject<Generation::Old>(object);
     });
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
-    // A serial driver and synchronous GCWorkers::Run have already joined GC
+    // A serial driver and synchronous ZWorkers::run have already joined GC
     // work here; mutators (including the finalizer thread) need a rendezvous.
     ZRendezvousHandshakeClosure rendezvous;
     Handshake::execute(&rendezvous);
@@ -1071,8 +1069,7 @@ namespace MapleRuntime {
 void GenerationCycle::InitializeWorkers(uint32_t capacity)
 {
     CHECK(workers == nullptr);
-    workers = std::make_unique<GCWorkers>(generation == GCCycleGeneration::YOUNG
-        ? GCWorkers::Generation::YOUNG : GCWorkers::Generation::OLD, capacity);
+    workers = std::make_unique<ZWorkers>(generation, capacity, &statWorkers);
 }
 
 void GenerationCycle::StopWorkers()
@@ -1144,8 +1141,8 @@ void TracingCollector::PreGarbageCollection(GCCycleGeneration generation, bool i
 
     // zDriver.cpp:183,399-400: generation workers use their concurrent
     // budget for both pause and concurrent work. Parallel workers are separate.
-    const int32_t threadCount = static_cast<int32_t>(GetWorkers(generation).ActiveWorkers());
-    GetWorkers(generation).SetActive();
+    const int32_t threadCount = static_cast<int32_t>(GetWorkers(generation).active_workers());
+    GetWorkers(generation).set_active();
     VLOG(REPORT, "GC generation active workers: %d", threadCount);
 
     GetGCStats(generation).reason = GetCycleSnapshot(generation).reason;
@@ -1166,7 +1163,7 @@ void TracingCollector::PreGarbageCollection(GCCycleGeneration generation, bool i
 namespace MapleRuntime {
 void TracingCollector::PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex)
 {
-    GetWorkers(generation).SetInactive();
+    GetWorkers(generation).set_inactive();
     // Periodic persistence: timeout/ABRT/SIGKILL cannot erase counters from
     // completed GC cycles. Both probes self-gate and remain default off.
     // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.

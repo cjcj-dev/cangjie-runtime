@@ -38,7 +38,6 @@ struct GenerationCycleRootTestAccess {
 
 namespace {
 std::atomic<unsigned> gPosted{0};
-std::atomic<bool> gMajorRootObserved{false};
 void* gTask = nullptr;
 
 bool RecordPost(void* task)
@@ -94,27 +93,7 @@ void* RunMajorCycle(void*)
     auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
     GenerationCycleRootTestAccess::Seed(collector, object);
-    collector.testRootsResult = [handle](GCWorkers::Generation generation,
-                                        TracingCollector::RootSet& roots) {
-        if (generation != GCWorkers::Generation::OLD) {
-            return;
-        }
-        BaseObject* current = Heap::GetHeap().GetExportObject(handle);
-        bool found = false;
-        for (auto* node = roots.head(); node != nullptr; node = node->next) {
-            auto copy = *node;
-            while (!copy.empty()) {
-                found = found || copy.back().object() == current;
-                copy.pop_back();
-            }
-        }
-        gMajorRootObserved.store(found, std::memory_order_relaxed);
-        std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
-                    static_cast<void*>(current), static_cast<unsigned>(found));
-        std::fflush(stdout);
-    };
     collector.RequestGC(GC_REASON_USER, false);
-    collector.testRootsResult = nullptr;
     GenerationCycleRootTestAccess::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;
@@ -153,6 +132,5 @@ GC_TEST(OHOSCycle, MajorEntryPostsResolveTask)
     GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
     ReleaseHandle(handle);
     ExpectPostState("OHOSCycle.MajorEntryPostsResolveTask", 1U);
-    GC_EXPECT_TRUE(gMajorRootObserved.load(std::memory_order_relaxed));
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

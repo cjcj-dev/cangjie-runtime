@@ -81,24 +81,34 @@ Uncommitter& Uncommitter::Current()
     return Heap::GetHeap().GetAllocator().GetUncommitter();
 }
 
+// zUncommitter.cpp:41-56: set_name + create_and_start.
 void Uncommitter::Start()
 {
-    CHECK(!worker.joinable());
+    CHECK(!started);
     stopped.store(false, std::memory_order_release);
-    worker = std::thread([this] { Run(); });
+    started = true;
+    set_name("ZUncommitter#0");
+    create_and_start();
 }
 
+// ConcurrentGCThread::stop; the wait for termination runs in a safe region
+// because the uncommitter thread participates in safepoints (I17).
 void Uncommitter::Stop()
 {
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        stopped.store(true, std::memory_order_release);
-        condition.notify_all();
+    if (!started) {
+        return;
     }
-    if (worker.joinable()) {
-        ScopedEnterSaferegion safeRegion(false);
-        worker.join();
-    }
+    started = false;
+    ScopedEnterSaferegion safeRegion(false);
+    stop();
+}
+
+// zUncommitter.cpp:171-175
+void Uncommitter::terminate()
+{
+    std::lock_guard<std::mutex> guard(lock);
+    stopped.store(true, std::memory_order_release);
+    condition.notify_all();
 }
 
 bool Uncommitter::WaitUntil(uint64_t deadline)
@@ -224,7 +234,8 @@ void Uncommitter::RunCycle()
     }
 }
 
-void Uncommitter::Run()
+// zUncommitter.cpp:109-169
+void Uncommitter::run_thread()
 {
     MutatorManager& mutators = MutatorManager::Instance();
     mutators.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
