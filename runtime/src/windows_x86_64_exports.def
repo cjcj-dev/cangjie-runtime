@@ -2977,7 +2977,6 @@ EXPORTS
     do_sema_b_wait_intern @3339
     g_cjLoadBadMask @3340 DATA
     g_cjMarkBadMask @3341 DATA
-    g_cjRuntimeProvenance @3342 DATA
     g_cjStoreBadMask @3485 DATA
     g_cjStoreGoodMask @3486 DATA
     g_cjLoadGoodMask @3487 DATA
@@ -3126,3 +3125,5 @@ EXPORTS
     CJ_MCC_PostWriteRefField @3487
     CJ_CJThreadIsStackGuardAddress @3488
     _ZN12MapleRuntime4Heap8DumpHeapENS_12HeapDumpKindE @1859
+    g_cjLoadShift @3489 DATA
+    g_cjMarkGoodMask @3490 DATA

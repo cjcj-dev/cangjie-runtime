@@ -292,12 +292,12 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
 
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
-    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_FALSE(rs.Contains(slot));
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
@@ -324,13 +324,13 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
     rs.DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
     GC_EXPECT_EQ(rs.Size(), 0u);
-    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
 
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
 
     GC_EXPECT_FALSE(rs.Contains(slot));
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
@@ -554,7 +554,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 
     field->StoreColoured(zpointer::null);
     barrier.WriteReference(fx.obj0, *field, fx.obj0);
-    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
     GC_EXPECT_FALSE(rs.Contains(slot));
 
     fx.region1->SetYoungRegionFlag(1);

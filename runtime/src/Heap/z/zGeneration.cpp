@@ -45,7 +45,22 @@
 #include "TypeInfoManager.h"
 #include "Heap/WCollector/WCollectorInternal.h"
 
+#include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
+// ZGC zGeneration.cpp:197-207: select policy at the generation boundary.
+static double fragmentation_limit(GCCycleGeneration generation)
+{
+    if (generation == GCCycleGeneration::OLD) {
+        return ZFragmentationLimit;
+    } else {
+        return ZYoungCompactionLimit;
+    }
+}
+double GenerationCycle::FragmentationLimit() const
+{
+    return fragmentation_limit(generation);
+}
+
 void ResetSkippedStackMapCounts();
 void ReportSkippedStackMapCounts();
 // ZGenerationYoung::mark_start (zGeneration.cpp:855-880). The collector

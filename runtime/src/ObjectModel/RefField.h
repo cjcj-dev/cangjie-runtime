@@ -192,7 +192,14 @@ public:
     // 若要当对象指针，经 uncolor_bits(GetFieldValue()) 或 GetTargetObject()。
     MAddress GetAddress() const
     {
-        return fieldVal >> ZPointer::load_shift_lookup(fieldVal);
+        const zpointer pointer = static_cast<zpointer>(fieldVal);
+        if (is_null_any(pointer)) {
+            return raw(ZPointer::uncolor(pointer));
+        }
+        if (ZPointer::is_store_bad(pointer)) {
+            return raw(ZPointer::uncolor_unsafe(pointer));
+        }
+        return raw(ZPointer::uncolor_store_good(pointer));
     }
 
     ~HeapSlot() = default;
@@ -245,10 +252,9 @@ inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr
 {
     // :73-79  Never heal with null since it interacts badly with reference processing.
     // ZGC's guard is `is_null_assert_load_good(heal_ptr) && !is_null_any(ptr)`; is_null_any
-    // tests the address bits rather than the whole word, and ColourPredicates::has_address
-    // (ColourPredicates.h:37-40) is that test.
-    if (allowNull == HealNull::Disallow && !(!is_null_any(to_zpointer(raw(healPtr)))) &&
-        (!is_null_any(to_zpointer(static_cast<uintptr_t>(raw(ptr)))))) {
+    // tests the address bits rather than the whole word.
+    if (allowNull == HealNull::Disallow && is_null_any(healPtr) &&
+        !is_null_any(ptr)) {
 
         return false;
     }

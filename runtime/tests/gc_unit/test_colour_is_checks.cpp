@@ -4,6 +4,7 @@
 #include "Common/ColourEncoding.h"
 #include "ObjectModel/RefField.h"
 #include "gc_unittest.hpp"
+#include "Heap/z/zGeneration.hpp"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -92,4 +93,12 @@ GC_TEST(ColourIsChecks, BarrierSelfHealUpgradeAndCompetingStore)
     slot.StoreColoured(old);
     GC_EXPECT_FALSE(ZgcSelfHeal(slot, old, color_null(), fast, HealSite::BarrierReadReference));
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(old));
+}
+
+GC_TEST(ZAddress, GenerationFragmentationPolicy)
+{
+    GenerationCycle young(GCCycleGeneration::YOUNG);
+    GenerationCycle old(GCCycleGeneration::OLD);
+    GC_EXPECT_EQ(young.FragmentationLimit(), 25.0);
+    GC_EXPECT_EQ(old.FragmentationLimit(), 5.0);
 }

@@ -316,7 +316,7 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     // ZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-705)
     // skips raw null. Flip remembered metadata to exercise the actual slow path.
     field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask));
-    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
 
     // obj == nullptr is the triggering ABI shape; field is demonstrably in heap.
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
@@ -355,7 +355,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
 
-    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
@@ -397,7 +397,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
 
-    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
@@ -443,7 +443,7 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     GC_EXPECT_TRUE(Heap::IsHeapAddress(nonHeapHolder));
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
 
-    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {

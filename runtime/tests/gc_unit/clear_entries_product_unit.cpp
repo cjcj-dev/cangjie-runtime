@@ -2544,7 +2544,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         field.StoreColoured(GcUnit::StoreGoodPointer(from));
         LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
         const zpointer before = field.GetFieldValue();
-        GC_EXPECT_FALSE(collector.is_load_good(field));
+        GC_EXPECT_FALSE(ZPointer::is_load_good((field).GetFieldValue()));
         GC_EXPECT_TRUE(ForwardingTable::GetCovering(reinterpret_cast<MAddress>(from), Generation::Young) != nullptr);
         if (!flipPromoted) {
             // Unfinished relocation must remain deferred, without waiting.
@@ -2574,7 +2574,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
             RegionManager::RememberPromotedObject(holder);
         }
         GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == to);
-        GC_EXPECT_TRUE(collector.is_load_good(field));
+        GC_EXPECT_TRUE(ZPointer::is_load_good((field).GetFieldValue()));
         GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
         const uintptr_t markBits = ZPointerMarkedYoungMask | ZPointerMarkedOldMask;
         GC_EXPECT_EQ(raw(field.GetFieldValue()) & markBits, raw(before) & markBits);
@@ -2671,8 +2671,8 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
 
     const bool nearResolved = to_object(nearField->GetTargetObject()) == forwarding.to;
     const bool farResolved = to_object(farField->GetTargetObject()) == forwarding.to;
-    const bool nearStoreGood = collector.is_store_good(*nearField);
-    const bool farStoreGood = collector.is_store_good(*farField);
+    const bool nearStoreGood = ZPointer::is_store_good((*nearField).GetFieldValue());
+    const bool farStoreGood = ZPointer::is_store_good((*farField).GetFieldValue());
     const bool youngUnchanged = raw(youngField->GetFieldValue()) == youngBefore;
     const bool holderNonAllocating = !holderRegion->IsAllocating();
     const bool matrixResult = farOffset > 64 && holderNonAllocating && nearResolved && farResolved &&

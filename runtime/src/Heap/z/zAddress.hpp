@@ -27,16 +27,18 @@
 #include "Base/Types.h"
 #include "Heap/z/zGenerationId.hpp"
 extern "C" {
-extern unsigned long g_cjLoadGoodMask;
-extern unsigned long g_cjLoadBadMask;
-extern unsigned long g_cjMarkGoodMask;
-extern unsigned long g_cjMarkBadMask;
-extern unsigned long g_cjStoreGoodMask;
-extern unsigned long g_cjStoreBadMask;
+extern uintptr_t g_cjLoadGoodMask;
+extern uintptr_t g_cjLoadBadMask;
+extern uintptr_t g_cjMarkGoodMask;
+extern uintptr_t g_cjMarkBadMask;
+extern uintptr_t g_cjStoreGoodMask;
+extern uintptr_t g_cjStoreBadMask;
 extern size_t g_cjLoadShift;
 }
 namespace MapleRuntime {
 class BaseObject;
+size_t ZPlatformAddressOffsetBits();
+size_t ZPlatformAddressHeapBaseShift();
 extern const bool ZVerifyOops;
 // One bit that denotes where the heap start. All uncolored
 // oops have this bit set, plus an offset within the heap.

@@ -861,24 +861,14 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     }
 }
 
-// Decode legacy ABI root words before classifying heap and stack storage.
-static BaseObject* PlainRootObject(zaddress_unsafe maybeColoured)
+// Stack-map and FFI root carriers contain plain addresses and remain committed
+// until this root pass completes; no colored-value decode applies here.
+static BaseObject* PlainRootObject(zaddress_unsafe address)
 {
-    if (is_null(maybeColoured)) {
-        return nullptr;
-    }
-    // Stack-map/FFI roots remain committed until this GC root pass heals them.
-    return to_object(safe(ZPointer::uncolor_unsafe(to_zpointer(raw(maybeColoured)))));
+    return to_object(safe(address));
 }
 
-static void StripRootObjectColour(ObjectRef& root)
-{
-    zaddress_unsafe oldValue = root.LoadPlain();
-    BaseObject* plain = PlainRootObject(oldValue);
-    if (reinterpret_cast<MAddress>(plain) != raw(oldValue)) {
-        HealRoot(root, from_object(plain), HealSite::MutatorStripRootColour);
-    }
-}
+
 
 // Eager ZUncoloredRoot::barrier (zUncoloredRoot.inline.hpp:38-59).
 // The handshake owns the actual ABI slot. Keep its observed color through
@@ -1142,7 +1132,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                            &refVisitor](ObjectRef& root) {
         // interiorsrc2: peel colour before ghost/forward checks; write plain back so mutator
         // does not resume with a coloured interior (si_code=128 in arrayInitByFunction).
-        StripRootObjectColour(root);
         BaseObject* oldObj = PlainRootObject(root.LoadPlain());
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {

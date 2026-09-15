@@ -520,7 +520,7 @@ protected:
     {
         const Uptr notCurrent = ZPointerRemappedMask ^ ZPointerRemapped;
         const Uptr staleOneHot = notCurrent & -notCurrent;
-        const Uptr storeColour = staleOneHot | ZPointerMarkedYoung | ZPointerMarkedOld | ZPointerRemembered;
+        const Uptr storeColour = ZPointer::remap_bits(staleOneHot) | ZPointerMarkedYoung | ZPointerMarkedOld | ZPointerRemembered;
         return RefField<>(from_region_addr(raw(stale)), storeColour);
     }
 
@@ -565,7 +565,7 @@ protected:
         }
         CheckStoreGoodTarget("ColourResolvedRefField", target, provenance);
         if (kColourWhoProbe) {
-            NoteColourStoreGoodOnBadTarget(target);
+            NoteStoreGoodOnBadTarget(target);
         }
         return RefField<>(ZAddress::store_good(from_object(target)));
     }
@@ -606,7 +606,7 @@ protected:
         // Fires when we are about to paint the current (load-good) colour on a target whose own
         // header already says FORWARDED, or whose header is zeroed.  Both are the crash families.
         if (kColourWhoProbe) {
-            NoteColourStoreGoodOnBadTarget(target);
+            NoteStoreGoodOnBadTarget(target);
         }
         return RefField<>(ZAddress::store_good(from_object(target)));
     }
@@ -623,7 +623,7 @@ protected:
     // colourwho: compile-time gated -- this is the funnel every coloured write goes through.
     static constexpr bool kColourWhoProbe = true;
 
-    void NoteColourStoreGoodOnBadTarget(BaseObject* target) const
+    void NoteStoreGoodOnBadTarget(BaseObject* target) const
     {
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
             return;

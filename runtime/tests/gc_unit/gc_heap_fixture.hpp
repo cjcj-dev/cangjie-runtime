@@ -43,7 +43,7 @@ inline zpointer ColouredPointer(BaseObject* object, uintptr_t remap)
         return zpointer::null;
     }
     const uintptr_t nonRemapFamilies = static_cast<uintptr_t>(::g_cjStoreGoodMask) & ~ZPointerRemappedMask;
-    return to_zpointer(address | remap | nonRemapFamilies);
+    return ZAddress::color(static_cast<zaddress>(address), remap | nonRemapFamilies);
 }
 
 inline zpointer StoreGoodPointer(BaseObject* object)
@@ -115,17 +115,17 @@ struct GcHeapFixture {
     explicit GcHeapFixture(bool withMemoryOwner = false)
     {
         // ZInitialize initializes statistics before any allocation can sample.
+        if (ZAddressHeapBase == 0) { ZGlobalsPointers::initialize(); }
         ZStat::Initialize();
         const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
         mappedSize = metadataSize + kUnits * RegionInfo::UNIT_SIZE;
-        if (withMemoryOwner) {
-            const MemMap::Option options = { "gc-unit-copy", nullptr,
-                MemMap::DEFAULT_MEM_FLAGS, MemMap::DEFAULT_MEM_PROT, false };
-            memoryOwner = MemMap::MapMemory(mappedSize, mappedSize, options);
-            mapping = memoryOwner == nullptr ? MAP_FAILED : memoryOwner->GetBaseAddr();
-        } else {
-            mapping = mmap(nullptr, mappedSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        }
+        // Use the product address-domain reservation, as ZTest's address
+        // reserver does. The optional page owner remains a separate fixture axis.
+        const MemMap::Option options = { "cangjie_heap", nullptr,
+            MemMap::DEFAULT_MEM_FLAGS, MemMap::DEFAULT_MEM_PROT, false };
+        reservationOwner = MemMap::MapMemory(mappedSize, mappedSize, options);
+        memoryOwner = withMemoryOwner ? reservationOwner : nullptr;
+        mapping = reservationOwner == nullptr ? MAP_FAILED : reservationOwner->GetBaseAddr();
         if (mapping == MAP_FAILED) {
             std::abort();
         }
@@ -188,11 +188,8 @@ struct GcHeapFixture {
             region1->SetYoungRegionFlag(0);
         }
         if (mapping != nullptr && mapping != MAP_FAILED) {
-            if (memoryOwner != nullptr) {
-                MemMap::DestroyMemMap(memoryOwner);
-            } else {
-                munmap(mapping, mappedSize);
-            }
+            MemMap::DestroyMemMap(reservationOwner);
+            memoryOwner = nullptr;
         }
     }
 
@@ -302,6 +299,7 @@ struct GcHeapFixture {
         auto owned = LiveInfoArena::GetLiveInfoArena().TakePageLiveInfo(live->bindedRegion, live);
     }
 
+    MemMap* reservationOwner = nullptr;
     MemMap* memoryOwner = nullptr;
     void* mapping = nullptr;
     size_t mappedSize = 0;

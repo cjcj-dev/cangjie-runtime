@@ -685,17 +685,17 @@ done <"$PTRCOLOUR_MANIFEST"
 [[ "$ptrcolour_rows" -eq 2 ]]
 echo "GATE_PTRCOLOUR_PRODUCT_BINDING_OK rows=$ptrcolour_rows elf=$OUT/cj_gc_unit"
 
-# The classifier's four required colour-family rows are coupled to this stable
+# The classifier's four required metadata groups (old mark or finalizable) are coupled to this stable
 # producer set.  A producer/anchor removal, an empty set, or a partial family
 # declaration fails before the behavioral suite can lend it a green result.
 PTRCOLOUR_PRODUCER_MANIFEST="$SRC/product_colour_producer_manifest.tsv"
-EXPECTED_PTRCOLOUR_PRODUCERS=(store_good stale_load_bad interior_store_good bulk_store_good)
+EXPECTED_PTRCOLOUR_PRODUCERS=(store_good stale_load_bad interior_store_good bulk_store_good finalizable_good)
 ptrcolour_producer_rows=0
 while IFS=$'\t' read -r producer_name source_file stable_anchor required_families; do
   if [[ "$producer_name" == "producer_name" ]]; then
     continue
   fi
-  [[ "$required_families" == "remap,marked_young,marked_old,remembered" ]]
+  [[ "$required_families" == "remap,marked_young,old_reachability,remembered" ]]
   /usr/bin/grep -F -q "$stable_anchor" "$ROOT/$source_file"
   ptrcolour_producer_rows=$((ptrcolour_producer_rows + 1))
 done <"$PTRCOLOUR_PRODUCER_MANIFEST"
@@ -703,7 +703,7 @@ done <"$PTRCOLOUR_PRODUCER_MANIFEST"
 for producer_name in "${EXPECTED_PTRCOLOUR_PRODUCERS[@]}"; do
   /usr/bin/grep -q "^${producer_name}"$'\t' "$PTRCOLOUR_PRODUCER_MANIFEST"
 done
-echo "GATE_PTRCOLOUR_PRODUCER_MANIFEST_OK rows=$ptrcolour_producer_rows families=4"
+echo "GATE_PTRCOLOUR_PRODUCER_MANIFEST_OK rows=$ptrcolour_producer_rows groups=4 old_group=marked_old_or_finalizable"
 
 LOADHEAL_FULL="$OUT/cj_gc_forwarding_publication_unit.full-defined.txt"
 LOADHEAL_UNDEFINED="$OUT/cj_gc_forwarding_publication_unit.undefined.txt"

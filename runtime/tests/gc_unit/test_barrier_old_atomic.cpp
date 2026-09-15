@@ -83,7 +83,7 @@ public:
     }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>& field) const override { return IsLoadBad(field); }
-    bool IsCurrentPointer(RefField<>& field) const override { return is_load_good(field); }
+    bool IsCurrentPointer(RefField<>& field) const override { return ZPointer::is_load_good(field.GetFieldValue()); }
     bool IsFromObject(BaseObject* object) const override { return object == from && to != nullptr; }
     bool IsGhostFromObject(BaseObject*) const override { return false; }
     bool IsUnmovableFromObject(BaseObject*) const override { return false; }
@@ -315,12 +315,12 @@ GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
     std::fprintf(stderr, "DETAIL arm=atomic_colour before=%#zx after=%#zx returned=%p target=%p load_good=%u\n",
                  static_cast<size_t>(raw(before)), static_cast<size_t>(raw(terminal.GetFieldValue())), returned,
                  static_cast<void*>(to_object(terminal.GetTargetObject())),
-                 static_cast<unsigned>(collector.is_load_good(terminal)));
+                 static_cast<unsigned>(ZPointer::is_load_good((terminal).GetFieldValue())));
     std::fflush(stderr);
 
     GC_EXPECT_TRUE(returned == heap.obj0);
     GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == heap.obj0);
-    GC_EXPECT_TRUE(collector.is_load_good(terminal));
+    GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
 }
 
 GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
@@ -343,12 +343,12 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
     std::fprintf(stderr, "DETAIL arm=atomic_from_to before=%#zx after=%#zx returned=%p target=%p load_good=%u\n",
                  static_cast<size_t>(raw(before)), static_cast<size_t>(raw(terminal.GetFieldValue())), returned,
                  static_cast<void*>(to_object(terminal.GetTargetObject())),
-                 static_cast<unsigned>(collector.is_load_good(terminal)));
+                 static_cast<unsigned>(ZPointer::is_load_good((terminal).GetFieldValue())));
     std::fflush(stderr);
 
     GC_EXPECT_TRUE(returned == collector.to);
     GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == collector.to);
-    GC_EXPECT_TRUE(collector.is_load_good(terminal));
+    GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
 }
 
 GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
@@ -389,7 +389,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
         RefField<> terminal(field.GetFieldValue());
         GC_EXPECT_TRUE(returned == heap.obj0);
         GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == winner);
-        GC_EXPECT_TRUE(collector.is_load_good(terminal));
+        GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
     }
     std::fprintf(stderr,
                  "DETAIL arm=atomic_cas_lost forced_failures=%zu winner_store_good=1 winner=%p\n",
