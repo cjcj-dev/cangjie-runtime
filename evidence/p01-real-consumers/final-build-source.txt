@@ -1,0 +1,2 @@
+COMMAND ['git', 'diff', '--exit-code', 'ca3393086148856f818f1a88f3f70d6574cb97ca', 'HEAD', '--', 'runtime']
+RC=0

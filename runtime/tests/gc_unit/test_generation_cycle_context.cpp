@@ -22,26 +22,32 @@
 
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
-// Seed inputs of the real processor/collector; never call or reconstruct the
-// enum task in the test. The real major request owns execution and merging.
+// Seed inputs of the real collector; never call or reconstruct the enum task
+// in the test. The real major request owns execution and merging.
 // This fixture checks root scanning, not finalizer scheduling or invocation.
+//
+// Strong native roots are the entries of the strong OopStorage
+// (zRootsIterator.cpp:159-162 ZRootsIteratorStrongColored::apply ->
+// :102-105 ZOopStorageSetIteratorStrong::apply ->
+// oopStorageSetParState.inline.hpp:38-42 OopStorageSetStrongParState::oops_do;
+// ours OopStorageSetIteratorStrong over
+// FinalizerProcessor::StrongRootStorage()). The storage is the root truth; the
+// processor's finalizables/workingFinalizables lists own no slots and are its
+// private scheduling state, guarded by the predicate CHECK in
+// FinalizerProcessor::HasFinalizableJob(). Seed the storage through its own
+// public Allocate/Release (gtest test_oopStorage.cpp shape) and leave the
+// scheduling lists untouched, so the finalizer thread never sees a queue
+// whose predicate it did not set.
 struct GenerationCycleRootTestAccess {
+    inline static std::array<NativeSlot*, 2> strongSlots {};
     static void Install(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
     {
-        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
-        {
-            std::lock_guard<std::mutex> lock(processor.listLock);
-            NativeSlot queued(zpointer::null), working(zpointer::null);
-            Heap::GetBarrier().WriteStaticRef(queued, objects[0]);
-            Heap::GetBarrier().WriteStaticRef(working, objects[1]);
-            NativeSlot* queuedSlot = processor.strongStorage.Allocate();
-            queuedSlot->StoreColoured(queued.GetFieldValue(), std::memory_order_relaxed);
-            processor.finalizables.push_back(queuedSlot);
-            NativeSlot* workingSlot = processor.strongStorage.Allocate();
-            workingSlot->StoreColoured(working.GetFieldValue(), std::memory_order_relaxed);
-            processor.workingFinalizables.push_back(workingSlot);
-            // Deliberately do not schedule finalization: only the scanner's
-            // queued/working input branches are under test.
+        OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
+        for (size_t i = 0; i < strongSlots.size(); ++i) {
+            NativeSlot coloured(zpointer::null);
+            Heap::GetBarrier().WriteStaticRef(coloured, objects[i]);
+            strongSlots[i] = storage.Allocate();
+            strongSlots[i]->StoreColoured(coloured.GetFieldValue(), std::memory_order_relaxed);
         }
         {
             std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
@@ -55,20 +61,11 @@ struct GenerationCycleRootTestAccess {
     }
     static void Remove(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
     {
-        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
-        {
-            std::lock_guard<std::mutex> lock(processor.listLock);
-            auto remove = [&](NativeRootHandles& roots, BaseObject* object) {
-                for (auto it = roots.begin(); it != roots.end();) {
-                    if (to_object(it->GetTargetObject()) == object) {
-                        processor.strongStorage.Release(&*it);
-                        it = roots.erase(it);
-                    }
-                    else ++it;
-                }
-            };
-            remove(processor.finalizables, objects[0]);
-            remove(processor.workingFinalizables, objects[1]);
+        OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
+        for (NativeSlot*& slot : strongSlots) {
+            if (slot == nullptr) continue;
+            storage.Release(slot);
+            slot = nullptr;
         }
         {
             std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
@@ -232,8 +229,8 @@ void* Exercise(void*)
         std::printf("ROOT_CONCURRENCY expected=%zu included=%u\n", concurrencyRoots.size(), concurrencyIncluded);
         Expect(!concurrencyRoots.empty(), "worker_concurrency_witness_exists");
         Expect(concurrencyIncluded, "worker_root_result_contains_concurrency");
-        const char* names[] = { "worker_root_result_contains_queued_finalizer",
-            "worker_root_result_contains_working_finalizer", "worker_root_result_contains_resurrected",
+        const char* names[] = { "worker_root_result_contains_strong_storage_slot0",
+            "worker_root_result_contains_strong_storage_slot1", "worker_root_result_contains_resurrected",
             "worker_root_result_contains_forward_resurrected", "worker_root_result_contains_cycle_owner",
             "worker_root_result_contains_cycle_external" };
         std::set<BaseObject*> unique(witnesses.begin(), witnesses.end());

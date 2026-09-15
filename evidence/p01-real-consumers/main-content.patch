@@ -1,0 +1,463 @@
+diff --git a/runtime/src/Heap/Collector/FinalizerProcessor.h b/runtime/src/Heap/Collector/FinalizerProcessor.h
+index 83f39f84b..8ad24c85e 100644
+--- a/runtime/src/Heap/Collector/FinalizerProcessor.h
++++ b/runtime/src/Heap/Collector/FinalizerProcessor.h
+@@ -23,9 +23,6 @@
+ namespace MapleRuntime {
+ 
+ class FinalizerProcessor {
+-#if defined(MRT_TESTABLE_INTERNALS)
+-    friend struct GenerationCycleRootTestAccess;
+-#endif
+ public:
+     FinalizerProcessor();
+     ~FinalizerProcessor() = default;
+diff --git a/runtime/src/Heap/z/zUncommitter.cpp b/runtime/src/Heap/z/zUncommitter.cpp
+index e1979d800..907d705e6 100644
+--- a/runtime/src/Heap/z/zUncommitter.cpp
++++ b/runtime/src/Heap/z/zUncommitter.cpp
+@@ -20,6 +20,17 @@
+ #include "Base/TimeUtils.h"
+ 
+ namespace MapleRuntime {
++// The runtime is compiled as gnu++14 (runtime/config.cmake:368). There an
++// in-class static constexpr declaration is not a definition, and std::min(const
++// T&, const T&) in ChunkLimit odr-uses kMaxUncommitChunk, so the Debug (-O0)
++// link reports an undefined reference; -O2 only hides it by constant folding.
++// The reference JDK builds HotSpot as -std=c++17 (make/autoconf/flags-cflags.m4:615),
++// where such members are implicitly inline and zMappedCache.hpp:87-90 needs no
++// out-of-class line. Same idiom as zVirtualMemoryManager.cpp:40 here and
++// HotSpot memory/metaspace/blockTree.cpp:37. kDefaultDelayNs is only read by
++// value in this TU (no odr-use measured), so it gets no definition.
++constexpr size_t Uncommitter::kMaxUncommitChunk;
++
+ uint64_t Uncommitter::ParseDelayNs(const char* env)
+ {
+     if (env == nullptr) {
+diff --git a/runtime/tests/PROBES.manifest b/runtime/tests/PROBES.manifest
+index 2b0e8e4c0..43cd5cfe1 100644
+--- a/runtime/tests/PROBES.manifest
++++ b/runtime/tests/PROBES.manifest
+@@ -41,6 +41,7 @@ run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpu
+ run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dlclose address-reuse positive/negative arms plus measured registeredTypeInfos RSS
+ run_elf_unload_quiescence.sh              manual     testable product runtime SO + Cangjie SDK; real dylib unload reader/directory/type/static-root groups and public PackageInfo snapshot traversal
+ run_zgc_self_heal_loop_probe.sh           manual     built runtime SO; scripts a lost CAS to drive the ported ZBarrier::self_heal loop through its :103-107 retry and :98-101 fast-path-exit arms, which the workload leaves cold
++run_uncommitter_constexpr_odr_probe.sh    manual     host clang++ + nm + a configured runtime tree (RUNTIME_BUILD_DIR: third_party clone and runtime-staging/include); compiles zUncommitter.cpp with the product gnu++14 -O0 flags and reports every static constexpr member of Uncommitter that its nm -u leaves undefined (the TU references it without a definition); a generated odr-use consumer TU is only the nm instrument control (#59: the Release gate folds the reference away, only the Debug link sees it)
+ test_runtime_provenance.py                manual     host git+cmake; git/dirty and repository-free source-content identities, declaration isolation, and unchanged-output mtime
+ test_runtime_output_layout.cmake          manual     real-product build-time publication regression entry; requires TEST_RUNTIME_OUTPUT_WORK
+ test_runtime_output_product.py            manual     real runtime configure/build/resolver, repeat publication and toolchain/initial-cache/arbitrary/indirect/override input isolation
+diff --git a/runtime/tests/gc_unit/run_generation_cycle_context.sh b/runtime/tests/gc_unit/run_generation_cycle_context.sh
+index 83fff4025..291ebfc53 100644
+--- a/runtime/tests/gc_unit/run_generation_cycle_context.sh
++++ b/runtime/tests/gc_unit/run_generation_cycle_context.sh
+@@ -1,6 +1,17 @@
+ #!/usr/bin/env bash
+ # Managed cycle entry and explicit SATB ownership API tests.
+ # No product .cpp is compiled into either test artifact.
++# The test translation units must see the same compile-time configuration as
++# the product SO they bind (run_standalone.sh derives it the same way): the
++# testable SO is built with MRT_TESTABLE_INTERNALS=1 and, through
++# runtime/CMakeLists.txt "MRT_GC_UNIT_TESTS OR MRT_TESTABLE_INTERNALS",
++# MRT_GC_UNIT_TESTS=1, and both macros gate data members (zDriver.hpp
++# CollectorResources, zDriverPort.hpp GCDriverPort, WCollector.h). A TU built
++# with a different set reads product objects at the wrong offsets.
++# GC_CYCLE_TESTABLE, when set, must agree with the SO. The SATB companion
++# (test_generation_satb_obligations.cpp) only exists in the testable
++# configuration: it reaches product internals through testable-only friend
++# access, so with a default SO it is not built and SATB_RC=NOT_RUN.
+ set -euo pipefail
+ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+ SRC="$ROOT/runtime/tests/gc_unit"
+@@ -9,13 +20,47 @@ LIB="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR to the product pair}"
+ mkdir -p "$OUT"
+ SDK="${CANGJIE_HOME:?set CANGJIE_HOME to matching compiler}"
+ HEADERS=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" "$ROOT/runtime" "$LIB")
++nm -D "$LIB/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
++# Product shape from both remap-receipt endpoints, exactly as run_standalone.sh
++# derives REMAP_RECEIPT_PRODUCT_SHAPE; a partial export is an invalid shape.
++nm -D --defined-only "$LIB/libcangjie-runtime.so" | c++filt >"$OUT/runtime-defined-symbols.txt"
++receipt_reset=0
++receipt_read=0
++if /usr/bin/grep -F -q 'MapleRuntime::ResetRemapYoungRootsTestReceipt(' "$OUT/runtime-defined-symbols.txt"; then
++  receipt_reset=1
++fi
++if /usr/bin/grep -F -q 'MapleRuntime::ReadRemapYoungRootsTestReceipt(' "$OUT/runtime-defined-symbols.txt"; then
++  receipt_read=1
++fi
++if [[ "$receipt_reset" -eq 1 && "$receipt_read" -eq 1 ]]; then
++  SO_TESTABLE=1
++elif [[ "$receipt_reset" -eq 0 && "$receipt_read" -eq 0 ]]; then
++  SO_TESTABLE=0
++else
++  echo "GC_CYCLE_PRODUCT_SHAPE_INCOMPLETE reset=$receipt_reset read=$receipt_read so=$LIB/libcangjie-runtime.so" >&2
++  exit 19
++fi
++SO_GC_UNIT_TESTS=0
++if /usr/bin/grep -Eq 'CJ_MRT_SetLargeArrayInitTestHooks' "$OUT/runtime-dynamic-symbols.txt"; then
++  SO_GC_UNIT_TESTS=1
++fi
++if [[ -n "${GC_CYCLE_TESTABLE:-}" && "$GC_CYCLE_TESTABLE" != "$SO_TESTABLE" ]]; then
++  echo "GC_CYCLE_PRODUCT_CONFIGURATION_MISMATCH GC_CYCLE_TESTABLE=$GC_CYCLE_TESTABLE so_testable=$SO_TESTABLE so=$LIB/libcangjie-runtime.so" >&2
++  exit 6
++fi
+ TEST_FLAGS=()
+-if [[ "${GC_CYCLE_TESTABLE:-0}" == 1 ]]; then
+-  TEST_FLAGS+=(-DMRT_TESTABLE_INTERNALS=1)
++SATB_ENABLED=0
++if [[ "$SO_TESTABLE" == 1 ]]; then
++  TEST_FLAGS+=(-DMRT_TESTABLE_INTERNALS=1 -DMRT_PRODUCT_TESTABLE_INTERNALS=1)
++  SATB_ENABLED=1
+ fi
++if [[ "$SO_GC_UNIT_TESTS" == 1 ]]; then
++  TEST_FLAGS+=(-DMRT_GC_UNIT_TESTS=1)
++fi
++echo "GC_CYCLE_PRODUCT_CONFIGURATION testable=$SO_TESTABLE gc_unit_tests=$SO_GC_UNIT_TESTS flags=${TEST_FLAGS[*]:-none}"
+ if [[ "${GC_CYCLE_REUSE_ELFS:-0}" != 1 ]]; then
+ "${CXX:-clang++}" -shared -fPIC -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+-  -fvisibility-inlines-hidden "${TEST_FLAGS[@]}" \
++  -fvisibility-inlines-hidden ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
+   -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+   -I"$ROOT/runtime/include" -I"$HEADERS/include" \
+@@ -23,15 +68,21 @@ if [[ "${GC_CYCLE_REUSE_ELFS:-0}" != 1 ]]; then
+   "$SRC/test_generation_cycle_context.cpp" \
+   -L"$LIB" -Wl,-rpath,"$LIB" -Wl,--exclude-libs,ALL \
+   -lcangjie-runtime -lboundscheck -ldl -o "$OUT/libcycle_observer.so"
++if [[ "$SATB_ENABLED" == 1 ]]; then
++# Same entry point as cj_gc_unit (gc_unit_main.cpp): it owns the
++# --gtest_filter=/--gtest_list_tests parsing that GC_OTHER_VM_TEST children
++# are re-exec'd with (gc_unittest.hpp RunInOtherVm).
+ "${CXX:-clang++}" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+-  -fvisibility-inlines-hidden "${TEST_FLAGS[@]}" \
++  -fvisibility-inlines-hidden ${TEST_FLAGS[@]+"${TEST_FLAGS[@]}"} \
+   -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+   -I"$ROOT/runtime/include" -I"$HEADERS/include" \
+   -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
+-  "$SRC/test_generation_satb_obligations.cpp" "$SRC/gc_cycle_sequence_fixture.cpp" \
++  "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp" \
++  "$SRC/test_generation_satb_obligations.cpp" \
+   -L"$LIB" -Wl,-rpath,"$LIB" -Wl,--exclude-libs,ALL \
+   -lcangjie-runtime -lboundscheck -ldl -o "$OUT/generation_satb_obligations"
++fi
+ cat > "$OUT/cycle.cj" <<'CJ'
+ foreign {
+     func cycleExercise(): Int32
+@@ -45,13 +96,42 @@ SDK="${CANGJIE_HOME:?set CANGJIE_HOME to matching compiler}"
+ LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to compiler host runtime}:$SDK/tools/lib:$SDK/third_party/llvm/lib" \
+   "$SDK/bin/cjc" "$OUT/cycle.cj" -O0 --static-std -L "$LIB" -L "$OUT" -lcycle_observer -o "$OUT/generation_cycle_context"
+ fi
+-sha256sum "$OUT/generation_satb_obligations" "$OUT/generation_cycle_context" "$OUT/libcycle_observer.so" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so"
++if [[ "$SATB_ENABLED" == 1 ]]; then
++  sha256sum "$OUT/generation_satb_obligations"
++fi
++sha256sum "$OUT/generation_cycle_context" "$OUT/libcycle_observer.so" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so"
+ set +e
+ LD_LIBRARY_PATH="$OUT:$LIB:$SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+   cjGCInterval=3600s timeout 60s "$OUT/generation_cycle_context"
+ cycle_rc=$?
+-LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+-  timeout 60s "$OUT/generation_satb_obligations"
+-satb_rc=$?
++satb_rc=NOT_RUN
++if [[ "$SATB_ENABLED" == 1 ]]; then
++  # Same process model as run_standalone.sh/run_parallel_tests.sh: one process
++  # per registered test, selected with --gtest_filter=, so gc_unit_main.cpp
++  # binds CollectorProxy's built-in collector at each isolated entry. A
++  # whole-suite process has no such binding before its first in-process test.
++  SATB_ENV="LD_LIBRARY_PATH=$LIB:$SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
++  env "$SATB_ENV" "$OUT/generation_satb_obligations" --gtest_list_tests >"$OUT/satb-tests.raw" 2>"$OUT/satb-tests.stderr"
++  list_rc=$?
++  mapfile -t satb_tests < <(awk '
++    /^[A-Za-z_][A-Za-z0-9_]*\.$/ { suite = substr($0, 1, length($0) - 1); next }
++    /^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*$/ { sub(/^[[:space:]]+/, ""); print suite "." $0 }' "$OUT/satb-tests.raw")
++  satb_total=${#satb_tests[@]}
++  satb_failed=0
++  if [[ "$list_rc" != 0 || "$satb_total" == 0 ]]; then
++    echo "SATB_LIST_TESTS_FAIL rc=$list_rc tests=$satb_total" >&2
++    satb_failed=1
++  fi
++  for test in ${satb_tests[@]+"${satb_tests[@]}"}; do
++    env "$SATB_ENV" timeout 60s "$OUT/generation_satb_obligations" "--gtest_filter=$test" \
++      >"$OUT/satb-$test.log" 2>&1
++    test_rc=$?
++    cat "$OUT/satb-$test.log"
++    printf "SATB_TEST name=%s rc=%s\n" "$test" "$test_rc"
++    [[ "$test_rc" == 0 ]] || satb_failed=$((satb_failed + 1))
++  done
++  printf "SATB_TESTS=%s SATB_FAILED=%s\n" "$satb_total" "$satb_failed"
++  satb_rc=$satb_failed
++fi
+ printf "CYCLE_RC=%s SATB_RC=%s\n" "$cycle_rc" "$satb_rc"
+-[[ "$cycle_rc" == 0 && "$satb_rc" == 0 ]]
++[[ "$cycle_rc" == 0 && ( "$satb_rc" == 0 || "$satb_rc" == NOT_RUN ) ]]
+diff --git a/runtime/tests/gc_unit/test_generation_cycle_context.cpp b/runtime/tests/gc_unit/test_generation_cycle_context.cpp
+index 713a7ed45..2e1580438 100644
+--- a/runtime/tests/gc_unit/test_generation_cycle_context.cpp
++++ b/runtime/tests/gc_unit/test_generation_cycle_context.cpp
+@@ -22,26 +22,32 @@
+ 
+ #if defined(MRT_TESTABLE_INTERNALS)
+ namespace MapleRuntime {
+-// Seed inputs of the real processor/collector; never call or reconstruct the
+-// enum task in the test. The real major request owns execution and merging.
++// Seed inputs of the real collector; never call or reconstruct the enum task
++// in the test. The real major request owns execution and merging.
+ // This fixture checks root scanning, not finalizer scheduling or invocation.
++//
++// Strong native roots are the entries of the strong OopStorage
++// (zRootsIterator.cpp:159-162 ZRootsIteratorStrongColored::apply ->
++// :102-105 ZOopStorageSetIteratorStrong::apply ->
++// oopStorageSetParState.inline.hpp:38-42 OopStorageSetStrongParState::oops_do;
++// ours OopStorageSetIteratorStrong over
++// FinalizerProcessor::StrongRootStorage()). The storage is the root truth; the
++// processor's finalizables/workingFinalizables lists own no slots and are its
++// private scheduling state, guarded by the predicate CHECK in
++// FinalizerProcessor::HasFinalizableJob(). Seed the storage through its own
++// public Allocate/Release (gtest test_oopStorage.cpp shape) and leave the
++// scheduling lists untouched, so the finalizer thread never sees a queue
++// whose predicate it did not set.
+ struct GenerationCycleRootTestAccess {
++    inline static std::array<NativeSlot*, 2> strongSlots {};
+     static void Install(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
+     {
+-        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
+-        {
+-            std::lock_guard<std::mutex> lock(processor.listLock);
+-            NativeSlot queued(zpointer::null), working(zpointer::null);
+-            Heap::GetBarrier().WriteStaticRef(queued, objects[0]);
+-            Heap::GetBarrier().WriteStaticRef(working, objects[1]);
+-            NativeSlot* queuedSlot = processor.strongStorage.Allocate();
+-            queuedSlot->StoreColoured(queued.GetFieldValue(), std::memory_order_relaxed);
+-            processor.finalizables.push_back(queuedSlot);
+-            NativeSlot* workingSlot = processor.strongStorage.Allocate();
+-            workingSlot->StoreColoured(working.GetFieldValue(), std::memory_order_relaxed);
+-            processor.workingFinalizables.push_back(workingSlot);
+-            // Deliberately do not schedule finalization: only the scanner's
+-            // queued/working input branches are under test.
++        OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
++        for (size_t i = 0; i < strongSlots.size(); ++i) {
++            NativeSlot coloured(zpointer::null);
++            Heap::GetBarrier().WriteStaticRef(coloured, objects[i]);
++            strongSlots[i] = storage.Allocate();
++            strongSlots[i]->StoreColoured(coloured.GetFieldValue(), std::memory_order_relaxed);
+         }
+         {
+             std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+@@ -55,20 +61,11 @@ struct GenerationCycleRootTestAccess {
+     }
+     static void Remove(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
+     {
+-        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
+-        {
+-            std::lock_guard<std::mutex> lock(processor.listLock);
+-            auto remove = [&](NativeRootHandles& roots, BaseObject* object) {
+-                for (auto it = roots.begin(); it != roots.end();) {
+-                    if (to_object(it->GetTargetObject()) == object) {
+-                        processor.strongStorage.Release(&*it);
+-                        it = roots.erase(it);
+-                    }
+-                    else ++it;
+-                }
+-            };
+-            remove(processor.finalizables, objects[0]);
+-            remove(processor.workingFinalizables, objects[1]);
++        OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
++        for (NativeSlot*& slot : strongSlots) {
++            if (slot == nullptr) continue;
++            storage.Release(slot);
++            slot = nullptr;
+         }
+         {
+             std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+@@ -232,8 +229,8 @@ void* Exercise(void*)
+         std::printf("ROOT_CONCURRENCY expected=%zu included=%u\n", concurrencyRoots.size(), concurrencyIncluded);
+         Expect(!concurrencyRoots.empty(), "worker_concurrency_witness_exists");
+         Expect(concurrencyIncluded, "worker_root_result_contains_concurrency");
+-        const char* names[] = { "worker_root_result_contains_queued_finalizer",
+-            "worker_root_result_contains_working_finalizer", "worker_root_result_contains_resurrected",
++        const char* names[] = { "worker_root_result_contains_strong_storage_slot0",
++            "worker_root_result_contains_strong_storage_slot1", "worker_root_result_contains_resurrected",
+             "worker_root_result_contains_forward_resurrected", "worker_root_result_contains_cycle_owner",
+             "worker_root_result_contains_cycle_external" };
+         std::set<BaseObject*> unique(witnesses.begin(), witnesses.end());
+diff --git a/runtime/tests/gc_unit/test_generation_satb_obligations.cpp b/runtime/tests/gc_unit/test_generation_satb_obligations.cpp
+index 8d7ba180b..b1a347408 100644
+--- a/runtime/tests/gc_unit/test_generation_satb_obligations.cpp
++++ b/runtime/tests/gc_unit/test_generation_satb_obligations.cpp
+@@ -3,6 +3,18 @@
+ // with Runtime Library Exception.
+ // See https://cangjie-lang.cn/pages/LICENSE for license information.
+ // Per-generation publication and independent product mark consumption.
++//
++// Companion of run_generation_cycle_context.sh. Its fixtures reach product
++// internals through MRT_TESTABLE_INTERNALS friend access (MarkPublicationFixture
++// in WCollector.h/CollectorProxy.h/zMark.hpp/zDriver.hpp), so it only exists in
++// the testable configuration; the runner builds it only against a testable
++// product SO and reports SATB_RC=NOT_RUN otherwise. The process entry is
++// gc_unit_main.cpp, the same one as cj_gc_unit, so --gtest_filter= /
++// --gtest_list_tests and the GC_OTHER_VM_TEST child re-exec (gc_unittest.hpp
++// RunInOtherVm) are handled identically here, one process per test.
++#if !defined(MRT_TESTABLE_INTERNALS)
++#error "test_generation_satb_obligations.cpp requires MRT_TESTABLE_INTERNALS; build it against a testable product SO"
++#endif
+ 
+ #include "Common/Runtime.h"
+ #include "gc_heap_fixture.hpp"
+@@ -139,9 +151,3 @@ GC_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
+     GC_EXPECT_EQ(published.size(), 1u);
+     GC_EXPECT_TRUE(published.front() == fx.obj0);
+ }
+-
+-int main(int argc, char** argv)
+-{
+-    if (argc == 2) setenv("GC_UNIT_FILTER", argv[1], 1);
+-    return RunAll();
+-}
+diff --git a/runtime/tests/run_uncommitter_constexpr_odr_probe.sh b/runtime/tests/run_uncommitter_constexpr_odr_probe.sh
+new file mode 100755
+index 000000000..3d17fde5f
+--- /dev/null
++++ b/runtime/tests/run_uncommitter_constexpr_odr_probe.sh
+@@ -0,0 +1,141 @@
++#!/usr/bin/env bash
++# cangjie-runtime#59: the product tree is compiled as gnu++14
++# (runtime/config.cmake:368). There an in-class `static constexpr` declaration
++# is not a definition, so an Uncommitter constant that zUncommitter.cpp odr-uses
++# (std::min(const T&, const T&) in ChunkLimit binds kMaxUncommitChunk by
++# reference) needs an out-of-class definition, or the -O0 (Debug) link of
++# libcangjie-runtime.so reports "undefined reference to
++# MapleRuntime::Uncommitter::k...". -O2 hides that by constant folding, which is
++# why the Release gate never sees it. (The reference JDK builds HotSpot as
++# -std=c++17, make/autoconf/flags-cflags.m4:615, where such members are
++# implicitly inline; zMappedCache.hpp:87-90 therefore needs no such line.)
++#
++# Invariant measured (per `static constexpr` member declared in zUncommitter.hpp):
++#   provider.o : runtime/src/Heap/z/zUncommitter.cpp compiled with the product
++#                standard and the product -O0. `nm -u provider.o` must not list
++#                the member. A `U` line is the #59 defect for that member: the
++#                TU odr-uses it and defines it nowhere. A member the TU does not
++#                odr-use is fine with or without a definition -- the probe does
++#                not demand "declared implies defined".
++# Instrument control (does not decide the verdict):
++#   consumer.o : a generated TU that odr-uses (address and reference) every
++#                member. `nm -u consumer.o` must list each of them, otherwise
++#                nm cannot see these symbols as `U` here and the probe stops
++#                with rc=2 instead of reporting PASS.
++#
++# Needs a configured runtime tree: configure clones third_party_bounds_checking_
++# function (securec.h, runtime/config.cmake:419) and installs the CJThread
++# headers into <build>/runtime-staging/include (schedule.h). Point
++# RUNTIME_BUILD_DIR at that build directory; default: <runtime>/CMakebuild
++# (build.py), then <runtime>/../build (the kkk2 lane layout).
++# Exit codes: 0 PASS, 1 a member is odr-used but undefined, 2 the probe itself
++# could not run (no configured tree, compile error, instrument control broken).
++set -uo pipefail
++
++script_dir="$(cd "$(dirname "$0")" && pwd)"
++runtime_dir="$(cd "${script_dir}/.." && pwd)"
++header="${runtime_dir}/src/Heap/z/zUncommitter.hpp"
++provider_src="${runtime_dir}/src/Heap/z/zUncommitter.cpp"
++prefix="UNCOMMITTER_CONSTEXPR_ODR_PROBE"
++
++build_dir="${RUNTIME_BUILD_DIR:-}"
++if [[ -z "${build_dir}" ]]; then
++    for candidate in "${runtime_dir}/CMakebuild" "${runtime_dir}/../build"; do
++        if [[ -d "${candidate}/runtime-staging/include" ]]; then
++            build_dir="${candidate}"
++            break
++        fi
++    done
++fi
++if [[ ! -f "${build_dir}/runtime-staging/include/schedule.h" ]]; then
++    echo "${prefix}_FAIL: no configured build dir (set RUNTIME_BUILD_DIR; need <build>/runtime-staging/include/schedule.h)" >&2
++    exit 2
++fi
++if [[ ! -f "${runtime_dir}/third_party/third_party_bounds_checking_function/include/securec.h" ]]; then
++    echo "${prefix}_FAIL: third_party_bounds_checking_function is not cloned (configure the runtime first)" >&2
++    exit 2
++fi
++out_dir="${UNCOMMITTER_ODR_PROBE_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/uncommitter-constexpr-odr.XXXXXX")}"
++mkdir -p "${out_dir}"
++if [[ -z "${UNCOMMITTER_ODR_PROBE_OUT:-}" ]]; then
++    trap 'rm -rf "${out_dir}"' EXIT
++fi
++
++# Same standard, optimisation level and defines as the Debug product compile
++# of this TU (runtime/config.cmake:368,372; runtime/src/Heap/CMakeLists.txt).
++cxx_flags=(
++    -std=gnu++14 -O0 -fPIC -fno-exceptions -fno-rtti -w
++    -DCANGJIE_GWPASAN_SUPPORT -DCJ_SDK_VERSION='"0.0.1"' -DDISABLE_VERSION_CHECK
++    -DMRT_USE_CJTHREAD_RENAME -DMRT_USE_COPYGC -DMRT_DEBUG=1
++    -I"${runtime_dir}/third_party/third_party_bounds_checking_function/include"
++    -I"${build_dir}/runtime-staging/include"
++    -I"${runtime_dir}/include"
++    -I"${runtime_dir}/src"
++    -I"${runtime_dir}/src/Heap"
++)
++
++# Every single-line `static constexpr <type> <name> = ...;` member of class
++# Uncommitter. The type may contain spaces, `*`, `&`, `<...>` (anything but `=`).
++mapfile -t members < <(sed -n '/^class Uncommitter {/,/^};/p' "${header}" \
++    | sed -nE 's/^[[:space:]]*static constexpr [^=]*[[:space:]*&]([A-Za-z_][A-Za-z_0-9]*)[[:space:]]*=.*/\1/p')
++if [[ ${#members[@]} -eq 0 ]]; then
++    echo "${prefix}_FAIL: no static constexpr member found in ${header}" >&2
++    exit 2
++fi
++
++# Instrument control TU: two odr-uses per member, both with external linkage so
++# the object keeps the relocations -- the address, and a reference binding (the
++# std::min(const T&, const T&) pattern that produced the #59 undefined reference).
++consumer_src="${out_dir}/consumer.cpp"
++{
++    echo '#include "Heap/z/zUncommitter.hpp"'
++    echo 'namespace MapleRuntime {'
++    echo 'const void* uncommitterConstexprOdrUseAddresses[] = {'
++    for m in "${members[@]}"; do echo "    &Uncommitter::${m},"; done
++    echo '};'
++    for m in "${members[@]}"; do
++        echo "const void* UncommitterOdrUseReference_${m}() { const auto& ref = Uncommitter::${m}; return &ref; }"
++    done
++    echo '}'
++} > "${consumer_src}"
++
++cxx="${CXX:-clang++}"
++if ! "${cxx}" "${cxx_flags[@]}" -c "${consumer_src}" -o "${out_dir}/consumer.o" > "${out_dir}/consumer.build.log" 2>&1; then
++    echo "${prefix}_FAIL: consumer TU did not compile (see ${out_dir}/consumer.build.log)" >&2
++    head -20 "${out_dir}/consumer.build.log" >&2
++    exit 2
++fi
++if ! "${cxx}" "${cxx_flags[@]}" -c "${provider_src}" -o "${out_dir}/provider.o" > "${out_dir}/provider.build.log" 2>&1; then
++    echo "${prefix}_FAIL: ${provider_src} did not compile (see ${out_dir}/provider.build.log)" >&2
++    head -20 "${out_dir}/provider.build.log" >&2
++    exit 2
++fi
++
++nm -C -u "${out_dir}/consumer.o" > "${out_dir}/consumer.undefined.txt"
++nm -C -u "${out_dir}/provider.o" > "${out_dir}/provider.undefined.txt"
++nm -C --defined-only "${out_dir}/provider.o" > "${out_dir}/provider.defined.txt"
++
++# Instrument control first: if nm does not show the synthetic odr-uses as `U`,
++# a clean provider.undefined.txt below would prove nothing.
++for m in "${members[@]}"; do
++    sym="MapleRuntime::Uncommitter::${m}"
++    if ! grep -qE "[[:space:]]${sym}\$" "${out_dir}/consumer.undefined.txt"; then
++        echo "${prefix}_FAIL: instrument control broken: nm -u consumer.o lists no U ${sym} (see ${out_dir}/consumer.undefined.txt)" >&2
++        exit 2
++    fi
++done
++
++rc=0
++for m in "${members[@]}"; do
++    sym="MapleRuntime::Uncommitter::${m}"
++    if grep -qE "[[:space:]]${sym}\$" "${out_dir}/provider.undefined.txt"; then
++        echo "${prefix}_FAIL: nm -u provider.o lists U ${sym}: zUncommitter.cpp compiled gnu++14 -O0 references ${m} and does not define it (#59)" >&2
++        rc=1
++    elif grep -qE "[[:space:]]${sym}\$" "${out_dir}/provider.defined.txt"; then
++        echo "[  PASS  ] ${sym}: defined by zUncommitter.cpp (gnu++14 -O0), nm -u lists no U"
++    else
++        echo "[  PASS  ] ${sym}: zUncommitter.cpp (gnu++14 -O0) leaves no reference to it (nm -u lists no U, no definition needed)"
++    fi
++done
++echo "RESULT=$([[ ${rc} -eq 0 ]] && echo PASS || echo FAIL) members=${#members[@]} out=${out_dir}"
++exit "${rc}"
