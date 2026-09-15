@@ -82,9 +82,6 @@ void FreeRegionManager::Initialize(UnitCount regionCnt, ZVirtualMemoryManager& v
         Partition& partition = *partitions.back();
         partition.currentMaxCapacity =
             NumaTopology::calculate_share(numaId, maxCapacity, RegionInfo::UNIT_SIZE);
-        partition.cache.SetRefresh([](MappedCache::Extent extent) {
-            RegionInfo::InitFreeRegion(extent.index, extent.count);
-        });
     }
 }
 
@@ -208,7 +205,10 @@ size_t FreeRegionManager::capacity() const
 
 void FreeRegionManager::InsertCommitted(Partition& partition, UnitIndex index, UnitCount count)
 {
-    partition.cache.Insert({index, count});
+    // The reverse metadata array describes cached units as free (P05 keeps
+    // the descriptor state machine; ZGC destroys the ZPage instead).
+    RegionInfo::InitFreeRegion(index, count);
+    partition.cache.insert(VirtualMemoryOf(index, count));
 }
 
 // ZPartition::free_memory (zPageAllocator.cpp:690-697): a freed page's vmem
@@ -217,7 +217,11 @@ void FreeRegionManager::FreeMemory(UnitIndex index, UnitCount count)
 {
     const ZVirtualMemory vmem = VirtualMemoryOf(index, count);
     const uint32_t partitionId = virtualMemory->lookup_partition_id(vmem);
-    InsertCommitted(*partitions.at(partitionId), index, count);
+    Partition& partition = *partitions.at(partitionId);
+    InsertCommitted(partition, index, count);
+    // decrease_used
+    CHECK(partition.used >= vmem.size());
+    partition.used -= vmem.size();
 }
 
 void FreeRegionManager::AddGarbageUnits(UnitIndex index, UnitCount count, bool allowSaferegion)
@@ -254,16 +258,16 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
     for (size_t visited = 0; visited < partitions.size(); ++visited) {
         const size_t selected = (nextPartition + visited) % partitions.size();
         Partition& partition = *partitions[selected];
-        // available() = current_max_capacity - used - claimed: what the cache
-        // holds plus what capacity may still grow by.
-        const size_t available = partition.cache.Size() * RegionInfo::UNIT_SIZE +
-                                 (partition.currentMaxCapacity - partition.capacity);
-        if (available < size) { continue; }
+        if (partition.available() < size) {
+            // Out of memory in this partition
+            continue;
+        }
 
         // Try to allocate one contiguous vmem
-        const auto extent = partition.cache.RemoveContiguous(static_cast<UnitCount>(num));
-        if (!extent.IsNull()) {
-            memory = PageMemory{extent.index, num, static_cast<uint32_t>(selected), true};
+        const ZVirtualMemory vmem = partition.cache.remove_contiguous(size);
+        if (!vmem.is_null()) {
+            memory = PageMemory{UnitIndexOf(vmem), num, static_cast<uint32_t>(selected), true};
+            partition.used += size;
             nextPartition = (selected + 1) % partitions.size();
             return true;
         }
@@ -272,19 +276,17 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
         const size_t increased = increase_capacity(static_cast<uint32_t>(selected), size);
         // Could not increase capacity enough to satisfy the allocation completely.
         // Try removing multiple vmems from the mapped cache.
-        const UnitCount remaining = static_cast<UnitCount>((size - increased) / RegionInfo::UNIT_SIZE);
-        std::vector<MappedCache::Extent> extents;
-        const UnitCount harvested = remaining == 0 ? 0 : partition.cache.RemoveDiscontiguous(remaining, extents);
-        CHECK(harvested * RegionInfo::UNIT_SIZE + increased == size);
-        for (const auto& extent : extents) {
-            memory.partialMappings.push_back(VirtualMemoryOf(extent.index, extent.count));
-        }
+        const size_t remaining = size - increased;
+        const size_t harvested = remaining == 0 ? 0 : partition.cache.remove_discontiguous(remaining, &memory.partialMappings);
+        CHECK(harvested + increased == size);
         memory.index = 0;
         memory.units = num;
         memory.partition = static_cast<uint32_t>(selected);
-        memory.committed = harvested == num;
+        memory.committed = harvested == size;
         memory.virtualClaimed = false;
-        memory.harvestedUnits = harvested;
+        memory.harvestedUnits = harvested / RegionInfo::UNIT_SIZE;
+        // increase_used
+        partition.used += size;
         nextPartition = (selected + 1) % partitions.size();
         return true;
     }
@@ -419,6 +421,10 @@ void FreeRegionManager::FreeMemoryAllocFailed(PageMemory& memory)
     std::lock_guard<std::mutex> lock(cacheMutex);
     Partition& partition = *partitions.at(memory.partition);
     const size_t size = memory.units * RegionInfo::UNIT_SIZE;
+    // Only decrease the overall used and not the generation used,
+    // since the allocation failed and generation used wasn't bumped.
+    CHECK(partition.used >= size);
+    partition.used -= size;
     size_t freed = 0;
     for (const ZVirtualMemory vmem : memory.partialMappings) {
         freed += vmem.size();
@@ -435,26 +441,23 @@ void FreeRegionManager::FreeMemoryAllocFailed(PageMemory& memory)
 
 FreeRegionManager::UnitCount FreeRegionManager::GetDirtyUnitCount() const
 {
+    // capacity == used + cached + claimed (ZPartition accounting).
     std::lock_guard<std::mutex> lock(cacheMutex);
-    UnitCount count = 0;
-    for (const auto& partition : partitions) { count += partition->cache.Size(); }
-    return count;
+    size_t bytes = 0;
+    for (const auto& partition : partitions) {
+        bytes += partition->capacity - partition->used - partition->claimed;
+    }
+    return static_cast<UnitCount>(bytes / RegionInfo::UNIT_SIZE);
 }
 
-FreeRegionManager::UnitCount FreeRegionManager::GetDirtyMaxBlock() const
+void FreeRegionManager::PrintCacheOn() const
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
-    UnitCount maximum = 0;
-    for (const auto& partition : partitions) { maximum = std::max(maximum, partition->cache.MaxExtent()); }
-    return maximum;
-}
-
-size_t FreeRegionManager::GetDirtyNodeCount() const
-{
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    size_t count = 0;
-    for (const auto& partition : partitions) { count += partition->cache.EntryCount(); }
-    return count;
+    for (const auto& partition : partitions) {
+        VLOG(REPORT, "Partition %u    used %zuM, capacity %zuM, max capacity %zuM", partition->numaId,
+             partition->used / MB, partition->capacity / MB, partition->currentMaxCapacity / MB);
+        partition->cache.print_on();
+    }
 }
 
 // zUncommitter.cpp:392-403.
@@ -464,15 +467,7 @@ size_t FreeRegionManager::RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>
     size_t flushed = 0;
     for (auto& partition : partitions) {
         if (flush <= flushed) { break; }
-        std::vector<MappedCache::Extent> extents;
-        const UnitCount limit = static_cast<UnitCount>((flush - flushed) / RegionInfo::UNIT_SIZE);
-        if (limit == 0) { break; }
-        partition->cache.RemoveForUncommit(limit, extents);
-        size_t partitionFlushed = 0;
-        for (const auto& extent : extents) {
-            out->push_back(VirtualMemoryOf(extent.index, extent.count));
-            partitionFlushed += extent.count * RegionInfo::UNIT_SIZE;
-        }
+        const size_t partitionFlushed = partition->cache.remove_for_uncommit(flush - flushed, out);
         // Record flushed memory as claimed
         partition->claimed += partitionFlushed;
         flushed += partitionFlushed;
@@ -1153,14 +1148,10 @@ void RegionManager::DumpRegionStats(const char* msg) const
     DUMP_REGION_STATS_LOG("\tused summary: usedUnits %zu (%zu B), usedObjSize %zu B",
                           usedUnitCount, usedUnitCount * RegionInfo::UNIT_SIZE, usedObjSize);
 
-    size_t dirtyMaxBlock = freeRegionManager.GetDirtyMaxBlock();
-    size_t dirtyNodeCount = freeRegionManager.GetDirtyNodeCount();
     DUMP_REGION_STATS_LOG("\tuncommitted capacity: %zu units (%zu B)",
                           virtualUnits, virtualUnits * RegionInfo::UNIT_SIZE);
-    DUMP_REGION_STATS_LOG("\tdirty units: %zu (%zu B), nodes: %zu, maxBlock: %zu units (%zu B)",
-                          dirtyUnits, dirtyUnits * RegionInfo::UNIT_SIZE, dirtyNodeCount,
-                          dirtyMaxBlock,
-                          dirtyMaxBlock * RegionInfo::UNIT_SIZE);
+    DUMP_REGION_STATS_LOG("\tdirty units: %zu (%zu B)", dirtyUnits, dirtyUnits * RegionInfo::UNIT_SIZE);
+    freeRegionManager.PrintCacheOn();
 
     DUMP_REGION_STATS_LOG("\tgarbage+dirty summary: garbageUnits %zu (%zu B, allocObj %zu), dirtyUnits %zu (%zu B)",
                           garbageUnits, garbageSize, allocGarbageSize, dirtyUnits, dirtySize);
@@ -1287,12 +1278,14 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     // It is committed lazily by the kernel: only units that ever become pages
     // touch their descriptor.
     const std::vector<RegionInfo::UnitSegment> segments{ RegionInfo::UnitSegment{ reservedStart, span.size(), 0 } };
-    metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(segments));
-    metadata = mmap(nullptr, metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    CHECK_DETAIL(metadata != MAP_FAILED, "failed to map %zu bytes of region metadata", metadataSize);
+    metadata.size = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(segments));
+    void* const metadataBase =
+        mmap(nullptr, metadata.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    CHECK_DETAIL(metadataBase != MAP_FAILED, "failed to map %zu bytes of region metadata", metadata.size);
+    metadata.base = metadataBase;
     Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
-    MAddress metadataAddress = reinterpret_cast<MAddress>(metadata);
-    CHECK(IsRepresentableLow48Range(metadataAddress, metadataSize));
+    MAddress metadataAddress = reinterpret_cast<MAddress>(metadata.base);
+    CHECK(IsRepresentableLow48Range(metadataAddress, metadata.size));
     regionManager.Initialize(unitNum, metadataAddress, *virtualMemory, *physicalMemory, vmHeapParam,
                              CangjieRuntime::GetGCParam().garbageThreshold);
 #if defined(MRT_DUMP_ADDRESS)

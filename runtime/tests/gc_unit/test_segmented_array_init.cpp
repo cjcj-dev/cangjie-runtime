@@ -470,8 +470,13 @@ bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx
             return false;
     }
     if (source == AllocationSource::DIRTY || source == AllocationSource::GARBAGE) {
-        std::memset(reinterpret_cast<void*>(ctx.dirtyAddress), ctx.dirtyByte,
-                    unitCount * RegionInfo::UNIT_SIZE);
+        // ZMappedCache keeps its entry inside the last granule of a cached
+        // range (zMappedCache.cpp:92-119); dirtying cached memory must stay
+        // clear of it. The yield check reads the first two segments only, so
+        // dirty those (plus the array header that precedes the payload).
+        const size_t dirtyBytes = std::min(unitCount * RegionInfo::UNIT_SIZE,
+                                           2 * static_cast<size_t>(MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) + 64);
+        std::memset(reinterpret_cast<void*>(ctx.dirtyAddress), ctx.dirtyByte, dirtyBytes);
     }
     return true;
 }

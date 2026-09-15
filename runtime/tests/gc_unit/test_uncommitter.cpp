@@ -237,9 +237,6 @@ static void InitializeUncommitCache(FreeRegionManager& frm, ProbeHeap& heap)
 {
     const size_t bytes = heap.units * RegionInfo::UNIT_SIZE;
     frm.Initialize(heap.units, *heap.virtualMemory, *heap.physicalMemory, bytes);
-    for (auto& partition : frm.partitions) {
-        partition->cache.SetRefresh({});
-    }
     // Prime partition 0 with all of its capacity: claim, commit, map, cache.
     const size_t primed = frm.partitions.front()->currentMaxCapacity;
     const ZVirtualMemory vmem = frm.claim_virtual(primed, 0);
@@ -248,8 +245,7 @@ static void InitializeUncommitCache(FreeRegionManager& frm, ProbeHeap& heap)
     frm.claim_physical(vmem, 0);
     GC_EXPECT_EQ(frm.commit_physical(vmem, 0), primed);
     frm.map_virtual(vmem, 0);
-    frm.partitions.front()->cache.Insert({FreeRegionManager::UnitIndexOf(vmem),
-                                          static_cast<uint32_t>(vmem.granule_count())});
+    frm.partitions.front()->cache.insert(vmem);
 }
 
 static size_t ProbeProductUncommit(bool cancelFirst)

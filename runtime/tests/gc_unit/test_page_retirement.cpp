@@ -34,11 +34,16 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
     const size_t unit = RegionInfo::UNIT_SIZE;
     int result = 0;
     {
-        RegionManager manager;
+        // Destroyed in reverse order: the manager (mapped caches keep entries
+        // in heap memory) goes before the mapping.
         HeapParam heapParam{};
         heapParam.regionSize = 64;
         heapParam.exemptionThreshold = 0.8;
-        ZTestRegionHeap heap(4, manager, heapParam, 0.5);
+        std::unique_ptr<ZTestRegionHeap> heapHolder;
+        RegionManager manager;
+        heapHolder.reset(new ZTestRegionHeap(4, manager, heapParam, 0.5));
+        ZTestRegionHeap& heap = *heapHolder;
+        (void)heap;
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
         Heap::GetHeap().GetRememberedSet().Initialize(manager.GetRegionHeapStart(),

@@ -206,6 +206,7 @@ private:
 
 #include <vector>
 #include <memory>
+#include "Heap/z/zMappedCache.hpp"
 #include "Heap/z/zPhysicalMemoryManager.hpp"
 #include "Heap/z/zVirtualMemory.inline.hpp"
 #include "Heap/z/zVirtualMemoryManager.inline.hpp"
@@ -300,8 +301,8 @@ public:
     }
 
     UnitCount GetDirtyUnitCount() const;
-    UnitCount GetDirtyMaxBlock() const;
-    size_t GetDirtyNodeCount() const;
+    // ZPartition::print_cache_on (zPageAllocator.cpp:1118-1121) for every partition.
+    void PrintCacheOn() const;
     // zUncommitter.cpp:395-403: flush from the mapped cache under the page
     // allocator lock and record the flushed amount as claimed.
     size_t RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>* out);
@@ -323,11 +324,14 @@ private:
     // capacity account; virtual/physical memory is reached through the managers.
     struct Partition {
         uint32_t numaId;
-        MappedCache cache;
+        ZMappedCache cache;
         size_t capacity{ 0 };
         size_t claimed{ 0 };
+        size_t used{ 0 };
         size_t currentMaxCapacity{ 0 };
         explicit Partition(uint32_t id) : numaId(id) {}
+        // ZPartition::available (zPageAllocator.cpp:644-646).
+        size_t available() const { return currentMaxCapacity - used - claimed; }
     };
     void InsertCommitted(Partition& partition, UnitIndex index, UnitCount count);
     void FreeMemory(UnitIndex index, UnitCount count);

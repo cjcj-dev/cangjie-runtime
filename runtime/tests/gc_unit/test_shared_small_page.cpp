@@ -76,8 +76,10 @@ namespace {
 // A synthetic, single-caller heap, using the product page allocator and page
 // table. There are no registered mutators; retire_pages has a quiescent world.
 struct SharedPageFixture {
-    RegionManager manager;
+    // The RegionManager (mapped caches keep entries in heap memory) must be
+    // destroyed before the mapping: declare it last.
     std::unique_ptr<ZTestRegionHeap> heap;
+    RegionManager manager;
     SharedPageFixture()
     {
         // Match CollectorResources::Init before allocation-rate sampling.
@@ -88,7 +90,6 @@ struct SharedPageFixture {
         params.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
     }
-    ~SharedPageFixture() { heap.reset(); }
 };
 
 class CPUAffinity {

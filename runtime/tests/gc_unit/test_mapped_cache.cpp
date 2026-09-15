@@ -7,12 +7,13 @@
 #include "Mutator/ThreadLocal.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Allocator/CartesianTree.h"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "zunittest.hpp"
 
+#include <algorithm>
 #include <memory>
+#include <vector>
 
 namespace MapleRuntime {
 namespace GcUnit {
@@ -20,69 +21,168 @@ namespace GcUnit {
 // ZGC has no test_zMappedCache.cpp in the frozen reference. These cases port
 // the range geometries from ZVirtualMemoryManagerTest::test_remove_whole,
 // test_remove_from_low and test_remove_from_high to the mapped-cache owner.
+// ZMappedCache stores its entries inside the cached memory
+// (zMappedCache.cpp:92-119), so the cases run over a committed, mapped
+// fixture range and speak in vmems of `unit` granules.
+namespace {
+struct CacheFixture {
+    static constexpr size_t kUnits = 16;
+    ZTestHeapMapping mapping{ kUnits * ZBackingGranuleSize };
+    ZMappedCache cache;
+
+    ZVirtualMemory vmem(size_t index, size_t count) const
+    {
+        return ZVirtualMemory(mapping.offset() + index * ZBackingGranuleSize, count * ZBackingGranuleSize);
+    }
+    size_t index(const ZVirtualMemory& v) const { return (v.start() - mapping.offset()) / ZBackingGranuleSize; }
+    size_t count(const ZVirtualMemory& v) const { return v.size() / ZBackingGranuleSize; }
+    size_t bytes(size_t count) const { return count * ZBackingGranuleSize; }
+};
+}
+
 GC_TEST(MappedCache, CoalesceAndRemoveWhole)
 {
-    MappedCache cache;
-    cache.Insert({0, 2});
-    cache.Insert({4, 2});
-    cache.Insert({2, 2});
-    GC_EXPECT_EQ(cache.EntryCount(), 1U);
-    GC_EXPECT_EQ(cache.Size(), 6U);
-    const auto whole = cache.RemoveContiguous(6);
-    GC_EXPECT_EQ(whole.index, 0U);
-    GC_EXPECT_EQ(whole.count, 6U);
-    GC_EXPECT_EQ(cache.Size(), 0U);
+    EnsureZAddressDomain();
+    CacheFixture f;
+    f.cache.insert(f.vmem(0, 2));
+    f.cache.insert(f.vmem(4, 2));
+    f.cache.insert(f.vmem(2, 2));
+    const ZVirtualMemory whole = f.cache.remove_contiguous(f.bytes(6));
+    GC_EXPECT_FALSE(whole.is_null());
+    GC_EXPECT_EQ(f.index(whole), 0U);
+    GC_EXPECT_EQ(f.count(whole), 6U);
+    GC_EXPECT_TRUE(f.cache.remove_contiguous(f.bytes(1)).is_null());
 }
 
 GC_TEST(MappedCache, SmallPagesUseLowestAddress)
 {
-    MappedCache cache;
-    cache.Insert({10, 8});
-    cache.Insert({0, 2});
-    const auto first = cache.RemoveContiguous(1);
-    const auto second = cache.RemoveContiguous(1);
-    GC_EXPECT_EQ(first.index, 0U);
-    GC_EXPECT_EQ(second.index, 1U);
-    GC_EXPECT_EQ(cache.Size(), 8U);
+    EnsureZAddressDomain();
+    // remove_contiguous(ZPageSizeSmall) scans from the lowest address
+    // (zMappedCache.cpp:642-644); every other size goes through the size
+    // classes first. The fixture speaks in small-page multiples.
+    const size_t small = ZPageSizeSmall;
+    ZTestHeapMapping mapping(18 * small);
+    ZMappedCache cache;
+    auto vmem = [&](size_t index, size_t count) {
+        return ZVirtualMemory(mapping.offset() + index * small, count * small);
+    };
+    auto index = [&](const ZVirtualMemory& v) { return (v.start() - mapping.offset()) / small; };
+    cache.insert(vmem(10, 8));
+    cache.insert(vmem(0, 2));
+    const ZVirtualMemory first = cache.remove_contiguous(small);
+    const ZVirtualMemory second = cache.remove_contiguous(small);
+    GC_EXPECT_FALSE(first.is_null());
+    GC_EXPECT_FALSE(second.is_null());
+    GC_EXPECT_EQ(index(first), 0U);
+    GC_EXPECT_EQ(index(second), 1U);
+    // A larger request prefers the approximate best-fit size class.
+    const ZVirtualMemory rest = cache.remove_contiguous(8 * small);
+    GC_EXPECT_FALSE(rest.is_null());
+    GC_EXPECT_EQ(index(rest), 10U);
+    GC_EXPECT_TRUE(cache.remove_contiguous(small).is_null());
 }
 
 GC_TEST(MappedCache, EqualCapacityContiguousAndFragmented)
 {
-    MappedCache contiguous;
-    MappedCache fragmented;
-    contiguous.Insert({0, 6});
-    fragmented.Insert({0, 2});
-    fragmented.Insert({4, 2});
-    fragmented.Insert({8, 2});
-    contiguous.ResetMinSizeWatermark();
-    fragmented.ResetMinSizeWatermark();
-    GC_EXPECT_EQ(contiguous.Size(), fragmented.Size());
-    const auto whole = contiguous.RemoveContiguous(6);
-    GC_EXPECT_EQ(whole.count, 6U);
-    GC_EXPECT_TRUE(fragmented.RemoveContiguous(6).IsNull());
-    GC_EXPECT_EQ(fragmented.Size(), 6U);
-    std::vector<MappedCache::Extent> harvested;
-    GC_EXPECT_EQ(fragmented.RemoveDiscontiguous(5, harvested), 5U);
+    EnsureZAddressDomain();
+    CacheFixture contiguous;
+    CacheFixture fragmented;
+    contiguous.cache.insert(contiguous.vmem(0, 6));
+    fragmented.cache.insert(fragmented.vmem(0, 2));
+    fragmented.cache.insert(fragmented.vmem(4, 2));
+    fragmented.cache.insert(fragmented.vmem(8, 2));
+    contiguous.cache.reset_min_size_watermark();
+    fragmented.cache.reset_min_size_watermark();
+    GC_EXPECT_EQ(contiguous.cache.min_size_watermark(), fragmented.cache.min_size_watermark());
+    const ZVirtualMemory whole = contiguous.cache.remove_contiguous(contiguous.bytes(6));
+    GC_EXPECT_EQ(contiguous.count(whole), 6U);
+    GC_EXPECT_TRUE(fragmented.cache.remove_contiguous(fragmented.bytes(6)).is_null());
+    ZArray<ZVirtualMemory> harvested;
+    GC_EXPECT_EQ(fragmented.cache.remove_discontiguous(fragmented.bytes(5), &harvested), fragmented.bytes(5));
     size_t owned = 0;
-    for (const auto& range : harvested) { owned += range.count; }
-    GC_EXPECT_EQ(owned + fragmented.Size(), whole.count);
-    GC_EXPECT_EQ(fragmented.MinSizeWatermark(), 1U);
-    for (const auto& range : harvested) { fragmented.Insert(range); }
-    GC_EXPECT_EQ(fragmented.Size(), 6U);
-    GC_EXPECT_EQ(fragmented.EntryCount(), 3U);
+    for (const auto& range : harvested) { owned += fragmented.count(range); }
+    GC_EXPECT_EQ(owned, 5U);
+    GC_EXPECT_EQ(fragmented.cache.min_size_watermark(), fragmented.bytes(1));
+    for (const auto& range : harvested) { fragmented.cache.insert(range); }
+    ZArray<ZVirtualMemory> all;
+    GC_EXPECT_EQ(fragmented.cache.remove_discontiguous(fragmented.bytes(6), &all), fragmented.bytes(6));
+    GC_EXPECT_EQ(all.size(), 3U);
 }
 
 GC_TEST(MappedCache, UncommitUsesHighestAddress)
 {
-    MappedCache cache;
-    cache.Insert({0, 4});
-    cache.Insert({8, 4});
-    std::vector<MappedCache::Extent> extents;
-    GC_EXPECT_EQ(cache.RemoveForUncommit(2, extents), 2U);
+    EnsureZAddressDomain();
+    CacheFixture f;
+    f.cache.insert(f.vmem(0, 4));
+    f.cache.insert(f.vmem(8, 4));
+    ZArray<ZVirtualMemory> extents;
+    GC_EXPECT_EQ(f.cache.remove_for_uncommit(f.bytes(2), &extents), f.bytes(2));
     GC_EXPECT_EQ(extents.size(), 1U);
-    GC_EXPECT_EQ(extents[0].index, 10U);
-    GC_EXPECT_EQ(extents[0].count, 2U);
-    GC_EXPECT_EQ(cache.Size(), 6U);
+    GC_EXPECT_EQ(f.index(extents[0]), 10U);
+    GC_EXPECT_EQ(f.count(extents[0]), 2U);
+    // What is left: [0,4) and [8,10).
+    const ZVirtualMemory low = f.cache.remove_contiguous(f.bytes(4));
+    GC_EXPECT_EQ(f.index(low), 0U);
+    const ZVirtualMemory high = f.cache.remove_contiguous(f.bytes(2));
+    GC_EXPECT_EQ(f.index(high), 8U);
+    GC_EXPECT_TRUE(f.cache.remove_contiguous(f.bytes(1)).is_null());
+}
+
+// The intrusive red-black tree behind the cache (Base/RBTree.h) against a
+// sorted model: random inserts, removals and coalescing keep the in-order
+// walk equal to the set of cached ranges.
+GC_TEST(MappedCache, TreeMatchesModelUnderRandomChurn)
+{
+    EnsureZAddressDomain();
+    constexpr size_t kUnits = 256;
+    ZTestHeapMapping mapping(kUnits * ZBackingGranuleSize);
+    ZMappedCache cache;
+    std::vector<bool> cached(kUnits, false);
+    uint64_t seed = 0x9e3779b97f4a7c15ULL;
+    auto next = [&seed]() { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed; };
+    auto vmemOf = [&](size_t index, size_t count) {
+        return ZVirtualMemory(mapping.offset() + index * ZBackingGranuleSize, count * ZBackingGranuleSize);
+    };
+    size_t cachedUnits = 0;
+    for (int round = 0; round < 4000; ++round) {
+        const size_t index = next() % kUnits;
+        const size_t count = 1 + next() % 4;
+        if (index + count > kUnits) { continue; }
+        bool free = true;
+        for (size_t i = index; i < index + count; ++i) { free = free && !cached[i]; }
+        if (free && (next() % 3) != 0) {
+            cache.insert(vmemOf(index, count));
+            for (size_t i = index; i < index + count; ++i) { cached[i] = true; }
+            cachedUnits += count;
+        } else if (cachedUnits != 0) {
+            ZArray<ZVirtualMemory> out;
+            const size_t want = std::min(cachedUnits, count) * ZBackingGranuleSize;
+            const size_t got = (next() % 2 == 0)
+                ? cache.remove_discontiguous(want, &out)
+                : cache.remove_for_uncommit(want, &out);
+            GC_EXPECT_EQ(got, want);
+            for (const ZVirtualMemory& v : out) {
+                const size_t start = (v.start() - mapping.offset()) / ZBackingGranuleSize;
+                for (size_t i = start; i < start + v.size() / ZBackingGranuleSize; ++i) {
+                    GC_EXPECT_TRUE(cached[i]);
+                    cached[i] = false;
+                }
+                cachedUnits -= v.size() / ZBackingGranuleSize;
+            }
+        }
+    }
+    // Drain: everything cached comes back exactly once, lowest address first.
+    ZArray<ZVirtualMemory> all;
+    GC_EXPECT_EQ(cache.remove_discontiguous(cachedUnits * ZBackingGranuleSize, &all), cachedUnits * ZBackingGranuleSize);
+    for (const ZVirtualMemory& v : all) {
+        const size_t start = (v.start() - mapping.offset()) / ZBackingGranuleSize;
+        for (size_t i = start; i < start + v.size() / ZBackingGranuleSize; ++i) {
+            GC_EXPECT_TRUE(cached[i]);
+            cached[i] = false;
+        }
+    }
+    for (bool c : cached) { GC_EXPECT_FALSE(c); }
+    GC_EXPECT_TRUE(cache.remove_contiguous(ZBackingGranuleSize).is_null());
 }
 
 #if defined(__linux__)
@@ -148,8 +248,10 @@ GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
 
 namespace {
 struct ProductHeapFixture {
-    RegionManager manager;
+    // The RegionManager (and its mapped caches, whose entries live in heap
+    // memory) must be destroyed before the mapping: declare it last.
     std::unique_ptr<ZTestRegionHeap> heap;
+    RegionManager manager;
     explicit ProductHeapFixture(size_t units)
     {
         // This synthetic allocator runs on a runtime worker, not a CJ scheduler thread.

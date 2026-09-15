@@ -57,8 +57,10 @@ private:
     RegionInfo* capacity{ nullptr };
 
 public:
-    RegionManager manager;
+    // The RegionManager (mapped caches keep entries in heap memory) must be
+    // destroyed before the mapping: declare it last.
     std::unique_ptr<ZTestRegionHeap> heap;
+    RegionManager manager;
 
     OneUnitStallFixture()
     {
