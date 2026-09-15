@@ -102,7 +102,10 @@ GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
     GC_EXPECT_TRUE(reserver.reserver()->reserved() == 8 * unit && reserver.registry()->is_contiguous());
     const zoffset base = reserver.registry()->peek_low_address();
     {
-        ZPhysicalMemoryManager physical(8 * unit);
+        // Exactly two backing indices per partition: the final alloc below
+        // only succeeds if free() handed the stashed indices back.
+        const size_t partitions = NumaTopology::SealProcessTopology().Count();
+        ZPhysicalMemoryManager physical(2 * partitions * unit);
         GC_EXPECT_TRUE(physical.is_initialized());
         const ZVirtualMemory a(base, unit);
         const ZVirtualMemory b(base + 4 * unit, unit);
