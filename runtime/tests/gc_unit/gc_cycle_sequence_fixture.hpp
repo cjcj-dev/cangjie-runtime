@@ -12,5 +12,8 @@ struct GenerationSequenceFixture {
         remembered.FlipForMinor();
     }
 };
+
+}
+#endif
 }
 #endif

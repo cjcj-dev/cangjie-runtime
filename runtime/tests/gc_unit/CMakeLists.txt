@@ -9,6 +9,7 @@
 
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
+    gc_cycle_sequence_fixture.cpp
     gc_unit_stubs.cpp
     test_colour_address.cpp
     test_zBitField.cpp
@@ -124,6 +125,7 @@ add_test(NAME cj_gc_unit COMMAND cj_gc_unit)
 # stall consumer from the same MRT_GC_UNIT_TESTS product SO.
 add_executable(cj_gc_allocation_stall_unit
     gc_unit_main.cpp
+    gc_cycle_sequence_fixture.cpp
     test_allocation_stall_queue.cpp
 )
 target_include_directories(cj_gc_allocation_stall_unit PRIVATE
@@ -152,6 +154,7 @@ add_test(NAME cj_gc_allocation_stall_unit COMMAND cj_gc_allocation_stall_unit)
 # the test executable.
 add_executable(cj_gc_cycle_saferegion_unit
     gc_unit_main.cpp
+    gc_cycle_sequence_fixture.cpp
     test_cycle_ref_saferegion.cpp
 )
 target_include_directories(cj_gc_cycle_saferegion_unit PRIVATE
@@ -179,6 +182,7 @@ add_test(NAME cj_gc_cycle_saferegion_unit COMMAND cj_gc_cycle_saferegion_unit)
 # main suite already owns that process-global table.
 add_executable(cj_gc_clear_entries_unit
     gc_unit_main.cpp
+    gc_cycle_sequence_fixture.cpp
     clear_entries_product_unit.cpp
 )
 target_include_directories(cj_gc_clear_entries_unit PRIVATE
@@ -211,6 +215,7 @@ add_test(NAME cj_gc_clear_entries_unit COMMAND cj_gc_clear_entries_unit)
 
 add_executable(cj_gc_uncommit_unit
     gc_unit_main.cpp
+    gc_cycle_sequence_fixture.cpp
     gc_unit_stubs.cpp
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp

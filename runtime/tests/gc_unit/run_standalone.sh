@@ -78,7 +78,7 @@ run_ohos_host_arm() {
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
       "${runtime_include_flags[@]}" \
-      "$SRC/gc_unit_main.cpp" "$host_src/ohos_cycle_unit.cpp" \
+      "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp" "$host_src/ohos_cycle_unit.cpp" \
       -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
       -lcangjie-runtime -lboundscheck -o "$elf"
   elif [[ ! -x "$elf" ]]; then
@@ -292,7 +292,7 @@ MAIN_COMPILE_FLAGS=(
   "${INC_FLAGS[@]}"
 )
 MAIN_SOURCES=(
-  "$SRC/gc_unit_main.cpp"
+  "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/gc_unit_stubs.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
@@ -379,7 +379,7 @@ PUBLICATION_COMPILE_FLAGS=(
   "${INC_FLAGS[@]}"
 )
 PUBLICATION_SOURCES=(
-  "$SRC/gc_unit_main.cpp"
+  "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/clear_entries_product_unit.cpp"
 )
 

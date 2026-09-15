@@ -137,7 +137,6 @@ void GenerationCycle::StartOldMark(WCollector& collector)
 #endif
     auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
     space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
-    space.AssembleGarbageCandidates();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
         TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence);

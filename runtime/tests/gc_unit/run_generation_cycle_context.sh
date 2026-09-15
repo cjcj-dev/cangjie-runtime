@@ -29,7 +29,7 @@ if [[ "${GC_CYCLE_REUSE_ELFS:-0}" != 1 ]]; then
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
   -I"$ROOT/runtime/include" -I"$HEADERS/include" \
   -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
-  "$SRC/test_generation_satb_obligations.cpp" \
+  "$SRC/test_generation_satb_obligations.cpp" "$SRC/gc_cycle_sequence_fixture.cpp" \
   -L"$LIB" -Wl,-rpath,"$LIB" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck -ldl -o "$OUT/generation_satb_obligations"
 cat > "$OUT/cycle.cj" <<'CJ'
@@ -42,7 +42,7 @@ main(): Int64 {
 }
 CJ
 SDK="${CANGJIE_HOME:?set CANGJIE_HOME to matching compiler}"
-LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative:$SDK/tools/lib:$SDK/third_party/llvm/lib" \
+LD_LIBRARY_PATH="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set GC_UNIT_CJC_RUNTIME_LIB_DIR to compiler host runtime}:$SDK/tools/lib:$SDK/third_party/llvm/lib" \
   "$SDK/bin/cjc" "$OUT/cycle.cj" -O0 --static-std -L "$LIB" -L "$OUT" -lcycle_observer -o "$OUT/generation_cycle_context"
 fi
 sha256sum "$OUT/generation_satb_obligations" "$OUT/generation_cycle_context" "$OUT/libcycle_observer.so" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so"

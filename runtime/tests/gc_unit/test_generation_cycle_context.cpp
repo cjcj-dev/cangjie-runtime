@@ -124,7 +124,7 @@ void* Exercise(void*)
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu parallel=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent, parallel);
 #if defined(MRT_TESTABLE_INTERNALS)
-    auto& tracing = static_cast<TracingCollector&>(collector);
+    auto& tracing = resources.collectorProxy.GetCurrentCollector();
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;
@@ -165,7 +165,8 @@ void* Exercise(void*)
                 size_t buffers = 0;
                 Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
                     ++buffers;
-                    retired = retired && buffer.GetRegion() == nullptr && buffer.GetPreparedRegion() == nullptr;
+                    retired = retired && (buffer.GetRegion() == nullptr || buffer.GetRegion() == RegionInfo::NullRegion()) &&
+                        (buffer.GetPreparedRegion() == nullptr || buffer.GetPreparedRegion() == RegionInfo::NullRegion());
                 });
                 std::printf("P1_TLAB_RETIRE buffers=%zu retired=%u\n", buffers, retired);
                 Expect(retired, "p1_young_tlab_retired_before_sequence");

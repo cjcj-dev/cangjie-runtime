@@ -60,52 +60,64 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
     region->AddLiveCounts(1, obj->GetSize());
 }
 
+namespace {
+// ZGenerationPagesIterator + ZPage::is_relocatable (zGeneration.cpp:209-213).
+// Existing intrusive allocation lists are the Cangjie page-table adapter.
+bool IsOldRelocationCandidate(const RegionInfo* region)
+{
+    return region->GetOwnerGeneration() == Generation::Old && region->IsRelocatable();
+}
+}
+
 void RegionManager::AssembleSmallGarbageCandidates()
 {
-    fromRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FROM_REGION);
-    // twoflags: regions stamped post-mark-start of the previous major stay off from-space
-    // until PrepareTrace clears the stamp (after this Assemble).
-    {
-        RegionInfo* region = recentFullRegionList.GetHeadRegion();
+    // The young collection and old selection share the physical FROM list.
+    // Establish the old selector's input here, before cleanup or forwarding.
+    RegionInfo* region = fromRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (!IsOldRelocationCandidate(region)) {
+            fromRegionList.DeleteRegion(region);
+            ParkUnmovableFromRegion(region);
+        }
+        region = next;
+    }
+    auto select = [this](RegionList& list, bool recent) {
+        RegionInfo* region = list.GetHeadRegion();
         while (region != nullptr) {
             RegionInfo* next = region->GetNextRegion();
-            // routedest: a region a published route still names must not enter the collection
-            // set. Unlike notRelocatableThisCycle this is not about liveness — the region may
-            // well be dead — it is about address ownership: reclaiming it hands its units back
-            // for ClearUnits while the route keeps answering the old geometry.
-            if (!region->IsNotRelocatableThisCycle()) {
-                const size_t units = region->GetUnitCount();
-                recentFullRegionList.DeleteRegion(region);
-                RecentFullAccounting::Dequeue(1, units);
+            if (IsOldRelocationCandidate(region) && !region->IsNotRelocatableThisCycle()) {
+                list.DeleteRegion(region);
+                if (recent) RecentFullAccounting::Dequeue(1, region->GetUnitCount());
                 fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
             }
             region = next;
         }
-    }
-    {
-        RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
-        while (region != nullptr) {
-            RegionInfo* next = region->GetNextRegion();
-            if (!region->IsNotRelocatableThisCycle()) {
-                unmovableFromRegionList.DeleteRegion(region);
-                fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
-            }
-            region = next;
-        }
-    }
-
-    fromRegionList.VisitAllRegions([](RegionInfo* region) {
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        region->ClearLiveInfo(view);
-    });
+    };
+    select(rawPointerPinnedRegionList, false);
+    select(recentFullRegionList, true);
+    select(unmovableFromRegionList, false);
 }
 
 void RegionManager::AssembleLargeGarbageCandidates()
 {
-    oldLargeRegionList.MergeRegionList(recentLargeRegionList, RegionInfo::RegionType::LARGE_REGION);
-    for (RegionInfo* region = oldLargeRegionList.GetHeadRegion(); region != nullptr; region = region->GetNextRegion()) {
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        region->ClearLiveInfo(view);
+    RegionInfo* region = oldLargeRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (!IsOldRelocationCandidate(region)) {
+            oldLargeRegionList.DeleteRegion(region);
+            recentLargeRegionList.PrependRegion(region, RegionInfo::RegionType::LARGE_REGION);
+        }
+        region = next;
+    }
+    region = recentLargeRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (IsOldRelocationCandidate(region)) {
+            recentLargeRegionList.DeleteRegion(region);
+            oldLargeRegionList.PrependRegion(region, RegionInfo::RegionType::LARGE_REGION);
+        }
+        region = next;
     }
 }
 
@@ -142,17 +154,32 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
-    oldPinnedRegionList.MergeRegionList(recentPinnedRegionList, RegionInfo::RegionType::FULL_PINNED_REGION);
     RegionInfo* region = oldPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* nextRegion = region->GetNextRegion();
-        if (collectAll && (region->GetRawPointerObjectCount() > 0)) {
+        RegionInfo* next = region->GetNextRegion();
+        if (!IsOldRelocationCandidate(region)) {
+            oldPinnedRegionList.DeleteRegion(region);
+            recentPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
+        }
+        region = next;
+    }
+    region = recentPinnedRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (IsOldRelocationCandidate(region)) {
+            recentPinnedRegionList.DeleteRegion(region);
+            oldPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::FULL_PINNED_REGION);
+        }
+        region = next;
+    }
+    region = oldPinnedRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (collectAll && region->GetRawPointerObjectCount() > 0) {
             oldPinnedRegionList.DeleteRegion(region);
             rawPointerPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
         }
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        region->ClearLiveInfo(view);
-        region = nextRegion;
+        region = next;
     }
 }
 
