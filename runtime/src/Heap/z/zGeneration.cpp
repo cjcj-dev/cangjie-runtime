@@ -140,7 +140,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
     auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
     // ZGC holds the VM mark-start pause across retirement and seqnum advance
     // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
-    // explicitly because our ScopedLightSync pause permits safe native threads.
+    // explicitly because our handshake pause permits safe native threads.
     std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
     space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
 #if defined(MRT_TESTABLE_INTERNALS)
