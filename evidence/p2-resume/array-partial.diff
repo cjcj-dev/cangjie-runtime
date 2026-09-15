@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zMark.cpp
++++ b/runtime/src/Heap/z/zMark.cpp
+@@ -1355,7 +1355,7 @@
+     {
+         TracingCollector& collector = *shared.collector;
+         if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
+-            collector.FollowPartialArray(entry, staging);
++            // P2 regression: omit the old partial-array consumer.
+             PublishStaging(ctx, staging);
+             return;
+         }

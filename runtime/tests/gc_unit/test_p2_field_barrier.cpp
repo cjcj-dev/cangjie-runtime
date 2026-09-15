@@ -16,7 +16,10 @@
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 
-namespace MapleRuntime { extern "C" ArrayRef MCC_NewObjArray(const TypeInfo*, MIndex); }
+namespace MapleRuntime {
+extern "C" ArrayRef MCC_NewObjArray(const TypeInfo*, MIndex);
+extern "C" ArrayRef MCC_NewArray(const TypeInfo*, MIndex);
+}
 using namespace MapleRuntime;
 namespace {
 std::atomic<unsigned> failures{0};
@@ -434,13 +437,16 @@ extern "C" int p2FinalizerClosureExercise()
 
 extern "C" int p2ArrayFieldExercise()
 {
-    alignas(TypeInfo) static unsigned char types[3][sizeof(TypeInfo)]{};
+    alignas(TypeInfo) static unsigned char types[4][sizeof(TypeInfo)]{};
     auto* leafType = Type(types[0], false, 1);
     auto* holderType = Type(types[1], true, 1);
     holderType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     auto* arrayType = reinterpret_cast<TypeInfo*>(types[2]);
     arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
-    arrayType->SetComponentTypeInfo(leafType);
+    const bool structArray = std::getenv("P2_STRUCT_ARRAY") != nullptr;
+    auto* structType = Type(types[3], true, 2);
+    structType->SetType(TypeKind::TYPE_KIND_STRUCT);
+    arrayType->SetComponentTypeInfo(structArray ? structType : leafType);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<MAddress>(arrayType), sizeof(TypeInfo));
     auto& heap = Heap::GetHeap();
     auto& collector = heap.GetCollector();
@@ -454,9 +460,10 @@ extern "C" int p2ArrayFieldExercise()
     if (finalizable) holder->OnFinalizerCreated();
     collector.RequestGC(GC_REASON_YOUNG, false);
     const size_t length = 2 * MarkPartialArray::MIN_LENGTH + 17;
-    MArray* array = MCC_NewObjArray(arrayType, length);
+    const size_t fieldCount = length * (structArray ? 2 : 1);
+    MArray* array = structArray ? MCC_NewArray(arrayType, length) : MCC_NewObjArray(arrayType, length);
     auto* elements = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
-    for (size_t index = 0; index < length; ++index) {
+    for (size_t index = 0; index < fieldCount; ++index) {
         barrier.WriteReference(array, elements[index], index % 2 == 0 ? first : last);
     }
     barrier.WriteReference(holder, Slot(holder), array);
@@ -476,9 +483,9 @@ extern "C" int p2ArrayFieldExercise()
         auto* current = reinterpret_cast<MArray*>(arrayAddress());
         const MAddress begin = reinterpret_cast<MAddress>(current->ConvertToCArray());
         const MAddress address = reinterpret_cast<MAddress>(&field);
-        if (address >= begin && address < begin + length * sizeof(uintptr_t)) {
+        if (address >= begin && address < begin + fieldCount * sizeof(uintptr_t)) {
             ++fields;
-            if (address == begin + (length - 1) * sizeof(uintptr_t)) rangeTarget = true;
+            if (address == begin + (fieldCount - 1) * sizeof(uintptr_t)) rangeTarget = true;
         }
     };
     ConcurrentGCBreakpoints::AcquireControl();
@@ -488,8 +495,8 @@ extern "C" int p2ArrayFieldExercise()
     auto* lastPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(last));
     auto* controlPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(control));
     Expect(!RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(current))->IsYoungRegion(), "array_real_old_owner");
-    Expect(fields.load() == length, "array_full_and_range_visit_all_fields");
-    Expect(rangeTarget.load(), "array_range_target_reached");
+    Expect(fields.load() == fieldCount, structArray ? "struct_array_visits_all_members" : "array_full_and_range_visit_all_fields");
+    Expect(rangeTarget.load(), structArray ? "struct_array_last_member_reached" : "array_range_target_reached");
     Expect(finalizable ? firstPage->IsResurrectedObject(first) :
         firstPage->IsMarkedObject(firstPage->GetMarkView<Generation::Old>(), first), "array_first_child_retained_in_domain");
     Expect(finalizable ? lastPage->IsResurrectedObject(last) :
@@ -497,7 +504,7 @@ extern "C" int p2ArrayFieldExercise()
     Expect(controlPage->IsMarkedObject(controlPage->GetMarkView<Generation::Old>(), control), "array_independent_strong_control");
     Barrier::testFieldMarkResult = nullptr;
     std::printf("P2_ARRAY_RESULT failures=%u finalizable=%d fields=%zu expected=%zu range_target=%d\n",
-                failures.load(), finalizable, fields.load(), length, rangeTarget.load());
+                failures.load(), finalizable, fields.load(), fieldCount, rangeTarget.load());
     std::fflush(stdout);
     if (failures.load() != 0) std::_Exit(failures.load());
     ConcurrentGCBreakpoints::RunToIdle();

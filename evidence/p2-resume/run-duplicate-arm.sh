@@ -2,15 +2,15 @@
 set -u
 ulimit -c 0
 arm=$1
-R=/root/sym_cangjie_runtime_607_implement_r5684610492-build7
+R=/root/sym_cangjie_runtime_607_implement_r5684610492-build8
 case "$arm" in
- green) P="$R/testable"; cores=112-119;;
- cut) P=/root/sym_cangjie_runtime_607_implement_r5684610492-final-duplicate/testable; cores=120-127;;
- restored) P=/root/sym_cangjie_runtime_607_implement_r5684610492-final-restored/testable; cores=128-135;;
+ green) P="$R/testable"; cores=16-23;;
+ cut) P=/root/sym_cangjie_runtime_607_implement_r5684610492-final8-duplicate/testable; cores=24-31;;
+ restored) P=/root/sym_cangjie_runtime_607_implement_r5684610492-restored8/testable; cores=32-39;;
  *) exit 2;;
 esac
 SO="$P/build/runtime-staging/lib/x86_64_Release"
-ELF="$R/unit-testable/cj_gc_unit"
+ELF="$R/unit-final-testable/cj_gc_unit"
 O="$R/qualified-duplicate/$arm"
 mkdir -p "$O"
 uptime > "$O/before.txt"
