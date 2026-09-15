@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRangeRegistry.inline.hpp
++++ b/runtime/src/Heap/z/zRangeRegistry.inline.hpp
+@@ -34,7 +34,7 @@
+     }
+ 
+     Node* const prev = _list.prev(node);
+-    if (prev != nullptr && start == prev->end()) {
++    if (false && prev != nullptr && start == prev->end()) {
+       if (end == node->start()) {
+         // Merge with prev and current ranges
+         grow_from_back(prev->range(), size);

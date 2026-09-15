@@ -582,6 +582,28 @@ ZVirtualMemory RegionManager::ReservedAddressSpan(const ZVirtualMemoryManager& v
     return ZVirtualMemory(lowest, ZAddressOffsetMax - untype(lowest));
 }
 
+// ZGC's manager owns the sole free-range registry. Cangjie's reverse metadata
+// and compiler slot-domain table also need the actual reservation boundaries.
+// Borrow/return the initial free ranges before any page can be claimed; do not
+// retain a second runtime registry or replace holes with an address envelope.
+std::vector<RegionInfo::UnitSegment> RegionManager::ReservedSegments(ZVirtualMemoryManager& virtualMemory)
+{
+    std::vector<RegionInfo::UnitSegment> segments;
+    for (uint32_t partitionId = 0; partitionId < ZPerNUMAStorage::count(); ++partitionId) {
+        ZArray<ZVirtualMemory> ranges;
+        virtualMemory.remove_from_low_many_at_most(ZAddressOffsetMax, partitionId, &ranges);
+        for (const ZVirtualMemory& range : ranges) {
+            segments.push_back({ untype(ZOffset::address_unsafe(range.start())), range.size(), 0 });
+            virtualMemory.insert(range, partitionId);
+        }
+    }
+    std::sort(segments.begin(), segments.end(), [](const RegionInfo::UnitSegment& a,
+                                                  const RegionInfo::UnitSegment& b) {
+        return a.start < b.start;
+    });
+    return segments;
+}
+
 void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualMemoryManager& virtualMemory,
                                ZPhysicalMemoryManager& physicalMemory, const HeapParam& heapParam,
                                double garbageThreshold)
@@ -589,8 +611,7 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     // nUnit is the max capacity in units; the metadata spans the reserved
     // address range (ZVirtualToPhysicalRatio times larger).
     const ZVirtualMemory span = ReservedAddressSpan(virtualMemory);
-    const std::vector<RegionInfo::UnitSegment> segments{
-        RegionInfo::UnitSegment{ untype(ZOffset::address_unsafe(span.start())), span.size(), 0 } };
+    const std::vector<RegionInfo::UnitSegment> segments = ReservedSegments(virtualMemory);
     const size_t spanUnits = RegionInfo::IndexedUnitCount(segments);
     const size_t metadataSize = GetMetadataSize(spanUnits);
     this->regionInfoStart = regionInfoAddr;
@@ -1253,13 +1274,15 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
                  "heap reservation exceeds the 48-bit HeapSlot address carrier: start=%#zx size=%zu",
                  static_cast<size_t>(reservedStart), span.size());
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
-    Sanitizer::OnHeapAllocated(reinterpret_cast<void*>(reservedStart), span.size());
+    for (const auto& segment : RegionManager::ReservedSegments(*virtualMemory)) {
+        Sanitizer::OnHeapAllocated(reinterpret_cast<void*>(segment.start), segment.size);
+    }
 #endif
     // Metadata remains a contiguous reverse-indexed ABI array, independent of
     // the payload reservations (zPage metadata lives outside virtual memory).
     // It is committed lazily by the kernel: only units that ever become pages
     // touch their descriptor.
-    const std::vector<RegionInfo::UnitSegment> segments{ RegionInfo::UnitSegment{ reservedStart, span.size(), 0 } };
+    const std::vector<RegionInfo::UnitSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
     metadata.size = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(segments));
     void* const metadataBase =
         mmap(nullptr, metadata.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
@@ -1275,7 +1298,9 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
          reservedEnd);
 #endif
     std::vector<HeapSlotAddressRange> heapReservations;
-    heapReservations.push_back({ reservedStart, reservedEnd });
+    for (const auto& segment : segments) {
+        heapReservations.push_back({ segment.start, segment.End() });
+    }
     Heap::OnHeapCreated(reservedStart, heapReservations);
     Heap::OnHeapExtended(reservedEnd);
 }

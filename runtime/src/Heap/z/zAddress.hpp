@@ -36,7 +36,8 @@ extern uintptr_t g_cjStoreBadMask;
 extern size_t g_cjLoadShift;
 extern uintptr_t g_cjHeapStart;
 extern uintptr_t g_cjHeapEnd;
-constexpr unsigned kCjHeapRangeCap = 8;
+// P01/P04 compiler ABI: synchronized with ZMaxVirtualReservations and LLVM.
+constexpr unsigned kCjHeapRangeCap = 100;
 extern uintptr_t g_cjHeapRangeCount;
 extern uintptr_t g_cjHeapRangeStart[kCjHeapRangeCap];
 extern uintptr_t g_cjHeapRangeEnd[kCjHeapRangeCap];

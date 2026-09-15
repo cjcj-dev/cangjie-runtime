@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zMappedCache.cpp
++++ b/runtime/src/Heap/z/zMappedCache.cpp
+@@ -665,7 +665,7 @@
+     return true;
+   };
+ 
+-  if (size == ZPageSizeSmall) {
++  if (false && size == ZPageSizeSmall) {
+     // Small page allocations allocate at the lowest possible address
+     scan_remove_vmem<RemovalStrategy::LowestAddress>(size, select_size_fn, consume_vmem_fn);
+   } else {

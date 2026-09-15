@@ -30,6 +30,7 @@ MRT_EXPORT uintptr_t g_cjHeapRangeStart[kCjHeapRangeCap];
 MRT_EXPORT uintptr_t g_cjHeapRangeEnd[kCjHeapRangeCap];
 }
 namespace MapleRuntime {
+static_assert(kCjHeapRangeCap == ZMaxVirtualReservations, "compiler reservation table must cover the reserver");
 uintptr_t ZAddressHeapBase;
 uintptr_t ZAddressHeapBaseShift;
 size_t ZAddressOffsetBits;

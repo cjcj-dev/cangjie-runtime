@@ -222,9 +222,7 @@ public:
     GC_EXPECT_TRUE(_virtual->is_initialized());
     _physical.reset(new ZPhysicalMemoryManager(maxCapacity));
     GC_EXPECT_TRUE(_physical->is_initialized());
-    const ZVirtualMemory span = RegionManager::ReservedAddressSpan(*_virtual);
-    const std::vector<RegionInfo::UnitSegment> segments{
-      RegionInfo::UnitSegment{ untype(ZOffset::address_unsafe(span.start())), span.size(), 0 } };
+    const std::vector<RegionInfo::UnitSegment> segments = RegionManager::ReservedSegments(*_virtual);
     _metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(segments));
     _metadata = mmap(nullptr, _metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     GC_EXPECT_TRUE(_metadata != MAP_FAILED);

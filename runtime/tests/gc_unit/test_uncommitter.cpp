@@ -216,9 +216,7 @@ struct ProbeHeap {
         GC_EXPECT_TRUE(virtualMemory->is_initialized());
         physicalMemory.reset(new ZPhysicalMemoryManager(n * RegionInfo::UNIT_SIZE));
         GC_EXPECT_TRUE(physicalMemory->is_initialized());
-        const ZVirtualMemory span = RegionManager::ReservedAddressSpan(*virtualMemory);
-        const std::vector<RegionInfo::UnitSegment> segments{
-            RegionInfo::UnitSegment{ untype(ZOffset::address_unsafe(span.start())), span.size(), 0 } };
+        const std::vector<RegionInfo::UnitSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
         metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(segments));
         metadata = mmap(nullptr, metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
         GC_EXPECT_TRUE(metadata != MAP_FAILED);

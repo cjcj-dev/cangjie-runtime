@@ -11,6 +11,7 @@
 
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
+#include "Heap/z/zHeap.hpp"
 
 #include <sys/mman.h>
 
@@ -267,3 +268,80 @@ ZVMM_TEST(test_remove_from_low)
 ZVMM_TEST(test_remove_from_high)
 ZVMM_TEST(test_remove_whole)
 ZVMM_TEST(test_insert_merges_neighbours)
+
+// P01 reverse-metadata adapter over P04's real reservation producer. Keep the
+// holes occupied so both the contiguous search and recursive fallback run.
+GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, InitialSegmentsPreserveNineReservations)
+{
+    EnsureZAddressDomain();
+    constexpr size_t domainSize = 512 * MB;
+    constexpr size_t segmentSize = 8 * MB;
+    constexpr size_t count = 9;
+    const uintptr_t domain = ZAddressHeapBase;
+    ZAddressOffsetMaxSetter domainLimit(domainSize);
+    void* occupied = mmap(reinterpret_cast<void*>(domain), domainSize, PROT_NONE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+    GC_EXPECT_TRUE(occupied != MAP_FAILED);
+    for (size_t i = 0; i < count; ++i) {
+        GC_EXPECT_EQ(munmap(reinterpret_cast<void*>(domain + 2 * i * segmentSize), segmentSize), 0);
+    }
+    {
+        ZVirtualMemoryManager manager(8 * MB);
+        GC_EXPECT_TRUE(manager.is_initialized());
+        const auto first = RegionManager::ReservedSegments(manager);
+        const auto second = RegionManager::ReservedSegments(manager);
+        std::fprintf(stderr, "P04_SEGMENTS_TARGET first=%zu second=%zu expected=%zu\n",
+                     first.size(), second.size(), count);
+        GC_EXPECT_EQ(first.size(), count);
+        GC_EXPECT_EQ(second.size(), first.size());
+        size_t bytes = 0;
+        for (size_t i = 0; i < count; ++i) {
+            GC_EXPECT_EQ(first[i].start, domain + 2 * i * segmentSize);
+            GC_EXPECT_EQ(first[i].size, segmentSize);
+            GC_EXPECT_EQ(second[i].start, first[i].start);
+            GC_EXPECT_EQ(second[i].size, first[i].size);
+            bytes += first[i].size;
+        }
+        // A real claim sees exactly the same addresses after both borrow/return
+        // operations, including the ninth segment; no interval crosses a hole.
+        ZArray<ZVirtualMemory> claimed;
+        GC_EXPECT_EQ(manager.remove_from_low_many_at_most(ZAddressOffsetMax, ZPerNUMAStorage::id(), &claimed), bytes);
+        GC_EXPECT_EQ(claimed.length(), static_cast<int>(count));
+        for (int i = 0; i < claimed.length(); ++i) {
+            GC_EXPECT_EQ(untype(ZOffset::address_unsafe(claimed.at(i).start())), first[i].start);
+            GC_EXPECT_EQ(claimed.at(i).size(), first[i].size);
+            manager.insert(claimed.at(i), ZPerNUMAStorage::id());
+        }
+    }
+    GC_EXPECT_EQ(munmap(reinterpret_cast<void*>(domain), domainSize), 0);
+}
+
+// Unit coverage of the header-only P01 provider. The joint llc runner separately
+// consumes ranges emitted by RegionSpace::Init from real OS reservations.
+GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTablePublishesEveryRange)
+{
+    EnsureZAddressDomain();
+    const uintptr_t domain = ZAddressHeapBase;
+    const size_t granule = ZBackingGranuleSize;
+    for (size_t count : {size_t(0), size_t(1), size_t(9), size_t(kCjHeapRangeCap)}) {
+        std::vector<HeapSlotAddressRange> ranges;
+        for (size_t i = 0; i < count; ++i) {
+            ranges.push_back({domain + 2 * i * granule, domain + (2 * i + 1) * granule});
+        }
+        Heap::OnHeapCreated(domain, ranges);
+        std::fprintf(stderr, "P04_RANGE_PUBLICATION_TARGET input=%zu published=%zu\n",
+                     count, static_cast<size_t>(g_cjHeapRangeCount));
+        GC_EXPECT_EQ(g_cjHeapRangeCount, count);
+        for (size_t i = 0; i < count; ++i) {
+            GC_EXPECT_EQ(g_cjHeapRangeStart[i], ranges[i].start);
+            GC_EXPECT_EQ(g_cjHeapRangeEnd[i], ranges[i].end);
+            GC_EXPECT_TRUE(Heap::IsHeapAddress(reinterpret_cast<void*>(ranges[i].start)));
+            GC_EXPECT_TRUE(Heap::IsHeapAddress(reinterpret_cast<void*>(ranges[i].end - 1)));
+            GC_EXPECT_FALSE(Heap::IsHeapAddress(reinterpret_cast<void*>(ranges[i].end)));
+        }
+        for (size_t i = count; i < kCjHeapRangeCap; ++i) {
+            GC_EXPECT_EQ(g_cjHeapRangeStart[i], 0U);
+            GC_EXPECT_EQ(g_cjHeapRangeEnd[i], 0U);
+        }
+    }
+}

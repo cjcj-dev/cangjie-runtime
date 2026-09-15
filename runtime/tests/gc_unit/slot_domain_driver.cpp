@@ -1,5 +1,16 @@
 // Real runtime reservation and MCC consumers; no range publication or MCC substitutes.
+#include <list>
+#include <map>
+#include <memory>
+#include <set>
+#include <thread>
+#include <vector>
 #include "Cangjie.h"
+// Test setup claims virtual space through the real manager so a normal large
+// array allocation reaches the ninth reservation. No range provider is replaced.
+#define private public
+#include "Heap/Allocator/RegionSpace.h"
+#undef private
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
@@ -22,6 +33,8 @@ static NativeSlot globalSlot(zpointer::null);
 static const char* selected = "all";
 static unsigned failures = 0;
 static unsigned assertions = 0;
+static size_t requestedReservations = 2;
+static size_t targetReservation = 0;
 
 static void Expect(const char* name, uintptr_t actual, uintptr_t expected)
 {
@@ -56,7 +69,35 @@ static bool Enabled(const char* name)
 static int RunConsumers()
 {
     ArrayTypes types;
-    MArray* holder = MCC_NewObjArray(types.array, 8);
+    ZArray<ZVirtualMemory> borrowed;
+    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    if (targetReservation != 0) {
+        // Temporarily own the other free virtual ranges. MCC_NewObjArray still
+        // executes the product claim/commit/map path and creates the real holder.
+        ZArray<ZVirtualMemory> free;
+        space.virtualMemory->remove_from_low_many_at_most(
+            ZAddressOffsetMax, ZPerNUMAStorage::id(), &free);
+        for (const auto& range : free) {
+            const uintptr_t start = untype(ZOffset::address_unsafe(range.start()));
+            if (start >= g_cjHeapRangeStart[targetReservation] &&
+                start + range.size() <= g_cjHeapRangeEnd[targetReservation]) {
+                space.virtualMemory->insert(range, ZPerNUMAStorage::id());
+            } else {
+                borrowed.append(range);
+            }
+        }
+    }
+    // A four MiB array bypasses any existing small-page allocation buffer.
+    MArray* holder = MCC_NewObjArray(types.array, targetReservation == 0 ? 8 : 512 * 1024);
+    for (const auto& range : borrowed) {
+        space.virtualMemory->insert(range, ZPerNUMAStorage::id());
+    }
+    const uintptr_t holderAddress = reinterpret_cast<uintptr_t>(holder);
+    if (holderAddress < g_cjHeapRangeStart[targetReservation] ||
+        holderAddress >= g_cjHeapRangeEnd[targetReservation]) {
+        std::printf("SLOT_DOMAIN_TARGET_SETUP_FAIL holder=%p target=%zu\n", holder, targetReservation);
+        return 98;
+    }
     // Choose an actual allocated object whose raw bits satisfy the load mask.
     // That makes a mistaken heap fast read of plain storage observably shift it.
     MArray* payload = nullptr;
@@ -67,10 +108,14 @@ static int RunConsumers()
             break;
         }
     }
-    if (!payload || g_cjHeapRangeCount != 2) {
+    if (!payload || g_cjHeapRangeCount != requestedReservations) {
         std::printf("SLOT_DOMAIN_SETUP_FAIL payload=%p ranges=%lu\n", payload, g_cjHeapRangeCount);
         return 90;
     }
+    Expect("reservation.count", g_cjHeapRangeCount, requestedReservations);
+    std::printf("SLOT_DOMAIN_TARGET_RESERVATION index=%zu start=%#lx end=%#lx holder=%p\n",
+                targetReservation, g_cjHeapRangeStart[targetReservation],
+                g_cjHeapRangeEnd[targetReservation], holder);
     auto** heapSlot = reinterpret_cast<void**>(holder->ConvertToCArray());
     const uintptr_t hole = g_cjHeapRangeEnd[0];
     void* mapped = mmap(reinterpret_cast<void*>(hole), 4096, PROT_READ | PROT_WRITE,
@@ -115,21 +160,25 @@ int main(int argc, char** argv)
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc > 1) selected = argv[1];
     ZGlobalsPointers::initialize();
-    // Occupy the legal domain, leaving two 64 MiB windows for the native
-    // reservation search. No product map/range/backend is replaced. A 128 MiB
-    // contiguous reservation cannot fit, so TryMapMemory must use its fallback.
-    constexpr size_t segment = 64UL * 1024 * 1024;
+    if (const char* value = std::getenv("SLOT_DOMAIN_RESERVATIONS")) {
+        requestedReservations = std::strtoul(value, nullptr, 10);
+    }
+    if (requestedReservations != 2 && requestedReservations != 9) return 99;
+    targetReservation = requestedReservations == 9 ? 8 : 0;
+    // Occupy the legal domain and leave exact separated windows. The real
+    // ZVirtualMemoryReserver must take its recursive fallback; the real
+    // RegionSpace::Init publishes the resulting reservations to LLVM.
+    const size_t segment = requestedReservations == 9 ? 32 * 1024 * 1024 : 64 * 1024 * 1024;
     const uintptr_t domain = ZAddressHeapBase;
     const size_t size = ZAddressOffsetMax;
-    const size_t granule = 1UL << 21;
-    const size_t step = (((size - segment) / 8192 + granule - 1) / granule) * granule;
     void* occupied = mmap(reinterpret_cast<void*>(domain), size, PROT_NONE,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
     if (occupied == MAP_FAILED) { std::perror("domain reservation"); return 93; }
-    if (munmap(reinterpret_cast<void*>(domain), segment) != 0 ||
-        munmap(reinterpret_cast<void*>(domain + step), segment) != 0) return 94;
-    std::printf("SLOT_DOMAIN_INPUT domain=%#lx size=%zu windows=%#lx,%#lx segment=%zu\n",
-                domain, size, domain, domain + step, segment);
+    for (size_t i = 0; i < requestedReservations; ++i) {
+        if (munmap(reinterpret_cast<void*>(domain + 2 * i * segment), segment) != 0) return 94;
+    }
+    std::printf("SLOT_DOMAIN_INPUT domain=%#lx size=%zu windows=%zu segment=%zu\n",
+                domain, size, requestedReservations, segment);
     (void)setenv("cjProcessorNum", "1", 1);
     (void)setenv("cjGCInterval", "3600s", 1);
     RuntimeParam param {};

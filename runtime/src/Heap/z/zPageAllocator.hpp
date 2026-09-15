@@ -485,6 +485,8 @@ public:
                     ZPhysicalMemoryManager& physicalMemory, const HeapParam& heapParam, double garbageThreshold);
     // Address span the per-unit metadata covers: [lowest reserved offset, ZAddressOffsetMax).
     static ZVirtualMemory ReservedAddressSpan(const ZVirtualMemoryManager& virtualMemory);
+    // P01 reverse-metadata ABI adapter; called only before runtime allocation.
+    static std::vector<RegionInfo::UnitSegment> ReservedSegments(ZVirtualMemoryManager& virtualMemory);
 
     void VisitPageOwners(const std::function<void(RegionInfo*)>& visitor) const
     {
