@@ -2018,7 +2018,6 @@ bool RegionManager::RelocateClaimedPage(RegionInfo* region)
     MAddress regionLimit = region->GetRegionAllocPtr();
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     bool allocFailed = false;
-    region->ResetPageSequence();
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t) {
         if (allocFailed) {
             return;
@@ -2073,7 +2072,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // ZGC zRelocate.cpp:862-896: establish the to-page age before publishing
     // any in-place forwarding entry. The descriptor stays in the page table,
     // so promotion publishes its old identity here. PublishFromPageMetadata
-    // already saved the source generation, livemap and allocation watermark in
+    // already saved the source generation, livemap and birth sequence in
     // the forwarding carrier; ForEachLiveObjectStart consumes that snapshot,
     // not the new destination LiveInfo allocated by PromoteYoungRegion.
     if (fromYoung) {
@@ -2084,6 +2083,8 @@ void RegionManager::CompactRegion(RegionInfo* region)
             region->SetYoungAge(untype(toAge));
         }
     }
+    // ZPage::reset(to_age): only the actual in-place destination is born anew.
+    region->ResetPageSequence();
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
         if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {

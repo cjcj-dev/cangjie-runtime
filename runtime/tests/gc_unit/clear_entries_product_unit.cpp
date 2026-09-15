@@ -1086,7 +1086,15 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     ForwardingTable::RetainPageOwner(region)->set_in_place();
+    const uint64_t sourceBirth = region->BirthSequence();
+    const uint64_t sourceEpoch = region->GetSnapshotEpoch();
     manager.CompactRegion(region);
+    const auto* source = ForwardingTable::GetFromPageView(region);
+    const bool frozenSource = source != nullptr && source->birthSequence == sourceBirth && source->epoch == sourceEpoch;
+    std::fprintf(stderr, "P1_INPLACE_BIRTH_ASSERT allocating=%d frozen_source=%d birth=%llu owner=%llu\n",
+        region->IsAllocating(), frozenSource, static_cast<unsigned long long>(region->BirthSequence()),
+        static_cast<unsigned long long>(region->GetSnapshotEpoch()));
+    GC_EXPECT_TRUE(region->IsAllocating() && frozenSource);
     GC_EXPECT_TRUE(region->IsForwardingDone());
 
     const MAddress deadAddr = reinterpret_cast<MAddress>(deadObject);
