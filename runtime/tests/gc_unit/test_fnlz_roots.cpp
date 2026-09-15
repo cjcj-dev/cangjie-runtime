@@ -3,6 +3,9 @@
 #include "gc_unittest.hpp"
 #include "Mutator/Mutator.h"
 
+#include <algorithm>
+#include <array>
+#include <vector>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -200,14 +203,19 @@ GC_OTHER_VM_TEST(FnlzRoots, SharedBlockHandlesSurviveGrowthAndTransfer)
 GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
 {
     auto& heap = Heap::GetHeap();
-    alignas(8) unsigned char objects[130][16] = {};
+    GcHeapFixture fixture;
+    std::array<BaseObject*, 130> objects;
+    for (size_t i = 0; i < objects.size(); ++i) {
+        objects[i] = fixture.PlaceObject(fixture.heapStart + 128 + i * 16);
+    }
+    fixture.region0->SetRegionAllocPtr(fixture.heapStart + 128 + objects.size() * 16);
     std::vector<U64> handles;
     NativeSlot* first = nullptr;
     for (size_t index = 0; index < 130; ++index) {
-        handles.push_back(heap.RegisterExportRoot(reinterpret_cast<BaseObject*>(objects[index])));
+        handles.push_back(heap.RegisterExportRoot(objects[index]));
         if (index == 0) {
             heap.VisitAllExportRoots([&](NativeSlot& slot) {
-                if (to_object(slot.GetTargetObject()) == reinterpret_cast<BaseObject*>(objects[0])) { first = &slot; }
+                if (to_object(slot.GetTargetObject()) == objects[0]) { first = &slot; }
             });
         }
     }
@@ -215,7 +223,7 @@ GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
     NativeSlot* grown = nullptr;
     heap.VisitAllExportRoots([&](NativeSlot& slot) {
         for (auto& object : objects) {
-            if (to_object(slot.GetTargetObject()) == reinterpret_cast<BaseObject*>(object)) {
+            if (to_object(slot.GetTargetObject()) == object) {
                 ++seen;
                 if (&object == &objects[0]) { grown = &slot; }
             }
@@ -229,7 +237,7 @@ GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
     size_t releasedSeen = 0;
     heap.VisitAllExportRoots([&](NativeSlot& slot) {
         for (auto& object : objects) {
-            if (to_object(slot.GetTargetObject()) == reinterpret_cast<BaseObject*>(object)) { ++releasedSeen; }
+            if (to_object(slot.GetTargetObject()) == object) { ++releasedSeen; }
         }
     });
     std::fprintf(stderr, "ROOT_STORAGE_TARGET export_released_remaining=%zu\n", releasedSeen);

@@ -223,7 +223,12 @@ void CheckNativeRoot(bool minor, bool plain = false, unsigned threadKind = 0)
     std::fprintf(stderr, "native_root_after_reset executed=1 enumerated=%u slot=%#zx expected=%p\n",
                  unsigned(enumerated), raw(slot.GetFieldValue()), to);
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
-    GC_EXPECT_TRUE(enumerated && to_object(slot.GetTargetObject()) == to);
+    // ZMark::mark_object skips an already marked object (zMark.inline.hpp:63-75).
+    // Observe actual published stacks, not the retired RootSet input buffer.
+    // After young, this is the first old scan and must publish. After old,
+    // the already marked current object must not be requeued.
+    GC_EXPECT_EQ(enumerated, minor);
+    GC_EXPECT_TRUE(to_object(slot.GetTargetObject()) == to);
     GC_EXPECT_TRUE(oldMarkedCurrent);
 }
 void CheckPlainRejected(bool minor)
@@ -248,7 +253,7 @@ void CheckPlainRejected(bool minor)
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     const char* site = minor ? "NativeSlot requires colored value at MarkYoungGoodBarrier"
-                             : "NativeSlot requires colored value at EnumRefFieldRoot";
+                             : "NativeSlot requires colored value at ReadStaticRef";
     const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
                           output.find(site) != std::string::npos;
     std::fprintf(stderr, "%snative_root_encoding_rejected executed=1 entry=%s status=%d result=%u\n",
