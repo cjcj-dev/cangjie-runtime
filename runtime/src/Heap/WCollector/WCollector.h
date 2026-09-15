@@ -174,6 +174,7 @@ public:
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
+    void MarkYoungRootObject(BaseObject* object) const override;
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const override;

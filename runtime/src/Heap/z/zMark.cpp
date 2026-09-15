@@ -39,6 +39,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -673,8 +674,10 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
         BaseObject* obj = ResolveMinorReference(root);
         invisibleVisitor(obj);
     };
-    NativeSlotVisitor nativeVisitor = [&visitor](NativeSlot& root) {
-        visitor(Heap::GetBarrier().ReadStaticRef(root));
+    // ZMarkYoungOopClosure::do_oop, zMark.cpp:678-681. All colored root
+    // families use this closure; owner routing belongs to the barrier.
+    NativeSlotVisitor nativeVisitor = [](NativeSlot& root) {
+        Heap::GetBarrier().MarkYoungGoodBarrierOnOopField(root);
     };
     VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, nativeVisitor, stackScanEpoch);
     VisitMinorValueRoots(visitor);
@@ -1069,6 +1072,22 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
     MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*youngMarkDomain);
     publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
                      MarkStackEntry::MarkAndFollow(object), true);
+}
+
+// ZGenerationYoung::mark_object -> ZMark::mark_object (GCThread/Strong/Follow),
+// zGeneration.inline.hpp:119-123 / zMark.inline.hpp:49-94.
+void WCollector::MarkYoungRootObject(BaseObject* object) const
+{
+    CHECK_DETAIL(youngMarkDomain != nullptr, "young root mark requires its mark domain");
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    bool firstLive = false;
+    if (region->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, firstLive)) {
+        return;
+    }
+    MarkStripeSet& stripes = youngMarkDomain->Stripes();
+    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*youngMarkDomain);
+    publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
+                     MarkStackEntry::Claimed(object, firstLive, true, false), true);
 }
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,

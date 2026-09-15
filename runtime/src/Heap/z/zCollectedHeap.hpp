@@ -89,6 +89,10 @@ public:
     {
         AbortUnimplemented("Collector::MarkYoungObjectIfActive");
     }
+    virtual void MarkYoungRootObject(BaseObject*) const
+    {
+        AbortUnimplemented("Collector::MarkYoungRootObject");
+    }
     virtual void MarkOldObjectIfActive(BaseObject*, bool = false) const
     {
         AbortUnimplemented("Collector::MarkOldObjectIfActive");

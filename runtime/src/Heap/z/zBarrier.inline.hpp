@@ -9,9 +9,29 @@
 #define MRT_BARRIER_INLINE_H
 
 #include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 #include "securec.h"
 
 namespace MapleRuntime {
+// ZBarrier::is_mark_young_good_fast_path, zBarrier.inline.hpp:392-394.
+inline bool Barrier::IsMarkYoungGoodFastPath(zpointer value)
+{
+    return ColourPredicates::is_load_good(raw(value), ::g_cjLoadBadMask) &&
+           ColourPredicates::is_marked_young(raw(value), ::g_cjMarkBadMask);
+}
+
+inline zpointer Barrier::ColorMarkYoungGood(BaseObject* object, zpointer previous)
+{
+    return ColorAddressMarkYoungGood(from_object(object), previous);
+}
+
+inline BaseObject* Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    return MarkBarrier(IsMarkYoungGoodFastPath, &Barrier::MarkYoungSlowPath,
+                       ColorMarkYoungGood, field, observed);
+}
+
 template<>
 inline void Barrier::WriteField<int8_t>(BaseObject* obj, Field<int8_t>& field, int8_t val) const
 {

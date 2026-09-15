@@ -275,6 +275,49 @@ BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
 }
 
+// ZBarrier::barrier, zBarrier.inline.hpp:319-344. Retain the observed colored
+// word until after marking: the color operation needs its old-generation bits.
+BaseObject* Barrier::MarkBarrier(MarkFastPath fast, MarkSlowPath slow, MarkColor color,
+                                 NativeSlot& field, zpointer observed) const
+{
+    if (fast(observed)) {
+        return to_object(RefField<>(observed).GetTargetObject());
+    }
+    RefField<> value(observed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &field };
+    BaseObject* loadGood = theCollector.make_load_good(value, provenance);
+    BaseObject* good = (this->*slow)(loadGood);
+    const zpointer colored = color(good, observed);
+    ZgcSelfHeal(field, observed, colored, fast, HealSite::BarrierReadReference);
+    return good;
+}
+
+// ZBarrier::mark_young_slow_path, zBarrier.cpp:206-215.
+BaseObject* Barrier::MarkYoungSlowPath(BaseObject* object) const
+{
+    if (object == nullptr) {
+        return nullptr;
+    }
+    MarkIfYoung(object);
+    return object;
+}
+
+// ZBarrier::mark_if_young, zBarrier.inline.hpp:763-767. Native literal roots
+// are the Cangjie non-heap case and have no generation owner.
+void Barrier::MarkIfYoung(BaseObject* object) const
+{
+    if (Heap::IsHeapAddress(object) &&
+        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
+        MarkYoung(object);
+    }
+}
+
+// ZBarrier::mark_young<DontResurrect, GCThread, Follow>, :754-759.
+void Barrier::MarkYoung(BaseObject* object) const
+{
+    theCollector.MarkYoungRootObject(object);
+}
+
 // Thread-owned uncolored roots are made load-good by the shared root handshake
 // before their mutator resumes (ZStackWatermark). Mutator access does not remap.
 BaseObject* Barrier::ReadPlainRoot(RootSlot& field) const

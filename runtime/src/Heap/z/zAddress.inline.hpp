@@ -372,4 +372,16 @@ constexpr bool is_remembered_exact(uintptr_t value, uintptr_t storeBadMask)
 constexpr unsigned ZGC_PREDICATE_COUNT = 17u;
 
 } // namespace ColourPredicates
+
+// ZAddress::mark_young_good, zAddress.inline.hpp:793-805.
+inline zpointer ColorAddressMarkYoungGood(zaddress address, zpointer previous)
+{
+    if (!ColourPredicates::has_address(raw(previous))) {
+        return to_zpointer(::g_cjStoreGoodMask | REMEMBERED_MASK);
+    }
+    const uintptr_t oldMarked = raw(previous) & (MARKED_OLD_MASK | FINALIZABLE_MASK);
+    return to_zpointer(raw(address) | (::g_cjLoadBadMask ^ REMAP_COLOUR_MASK) |
+                      (MARKED_YOUNG_MASK & ~::g_cjMarkBadMask) | oldMarked | REMEMBERED_MASK);
+}
+
 } // namespace MapleRuntime
