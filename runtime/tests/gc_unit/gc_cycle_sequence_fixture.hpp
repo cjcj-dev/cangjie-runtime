@@ -15,5 +15,3 @@ struct GenerationSequenceFixture {
 
 }
 #endif
-}
-#endif
