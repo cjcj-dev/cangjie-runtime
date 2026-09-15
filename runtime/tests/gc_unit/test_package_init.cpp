@@ -19,7 +19,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/MObject.h"
 #include "Loader/BinaryFile/CjFile/CjFile.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"
@@ -444,11 +444,16 @@ GC_OTHER_VM_TEST(PackageInit, ForeignCJThreadWaitsForCompletion)
     Start(Owner, &c);
     Target("owner-reached-body", Await(c.ownerStarted));
     std::atomic<Mutator*> foreignMutator { nullptr };
+    std::atomic<bool> mayDetach { false };
     std::thread foreign([&]() {
         Target("foreign-attach", MRT_NewForeignCJThread());
         foreignMutator.store(Mutator::GetMutator(), std::memory_order_release);
         Mutator::GetMutator()->SetManagedContext(false);
         Waiter(&c);
+        {
+            ScopedEnterSaferegion safe(false);
+            while (!mayDetach.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+        }
         Target("foreign-detach", MRT_EndForeignCJThread());
     });
     Target("foreign-waiter-started", Await(c.waiterStarted));
@@ -461,6 +466,7 @@ GC_OTHER_VM_TEST(PackageInit, ForeignCJThreadWaitsForCompletion)
     c.finish.store(true, std::memory_order_release);
     WaitqueueWakeAll(&c.release, nullptr, nullptr);
     Target("foreign-waiter-completed", Await(c.waiterDone));
+    mayDetach.store(true, std::memory_order_release);
     foreign.join();
     Target("all-body-writes-visible", c.observedPayload == 73);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
