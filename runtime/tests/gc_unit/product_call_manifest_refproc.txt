@@ -1,0 +1,6 @@
+# Independent product-call manifest (not derived from dlsym count).
+# test_name / stable_product_anchor / carrier / consumer_callsite / cut_site
+ZLiveMapPort.ConcurrentDuplicateSatbPublicationHasOneStrongReceipt / RegionInfo::MarkObject<Old>(view,obj,size,accountLive) / libcangjie-runtime.so explicit inst RegionManager.cpp:3767-3776 / test_live_map.cpp:ProductMarkObjectFn dlsym / LiveInfo.h:186 fetch_or
+ZLiveMapPort.CollectorMarkObjectConsumesProductPair / WCollector::MarkObject / libcangjie-runtime.so Mark.cpp:77-111 / test_live_map.cpp collector.MarkObject / Mark.cpp:99 MarkObjectByOwner
+ZLiveMapPort.DuplicateSatbPublicationConvergesAtStrongMark / SatbBuffer::ShouldEnqueue / libcangjie-runtime.so SatbBuffer.cpp:24-46,105-115 / test_live_map.cpp SatbBuffer::Young().ShouldEnqueue / RegionSpace.h:232-243
+LiveMap.LargeFirstPaintHasSingleWinner / RegionInfo::MarkObject<Old> / libcangjie-runtime.so RegionManager.cpp:3767-3776 / test_live_map.cpp:ProductMarkObjectFn / RegionInfo.h:1324-1333

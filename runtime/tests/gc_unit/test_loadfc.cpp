@@ -1,0 +1,187 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+
+// Healthy load-barrier entry coverage. The removed FinalizeLoadForMutator
+// zero-header termination policy has no ZGC counterpart (barrier:319-343).
+
+
+#include "gc_heap_fixture.hpp"
+
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrier.hpp"
+#include "ObjectModel/RefField.inline.h"
+#include "gc_unittest.hpp"
+
+// Test-only read of the heap-wide remembered-set init state so repeated fixtures in one process
+// do not double-initialize it (another fixture may already have done so).
+#define private public
+#include "Heap/z/zRememberedSet.hpp"
+#undef private
+
+using namespace MapleRuntime;
+using namespace MapleRuntime::GcUnit;
+
+extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadRefField(
+    MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<false>* field);
+extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadWeakRef(
+    MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<false>* field);
+extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadStaticRef(MapleRuntime::NativeSlot* field);
+extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicReadReference(
+    MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field, MapleRuntime::MemoryOrder order);
+extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicSwapReference(
+    MapleRuntime::ObjectPtr ref, MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field,
+    MapleRuntime::MemoryOrder order);
+extern "C" void CJ_MCC_ArrayCopyRef(MapleRuntime::ObjectPtr dstObj, MapleRuntime::MAddress dstField,
+                                     size_t dstSize, MapleRuntime::ObjectPtr srcObj,
+                                     MapleRuntime::MAddress srcField, size_t srcSize);
+
+namespace {
+
+class NoAnswerCollector final : public Collector {
+public:
+    void Init() override {}
+    void RunGarbageCollection(uint64_t, GCReason) override {}
+    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
+    FindToVersionResult FindToVersion(BaseObject*, Generation) const override { return FindToVersionResult::NotForwarded(); }
+    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
+    bool IsOldPointer(RefField<>&) const override { return false; }
+    bool IsFromObject(BaseObject*) const override { return false; }
+    bool IsGhostFromObject(BaseObject*) const override { return false; }
+    bool IsUnmovableFromObject(BaseObject*) const override { return false; }
+    RefField<> GetAndTryTagRefField(BaseObject* object) const override
+    {
+        const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
+        return RefField<>(GcUnit::ColouredPointer(object, remap));
+    }
+    ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
+    BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
+};
+
+class InstalledBarrierScope {
+public:
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
+    {
+        Heap::barrierPtr = &barrier;
+    }
+    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
+
+private:
+    Barrier* previous;
+};
+
+struct LoadFcFixture {
+    LoadFcFixture() : barrier(collector, rememberedSet), installed(barrier)
+    {
+        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        auto& heapRemset = Heap::GetHeap().GetRememberedSet();
+        if (!heapRemset.initialized) {
+            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        }
+        heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj0) + 128);
+        heap.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj1) + 128);
+    }
+
+    // Ordinary slot pointing at obj0 with the current good colour.
+    RefField<>* MakePlainField()
+    {
+        field = &HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
+        field->StoreColoured(GcUnit::StoreGoodPointer(heap.obj0));
+        return field;
+    }
+
+    GcHeapFixture heap;
+    NoAnswerCollector collector;
+    RememberedSet rememberedSet;
+    Barrier barrier;
+    InstalledBarrierScope installed;
+    RefField<false>* field = nullptr;
+};
+
+
+} // namespace
+
+// ---- ordinary ----
+
+GC_TEST(LoadFc, OrdinaryReadHealthyTargetReturnsNormally)
+{
+    LoadFcFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RefField<>* field = fx.MakePlainField();
+
+    ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, field);
+
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+// ---- weak ----
+
+GC_TEST(LoadFc, WeakReadHealthyTargetReturnsNormally)
+{
+    LoadFcFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RefField<>* field = fx.MakePlainField();
+
+    ObjectPtr got = CJ_MCC_ReadWeakRef(fx.heap.obj1, field);
+
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+// ---- static root ----
+
+GC_TEST(LoadFc, StaticReadHealthyTargetReturnsNormally)
+{
+    LoadFcFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    NativeSlot root(StoreGoodPointer(fx.heap.obj0));
+
+    ObjectPtr got = CJ_MCC_ReadStaticRef(&root);
+
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+// ---- atomic read ----
+
+GC_TEST(LoadFc, AtomicReadHealthyTargetReturnsNormally)
+{
+    LoadFcFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RefField<true> field(to_zpointer(reinterpret_cast<MAddress>(fx.heap.obj0)));
+
+    ObjectPtr got = CJ_MCC_AtomicReadReference(fx.heap.obj1, &field, std::memory_order_seq_cst);
+
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+// ---- swap old value ----
+GC_TEST(LoadFc, SwapOldValueHealthyTargetReturnsNormally)
+{
+    LoadFcFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RefField<true> field(to_zpointer(reinterpret_cast<MAddress>(fx.heap.obj0)));
+    BaseObject* newRef = fx.heap.obj1;
+
+    ObjectPtr got = CJ_MCC_AtomicSwapReference(newRef, fx.heap.obj1, &field, std::memory_order_seq_cst);
+
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+// ---- bulk (ref-array copy reads each src slot through the load barrier) ----
+
+GC_TEST(LoadFc, BulkCopyHealthySourceReturnsNormally)
+{
+    LoadFcFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RefField<>* field = fx.MakePlainField();
+    RootSlot copied;
+
+    CJ_MCC_ArrayCopyRef(nullptr, reinterpret_cast<MAddress>(&copied), sizeof(copied), fx.heap.obj1,
+                        reinterpret_cast<MAddress>(field), sizeof(*field));
+
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
