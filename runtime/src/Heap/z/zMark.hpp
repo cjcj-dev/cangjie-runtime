@@ -301,6 +301,8 @@ public:
     // Observers see the product result after dispatch; neither supplies work.
     // Static storage keeps the instance layout identical in both build shapes.
     static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
+    // Observes the post-closure slot; nullptr denotes that worker completing.
+    static std::function<void(GCWorkers::Generation, NativeSlot*)> testColoredRootResult;
     void ObservePublishedRoots(GCWorkers::Generation generation);
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
@@ -313,8 +315,8 @@ public:
 
     // zRootsIterator.cpp:159-220. The language has no weak plain code-cache roots.
     void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
-    void VisitStrongStorageRoots(const NativeSlotVisitor& visitor) const;
-    void VisitWeakFinalizerStorageRoots(const NativeSlotVisitor& visitor) const;
+    OopStorage& StrongRootStorage() const;
+    OopStorage& WeakFinalizerRootStorage() const;
     void VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const;
     void VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const;
     void VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const;

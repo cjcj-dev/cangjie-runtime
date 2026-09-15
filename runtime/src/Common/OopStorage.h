@@ -4,106 +4,89 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <climits>
 #include <cstdint>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
-// gc/shared/oopStorage.inline.hpp:132-150. Stable native slots live in blocks;
-// handles and language scheduling queues contain pointers to those slots.
-// The owning registry's lock protects allocation, release and visitation.
+// gc/shared/oopStorage.inline.hpp:132-150: stable slots, allocation bitmap,
+// active block array and allocation list. Registry locks protect handles only.
 class OopStorage {
     static constexpr size_t SLOTS = sizeof(uintptr_t) * CHAR_BIT;
     struct Slot : NativeSlot { Slot() : NativeSlot(zpointer::null) {} };
     struct Block {
         std::array<Slot, SLOTS> data;
-        uintptr_t allocatedBitmask = 0;
+        std::atomic<uintptr_t> allocatedBitmask{0};
         size_t activeIndex = 0;
         Block* allocationPrev = nullptr;
         Block* allocationNext = nullptr;
-        bool IsFull() const { return allocatedBitmask == ~uintptr_t(0); }
-        NativeSlot* Allocate()
-        {
-            const unsigned index = static_cast<unsigned>(__builtin_ctzl(~allocatedBitmask));
-            allocatedBitmask |= uintptr_t(1) << index;
-            return &data[index];
-        }
+        bool IsFull() const { return allocatedBitmask.load(std::memory_order_relaxed) == ~uintptr_t(0); }
+        NativeSlot* Allocate();
+        size_t Iterate(const NativeSlotVisitor& visitor);
     };
+    // Infrastructure adapter: no HotSpot allocator/Mutex rank protocol.
+    // shared_ptr owns the active array; iteration count protects its blocks.
+    struct ActiveArray { std::vector<Block*> blocks; };
 public:
-    OopStorage() = default;
+    OopStorage();
+    ~OopStorage();
     OopStorage(const OopStorage&) = delete;
     OopStorage& operator=(const OopStorage&) = delete;
 
-    NativeSlot* Allocate()
-    {
-        if (allocationHead == nullptr) {
-            std::unique_ptr<Block> block(new Block());
-            block->activeIndex = activeArray.size();
-            activeArray.push_back(std::move(block));
-            AddAllocationBlock(*activeArray.back());
-        }
-        Block& block = *allocationHead;
-        NativeSlot* slot = block.Allocate();
-        if (block.IsFull()) { RemoveAllocationBlock(block); }
-        ++allocationCount;
-        return slot;
-    }
+    NativeSlot* Allocate();
+    void Release(NativeSlot* slot);
+    size_t OopsDo(const NativeSlotVisitor& visitor);
+    size_t AllocationCount() const;
 
-    void Release(NativeSlot* slot)
-    {
-        const uintptr_t address = reinterpret_cast<uintptr_t>(slot);
-        for (auto& entry : activeArray) {
-            Block& block = *entry;
-            const uintptr_t start = reinterpret_cast<uintptr_t>(block.data.data());
-            if (address < start || address >= start + sizeof(block.data)) { continue; }
-            const size_t index = (address - start) / sizeof(Slot);
-            const uintptr_t bit = uintptr_t(1) << index;
-            CHECK_DETAIL((block.allocatedBitmask & bit) != 0, "release of inactive native slot");
-            const bool wasFull = block.IsFull();
-            slot->StoreColoured(zpointer::null, std::memory_order_relaxed);
-            block.allocatedBitmask &= ~bit;
-            --allocationCount;
-            if (wasFull) { AddAllocationBlock(block); }
-            return;
-        }
-        CHECK_DETAIL(false, "native slot belongs to another storage");
-    }
-
-    size_t OopsDo(const NativeSlotVisitor& visitor)
-    {
-        size_t visited = 0;
-        for (auto& block : activeArray) {
-            uintptr_t remaining = block->allocatedBitmask;
-            while (remaining != 0) {
-                const unsigned index = static_cast<unsigned>(__builtin_ctzl(remaining));
-                visitor(block->data[index]);
-                remaining &= remaining - 1;
-                ++visited;
-            }
-        }
-        return visited;
-    }
-    size_t AllocationCount() const { return allocationCount; }
-
+    // oopStorage.cpp:1051-1127 / oopStorageParState.inline.hpp:52-65.
+    // This state belongs to the root task and is shared by all its workers.
+    class BasicParState {
+    public:
+        BasicParState(OopStorage& storage, unsigned estimatedThreadCount, bool concurrent);
+        ~BasicParState();
+        BasicParState(const BasicParState&) = delete;
+        BasicParState& operator=(const BasicParState&) = delete;
+        size_t Iterate(const NativeSlotVisitor& visitor);
+    private:
+        struct IterationData {
+            size_t segmentStart = 0;
+            size_t segmentEnd = 0;
+            size_t processed = 0;
+        };
+        bool ClaimNextSegment(IterationData& data);
+        OopStorage& storage;
+        std::shared_ptr<ActiveArray> activeArray;
+        size_t blockCount;
+        std::atomic<size_t> nextBlock{0};
+        const unsigned estimatedThreadCount;
+        const bool concurrent;
+    };
+    template<bool concurrent>
+    class ParState {
+    public:
+        ParState(OopStorage& storage, unsigned estimatedThreadCount = 1)
+            : basicState(storage, estimatedThreadCount, concurrent) {}
+        size_t OopsDo(const NativeSlotVisitor& visitor) { return basicState.Iterate(visitor); }
+    private:
+        BasicParState basicState;
+    };
+#if defined(MRT_TESTABLE_INTERNALS)
+    size_t BlockCountForTest() const;
+    size_t ConcurrentIterationsForTest() const;
+#endif
 private:
-    void AddAllocationBlock(Block& block)
-    {
-        block.allocationPrev = nullptr;
-        block.allocationNext = allocationHead;
-        if (allocationHead != nullptr) { allocationHead->allocationPrev = &block; }
-        allocationHead = &block;
-    }
-    void RemoveAllocationBlock(Block& block)
-    {
-        if (block.allocationPrev != nullptr) { block.allocationPrev->allocationNext = block.allocationNext; }
-        else { allocationHead = block.allocationNext; }
-        if (block.allocationNext != nullptr) { block.allocationNext->allocationPrev = block.allocationPrev; }
-        block.allocationPrev = block.allocationNext = nullptr;
-    }
-    std::vector<std::unique_ptr<Block>> activeArray;
+    void AddAllocationBlock(Block& block);
+    void RemoveAllocationBlock(Block& block);
+    void EnsureWritableArray();
+    void DeleteEmptyBlocks(); // called with mutex held; deferred during iteration
+    mutable std::mutex mutex;
+    std::shared_ptr<ActiveArray> activeArray;
+    size_t concurrentIterationCount = 0;
     Block* allocationHead = nullptr;
     size_t allocationCount = 0;
 };

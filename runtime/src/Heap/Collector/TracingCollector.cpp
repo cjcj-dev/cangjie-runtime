@@ -58,6 +58,7 @@ void TracingCollector::ObservePublishedRoots(GCWorkers::Generation generation)
 }
 
 std::function<void(GCWorkers::Generation, TracingCollector::RootSet&)> TracingCollector::testRootsResult;
+std::function<void(GCWorkers::Generation, NativeSlot*)> TracingCollector::testColoredRootResult;
 std::function<void()> TracingCollector::testCyclePrepared;
 std::function<void()> TracingCollector::testYoungMarkStarted;
 std::function<void()> TracingCollector::testYoungMarkCompleted;

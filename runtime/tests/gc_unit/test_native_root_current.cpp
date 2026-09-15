@@ -10,6 +10,10 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
 #include <cstdio>
 #include <dlfcn.h>
 #include <string>
@@ -20,14 +24,14 @@
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, RuntimeWorkers& pool)
+    static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, RuntimeWorkers& pool, uint32_t workers = 1)
     {
         resources.collectorProxy.currentCollector = &collector;
         resources.runtimeWorkers = &pool;
-        resources.gcThreadCount = resources.concurrentGcThreadCount = 1;
+        resources.gcThreadCount = resources.concurrentGcThreadCount = workers;
         for (auto gen : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-            collector.GetGenerationCycle(gen).InitializeWorkers(1);
-            collector.GetGenerationCycle(gen).Begin(1);
+            collector.GetGenerationCycle(gen).InitializeWorkers(workers);
+            collector.GetGenerationCycle(gen).Begin(workers);
         }
         collector.set_good_masks();
     }
@@ -411,5 +415,144 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
                  fixture.obj0, unsigned(published), unsigned(marked));
     // Both observations are read before either target assertion can fail.
     GC_EXPECT_TRUE(published && marked);
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+void CheckRootStorageSegments(unsigned family)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    auto& resources = heap.GetCollectorResources();
+    WCollector collector(heap.GetAllocator(), resources);
+    RuntimeWorkers pool(2);
+    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, pool, 2);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    fixture.region0->SetYoungRegionFlag(family != 0);
+    auto& finalizers = resources.GetFinalizerProcessor();
+    // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
+    constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
+    for (size_t i = 0; i < count; ++i) {
+        if (family == 0) { finalizers.EnqueueFinalizableForTest(fixture.obj0); }
+        else if (family == 1) { finalizers.RegisterFinalizer(fixture.obj0); }
+        else { (void)heap.RegisterExportRoot(fixture.obj0); }
+    }
+    std::unordered_map<NativeSlot*, size_t> visits;
+    const NativeSlotVisitor remember = [&](NativeSlot& slot) { visits.emplace(&slot, 0); };
+    if (family == 0) { finalizers.VisitGCRoots(remember); }
+    else if (family == 1) { finalizers.VisitFinalizers(remember); }
+    else { heap.VisitAllExportRoots(remember); }
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::thread::id paused;
+    bool started = false;
+    bool otherDone = false;
+    size_t otherConsumed = 0;
+    bool valuesValid = true;
+    struct ResetObserver {
+        ~ResetObserver() { TracingCollector::testColoredRootResult = nullptr; }
+    } reset;
+    collector.testColoredRootResult = [&](GCWorkers::Generation generation, NativeSlot* slot) {
+        if ((generation == GCWorkers::Generation::OLD) != (family == 0)) { return; }
+        std::unique_lock<std::mutex> lock(mutex);
+        if (slot == nullptr) {
+            if (!started || std::this_thread::get_id() != paused) {
+                otherDone = true;
+                condition.notify_all();
+            }
+            return;
+        }
+        auto it = visits.find(slot);
+        if (it == visits.end()) { return; }
+        ++it->second;
+        // Read the actual post-closure product slot result, never feed a
+        // manufactured intermediate value to a downstream marker.
+        valuesValid &= to_object(slot->GetTargetObject()) == fixture.obj0;
+        if (!started) {
+            started = true;
+            paused = std::this_thread::get_id();
+            condition.wait(lock, [&] { return otherDone; });
+        } else if (std::this_thread::get_id() != paused) {
+            ++otherConsumed;
+        }
+    };
+    if (family == 0) { RelocationReceiptTestAccess::NativeRootTrace(collector); }
+    else { RelocationReceiptTestAccess::NativeRootMajorPrelude(collector); }
+    collector.testColoredRootResult = nullptr;
+    bool exactlyOnce = visits.size() == count;
+    for (const auto& entry : visits) { exactlyOnce &= entry.second == 1; }
+    std::fprintf(stderr,
+        "ROOT_SEGMENT_TARGET executed=1 family=%u slots=%zu other_consumed=%zu exactly_once=%u values_valid=%u\n",
+        family, visits.size(), otherConsumed, unsigned(exactlyOnce), unsigned(valuesValid));
+    // Every target fact is observed before any assertion can mask another.
+    GC_EXPECT_TRUE(otherConsumed > 0 && exactlyOnce && valuesValid);
+}
+}
+GC_OTHER_VM_TEST(RootStorageSegments, Strong) { CheckRootStorageSegments(0); }
+GC_OTHER_VM_TEST(RootStorageSegments, WeakFinalizer) { CheckRootStorageSegments(1); }
+GC_OTHER_VM_TEST(RootStorageSegments, Export) { CheckRootStorageSegments(2); }
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    auto& resources = heap.GetCollectorResources();
+    WCollector collector(heap.GetAllocator(), resources);
+    RuntimeWorkers pool(1);
+    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, pool);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    fixture.region0->SetYoungRegionFlag(1);
+    std::vector<U64> original;
+    for (size_t i = 0; i < sizeof(uintptr_t) * CHAR_BIT; ++i) {
+        original.push_back(heap.RegisterExportRoot(fixture.obj0));
+    }
+    auto& storage = heap.GetExportRootStorage();
+    const size_t before = storage.BlockCountForTest();
+    size_t pinned = 0;
+    size_t during = 0;
+    size_t grown = 0;
+    bool observed = false;
+    U64 added = 0;
+    NativeSlot* addedSlot = nullptr;
+    bool newSlotVisited = false;
+    struct ResetObserver {
+        ~ResetObserver() { TracingCollector::testColoredRootResult = nullptr; }
+    } reset;
+    collector.testColoredRootResult = [&](GCWorkers::Generation generation, NativeSlot* slot) {
+        if (generation != GCWorkers::Generation::YOUNG || slot == nullptr) { return; }
+        if (slot == addedSlot) { newSlotVisited = true; }
+        if (observed) { return; }
+        observed = true;
+        pinned = storage.ConcurrentIterationsForTest();
+        // Existing block is full, so growth must publish a new active array.
+        added = heap.RegisterExportRoot(fixture.obj0);
+        heap.VisitAllExportRoots([&](NativeSlot& root) {
+            if (&root != slot) { addedSlot = &root; }
+        });
+        // The added slot is last in the new block. Nested iteration above has
+        // finished before the release, leaving the root task's state pinned.
+        grown = storage.BlockCountForTest();
+        for (U64 handle : original) { heap.RemoveExportObject(handle); }
+        during = storage.BlockCountForTest();
+    };
+    RelocationReceiptTestAccess::NativeRootMajorPrelude(collector);
+    collector.testColoredRootResult = nullptr;
+    const size_t after = storage.BlockCountForTest();
+    const size_t remaining = storage.AllocationCount();
+    std::fprintf(stderr,
+        "ROOT_LIFETIME_TARGET executed=1 observed=%u before=%zu pinned=%zu grown=%zu during=%zu after=%zu remaining=%zu new_visited=%u\n",
+        unsigned(observed), before, pinned, grown, during, after, remaining, unsigned(newSlotVisited));
+    heap.RemoveExportObject(added);
+    GC_EXPECT_TRUE(observed && pinned > 0 && grown == before + 1 && during == grown &&
+                   after == grown - 1 && remaining == 1 && !newSlotVisited);
 }
 #endif

@@ -673,13 +673,25 @@ private:
 class MarkOldRootsTask final : public GCWorkerTask {
 public:
     MarkOldRootsTask(const TracingCollector& collector, MarkDomain& domain,
-                     std::function<void()> uncolored)
-        : rootsColored(collector), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
+                     std::function<void()> uncolored, unsigned workers)
+        : rootsColored(collector, workers), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
     void Work(uint32_t) override
     {
-        rootsColored.Apply([&](NativeSlot& slot) { coloredClosure.DoOop(slot); });
+        rootsColored.Apply([&](NativeSlot& slot) {
+            coloredClosure.DoOop(slot);
+#if defined(MRT_TESTABLE_INTERNALS)
+            if (TracingCollector::testColoredRootResult) {
+                TracingCollector::testColoredRootResult(GCWorkers::Generation::OLD, &slot);
+            }
+#endif
+        });
         rootsUncolored.Apply(uncolored);
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (TracingCollector::testColoredRootResult) {
+            TracingCollector::testColoredRootResult(GCWorkers::Generation::OLD, nullptr);
+        }
+#endif
     }
 private:
     RootsIteratorStrongColored rootsColored;
@@ -698,7 +710,7 @@ void TracingCollector::EnumAllCommonRoots(GCWorkers& workers)
             MarkOldObjectIfActive(Heap::GetBarrier().ReadPlainRoot(root));
         }, {});
         VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
-    });
+    }, workers.ActiveWorkers());
     workers.Run(task);
 #if defined(MRT_TESTABLE_INTERNALS)
     ObservePublishedRoots(workers.GetSnapshot().generation);
@@ -720,8 +732,8 @@ public:
 class MarkYoungRootsTask final : public GCWorkerTask {
 public:
     MarkYoungRootsTask(const TracingCollector& collector, MarkDomain& domain,
-                       std::function<void()> uncolored)
-        : rootsColored(collector), domain(domain), uncolored(std::move(uncolored)) {}
+                       std::function<void()> uncolored, unsigned workers)
+        : rootsColored(collector, workers), domain(domain), uncolored(std::move(uncolored)) {}
 
     void Work(uint32_t) override
     {
@@ -730,9 +742,19 @@ public:
             Heap::GetHeap().GetRememberedSet().VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&slot));
 #endif
             coloredClosure.DoOop(slot);
+#if defined(MRT_TESTABLE_INTERNALS)
+            if (TracingCollector::testColoredRootResult) {
+                TracingCollector::testColoredRootResult(GCWorkers::Generation::YOUNG, &slot);
+            }
+#endif
         });
         rootsUncolored.Apply(uncolored);
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (TracingCollector::testColoredRootResult) {
+            TracingCollector::testColoredRootResult(GCWorkers::Generation::YOUNG, nullptr);
+        }
+#endif
     }
 private:
     RootsIteratorAllColored rootsColored;
@@ -758,7 +780,7 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     MarkYoungRootsTask task(*this, *youngMarkDomain, [&] {
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
         VisitMinorValueRoots(visitor);
-    });
+    }, GetWorkers(GCCycleGeneration::YOUNG).ActiveWorkers());
     GetWorkers(GCCycleGeneration::YOUNG).Run(task);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().GetRememberedSet().CheckStaticCoverageForMinor();

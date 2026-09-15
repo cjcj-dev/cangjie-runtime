@@ -2,7 +2,7 @@
 
 待主控登记进 `/root/cj_build/ops/CURRENT_DOCS.manifest`。
 
-坐标：任务冻结 `c3973505c171aa7e72095c3357ffd57f56156707`；按本条“消费 #596”要求，实际实现基线为合入后的 `fb7d5282867aaa3b9d8b5df2f6691227ff3424ce`。本文描述实现，独立形态判定由 Review 完成。
+坐标：本轮返工起点 `2a65c8132b63c4d7f0d5929ed39d96ce5657fe25`；#596 合入后的主线基线为 `fb7d5282867aaa3b9d8b5df2f6691227ff3424ce`。本文描述实现，独立形态判定由 Review 完成。
 
 ## 对应与明确适配
 
@@ -53,3 +53,22 @@ ZGC 根目录：`/root/cj_build/reference/jdk/src/hotspot/share/`。
 ## 完整托管 cycle 的观测限制
 
 同一个 managed wrapper ELF：候选/恢复到达全部 ROOT_FAMILY 断言后出现 `LOADFC current raw value required`（#607 已登记同位点）；基线被更早的 finalizable queue/predicate 检查遮挡。因此这些运行不构成完整托管 cycle 验收通过，也不能据此声称 LOADFC 非本包新增。该对照资格限制与装置问题（#629）在交付报告单列，未提前退出程序或更改断言来取得通过。
+
+## R1 返工：每个 storage 内领取块区段
+
+| ZGC 锚（gc/shared 下） | 本轮实现 | 不变量 / 判定边界 |
+|---|---|---|
+| `oopStorageSetParState.inline.hpp:38、73` | `zRootsIterator.cpp` 的 strong/weak set 各持每个 storage 的 `ParState<true>` 数组；Apply 对每个 state 调 OopsDo | 每个 worker 都进入每个 storage，领取点不在 storage-set 层 |
+| `oopStorage.cpp:1051-1127`、`oopStorageParState.inline.hpp:52-65` | `Common/OopStorage.cpp` BasicParState：activeArray、blockCount、nextBlock、estimatedThreadCount、concurrent；ClaimNextSegment → block Iterate | 按 max_step=10 与 remaining/threads 计算区段，fetch-add 后截断越界；稳定 allocated 集合恰好一次 |
+| `oopStorage.inline.hpp:337-347` | `OopStorage::Block::Iterate` | 每块一次读取 atomic bitmap，再调用原 colored closure；释放置 null 先于位图清位 |
+| `oopStorage.cpp:1051-1085` | active-array 用 shared_ptr/不可变 vector<Block*> 快照；concurrentIterationCount 禁止块删除 | **基础设施差异，非 ✅**：载体用 shared_ptr/vector 替代自研 ActiveArray；无 HotSpot 分配器/Mutex rank 约束。增长复制指针数组，既有 state 持旧数组与固定 blockCount |
+| `oopStorage.cpp:932-988` | Release 与最后一个 BasicParState 析构调用 DeleteEmptyBlocks | **基础设施差异，非 ✅**：无 ServiceThread 与 HotSpot safepoint/锁序约束；清理点为存储操作与末次迭代退出。并发迭代期间禁止删块，末次退出清理空块 |
+| `oopStorage.cpp:407-437` | storage mutex 保护分配/释放元数据；registry mutex 只保护 owner 及调度队列 | **基础设施差异，非 ✅**：沿用已裁定 Cangjie mutex 载体；closure 不在 registry/storage mutex 中执行；slot 与 bitmap 均为原子访问 |
+
+基础设施裁定：`/root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_603_implement_r5675303344-20260915T053955Z.md`。主线坐标裁定：同目录 `sym_cangjie_runtime_603_implement_r5675303344-20260915T053852Z.md`。
+
+本轮删除 strong `claimed.exchange` 与 weak storage-family `claimed.fetch_add`，不删除静态 ABI adapter 与语言 uncolored scanner 的独立领取。原 OopStorage 整 activeArray 遍历由 BasicParState/Block 分解替代；FinalizerProcessor/ExportRootTable 的枚举取消外层 registry 锁。
+
+新增 `RootStorageSegments.Strong/WeakFinalizer/Export`：经 TraceHeap / young GC 实际根任务，在第一个 worker 的 post-closure 观察点暂停，另一 worker 完成后释放，读取实际槽结果并断言剩余区段被访问且每槽一次。没有用耗时阈值决定通过。
+
+新增 `RootStorageLifetime.ReleaseAndGrowDuringYoungTask`：真实 young 根任务中增长 export storage，再释放旧块的全部槽，读取 active-array 块数与并发迭代数；验证旧快照不消费后来添加的块、迭代期间保留空块、任务退出后回收空块。观察接口受 MRT_TESTABLE_INTERNALS 控制，算法本体不受宏控制。

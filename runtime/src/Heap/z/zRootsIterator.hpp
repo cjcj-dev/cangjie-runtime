@@ -21,19 +21,17 @@ class TracingCollector;
 // (Cangjie ABI / HotSpot CLD) adapter and use the same colored closure.
 class OopStorageSetIteratorStrong {
 public:
-    explicit OopStorageSetIteratorStrong(const TracingCollector& collector) : collector(collector) {}
+    explicit OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers = 1);
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    const TracingCollector& collector;
-    std::atomic<bool> claimed{false};
+    std::array<OopStorage::ParState<true>, 1> states;
 };
 class OopStorageSetIteratorWeak {
 public:
-    explicit OopStorageSetIteratorWeak(const TracingCollector& collector) : collector(collector) {}
+    explicit OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers = 1);
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    const TracingCollector& collector;
-    std::atomic<unsigned> claimed{0};
+    std::array<OopStorage::ParState<true>, 2> states;
 };
 class StaticRootsAdapterIterator {
 public:
@@ -45,7 +43,8 @@ private:
 };
 class RootsIteratorStrongColored {
 public:
-    explicit RootsIteratorStrongColored(const TracingCollector& collector) : strong(collector), statics(collector) {}
+    explicit RootsIteratorStrongColored(const TracingCollector& collector, unsigned workers = 1)
+        : strong(collector, workers), statics(collector) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
     OopStorageSetIteratorStrong strong;
@@ -53,15 +52,16 @@ private:
 };
 class RootsIteratorWeakColored {
 public:
-    explicit RootsIteratorWeakColored(const TracingCollector& collector) : weak(collector) {}
+    explicit RootsIteratorWeakColored(const TracingCollector& collector, unsigned workers = 1)
+        : weak(collector, workers) {}
     void Apply(const NativeSlotVisitor& visitor) { weak.Apply(visitor); }
 private:
     OopStorageSetIteratorWeak weak;
 };
 class RootsIteratorAllColored {
 public:
-    explicit RootsIteratorAllColored(const TracingCollector& collector)
-        : strong(collector), weak(collector), statics(collector) {}
+    explicit RootsIteratorAllColored(const TracingCollector& collector, unsigned workers = 1)
+        : strong(collector, workers), weak(collector, workers), statics(collector) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
     OopStorageSetIteratorStrong strong;
@@ -175,6 +175,7 @@ public:
         exportRoots[index].activeState = true;
         accessableId.push_back(index);
     }
+    OopStorage& RootStorage() { return weakStorage; }
     void VisitGCRoots(const NativeSlotVisitor& visitor);
     void SetActiveState(U64 handle, bool state)
     {
@@ -193,7 +194,7 @@ public:
             return false;
         }
         auto info = exportRoots[index];
-        // tableMutex excludes GC visitation, so this retained root is live here.
+        // tableMutex protects handle ownership; slot access uses the native barrier.
         if (Heap::GetBarrier().ReadStaticRef(*info.exportObj) != obj) {
             return false;
         }

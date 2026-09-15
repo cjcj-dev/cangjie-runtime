@@ -85,7 +85,6 @@ void StaticRootTable::VisitRoots(const NativeSlotVisitor& visitor)
 
 void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 {
-    std::lock_guard<std::mutex> lock(tableMutex);
     weakStorage.OopsDo(visitor);
 }
 
@@ -360,14 +359,14 @@ void TracingCollector::VisitExportColoredRoots(const NativeSlotVisitor& visitor)
     Heap::GetHeap().VisitAllExportRoots(visitor);
 }
 
-void TracingCollector::VisitStrongStorageRoots(const NativeSlotVisitor& visitor) const
+OopStorage& TracingCollector::StrongRootStorage() const
 {
-    VisitFinalizerRoots(visitor);
+    return collectorResources.GetFinalizerProcessor().StrongRootStorage();
 }
 
-void TracingCollector::VisitWeakFinalizerStorageRoots(const NativeSlotVisitor& visitor) const
+OopStorage& TracingCollector::WeakFinalizerRootStorage() const
 {
-    collectorResources.GetFinalizerProcessor().VisitFinalizers(visitor);
+    return collectorResources.GetFinalizerProcessor().WeakRootStorage();
 }
 
 void TracingCollector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
@@ -393,20 +392,22 @@ void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) co
     roots.Apply(visitor);
 }
 
+OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers)
+    : states{{{collector.StrongRootStorage(), workers}}} {}
+
+OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers)
+    : states{{{collector.WeakFinalizerRootStorage(), workers},
+              {Heap::GetHeap().GetExportRootStorage(), workers}}} {}
+
 void OopStorageSetIteratorStrong::Apply(const NativeSlotVisitor& visitor)
 {
-    if (!claimed.exchange(true, std::memory_order_relaxed)) {
-        collector.VisitStrongStorageRoots(visitor);
-    }
+    // oopStorageSetParState.inline.hpp:38: every worker enters every storage.
+    for (auto& state : states) { state.OopsDo(visitor); }
 }
 
 void OopStorageSetIteratorWeak::Apply(const NativeSlotVisitor& visitor)
 {
-    for (unsigned index = claimed.fetch_add(1, std::memory_order_relaxed);
-         index < 2; index = claimed.fetch_add(1, std::memory_order_relaxed)) {
-        if (index == 0) { collector.VisitWeakFinalizerStorageRoots(visitor); }
-        else { collector.VisitExportColoredRoots(visitor); }
-    }
+    for (auto& state : states) { state.OopsDo(visitor); }
 }
 
 void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)

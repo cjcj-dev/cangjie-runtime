@@ -32,6 +32,8 @@ public:
 
     // zRootsIterator: strong queued/running roots and weak registrations
     // share one physical enumeration, with distinct closures.
+    OopStorage& StrongRootStorage() { return strongStorage; }
+    OopStorage& WeakRootStorage() { return weakStorage; }
     U32 VisitFinalizers(const NativeSlotVisitor& visitor) { return VisitRootLists({}, visitor); }
     void VisitGCRoots(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, {}); }
     void VisitNativePointers(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, visitor); }
@@ -81,7 +83,6 @@ public:
 private:
     U32 VisitRootLists(const NativeSlotVisitor& strong, const NativeSlotVisitor& weak)
     {
-        std::lock_guard<std::mutex> lock(listLock);
         if (strong) { strongStorage.OopsDo(strong); }
         U32 count = weak ? static_cast<U32>(weakStorage.OopsDo(weak)) : 0;
         return count;
