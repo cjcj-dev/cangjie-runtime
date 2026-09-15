@@ -5,9 +5,10 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
-    "Barrier.cpp"
+    "../z/zBarrier.cpp"
+    "../z/zRememberedSet.cpp"
+    "../z/zStoreBarrierBuffer.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 add_library(Barrier STATIC ${SRC_LIST})
-
