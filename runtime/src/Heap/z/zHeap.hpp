@@ -23,6 +23,7 @@
 
 #include <unordered_set>
 namespace MapleRuntime {
+class OopStorage;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
 class AllocBuffer;
@@ -108,6 +109,7 @@ public:
     virtual void VisitStaticRoots(const NativeSlotVisitor& visitor) = 0;
 
     virtual U64 RegisterExportRoot(BaseObject*) = 0;
+    virtual OopStorage& GetExportRootStorage() = 0;
     virtual void VisitAllExportRoots(const NativeSlotVisitor& visitor) = 0;
 
     virtual BaseObject* GetExportObject(U64) = 0;

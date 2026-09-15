@@ -301,6 +301,9 @@ public:
     // Observers see the product result after dispatch; neither supplies work.
     // Static storage keeps the instance layout identical in both build shapes.
     static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
+    // Observes the post-closure slot; nullptr denotes that worker completing.
+    static std::function<void(GCWorkers::Generation, NativeSlot*)> testColoredRootResult;
+    void ObservePublishedRoots(GCWorkers::Generation generation);
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
     static std::function<void()> testYoungMarkCompleted;
@@ -312,6 +315,9 @@ public:
 
     // zRootsIterator.cpp:159-220. The language has no weak plain code-cache roots.
     void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
+    OopStorage& StrongRootStorage() const;
+    OopStorage& WeakFinalizerRootStorage() const;
+    void VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const;
     void VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const;
     void VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const;
     void VisitAllColoredRoots(const NativeSlotVisitor& visitor) const;
@@ -516,7 +522,7 @@ protected:
 
 
     // enum all common roots.
-    void EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet);
+    void EnumAllCommonRoots(GCWorkers& workers);
     GCWorkers& GetWorkers(GCCycleGeneration generation) const
     {
         return *(generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Workers();
@@ -550,6 +556,7 @@ private:
     size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
+    void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
 
     void VisitStaticRoots(const NativeSlotVisitor& visitor) const;
     void VisitFinalizerRoots(const NativeSlotVisitor& visitor) const;

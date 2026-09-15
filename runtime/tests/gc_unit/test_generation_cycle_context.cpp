@@ -34,8 +34,12 @@ struct GenerationCycleRootTestAccess {
             NativeSlot queued(zpointer::null), working(zpointer::null);
             Heap::GetBarrier().WriteStaticRef(queued, objects[0]);
             Heap::GetBarrier().WriteStaticRef(working, objects[1]);
-            processor.finalizables.push_back(queued);
-            processor.workingFinalizables.push_back(working);
+            NativeSlot* queuedSlot = processor.strongStorage.Allocate();
+            queuedSlot->StoreColoured(queued.GetFieldValue(), std::memory_order_relaxed);
+            processor.finalizables.push_back(queuedSlot);
+            NativeSlot* workingSlot = processor.strongStorage.Allocate();
+            workingSlot->StoreColoured(working.GetFieldValue(), std::memory_order_relaxed);
+            processor.workingFinalizables.push_back(workingSlot);
             // Deliberately do not schedule finalization: only the scanner's
             // queued/working input branches are under test.
         }
@@ -54,9 +58,12 @@ struct GenerationCycleRootTestAccess {
         auto& processor = Heap::GetHeap().GetFinalizerProcessor();
         {
             std::lock_guard<std::mutex> lock(processor.listLock);
-            auto remove = [&](ManagedList<NativeSlot>& roots, BaseObject* object) {
+            auto remove = [&](NativeRootHandles& roots, BaseObject* object) {
                 for (auto it = roots.begin(); it != roots.end();) {
-                    if (to_object(it->GetTargetObject()) == object) it = roots.erase(it);
+                    if (to_object(it->GetTargetObject()) == object) {
+                        processor.strongStorage.Release(&*it);
+                        it = roots.erase(it);
+                    }
                     else ++it;
                 }
             };
@@ -133,7 +140,7 @@ void* Exercise(void*)
         const auto young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
         const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
         Expect(young.active, "young_mark_start_active");
-        if (resources.YoungPreludeRequest() != nullptr) {
+        if (collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
             ++combinedMarkStarts;
             preludeOld = old;
             preludeOldColor = ::g_cjMarkBadMask & MARKED_OLD_MASK;
@@ -216,7 +223,7 @@ void* Exercise(void*)
         });
         std::set<BaseObject*> concurrencyRoots;
         RootVisitor concurrentVisitor = [&](ObjectRef& slot) {
-            auto* object = to_object(slot.GetTargetObject());
+            auto* object = to_object(safe(slot.LoadPlain()));
             if (object != nullptr && Heap::IsHeapAddress(object)) concurrencyRoots.insert(object);
         };
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrentVisitor);

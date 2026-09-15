@@ -29,6 +29,9 @@ class RegionInfo;
 // ZGC zMarkStack.hpp:35-54. A chunk is single-owner while it is being
 // filled/drained and becomes immutable while linked on a shared stripe.
 class MarkStripeStack {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RootPublicationSnapshot;
+#endif
 public:
     static MarkStripeStack* Create(bool firstStack);
     static void Destroy(MarkStripeStack* stack);
@@ -77,6 +80,9 @@ private:
 
 
 class alignas(64) MarkStripeStackList {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RootPublicationSnapshot;
+#endif
 public:
     MarkStripeStackList() = default;
     MarkStripeStackList(const MarkStripeStackList&) = delete;
@@ -95,6 +101,9 @@ private:
 class MarkTerminate;
 
 class MarkStripe {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RootPublicationSnapshot;
+#endif
 public:
     bool IsEmpty() const;
     size_t Population() const;

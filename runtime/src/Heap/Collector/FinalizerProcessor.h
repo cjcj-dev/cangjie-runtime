@@ -14,6 +14,7 @@
 #include <mutex>
 
 #include "Base/Panic.h"
+#include "Common/OopStorage.h"
 #include "Common/PageAllocator.h"
 #include "Common/TypeDef.h"
 #include "Heap/z/zCollectedHeap.hpp"
@@ -31,6 +32,8 @@ public:
 
     // zRootsIterator: strong queued/running roots and weak registrations
     // share one physical enumeration, with distinct closures.
+    OopStorage& StrongRootStorage() { return strongStorage; }
+    OopStorage& WeakRootStorage() { return weakStorage; }
     U32 VisitFinalizers(const NativeSlotVisitor& visitor) { return VisitRootLists({}, visitor); }
     void VisitGCRoots(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, {}); }
     void VisitNativePointers(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, visitor); }
@@ -47,8 +50,9 @@ public:
     void Fini();
     void WaitStop();
 
+    NativeSlot* AllocateFinalizerHandle(BaseObject* obj);
     void RegisterFinalizer(BaseObject* obj);
-    void RegisterFinalizers(ManagedList<NativeSlot>& objs);
+    void RegisterFinalizers(NativeRootHandles& objs);
     bool IsRunning() const { return running.load(std::memory_order_acquire); }
     uint32_t GetTid() const { return tid; }
     ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }
@@ -79,15 +83,8 @@ public:
 private:
     U32 VisitRootLists(const NativeSlotVisitor& strong, const NativeSlotVisitor& weak)
     {
-        std::lock_guard<std::mutex> lock(listLock);
-        if (strong) {
-            for (NativeSlot& root : finalizables) { strong(root); }
-            for (NativeSlot& root : workingFinalizables) { strong(root); }
-        }
-        U32 count = 0;
-        if (weak) {
-            for (NativeSlot& root : finalizers) { weak(root); ++count; }
-        }
+        if (strong) { strongStorage.OopsDo(strong); }
+        U32 count = weak ? static_cast<U32>(weakStorage.OopsDo(weak)) : 0;
         return count;
     }
 
@@ -114,13 +111,15 @@ private:
     U32 iterationWaitTime;
 
     // finalization
+    OopStorage strongStorage;
+    OopStorage weakStorage;
     std::mutex listLock;                 // lock for finalizers & finalizables & workingFinalizables
-    ManagedList<NativeSlot> finalizers; // created finalizer record, accessed by mutator & GC
+    NativeRootHandles finalizers; // created finalizer record, accessed by mutator & GC
 
     // a dead finalizer is moved into finalizable by GC, then run finalize method by FP thread
-    ManagedList<NativeSlot> finalizables;
+    NativeRootHandles finalizables;
 
-    ManagedList<NativeSlot> workingFinalizables; // FP working list, swap from finalizables
+    NativeRootHandles workingFinalizables; // FP working list, swap from finalizables
     ReferenceProcessor referenceProcessor;
 
     // Protected by listLock.  Queue non-emptiness and the cached predicate are

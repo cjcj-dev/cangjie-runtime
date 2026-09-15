@@ -252,6 +252,7 @@ bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
     while (it != finalizers.end()) {
         BaseObject* obj = LoadFinalizerGood(*it);
         if (obj == nullptr || HeapFiller::IsFiller(obj)) {
+            weakStorage.Release(&*it);
             it = finalizers.erase(it);
             continue;
         }
@@ -259,7 +260,11 @@ bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
             ++it;
             continue;
         }
-        finalizables.splice(finalizables.end(), finalizers, it);
+        NativeSlot* strong = strongStorage.Allocate();
+        strong->StoreColoured(it->GetFieldValue(), std::memory_order_relaxed);
+        finalizables.push_back(strong);
+        weakStorage.Release(&*it);
+        finalizers.erase(it);
         hasFinalizableJob = true;
         VLOG(REPORT, "enqueued finalizer %p", candidate);
         return true;
@@ -320,6 +325,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         BaseObject* finalizeObjAddr = LoadFinalizerGood(*itor);
         if (finalizeObjAddr == nullptr || HeapFiller::IsFiller(finalizeObjAddr)) {
             std::lock_guard<std::mutex> l(listLock);
+            strongStorage.Release(&*itor);
             itor = workingFinalizables.erase(itor);
             continue;
         }
@@ -347,6 +353,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         ExceptionManager::ClearPendingException();
         {
             std::lock_guard<std::mutex> l(listLock);
+            strongStorage.Release(&*itor);
             itor = workingFinalizables.erase(itor);
         }
     }
@@ -380,7 +387,9 @@ void FinalizerProcessor::EnqueueFinalizableForTest(BaseObject* obj)
     Heap::GetBarrier().WriteStaticRef(root, obj);
     {
         std::lock_guard<std::mutex> l(listLock);
-        finalizables.push_back(root);
+        NativeSlot* slot = strongStorage.Allocate();
+        slot->StoreColoured(root.GetFieldValue(), std::memory_order_relaxed);
+        finalizables.push_back(slot);
         hasFinalizableJob = true;
     }
     Notify();
@@ -433,14 +442,23 @@ void FinalizerProcessor::LogAfterProcess()
 }
 #endif
 
+NativeSlot* FinalizerProcessor::AllocateFinalizerHandle(BaseObject* obj)
+{
+    std::lock_guard<std::mutex> l(listLock);
+    NativeSlot* slot = weakStorage.Allocate();
+    Heap::GetBarrier().WriteStaticRef(*slot, obj);
+    return slot;
+}
+
 void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
 {
     std::lock_guard<std::mutex> l(listLock);
-    finalizers.emplace_back(zpointer::null);
-    Heap::GetBarrier().WriteStaticRef(finalizers.back(), obj);
+    NativeSlot* slot = weakStorage.Allocate();
+    Heap::GetBarrier().WriteStaticRef(*slot, obj);
+    finalizers.push_back(slot);
 }
 
-void FinalizerProcessor::RegisterFinalizers(ManagedList<NativeSlot>& objs)
+void FinalizerProcessor::RegisterFinalizers(NativeRootHandles& objs)
 {
     if (objs.empty()) {
         return;

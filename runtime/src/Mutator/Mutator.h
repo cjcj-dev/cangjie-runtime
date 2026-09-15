@@ -9,6 +9,7 @@
 #define MRT_MUTATOR_H
 
 #include <climits>
+#include "Common/OopStorage.h"
 #include <tuple>
 #include <vector>
 
@@ -643,7 +644,7 @@ protected:
     void CreateCurrentGCInfo();
 
 private:
-    ManagedList<NativeSlot>& GetLocalFinalizers() { return localFinalizers; }
+    NativeRootHandles& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
     std::atomic<GCPhase> mutatorPhase = { GCPhase::GC_PHASE_UNDEF };
@@ -677,7 +678,7 @@ private:
     ObjectRef rawObject{};
     std::list<ObjectRef> nativeFrameRoots;
 
-    ManagedList<NativeSlot> localFinalizers;
+    NativeRootHandles localFinalizers;
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     GCInfos gcInfos;

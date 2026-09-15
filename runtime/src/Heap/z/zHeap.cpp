@@ -152,6 +152,7 @@ public:
     void RegisterAllocBuffer(AllocBuffer& buffer) override;
     void RemoveAllocBuffer(AllocBuffer& buffer) override;
     U64 RegisterExportRoot(BaseObject* obj) override;
+    OopStorage& GetExportRootStorage() override { return exportRootsTable.RootStorage(); }
     void VisitAllExportRoots(const NativeSlotVisitor& visitor) override;
     BaseObject* GetExportObject(U64 id) override;
     void RemoveExportObject(U64 id) override;

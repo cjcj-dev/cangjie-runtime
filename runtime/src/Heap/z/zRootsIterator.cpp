@@ -85,10 +85,7 @@ void StaticRootTable::VisitRoots(const NativeSlotVisitor& visitor)
 
 void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 {
-    std::lock_guard<std::mutex> lock(tableMutex);
-    for (auto &rootInfo : exportRoots) {
-        visitor(rootInfo.exportObj);
-    }
+    weakStorage.OopsDo(visitor);
 }
 
 } // namespace MapleRuntime
@@ -325,7 +322,8 @@ void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_ENUM");
-    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD), workStack);
+    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD));
+    MergeMutatorRoots(workStack);
     EnumAllExportRoots(foreignRootsSet);
 }
 
@@ -361,34 +359,75 @@ void TracingCollector::VisitExportColoredRoots(const NativeSlotVisitor& visitor)
     Heap::GetHeap().VisitAllExportRoots(visitor);
 }
 
-// Each physical root family is enumerated here, shared by mark and remap.
-void TracingCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
+OopStorage& TracingCollector::StrongRootStorage() const
+{
+    return collectorResources.GetFinalizerProcessor().StrongRootStorage();
+}
+
+OopStorage& TracingCollector::WeakFinalizerRootStorage() const
+{
+    return collectorResources.GetFinalizerProcessor().WeakRootStorage();
+}
+
+void TracingCollector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
 {
     VisitStaticRoots(visitor);
-    VisitFinalizerRoots(visitor);
+}
+
+void TracingCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    RootsIteratorStrongColored roots(*this);
+    roots.Apply(visitor);
 }
 
 void TracingCollector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
 {
-    collectorResources.GetFinalizerProcessor().VisitFinalizers(visitor);
-    VisitExportColoredRoots(visitor);
+    RootsIteratorWeakColored roots(*this);
+    roots.Apply(visitor);
 }
 
 void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
 {
-    VisitStrongColoredRoots(visitor);
-    VisitWeakColoredRoots(visitor);
+    RootsIteratorAllColored roots(*this);
+    roots.Apply(visitor);
 }
 
-// ZRootsIteratorAllColored::apply, zRootsIterator.cpp:194-198.
+OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers)
+    : states{{{collector.StrongRootStorage(), workers}}} {}
+
+OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers)
+    : states{{{collector.WeakFinalizerRootStorage(), workers},
+              {Heap::GetHeap().GetExportRootStorage(), workers}}} {}
+
+void OopStorageSetIteratorStrong::Apply(const NativeSlotVisitor& visitor)
+{
+    // oopStorageSetParState.inline.hpp:38: every worker enters every storage.
+    for (auto& state : states) { state.OopsDo(visitor); }
+}
+
+void OopStorageSetIteratorWeak::Apply(const NativeSlotVisitor& visitor)
+{
+    for (auto& state : states) { state.OopsDo(visitor); }
+}
+
+void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)
+{
+    if (!claimed.exchange(true, std::memory_order_relaxed)) {
+        collector.VisitStaticAdapterRoots(visitor);
+    }
+}
+
+void RootsIteratorStrongColored::Apply(const NativeSlotVisitor& visitor)
+{
+    strong.Apply(visitor);
+    statics.Apply(visitor);
+}
+
 void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
 {
-    if (!strongClaimed.exchange(true, std::memory_order_relaxed)) {
-        collector.VisitStrongColoredRoots(visitor);
-    }
-    if (!weakClaimed.exchange(true, std::memory_order_relaxed)) {
-        collector.VisitWeakColoredRoots(visitor);
-    }
+    strong.Apply(visitor);
+    weak.Apply(visitor);
+    statics.Apply(visitor);
 }
 
 void TracingCollector::VisitStrongPlainRoots(
@@ -399,43 +438,6 @@ void TracingCollector::VisitStrongPlainRoots(
     }
     RootVisitor plainVisitor = visitor;
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
-}
-
-void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
-{
-    // zRootsIterator.cpp: generation workers claim independent root families.
-    const uint32_t count = workers.ActiveWorkers();
-    std::vector<RootSet> roots(count);
-    std::atomic<unsigned> next { 0 };
-    class RootsTask final : public GCWorkerTask {
-    public:
-        explicit RootsTask(std::function<void(uint32_t)> body) : body(std::move(body)) {}
-        void Work(uint32_t id) override { body(id); }
-    private:
-        std::function<void(uint32_t)> body;
-    } task([&](uint32_t id) {
-        const std::function<void()> families[] = {
-            [&] { VisitStrongColoredRoots([&](NativeSlot& root) { EnumRefFieldRoot(root, roots[id]); }); },
-            [&] { VisitStrongPlainRoots([&](ObjectRef& root) {
-                EnumAndTagRawRoot(root, roots[id], Generation::Old);
-            }, {}); },
-            [&] { EnumAllSurrectedExportRoots(roots[id]); }
-        };
-        for (unsigned family = next.fetch_add(1); family < 3; family = next.fetch_add(1)) {
-            families[family]();
-        }
-    });
-    workers.Run(task);
-    MergeMutatorRoots(rootSet);
-    for (auto& result : roots) {
-        rootSet.insert(result);
-    }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testRootsResult) {
-        testRootsResult(workers.GetSnapshot().generation, rootSet);
-    }
-#endif
-    VLOG(REPORT, "Total roots: %zu(exclude stack roots)", rootSet.size());
 }
 
 void TracingCollector::VisitStaticRoots(const NativeSlotVisitor& visitor) const

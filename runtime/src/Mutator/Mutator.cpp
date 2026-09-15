@@ -176,8 +176,7 @@ void Mutator::InitProtectStackAddr()
 // zBarrierSet.inline.hpp:258-265). Keep that slot and its epoch through transfer.
 void Mutator::AddLocalFinalizer(BaseObject* object)
 {
-    localFinalizers.emplace_back(zpointer::null);
-    Heap::GetBarrier().WriteStaticRef(localFinalizers.back(), object);
+    localFinalizers.push_back(Heap::GetHeap().GetFinalizerProcessor().AllocateFinalizerHandle(object));
 }
 
 void Mutator::ResetMutator()

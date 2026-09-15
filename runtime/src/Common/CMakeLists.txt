@@ -6,6 +6,7 @@
 
 set(SRC_LIST
     "BaseObject.cpp"
+    "OopStorage.cpp"
     "../Heap/z/zAddress.cpp"
     "RunType.cpp"
     "PageCache.cpp"
