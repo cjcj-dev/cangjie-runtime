@@ -1,6 +1,7 @@
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Mutator/Mutator.h"
 
 #include <condition_variable>
 #include <mutex>
@@ -8,6 +9,45 @@
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
+{
+    // A native handle is stored at creation, not recolored when its owning
+    // list changes: weakHandle.cpp:39-50, zBarrierSet.inline.hpp:258-265.
+    Mutator mutator;
+    FinalizerProcessor processor;
+    alignas(8) unsigned char storage[16] = {};
+    mutator.AddLocalFinalizer(reinterpret_cast<BaseObject*>(storage));
+    auto& local = mutator.GetLocalFinalizers();
+    NativeSlot* const originalSlot = &local.front();
+    const zpointer originalWord = originalSlot->GetFieldValue();
+    struct RestoreMasks {
+        unsigned long mark = ::g_cjMarkBadMask;
+        unsigned long store = ::g_cjStoreGoodMask;
+        unsigned long bad = ::g_cjStoreBadMask;
+        ~RestoreMasks()
+        {
+            ::g_cjMarkBadMask = mark;
+            ::g_cjStoreGoodMask = store;
+            ::g_cjStoreBadMask = bad;
+        }
+    } masks;
+    ::g_cjMarkBadMask ^= MARKED_YOUNG_MASK;
+    ::g_cjStoreGoodMask ^= MARKED_YOUNG_MASK;
+    ::g_cjStoreBadMask ^= MARKED_YOUNG_MASK;
+    processor.RegisterFinalizers(local);
+    size_t seen = 0;
+    processor.VisitFinalizers([&](NativeSlot& slot) {
+        ++seen;
+        std::fprintf(stderr, "B19_REGISTRATION_EPOCH_ASSERT observed=%#lx expected=%#lx\n",
+                     raw(slot.GetFieldValue()), raw(originalWord));
+        GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(originalWord));
+        GC_EXPECT_TRUE(&slot == originalSlot);
+        GC_EXPECT_FALSE(ColourPredicates::is_marked_young(raw(slot.GetFieldValue()), ::g_cjMarkBadMask));
+    });
+    GC_EXPECT_EQ(seen, size_t(1));
+    GC_EXPECT_TRUE(local.empty());
+}
 
 GC_TEST(FnlzRoots, RegisteredFinalizerIsRawPointerButNotStrongRoot)
 {

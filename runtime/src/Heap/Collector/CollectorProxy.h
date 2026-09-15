@@ -60,6 +60,10 @@ public:
     {
         currentCollector->MarkYoungObjectIfActive(object);
     }
+    void MarkYoungRootObject(BaseObject* object) const override
+    {
+        currentCollector->MarkYoungRootObject(object);
+    }
 
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
     {

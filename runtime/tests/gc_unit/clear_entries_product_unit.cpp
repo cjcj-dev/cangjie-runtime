@@ -2958,7 +2958,7 @@ GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorFallbackKeepsOldPendingThenRelocates
 
 #include "b09_runtime_fixture.hpp"
 
-static void CheckCompactIncoming(bool overlapping, bool external = false, bool major = false, bool flipYoung = false, bool rootBeforeCompact = false)
+static void CheckCompactIncoming(bool overlapping, bool external = false, bool major = false, bool flipYoung = false, bool rootBeforeCompact = false, bool exportEntry = false)
 {
     B09RuntimeFixture runtime;
     GcHeapFixture& fx = ProductFixture();
@@ -3002,9 +3002,17 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     GC_EXPECT_TRUE(current->IsValidObject());
     if (!rootBeforeCompact) {
         collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-        collector.ResurrectExportObject(current);
-        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
-        collector.ResurrectExportObject(current);
+        if (exportEntry) {
+            const U64 handle = Heap::GetHeap().RegisterExportRoot(current);
+            Heap::GetHeap().CrossAccessBarrier(handle);
+            collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+            Heap::GetHeap().CrossAccessBarrier(handle);
+            Heap::GetHeap().RemoveExportObject(handle);
+        } else {
+            collector.ResurrectExportObject(current);
+            collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+            collector.ResurrectExportObject(current);
+        }
     }
     const bool identity = RelocationReceiptTestAccess::BothResurrectionSetsEqual(
         collector, rootBeforeCompact ? second : current);
@@ -3183,4 +3191,9 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     GC_EXPECT_TRUE(region->GetRegionLifeId() != oldLife);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
     GC_EXPECT_TRUE(collector.ObjectGeneration(fixture.obj0) == Generation::Old);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, ExportEntryCurrentCompactDestinationKeepsIdentity)
+{
+    CheckCompactIncoming(true, false, false, false, false, true);
 }

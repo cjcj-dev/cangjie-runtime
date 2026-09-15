@@ -380,6 +380,17 @@ void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) co
     VisitWeakColoredRoots(visitor);
 }
 
+// ZRootsIteratorAllColored::apply, zRootsIterator.cpp:194-198.
+void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
+{
+    if (!strongClaimed.exchange(true, std::memory_order_relaxed)) {
+        collector.VisitStrongColoredRoots(visitor);
+    }
+    if (!weakClaimed.exchange(true, std::memory_order_relaxed)) {
+        collector.VisitWeakColoredRoots(visitor);
+    }
+}
+
 void TracingCollector::VisitStrongPlainRoots(
     const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor) const
 {

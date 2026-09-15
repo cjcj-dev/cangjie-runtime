@@ -1,0 +1,45 @@
+[
+  {
+    "command": [
+      "git",
+      "-C",
+      "/root/cj_build/cangjie_runtime",
+      "rev-parse",
+      "cjcjdev/main"
+    ],
+    "rc": 0,
+    "stdout": "c3973505c171aa7e72095c3357ffd57f56156707\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "rc": 0,
+    "stdout": "fb814a743fd7518de2f547bb15e6893bee25bb8c\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "cat-file",
+      "-t",
+      "4f9a173ed86a77cd72de1863277c75e6652f8379"
+    ],
+    "rc": 0,
+    "stdout": "commit\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "status",
+      "--short"
+    ],
+    "rc": 0,
+    "stdout": "?? .a2-arms/\n?? evidence/a2-export-cut.diff\n?? evidence/a2-thread-cut.diff\n?? evidence/build-export-cut.log\n?? evidence/build-finalizer-cut.log\n?? evidence/build-green.log\n?? evidence/build-old-strong-cut.log\n?? evidence/build-restored.log\n?? evidence/build-thread-cut.log\n?? evidence/cut.diff\n?? evidence/observe_chain.py\n?? evidence/regression.diff\n?? evidence/run_cut_suites.sh\n?? evidence/run_finalizer_qualified.py\n?? evidence/run_full_units.sh\n?? evidence/run_observed.py\n",
+    "stderr": ""
+  }
+]

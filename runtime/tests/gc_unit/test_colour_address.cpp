@@ -46,6 +46,22 @@ constexpr bool IsLoadGood(Uptr v, unsigned long badMask)
 
 } // namespace
 
+GC_TEST(ColourAddress, YoungRootColorPreservesOldEpochAndFinalizable)
+{
+    // Exercise the address operation used by the real young-root barrier.
+    // ZAddress::mark_young_good, zAddress.inline.hpp:793-805.
+    for (Uptr old : {MARKED_OLD_0, MARKED_OLD_1, FINALIZABLE_0, FINALIZABLE_1,
+                     MARKED_OLD_0 | FINALIZABLE_1, MARKED_OLD_1 | FINALIZABLE_0}) {
+        const zpointer before = to_zpointer(kSampleAddr | ZPointerRemapped00 | MARKED_YOUNG_MASK | old);
+        const zpointer after = ColorAddressMarkYoungGood(to_zaddress(kSampleAddr), before);
+        GC_EXPECT_EQ(raw(after) & (MARKED_OLD_MASK | FINALIZABLE_MASK), old);
+        GC_EXPECT_EQ(raw(after) & MARKED_YOUNG_MASK, MARKED_YOUNG_MASK & ~::g_cjMarkBadMask);
+        GC_EXPECT_EQ(raw(after) & kAddrMask, kSampleAddr);
+        GC_EXPECT_TRUE(ColourPredicates::is_load_good(raw(after), ::g_cjLoadBadMask));
+    }
+    GC_EXPECT_FALSE(ColourPredicates::has_address(raw(ColorAddressMarkYoungGood(zaddress::null, zpointer::null))));
+}
+
 // U2: uncolor(color(p)) == p for every remap one-hot and mark-bit combo we publish.
 GC_TEST(ColourAddress, UncolorRoundTripAllRemapOneHot)
 {

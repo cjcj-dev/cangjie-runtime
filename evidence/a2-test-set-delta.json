@@ -1,0 +1,11 @@
+{
+  "base": "4f9a173ed86a77cd72de1863277c75e6652f8379",
+  "added": [
+    "ThreadRootCurrent.C1StackFieldHistoricalColor",
+    "ThreadRootCurrent.C2ObjectRefHistoricalColor",
+    "ThreadRootCurrent.C3InvisibleHistoricalColor",
+    "ThreadRootCurrent.C4HeaderlessHistoricalColor",
+    "ValueRootCurrentization.ExportEntryCurrentCompactDestinationKeepsIdentity"
+  ],
+  "deleted": []
+}

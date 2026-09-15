@@ -1,0 +1,5 @@
+LANE=sym_cangjie_runtime_596_implement_r5673746875
+ROLE=implement
+A2 value/export补充实测：真实Heap::RegisterExportRoot→CrossAccessBarrier进入同CompactRegion重叠键构造，修前B09_OVERLAP_TARGET_ASSERT current_identity=0，原9项直接collector入口均identity=1。路径zHeap.cpp:392 GetExportObject→zRootsIterator.hpp:106 ReadStaticRef已给current，再由zHeap.cpp:397–401按page owner ForwardObject，second.to重叠first.from发生二次解析。
+已在本包value/export生产端删除这段重复ForwardObject，保持GetExportObject后的current进入ResurrectExportObject(IncomingNew)，ZGC zUncoloredRoot.inline.hpp:62–69 load-good身份保持。此为原A2生产端资格范围；未改StackWatermark/#498。测试为新增ValueRootCurrentization.ExportEntryCurrentCompactDestinationKeepsIdentity，真实产品Heap入口，非人工传中间值。
+线程C1–C4仍等待上一问023905Z裁定，报告保持WIP。请把本补充并入该裁定：如果本包因线程根边界退回，value/export修复及其证据仍提交同分支供后续保留。

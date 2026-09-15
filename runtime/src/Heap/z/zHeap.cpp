@@ -393,14 +393,10 @@ void HeapImpl::CrossAccessBarrier(I64 id)
     if (recordObj == nullptr) {
         return;
     }
-    if (GetGCPhase(static_cast<GCCycleGeneration>(GetCollector().ObjectGeneration(recordObj))) == GCPhase::GC_PHASE_PREFORWARD) {
-        auto& collector = GetCollector();
-        if (collector.IsGhostFromObject(recordObj) &&
-            !collector.IsUnmovableFromObject(recordObj)) {
-            recordObj = collector.ForwardObject(recordObj, collector.ObjectGeneration(recordObj));
-        }
-    }
-
+    // GetExportObject loads the native slot through its colored load barrier.
+    // Preserve that current identity, including an in-place destination whose
+    // address is also another object's from-key (ZUncoloredRoot::make_load_good,
+    // zUncoloredRoot.inline.hpp:62-69). Page ownership cannot reclassify it.
     reinterpret_cast<TracingCollector&>(GetCollector()).ResurrectExportObject(recordObj);
     SetExportObjActiveState(id, true);
 }
