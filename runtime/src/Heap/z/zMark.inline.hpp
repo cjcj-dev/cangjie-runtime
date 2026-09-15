@@ -15,6 +15,7 @@ namespace MapleRuntime {
 template<bool resurrect, bool gcThread, bool follow, bool finalizable>
 inline void MarkDomain::MarkObject(zaddress address)
 {
+    (void)to_object(address); // ZMark entry validates the current oop before the page query.
     RegionInfo* page = RegionInfo::GetRegionInfoAt(raw(address));
     if (page->IsAllocating()) {
         return;
