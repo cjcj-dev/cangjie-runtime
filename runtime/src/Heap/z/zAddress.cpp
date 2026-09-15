@@ -23,6 +23,8 @@ MRT_EXPORT uintptr_t g_cjMarkBadMask;
 MRT_EXPORT uintptr_t g_cjStoreGoodMask;
 MRT_EXPORT uintptr_t g_cjStoreBadMask;
 MRT_EXPORT size_t g_cjLoadShift;
+MRT_EXPORT uintptr_t g_cjHeapStart;
+MRT_EXPORT uintptr_t g_cjHeapEnd;
 }
 namespace MapleRuntime {
 uintptr_t ZAddressHeapBase;

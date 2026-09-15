@@ -22,6 +22,10 @@
 #include "RuntimeConfig.h"
 
 #include <unordered_set>
+extern "C" {
+extern uintptr_t g_cjHeapStart;
+extern uintptr_t g_cjHeapEnd;
+}
 namespace MapleRuntime {
 class OopStorage;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
@@ -151,6 +155,8 @@ public:
         heapStartAddr = startAddr;
         heapCurrentEnd = 0;
         heapReservations.clear();
+        g_cjHeapStart = startAddr;
+        g_cjHeapEnd = 0;
     }
 
     static void OnHeapCreated(MAddress startAddr, const std::vector<HeapSlotAddressRange>& reservations)
@@ -160,6 +166,10 @@ public:
             CHECK(range.end > range.start && IsRepresentableLow48Range(range.start, range.end - range.start));
         }
         heapReservations = reservations;
+        if (!reservations.empty()) {
+            g_cjHeapStart = reservations.front().start;
+            g_cjHeapEnd = reservations.back().end;
+        }
     }
 
     static void OnHeapExtended(MAddress newEnd)
@@ -171,6 +181,10 @@ public:
             heapReservations.back().end = newEnd;
         }
         heapCurrentEnd = newEnd;
+        g_cjHeapEnd = newEnd;
+        if (g_cjHeapStart == 0) {
+            g_cjHeapStart = heapStartAddr;
+        }
     }
 
     virtual ~Heap() {}
