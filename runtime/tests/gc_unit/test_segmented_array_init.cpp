@@ -30,6 +30,7 @@
 #include "Heap/Collector/GcRequest.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zIterator.hpp"
+#include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
@@ -885,6 +886,77 @@ void* RunMarkAllocationCase(void* rawExisting)
 }
 #endif
 
+void* RunVisibleArrayGraph(void*)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    const U64 handle = Heap::GetHeap().RegisterExportRoot(array);
+    std::vector<size_t> visits(array->GetLength(), 0);
+    size_t invalid = 0;
+    size_t objects = 0;
+    const MAddress first = reinterpret_cast<MAddress>(array->ConvertToCArray());
+    {
+        ScopedEnterSaferegion saferegion(true);
+        ScopedStopTheWorld stw("segmented-array range graph", false);
+        HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; },
+            [&](BaseObject* base, const void* slot, uintptr_t) {
+                if (base != array) { return; }
+                const MAddress field = reinterpret_cast<MAddress>(slot);
+                if (field < first || (field - first) % sizeof(RefField<>) != 0 ||
+                    (field - first) / sizeof(RefField<>) >= visits.size()) {
+                    ++invalid;
+                } else {
+                    ++visits[(field - first) / sizeof(RefField<>)];
+                }
+            });
+    }
+    Heap::GetHeap().RemoveExportObject(handle);
+    for (size_t count : visits) { invalid += count != 1; }
+    const bool complete = objects == 1 && invalid == 0;
+    std::fprintf(stderr, "SEGMENTED_GRAPH_RANGE_ASSERT objects=%zu fields=%zu invalid=%zu pass=%d\n",
+                 objects, visits.size(), invalid, complete);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>(complete ? 0 : 1);
+}
+
+struct InvisibleGraphProbe {
+    static size_t checks;
+    static size_t objects;
+    static void Publish(MArray* array)
+    {
+        // Construct legal null payloads so a deliberately wrong graph-root
+        // inclusion reaches this test's target result without an earlier
+        // field-value check. This fixture tests root selection, not clearing.
+        std::memset(array->ConvertToCArray(), 0, array->GetContentSize());
+    }
+    static void Yield(size_t segment)
+    {
+        if (segment != 0 || checks != 0) { return; }
+        ++checks;
+        BaseObject* root = Mutator::GetMutator()->LoadInvisibleRoot();
+        ScopedStopTheWorld stw("segmented-array invisible graph root", false);
+        HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == root; });
+    }
+};
+size_t InvisibleGraphProbe::checks = 0;
+size_t InvisibleGraphProbe::objects = 0;
+
+void* RunInvisibleArrayGraph(void*)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    LargeArrayInitTestHooks hooks;
+    hooks.onPublish = InvisibleGraphProbe::Publish;
+    hooks.onYield = InvisibleGraphProbe::Yield;
+    CJ_MRT_SetLargeArrayInitTestHooks(&hooks);
+    (void)MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    CJ_MRT_SetLargeArrayInitTestHooks(nullptr);
+    const bool excluded = InvisibleGraphProbe::checks == 1 && InvisibleGraphProbe::objects == 0;
+    std::fprintf(stderr, "SEGMENTED_GRAPH_INVISIBLE_ASSERT checks=%zu objects=%zu pass=%d\n",
+                 InvisibleGraphProbe::checks, InvisibleGraphProbe::objects, excluded);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>(excluded ? 0 : 1);
+}
+
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
 {
 #if defined(__linux__)
@@ -957,6 +1029,16 @@ GC_OTHER_VM_TEST(LargePageGeneration, NativeAllocationPublishesYoungEden)
 GC_OTHER_VM_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::NONE)), 0);
+}
+
+GC_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunVisibleArrayGraph, 0), 0);
+}
+
+GC_OTHER_VM_TEST(SegmentedArrayInit, InvisibleRootIsExcludedFromHeapGraph)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunInvisibleArrayGraph, 0), 0);
 }
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedFirstInactiveExtentUsesSegmentedInitializer)
