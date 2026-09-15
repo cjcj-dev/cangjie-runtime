@@ -54,17 +54,17 @@ uint32_t* ZPointerStoreGoodMaskLowOrderBitsAddr = ZPointerCalculateStoreGoodMask
 void ZGlobalsPointers::set_good_masks()
 {
     ZPointerRemapped = ZPointerRemappedOldMask & ZPointerRemappedYoungMask;
-    g_cjLoadGoodMask = ZPointer::remap_bits(ZPointerRemapped);
-    g_cjMarkGoodMask = g_cjLoadGoodMask | ZPointerMarkedYoung | ZPointerMarkedOld;
-    g_cjStoreGoodMask = g_cjMarkGoodMask | ZPointerRemembered;
-    g_cjLoadBadMask = g_cjLoadGoodMask ^ ZPointerLoadMetadataMask;
-    g_cjMarkBadMask = g_cjMarkGoodMask ^ ZPointerMarkMetadataMask;
-    g_cjStoreBadMask = g_cjStoreGoodMask ^ ZPointerStoreMetadataMask;
+    ZPointerLoadGoodMask = ZPointer::remap_bits(ZPointerRemapped);
+    ZPointerMarkGoodMask = ZPointerLoadGoodMask | ZPointerMarkedYoung | ZPointerMarkedOld;
+    ZPointerStoreGoodMask = ZPointerMarkGoodMask | ZPointerRemembered;
+    ZPointerLoadBadMask = ZPointerLoadGoodMask ^ ZPointerLoadMetadataMask;
+    ZPointerMarkBadMask = ZPointerMarkGoodMask ^ ZPointerMarkMetadataMask;
+    ZPointerStoreBadMask = ZPointerStoreGoodMask ^ ZPointerStoreMetadataMask;
     pd_set_good_masks();
 }
 void ZGlobalsPointers::pd_set_good_masks()
 {
-    g_cjLoadShift = ZPointer::load_shift_lookup(g_cjLoadGoodMask);
+    g_cjLoadShift = ZPointer::load_shift_lookup(ZPointerLoadGoodMask);
 }
 #ifdef __aarch64__
 // ZGC zAddress_aarch64.cpp:41-91.

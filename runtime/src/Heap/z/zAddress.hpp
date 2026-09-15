@@ -35,6 +35,12 @@ extern uintptr_t g_cjStoreGoodMask;
 extern uintptr_t g_cjStoreBadMask;
 extern size_t g_cjLoadShift;
 }
+#define ZPointerLoadGoodMask g_cjLoadGoodMask
+#define ZPointerLoadBadMask g_cjLoadBadMask
+#define ZPointerMarkGoodMask g_cjMarkGoodMask
+#define ZPointerMarkBadMask g_cjMarkBadMask
+#define ZPointerStoreGoodMask g_cjStoreGoodMask
+#define ZPointerStoreBadMask g_cjStoreBadMask
 namespace MapleRuntime {
 class BaseObject;
 size_t ZPlatformAddressOffsetBits();
@@ -218,12 +224,7 @@ extern uintptr_t  ZPointerRemembered;
 extern uintptr_t  ZPointerRemappedYoungMask;
 extern uintptr_t  ZPointerRemappedOldMask;
 
-// Good/bad masks
-
-
-
-
-
+// Good/bad masks (C ABI storage is g_cj*; ZGC names alias those symbols)
 constexpr uintptr_t ZPointerMarkedYoungMask = ZPointerMarkedYoung0 | ZPointerMarkedYoung1;
 constexpr uintptr_t ZPointerMarkedOldMask = ZPointerMarkedOld0 | ZPointerMarkedOld1;
 constexpr uintptr_t ZPointerFinalizableMask = ZPointerFinalizable0 | ZPointerFinalizable1;

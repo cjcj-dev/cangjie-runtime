@@ -399,7 +399,7 @@ inline zaddress_unsafe ZPointer::uncolor_unsafe(zpointer ptr) {
 }
 
 inline bool ZPointer::is_load_bad(zpointer ptr) {
-  return untype(ptr) & g_cjLoadBadMask;
+  return untype(ptr) & ZPointerLoadBadMask;
 }
 
 inline bool ZPointer::is_load_good(zpointer ptr) {
@@ -430,7 +430,7 @@ inline bool ZPointer::is_old_load_good(zpointer ptr) {
 }
 
 inline bool ZPointer::is_mark_bad(zpointer ptr) {
-  return untype(ptr) & g_cjMarkBadMask;
+  return untype(ptr) & ZPointerMarkBadMask;
 }
 
 inline bool ZPointer::is_mark_good(zpointer ptr) {
@@ -451,7 +451,7 @@ inline bool ZPointer::is_mark_good_or_null(zpointer ptr) {
 }
 
 inline bool ZPointer::is_store_bad(zpointer ptr) {
-  return untype(ptr) & g_cjStoreBadMask;
+  return untype(ptr) & ZPointerStoreBadMask;
 }
 
 inline bool ZPointer::is_store_good(zpointer ptr) {
@@ -522,7 +522,7 @@ inline zoffset ZAddress::offset(zaddress_unsafe addr) {
 }
 
 inline zpointer color_null() {
-  return ZAddress::color(zaddress::null, g_cjStoreGoodMask | ZPointerRememberedMask);
+  return ZAddress::color(zaddress::null, ZPointerStoreGoodMask | ZPointerRememberedMask);
 }
 
 inline zpointer ZAddress::load_good(zaddress addr, zpointer prev) {
@@ -532,7 +532,7 @@ inline zpointer ZAddress::load_good(zaddress addr, zpointer prev) {
 
   const uintptr_t non_load_bits_mask = ZPointerLoadMetadataMask ^ ZPointerAllMetadataMask;
   const uintptr_t non_load_prev_bits = untype(prev) & non_load_bits_mask;
-  return color(addr, g_cjLoadGoodMask | non_load_prev_bits | ZPointerRememberedMask);
+  return color(addr, ZPointerLoadGoodMask | non_load_prev_bits | ZPointerRememberedMask);
 }
 
 inline zpointer ZAddress::finalizable_good(zaddress addr, zpointer prev) {
@@ -540,7 +540,7 @@ inline zpointer ZAddress::finalizable_good(zaddress addr, zpointer prev) {
     return color_null();
   }
 
-  return color(addr, g_cjLoadGoodMask | ZPointerMarkedYoung | ZPointerFinalizable | ZPointerRememberedMask);
+  return color(addr, ZPointerLoadGoodMask | ZPointerMarkedYoung | ZPointerFinalizable | ZPointerRememberedMask);
 }
 
 inline zpointer ZAddress::mark_good(zaddress addr, zpointer prev) {
@@ -548,7 +548,7 @@ inline zpointer ZAddress::mark_good(zaddress addr, zpointer prev) {
     return color_null();
   }
 
-  return color(addr, g_cjLoadGoodMask | ZPointerMarkedYoung | ZPointerMarkedOld | ZPointerRememberedMask);
+  return color(addr, ZPointerLoadGoodMask | ZPointerMarkedYoung | ZPointerMarkedOld | ZPointerRememberedMask);
 }
 
 inline zpointer ZAddress::mark_old_good(zaddress addr, zpointer prev) {
@@ -561,7 +561,7 @@ inline zpointer ZAddress::mark_old_good(zaddress addr, zpointer prev) {
   const uintptr_t young_marked_mask = ZPointerMarkedYoung0 | ZPointerMarkedYoung1;
   const uintptr_t young_marked = prev_color & young_marked_mask;
 
-  return color(addr, g_cjLoadGoodMask | ZPointerMarkedOld | young_marked | ZPointerRememberedMask);
+  return color(addr, ZPointerLoadGoodMask | ZPointerMarkedOld | young_marked | ZPointerRememberedMask);
 }
 
 inline zpointer ZAddress::mark_young_good(zaddress addr, zpointer prev) {
@@ -574,11 +574,11 @@ inline zpointer ZAddress::mark_young_good(zaddress addr, zpointer prev) {
   const uintptr_t old_marked_mask = ZPointerMarkedMask ^ (ZPointerMarkedYoung0 | ZPointerMarkedYoung1);
   const uintptr_t old_marked = prev_color & old_marked_mask;
 
-  return color(addr, g_cjLoadGoodMask | ZPointerMarkedYoung | old_marked | ZPointerRememberedMask);
+  return color(addr, ZPointerLoadGoodMask | ZPointerMarkedYoung | old_marked | ZPointerRememberedMask);
 }
 
 inline zpointer ZAddress::store_good(zaddress addr) {
-  return color(addr, g_cjStoreGoodMask);
+  return color(addr, ZPointerStoreGoodMask);
 }
 
 inline zpointer ZAddress::store_good_or_null(zaddress addr) {
