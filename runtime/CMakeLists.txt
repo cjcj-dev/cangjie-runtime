@@ -181,6 +181,7 @@ if (BUILD_DEMANGLE)
 endif() # BUILD_DEMANGLE
 
 if (BUILD_CJTHREAD) # BUILD_CJTHREAD
+unset(_cjthread_result)
 set(_cjthread_previous_build_path "$ENV{CJTHREAD_BUILD_PATH}")
 set(ENV{CJTHREAD_BUILD_PATH} "${CMAKE_BINARY_DIR}/cjthread-build")
 # build cjthread
@@ -188,86 +189,111 @@ if (WINDOWS_FLAG MATCHES 1)
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         message("build cjthread for windows on windows")
         # build\build_cjthread_windows.bat -p windows_x86_64 Debug STATIC
-        execute_process(COMMAND build\\build_cjthread_windows.bat -p windows_x86_64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" ${TARGET_ARCH})
+        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p windows_x86_64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     elseif (CMAKE_HOST_SYSTEM_NAME MATCHES "Linux")
         message("build cjthread for windows on linux")
-        execute_process(COMMAND bash build/build_cjthread.sh -p cross_windows_x86_64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" ${TARGET_ARCH})
+        execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p cross_windows_x86_64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} "${OTHER_DEFINITIONS}" "${CMAKE_INSTALL_PREFIX}" ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         message("Only the Windows and Linux platforms are supported.")
     endif ()
 elseif (OHOS_FLAG MATCHES 1) # for ohos-aarch64
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         message("build cjthread for ohos on windows")
-        execute_process(COMMAND build\\build_cjthread_windows.bat -p ohos_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         message("build cjthread for ohos")
-        execute_process(COMMAND bash build/build_cjthread.sh -p ohos_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p ohos_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     endif ()
 elseif (OHOS_FLAG MATCHES 2) # for ohos-x86_64
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         message("build cjthread for ohos on windows")
-        execute_process(COMMAND build\\build_cjthread_windows.bat -p ohos_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         message("build cjthread for ohos")
-        execute_process(COMMAND bash build/build_cjthread.sh -p ohos_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p ohos_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     endif ()
 elseif (OHOS_FLAG MATCHES 3) # for ohos-arm
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
         message("build cjthread for ohos on windows")
-        execute_process(COMMAND build\\build_cjthread_windows.bat -p ohos_arm_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread_windows.bat" -p ohos_arm_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         message("build cjthread for ohos")
-        execute_process(COMMAND bash build/build_cjthread.sh -p ohos_arm_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p ohos_arm_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     endif ()
 elseif (ANDROID_FLAG MATCHES 1) # for android-aarch64
     message("build cjthread for ${ANDROID_TARGET_API}")
     set(ENV{ANDROID_ROOT} "${ANDROID_ROOT}")
     set(ENV{ANDROID_ARCH} "${ANDROID_ARCH}")
     set(ENV{ANDROID_TARGET_API} "${ANDROID_TARGET_API}")
-    execute_process(COMMAND sh build/build_cjthread.sh -p android_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    execute_process(COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p android_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
 elseif (ANDROID_FLAG MATCHES 2) # for android-x86_64
     message("build cjthread for ${ANDROID_TARGET_API}")
     set(ENV{ANDROID_ROOT} "${ANDROID_ROOT}")
     set(ENV{ANDROID_ARCH} "${ANDROID_ARCH}")
     set(ENV{ANDROID_TARGET_API} "${ANDROID_TARGET_API}")
-    execute_process(COMMAND sh build/build_cjthread.sh -p android_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    execute_process(COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p android_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
 elseif (ANDROID_FLAG MATCHES 3) # for android-armv7a
     message("build cjthread for ${ANDROID_TARGET_API}")
     set(ENV{ANDROID_ROOT} "${ANDROID_ROOT}")
     set(ENV{ANDROID_ARCH} "${ANDROID_ARCH}")
     set(ENV{ANDROID_TARGET_API} "${ANDROID_TARGET_API}")
-    execute_process(COMMAND sh build/build_cjthread.sh -p android_arm_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    execute_process(COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p android_arm_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
 elseif (MACOS_FLAG MATCHES 1)
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
         message("build cjthread for macos x86_64")
-        execute_process(COMMAND bash build/build_cjthread.sh -p macos_x86_64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p macos_x86_64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else()
         message("build cjthread for macos aarch64")
-        execute_process(COMMAND bash build/build_cjthread.sh -p macos_aarch64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p macos_aarch64 ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     endif()
 elseif (IOS_FLAG MATCHES 1)
     message("build cjthread for ios")
-    execute_process(COMMAND sh build/build_cjthread.sh -p ios_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    execute_process(COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p ios_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
 elseif (IOS_SIMULATOR_FLAG MATCHES 2)
         message("build cjthread for ios simulator x86_64")
-        execute_process(COMMAND sh build/build_cjthread.sh -p ios_simulator_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        execute_process(COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p ios_simulator_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
 elseif (IOS_SIMULATOR_FLAG MATCHES 1)
         message("build cjthread for ios simulator aarch64")
-        execute_process(COMMAND sh build/build_cjthread.sh -p ios_simulator_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        execute_process(COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p ios_simulator_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
 else ()
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
         message("build cjthread for aarch64")
         # bash build/build_cjthread.sh -p linux_aarch64_cangjie Debug STATIC ${CJTHREAD_SAN_PRARM}
-        execute_process(COMMAND sh build/build_cjthread.sh -p linux_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p linux_aarch64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     else ()
         # bash build/build_cjthread.sh -p linux_x86_64_cangjie Debug STATIC ${CJTHREAD_SAN_PRARM}
         message("build cjthread for x86_64")
-        execute_process(COMMAND bash build/build_cjthread.sh -p linux_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH})
+        execute_process(COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/build/build_cjthread.sh" -p linux_x86_64_cangjie ${CMAKE_BUILD_TYPE} STATIC ${CJTHREAD_SAN_PRARM} ${OTHER_DEFINITIONS} ${CMAKE_INSTALL_PREFIX} ${TARGET_ARCH}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" RESULT_VARIABLE _cjthread_result)
     endif ()
 endif () # WINDOWS_FLAG
 
 set(ENV{CJTHREAD_BUILD_PATH} "${_cjthread_previous_build_path}")
-message("build cjthread done!!!")
+# Only an executed child has a result (BUILD_CJTHREAD=OFF never enters here).
+# Restore the caller's environment before reporting a child failure.
+if (DEFINED _cjthread_result)
+    if (NOT "${_cjthread_result}" STREQUAL "0")
+        message(FATAL_ERROR "CJThread build failed: ${_cjthread_result}")
+    endif()
+    message("build cjthread done!!!")
+endif()
 endif() # BUILD_CJTHREAD
 
 if (BUILD_RUNTIME)
