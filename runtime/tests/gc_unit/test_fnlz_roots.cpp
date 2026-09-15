@@ -15,7 +15,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
     // A native handle is stored at creation, not recolored when its owning
     // list changes: weakHandle.cpp:39-50, zBarrierSet.inline.hpp:258-265.
     Mutator mutator;
-    FinalizerProcessor processor;
+    auto& processor = Heap::GetHeap().GetFinalizerProcessor();
     alignas(8) unsigned char storage[16] = {};
     mutator.AddLocalFinalizer(reinterpret_cast<BaseObject*>(storage));
     auto& local = mutator.GetLocalFinalizers();
@@ -170,3 +170,68 @@ GC_TEST(FnlzRoots, EnqueueBetweenIdleCheckAndCommitKeepsJobVisible)
     GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(1));
 }
 #endif
+
+GC_OTHER_VM_TEST(FnlzRoots, SharedBlockHandlesSurviveGrowthAndTransfer)
+{
+    Mutator mutator;
+    auto& processor = Heap::GetHeap().GetFinalizerProcessor();
+    alignas(8) unsigned char objects[130][16] = {};
+    std::vector<NativeSlot*> slots;
+    std::vector<zpointer> words;
+    for (auto& object : objects) {
+        mutator.AddLocalFinalizer(reinterpret_cast<BaseObject*>(object));
+        slots.push_back(&mutator.GetLocalFinalizers().back());
+        words.push_back(slots.back()->GetFieldValue());
+    }
+    processor.RegisterFinalizers(mutator.GetLocalFinalizers());
+    size_t observed = 0;
+    processor.VisitFinalizers([&](NativeSlot& slot) {
+        auto found = std::find(slots.begin(), slots.end(), &slot);
+        if (found == slots.end()) { return; }
+        const size_t index = static_cast<size_t>(found - slots.begin());
+        ++observed;
+        GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(words[index]));
+    });
+    std::fprintf(stderr, "ROOT_STORAGE_TARGET finalizer_registered=%zu expected=%zu\n", observed, slots.size());
+    GC_EXPECT_EQ(observed, slots.size());
+    GC_EXPECT_TRUE(mutator.GetLocalFinalizers().empty());
+}
+
+GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
+{
+    auto& heap = Heap::GetHeap();
+    alignas(8) unsigned char objects[130][16] = {};
+    std::vector<U64> handles;
+    NativeSlot* first = nullptr;
+    for (size_t index = 0; index < 130; ++index) {
+        handles.push_back(heap.RegisterExportRoot(reinterpret_cast<BaseObject*>(objects[index])));
+        if (index == 0) {
+            heap.VisitAllExportRoots([&](NativeSlot& slot) {
+                if (to_object(slot.GetTargetObject()) == reinterpret_cast<BaseObject*>(objects[0])) { first = &slot; }
+            });
+        }
+    }
+    size_t seen = 0;
+    NativeSlot* grown = nullptr;
+    heap.VisitAllExportRoots([&](NativeSlot& slot) {
+        for (auto& object : objects) {
+            if (to_object(slot.GetTargetObject()) == reinterpret_cast<BaseObject*>(object)) {
+                ++seen;
+                if (&object == &objects[0]) { grown = &slot; }
+            }
+        }
+    });
+    std::fprintf(stderr, "ROOT_STORAGE_TARGET export_registered=%zu first=%p grown=%p\n",
+                 seen, static_cast<void*>(first), static_cast<void*>(grown));
+    GC_EXPECT_EQ(seen, size_t(130));
+    GC_EXPECT_TRUE(first != nullptr && first == grown);
+    for (U64 handle : handles) { heap.RemoveExportRoot(handle); }
+    size_t releasedSeen = 0;
+    heap.VisitAllExportRoots([&](NativeSlot& slot) {
+        for (auto& object : objects) {
+            if (to_object(slot.GetTargetObject()) == reinterpret_cast<BaseObject*>(object)) { ++releasedSeen; }
+        }
+    });
+    std::fprintf(stderr, "ROOT_STORAGE_TARGET export_released_remaining=%zu\n", releasedSeen);
+    GC_EXPECT_EQ(releasedSeen, size_t(0));
+}

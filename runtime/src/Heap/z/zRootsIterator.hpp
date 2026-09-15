@@ -6,6 +6,7 @@
 
 #pragma once
 #include <list>
+#include "Common/OopStorage.h"
 #include <map>
 #include <mutex>
 #include <vector>
@@ -16,33 +17,56 @@
 namespace MapleRuntime {
 class TracingCollector;
 
-// zRootsIterator.hpp: colored storage and uncolored language roots have
-// separate iterators. Tasks compose them with generation-specific closures.
+// zRootsIterator.cpp:159-198: storage sets precede the external-slot
+// (Cangjie ABI / HotSpot CLD) adapter and use the same colored closure.
+class OopStorageSetIteratorStrong {
+public:
+    explicit OopStorageSetIteratorStrong(const TracingCollector& collector) : collector(collector) {}
+    void Apply(const NativeSlotVisitor& visitor);
+private:
+    const TracingCollector& collector;
+    std::atomic<bool> claimed{false};
+};
+class OopStorageSetIteratorWeak {
+public:
+    explicit OopStorageSetIteratorWeak(const TracingCollector& collector) : collector(collector) {}
+    void Apply(const NativeSlotVisitor& visitor);
+private:
+    const TracingCollector& collector;
+    std::atomic<unsigned> claimed{0};
+};
+class StaticRootsAdapterIterator {
+public:
+    explicit StaticRootsAdapterIterator(const TracingCollector& collector) : collector(collector) {}
+    void Apply(const NativeSlotVisitor& visitor);
+private:
+    const TracingCollector& collector;
+    std::atomic<bool> claimed{false};
+};
 class RootsIteratorStrongColored {
 public:
-    explicit RootsIteratorStrongColored(const TracingCollector& collector) : collector(collector) {}
+    explicit RootsIteratorStrongColored(const TracingCollector& collector) : strong(collector), statics(collector) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    const TracingCollector& collector;
-    std::atomic<bool> claimed{false};
+    OopStorageSetIteratorStrong strong;
+    StaticRootsAdapterIterator statics;
 };
-
 class RootsIteratorWeakColored {
 public:
-    explicit RootsIteratorWeakColored(const TracingCollector& collector) : collector(collector) {}
-    void Apply(const NativeSlotVisitor& visitor);
+    explicit RootsIteratorWeakColored(const TracingCollector& collector) : weak(collector) {}
+    void Apply(const NativeSlotVisitor& visitor) { weak.Apply(visitor); }
 private:
-    const TracingCollector& collector;
-    std::atomic<bool> claimed{false};
+    OopStorageSetIteratorWeak weak;
 };
-
 class RootsIteratorAllColored {
 public:
-    explicit RootsIteratorAllColored(const TracingCollector& collector) : strong(collector), weak(collector) {}
+    explicit RootsIteratorAllColored(const TracingCollector& collector)
+        : strong(collector), weak(collector), statics(collector) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    RootsIteratorStrongColored strong;
-    RootsIteratorWeakColored weak;
+    OopStorageSetIteratorStrong strong;
+    OopStorageSetIteratorWeak weak;
+    StaticRootsAdapterIterator statics;
 };
 
 // The language scanner owns stack-watermark fallback and non-thread plain
@@ -90,7 +114,7 @@ private:
 
 struct ExportObjectInfo {
     explicit ExportObjectInfo(bool state) : generation(1), occupied(true), activeState(state) {}
-    NativeSlot exportObj{zpointer::null};
+    NativeSlot* exportObj = nullptr;
     U32 generation = 0;
     bool occupied = false;
     bool activeState = true;
@@ -135,7 +159,7 @@ public:
         if (!ResolveLiveIndex(handle, index)) {
             return nullptr;
         }
-        return Heap::GetBarrier().ReadStaticRef(exportRoots[index].exportObj);
+        return Heap::GetBarrier().ReadStaticRef(*exportRoots[index].exportObj);
     }
     void RemoveExportRoot(U64 handle)
     {
@@ -144,7 +168,9 @@ public:
         if (!ResolveLiveIndex(handle, index)) {
             return;
         }
-        Heap::GetBarrier().WriteStaticRef(exportRoots[index].exportObj, nullptr);
+        Heap::GetBarrier().WriteStaticRef(*exportRoots[index].exportObj, nullptr);
+        weakStorage.Release(exportRoots[index].exportObj);
+        exportRoots[index].exportObj = nullptr;
         exportRoots[index].occupied = false;
         exportRoots[index].activeState = true;
         accessableId.push_back(index);
@@ -168,18 +194,19 @@ public:
         }
         auto info = exportRoots[index];
         // tableMutex excludes GC visitation, so this retained root is live here.
-        if (Heap::GetBarrier().ReadStaticRef(info.exportObj) != obj) {
+        if (Heap::GetBarrier().ReadStaticRef(*info.exportObj) != obj) {
             return false;
         }
         return info.activeState;
     }
 private:
-    static void PublishRegisteredRoot(ExportObjectInfo& slot, BaseObject* exportObj)
+    void PublishRegisteredRoot(ExportObjectInfo& slot, BaseObject* exportObj)
     {
         // ZGC native stores preserve the slot's previous value, not the
         // incoming reference (zBarrier.inline.hpp:709-715). The caller already
         // holds the incoming object; publish its handle before returning.
-        Heap::GetBarrier().WriteStaticRef(slot.exportObj, exportObj);
+        slot.exportObj = weakStorage.Allocate();
+        Heap::GetBarrier().WriteStaticRef(*slot.exportObj, exportObj);
     }
 
     bool ResolveLiveIndex(U64 handle, U64& index) const
@@ -203,6 +230,7 @@ private:
         return true;
     }
 
+    OopStorage weakStorage;
     std::mutex tableMutex;
     std::vector<ExportObjectInfo> exportRoots;
     std::list<U64> accessableId;

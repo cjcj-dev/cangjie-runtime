@@ -312,6 +312,9 @@ public:
 
     // zRootsIterator.cpp:159-220. The language has no weak plain code-cache roots.
     void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
+    void VisitStrongStorageRoots(const NativeSlotVisitor& visitor) const;
+    void VisitWeakFinalizerStorageRoots(const NativeSlotVisitor& visitor) const;
+    void VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const;
     void VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const;
     void VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const;
     void VisitAllColoredRoots(const NativeSlotVisitor& visitor) const;

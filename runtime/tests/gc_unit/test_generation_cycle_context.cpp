@@ -34,8 +34,12 @@ struct GenerationCycleRootTestAccess {
             NativeSlot queued(zpointer::null), working(zpointer::null);
             Heap::GetBarrier().WriteStaticRef(queued, objects[0]);
             Heap::GetBarrier().WriteStaticRef(working, objects[1]);
-            processor.finalizables.push_back(queued);
-            processor.workingFinalizables.push_back(working);
+            NativeSlot* queuedSlot = processor.strongStorage.Allocate();
+            queuedSlot->StoreColoured(queued.GetFieldValue(), std::memory_order_relaxed);
+            processor.finalizables.push_back(queuedSlot);
+            NativeSlot* workingSlot = processor.strongStorage.Allocate();
+            workingSlot->StoreColoured(working.GetFieldValue(), std::memory_order_relaxed);
+            processor.workingFinalizables.push_back(workingSlot);
             // Deliberately do not schedule finalization: only the scanner's
             // queued/working input branches are under test.
         }
@@ -54,9 +58,12 @@ struct GenerationCycleRootTestAccess {
         auto& processor = Heap::GetHeap().GetFinalizerProcessor();
         {
             std::lock_guard<std::mutex> lock(processor.listLock);
-            auto remove = [&](ManagedList<NativeSlot>& roots, BaseObject* object) {
+            auto remove = [&](NativeRootHandles& roots, BaseObject* object) {
                 for (auto it = roots.begin(); it != roots.end();) {
-                    if (to_object(it->GetTargetObject()) == object) it = roots.erase(it);
+                    if (to_object(it->GetTargetObject()) == object) {
+                        processor.strongStorage.Release(&*it);
+                        it = roots.erase(it);
+                    }
                     else ++it;
                 }
             };
