@@ -345,3 +345,24 @@ GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTablePublishesEveryRange)
         }
     }
 }
+
+GC_OTHER_VM_TEST(ZVirtualMemoryManagerTest, CompilerTableRejectsOversizedPublication)
+{
+    EnsureZAddressDomain();
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        std::vector<HeapSlotAddressRange> ranges;
+        for (size_t i = 0; i <= kCjHeapRangeCap; ++i) {
+            ranges.push_back({ZAddressHeapBase + 2 * i * ZBackingGranuleSize,
+                              ZAddressHeapBase + (2 * i + 1) * ZBackingGranuleSize});
+        }
+        Heap::OnHeapCreated(ZAddressHeapBase, ranges);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    std::fprintf(stderr, "P04_RANGE_LIMIT_TARGET status=%d\n", status);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+}
