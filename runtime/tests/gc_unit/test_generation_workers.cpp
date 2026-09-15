@@ -17,10 +17,10 @@ using namespace MapleRuntime::GcUnit;
 using Generation = GCWorkers::Generation;
 
 namespace {
-class Task : public GCWorkerTask {
+class Task : public ZTask {
 public:
-    explicit Task(std::function<void(uint32_t)> fn) : fn(std::move(fn)) {}
-    void Work(uint32_t id) override { fn(id); }
+    explicit Task(std::function<void(uint32_t)> fn) : ZTask("Task"), fn(std::move(fn)) {}
+    void work() override { fn(WorkerThread::worker_id()); }
 private:
     std::function<void(uint32_t)> fn;
 };
@@ -117,12 +117,12 @@ GC_TEST(GenerationWorkers, BorrowedTaskJoin)
 {
     GCWorkers workers(Generation::OLD, 3);
     std::atomic<unsigned> completed{0}, destroyed{0};
-    struct Borrowed : GCWorkerTask {
+    struct Borrowed : ZTask {
         std::atomic<unsigned>& completed;
         std::atomic<unsigned>& destroyed;
-        Borrowed(std::atomic<unsigned>& c, std::atomic<unsigned>& d) : completed(c), destroyed(d) {}
+        Borrowed(std::atomic<unsigned>& c, std::atomic<unsigned>& d) : ZTask("Borrowed"), completed(c), destroyed(d) {}
         ~Borrowed() override { ++destroyed; }
-        void Work(uint32_t) override { ++completed; }
+        void work() override { ++completed; }
     };
     {
         Borrowed task(completed, destroyed);
@@ -140,15 +140,16 @@ GC_TEST(GenerationWorkers, ResizeRestart)
         GCWorkers workers(Generation::YOUNG, 3);
         workers.SetActiveWorkers(counts.first);
         workers.SetActive();
-        struct Restart : GCRestartableWorkerTask {
+        struct Restart : ZRestartableTask {
             GCWorkers& workers;
             Latch entered, release;
             Record before, after;
             std::atomic<unsigned> phase{0}, polled{0};
             unsigned applied = 0;
-            explicit Restart(GCWorkers& w) : workers(w) {}
-            void Work(uint32_t id) override
+            explicit Restart(GCWorkers& w) : ZRestartableTask("Restart"), workers(w) {}
+            void work() override
             {
+                const uint32_t id = WorkerThread::worker_id();
                 if (phase == 0) {
                     before.Add(id);
                     entered.Add();
@@ -158,7 +159,7 @@ GC_TEST(GenerationWorkers, ResizeRestart)
                     after.Add(id);
                 }
             }
-            void ResizeWorkers(uint32_t n) override { applied = n; ++phase; }
+            void resize_workers(uint32_t n) override { applied = n; ++phase; }
         } task(workers);
         std::thread coordinator([&] { workers.Run(task); });
         bool ready = task.entered.Wait(counts.first);
@@ -183,11 +184,12 @@ GC_TEST(GenerationWorkers, ResizeRestart)
 GC_TEST(GenerationWorkers, RestartWithoutRequest)
 {
     GCWorkers workers(Generation::OLD, 2);
-    struct Restart : GCRestartableWorkerTask {
+    struct Restart : ZRestartableTask {
         Record result;
         unsigned callbacks = 0;
-        void Work(uint32_t id) override { result.Add(id); }
-        void ResizeWorkers(uint32_t) override { ++callbacks; }
+        Restart() : ZRestartableTask("Restart") {}
+        void work() override { result.Add(WorkerThread::worker_id()); }
+        void resize_workers(uint32_t) override { ++callbacks; }
     } task;
     workers.Run(task);
     task.result.Check(2);
@@ -390,14 +392,15 @@ GC_OTHER_VM_TEST(GenerationWorkers, BorrowedCompletionOrder)
     std::atomic<unsigned> completed{0}, destroyed{0};
     CallState run;
     unsigned completedAtReturn = 0;
-    struct Borrowed : GCWorkerTask {
+    struct Borrowed : ZTask {
         Latch &entered, &others, &last;
         std::atomic<unsigned> &completed, &destroyed;
         Borrowed(Latch& e, Latch& o, Latch& l, std::atomic<unsigned>& c, std::atomic<unsigned>& d)
-            : entered(e), others(o), last(l), completed(c), destroyed(d) {}
+            : ZTask("Borrowed"), entered(e), others(o), last(l), completed(c), destroyed(d) {}
         ~Borrowed() override { ++destroyed; }
-        void Work(uint32_t id) override
+        void work() override
         {
+            const uint32_t id = WorkerThread::worker_id();
             entered.Add();
             if (!(id == 0 ? last : others).Wait(1)) JoinHarnessError("borrowed-release");
             ++completed;
@@ -490,18 +493,18 @@ GC_OTHER_VM_TEST(GenerationWorkers, StopRestartCompletionOrder)
     GCWorkers workers(Generation::OLD, 2);
     workers.SetActiveWorkers(1);
     workers.SetActive();
-    struct Restart : GCRestartableWorkerTask {
+    struct Restart : ZRestartableTask {
         GCWorkers& workers;
         ExitGate& exit;
         Latch callback, release;
         std::atomic<unsigned> phase{0}, completed{0};
-        Restart(GCWorkers& w, ExitGate& e) : workers(w), exit(e) {}
-        void Work(uint32_t) override
+        Restart(GCWorkers& w, ExitGate& e) : ZRestartableTask("Restart"), workers(w), exit(e) {}
+        void work() override
         {
             exit.Install();
             if (phase == 0) workers.RequestResize(2); else ++completed;
         }
-        void ResizeWorkers(uint32_t) override
+        void resize_workers(uint32_t) override
         {
             callback.Add();
             if (!release.Wait(1)) JoinHarnessError("restart-callback-release");

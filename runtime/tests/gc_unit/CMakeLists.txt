@@ -9,12 +9,18 @@
 
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
+    gc_worker_fixture.cpp
     gc_cycle_sequence_fixture.cpp
     gc_unit_stubs.cpp
     test_colour_address.cpp
     test_zBitField.cpp
     test_zBitMap.cpp
     test_zList.cpp
+    test_region_list.cpp
+    test_zArray.cpp
+    test_zIndexDistributor.cpp
+    test_zValue.cpp
+    test_zUtils.cpp
     test_zstat.cpp
     test_zserviceability.cpp
     test_trustp1_phase1.cpp

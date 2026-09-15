@@ -90,14 +90,17 @@ void GCWorkers::WorkerLoop(uint32_t id)
         if (id >= runningWorkers) {
             continue;
         }
-        GCWorkerTask* task = currentTask;
-        GCIdMark gcId(currentGCId);
+        WorkerTask* task = currentTask;
+        // workerThread.cpp:68-73: set the thread-local worker id, then run
+        // under the gc id the task captured at construction.
+        WorkerThread::set_worker_id(id);
+        GCIdMark gcId(task->gc_id());
         lock.unlock();
 #if defined(CANGJIE_TSAN_SUPPORT)
         Sanitizer::TsanAttachNativeThread();
         TsanPosCtrlMaybeRace(id);
 #endif
-        task->Work(id);
+        task->work(id);
         // ZMarkTask::work: publish both generations before reporting completion.
         ThreadLocal::FlushCurrentThreadMarkStacks();
         lock.lock();
@@ -110,13 +113,12 @@ void GCWorkers::WorkerLoop(uint32_t id)
 
 // coordinatorMutex protects the complete run, including resize callbacks.
 // mutex is released while waiting, so worker polls and external requests work.
-void GCWorkers::RunBatch(GCWorkerTask& task)
+void GCWorkers::RunBatch(WorkerTask& task)
 {
     // The coordinating GC thread cannot publish while waiting for this batch.
     ThreadLocal::FlushCurrentThreadMarkStacks();
     std::unique_lock<std::mutex> lock(mutex);
     currentTask = &task;
-    currentGCId = GCIdMark::Current();
     runningWorkers = activeWorkers;
     remainingWorkers = runningWorkers;
     ++batch;
@@ -132,17 +134,17 @@ void GCWorkers::RunBatch(GCWorkerTask& task)
     currentTask = nullptr;
 }
 
-void GCWorkers::Run(GCWorkerTask& task)
+void GCWorkers::Run(ZTask& task)
 {
     std::lock_guard<std::mutex> coordinator(coordinatorMutex);
     {
         std::lock_guard<std::mutex> lock(mutex);
         CheckOpen();
     }
-    RunBatch(task);
+    RunBatch(*task.worker_task());
 }
 
-void GCWorkers::Run(GCRestartableWorkerTask& task)
+void GCWorkers::Run(ZRestartableTask& task)
 {
     std::lock_guard<std::mutex> coordinator(coordinatorMutex);
     {
@@ -150,7 +152,7 @@ void GCWorkers::Run(GCRestartableWorkerTask& task)
         CheckOpen();
     }
     for (;;) {
-        RunBatch(task);
+        RunBatch(*task.worker_task());
         uint32_t applied;
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -161,11 +163,11 @@ void GCWorkers::Run(GCRestartableWorkerTask& task)
             requestedWorkers = 0;
             applied = activeWorkers;
         }
-        task.ResizeWorkers(applied);
+        task.resize_workers(applied);
     }
 }
 
-void GCWorkers::RunAll(GCWorkerTask& task)
+void GCWorkers::RunAll(ZTask& task)
 {
     std::lock_guard<std::mutex> coordinator(coordinatorMutex);
     uint32_t previous;
@@ -175,7 +177,7 @@ void GCWorkers::RunAll(GCWorkerTask& task)
         previous = activeWorkers;
         activeWorkers = capacity;
     }
-    RunBatch(task);
+    RunBatch(*task.worker_task());
     std::lock_guard<std::mutex> lock(mutex);
     activeWorkers = previous;
 }

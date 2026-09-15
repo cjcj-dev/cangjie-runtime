@@ -10,8 +10,8 @@
 namespace MapleRuntime {
 // zPageTable.inline.hpp:79-99. The map includes reservation holes. A page
 // spanning several granules is emitted only at its own start granule.
-// z_globals.hpp:99 selects claim-tree by default. The diagnostic strategy
-// selector is not part of this port.
+// zPageTable.hpp:73: the iterator holds a ZIndexDistributor; z_globals.hpp:99
+// (ZIndexDistributorStrategy) selects the claim tree by default.
 template<typename T>
 class ZPageTableParallelIterator {
 public:
@@ -22,7 +22,7 @@ public:
 
 private:
     const ZGranuleMap<T>& table;
-    ZIndexDistributorClaimTree distributor;
+    ZIndexDistributor distributor;
 };
 
 }

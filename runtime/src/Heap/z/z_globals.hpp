@@ -5,7 +5,8 @@
 #define Z_FLAGS(product) \
     product(double, ZAllocationSpikeTolerance, 2.0) \
     product(double, ZFragmentationLimit, 5.0) \
-    product(double, ZYoungCompactionLimit, 25.0)
+    product(double, ZYoungCompactionLimit, 25.0) \
+    product(unsigned, ZIndexDistributorStrategy, 0)
 namespace MapleRuntime {
 #define DECLARE_Z_FLAG(type, name, value) constexpr type name = value;
 Z_FLAGS(DECLARE_Z_FLAG)

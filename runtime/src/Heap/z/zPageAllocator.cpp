@@ -535,14 +535,15 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
         } while (anotherWave);
     }
 
+    // zFuture.inline.hpp:47-53: a Java thread waits with a safepoint check;
+    // here the mutator enters its saferegion before ZFuture::get (I3/I4).
     ScopedEnterSaferegion enterSaferegion(false);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    const bool satisfied = request.Wait(allocationStallBeforeWaitTestHook
-        ? [this] { allocationStallBeforeWaitTestHook(*this); }
-        : std::function<void()> {});
-#else
-    const bool satisfied = request.Wait();
+    if (allocationStallBeforeWaitTestHook) {
+        allocationStallBeforeWaitTestHook(*this);
+    }
 #endif
+    const bool satisfied = request.Wait();
     // Pair with the posting owner before the caller destroys its request.
     // zPageAllocator.cpp:1454-1464.
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
@@ -1078,7 +1079,7 @@ void RegionManager::DumpRegionStats(const char* msg) const
 
 } // namespace MapleRuntime
 
-#include "Heap/z/zList.inline.hpp"
+#include "Heap/Allocator/RegionList.inline.h"
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
