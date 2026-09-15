@@ -499,6 +499,11 @@ public:
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
     uintptr_t AllocSharedObject(size_t size, PageAge age, bool nonBlocking = false);
     void RetireSharedPages(PageAgeRange ages);
+    // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
+    std::mutex& PinnedAllocationMutex() { return recentPinnedRegionList.GetListMutex(); }
+#if defined(MRT_TESTABLE_INTERNALS)
+    MRT_EXPORT static void (*testPinnedPageAcquired)(RegionInfo*);
+#endif
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.

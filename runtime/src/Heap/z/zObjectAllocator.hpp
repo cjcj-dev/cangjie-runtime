@@ -59,10 +59,20 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
              region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(),
              region->GetRegionType());
 
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (testPinnedPageAcquired != nullptr) {
+            testPinnedPageAcquired(region);
+        }
+#endif
         LockRegionListInSaferegion(regionListMutex);
         // another mutator may have installed a pinned region while the mutex was released.
         addr = AllocPinnedLocked(size);
         if (addr == 0) {
+            // ZPage::reset_seqnum (zPage.cpp:90) precedes publication without
+            // an intervening mark-start pause. Our acquisition may handshake;
+            // refresh this still-empty page under the same mutex that spans
+            // old retirement and seqnum advancement (P14 pause-model adapter).
+            region->ResetPageSequence();
             // If allocate pinned obj during tracing, set region to traced new region.
             GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
