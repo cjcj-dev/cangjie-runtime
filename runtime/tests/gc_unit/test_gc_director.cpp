@@ -7,7 +7,12 @@
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Base/TimeUtils.h"
 #include "gc_unittest.hpp"
+
+#include <chrono>
+#include <cmath>
+#include <thread>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -123,40 +128,77 @@ GC_TEST(GcDirector, ActiveMarkPressureRequestsMoreWorkers)
     GC_EXPECT_EQ(relaxed.workers, 1u);
 }
 
-// zStat.cpp:1242-1267: cycle wall time is split using actual worker
-// duration and accumulated worker time, never a fixed percentage.
+// zStat.cpp:1242-1267: cycle wall time is split using the worker duration
+// and accumulated worker time that ZStatWorkers recorded, never a fixed
+// percentage. at_start(n)/at_end() are the ZWorkers::run brackets.
 GC_TEST(GcDirector, CycleUsesWorkerAccountingAndControlledClock)
 {
     ZStatCycle cycle;
+    ZStatWorkers workers;
     cycle.Initialize(0);
-    cycle.AtStart(1000000000, 0, 0);
-    cycle.AtEnd(5000000000, 2000000000, 4000000000, true);
-    const auto first = cycle.Stats(6000000000);
-    GC_EXPECT_EQ(first.serialTime, 2.0);
-    GC_EXPECT_EQ(first.parallelTime, 4.0);
-    GC_EXPECT_EQ(first.lastActiveWorkers, 2.0);
+    const uint64_t start = TimeUtil::NanoSeconds();
+    cycle.AtStart(start);
+    workers.at_start(2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    workers.at_end();
+    const auto recorded = workers.stats();
+    GC_EXPECT_TRUE(recorded._accumulated_duration > 0.0);
+    GC_EXPECT_TRUE(std::fabs(recorded._accumulated_time - 2.0 * recorded._accumulated_duration) < 0.000001);
+    const uint64_t end = TimeUtil::NanoSeconds();
+    cycle.AtEnd(end, &workers, true, true);
+    const auto first = cycle.Stats(end + 1000000000);
+    const double wall = static_cast<double>(end - start) / SECOND_TO_NANO_SECOND;
+    GC_EXPECT_TRUE(std::fabs(first.serialTime - (wall - recorded._accumulated_duration)) < 0.000001);
+    GC_EXPECT_TRUE(std::fabs(first.parallelTime - recorded._accumulated_time) < 0.000001);
+    GC_EXPECT_TRUE(std::fabs(first.lastActiveWorkers - 2.0) < 0.000001);
     GC_EXPECT_EQ(first.timeSinceLast, 1.0);
     GC_EXPECT_EQ(first.warmupCycles, 1u);
-    cycle.AtStart(6000000000, 2000000000, 4000000000);
-    cycle.AtEnd(11000000000, 6000000000, 12000000000, false);
-    const auto next = cycle.Stats(12000000000);
-    GC_EXPECT_TRUE(std::fabs(next.serialTime - 1.3) < 0.000001);
-    GC_EXPECT_TRUE(std::fabs(next.parallelTime - 6.8) < 0.000001);
-    GC_EXPECT_TRUE(next.serialTimeSd > 0.0);
-    GC_EXPECT_TRUE(next.parallelTimeSd > 0.0);
-    GC_EXPECT_EQ(next.warmupCycles, 1u);
+    // at_end consumed the accumulation (get_and_reset), so the next cycle
+    // starts from zero and an unrecorded cycle still resets it.
+    const auto reset = workers.stats();
+    GC_EXPECT_EQ(reset._accumulated_duration, 0.0);
+    GC_EXPECT_EQ(reset._accumulated_time, 0.0);
+    workers.at_start(3);
+    workers.at_end();
+    cycle.AtStart(end);
+    cycle.AtEnd(end + 1, &workers, false, false);
+    GC_EXPECT_EQ(workers.stats()._accumulated_duration, 0.0);
+    const auto unrecorded = cycle.Stats(end + 2);
+    GC_EXPECT_TRUE(std::fabs(unrecorded.parallelTime - recorded._accumulated_time) < 0.000001);
+    GC_EXPECT_EQ(unrecorded.warmupCycles, 1u);
+}
+
+// zStat.cpp:1356-1377: stats() also counts the batch that is still running,
+// weighted by its active worker count.
+GC_TEST(GcDirector, WorkerStatsIncludeInFlightBatch)
+{
+    ZStatWorkers workers;
+    GC_EXPECT_EQ(workers.stats()._accumulated_time, 0.0);
+    workers.at_start(4);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const auto inFlight = workers.stats();
+    GC_EXPECT_TRUE(inFlight._accumulated_duration > 0.0);
+    GC_EXPECT_TRUE(std::fabs(inFlight._accumulated_time - 4.0 * inFlight._accumulated_duration) < 0.000001);
+    workers.at_end();
+    const auto done = workers.stats();
+    GC_EXPECT_TRUE(done._accumulated_duration >= inFlight._accumulated_duration);
+    GC_EXPECT_TRUE(std::fabs(done._accumulated_time - 4.0 * done._accumulated_duration) < 0.000001);
+    GC_EXPECT_TRUE(std::fabs(workers.get_and_reset_duration() - done._accumulated_duration) < 0.000001);
+    GC_EXPECT_TRUE(std::fabs(workers.get_and_reset_time() - done._accumulated_time) < 0.000001);
+    GC_EXPECT_EQ(workers.stats()._accumulated_duration, 0.0);
 }
 
 GC_TEST(GcDirector, WarmupCountsOnlyWarmupRequests)
 {
     ZStatCycle cycle;
+    ZStatWorkers workers;
     cycle.Initialize(0);
-    cycle.AtStart(1, 0, 0);
-    cycle.AtEnd(2, 0, 0, false);
+    cycle.AtStart(1);
+    cycle.AtEnd(2, &workers, false, true);
     GC_EXPECT_EQ(cycle.Stats(3).warmupCycles, 0u);
     for (uint64_t i = 0; i < 4; ++i) {
-        cycle.AtStart(10 + 2 * i, 0, 0);
-        cycle.AtEnd(11 + 2 * i, 0, 0, true);
+        cycle.AtStart(10 + 2 * i);
+        cycle.AtEnd(11 + 2 * i, &workers, true, true);
     }
     GC_EXPECT_EQ(cycle.Stats(20).warmupCycles, 3u);
 }
@@ -228,10 +270,12 @@ GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
     GC_EXPECT_EQ(combined.totalCollections - prior.totalCollections, 1u);
     GC_EXPECT_EQ(combined.collectionsAtMajorStart, combined.totalCollections);
 
-    young.AtStart(1, 0, 0);
-    young.AtEnd(2, 0, 0, true);
-    old.AtStart(2, 0, 0);
-    old.AtEnd(3, 0, 0, true);
+    ZStatWorkers youngWorkers;
+    ZStatWorkers oldWorkers;
+    young.AtStart(1);
+    young.AtEnd(2, &youngWorkers, true, true);
+    old.AtStart(2);
+    old.AtEnd(3, &oldWorkers, true, true);
     const auto completed = collections.Stats();
     GC_EXPECT_EQ(completed.totalCollections, combined.totalCollections);
     GC_EXPECT_EQ(completed.collectionsAtMajorStart, combined.collectionsAtMajorStart);
@@ -313,21 +357,21 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     young.SelectReason(GC_REASON_YOUNG);
     young.Begin(1);
     young.PublishPhase(GC_PHASE_TRACE);
-    young.Workers()->SetActiveWorkers(1);
+    young.Workers()->set_active_workers(1);
     const auto before = young.Snapshot();
 
     old.SelectReason(GC_REASON_USER);
     old.Begin(2);
     old.PublishPhase(GC_PHASE_FORWARD);
-    old.Workers()->SetActiveWorkers(2);
+    old.Workers()->set_active_workers(2);
 
     const auto after = young.Snapshot();
     GC_EXPECT_EQ(after.sequence, before.sequence);
     GC_EXPECT_EQ(after.phase, GC_PHASE_TRACE);
     GC_EXPECT_EQ(after.reason, GC_REASON_YOUNG);
     GC_EXPECT_TRUE(after.active);
-    GC_EXPECT_EQ(young.Workers()->ActiveWorkers(), 1u);
-    GC_EXPECT_EQ(old.Workers()->ActiveWorkers(), 2u);
+    GC_EXPECT_EQ(young.Workers()->active_workers(), 1u);
+    GC_EXPECT_EQ(old.Workers()->active_workers(), 2u);
     GC_EXPECT_TRUE(&young.Stats() != &old.Stats());
     GC_EXPECT_TRUE(&young.CycleStats() != &old.CycleStats());
 

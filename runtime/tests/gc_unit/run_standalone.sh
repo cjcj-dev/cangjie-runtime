@@ -347,6 +347,7 @@ MAIN_SOURCES=(
   "$SRC/test_uncommitter.cpp"
   "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_gc_thread_pool.cpp"
+  "$SRC/test_zWorkers.cpp"
 
   "$SRC/test_exempt_unlock.cpp"
   "$SRC/test_isfromreg.cpp"
