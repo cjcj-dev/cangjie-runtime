@@ -36,6 +36,7 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -911,6 +912,32 @@ void* RunMarkAllocationCase(void* rawExisting)
 }
 #endif
 
+void* RunPinnedBirthCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    auto* mutator = Mutator::GetMutator();
+    TypeInfo* type = GetReferenceArrayTypeInfos().component;
+    const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
+    MObject* dead = MObject::NewPinnedObject(type, size);
+    MObject* survivor = MObject::NewPinnedObject(type, size);
+    RegionInfo* oldPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(dead));
+    const bool shared = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(survivor)) == oldPage;
+    const U64 root = heap.RegisterExportRoot(survivor);
+    mutator->SetManagedContext(false);
+    heap.GetCollector().RequestGC(GC_REASON_USER, false);
+    mutator->SetManagedContext(true);
+    MObject* fresh = MObject::NewPinnedObject(type, size);
+    RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
+    const bool fromNewPage = page != oldPage;
+    const bool noExplicitMark = !page->IsCurrentFacePublished();
+    const bool allocating = page->IsAllocating();
+    const bool retained = heap.GetExportObject(root) == survivor;
+    std::fprintf(stderr, "P1_PINNED_ASSERT_EXECUTED shared=%d new_page=%d allocating=%d no_bitmap=%d retained=%d\n",
+                 shared, fromNewPage, allocating, noExplicitMark, retained);
+    heap.RemoveExportObject(root);
+    return reinterpret_cast<void*>((shared && fromNewPage && allocating && noExplicitMark && retained) ? 0 : 1);
+}
+
 void* RunVisibleArrayGraph(void*)
 {
     Mutator::GetMutator()->SetManagedContext(false);
@@ -1060,6 +1087,11 @@ GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
     GC_EXPECT_EQ(RunRuntimeCase(RunLargeYoungClosureCase, 0), 0);
 }
 #endif
+
+GC_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunPinnedBirthCase, 0), 0);
+}
 
 GC_OTHER_VM_TEST(LargePageGeneration, ManagedAllocationPublishesYoungEden)
 {
