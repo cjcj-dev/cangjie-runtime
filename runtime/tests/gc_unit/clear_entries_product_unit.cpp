@@ -524,25 +524,23 @@ public:
     {
         // Heap::Init normally supplies this limit. The synthetic heap has one-unit pages.
         manager.SetLargeObjectThreshold(RegionInfo::UNIT_SIZE / KB);
-        auto& allocator = manager.objectAllocators[untype(PageAge::old)];
-        created = allocator == nullptr;
-        if (created) allocator = std::make_unique<RegionManager::PerAgeObjectAllocator>(PageAge::old);
-        for (size_t cpu = 0; cpu < RegionManager::SharedPageCPUCount(); ++cpu) {
-            previous.push_back(allocator->smallPages[cpu].page.exchange(page));
+        // zObjectAllocator.hpp:41 ZPerCPU<ZPage*>: every CPU slot names the page.
+        auto& allocator = *manager.objectAllocators[untype(PageAge::old)];
+        ZPerCPUIterator<RegionInfo*> slots(&allocator.sharedSmallPage);
+        for (RegionInfo** slot; slots.next(&slot);) {
+            previous.push_back(__atomic_exchange_n(slot, page, __ATOMIC_ACQ_REL));
         }
     }
     ~DeliverySharedPageScope()
     {
-        auto& allocator = manager.objectAllocators[untype(PageAge::old)];
-        for (size_t cpu = 0; cpu < previous.size(); ++cpu) {
-            allocator->smallPages[cpu].page.store(previous[cpu]);
+        auto& allocator = *manager.objectAllocators[untype(PageAge::old)];
+        for (uint32_t cpu = 0; cpu < previous.size(); ++cpu) {
+            allocator.sharedSmallPage.set(previous[cpu], cpu);
         }
-        if (created) allocator.reset();
     }
 private:
     RegionManager& manager;
     std::vector<RegionInfo*> previous;
-    bool created;
 };
 
 LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liveObject)

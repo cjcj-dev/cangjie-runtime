@@ -50,6 +50,19 @@ constexpr bool IsPowerOfTwo(T x)
     return ret;
 }
 
+// utilities/powerOfTwo.hpp log2i_exact: exact log2 of a power of two.
+template<typename T>
+inline int Log2Exact(T value)
+{
+    static_assert(std::is_integral<T>::value, "T must be integral");
+    DCHECK(IsPowerOfTwo(value));
+    int result = 0;
+    while ((static_cast<T>(1) << result) != value) {
+        ++result;
+    }
+    return result;
+}
+
 template<typename T>
 T RoundDown(T x, typename Identity<T>::type n)
 {

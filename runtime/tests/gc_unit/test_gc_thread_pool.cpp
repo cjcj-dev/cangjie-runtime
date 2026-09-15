@@ -232,7 +232,7 @@ bool RunActualTaskClaimedOwnerSuccess()
     }
     fromSpace.PrependRegion(fx.region0, RegionInfo::RegionType::FROM_REGION);
     ForwardTask<Generation::Old> task(manager, fromSpace);
-    task.Work(0);
+    task.work();
     return added.request->state() == RelocationRequestQueue::State::COMPLETED &&
         added.request->page_forwarding()->find(from) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
 }
@@ -258,11 +258,12 @@ GC_TEST(RuntimeWorkers, FixedParticipantsCompleteEachBorrowedTask)
 {
     for (uint32_t count : { 1u, 3u }) {
         RuntimeWorkers workers(count);
-        class Task : public GCWorkerTask {
+        class Task : public ZTask {
         public:
-            explicit Task(uint32_t count) : visits(count, 0), handles(count) {}
-            void Work(uint32_t id) override
+            explicit Task(uint32_t count) : ZTask("FixedParticipantsTask"), visits(count, 0), handles(count) {}
+            void work() override
             {
+                const uint32_t id = WorkerThread::worker_id();
                 ++visits[id];
                 handles[id] = pthread_self();
             }
@@ -313,11 +314,11 @@ GC_TEST(RuntimeWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
     GC_EXPECT_TRUE(queue.IsActive());
     std::atomic<size_t> completionOwners{ 0 };
     RuntimeWorkers workers(kWorkers);
-    class RequestTask : public GCWorkerTask {
+    class RequestTask : public ZTask {
     public:
         RequestTask(RelocationRequestQueue& queue, std::atomic<size_t>& owners)
-            : queue(queue), completionOwners(owners) {}
-        void Work(uint32_t) override
+            : ZTask("RequestTask"), queue(queue), completionOwners(owners) {}
+        void work() override
         {
             for (;;) {
                 auto selected = queue.SelectBeforeOrdinary([]() -> void* { return nullptr; });
@@ -360,7 +361,7 @@ GC_TEST(RuntimeWorkers, ActualForwardTaskPreservesExternalClaimant)
     queue.BeginWorkers(1);
     const auto request = queue.Add(owner);
     ForwardTask<Generation::Old> task(manager, empty);
-    task.Work(0);
+    task.work();
     GC_EXPECT_FALSE(owner->is_done());
     GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::CLAIMED);
     owner->release_page();
@@ -387,7 +388,7 @@ GC_TEST(RuntimeWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
         answer.store(owner->find(from), std::memory_order_release);
     });
     ForwardTask<Generation::Old> task(manager, empty);
-    std::thread worker([&] { task.Work(0); });
+    std::thread worker([&] { task.work(); });
     while (queue.SynchronizedWorkerCount() != 1) std::this_thread::yield();
     const bool pending = !owner->is_done() && answer.load(std::memory_order_acquire) == 0;
     owner->release_page();

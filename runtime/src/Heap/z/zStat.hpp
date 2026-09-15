@@ -98,8 +98,6 @@ protected:
     }
     static void InitializeStorage();
     friend class ZStat;
-    static size_t CpuCount();
-    static size_t CpuId();
 private:
     const char* const group;
     const char* const name;

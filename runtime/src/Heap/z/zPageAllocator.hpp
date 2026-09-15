@@ -358,8 +358,10 @@ private:
 #include "Common/ColourEncoding.h"
 #include "Common/RunType.h"
 
+#include "Heap/z/zDeferredConstructed.hpp"
 #include "Heap/z/zRangeRegistry.hpp"
 #include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zValue.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/Allocator/RegionList.h"
@@ -797,15 +799,23 @@ private:
     template<Generation G>
     void ClearLiveInfo(RegionList& list);
 
-    // ZObjectAllocator::PerAge and ZPerCPU<ZPage*>. Contended slots have
-    // independent cache lines; CPU migration selects a fresh index per call.
-    struct SharedSmallPage;
-    struct PerAgeObjectAllocator;
-    static size_t SharedPageCPUCount();
-    static size_t CurrentSharedPageCPU();
+    // ZObjectAllocator::PerAge (zObjectAllocator.hpp:37-71): per-CPU shared
+    // small page in ZPerCPU storage (zValue.hpp), one PerAge per page age
+    // constructed in place (zObjectAllocator.hpp:73 ZDeferredConstructed).
+    struct PerAgeObjectAllocator {
+        explicit PerAgeObjectAllocator(PageAge pageAge);
+        const PageAge age;
+        ZPerCPU<RegionInfo*> sharedSmallPage;
+        std::atomic<RegionInfo*> pinnedPage{nullptr};
+
+        // zObjectAllocator.hpp:48-49
+        RegionInfo** shared_small_page_addr();
+        RegionInfo* const* shared_small_page_addr() const;
+    };
     RegionInfo* AllocateSharedPage(size_t units, RegionInfo::UnitRole role, PageAge age, bool nonBlocking);
     void UndoSharedPage(RegionInfo* page);
-    std::unique_ptr<PerAgeObjectAllocator> objectAllocators[kPageAgeCount];
+    ZDeferredConstructed<PerAgeObjectAllocator> objectAllocators[kPageAgeCount];
+    PerAgeObjectAllocator* allocator(PageAge age);
 
     FreeRegionManager freeRegionManager;
 

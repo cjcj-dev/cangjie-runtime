@@ -14,6 +14,9 @@ set(GC_UNIT_SOURCES
     test_colour_address.cpp
     test_zBitField.cpp
     test_zList.cpp
+    test_region_list.cpp
+    test_zArray.cpp
+    test_zIndexDistributor.cpp
     test_zstat.cpp
     test_zserviceability.cpp
     test_trustp1_phase1.cpp

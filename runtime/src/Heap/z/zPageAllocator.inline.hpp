@@ -426,16 +426,16 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
 // export Work so the unit runner binds the product SO; default builds retain
 // the implicit inline virtual with no MRT_EXPORT and no dynamic export.
 template<Generation G>
-class ForwardTask : public GCWorkerTask {
+class ForwardTask : public ZTask {
 public:
     ForwardTask(RegionManager& manager, RegionList& fromSpace)
-        : regionManager(manager), fromRegionList(fromSpace) {}
+        : ZTask("ZRelocateTask"), regionManager(manager), fromRegionList(fromSpace) {}
 
     ~ForwardTask() override = default;
 #if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT void Work(uint32_t) override;
+    MRT_EXPORT void work() override;
 #else
-    __attribute__((visibility("hidden"))) void Work(uint32_t) override
+    __attribute__((visibility("hidden"))) void work() override
     {
         detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
     }

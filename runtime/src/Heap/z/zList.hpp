@@ -3,224 +3,107 @@
 // with Runtime Library Exception.
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+// gc/z/zList.hpp:24-126
 #pragma once
-#include "Heap/z/zPage.hpp"
+#include <cassert>
+#include <cstddef>
+
 namespace MapleRuntime {
-class RegionList {
-public:
-    friend void RemoveRegionLocked(RegionList*, RegionInfo*);
-    RegionList(const char* name) : listName(name) {}
+template <typename T> class ZList;
 
-    void PrependRegion(RegionInfo* region, RegionInfo::RegionType type);
-    void PrependRegionLocked(RegionInfo* region, RegionInfo::RegionType type);
+// Element in a doubly linked list
+template <typename T>
+class ZListNode {
+    friend class ZList<T>;
 
-    void MergeRegionList(RegionList& regionList, RegionInfo::RegionType regionType);
-
-    void DeleteRegion(RegionInfo* del)
-    {
-        if (del == nullptr) {
-            return;
-        }
-
-        std::lock_guard<std::mutex> lock(listMutex);
-        DeleteRegionLocked(del);
-    }
-
-    bool TryDeleteRegion(RegionInfo* del, RegionInfo::RegionType oldType, RegionInfo::RegionType newType)
-    {
-        if (del == nullptr) {
-            return false;
-        }
-
-        CHECK(oldType != newType);
-        std::lock_guard<std::mutex> lock(listMutex);
-        if (del->GetRegionType() != oldType) {
-            return false;
-        }
-        if (del->GetRegionListOwner() != this) {
-            return false;
-        }
-        DeleteRegionLocked(del);
-        del->SetRegionType(newType);
-        return true;
-    }
-
-#ifdef MRT_DEBUG
-    void DumpRegionList(const char*);
-#endif
-
-    void DecCounts(size_t nRegion, size_t nUnit)
-    {
-        if (regionCount >= nRegion && unitCount >= nUnit) {
-            regionCount -= nRegion;
-            unitCount -= nUnit;
-        } else {
-            LOG(RTLOG_FATAL, "region list %p error count %zu-%zu %zu-%zu", regionCount, nRegion, unitCount, nUnit);
-        }
-    }
-
-    void IncCounts(size_t nRegion, size_t nUnit)
-    {
-        CHECK((nRegion <= std::numeric_limits<size_t>::max() - regionCount) &&
-              (nUnit <= std::numeric_limits<size_t>::max() - unitCount));
-        regionCount += nRegion;
-        unitCount += nUnit;
-    }
-
-    RegionInfo* GetHeadRegion() const { return listHead; }
-
-    void ClearList()
-    {
-        listHead = nullptr;
-        listTail = nullptr;
-        regionCount = 0;
-        unitCount = 0;
-    }
-
-    RegionInfo* GetTailRegion() { return listTail; }
-
-    RegionInfo* TakeHeadRegion()
-    {
-        std::lock_guard<std::mutex> lg(listMutex);
-        if (listHead == nullptr) { return nullptr; }
-        RegionInfo* currentHead = listHead;
-        DeleteRegionLocked(currentHead);
-        return currentHead;
-    }
-
-    RegionInfo* TakeHeadRegion(RegionInfo::RegionType newType)
-    {
-        std::lock_guard<std::mutex> lg(listMutex);
-        if (listHead == nullptr) { return nullptr; }
-        RegionInfo* currentHead = listHead;
-        DeleteRegionLocked(currentHead);
-        currentHead->SetRegionType(newType);
-        return currentHead;
-    }
-
-    size_t GetUnitCount() const { return unitCount; }
-
-    size_t GetRegionCount() const { return regionCount; }
-
-    size_t GetAllocatedSize(bool count = false) const
-    {
-        if (!count) {
-            return GetUnitCount() * RegionInfo::UNIT_SIZE;
-        }
-        return CountAllocatedSize();
-    }
-
-    void VisitAllRegions(const std::function<void(RegionInfo*)>& visitor) const
-    {
-        std::lock_guard<std::mutex> lock(listMutex);
-        RegionInfo* node = listHead;
-        RegionInfo* next = node;
-        while (node != nullptr) {
-            next = node->GetNextRegion();
-            visitor(node);
-            node = next;
-        }
-    }
-
-    void VisitAllGhostRegions(const std::function<void(RegionInfo*)>& visitor)
-    {
-        // Snapshot next before the visitor. PrepareFromRegionList may
-        // ReclaimRegionToMarkQuarantine → InitRegionInfo, which clears
-        // nextRegionIdx0 (the ghost successor). Walking GetNextGhostRegion
-        // after that truncates the chain; undispelled from-regions then
-        // fail PrepareForwardableRegion CHECK(inGhostFromRegion==0).
-        // Same shape as VisitAllRegions (RegionList.h:115-124).
-        RegionInfo* node = listHead;
-        while (node != nullptr) {
-            RegionInfo* next = node->GetNextGhostRegion();
-            visitor(node);
-            node = next;
-        }
-    }
-
-    void SetElementType(RegionInfo::RegionType type)
-    {
-        std::lock_guard<std::mutex> lock(listMutex);
-        for (RegionInfo* node = listHead; node != nullptr; node = node->GetNextRegion()) {
-            node->SetRegionType(type);
-        }
-    }
-
-    void ClearTraceRegionFlag()
-    {
-        std::lock_guard<std::mutex> lock(listMutex);
-        for (RegionInfo *node = listHead; node != nullptr; node = node->GetNextRegion()) {
-            node->SetTraceRegionFlag(0);
-        }
-    }
-
-    std::mutex& GetListMutex() { return listMutex; }
-
-    void MoveTo(RegionList& targetList)
-    {
-        std::lock_guard<std::mutex> lock(listMutex);
-        targetList.AssignWith(*this);
-        for (RegionInfo* node = targetList.listHead; node != nullptr; node = node->GetNextRegion()) {
-            node->SetRegionListOwner(&targetList);
-        }
-        this->ClearList();
-    }
-
-    void CopyListTo(RegionList& dstList)
-    {
-        std::lock_guard<std::mutex> lock(listMutex);
-        // Snapshot aliases (notably ghostFromRegionList) never claim authority;
-        // the source list remains the sole owner of every node.
-        dstList.listHead = this->listHead;
-        dstList.listTail = this->listTail;
-        dstList.regionCount = this->regionCount;
-        dstList.unitCount = this->unitCount;
-    }
-
-protected:
-    mutable std::mutex listMutex;
-    size_t regionCount = 0;
-    size_t unitCount = 0;
-    RegionInfo* listHead = nullptr; // the start region for iteration, i.e., the first region
-    RegionInfo* listTail = nullptr; // help to merge region list
-    const char* listName = nullptr;
 private:
-    void DeleteRegionLocked(RegionInfo* del);
+    ZListNode<T>* _next;
+    ZListNode<T>* _prev;
 
-    void AssignWith(const RegionList& srcList)
-    {
-        std::lock_guard<std::mutex> lock(listMutex);
-        listHead = srcList.listHead;
-        listTail = srcList.listTail;
-        regionCount = srcList.regionCount;
-        unitCount = srcList.unitCount;
+    ZListNode(const ZListNode&) = delete;
+    ZListNode& operator=(const ZListNode&) = delete;
+
+    void verify_links() const;
+    void verify_links_linked() const;
+    void verify_links_unlinked() const;
+
+public:
+    ZListNode();
+    ~ZListNode() {
+        // Implementation placed here to make it easier easier to embed ZListNode
+        // instances without having to include zListNode.inline.hpp.
+        assert(_next == this && "Should not be in a list");
+        assert(_prev == this && "Should not be in a list");
     }
-
-    // allocated-size of to-region list must be calculated on the fly.
-    size_t CountAllocatedSize() const
-    {
-        size_t allocCnt = 0;
-        std::lock_guard<std::mutex> lock(const_cast<RegionList*>(this)->listMutex);
-        for (RegionInfo* region = listHead; region != nullptr; region = region->GetNextRegion()) {
-            allocCnt += region->GetRegionAllocatedSize();
-        }
-        return allocCnt;
-    }
-
-#ifdef MRT_DEBUG
-    void VerifyRegion(RegionInfo* region)
-    {
-        RegionInfo* prev = region->GetPrevRegion();
-        RegionInfo* next = region->GetNextRegion();
-        if (prev != nullptr && prev->GetNextRegion() != region) {
-            LOG(RTLOG_FATAL, "illegal region node");
-        }
-
-        if (next != nullptr && next->GetPrevRegion() != region) {
-            LOG(RTLOG_FATAL, "illegal region node");
-        }
-    }
-#endif
 };
 
-}
+// Doubly linked list
+template <typename T>
+class ZList {
+private:
+    ZListNode<T> _head;
+    size_t       _size;
+
+    ZList(const ZList&) = delete;
+    ZList& operator=(const ZList&) = delete;
+
+    void verify_head() const;
+    void verify_head_error_reporter_safe() const;
+
+    void insert(ZListNode<T>* before, ZListNode<T>* node);
+
+    ZListNode<T>* cast_to_inner(T* elem) const;
+    T* cast_to_outer(ZListNode<T>* node) const;
+
+public:
+    ZList();
+
+    size_t size_error_reporter_safe() const;
+    bool is_empty_error_reporter_safe() const;
+
+    size_t size() const;
+    bool is_empty() const;
+
+    T* first() const;
+    T* last() const;
+    T* next(T* elem) const;
+    T* prev(T* elem) const;
+
+    void insert_first(T* elem);
+    void insert_last(T* elem);
+    void insert_before(T* before, T* elem);
+    void insert_after(T* after, T* elem);
+
+    void remove(T* elem);
+    T* remove_first();
+    T* remove_last();
+};
+
+template <typename T, bool Forward>
+class ZListIteratorImpl {
+private:
+    const ZList<T>* const _list;
+    T*                    _next;
+
+public:
+    ZListIteratorImpl(const ZList<T>* list);
+
+    bool next(T** elem);
+};
+
+template <typename T, bool Forward>
+class ZListRemoveIteratorImpl {
+private:
+    ZList<T>* const _list;
+
+public:
+    ZListRemoveIteratorImpl(ZList<T>* list);
+
+    bool next(T** elem);
+};
+
+template <typename T> using ZListIterator = ZListIteratorImpl<T, true /* Forward */>;
+template <typename T> using ZListReverseIterator = ZListIteratorImpl<T, false /* Forward */>;
+template <typename T> using ZListRemoveIterator = ZListRemoveIteratorImpl<T, true /* Forward */>;
+} // namespace MapleRuntime

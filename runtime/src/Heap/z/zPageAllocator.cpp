@@ -1103,7 +1103,7 @@ void RegionManager::DumpRegionStats(const char* msg) const
 
 } // namespace MapleRuntime
 
-#include "Heap/z/zList.inline.hpp"
+#include "Heap/Allocator/RegionList.inline.h"
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0

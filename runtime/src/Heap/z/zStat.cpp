@@ -220,6 +220,9 @@ GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZSta
 #include <unistd.h>
 #endif
 #include "Base/LogFile.h"
+#include "Heap/z/zCPU.inline.hpp"
+#include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zUtils.inline.hpp"
 
 namespace MapleRuntime {
 ZStatSampler* ZStatSampler::first = nullptr;
@@ -237,38 +240,12 @@ ZStatValue::ZStatValue(const char* group, const char* name, uint32_t id, size_t 
     stride += size;
 }
 
+// zStat.cpp:362-369: one cache-line aligned, unfreeable block of
+// ZCPU::count() * stride bytes.
 void ZStatValue::InitializeStorage()
 {
-    // Each CpuData is cache-line aligned; the entire per-CPU layout is resident.
-    stride = (stride + 63) & ~static_cast<size_t>(63);
-    // zUtils.inline.hpp:37-49: reserve padding and keep the aligned storage
-    // for process lifetime. This also works in the product's C++14 build.
-    const uintptr_t allocation = reinterpret_cast<uintptr_t>(std::malloc(stride * CpuCount() + 63));
-    CHECK_DETAIL(allocation != 0, "statistics storage allocation failed");
-    base = reinterpret_cast<char*>((allocation + 63) & ~static_cast<uintptr_t>(63));
-}
-
-size_t ZStatValue::CpuCount()
-{
-    static const size_t count = [] {
-#if defined(__linux__) || defined(hongmeng)
-        const long configured = sysconf(_SC_NPROCESSORS_CONF);
-        if (configured > 0) return static_cast<size_t>(configured);
-#endif
-        return static_cast<size_t>(std::max(1U, std::thread::hardware_concurrency()));
-    }();
-    return count;
-}
-
-size_t ZStatValue::CpuId()
-{
-#if defined(__linux__) || defined(hongmeng)
-    const int cpu = sched_getcpu();
-    if (cpu >= 0 && static_cast<size_t>(cpu) < CpuCount()) return static_cast<size_t>(cpu);
-#endif
-    // os_bsd.cpp:2260-2265 / os_linux.cpp:4987-5008: unsupported or invalid
-    // processor ids share CPU zero; all updates remain atomic.
-    return 0;
+    stride = AlignUp(stride, ZCacheLineSize);
+    base = reinterpret_cast<char*>(ZUtils::alloc_aligned_unfreeable(ZCacheLineSize, stride * ZCPU::count()));
 }
 
 ZStatSampler::ZStatSampler(const char* group, const char* name, ZStatUnit unit)
@@ -298,12 +275,12 @@ void ZStatSampler::Sort()
 
 void ZStatSampler::Initialize() const
 {
-    for (size_t i = 0; i < CpuCount(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
 }
 
 void ZStatSampler::Sample(uint64_t value) const
 {
-    auto& data = *CpuLocal<CpuData>(CpuId());
+    auto& data = *CpuLocal<CpuData>(ZCPU::id());
     data.nsamples.fetch_add(1, std::memory_order_relaxed);
     data.sum.fetch_add(value, std::memory_order_relaxed);
     uint64_t maximum = data.max.load(std::memory_order_relaxed);
@@ -313,7 +290,7 @@ void ZStatSampler::Sample(uint64_t value) const
 ZStatSamplerData ZStatSampler::CollectAndReset() const
 {
     ZStatSamplerData result;
-    for (size_t i = 0; i < CpuCount(); ++i) {
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) {
         auto& data = *CpuLocal<CpuData>(i);
         if (data.nsamples.load(std::memory_order_relaxed) != 0) {
             result.Add({data.nsamples.exchange(0, std::memory_order_relaxed),
@@ -332,18 +309,18 @@ ZStatCounter::ZStatCounter(const char* group, const char* name, ZStatUnit unit)
 
 void ZStatCounter::Initialize() const
 {
-    for (size_t i = 0; i < CpuCount(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
 }
 
 void ZStatCounter::Increment(uint64_t value) const
 {
-    CpuLocal<CpuData>(CpuId())->value.fetch_add(value, std::memory_order_relaxed);
+    CpuLocal<CpuData>(ZCPU::id())->value.fetch_add(value, std::memory_order_relaxed);
 }
 
 void ZStatCounter::SampleAndReset() const
 {
     uint64_t value = 0;
-    for (size_t i = 0; i < CpuCount(); ++i) {
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) {
         value += CpuLocal<CpuData>(i)->value.exchange(0, std::memory_order_relaxed);
     }
     sampler.Sample(value);
@@ -486,7 +463,7 @@ const ZStatPhase MajorCollection("Major Collection", "Major Collection");
 } // namespace MapleRuntime
 
 #include "Base/AtomicSpinLock.h"
-#include "Heap/Collector/TruncatedSeq.h"
+#include "Base/TruncatedSeq.h"
 #include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
@@ -521,11 +498,10 @@ void ZStatMutatorAllocRate::update_sampling_granule()
 
 void ZStatMutatorAllocRate::initialize()
 {
+    // zStat.cpp:945-949: the sample windows are process-lifetime statics;
+    // initialize only stamps the last sample time and the granule.
     g_lastSampleTimeNs = TimeUtil::NanoSeconds();
     g_allocatedSinceSample.store(0, std::memory_order_relaxed);
-    g_samplesTime.reset();
-    g_samplesBytes.reset();
-    g_rate.reset();
     // zDirector.cpp:867 / zHeap.cpp:61 — SoftMaxHeapSize. Env missing or 0 ⇒ hard cap.
     // ParseSizeFromEnv returns KB, same as cjHeapSize.
     size_t hard = Heap::GetHeap().GetMaxCapacity();

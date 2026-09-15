@@ -8,6 +8,7 @@
 // setup / find_empty / find_full / find_every_other.
 
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zHash.inline.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -340,8 +341,8 @@ GC_TEST(ZForwardingEntries, CollisionPreservesIdentityAndOtherKey)
     GC_EXPECT_TRUE(table != nullptr);
     const uintptr_t first = 0;
     uintptr_t collision = 1;
-    while ((ZHashUint32(collision) & (table->length() - 1)) !=
-           (ZHashUint32(first) & (table->length() - 1))) {
+    while ((ZHash::uint32_to_uint32(collision) & (table->length() - 1)) !=
+           (ZHash::uint32_to_uint32(first) & (table->length() - 1))) {
         ++collision;
     }
     const MAddress other = 0x1000 + (collision << ZForwarding::kAlignShift);

@@ -21,6 +21,7 @@
 #endif
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zCPU.hpp"
 
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
@@ -44,6 +45,8 @@ void PrepareIsolatedGcUnitProcess()
 int main(int argc, char** argv)
 {
     MapleRuntime::ZGlobalsPointers::initialize();
+    // zInitialize.cpp:62: the CPU affinity table precedes any ZCPU::id() reader.
+    MapleRuntime::ZCPU::initialize();
     constexpr const char* filterPrefix = "--gtest_filter=";
     constexpr const char* listTests = "--gtest_list_tests";
     bool isolatedTest = false;
