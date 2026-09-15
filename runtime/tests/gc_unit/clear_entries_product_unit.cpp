@@ -1799,8 +1799,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     StorePlain(root, from_object(from));
     BaseObject* resolved = RelocationReceiptTestAccess::ForwardUpdateRawRef(collector, root);
     GC_EXPECT_TRUE(resolved == to);
-    HeapSlot<> bits(to_zpointer(raw(root.LoadPlain())));
-    GC_EXPECT_TRUE(to_object(bits.GetTargetObject()) == to);
+    GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<MAddress>(to));
 
     publication = ForwardingTable::Publication();
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
