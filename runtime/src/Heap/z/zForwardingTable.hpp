@@ -19,7 +19,7 @@ enum class Generation : uint8_t;
 class RegionInfo;
 class RegionList;
 class BaseObject;
-struct LiveInfo;
+class ZLiveMap;
 
 // zForwardingTable.hpp:32-52 — granule map of ZForwarding*.
 // Map entries borrow the objects owned by the generation relocation sets.
@@ -148,7 +148,7 @@ public:
     // Product connection points for the dual carrier. Publication copies the
     // from-page view into the already-installed ZForwarding; every consumer
     // resolves the view back through the table rather than RegionInfo storage.
-    static bool PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
+    static bool PublishFromPageView(RegionInfo* region, ZLiveMap* livemap, uint64_t epoch,
                                     MAddress topAtStart, uint64_t birthSequence,
                                     uint8_t owner,
                                     uint8_t largeMarked, RegionLifeId lifeId);

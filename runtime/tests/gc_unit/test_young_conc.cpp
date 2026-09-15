@@ -69,12 +69,10 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     TracingCollector::WorkStack workStack;
-    MarkView<Generation::Old> view = fx.region1->GetMarkView<Generation::Old>();
-
     collector.DiscoverWeakReference(fx.obj0, workStack);
 
     GC_EXPECT_TRUE(workStack.empty());
-    GC_EXPECT_FALSE(fx.region1->IsMarkedObject(view, fx.obj1));
+    GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(fx.obj1)));
     ReferenceProcessor& processor =
         Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor();
     processor.ProcessReferences([](BaseObject*) { return true; });
@@ -204,18 +202,11 @@ GC_TEST(YoungConc, PaintedObjectSkippedByShouldEnqueue)
     MarkPublicationFixture markFixture;
     fx.region0->SetYoungRegionFlag(1);
     fx.region0->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
 
-    size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    MarkView<Generation::Young> view = fx.region0->GetMarkView<Generation::Young>();
-    GC_EXPECT_TRUE(fx.region0->GetMarkBitmap(view) != nullptr);
-    (void)fx.region0->GetMarkBitmap(view)->MarkBits(off, 8, fx.region0->GetRegionSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
 
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
 
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
 }
 
 // A current page has one owner/livemap pair. Typed closure views do not expose
@@ -226,15 +217,9 @@ GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
     MarkPublicationFixture markFixture;
     fx.region0->SetYoungRegionFlag(1);
     fx.region0->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
-    size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    MarkView<Generation::Young> youngView = fx.region0->GetMarkView<Generation::Young>();
-    (void)fx.region0->GetMarkBitmap(youngView)->MarkBits(off, 8, fx.region0->GetRegionSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
 }
 
 // isTraceRegion without paint is not allocate-black: SATB must still enqueue
@@ -248,15 +233,10 @@ GC_TEST(YoungConc, TraceRegionSkipsSatbWithoutPaint)
     fx.region0->SetYoungAge(1);
     fx.region0->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     fx.region0->SetTraceRegionFlag(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
 
     GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
-    size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_FALSE(fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Young>(), off));
+    GC_EXPECT_FALSE(fx.region0->is_object_strongly_live(from_object(fx.obj0)));
 
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
 }
 
 GC_TEST(YoungConc, EpochHandshakeIsRequired)
@@ -364,8 +344,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     MarkPublicationFixture markFixture;
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     BaseObject* first = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + 64);
@@ -407,7 +385,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
-    (void)live;
 }
 
 // ZGC zGeneration.cpp:550-552,897-905: published work prevents mark completion.
@@ -421,8 +398,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     MarkPublicationFixture markFixture;
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
@@ -460,7 +435,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
-    (void)live;
 }
 
 // ZGC zGeneration.cpp:550-552,897-905: published work prevents mark completion.
@@ -475,8 +449,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
@@ -523,7 +495,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
-    (void)live;
 }
 
 // Worker termination then mutator leftover y2y before STW.
@@ -537,8 +508,6 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     MarkPublicationFixture markFixture;
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     BaseObject* y2yHolder = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     BaseObject* y2yChild = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 192);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(y2yChild) + 64);
@@ -579,7 +548,6 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
-    (void)live;
 }
 
 GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
@@ -591,8 +559,6 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     MarkPublicationFixture markFixture;
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj1) + 64);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
@@ -621,7 +587,6 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
-    (void)live;
 }
 
 // ZGC native stores consume prev (zBarrier.inline.hpp:709-715), including
@@ -881,7 +846,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     GC_EXPECT_TRUE(work.front() == fx.obj1);
     GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == incoming);
     GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
-    GC_EXPECT_FALSE(fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), incoming));
+    GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(incoming)));
 }
 
 GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
@@ -1074,9 +1039,9 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     const size_t pending = young ? publication.YoungPending() : publication.OldPending();
                     std::fprintf(stderr, "P1_ALLOCATING_ASSERT young=%d gc=%d follow=%d finalizable=%d pending=%zu live=%zu\n",
                                  young, gcThread, follow, finalizable, pending,
-                                 static_cast<size_t>(fx.region0->GetLiveByteCount()));
+                                 static_cast<size_t>(fx.region0->live_bytes()));
                     GC_EXPECT_EQ(pending, 0u);
-                    GC_EXPECT_FALSE(fx.region0->IsCurrentFacePublished());
+                    GC_EXPECT_FALSE(fx.region0->livemap()->is_marked(fx.region0->generation_id()));
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
                     cycle.PublishPhase(GC_PHASE_TRACE);
                     fn(&cycle, from_object(fx.obj0));
@@ -1086,12 +1051,13 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     MarkStackEntry entry;
                     size_t entries = 0;
                     for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
+                        WorkerFixture worker;
                         while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
                             ++entries;
-                            GC_EXPECT_TRUE(entry.object() == fx.obj0);
-                            GC_EXPECT_EQ(entry.objectOffset(), reinterpret_cast<uintptr_t>(fx.obj0) - MarkStackEntry::HeapBase());
+                            GC_EXPECT_TRUE(to_object(ZOffset::address(to_zoffset(entry.object_address()))) == fx.obj0);
+                            GC_EXPECT_EQ(entry.object_address(), untype(ZAddress::offset(from_object(fx.obj0))));
                             GC_EXPECT_EQ(entry.mark(), !gcThread);
-                            GC_EXPECT_EQ(entry.incLive(), gcThread);
+                            GC_EXPECT_EQ(entry.inc_live(), gcThread);
                             GC_EXPECT_EQ(entry.follow(), follow);
                             GC_EXPECT_EQ(entry.finalizable(), finalizable);
                         }
@@ -1125,10 +1091,10 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     std::vector<BaseObject*> reached;
     publication.FollowYoung(work, reached);
     std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu\n", reached.size(),
-                 static_cast<size_t>(fx.region0->GetLiveByteCount()));
+                 static_cast<size_t>(fx.region0->live_bytes()));
     GC_EXPECT_EQ(reached.size(), 1u);
     GC_EXPECT_TRUE(reached[0] == fx.obj0);
-    GC_EXPECT_EQ(fx.region0->GetLiveByteCount(), fx.obj0->GetSize());
+    GC_EXPECT_EQ(fx.region0->live_bytes(), fx.obj0->GetSize());
 }
 
 

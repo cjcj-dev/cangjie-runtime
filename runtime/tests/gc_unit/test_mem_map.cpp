@@ -519,6 +519,15 @@ int ExerciseSegmentedProductAllocation()
             !Heap::IsHeapAddress(ranges[1].start)) {
             return 11;
         }
+        if (g_cjHeapRangeCount < 2 || g_cjHeapRangeStart[0] != ranges[0].start ||
+            g_cjHeapRangeEnd[0] != ranges[0].End() || g_cjHeapRangeStart[1] != ranges[1].start ||
+            g_cjHeapRangeEnd[1] != ranges[1].End() ||
+            (hole >= g_cjHeapStart && hole < g_cjHeapEnd &&
+             (hole < g_cjHeapRangeStart[0] || hole >= g_cjHeapRangeEnd[0]) &&
+             (hole < g_cjHeapRangeStart[1] || hole >= g_cjHeapRangeEnd[1]) &&
+             Heap::IsHeapAddress(hole))) {
+            return 11;
+        }
         const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
         if (manager.TakeRegion(3, role, false, false, false) != nullptr || !backend.commits.empty()) {
             return 12;

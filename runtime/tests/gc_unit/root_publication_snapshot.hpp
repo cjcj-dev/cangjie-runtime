@@ -32,7 +32,7 @@ struct RootPublicationSnapshot {
             const MarkStripeStack* stack = node->Stack();
             const MarkStackEntry* entries = stack->entries(stack);
             for (size_t i = 0; i < stack->top; ++i) {
-                if (!entries[i].partialArray()) {
+                if (!entries[i].partial_array()) {
                     visit(entries[i]);
                 }
             }
@@ -51,14 +51,14 @@ struct RootPublicationSnapshot {
     static bool Contains(MarkDomain& domain, const BaseObject* object)
     {
         bool found = false;
-        Visit(domain, [&](const MarkStackEntry& entry) { found = found || entry.object() == object; });
+        Visit(domain, [&](const MarkStackEntry& entry) { found = found || to_object(ZOffset::address(to_zoffset(entry.object_address()))) == object; });
         return found;
     }
 
     static std::set<BaseObject*> Objects(MarkDomain& domain)
     {
         std::set<BaseObject*> objects;
-        Visit(domain, [&](const MarkStackEntry& entry) { objects.insert(entry.object()); });
+        Visit(domain, [&](const MarkStackEntry& entry) { objects.insert(to_object(ZOffset::address(to_zoffset(entry.object_address())))); });
         return objects;
     }
 };

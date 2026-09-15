@@ -124,7 +124,6 @@ private:
 #include "Heap/z/zDriver.hpp"
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/LiveInfoArena.h"
 #include "Heap/z/zMarkStackEntry.hpp"
 #include "Mutator/MutatorManager.h"
 
@@ -404,10 +403,16 @@ public:
     }
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
+    // ZPage::mark_object(addr, finalizable = true) with direct inc_live accounting.
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
     {
-        // livesame: ResurrectObject counts on 0→1 inside.
-        bool resurrected = !regionInfo->ResurrectObject(obj, offset);
+        (void)offset;
+        bool incLive = false;
+        const bool newlyMarked = regionInfo->mark_object(from_object(obj), true, incLive);
+        if (incLive) {
+            regionInfo->inc_live(1, obj->GetSize());
+        }
+        bool resurrected = !newlyMarked;
         if (!resurrected) {
             size_t objSize = obj->GetSize();
             if (!fixReferences && regionInfo->IsFromRegion()) {
@@ -549,11 +554,13 @@ protected:
 
     void FindUselessExternObjects();
 
+    // Export-root producer consumed by the old roots task (zMark.cpp
+    // mark_old_roots -> MarkOldObjectIfActive).
+    void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
+
 private:
     size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
-    void EnumAllSurrectedExportRoots(RootSet& rootSet);
-    void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
 
     void VisitStaticRoots(const NativeSlotVisitor& visitor) const;
     void VisitFinalizerRoots(const NativeSlotVisitor& visitor) const;

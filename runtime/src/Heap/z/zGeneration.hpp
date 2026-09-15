@@ -86,7 +86,10 @@ private:
     // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
     ZStatWorkers statWorkers;
     mutable std::mutex mutex;
-    uint64_t sequence = 0;
+    // ZGeneration::ZGeneration (zGeneration.cpp:137): _seqnum(1). ZLiveMap uses
+    // seqnum 0 as "never marked" (zLiveMap.cpp:40, zLiveMap.inline.hpp:37-43),
+    // so no generation may ever report sequence 0.
+    uint64_t sequence = 1;
     uint64_t requestIndex = 0;
     // ZGenerationOld::_young_seqnum_at_reloc_start (zGeneration.hpp:278).
     std::atomic<uint64_t> youngSequenceAtRelocateStart{ 0 };

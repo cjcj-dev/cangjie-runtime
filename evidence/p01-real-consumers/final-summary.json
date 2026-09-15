@@ -1,0 +1,737 @@
+{
+  "green": {
+    "build_rc": 0,
+    "samples": {
+      "1": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "2": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "3": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "hole": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "hole.write",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "heap_dyn": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "heap_null": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "global": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      }
+    },
+    "hashes": {
+      "llc": "b71a256f4db199ffcb452e1ed1ec5b12b96544058b0d77c286293b252443ad30",
+      "cjcj-stage1": "c8a5b365c34493359a1bb2961764f914b59a704f243c034a970fdec21189fde4",
+      "slot_domain_driver": "8ab9e2f25a534d3e780fe7be7d3696daca9d5d6da3c81edcdccbd42ac9a21ef6",
+      "libcangjie-std-core.so": "a7c225c3a6553af2b359c2713424085013f58ee671b1643c00c37ace98ac6607",
+      "libcangjie-runtime.so": "31da634d81f19a48ab233e8a1f514a3435b20632a3d1cfb476a2c7cc2bcae880",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "loaded": [
+      "/root/sym_cangjie_runtime_608_implement_r5683164869-finalrt/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so",
+      "/root/sym_cangjie_runtime_608_implement_r5683164869-finalrt/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so",
+      "/root/sym_cangjie_runtime_608_implement_r5683164869/abi-final-green/std-install/runtime/lib/linux_x86_64_cjnative/libcangjie-std-core.so"
+    ]
+  },
+  "cut": {
+    "build_rc": 0,
+    "samples": {
+      "1": {
+        "rc": 1,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x40000000050",
+            "passed": false
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x20000000",
+            "expected": "0x40000000050",
+            "passed": false
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "2": {
+        "rc": 1,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x40000000050",
+            "passed": false
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x20000000",
+            "expected": "0x40000000050",
+            "passed": false
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "3": {
+        "rc": 1,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x40000000050",
+            "passed": false
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x20000000",
+            "expected": "0x40000000050",
+            "passed": false
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "hole": {
+        "rc": 1,
+        "assertions": [
+          {
+            "name": "hole.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x40000000050",
+            "passed": false
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x20000000",
+            "expected": "0x40000000050",
+            "passed": false
+          }
+        ]
+      },
+      "heap_dyn": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "heap_null": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "global": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      }
+    },
+    "hashes": {
+      "llc": "1248afe1998ec112486d23071646b49551e91130383ee2ba04c22d1d633696ee",
+      "cjcj-stage1": "c8a5b365c34493359a1bb2961764f914b59a704f243c034a970fdec21189fde4",
+      "slot_domain_driver": "4329199f4f6c44c98054813ff45361150da2dcee2e20cfcbb760c0580b0a1e44",
+      "libcangjie-std-core.so": "3675cca44f1227560b6d20bdc1aeb62dc89187e92df23f2c8429e2608b4adb8d",
+      "libcangjie-runtime.so": "31da634d81f19a48ab233e8a1f514a3435b20632a3d1cfb476a2c7cc2bcae880",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "loaded": [
+      "/root/sym_cangjie_runtime_608_implement_r5683164869-finalrt/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so",
+      "/root/sym_cangjie_runtime_608_implement_r5683164869-finalrt/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so",
+      "/root/sym_cangjie_runtime_608_implement_r5683164869/abi-final-cut/std-install/runtime/lib/linux_x86_64_cjnative/libcangjie-std-core.so"
+    ]
+  },
+  "restored": {
+    "build_rc": 0,
+    "samples": {
+      "1": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "2": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "3": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.write",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "hole": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "hole.write",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          },
+          {
+            "name": "hole.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "heap_dyn": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_dyn.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_dyn.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "heap_null": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "heap_null.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "heap_null.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      },
+      "global": {
+        "rc": 0,
+        "assertions": [
+          {
+            "name": "global.write",
+            "actual": "0x800000000a1510",
+            "expected": "0x800000000a1510",
+            "passed": true
+          },
+          {
+            "name": "global.read",
+            "actual": "0x40000000050",
+            "expected": "0x40000000050",
+            "passed": true
+          }
+        ]
+      }
+    },
+    "hashes": {
+      "llc": "b71a256f4db199ffcb452e1ed1ec5b12b96544058b0d77c286293b252443ad30",
+      "cjcj-stage1": "c8a5b365c34493359a1bb2961764f914b59a704f243c034a970fdec21189fde4",
+      "slot_domain_driver": "8ab9e2f25a534d3e780fe7be7d3696daca9d5d6da3c81edcdccbd42ac9a21ef6",
+      "libcangjie-std-core.so": "a7c225c3a6553af2b359c2713424085013f58ee671b1643c00c37ace98ac6607",
+      "libcangjie-runtime.so": "31da634d81f19a48ab233e8a1f514a3435b20632a3d1cfb476a2c7cc2bcae880",
+      "libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "loaded": [
+      "/root/sym_cangjie_runtime_608_implement_r5683164869-finalrt/default/build/runtime-staging/lib/x86_64_Release/libboundscheck.so",
+      "/root/sym_cangjie_runtime_608_implement_r5683164869-finalrt/default/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so",
+      "/root/sym_cangjie_runtime_608_implement_r5683164869/abi-final-restored/std-install/runtime/lib/linux_x86_64_cjnative/libcangjie-std-core.so"
+    ]
+  }
+}

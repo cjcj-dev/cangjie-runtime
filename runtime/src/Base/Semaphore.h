@@ -1,52 +1,54 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-#ifndef MRT_BASE_SEMAPHORE_H
-#define MRT_BASE_SEMAPHORE_H
-
-#include <cerrno>
-#include <cstdint>
-#include <semaphore.h>
-
-#include "Base/Log.h"
+// Licensed under Apache-2.0 with Runtime Library Exception.
+#pragma once
+#include <condition_variable>
+#include <mutex>
 
 namespace MapleRuntime {
-// runtime/semaphore.hpp:33-58 + os/posix/semaphore_posix.cpp:30-70. The
-// same-layer primitive behind HotSpot's Semaphore is sem_t; signal(count)
-// posts count times and wait() retries an interrupted wait.
+// runtime/semaphore.hpp Semaphore: a counting semaphore over the platform
+// mutex/condvar (I14, PLAN §5: same-layer primitives).
 class Semaphore {
-public:
-    explicit Semaphore(uint32_t value = 0)
-    {
-        const int ret = ::sem_init(&sem, 0, value);
-        CHECK_DETAIL(ret == 0, "sem_init failed: %d", errno);
-    }
-    ~Semaphore() { (void)::sem_destroy(&sem); }
-    Semaphore(const Semaphore&) = delete;
-    Semaphore& operator=(const Semaphore&) = delete;
-
-    void signal(uint32_t count = 1)
-    {
-        for (uint32_t i = 0; i < count; ++i) {
-            const int ret = ::sem_post(&sem);
-            CHECK_DETAIL(ret == 0, "sem_post failed: %d", errno);
-        }
-    }
-
-    void wait()
-    {
-        int ret;
-        do {
-            ret = ::sem_wait(&sem);
-        } while (ret != 0 && errno == EINTR);
-        CHECK_DETAIL(ret == 0, "sem_wait failed: %d", errno);
-    }
-
 private:
-    sem_t sem;
+    std::mutex _mutex;
+    std::condition_variable _cv;
+    unsigned _count;
+
+public:
+    explicit Semaphore(unsigned value = 0) : _count(value) {}
+
+    void signal(unsigned count = 1);
+    void wait();
+    bool trywait();
 };
+
+inline void Semaphore::signal(unsigned count)
+{
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _count += count;
+    }
+    if (count == 1) {
+        _cv.notify_one();
+    } else {
+        _cv.notify_all();
+    }
+}
+
+inline void Semaphore::wait()
+{
+    std::unique_lock<std::mutex> lock(_mutex);
+    _cv.wait(lock, [this] { return _count > 0; });
+    --_count;
+}
+
+inline bool Semaphore::trywait()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_count == 0) {
+        return false;
+    }
+    --_count;
+    return true;
+}
+
 } // namespace MapleRuntime
-#endif // MRT_BASE_SEMAPHORE_H

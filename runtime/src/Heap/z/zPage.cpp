@@ -62,9 +62,7 @@ uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;
 std::vector<RegionInfo::UnitSegment> RegionInfo::unitSegments;
 ZGranuleMap<RegionInfo*> RegionInfo::pageOwners;
-std::mutex RegionInfo::pageRetirementMutex;
-size_t RegionInfo::pageIterationCount = 0;
-std::vector<std::function<void()>> RegionInfo::deferredPageRetirements;
+ZSafeDelete<RegionInfo::PageRetirement> RegionInfo::safeDestroy;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 namespace {
@@ -73,13 +71,6 @@ namespace {
 std::atomic<size_t> youngRegionBytes{ 0 };
 }
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
-
-std::atomic<size_t> RegionInfo::ikeTrueEmpty { 0 };
-std::atomic<size_t> RegionInfo::ikeConservativeKeep { 0 };
-std::atomic<size_t> RegionInfo::ikeConservativeKeepBytes { 0 };
-std::atomic<size_t> RegionInfo::ikeNullFaceKeep { 0 };
-std::atomic<size_t> RegionInfo::ikeEpochKeep { 0 };
-std::atomic<bool> RegionInfo::ikeAtexitInstalled { false };
 
 std::mutex RegionInfo::youngRegionFlagMutex;
 void RegionInfo::SetYoungRegionFlag(uint8_t flag)
@@ -158,7 +149,7 @@ const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZ
 void RegionInfo::DumpRegionInfo(LogType type) const
 {
     DLOG(type, "Region index: %zu, type: %s, address: 0x%zx-0x%zx, allocated(B) %zu, live(B) %zu", GetUnitIdx(),
-         GetTypeName(), GetRegionStart(), GetRegionEnd(), GetRegionAllocatedSize(), GetLiveByteCount());
+         GetTypeName(), GetRegionStart(), GetRegionEnd(), GetRegionAllocatedSize(), livemap()->live_bytes());
 }
 
 const char* RegionInfo::GetTypeName() const
@@ -185,66 +176,63 @@ const char* RegionInfo::GetTypeName() const
 // ZPage::clone_for_promotion (zPage.cpp:64-71). RegionInfo is an indexed
 // slot rather than a separately allocated page descriptor, so the original
 // young page is represented by PromotionPage while the slot becomes old.
-std::unique_ptr<RegionInfo::PromotionPage> RegionInfo::CloneForPromotion(MarkView<Generation::Young> youngView)
+std::unique_ptr<RegionInfo::PromotionPage> RegionInfo::CloneForPromotion()
 {
-    CHECK(youngView.GetRegion() == this && IsYoungRegion());
+    CHECK(IsYoungRegion());
     const ZForwarding::FromPageView* from = GetFromPageView();
-    LiveInfo* original = from == nullptr ? GetLiveInfo() : from->liveInfo;
+    ZLiveMap* original = from == nullptr ? livemap() : from->livemap;
     const MAddress originalTop = from == nullptr ? GetRegionAllocPtr() : from->topAtStart;
-    auto page = std::make_unique<PromotionPage>(
-        LiveInfoArena::GetLiveInfoArena().TakePageLiveInfo(this, original),
-        GetRegionStart(), originalTop, GetYoungAge(), IsLargeRegion());
-    (void)PromoteYoungRegion(youngView);
-    return page;
+    // The published from-page livemap is this page's own map (PublishFromPageMetadata
+    // passes livemap()); the promotion page takes it over while the slot gets a
+    // fresh one (ZGC keeps the whole original ZPage in the relocation set).
+    CHECK_DETAIL(original == livemap(), "promotion source livemap does not belong to region %p", this);
+    const uint8_t age = GetYoungAge();
+    PromoteYoungRegion();
+    CHECK(metadata.retiredLivemap == original);
+    metadata.retiredLivemap = nullptr;
+    return std::make_unique<PromotionPage>(std::unique_ptr<ZLiveMap>(original), GetRegionStart(), originalTop, age,
+                                           IsLargeRegion());
 }
 
-// ZPage::object_iterate (zPage.inline.hpp:320): visit the original page's
-// ordinary start bits. ZLiveMap::iterate/is_marked (zLiveMap.inline.hpp:41,152)
-// checks the original generation's current sequence before reading any bits.
+// ZPage::object_iterate (zPage.inline.hpp:320) on the original young page:
+// ZLiveMap::iterate (zLiveMap.inline.hpp:141-158) checks the young
+// generation's current sequence before reading any bits.
 void RegionInfo::PromotionPage::ObjectIterate(const std::function<void(BaseObject*)>& visitor) const
 {
-    // PromotionPage is always the original young page, even after its RegionInfo
-    // slot becomes old. Do not use that slot's owner or freeze a clone-time epoch.
-    const uint64_t sequence = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence;
-    if (liveInfo == nullptr || sequence == 0 ||
-        liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) != sequence) {
+    if (livemap == nullptr) {
         return;
     }
-    RegionBitmap* bitmap = __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-    if (bitmap == nullptr) {
-        return;
-    }
-    if (large) {
-        if (bitmap->IsObjectStart(0)) {
-            visitor(from_region_addr(start));
-        }
-        return;
-    }
-    for (MAddress address = start; address < top; address += kMarkedBytesPerBit) {
-        if (bitmap->IsObjectStart(address - start)) {
+    const int shift = large ? ZObjectAlignmentLargeShift : ZObjectAlignmentSmallShift;
+    livemap->iterate(ZGenerationId::young, [&](BitMap::idx_t index) -> bool {
+        const MAddress address = start + ((index / 2) << shift);
+        if (address < top) {
             visitor(from_region_addr(address));
         }
-    }
+        return true;
+    });
 }
 
-// ZPage::verify_live (zPage.cpp:196). The forwarding owner holds the
+// ZPage::verify_live (zPage.cpp:196-203). The forwarding owner holds the
 // original page livemap when this metadata facade already describes to-space.
-void RegionInfo::VerifyLive(size_t liveObjects, size_t liveBytes, bool inPlace) const
+void RegionInfo::verify_live(uint32_t liveObjects, size_t liveBytes, bool inPlace) const
 {
     const ZForwarding::FromPageView* from = GetFromPageView();
-    CHECK_DETAIL(from != nullptr && from->liveInfo != nullptr, "Missing forwarding source livemap");
-    const LiveInfo::MarkFace& face = from->liveInfo->GetMarkFace();
-    RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
-    CHECK_DETAIL(bitmap != nullptr, "Missing forwarding source bitmap");
+    CHECK_DETAIL(from != nullptr && from->livemap != nullptr, "Missing forwarding source livemap");
+    const ZLiveMap* map = from->livemap;
     if (!inPlace) {
-        MRT_ASSERT(from->epoch != 0, "Should be marked");
+        // In-place relocation has changed the page to allocating
+        const ZGenerationId id = static_cast<Generation>(from->owner) == Generation::Young
+            ? ZGenerationId::young : ZGenerationId::old;
+        MRT_ASSERT(map->is_marked(id), "Should be marked");
+        (void)id;
         const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase(
             static_cast<GCCycleGeneration>(from->owner));
         MRT_ASSERT(phase != GC_PHASE_ENUM && phase != GC_PHASE_TRACE &&
                    phase != GC_PHASE_CLEAR_SATB_BUFFER, "Wrong phase");
+        (void)phase;
     }
-    CHECK_DETAIL(liveObjects == bitmap->GetLiveObjects(), "Invalid number of live objects");
-    CHECK_DETAIL(liveBytes == bitmap->GetLiveBytes(), "Invalid number of live bytes");
+    CHECK_DETAIL(liveObjects == map->live_objects(), "Invalid number of live objects");
+    CHECK_DETAIL(liveBytes == map->live_bytes(), "Invalid number of live bytes");
 }
 
 void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
@@ -276,27 +264,6 @@ void RegionInfo::ClearRelocationResiduals()
     });
 }
 
-bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func)
-{
-    // ZPage::object_iterate: only object-start bits authorize a header read.
-    std::vector<MAddress> objects;
-    CollectLiveObjectStarts(objects);
-    for (MAddress address : objects) {
-        if (!func(from_region_addr(address))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-#if defined(MRT_GC_UNIT_TESTS)
-// mc-r6: keep the unit-test-only mark-cycle entry points in the product
-// carrier.  Tests must import these instantiations from libcangjie-runtime.so
-// instead of instantiating a second copy in the test executable.
-template void RegionInfo::ClearLiveInfo<Generation::Young>(MarkView<Generation::Young>);
-template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Old>);
-
-#endif
 } // namespace MapleRuntime
 
 
@@ -311,8 +278,7 @@ template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Ol
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/LiveInfoArena.h"
-#include "Heap/z/zLiveMap.hpp"
+#include "Heap/z/zLiveMap.inline.hpp"
 
 namespace MapleRuntime {
 // ZPage::reset_seqnum (zPage.cpp:90-93), after owner selection and before publication.

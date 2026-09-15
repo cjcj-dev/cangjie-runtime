@@ -54,7 +54,7 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSi
 inline size_t RegionManager::CollectRegion(RegionInfo* region)
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-             region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+             region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd(), region->GetRegionType());
         // STEER3 CALLSITE_AUDIT: scrub HERE (once), not at ReclaimRegion.
         // Linux TakeRegion often reuses garbage via ClearUnits WITHOUT ReclaimRegion
         // (RegionManager.cpp TakeRegion same-size head path). Scrub-only-at-Reclaim
@@ -77,7 +77,7 @@ inline size_t RegionManager::CollectRegion(RegionInfo* region)
         if (region->IsLargeRegion()) {
             return region->GetRegionSize();
         } else {
-            return region->GetRegionSize() - region->GetLiveByteCount();
+            return region->GetRegionSize() - (region->is_marked() ? region->live_bytes() : 0);
         }
     }
 
@@ -226,19 +226,6 @@ inline void RegionManager::ReleaseMarkQuarantine()
         SatisfyStalledAllocations();
     }
 
-inline void RegionManager::ClearAllLiveInfo()
-    {
-        ClearLiveInfo<Generation::Old>(tlRegionList);
-        ClearLiveInfo<Generation::Old>(recentFullRegionList);
-        ClearLiveInfo<Generation::Old>(fullTraceRegions);
-        ClearLiveInfo<Generation::Old>(unmovableFromRegionList);
-        ClearLiveInfo<Generation::Old>(recentPinnedRegionList);
-        ClearLiveInfo<Generation::Old>(oldPinnedRegionList);
-        ClearLiveInfo<Generation::Old>(rawPointerPinnedRegionList);
-        ClearLiveInfo<Generation::Old>(oldLargeRegionList);
-        ClearLiveInfo<Generation::Old>(recentLargeRegionList);
-        ClearLiveInfo<Generation::Old>(largeTraceRegions);
-    }
 
     template <typename F>
 inline void RegionManager::VisitAllManagedRegionsForProbe(F&& visitor)
@@ -334,16 +321,6 @@ inline void RegionManager::LockRegionListInSaferegion(std::mutex& listMutex)
         }
     }
 
-    template<Generation G>
-inline void RegionManager::ClearLiveInfo(RegionList& list)
-    {
-        RegionList tmp("temp region list");
-        list.CopyListTo(tmp);
-        tmp.VisitAllRegions([](RegionInfo* region) {
-            MarkView<G> view = region->GetMarkView<G>();
-            region->ClearLiveInfo(view);
-        });
-    }
 
 inline void RegionManager::TagHugePage(RegionInfo* region, size_t num) const
 {

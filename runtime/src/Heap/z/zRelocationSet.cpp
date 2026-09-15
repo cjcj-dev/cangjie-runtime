@@ -112,7 +112,7 @@ void WCollector::CollectSmallSpace()
 namespace MapleRuntime {
 void RegionManager::AddFlipPromotedPage(RegionInfo* region)
 {
-    auto original = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
+    auto original = region->CloneForPromotion();
     std::lock_guard<std::mutex> lock(flipPromotedMutex);
     flipPromotedPages.push_back(std::move(original));
 }

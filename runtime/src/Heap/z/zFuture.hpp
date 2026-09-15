@@ -4,11 +4,21 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
-#include "Base/ImmortalWrapper.h"
-#include "LiveInfoArena.h"
+// gc/z/zFuture.hpp:24-43
+#pragma once
+#include "Base/Semaphore.h"
 
 namespace MapleRuntime {
-static ImmortalWrapper<LiveInfoArena> liveInfoArena;
-LiveInfoArena& LiveInfoArena::GetLiveInfoArena() { return *liveInfoArena; }
+template <typename T>
+class ZFuture {
+private:
+    Semaphore _sema;
+    T         _value;
+
+public:
+    ZFuture();
+
+    void set(T value);
+    T get();
+};
 } // namespace MapleRuntime

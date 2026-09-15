@@ -24,11 +24,11 @@ inline void MarkDomain::MarkObject(zaddress address)
     const bool markBeforePush = gcThread;
     bool incLive = false;
     if (markBeforePush) {
-        if (!page->MarkObject(address, finalizable, incLive)) {
+        if (!page->mark_object(address, finalizable, incLive)) {
             return;
         }
     } else {
-        if (page->IsObjectMarked(address, finalizable)) {
+        if (page->is_object_marked(address, finalizable)) {
             return;
         }
     }
@@ -38,8 +38,7 @@ inline void MarkDomain::MarkObject(zaddress address)
     }
     MarkThreadLocalStacks& stacks = Stacks();
     const size_t stripe = stripes.StripeForAddress(raw(address));
-    const zoffset offset = static_cast<zoffset>(raw(address) - MarkStackEntry::HeapBase());
-    const MarkStackEntry entry(offset, !markBeforePush, incLive, follow, finalizable);
+    const MarkStackEntry entry(untype(ZAddress::offset(address)), !markBeforePush, incLive, follow, finalizable);
     CHECK(page->IsYoungRegion() == (generation == MarkingStacks::MarkingGeneration::YOUNG));
     const bool publish = !gcThread;
     stacks.Push(stripes, stripe, entry, publish);

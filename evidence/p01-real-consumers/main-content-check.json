@@ -1,0 +1,44 @@
+[
+  {
+    "file": "runtime/src/Heap/Collector/FinalizerProcessor.h",
+    "main_blob": "8ad24c85eeef48e681923d0a7af070ad068085e0",
+    "head_blob": "8ad24c85eeef48e681923d0a7af070ad068085e0",
+    "equal": true
+  },
+  {
+    "file": "runtime/src/Heap/z/zUncommitter.cpp",
+    "main_blob": "907d705e6bdffe5460ad746ccf2cf7fd367e4d7f",
+    "head_blob": "907d705e6bdffe5460ad746ccf2cf7fd367e4d7f",
+    "equal": true
+  },
+  {
+    "file": "runtime/tests/PROBES.manifest",
+    "main_blob": "43cd5cfe1a9fac7d354e4da5bd5addde95301a41",
+    "head_blob": "472b6970e6b2e542c2113eaf5f1863f183b4973d",
+    "equal": false
+  },
+  {
+    "file": "runtime/tests/gc_unit/run_generation_cycle_context.sh",
+    "main_blob": "291ebfc532ba35a6886a133e8fdd32bc0d127347",
+    "head_blob": "291ebfc532ba35a6886a133e8fdd32bc0d127347",
+    "equal": true
+  },
+  {
+    "file": "runtime/tests/gc_unit/test_generation_cycle_context.cpp",
+    "main_blob": "2e158043824de3d402ae454fc3f74b6b24eec708",
+    "head_blob": "d59be5df3cf945c643d8a8e8d47bf0dd9db01463",
+    "equal": false
+  },
+  {
+    "file": "runtime/tests/gc_unit/test_generation_satb_obligations.cpp",
+    "main_blob": "b1a34740826af424614cc8747208167e7cfcb220",
+    "head_blob": "b1a34740826af424614cc8747208167e7cfcb220",
+    "equal": true
+  },
+  {
+    "file": "runtime/tests/run_uncommitter_constexpr_odr_probe.sh",
+    "main_blob": "3d17fde5f6bf8ef9528ba7d0141b32eb837ffd16",
+    "head_blob": "3d17fde5f6bf8ef9528ba7d0141b32eb837ffd16",
+    "equal": true
+  }
+]

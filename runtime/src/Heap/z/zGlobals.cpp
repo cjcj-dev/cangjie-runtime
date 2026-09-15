@@ -18,3 +18,9 @@ int ZObjectAlignmentMediumShift;
 const int& ZObjectAlignmentSmall = MinObjAlignmentInBytes;
 int ZObjectAlignmentMedium;
 }
+namespace MapleRuntime {
+// gc/shared/gc_globals.hpp ConcGCThreads; zArguments.cpp:67-81 sets it before the
+// heap comes up. Until CollectorResources::Init publishes the concurrent budget,
+// one worker is the minimum any per-worker storage must hold.
+uint32_t ConcGCThreads = 1;
+}

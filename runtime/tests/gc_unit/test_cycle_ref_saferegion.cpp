@@ -147,9 +147,9 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
     std::mutex completionMutex;
     std::condition_variable completionCondition;
     bool consumerReturned = false;
-    TracingCollector::RootSet roots;
+    std::vector<BaseObject*> roots;
     std::thread consumer([&] {
-        collector.EnumAllSurrectedExportRoots(roots);
+        collector.VisitSurrectedExportRoots([&](BaseObject* object) { roots.push_back(object); });
         {
             std::lock_guard<std::mutex> lock(completionMutex);
             consumerReturned = true;
@@ -197,12 +197,12 @@ GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
     auto* externRoot = reinterpret_cast<BaseObject*>(0x2000);
     collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
 
-    TracingCollector::RootSet roots;
-    collector.EnumAllSurrectedExportRoots(roots);
-    BaseObject* observedExtern = roots.empty() ? nullptr : roots.back().object();
+    std::vector<BaseObject*> roots;
+    collector.VisitSurrectedExportRoots([&](BaseObject* object) { roots.push_back(object); });
+    BaseObject* observedExtern = roots.empty() ? nullptr : roots.back();
     roots.pop_back();
     const bool ownerPresentAfterExtern = !roots.empty();
-    BaseObject* observedExport = ownerPresentAfterExtern ? roots.back().object() : nullptr;
+    BaseObject* observedExport = ownerPresentAfterExtern ? roots.back() : nullptr;
     if (ownerPresentAfterExtern) {
         roots.pop_back();
     }

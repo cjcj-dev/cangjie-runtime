@@ -1,4 +1,4 @@
-#include "Heap/z/zUtils.inline.hpp"
+#include "Base/Globals.h"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -88,9 +88,9 @@ void MarkStripeStackList::Push(MarkStripeStack* stack)
     }
 }
 
-MarkStripeStack* MarkStripeStackList::Pop(MarkingSMR& smr, size_t workerId)
+MarkStripeStack* MarkStripeStackList::Pop(MarkingSMR& smr, size_t /* workerId */)
 {
-    std::atomic<MarkStripeStackListNode*>& hazard = smr.Hazard(workerId);
+    std::atomic<MarkStripeStackListNode*>& hazard = *smr.hazard_ptr();
     MarkStripeStackListNode* observed = head.load(std::memory_order_relaxed);
     for (;;) {
         if (observed == nullptr) {
@@ -115,7 +115,7 @@ MarkStripeStack* MarkStripeStackList::Pop(MarkingSMR& smr, size_t workerId)
             hazard.store(nullptr, std::memory_order_release);
             length.fetch_sub(1, std::memory_order_relaxed);
             MarkStripeStack* const stack = observed->Stack();
-            smr.Retire(workerId, observed);
+            smr.free_node(observed);
             return stack;
         }
     }
@@ -289,12 +289,3 @@ size_t MarkStripeSet::NStripes() const { return nstripesMask.load(std::memory_or
 #include "Heap/z/zMarkContext.inline.hpp"
 
 #include "Heap/z/zMarkStack.inline.hpp"
-
-// ZOffset::address / ZAddress::offset: the Cangjie heap uses one payload view.
-#include "Heap/z/zHeap.hpp"
-namespace MapleRuntime {
-uintptr_t MarkStackEntry::HeapBase()
-{
-    return Heap::GetHeapStartAddress();
-}
-}

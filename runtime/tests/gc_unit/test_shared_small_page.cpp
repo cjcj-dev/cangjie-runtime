@@ -13,6 +13,8 @@
 #include <vector>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/z/zCPU.inline.hpp"
+#include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zStat.hpp"
 #if defined(__linux__)
 #include <sched.h>
@@ -207,22 +209,51 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
     GC_EXPECT_EQ(manager.GetTLABUsed(), expected);
 }
 
+// zCPU.inline.hpp:36-46 / zCPU.cpp:54-66: ZCPU::id() caches the CPU per thread
+// and revalidates through the affinity table; the cached id is only replaced
+// once another thread has claimed that CPU's entry (the slow path). The shared
+// small page follows ZCPU::id() (zObjectAllocator.cpp:48-50).
 GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
 {
     CPUAffinity affinity;
     SharedPageFixture fixture;
     auto& manager = fixture.manager;
-    const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
-    GC_EXPECT_TRUE(first != 0);
     if (affinity.available.size() < 2) {
         std::fprintf(stderr, "SharedSmallPage: migration arm unavailable: one allowed CPU\n");
         return;
     }
-    affinity.Select(affinity.available.back());
+    const size_t cpuA = affinity.available.front();
+    const size_t cpuB = affinity.available.back();
+    affinity.Select(cpuA);
+    // Fresh thread state: the first id() takes the slow path and reads cpuA.
+    GC_EXPECT_EQ(ZCPU::id(), cpuA);
+    const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
+    GC_EXPECT_TRUE(first != 0);
+    GC_EXPECT_TRUE(manager.objectAllocators[untype(PageAge::eden)]->sharedSmallPage.get(static_cast<uint32_t>(cpuA)) ==
+                   RegionInfo::GetRegionInfoAt(first));
+
+    affinity.Select(cpuB);
+    // Fast path: the affinity entry for cpuA still names this thread.
+    GC_EXPECT_EQ(ZCPU::id(), cpuA);
+    GC_EXPECT_EQ(manager.AllocSharedObject(16, PageAge::eden, true), first + 16);
+
+    // Another thread pinned to cpuA claims cpuA's entry (zCPU.cpp:62-64) ...
+    std::thread claimer([&] {
+        cpu_set_t* set = CPU_ALLOC(affinity.available.back() + 1);
+        const size_t bytes = CPU_ALLOC_SIZE(affinity.available.back() + 1);
+        CPU_ZERO_S(bytes, set);
+        CPU_SET_S(cpuA, bytes, set);
+        (void)sched_setaffinity(0, bytes, set);
+        CPU_FREE(set);
+        (void)ZCPU::id();
+    });
+    claimer.join();
+    // ... so this thread's next id() falls to the slow path and reads cpuB.
+    GC_EXPECT_EQ(ZCPU::id(), cpuB);
     const uintptr_t second = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(second != 0);
     GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(first) != RegionInfo::GetRegionInfoAt(second));
-    affinity.Select(affinity.available.front());
-    GC_EXPECT_EQ(manager.AllocSharedObject(16, PageAge::eden, true), first + 16);
+    GC_EXPECT_TRUE(manager.objectAllocators[untype(PageAge::eden)]->sharedSmallPage.get(static_cast<uint32_t>(cpuB)) ==
+                   RegionInfo::GetRegionInfoAt(second));
 }
 #endif

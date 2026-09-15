@@ -31,29 +31,6 @@ void CopyCollector::PostGarbageCollection(GCCycleGeneration generation, uint64_t
     MutatorManager::Instance().DestroyExpiredMutators();
 }
 
-void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, size_t size) const
-{
-    uintptr_t from = reinterpret_cast<uintptr_t>(&fromObj);
-    uintptr_t to = reinterpret_cast<uintptr_t>(&toObj);
-    const bool overlap = to < from && to + size > from;
-    const bool restoreLocked = overlap && fromObj.GetStateWord().IsLockedWord();
-
-    CHECK_E(memmove_s(reinterpret_cast<void*>(to), size, reinterpret_cast<void*>(from), size) != EOK,
-            "memmove_s fail");
-    // A conjoint relocation can overwrite the source header while the copier
-    // still owns its lock. Restore only the state bits before UnlockObject
-    // publishes the forwarding receipt.
-    if (restoreLocked) {
-        const_cast<BaseObject&>(fromObj).SetStateCode(ObjectState::LOCKED);
-    }
-#if defined(CANGJIE_TSAN_SUPPORT)
-    Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
-#endif
-
-}
-
-
-
 void CopyCollector::ForwardFromSpace(GCCycleGeneration generation)
 {
     ScopedEntryTrace trace("CJRT_GC_FORWARD");

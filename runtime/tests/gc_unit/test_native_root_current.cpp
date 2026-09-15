@@ -152,26 +152,24 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         std::memcpy(historicalSlot, &historicalWord, sizeof(historicalWord));
     }
     const uintptr_t before = raw(slot.GetFieldValue());
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    auto* bitmap = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
-    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(from)), from->GetSize(), region->GetRegionSize());
-    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(second)), second->GetSize(), region->GetRegionSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, from));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
     RegionList selected("native-root-relocation");
     selected.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
     // Invoke the explicit product instantiation, not a header-instantiated
     // fixture copy of the forwarding publication mechanism.
-    using Prepare = void (*)(RegionInfo*, MarkView<Generation::Young>);
+    using Prepare = void (*)(RegionInfo*);
     void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
     GC_EXPECT_TRUE(product != nullptr);
     auto prepare = reinterpret_cast<Prepare>(dlsym(product,
-        "_ZN12MapleRuntime10RegionInfo24PrepareForwardableRegionILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE"));
+        "_ZN12MapleRuntime10RegionInfo24PrepareForwardableRegionILNS_10GenerationE0EEEvv"));
     GC_EXPECT_TRUE(prepare != nullptr);
     Dl_info identity{};
     GC_EXPECT_TRUE(dladdr(reinterpret_cast<void*>(prepare), &identity) != 0 &&
                    identity.dli_fname != nullptr && std::strstr(identity.dli_fname, "libcangjie-runtime.so") != nullptr);
-    prepare(region, region->GetMarkView<Generation::Young>());
+    prepare(region);
     dlclose(product);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_PREFORWARD);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
@@ -186,8 +184,8 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     if (threadKind != 0) RelocationReceiptTestAccess::PreparePlainRoots(collector);
     if (minor) RelocationReceiptTestAccess::NativeRootMajorPrelude(collector);
     else RelocationReceiptTestAccess::NativeRootTrace(collector);
-    const bool currentMarked = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), to);
-    const bool staleMarked = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), from);
+    const bool currentMarked = region->is_object_strongly_live(from_object(to));
+    const bool staleMarked = region->is_object_strongly_live(from_object(from));
     // ZMarkYoungRootsTask -> mark_if_young (zBarrier.inline.hpp:763-767)
     // remaps this promoted root without publishing old strong. The old root
     // task below must independently mark the current address.
@@ -234,8 +232,8 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testOldMarkStarted = nullptr;
     collector.testColoredRootResult = nullptr;
-    const bool oldMarkedCurrent = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), to) &&
-        !region->IsMarkedObject(region->GetMarkView<Generation::Old>(), from);
+    const bool oldMarkedCurrent = region->is_object_strongly_live(from_object(to)) &&
+        !region->is_object_strongly_live(from_object(from));
     std::fprintf(stderr, "native_root_after_reset executed=1 observed=%u visited=%u enumerated=%u slot=%#zx expected=%p\n",
                  unsigned(observed), unsigned(visited), unsigned(enumerated), raw(slot.GetFieldValue()), to);
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
@@ -290,7 +288,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     const size_t before = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
     heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
-    const bool marked = fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Young>(), fx.obj0);
+    const bool marked = fx.region0->is_object_strongly_live(from_object(fx.obj0));
     const size_t first = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
     std::fprintf(stderr, "B19_YOUNG_MARK_BEFORE_HEAL executed=1 marked=%u before=%zu after=%zu word=%#lx\n",
                  unsigned(marked), before, first, raw(root.GetFieldValue()));
@@ -325,8 +323,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     fixture.region0->SetYoungRegionFlag(0);
-    const auto view = fixture.region0->GetMarkView<Generation::Old>();
-    GC_EXPECT_FALSE(fixture.region0->IsMarkedObject(view, fixture.obj0));
+    GC_EXPECT_FALSE(fixture.region0->is_object_strongly_live(from_object(fixture.obj0)));
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
     resources.GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
@@ -336,7 +333,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testOldMarkStarted = nullptr;
-    const bool marked = fixture.region0->IsMarkedObject(fixture.region0->GetMarkView<Generation::Old>(), fixture.obj0);
+    const bool marked = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
     std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p published=%u marked=%u\n",
                  fixture.obj0, unsigned(published), unsigned(marked));
     // Both observations are read before either target assertion can fail.

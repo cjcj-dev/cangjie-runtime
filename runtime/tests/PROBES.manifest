@@ -25,7 +25,6 @@
 test_runtime_copied_headers.py            manual     real copied-SO header identity regression; requires a published runtime pair and isolated work directory
 
 slot_type_split_compile_probe.cpp         configure  three-arm negative compile gate for HeapSlot/RootSlot/DerivedSlot
-mark_generation_compile_probe.cpp         configure  control plus young-as-old and old-as-young negative compile gates for MarkView
 
 run_colour_table_witness.sh               manual     host g++/clang++ with C++14 only; prints the readable collision witness and per-family counts. Judgement is the configure arm above
 run_colour_predicates_unit.sh             manual     host g++/clang++ with C++14 only; 17 ZGC-named predicates x positive/negative words, 32 mask epochs, and 16 phase-colour rows
@@ -33,20 +32,19 @@ test_zAddress.cpp                manual     harness for run_colour_predicates_un
 run_colour_encoding_unit.sh               manual     host C++14 runner for low-48 admission, checked geometry, and slot-word encoding classification
 colour_encoding_unit.cpp                  manual     pure ColourEncoding contract table; no product component is recompiled into the test ELF
 
-run_object_size_guard_probe.sh            manual     built runtime SO + cpuset + fault injection
 run_mutator_lock_liveness_probe.sh        manual     source-text structural check; awk-parses source order
 run_epoch_handshake_protocol_probe.sh     manual     g++ only + cpuset; old/new PROTOCOL_FIXED arms
 run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpuset
 run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dlclose address-reuse positive/negative arms plus measured registeredTypeInfos RSS
 run_elf_unload_quiescence.sh              manual     testable product runtime SO + Cangjie SDK; real dylib unload reader/directory/type/static-root groups and public PackageInfo snapshot traversal
 run_zgc_self_heal_loop_probe.sh           manual     built runtime SO; scripts a lost CAS to drive the ported ZBarrier::self_heal loop through its :103-107 retry and :98-101 fast-path-exit arms, which the workload leaves cold
+run_uncommitter_constexpr_odr_probe.sh    manual     host clang++ + nm + a configured runtime tree (RUNTIME_BUILD_DIR: third_party clone and runtime-staging/include); compiles zUncommitter.cpp with the product gnu++14 -O0 flags and reports every static constexpr member of Uncommitter that its nm -u leaves undefined (the TU references it without a definition); a generated odr-use consumer TU is only the nm instrument control (#59: the Release gate folds the reference away, only the Debug link sees it)
 test_runtime_provenance.py                manual     host git+cmake; git/dirty and repository-free source-content identities, declaration isolation, and unchanged-output mtime
 test_runtime_output_layout.cmake          manual     real-product build-time publication regression entry; requires TEST_RUNTIME_OUTPUT_WORK
 test_runtime_output_product.py            manual     real runtime configure/build/resolver, repeat publication and toolchain/initial-cache/arbitrary/indirect/override input isolation
 test_resolve_runtime_output.sh             manual     shell fixture; configuration manifest selection, product hashes, and mismatched-identity negative arm
 run_string_dedup_product.sh               manual     rebuilt std.core module + product SO + runtime SO; full/range, detach, unequal, and 32-way concurrent request arms
 
-object_size_guard_harness.cpp             manual     harness for run_object_size_guard_probe.sh
 mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh
 epoch_handshake_protocol_harness.cpp      manual     harness for run_epoch_handshake_protocol_probe.sh
 threadlocal_init_race_harness.cpp         manual     harness for run_threadlocal_init_race_probe.sh
@@ -105,4 +103,3 @@ perf_vs_official                          manual     built subject/official SDKs
 interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)
 signal_stack_guard_preinit.cpp            manual     product runtime/boundscheck SO pair; run_signal_stack_guard_preinit.sh checks pre-TLS guard queries and separate native hard-fault cases
 run_signal_stack_guard_preinit.sh         manual     GCV2_RUNTIME_LIB_DIR and SIGNAL_TEST_OUTPUT; compiles and runs signal_stack_guard_preinit.cpp against the built product pair
-test_zIndexDistributor.cpp             manual     cj_z_index_distributor_unit CMake/CTest target; needs MRT_GC_UNIT_TESTS=ON and pthread; ZGC claim-tree geometry plus sparse serial/parallel page-set comparison
