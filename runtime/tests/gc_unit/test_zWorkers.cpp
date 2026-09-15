@@ -329,8 +329,24 @@ GC_TEST(ZWorkers, RunAccumulatesParallelTimeInStatWorkers)
 {
     Fixture fx(GCCycleGeneration::OLD, 3);
     GC_EXPECT_EQ(fx.stats.stats()._accumulated_duration, 0.0);
-    Task task([] { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
-    fx.workers.run(&task);
+    Latch entered, release;
+    Task task([&] {
+        entered.Add();
+        (void)release.Wait(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    });
+    std::thread coordinator([&] { fx.workers.run(&task); });
+    JoinGuard guard(coordinator);
+    const bool allEntered = entered.Wait(3);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const auto inFlight = fx.stats.stats();
+    release.Add();
+    coordinator.join();
+    std::fprintf(stderr, "WORKER_STATS_TARGET entered=%u inFlightDuration=%.9f inFlightTime=%.9f\n",
+                 unsigned(allEntered), inFlight._accumulated_duration, inFlight._accumulated_time);
+    GC_EXPECT_TRUE(inFlight._accumulated_duration > 0.0);
+    GC_EXPECT_TRUE(std::fabs(inFlight._accumulated_time - 3.0 * inFlight._accumulated_duration) < 0.000001);
+    GC_EXPECT_TRUE(allEntered);
     const auto first = fx.stats.stats();
     GC_EXPECT_TRUE(first._accumulated_duration >= 0.010);
     GC_EXPECT_TRUE(std::fabs(first._accumulated_time - 3.0 * first._accumulated_duration) < 0.000001);
