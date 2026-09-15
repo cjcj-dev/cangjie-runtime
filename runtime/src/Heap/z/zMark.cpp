@@ -653,6 +653,45 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
     gMinorRootOrigin = "unknown";
 }
 
+void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
+{
+    // zRootsIterator.cpp: generation workers claim independent root families.
+    const uint32_t count = workers.ActiveWorkers();
+    std::vector<RootSet> roots(count);
+    class MarkOldRootsTask final : public GCWorkerTask {
+    public:
+        MarkOldRootsTask(const TracingCollector& collector,
+                         std::function<void(uint32_t, RootsIteratorStrongColored&,
+                                            RootsIteratorStrongUncolored&)> body)
+            : rootsColored(collector), body(std::move(body)) {}
+        void Work(uint32_t id) override { body(id, rootsColored, rootsUncolored); }
+    private:
+        RootsIteratorStrongColored rootsColored;
+        RootsIteratorStrongUncolored rootsUncolored;
+        std::function<void(uint32_t, RootsIteratorStrongColored&, RootsIteratorStrongUncolored&)> body;
+    } task(*this, [&](uint32_t id, RootsIteratorStrongColored& colored,
+                     RootsIteratorStrongUncolored& uncolored) {
+        colored.Apply([&](NativeSlot& root) { EnumRefFieldRoot(root, roots[id]); });
+        uncolored.Apply([&] {
+            VisitStrongPlainRoots([&](ObjectRef& root) {
+                EnumAndTagRawRoot(root, roots[id], Generation::Old);
+            }, {});
+            EnumAllSurrectedExportRoots(roots[id]);
+        });
+    });
+    workers.Run(task);
+    MergeMutatorRoots(rootSet);
+    for (auto& result : roots) {
+        rootSet.insert(result);
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testRootsResult) {
+        testRootsResult(workers.GetSnapshot().generation, rootSet);
+    }
+#endif
+    VLOG(REPORT, "Total roots: %zu(exclude stack roots)", rootSet.size());
+}
+
 namespace {
 // ZMarkYoungOopClosure, zMark.cpp:678-681.
 class MarkYoungOopClosure {
@@ -679,9 +718,7 @@ public:
 #endif
             coloredClosure.DoOop(slot);
         });
-        if (!uncoloredClaimed.exchange(true, std::memory_order_relaxed)) {
-            uncolored();
-        }
+        rootsUncolored.Apply(uncolored);
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
     }
 private:
@@ -689,7 +726,7 @@ private:
     MarkYoungOopClosure coloredClosure;
     MarkDomain& domain;
     std::function<void()> uncolored;
-    std::atomic<bool> uncoloredClaimed{false};
+    RootsIteratorAllUncolored rootsUncolored;
 };
 } // namespace
 

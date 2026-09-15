@@ -380,15 +380,25 @@ void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) co
     VisitWeakColoredRoots(visitor);
 }
 
+void RootsIteratorStrongColored::Apply(const NativeSlotVisitor& visitor)
+{
+    if (!claimed.exchange(true, std::memory_order_relaxed)) {
+        collector.VisitStrongColoredRoots(visitor);
+    }
+}
+
+void RootsIteratorWeakColored::Apply(const NativeSlotVisitor& visitor)
+{
+    if (!claimed.exchange(true, std::memory_order_relaxed)) {
+        collector.VisitWeakColoredRoots(visitor);
+    }
+}
+
 // ZRootsIteratorAllColored::apply, zRootsIterator.cpp:194-198.
 void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
 {
-    if (!strongClaimed.exchange(true, std::memory_order_relaxed)) {
-        collector.VisitStrongColoredRoots(visitor);
-    }
-    if (!weakClaimed.exchange(true, std::memory_order_relaxed)) {
-        collector.VisitWeakColoredRoots(visitor);
-    }
+    strong.Apply(visitor);
+    weak.Apply(visitor);
 }
 
 void TracingCollector::VisitStrongPlainRoots(
@@ -399,43 +409,6 @@ void TracingCollector::VisitStrongPlainRoots(
     }
     RootVisitor plainVisitor = visitor;
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
-}
-
-void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
-{
-    // zRootsIterator.cpp: generation workers claim independent root families.
-    const uint32_t count = workers.ActiveWorkers();
-    std::vector<RootSet> roots(count);
-    std::atomic<unsigned> next { 0 };
-    class RootsTask final : public GCWorkerTask {
-    public:
-        explicit RootsTask(std::function<void(uint32_t)> body) : body(std::move(body)) {}
-        void Work(uint32_t id) override { body(id); }
-    private:
-        std::function<void(uint32_t)> body;
-    } task([&](uint32_t id) {
-        const std::function<void()> families[] = {
-            [&] { VisitStrongColoredRoots([&](NativeSlot& root) { EnumRefFieldRoot(root, roots[id]); }); },
-            [&] { VisitStrongPlainRoots([&](ObjectRef& root) {
-                EnumAndTagRawRoot(root, roots[id], Generation::Old);
-            }, {}); },
-            [&] { EnumAllSurrectedExportRoots(roots[id]); }
-        };
-        for (unsigned family = next.fetch_add(1); family < 3; family = next.fetch_add(1)) {
-            families[family]();
-        }
-    });
-    workers.Run(task);
-    MergeMutatorRoots(rootSet);
-    for (auto& result : roots) {
-        rootSet.insert(result);
-    }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testRootsResult) {
-        testRootsResult(workers.GetSnapshot().generation, rootSet);
-    }
-#endif
-    VLOG(REPORT, "Total roots: %zu(exclude stack roots)", rootSet.size());
 }
 
 void TracingCollector::VisitStaticRoots(const NativeSlotVisitor& visitor) const

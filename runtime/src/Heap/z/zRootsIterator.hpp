@@ -16,17 +16,49 @@
 namespace MapleRuntime {
 class TracingCollector;
 
-// ZRootsIteratorAllColored. Cangjie owns locked native-slot lists rather than
-// OopStorage; each physical family is claimed once by the root workers.
-class RootsIteratorAllColored {
+// zRootsIterator.hpp: colored storage and uncolored language roots have
+// separate iterators. Tasks compose them with generation-specific closures.
+class RootsIteratorStrongColored {
 public:
-    explicit RootsIteratorAllColored(const TracingCollector& collector) : collector(collector) {}
+    explicit RootsIteratorStrongColored(const TracingCollector& collector) : collector(collector) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
     const TracingCollector& collector;
-    std::atomic<bool> strongClaimed{false};
-    std::atomic<bool> weakClaimed{false};
+    std::atomic<bool> claimed{false};
 };
+
+class RootsIteratorWeakColored {
+public:
+    explicit RootsIteratorWeakColored(const TracingCollector& collector) : collector(collector) {}
+    void Apply(const NativeSlotVisitor& visitor);
+private:
+    const TracingCollector& collector;
+    std::atomic<bool> claimed{false};
+};
+
+class RootsIteratorAllColored {
+public:
+    explicit RootsIteratorAllColored(const TracingCollector& collector) : strong(collector), weak(collector) {}
+    void Apply(const NativeSlotVisitor& visitor);
+private:
+    RootsIteratorStrongColored strong;
+    RootsIteratorWeakColored weak;
+};
+
+// The language scanner owns stack-watermark fallback and non-thread plain
+// roots. There are no HotSpot CLD/nmethod registries in the Cangjie runtime.
+class RootsIteratorStrongUncolored {
+public:
+    void Apply(const std::function<void()>& visitor)
+    {
+        if (!claimed.exchange(true, std::memory_order_relaxed)) {
+            visitor();
+        }
+    }
+private:
+    std::atomic<bool> claimed{false};
+};
+using RootsIteratorAllUncolored = RootsIteratorStrongUncolored;
 
 class StaticRootTable {
 public:
