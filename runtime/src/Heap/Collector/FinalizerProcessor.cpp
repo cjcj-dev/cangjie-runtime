@@ -435,24 +435,21 @@ void FinalizerProcessor::LogAfterProcess()
 
 void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
 {
-    NativeSlot root(zpointer::null);
-    Heap::GetBarrier().WriteStaticRef(root, obj);
     std::lock_guard<std::mutex> l(listLock);
-    finalizers.push_back(root);
+    finalizers.emplace_back(zpointer::null);
+    Heap::GetBarrier().WriteStaticRef(finalizers.back(), obj);
 }
 
-void FinalizerProcessor::RegisterFinalizers(ManagedList<RootSlot>& objs)
+void FinalizerProcessor::RegisterFinalizers(ManagedList<NativeSlot>& objs)
 {
     if (objs.empty()) {
         return;
     }
     std::lock_guard<std::mutex> l(listLock);
-    for (RootSlot& source : objs) {
-        NativeSlot root(zpointer::null);
-        Heap::GetBarrier().WriteStaticRef(root, Heap::GetBarrier().ReadPlainRoot(source));
-        finalizers.push_back(root);
-    }
-    objs.clear();
+    // Transfer native slots, not uncolored values. Re-storing after mark-start
+    // would manufacture current mark-good metadata for an unmarked referent.
+    // ZGC's OopStorage keeps the slot originally published by NativeAccess.
+    finalizers.splice(finalizers.end(), objs);
 }
 
 void FinalizerProcessor::ReclaimHeapGarbage()

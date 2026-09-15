@@ -87,6 +87,13 @@ void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase val
 }
 
 
+// ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
+void WCollector::MarkYoungRootObject(BaseObject* object) const
+{
+    CHECK_DETAIL(youngMarkDomain != nullptr, "young root mark requires its mark domain");
+    youngMarkDomain->MarkRootObject(object);
+}
+
 void WCollector::FlushAllocationRegions()
 {
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });

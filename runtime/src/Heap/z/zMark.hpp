@@ -70,6 +70,7 @@ public:
     void PrepareWork(size_t nworkers);
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
+    void MarkRootObject(BaseObject* object);
     void BindWorkers(GCWorkers* workers) { gcWorkers = workers; }
     void BindAbort(ZAbort* token) { abortToken = token; }
     bool PollStop();

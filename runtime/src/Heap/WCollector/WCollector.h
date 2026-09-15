@@ -174,6 +174,7 @@ public:
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
+    void MarkYoungRootObject(BaseObject* object) const override;
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const override;
@@ -872,7 +873,6 @@ private:
     BaseObject* ResolveMinorReference(RootSlot& root,
                                      const ScopedStopTheWorld* stw = nullptr) const;
     void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
-                             const NativeSlotVisitor& nativeVisitor,
                              uint64_t stackScanEpoch = 0);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,

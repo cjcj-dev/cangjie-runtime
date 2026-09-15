@@ -275,6 +275,16 @@ BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
 }
 
+// ZBarrier::mark_young_slow_path, zBarrier.cpp:206-215.
+zaddress Barrier::MarkYoungSlowPath(zaddress address) const
+{
+    if (is_null(address)) {
+        return address;
+    }
+    MarkIfYoung(address);
+    return address;
+}
+
 // Thread-owned uncolored roots are made load-good by the shared root handshake
 // before their mutator resumes (ZStackWatermark). Mutator access does not remap.
 BaseObject* Barrier::ReadPlainRoot(RootSlot& field) const

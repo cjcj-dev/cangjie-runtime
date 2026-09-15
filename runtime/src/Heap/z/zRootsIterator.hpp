@@ -14,6 +14,20 @@
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
+class TracingCollector;
+
+// ZRootsIteratorAllColored. Cangjie owns locked native-slot lists rather than
+// OopStorage; each physical family is claimed once by the root workers.
+class RootsIteratorAllColored {
+public:
+    explicit RootsIteratorAllColored(const TracingCollector& collector) : collector(collector) {}
+    void Apply(const NativeSlotVisitor& visitor);
+private:
+    const TracingCollector& collector;
+    std::atomic<bool> strongClaimed{false};
+    std::atomic<bool> weakClaimed{false};
+};
+
 class StaticRootTable {
 public:
     struct StaticRootArray {
