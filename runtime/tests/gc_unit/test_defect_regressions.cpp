@@ -78,12 +78,6 @@ bool ModelShouldSelfHealCas(bool loadGoodIsHeap)
     return loadGoodIsHeap;
 }
 
-// ABI strip of coloured field *place* (fe6d163f / CompilerCalls PlainManagedAddr).
-Uptr ModelStripFieldPlace(Uptr maybeColouredPlace)
-{
-    return RefField<>(maybeColouredPlace).GetAddress();
-}
-
 class ExportHandleTestCollector final : public Collector {
 public:
     void Init() override {}
@@ -284,19 +278,8 @@ GC_TEST(DefectRegress, MinorNonHeapResolveNeverCasNull)
 
 // ⑦ fe6d163f — field *address* may arrive coloured; ABI must peel before dereference.
 // Product: RefField::GetAddress / CompilerCalls PlainManagedAddr shape.
-GC_TEST(DefectRegress, FieldPlaceColourMustStripAtAbi)
-{
-    GcHeapFixture fx;
-    Uptr plainPlace = reinterpret_cast<Uptr>(fx.obj0) + 16;
-    Uptr colouredPlace = plainPlace | ZPointerRemapped00 | ZPointerMarkedYoung1;
-    Uptr stripped = ModelStripFieldPlace(colouredPlace);
-    GC_EXPECT_EQ(stripped, plainPlace);
-    GC_EXPECT_EQ(stripped & ~kAddrMask, 0u);
-    // Coloured base + offset (lea off(coloured_base)) must peel to plain place.
-    Uptr colouredBase = reinterpret_cast<Uptr>(fx.obj0) | ZPointerRemapped01;
-    Uptr leaPlace = colouredBase + 16;
-    GC_EXPECT_EQ(ModelStripFieldPlace(leaPlace), (reinterpret_cast<Uptr>(fx.obj0) + 16) & kAddrMask);
-}
+// P01 removed field-address peeling. Compiler boundary tests now reject
+// applying uncolor to a plain slot address (ZGC zAddress.inline.hpp:609).
 
 // T6: the compiler may provide no holder object for a field GEP.  The product
 // call must classify the destination slot itself, publishing a coloured heap

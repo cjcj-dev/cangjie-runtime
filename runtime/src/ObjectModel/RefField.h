@@ -44,7 +44,6 @@ enum class HealSite : uint16_t {
     MutatorPreForwardHeaderlessRecord,
     MutatorPreForwardRoot,
     MutatorPreForwardStackField,
-    MutatorStripRootColour,
     MutatorMarkRoot,
     WCollectorEnumRawRoot,
     WCollectorEnumRefFieldRoot,
