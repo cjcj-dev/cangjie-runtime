@@ -44,6 +44,19 @@ struct RelocationReceiptTestAccess {
         collector.StartOldMarkWork();
         collector.TraceHeap();
     }
+    static size_t PendingYoungRootWork(WCollector& collector)
+    {
+        return ThreadLocal::GetMarkStacks(*collector.youngMarkDomain).Population();
+    }
+    static void DrainYoungRootWork(WCollector& collector)
+    {
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.youngMarkDomain);
+        TracingCollector::WorkStack work;
+        std::vector<BaseObject*> reachable;
+        WCollector::MinorSlotSet slots;
+        WCollector::MinorSlotSet weak;
+        collector.TraceYoungClosure(work, false, reachable, slots, weak);
+    }
 };
 }
 using namespace MapleRuntime;
@@ -273,5 +286,39 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     heap.GetBarrier().WriteStaticRef(slot, nullptr);
     GC_EXPECT_TRUE(heap.GetBarrier().ReadStaticRef(slot) == nullptr);
     std::fprintf(stderr, "native_root_boundary executed=1 colored=1 null=1\n");
+}
+
+GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    auto& resources = heap.GetCollectorResources();
+    WCollector collector(heap.GetAllocator(), resources);
+    RuntimeWorkers pool(1);
+    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, pool);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    Heap::OnHeapCreated(fx.heapStart);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    fx.region0->SetYoungRegionFlag(1);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_TRACE);
+    collector.StartYoungMarkWork();
+    // Load-good, but the previous young/old mark epochs: the root must take
+    // ZBarrier's mark-young slow path even though no remapping is needed.
+    NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ MARKED_YOUNG_MASK ^ MARKED_OLD_MASK));
+    const size_t before = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
+    heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
+    const bool marked = fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Young>(), fx.obj0);
+    const size_t first = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
+    std::fprintf(stderr, "B19_YOUNG_MARK_BEFORE_HEAL executed=1 marked=%u before=%zu after=%zu word=%#lx\n",
+                 unsigned(marked), before, first, raw(root.GetFieldValue()));
+    GC_EXPECT_TRUE(marked);
+    GC_EXPECT_EQ(first, before + 1);
+    GC_EXPECT_TRUE(ColourPredicates::is_marked_young(raw(root.GetFieldValue()), ::g_cjMarkBadMask));
+    // The same physical, now young-good slot must not publish another follow.
+    heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
+    GC_EXPECT_EQ(RelocationReceiptTestAccess::PendingYoungRootWork(collector), first);
+    RelocationReceiptTestAccess::DrainYoungRootWork(collector);
+    GC_EXPECT_EQ(RelocationReceiptTestAccess::PendingYoungRootWork(collector), size_t(0));
 }
 #endif
