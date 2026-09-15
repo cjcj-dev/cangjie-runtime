@@ -10,7 +10,7 @@
 #include <cstring>
 #include <thread>
 #include "Cangjie.h"
-#include "Cki.h"
+#include "Concurrency/Concurrency.h"
 #include "Common/Runtime.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"

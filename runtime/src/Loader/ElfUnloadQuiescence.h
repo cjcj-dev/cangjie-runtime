@@ -65,6 +65,7 @@ public:
     // records that complete interval; CompletionScope closes its final removal
     // against an unload preflight.
     class TaskAdmissionScope;
+    class PendingTask;
     class SharedTaskAdmissionScope final {
     public:
         SharedTaskAdmissionScope();
@@ -97,6 +98,7 @@ public:
 
     private:
         friend class TaskAdmissionScope;
+        friend class ElfUnloadQuiescence;
         void MarkCompleted();
 
         Uptr entry { 0 };
