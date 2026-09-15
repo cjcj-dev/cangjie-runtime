@@ -361,7 +361,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     collector.StartYoungMarkWork();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
-    NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ MARKED_YOUNG_MASK ^ MARKED_OLD_MASK));
+    NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     const size_t before = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
     heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
     const bool marked = fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Young>(), fx.obj0);

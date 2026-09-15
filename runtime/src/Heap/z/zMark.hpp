@@ -475,9 +475,9 @@ protected:
             // ZGC zUncoloredRoot.inline.hpp:64-65 selects the remap generation.
             // An unrelated generation flip cannot invalidate this current root.
             const uintptr_t mask = generation == Generation::Young
-                ? ColourPredicates::current_remapped_young_mask(::g_cjLoadBadMask)
-                : ColourPredicates::current_remapped_old_mask(::g_cjLoadBadMask);
-            return (color & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
+                ? ZPointerRemappedYoungMask
+                : ZPointerRemappedOldMask;
+            return (ZPointer::remap_bits(color) & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
         }
     };
     struct ValueRootHash {

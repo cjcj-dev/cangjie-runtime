@@ -297,7 +297,7 @@ void WCollector::RemapYoungRoots()
         bool healed = HealSlot(field, observed.GetFieldValue(), current.GetFieldValue(),
                                HealSite::WCollectorRemapYoungRoots);
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteRemapYoungRootsTestReceipt(field, raw(observed.GetFieldValue()), healed, is_store_good(field));
+        NoteRemapYoungRootsTestReceipt(field, raw(observed.GetFieldValue()), healed, ZPointer::is_store_good(field.GetFieldValue()));
 #else
         (void)healed;
 #endif
@@ -320,7 +320,7 @@ void WCollector::RemapYoungRoots()
     VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
         DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
         size_t frames = 0;
-        if (!mutator.DrainStackWatermark(visitor, visitor, FlipSeq().load(std::memory_order_acquire) + 1,
+        if (!mutator.DrainStackWatermark(visitor, visitor, __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE),
                                          StackWatermark::WM_OWNER_GC, &derived, frames, true,
                                          StackWatermark::ProcessingPhase::REMAP)) {
             mutator.VisitHeapReferences(visitor, derived);
@@ -376,7 +376,7 @@ bool WCollector::Preforward()
         MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
         // zGeneration.cpp:old relocate_start flips only the old remap epoch.
         // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
-        flip_old_relocate_start();
+        ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         StartRelocationTasks(GCCycleGeneration::OLD);
     }
@@ -581,14 +581,14 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
         CHECK_DETAIL(Collector::JudgeHandOutTarget(object) == HandVerdict::Usable,
                      "resolved heal target must be usable target=%p", object);
     }
-    zpointer desired = is_null(target) ? zpointer::null : ColourStoreGood(target).GetFieldValue();
+    zpointer desired = is_null(target) ? zpointer::null : RefField<>(ZAddress::store_good(target)).GetFieldValue();
     if (expected == raw(desired)) {
         return true;
     }
     const zpointer observed = to_zpointer(expected);
     auto loadGood = [this](zpointer value) {
         RefField<> probe(value);
-        return is_null(probe.GetTargetObject()) || is_load_good(probe);
+        return is_null(probe.GetTargetObject()) || ZPointer::is_load_good(probe.GetFieldValue());
     };
     if (loadGood(observed)) {
         return true;
@@ -961,7 +961,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
-                flip_young_relocate_start();
+                ZGlobalsPointers::flip_young_relocate_start();
                 ZVerify::OnColorFlip();
             }
             // Publish the relocate phase and submit page work while the
@@ -1092,21 +1092,17 @@ static BaseObject* RemapPromotedField(Collector& collector, RefField<>& field, z
 {
     RefField<> value(observed);
     auto loadGood = [](zpointer word) {
-        return ColourPredicates::is_load_good_or_null(raw(word), ::g_cjLoadBadMask);
+        return ZPointer::is_load_good_or_null(to_zpointer(raw(word)));
     };
     if (loadGood(observed)) {
         return to_object(value.GetTargetObject());
     }
     const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
     BaseObject* target = collector.make_load_good(value, provenance);
-    CHECK_DETAIL(target != nullptr || !ColourPredicates::has_address(raw(observed)),
+    CHECK_DETAIL(target != nullptr || !(!is_null_any(to_zpointer(raw(observed)))),
                  "promotion remap must preserve a non-null reference");
     // ZAddress::load_good: upgrade remap bits without claiming a marking epoch.
-    const zpointer healed = !ColourPredicates::has_address(raw(observed))
-        ? to_zpointer(::g_cjStoreGoodMask | REMEMBERED_MASK)
-        : to_zpointer(reinterpret_cast<uintptr_t>(target) | REMEMBERED_MASK |
-            (raw(observed) & ~kPointerAddressMask & ~REMAP_COLOUR_MASK) |
-            (::g_cjLoadBadMask ^ REMAP_COLOUR_MASK));
+    const zpointer healed = ZAddress::load_good(from_object(target), observed);
     ZgcSelfHeal(field, observed, healed, loadGood, HealSite::WCollectorMinorResolveLoadGoodForward);
     return target;
 }
@@ -1128,7 +1124,7 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
         BaseObject* target = to_object(value.GetTargetObject());
         if (target != nullptr && Heap::IsHeapAddress(target)) {
             const MAddress address = reinterpret_cast<MAddress>(target);
-            ZForwarding* forwarding = collector.is_load_good(value) ? nullptr :
+            ZForwarding* forwarding = ZPointer::is_load_good(value.GetFieldValue()) ? nullptr :
                 ForwardingTable::GetCovering(address, Generation::Young);
             const MAddress to = forwarding == nullptr ? address : forwarding->find(address);
             if (to == 0 || RegionInfo::GetRegionInfoAt(to)->IsYoungRegion()) {

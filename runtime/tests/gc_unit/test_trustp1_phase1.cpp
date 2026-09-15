@@ -18,7 +18,7 @@ namespace {
 
 constexpr Uptr kAddrMask = (Uptr(1) << 48) - 1u;
 constexpr Uptr kSampleAddr = Uptr(0x00007f12'34567000ULL);
-constexpr Uptr kColourMetaMask = REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK;
+constexpr Uptr kColourMetaMask = ZPointerRemappedMask | ZPointerMarkedYoungMask | ZPointerMarkedOldMask;
 
 // Model of Phase-1 TryUntag / HeapSlot write-back: install current colour, not plain.
 constexpr Uptr ModelHeapSlotWriteback(Uptr addr, Uptr currentColour)
@@ -46,7 +46,7 @@ constexpr bool IsPlainHeapRef(Uptr v)
 // ① positive: HeapSlot write-back after untag must be coloured (not plain).
 GC_TEST(TrustP1, TryUntagHeapSlotWritebackIsColoured)
 {
-    Uptr current = ZPointerRemapped00 | MARKED_YOUNG_0 | MARKED_OLD_0;
+    Uptr current = ZPointerRemapped00 | ZPointerMarkedYoung0 | ZPointerMarkedOld0;
     Uptr written = ModelHeapSlotWriteback(kSampleAddr, current);
     GC_EXPECT_FALSE(IsPlainHeapRef(written));
     GC_EXPECT_EQ(written & kAddrMask, kSampleAddr);
@@ -92,7 +92,7 @@ GC_TEST(TrustP1, DerivedInteriorPlainIsDistinctFromK1ObjectRoot)
 // ④ positive-control model: removing colour produces the forbidden heap-slot shape.
 GC_TEST(TrustP1, ColouredWriteGuardRejectsPlainShape)
 {
-    Uptr coloured = ModelHeapSlotWriteback(kSampleAddr, ZPointerRemapped00 | MARKED_YOUNG_0);
+    Uptr coloured = ModelHeapSlotWriteback(kSampleAddr, ZPointerRemapped00 | ZPointerMarkedYoung0);
     Uptr injected = coloured & kAddrMask; // inject peels colour meta
     GC_EXPECT_FALSE(IsPlainHeapRef(coloured));
     GC_EXPECT_TRUE(IsPlainHeapRef(injected));

@@ -868,7 +868,7 @@ static BaseObject* PlainRootObject(zaddress_unsafe maybeColoured)
         return nullptr;
     }
     // Stack-map/FFI roots remain committed until this GC root pass heals them.
-    return to_object(safe(uncolor_bits(to_zpointer(raw(maybeColoured)))));
+    return to_object(safe(ZPointer::uncolor_unsafe(to_zpointer(raw(maybeColoured)))));
 }
 
 static void StripRootObjectColour(ObjectRef& root)
@@ -1181,7 +1181,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     DerivedPtrVisitor derivedPtrVisitor = MakeDerivedRootVisitor(visitor);
     ForwardLocalFinalizers(collector);
     size_t frames = 0;
-    const uint64_t epoch = WCollector::FlipSeq().load(std::memory_order_acquire) + 1;
+    const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
     const auto owner = GetMutator() == this ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
     if (!DrainStackWatermark(visitor, visitor, epoch, owner, &derivedPtrVisitor, frames, false,
                              StackWatermark::ProcessingPhase::REMAP)) {

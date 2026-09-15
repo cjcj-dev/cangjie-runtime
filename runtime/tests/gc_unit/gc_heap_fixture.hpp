@@ -42,7 +42,7 @@ inline zpointer ColouredPointer(BaseObject* object, uintptr_t remap)
     if (address == 0) {
         return zpointer::null;
     }
-    const uintptr_t nonRemapFamilies = static_cast<uintptr_t>(::g_cjStoreGoodMask) & ~REMAP_COLOUR_MASK;
+    const uintptr_t nonRemapFamilies = static_cast<uintptr_t>(::g_cjStoreGoodMask) & ~ZPointerRemappedMask;
     return to_zpointer(address | remap | nonRemapFamilies);
 }
 

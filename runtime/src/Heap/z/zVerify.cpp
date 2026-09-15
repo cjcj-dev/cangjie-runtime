@@ -88,10 +88,10 @@ void ColoredRoot(NativeSlot& root, bool afterOldMark)
 {
     DCHECK(!Heap::IsHeapAddress(&root));
     const zpointer value = root.GetFieldValue(std::memory_order_acquire);
-    if (!ColourPredicates::has_address(raw(value))) { return; }
+    if (!(!is_null_any(to_zpointer(raw(value))))) { return; }
     CHECK_DETAIL(ClassifySlotWord(raw(value)) != SlotWordVerdict::kIllegal, "Bad colored root at %p", &root);
     if (afterOldMark) {
-        CHECK_DETAIL(ColourPredicates::is_marked_old(raw(value), ::g_cjMarkBadMask),
+        CHECK_DETAIL(ZPointer::is_marked_old(to_zpointer(raw(value))),
                      "Unmarked old root at %p", &root);
     }
     ZVerify::Object(Heap::GetBarrier().ReadStaticRef(root), &root);
@@ -138,7 +138,7 @@ void VerifyAccessedOop(zaddress address)
 void ZVerify::Object(BaseObject* object, const void* slot)
 {
     const uintptr_t addr = reinterpret_cast<uintptr_t>(object);
-    CHECK_DETAIL(addr != 0 && (addr & ~ColourPredicates::HEAP_ADDRESS_MASK) == 0 &&
+    CHECK_DETAIL(addr != 0 && is_valid(static_cast<zaddress>(addr)) &&
                  (addr & (alignof(void*) - 1)) == 0 && Heap::IsHeapAddress(addr),
                  "Bad object %p found at %p", object, slot);
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(addr);
@@ -166,9 +166,9 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
         CHECK_DETAIL(holder->IsAllocating(),
                      "Raw null requires allocating holder at %p", &field);
     }
-    if (!ColourPredicates::has_address(raw(value))) { return; }
+    if (!(!is_null_any(to_zpointer(raw(value))))) { return; }
     RefField<> preloaded(value);
-    if (!verifyWeaks && collector.is_mark_good(preloaded)) {
+    if (!verifyWeaks && ZPointer::is_mark_good(preloaded.GetFieldValue())) {
         Object(to_object(preloaded.GetTargetObject()), &field);
         return;
     }
@@ -176,23 +176,23 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
     Object(target, &field);
     const bool young = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion();
     if (verifyWeaks) {
-        CHECK_DETAIL(ColourPredicates::is_marked_any_old(raw(value), ::g_cjMarkBadMask),
+        CHECK_DETAIL(ZPointer::is_marked_any_old(to_zpointer(raw(value))),
                      "Bad possibly weak oop at %p", &field);
-        CHECK_DETAIL(!young || ColourPredicates::is_marked_young(raw(value), ::g_cjMarkBadMask),
+        CHECK_DETAIL(!young || ZPointer::is_marked_young(to_zpointer(raw(value))),
                      "Unmarked young oop at %p", &field);
         CHECK_DETAIL(young || RegionSpace::IsMarkedObject<Generation::Old>(target) ||
                      RegionSpace::IsResurrectedObject(target), "Non-live old oop at %p", &field);
-        const uintptr_t remset = raw(value) & REMEMBERED_MASK;
-        const uintptr_t previous = (::g_cjStoreGoodMask & REMEMBERED_MASK) ^ REMEMBERED_MASK;
+        const uintptr_t remset = raw(value) & ZPointerRememberedMask;
+        const uintptr_t previous = (::g_cjStoreGoodMask & ZPointerRememberedMask) ^ ZPointerRememberedMask;
         CHECK_DETAIL(remset != previous, "Previous remembered color at %p", &field);
-        CHECK_DETAIL(remset == REMEMBERED_MASK ||
+        CHECK_DETAIL(remset == ZPointerRememberedMask ||
                      Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)) ||
                      MutatorManager::Instance().StoreBarrierBufferContains(reinterpret_cast<MAddress>(&field)),
                      "Missing remembered field at %p", &field);
     } else {
         const bool youngMarking = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).phase == GC_PHASE_TRACE;
         if (!young || !youngMarking) {
-            CHECK_DETAIL(ColourPredicates::is_marked_old(raw(value), ::g_cjMarkBadMask),
+            CHECK_DETAIL(ZPointer::is_marked_old(to_zpointer(raw(value))),
                          "Unmarked old oop at %p", &field);
             CHECK_DETAIL(!RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(base))->IsYoungRegion(),
                          "Old oop holder must be old at %p", &field);
@@ -251,7 +251,7 @@ std::unordered_set<MAddress> bufferedStores;
 bool IntentionallyUnremembered(zpointer value)
 {
     // The upstream exemption is both remembered bits, not just the current bit.
-    return (raw(value) & REMEMBERED_MASK) == REMEMBERED_MASK;
+    return (raw(value) & ZPointerRememberedMask) == ZPointerRememberedMask;
 }
 }
 void ZVerify::OnColorFlip()
@@ -302,7 +302,7 @@ void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
             const zpointer value = field.GetFieldValue(std::memory_order_acquire);
             std::atomic_thread_fence(std::memory_order_acquire);
             RefField<> preloaded(value);
-            if (IntentionallyUnremembered(value) || Heap::GetHeap().GetCollector().is_store_good(preloaded) ||
+            if (IntentionallyUnremembered(value) || ZPointer::is_store_good(preloaded.GetFieldValue()) ||
                 bufferedStores.count(slot) != 0 ||
                 bufferedStores.count(from + slot - reinterpret_cast<MAddress>(object)) != 0) { return; }
             if (remset.Contains(slot) || remset.ContainsPrevious(slot)) { return; }

@@ -52,7 +52,7 @@ private:
     friend struct SlotListTestAccess;
     static bool MetadataWordHasColour(Uptr bits)
     {
-        return bits != raw(uncolor_bits(to_zpointer(bits)));
+        return bits != raw(ZPointer::uncolor_unsafe(to_zpointer(bits)));
     }
 
     uintptr_t PopFront(size_t size)

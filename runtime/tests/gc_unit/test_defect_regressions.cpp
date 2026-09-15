@@ -288,7 +288,7 @@ GC_TEST(DefectRegress, FieldPlaceColourMustStripAtAbi)
 {
     GcHeapFixture fx;
     Uptr plainPlace = reinterpret_cast<Uptr>(fx.obj0) + 16;
-    Uptr colouredPlace = plainPlace | ZPointerRemapped00 | MARKED_YOUNG_1;
+    Uptr colouredPlace = plainPlace | ZPointerRemapped00 | ZPointerMarkedYoung1;
     Uptr stripped = ModelStripFieldPlace(colouredPlace);
     GC_EXPECT_EQ(stripped, plainPlace);
     GC_EXPECT_EQ(stripped & ~kAddrMask, 0u);
@@ -315,7 +315,7 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     // ZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-705)
     // skips raw null. Flip remembered metadata to exercise the actual slow path.
-    field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK));
+    field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask));
     GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
 
     // obj == nullptr is the triggering ABI shape; field is demonstrably in heap.
@@ -344,7 +344,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask;
     std::memcpy(field, &initial, sizeof(initial));
 
     AllocBuffer alloc;
@@ -386,7 +386,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask;
     std::memcpy(field, &initial, sizeof(initial));
 
     AllocBuffer alloc;
@@ -432,7 +432,7 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask;
     std::memcpy(field, &initial, sizeof(initial));
 
     AllocBuffer alloc;

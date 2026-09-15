@@ -59,7 +59,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
         TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, markDomain);
     }
 #endif
-    collector.flip_young_mark_start();
+    ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
@@ -130,7 +130,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
         TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, markDomain);
     }
 #endif
-    collector.flip_old_mark_start();
+    ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {

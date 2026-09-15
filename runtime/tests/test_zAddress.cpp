@@ -40,12 +40,12 @@ constexpr EpochColours EPOCH = kInitialEpochColours;
 constexpr BadMasks MASKS = ComputeBadMasks(EPOCH);
 
 constexpr uintptr_t LOAD_GOOD = PAYLOAD | ZPointerRemapped00;
-constexpr uintptr_t MARK_GOOD = LOAD_GOOD | MARKED_YOUNG_0 | MARKED_OLD_0;
-constexpr uintptr_t STORE_GOOD = MARK_GOOD | REMEMBERED_0;
+constexpr uintptr_t MARK_GOOD = LOAD_GOOD | ZPointerMarkedYoung0 | ZPointerMarkedOld0;
+constexpr uintptr_t STORE_GOOD = MARK_GOOD | ZPointerRemembered0;
 constexpr uintptr_t STALE_REMAP = PAYLOAD | ZPointerRemapped01;
 constexpr uintptr_t OLD_HALF_BAD = PAYLOAD | ZPointerRemapped10;
-constexpr uintptr_t STALE_MARK = LOAD_GOOD | MARKED_YOUNG_1 | MARKED_OLD_0;
-constexpr uintptr_t STALE_REMEMBERED = MARK_GOOD | REMEMBERED_1;
+constexpr uintptr_t STALE_MARK = LOAD_GOOD | ZPointerMarkedYoung1 | ZPointerMarkedOld0;
+constexpr uintptr_t STALE_REMEMBERED = MARK_GOOD | ZPointerRemembered1;
 constexpr uintptr_t MISSING_REMEMBERED = MARK_GOOD;
 
 // 1. is_load_bad
@@ -97,23 +97,23 @@ static_assert(!is_store_good_or_null(STALE_REMEMBERED, MASKS.loadBad, MASKS.stor
               "COLOURPRED_NEG_is_store_good_or_null_stale_remembered");
 
 // 12. is_marked_finalizable
-static_assert(is_marked_finalizable(PAYLOAD | FINALIZABLE_0, MASKS.markBad),
+static_assert(is_marked_finalizable(PAYLOAD | ZPointerFinalizable0, MASKS.markBad),
               "COLOURPRED_POS_is_marked_finalizable");
-static_assert(!is_marked_finalizable(PAYLOAD | FINALIZABLE_1, MASKS.markBad),
+static_assert(!is_marked_finalizable(PAYLOAD | ZPointerFinalizable1, MASKS.markBad),
               "COLOURPRED_NEG_is_marked_finalizable");
 
 // 13. is_marked_old
-static_assert(is_marked_old(PAYLOAD | MARKED_OLD_0, MASKS.markBad), "COLOURPRED_POS_is_marked_old");
-static_assert(!is_marked_old(PAYLOAD | MARKED_OLD_1, MASKS.markBad), "COLOURPRED_NEG_is_marked_old");
+static_assert(is_marked_old(PAYLOAD | ZPointerMarkedOld0, MASKS.markBad), "COLOURPRED_POS_is_marked_old");
+static_assert(!is_marked_old(PAYLOAD | ZPointerMarkedOld1, MASKS.markBad), "COLOURPRED_NEG_is_marked_old");
 
 // 14. is_marked_young
-static_assert(is_marked_young(PAYLOAD | MARKED_YOUNG_0, MASKS.markBad), "COLOURPRED_POS_is_marked_young");
-static_assert(!is_marked_young(PAYLOAD | MARKED_YOUNG_1, MASKS.markBad), "COLOURPRED_NEG_is_marked_young");
+static_assert(is_marked_young(PAYLOAD | ZPointerMarkedYoung0, MASKS.markBad), "COLOURPRED_POS_is_marked_young");
+static_assert(!is_marked_young(PAYLOAD | ZPointerMarkedYoung1, MASKS.markBad), "COLOURPRED_NEG_is_marked_young");
 
 // 15. is_marked_any_old
-static_assert(is_marked_any_old(PAYLOAD | FINALIZABLE_0, MASKS.markBad),
+static_assert(is_marked_any_old(PAYLOAD | ZPointerFinalizable0, MASKS.markBad),
               "COLOURPRED_POS_is_marked_any_old");
-static_assert(!is_marked_any_old(PAYLOAD | MARKED_OLD_1 | FINALIZABLE_1, MASKS.markBad),
+static_assert(!is_marked_any_old(PAYLOAD | ZPointerMarkedOld1 | ZPointerFinalizable1, MASKS.markBad),
               "COLOURPRED_NEG_is_marked_any_old");
 
 // 16. is_remapped
@@ -121,9 +121,9 @@ static_assert(is_remapped(LOAD_GOOD, MASKS.loadBad), "COLOURPRED_POS_is_remapped
 static_assert(!is_remapped(STALE_REMAP, MASKS.loadBad), "COLOURPRED_NEG_is_remapped");
 
 // 17. is_remembered_exact
-static_assert(is_remembered_exact(PAYLOAD | REMEMBERED_0, MASKS.storeBad),
+static_assert(is_remembered_exact(PAYLOAD | ZPointerRemembered0, MASKS.storeBad),
               "COLOURPRED_POS_is_remembered_exact");
-static_assert(!is_remembered_exact(PAYLOAD | REMEMBERED_1, MASKS.storeBad),
+static_assert(!is_remembered_exact(PAYLOAD | ZPointerRemembered1, MASKS.storeBad),
               "COLOURPRED_NEG_is_remembered_exact");
 
 constexpr EpochColours EpochAt(unsigned i)
@@ -131,9 +131,9 @@ constexpr EpochColours EpochAt(unsigned i)
     return EpochColours{
         (i & 1u) ? (ZPointerRemapped01 | ZPointerRemapped11) : (ZPointerRemapped10 | ZPointerRemapped00),
         (i & 2u) ? (ZPointerRemapped10 | ZPointerRemapped11) : (ZPointerRemapped01 | ZPointerRemapped00),
-        (i & 4u) ? MARKED_YOUNG_1 : MARKED_YOUNG_0,
-        (i & 8u) ? MARKED_OLD_1 : MARKED_OLD_0,
-        (i & 16u) ? REMEMBERED_1 : REMEMBERED_0
+        (i & 4u) ? ZPointerMarkedYoung1 : ZPointerMarkedYoung0,
+        (i & 8u) ? ZPointerMarkedOld1 : ZPointerMarkedOld0,
+        (i & 16u) ? ZPointerRemembered1 : ZPointerRemembered0
     };
 }
 
@@ -146,7 +146,7 @@ constexpr bool PublishedMasksAreTheOnlyTruth()
         const EpochColours epoch = EpochAt(i);
         const BadMasks masks = ComputeBadMasks(epoch);
         const uintptr_t expectedFinalizable =
-            epoch.markedOld == MARKED_OLD_0 ? FINALIZABLE_0 : FINALIZABLE_1;
+            epoch.markedOld == ZPointerMarkedOld0 ? ZPointerFinalizable0 : ZPointerFinalizable1;
         if (current_remapped(masks.loadBad) != masks.remapColour ||
             current_marked_young(masks.markBad) != epoch.markedYoung ||
             current_marked_old(masks.markBad) != epoch.markedOld ||

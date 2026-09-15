@@ -388,7 +388,7 @@ void CjHeapData::ProcessRootConcurrencyModel()
 void CjHeapData::ProcessRootFinalizer()
 {
     NativeSlotVisitor visitor = [this](NativeSlot& objRef) {
-        zaddress_unsafe value = uncolor_bits(objRef.GetFieldValue());
+        zaddress_unsafe value = ZPointer::uncolor_unsafe(objRef.GetFieldValue());
         if (is_null(value) || !Heap::IsHeapAddress(reinterpret_cast<void*>(raw(value)))) {
             return;
         }

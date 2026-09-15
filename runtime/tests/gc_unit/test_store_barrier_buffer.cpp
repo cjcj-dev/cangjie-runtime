@@ -68,7 +68,7 @@ namespace {
 // A store-bad / load-good previous value exercises the ZGC store slow path.
 zpointer StoreBadPointer(BaseObject* object)
 {
-    return to_zpointer(raw(StoreGoodPointer(object)) ^ MARKED_OLD_MASK);
+    return to_zpointer(raw(StoreGoodPointer(object)) ^ ZPointerMarkedOldMask);
 }
 
 class StoreBufferCollector final : public Collector {
@@ -581,7 +581,7 @@ GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
     buf.Add(slot, previous, rs);
     buf.Add(SlotAt(fx, 9), zpointer::null, rs);
-    ::g_cjStoreGoodMask ^= MARKED_OLD_MASK;
+    ::g_cjStoreGoodMask ^= ZPointerMarkedOldMask;
     buf.Flush(rs);
     ::g_cjStoreGoodMask = saved;
     std::vector<BaseObject*> marked;
@@ -647,7 +647,7 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
     fx.region0->SetYoungRegionFlag(1);
     buf.Add(slot, previous, rs);
-    ::g_cjStoreGoodMask ^= MARKED_YOUNG_MASK;
+    ::g_cjStoreGoodMask ^= ZPointerMarkedYoungMask;
     buf.Flush(rs);
     ::g_cjStoreGoodMask = saved;
     std::vector<BaseObject*> marked;
@@ -695,7 +695,7 @@ GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
     buf.Add(slot, previous, rs);
-    ::g_cjStoreGoodMask ^= MARKED_OLD_MASK;
+    ::g_cjStoreGoodMask ^= ZPointerMarkedOldMask;
     const MAddress currentSlot = SlotAt(fx, 9);
     buf.Add(currentSlot, RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue(), rs);
     GC_EXPECT_EQ(buf.Pending(), 1u);
@@ -725,7 +725,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     buf.Add(SlotAt(fx, 12), prev, rs);
     // Publish the next old-mark epoch before this thread drains.  The pending
     // entry belongs to the install-time epoch and must not enter the new SATB.
-    ::g_cjStoreGoodMask = before ^ MARKED_OLD_MASK;
+    ::g_cjStoreGoodMask = before ^ ZPointerMarkedOldMask;
     buf.Flush(rs, collector);
     ::g_cjStoreGoodMask = before;
     DrainPublishedMarkObjects(retired);
@@ -751,7 +751,7 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
     buf.Add(SlotAt(fx, 13), prev, rs);
     // A young-mark publication does not change the old-mark epoch that owns
     // this entry, so its SATB half must still be retired after the flip.
-    ::g_cjStoreGoodMask = before ^ MARKED_YOUNG_MASK;
+    ::g_cjStoreGoodMask = before ^ ZPointerMarkedYoungMask;
     buf.Flush(rs, collector);
     ::g_cjStoreGoodMask = before;
     DrainPublishedMarkObjects(retired);

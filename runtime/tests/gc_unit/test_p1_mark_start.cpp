@@ -64,7 +64,7 @@ extern "C" int p1MarkStartExercise()
         const size_t index = generation == GCCycleGeneration::YOUNG ? 0 : 1;
         auto& before = state[index];
         const auto snapshot = collector.GetCycleSnapshot(generation);
-        const uintptr_t mask = index == 0 ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
+        const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
         const uintptr_t color = ::g_cjMarkBadMask & mask;
         const unsigned face = GenerationCycleRootTestAccess::RemsetFace();
         const unsigned workers = resources.GetWorkers(generation).ActiveWorkers();

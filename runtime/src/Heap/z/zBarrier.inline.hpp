@@ -30,7 +30,7 @@ inline zaddress Barrier::MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor
     // Retain the colored native-root admission invariant from ReadStaticRef.
     // ZPointer::assert_is_valid, zAddress.inline.hpp:320-393.
     CHECK_DETAIL(payload == nullptr ||
-                     (raw(observed) & (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
+                     (raw(observed) & (ZPointerRemappedMask | ZPointerMarkedYoungMask | ZPointerMarkedOldMask)) != 0,
                  "NativeSlot requires colored value at MarkYoungGoodBarrier slot=%p word=%#zx", &field,
                  raw(observed));
     if (fast(observed)) {
@@ -65,13 +65,13 @@ inline void Barrier::MarkYoung(zaddress address) const
 // ZBarrier::is_mark_young_good_fast_path, zBarrier.inline.hpp:392-394.
 inline bool Barrier::IsMarkYoungGoodFastPath(zpointer value)
 {
-    return ColourPredicates::is_load_good(raw(value), ::g_cjLoadBadMask) &&
-           ColourPredicates::is_marked_young(raw(value), ::g_cjMarkBadMask);
+    return ZPointer::is_load_good(to_zpointer(raw(value))) &&
+           ZPointer::is_marked_young(to_zpointer(raw(value)));
 }
 
 inline zpointer Barrier::ColorMarkYoungGood(zaddress address, zpointer previous)
 {
-    return ColorAddressMarkYoungGood(address, previous);
+    return ZAddress::mark_young_good(address, previous);
 }
 
 inline void Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const

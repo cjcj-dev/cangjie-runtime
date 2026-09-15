@@ -209,6 +209,7 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 
 void HeapImpl::Init(const HeapParam& param)
 {
+    ZGlobalsPointers::initialize();
     theSpace->Init(param);
     rememberedSet.Initialize(theSpace->GetSpaceStartAddress(),
                              theSpace->GetSpaceEndAddress() - theSpace->GetSpaceStartAddress());

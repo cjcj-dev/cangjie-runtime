@@ -1,173 +1,438 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
+/*
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
 
-// U1 / U2 — colour / address invariants (HotSpot test_zAddress.cpp shape).
-// Defect anchors:
-//   U1 STACK_ROOTS_STAY_PLAIN (layers 2/3/4) — root slots must hold plain
-//   U2 g_cjLoadBadMask bit layout (48,49,51-53 + young/old mark)
-
-#include "Heap/z/zAddress.hpp"
 #include "Heap/z/zAddress.inline.hpp"
-#include "gc_unittest.hpp"
 
+#include "gc_unittest.hpp"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace {
+class ZAddressTest {
+public:
+  static zpointer color(uintptr_t value, uintptr_t color) {
+    return ZAddress::color(zaddress(value | ZAddressHeapBase), color);
+  }
 
-// Address occupies bits 0..47 (ColourTypes.h uncolor_bits / RefField.h).
-constexpr Uptr kAddrMask = (Uptr(1) << 48) - 1u;
-constexpr Uptr kSampleAddr = Uptr(0x00007f12'34567000ULL); // 8-byte aligned, in 48-bit space
+  static const uintptr_t valid_value = (1 << 3 /* LogMinObjectAlignment */);
+  static const uintptr_t null_value = 0;
 
-// Initial load-bad mask (BaseObject.cpp / WCollector::set_good_masks with Remapped00 current).
-constexpr unsigned long kInitialLoadBadMask =
-    static_cast<unsigned long>(TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ ZPointerRemapped00));
+  enum ZColor {
+    Uncolored,
+    RemappedYoung0,
+    RemappedYoung1,
+    RemappedOld0,
+    RemappedOld1,
+    MarkedYoung0,
+    MarkedYoung1,
+    MarkedOld0,
+    MarkedOld1,
+    Finalizable0,
+    Finalizable1,
+    Remembered0,
+    Remembered1,
+    Remembered11
+  };
 
-// Paint address with one-hot remap colour + optional mark bits (production colour write shape).
-constexpr Uptr Color(Uptr addr, Uptr colourBits)
-{
-    return (addr & kAddrMask) | colourBits;
-}
-
-// Model of "root slot may only store plain" — production write path peels colour for non-heap.
-constexpr bool IsPlainRootValue(Uptr v)
-{
-    return (v & ~kAddrMask) == 0;
-}
-
-// Model of load-good: no bit set in g_cjLoadBadMask.
-constexpr bool IsLoadGood(Uptr v, unsigned long badMask)
-{
-    return (v & static_cast<Uptr>(badMask)) == 0;
-}
-
-} // namespace
-
-GC_TEST(ColourAddress, YoungRootColorPreservesOldEpochAndFinalizable)
-{
-    // Exercise the address operation used by the real young-root barrier.
-    // ZAddress::mark_young_good, zAddress.inline.hpp:793-805.
-    for (Uptr old : {MARKED_OLD_0, MARKED_OLD_1, FINALIZABLE_0, FINALIZABLE_1,
-                     MARKED_OLD_0 | FINALIZABLE_1, MARKED_OLD_1 | FINALIZABLE_0}) {
-        const zpointer before = to_zpointer(kSampleAddr | ZPointerRemapped00 | MARKED_YOUNG_MASK | old);
-        const zpointer after = ColorAddressMarkYoungGood(to_zaddress(kSampleAddr), before);
-        GC_EXPECT_EQ(raw(after) & (MARKED_OLD_MASK | FINALIZABLE_MASK), old);
-        GC_EXPECT_EQ(raw(after) & MARKED_YOUNG_MASK, MARKED_YOUNG_MASK & ~::g_cjMarkBadMask);
-        GC_EXPECT_EQ(raw(after) & kAddrMask, kSampleAddr);
-        GC_EXPECT_TRUE(ColourPredicates::is_load_good(raw(after), ::g_cjLoadBadMask));
+  static uintptr_t make_color(ZColor remembered, ZColor remapped_young, ZColor remapped_old, ZColor marked_young, ZColor marked_old) {
+    uintptr_t color = 0;
+    switch (remapped_young) {
+    case RemappedYoung0: {
+      switch (remapped_old) {
+      case RemappedOld0:
+        color |= ZPointer::remap_bits(ZPointerRemapped00);
+        break;
+      case RemappedOld1:
+        color |= ZPointer::remap_bits(ZPointerRemapped10);
+        break;
+      default:
+        GC_EXPECT_TRUE(false);
+      }
+      break;
     }
-    GC_EXPECT_FALSE(ColourPredicates::has_address(raw(ColorAddressMarkYoungGood(zaddress::null, zpointer::null))));
-}
-
-// U2: uncolor(color(p)) == p for every remap one-hot and mark-bit combo we publish.
-GC_TEST(ColourAddress, UncolorRoundTripAllRemapOneHot)
-{
-    const Uptr remapBits[] = { ZPointerRemapped00, ZPointerRemapped01, ZPointerRemapped10, ZPointerRemapped11 };
-    for (Uptr r : remapBits) {
-        zpointer coloured = to_zpointer(Color(kSampleAddr, r));
-        zaddress_unsafe stripped = uncolor_bits(coloured);
-        GC_EXPECT_EQ(raw(stripped), kSampleAddr);
+    case RemappedYoung1: {
+      switch (remapped_old) {
+      case RemappedOld0:
+        color |= ZPointer::remap_bits(ZPointerRemapped01);
+        break;
+      case RemappedOld1:
+        color |= ZPointer::remap_bits(ZPointerRemapped11);
+        break;
+      default:
+        GC_EXPECT_TRUE(false);
+      }
+      break;
     }
-}
-
-GC_TEST(ColourAddress, UncolorRoundTripWithMarkBits)
-{
-    const Uptr markCombos[] = {
-        0u,
-        MARKED_YOUNG_0,
-        MARKED_YOUNG_1,
-        MARKED_OLD_0,
-        MARKED_OLD_1,
-        MARKED_YOUNG_0 | MARKED_OLD_0,
-        MARKED_YOUNG_1 | MARKED_OLD_1,
-    };
-    for (Uptr m : markCombos) {
-        Uptr coloured = Color(kSampleAddr, ZPointerRemapped00 | m);
-        GC_EXPECT_EQ(raw(uncolor_bits(to_zpointer(coloured))), kSampleAddr);
+    default:
+      GC_EXPECT_TRUE(false);
     }
-}
 
-// U2: load-bad mask rejects every non-current remap one-hot (initial current = Remapped00).
-GC_TEST(ColourAddress, LoadBadMaskRejectsStaleRemap)
-{
-    // Current good: Remapped00 only (no tagged bits).
-    Uptr good = Color(kSampleAddr, ZPointerRemapped00);
-    GC_EXPECT_TRUE(IsLoadGood(good, kInitialLoadBadMask));
-
-    const Uptr stale[] = { ZPointerRemapped01, ZPointerRemapped10, ZPointerRemapped11 };
-    for (Uptr s : stale) {
-        Uptr bad = Color(kSampleAddr, s);
-        GC_EXPECT_FALSE(IsLoadGood(bad, kInitialLoadBadMask));
+    switch (marked_young) {
+    case MarkedYoung0:
+      color |= ZPointerMarkedYoung0;
+      break;
+    case MarkedYoung1:
+      color |= ZPointerMarkedYoung1;
+      break;
+    default:
+      GC_EXPECT_TRUE(false);
     }
-}
 
-// U2: a stale remap colour is always load-bad (no isTagged bit).
-GC_TEST(ColourAddress, StaleRemapAlwaysLoadBad)
-{
-    Uptr v = Color(kSampleAddr, ZPointerRemapped01);
-    GC_EXPECT_FALSE(IsLoadGood(v, kInitialLoadBadMask));
-    GC_EXPECT_EQ(raw(uncolor_bits(to_zpointer(v))), kSampleAddr);
-}
-
-// U1: root slot discipline — coloured value is not a legal plain root payload.
-GC_TEST(ColourAddress, RootSlotRejectsColouredValue)
-{
-    Uptr coloured = Color(kSampleAddr, ZPointerRemapped00);
-    GC_EXPECT_FALSE(IsPlainRootValue(coloured));
-
-    Uptr plain = raw(uncolor_bits(to_zpointer(coloured)));
-    GC_EXPECT_TRUE(IsPlainRootValue(plain));
-    GC_EXPECT_EQ(plain, kSampleAddr);
-}
-
-// U1: after peel, high colour bits must be zero (STACK_ROOTS_STAY_PLAIN write-back shape).
-GC_TEST(ColourAddress, PeelForRootWriteBackClearsHighBits)
-{
-    Uptr coloured = Color(kSampleAddr, REMAP_COLOUR_MASK | MARKED_YOUNG_1 | MARKED_OLD_1);
-    Uptr peeled = raw(uncolor_bits(to_zpointer(coloured)));
-    GC_EXPECT_TRUE(IsPlainRootValue(peeled));
-    GC_EXPECT_EQ(peeled, kSampleAddr);
-}
-
-// Layout sanity: address mask and colour masks are disjoint (defect if they overlap).
-GC_TEST(ColourAddress, AddressAndColourMasksDisjoint)
-{
-    GC_EXPECT_EQ(kAddrMask & REMAP_COLOUR_MASK, 0u);
-    GC_EXPECT_EQ(kAddrMask & MARKED_YOUNG_MASK, 0u);
-    GC_EXPECT_EQ(kAddrMask & MARKED_OLD_MASK, 0u);
-    GC_EXPECT_EQ(kAddrMask & TAGGED_BITS_MASK, 0u);
-}
-
-// Eth: colour bit-field encode/decode matrix (JDK test_zBitField spirit).
-// Product colour one-hots must round-trip through paint/uncolor without cross-talk.
-GC_TEST(ColourAddress, BitFieldRemapOneHotMatrix)
-{
-    const Uptr remapBits[] = { ZPointerRemapped00, ZPointerRemapped01, ZPointerRemapped10, ZPointerRemapped11 };
-    for (size_t i = 0; i < 4; ++i) {
-        Uptr coloured = Color(kSampleAddr, remapBits[i]);
-        GC_EXPECT_EQ(raw(uncolor_bits(to_zpointer(coloured))), kSampleAddr);
-        // Exactly one remap one-hot set in the colour field.
-        Uptr colourOnly = coloured & REMAP_COLOUR_MASK;
-        GC_EXPECT_EQ(colourOnly, remapBits[i]);
-        for (size_t j = 0; j < 4; ++j) {
-            if (i == j) {
-                GC_EXPECT_EQ(colourOnly & remapBits[j], remapBits[j]);
-            } else {
-                GC_EXPECT_EQ(colourOnly & remapBits[j], 0u);
-            }
-        }
+    switch (marked_old) {
+    case MarkedOld0:
+      color |= ZPointerMarkedOld0;
+      break;
+    case MarkedOld1:
+      color |= ZPointerMarkedOld1;
+      break;
+    case Finalizable0:
+      color |= ZPointerFinalizable0;
+      break;
+    case Finalizable1:
+      color |= ZPointerFinalizable1;
+      break;
+    default:
+      GC_EXPECT_TRUE(false);
     }
-}
 
-// Eth: mark young/old bits encode independently of remap one-hot.
-GC_TEST(ColourAddress, BitFieldMarkBitsIndependentOfRemap)
-{
-    Uptr base = Color(kSampleAddr, ZPointerRemapped10 | MARKED_YOUNG_1 | MARKED_OLD_0);
-    GC_EXPECT_EQ(raw(uncolor_bits(to_zpointer(base))), kSampleAddr);
-    GC_EXPECT_EQ(base & REMAP_COLOUR_MASK, ZPointerRemapped10);
-    GC_EXPECT_EQ(base & MARKED_YOUNG_MASK, MARKED_YOUNG_1);
-    GC_EXPECT_EQ(base & MARKED_OLD_MASK, MARKED_OLD_0);
+    switch (remembered) {
+    case Remembered0:
+      color |= ZPointerRemembered0;
+      break;
+    case Remembered1:
+      color |= ZPointerRemembered1;
+      break;
+    case Remembered11:
+      color |= ZPointerRemembered0 | ZPointerRemembered1;
+      break;
+    default:
+      GC_EXPECT_TRUE(false);
+    }
+
+    return color;
+  }
+
+  static zpointer color(uintptr_t addr,
+                        ZColor remembered,
+                        ZColor remapped_young,
+                        ZColor remapped_old,
+                        ZColor marked_young,
+                        ZColor marked_old) {
+    if (remembered == Uncolored &&
+        remapped_young == Uncolored &&
+        remapped_old == Uncolored &&
+        marked_young == Uncolored &&
+        marked_old == Uncolored) {
+      return zpointer(addr);
+    } else {
+      return color(addr, make_color(remembered, remapped_young, remapped_old, marked_young, marked_old));
+    }
+  }
+
+  static bool is_remapped_young_odd(uintptr_t bits) {
+    return ZPointer::remap_bits(bits) & (ZPointerRemapped01 | ZPointerRemapped11);
+  }
+
+  static bool is_remapped_old_odd(uintptr_t bits) {
+    return ZPointer::remap_bits(bits) & (ZPointerRemapped10 | ZPointerRemapped11);
+  }
+
+  static bool is_marked_young_odd(uintptr_t bits) {
+    return bits & ZPointerMarkedYoung1;
+  }
+
+  static bool is_marked_old_odd(uintptr_t bits) {
+    return bits & (ZPointerMarkedOld1 | ZPointerFinalizable1);
+  }
+
+  static bool is_remembered(uintptr_t bits) {
+    return bits & (ZPointerRemembered0 | ZPointerRemembered1);
+  }
+
+  static bool is_remembered_odd(uintptr_t bits) {
+    return bits & (ZPointerRemembered1);
+  }
+
+  static bool is_remembered_even(uintptr_t bits) {
+    return bits & (ZPointerRemembered0);
+  }
+
+  static void test_is_checks_on(uintptr_t value,
+                                ZColor remembered,
+                                ZColor remapped_young,
+                                ZColor remapped_old,
+                                ZColor marked_young,
+                                ZColor marked_old) {
+    const zpointer ptr = color(value, remembered, remapped_young, remapped_old, marked_young, marked_old);
+    uintptr_t ptr_raw = untype(ptr);
+
+    GC_EXPECT_TRUE(g_cjLoadGoodMask != 0);
+    GC_EXPECT_TRUE(g_cjStoreGoodMask != 0);
+
+    bool ptr_raw_null = ptr_raw == 0;
+    bool global_remapped_old_odd = is_remapped_old_odd(g_cjLoadGoodMask);
+    bool global_remapped_young_odd = is_remapped_young_odd(g_cjLoadGoodMask);
+    bool global_marked_old_odd = is_marked_old_odd(g_cjStoreGoodMask);
+    bool global_marked_young_odd = is_marked_young_odd(g_cjStoreGoodMask);
+    bool global_remembered_odd = is_remembered_odd(g_cjStoreGoodMask);
+    bool global_remembered_even = is_remembered_even(g_cjStoreGoodMask);
+
+    if (ptr_raw_null) {
+      GC_EXPECT_FALSE(ZPointer::is_marked_any_old(ptr));
+      GC_EXPECT_FALSE(ZPointer::is_load_good(ptr));
+      GC_EXPECT_TRUE(ZPointer::is_load_good_or_null(ptr));
+      GC_EXPECT_FALSE(ZPointer::is_load_bad(ptr));
+      GC_EXPECT_FALSE(ZPointer::is_mark_good(ptr));
+      GC_EXPECT_TRUE(ZPointer::is_mark_good_or_null(ptr));
+      GC_EXPECT_FALSE(ZPointer::is_mark_bad(ptr));
+      GC_EXPECT_FALSE(ZPointer::is_store_good(ptr));
+      GC_EXPECT_TRUE(ZPointer::is_store_good_or_null(ptr));
+      GC_EXPECT_FALSE(ZPointer::is_store_bad(ptr));
+    } else {
+      bool ptr_remapped_old_odd = is_remapped_old_odd(ptr_raw);
+      bool ptr_remapped_young_odd = is_remapped_young_odd(ptr_raw);
+      bool ptr_marked_old_odd = is_marked_old_odd(ptr_raw);
+      bool ptr_marked_young_odd = is_marked_young_odd(ptr_raw);
+      bool ptr_final = ptr_raw & (ZPointerFinalizable0 | ZPointerFinalizable1);
+      bool ptr_remembered = is_power_of_2(ptr_raw & (ZPointerRemembered0 | ZPointerRemembered1));
+      bool ptr_remembered_odd = is_remembered_odd(ptr_raw);
+      bool ptr_remembered_even = is_remembered_even(ptr_raw);
+      bool ptr_colored_null = !ptr_raw_null && (ptr_raw & ~ZPointerAllMetadataMask) == 0;
+
+      bool same_old_marking = global_marked_old_odd == ptr_marked_old_odd;
+      bool same_young_marking = global_marked_young_odd == ptr_marked_young_odd;
+      bool same_old_remapping = global_remapped_old_odd == ptr_remapped_old_odd;
+      bool same_young_remapping = global_remapped_young_odd == ptr_remapped_young_odd;
+      bool same_remembered = ptr_remembered_even == global_remembered_even && ptr_remembered_odd == global_remembered_odd;
+
+      GC_EXPECT_EQ(ZPointer::is_marked_finalizable(ptr), same_old_marking && ptr_final);
+      GC_EXPECT_EQ(ZPointer::is_marked_any_old(ptr), same_old_marking);
+      GC_EXPECT_EQ(ZPointer::is_remapped(ptr), same_old_remapping && same_young_remapping);
+      GC_EXPECT_EQ(ZPointer::is_load_good(ptr), same_old_remapping && same_young_remapping);
+      GC_EXPECT_EQ(ZPointer::is_load_good_or_null(ptr), same_old_remapping && same_young_remapping);
+      GC_EXPECT_EQ(ZPointer::is_load_bad(ptr), !same_old_remapping || !same_young_remapping);
+      GC_EXPECT_EQ(ZPointer::is_mark_good(ptr), same_young_remapping && same_old_remapping && same_young_marking && same_old_marking);
+      GC_EXPECT_EQ(ZPointer::is_mark_good_or_null(ptr), same_young_remapping && same_old_remapping && same_young_marking && same_old_marking);
+      GC_EXPECT_EQ(ZPointer::is_mark_bad(ptr), !same_young_remapping || !same_old_remapping || !same_young_marking || !same_old_marking);
+      GC_EXPECT_EQ(ZPointer::is_store_good(ptr), same_young_remapping && same_old_remapping && same_young_marking && same_old_marking && ptr_remembered && same_remembered);
+      GC_EXPECT_EQ(ZPointer::is_store_good_or_null(ptr), same_young_remapping && same_old_remapping && same_young_marking && same_old_marking && ptr_remembered && same_remembered);
+      GC_EXPECT_EQ(ZPointer::is_store_bad(ptr), !same_young_remapping || !same_old_remapping || !same_young_marking || !same_old_marking || !ptr_remembered || !same_remembered);
+    }
+  }
+
+  static void test_is_checks_on_all() {
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered0, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered0, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered1, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered1, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung0, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung0, RemappedOld0, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung0, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung0, RemappedOld1, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung1, RemappedOld0, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung1, RemappedOld0, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung1, RemappedOld1, MarkedYoung0, MarkedOld1);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld0);
+    test_is_checks_on(valid_value, Remembered11, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld1);
+    test_is_checks_on(null_value, Remembered11, RemappedYoung1, RemappedOld1, MarkedYoung1, MarkedOld1);
+
+    test_is_checks_on(null_value, Uncolored, Uncolored, Uncolored, Uncolored, Uncolored);
+  }
+
+  static void advance_and_test_young_phase(int& phase, int amount) {
+    for (int i = 0; i < amount; ++i) {
+      if (++phase & 1) {
+        ZGlobalsPointers::flip_young_mark_start();
+      } else {
+        ZGlobalsPointers::flip_young_relocate_start();
+      }
+      test_is_checks_on_all();
+    }
+  }
+
+  static void advance_and_test_old_phase(int& phase, int amount) {
+    for (int i = 0; i < amount; ++i) {
+      if (++phase & 1) {
+        ZGlobalsPointers::flip_old_mark_start();
+      } else {
+        ZGlobalsPointers::flip_old_relocate_start();
+      }
+      test_is_checks_on_all();
+    }
+  }
+
+  static void is_checks() {
+    int young_phase = 0;
+    int old_phase = 0;
+
+    test_is_checks_on_all();
+
+    advance_and_test_old_phase(old_phase, 4);
+    advance_and_test_young_phase(young_phase, 4);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 4);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 4);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 4);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 4);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 3);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 3);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 3);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 3);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 2);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 2);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 2);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 2);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 1);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 1);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 1);
+
+    advance_and_test_old_phase(old_phase, 1);
+    advance_and_test_young_phase(young_phase, 1);
+  }
+};
+
+GC_TEST(ZAddress, IsChecks) {
+  ZGlobalsPointers::initialize();
+  ZAddressTest::is_checks();
 }

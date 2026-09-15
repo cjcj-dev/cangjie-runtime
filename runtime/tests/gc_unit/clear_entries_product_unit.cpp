@@ -303,7 +303,7 @@ struct LoadHealDeliveryTestAccess {
 
     static uintptr_t DoubleBadColour(const WCollector& collector)
     {
-        return REMAP_COLOUR_MASK & ~collector.ZPointerRemappedYoungMask &
+        return ZPointerRemappedMask & ~collector.ZPointerRemappedYoungMask &
             ~collector.ZPointerRemappedOldMask;
     }
 
@@ -377,7 +377,7 @@ bool PageWaitEnterBarrier::entered = false;
 
 uintptr_t OneLoadBadRemap()
 {
-    const uintptr_t bad = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    const uintptr_t bad = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
     GC_EXPECT_TRUE(bad != 0);
     return bad & (~bad + 1);
 }
@@ -1862,7 +1862,7 @@ GC_TEST(ForwardingPublicationProduct, IdentityForwardStillWritesBackRootWord)
     region->MarkForwardingDone();
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     const uintptr_t colored = reinterpret_cast<uintptr_t>(from) |
-        (static_cast<uintptr_t>(::g_cjLoadBadMask) ^ REMAP_COLOUR_MASK);
+        (static_cast<uintptr_t>(::g_cjLoadBadMask) ^ ZPointerRemappedMask);
     ObjectRef root;
     StorePlain(root, to_zaddress(colored));
     GC_EXPECT_TRUE(raw(root.LoadPlain()) != reinterpret_cast<MAddress>(from));
@@ -2576,7 +2576,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == to);
         GC_EXPECT_TRUE(collector.is_load_good(field));
         GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
-        const uintptr_t markBits = MARKED_YOUNG_MASK | MARKED_OLD_MASK;
+        const uintptr_t markBits = ZPointerMarkedYoungMask | ZPointerMarkedOldMask;
         GC_EXPECT_EQ(raw(field.GetFieldValue()) & markBits, raw(before) & markBits);
         if (holderLive != nullptr) {
             holderRegion->metadata.liveInfo = nullptr;
@@ -2665,7 +2665,7 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     const uintptr_t doubleBad = LoadHealDeliveryTestAccess::DoubleBadColour(collector);
     GC_EXPECT_TRUE(doubleBad != 0 && (doubleBad & (doubleBad - 1)) == 0);
-    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & REMAP_COLOUR_MASK, doubleBad);
+    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & ZPointerRemappedMask, doubleBad);
     const uintptr_t youngBefore = raw(youngField->GetFieldValue());
     LoadHealDeliveryTestAccess::RemapYoungRoots(collector);
 

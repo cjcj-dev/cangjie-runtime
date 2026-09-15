@@ -191,7 +191,7 @@ private:
 
 zpointer LoadBadPointer(BaseObject* object)
 {
-    const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
     const uintptr_t staleRemap = staleRemaps & (~staleRemaps + 1);
     GC_EXPECT_TRUE(staleRemap != 0);
     return GcUnit::ColouredPointer(object, staleRemap);
@@ -226,7 +226,7 @@ struct StoreFixture {
         newValue = heap.obj1;
         regionOld->SetRegionAllocPtr(reinterpret_cast<MAddress>(oldValue) + oldValue->GetSize());
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
-        field->StoreColoured(to_zpointer(raw(GcUnit::StoreGoodPointer(oldValue)) ^ MARKED_OLD_MASK));
+        field->StoreColoured(to_zpointer(raw(GcUnit::StoreGoodPointer(oldValue)) ^ ZPointerMarkedOldMask));
         remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
         (void)DrainReceipts(oldValue, newValue);
     }

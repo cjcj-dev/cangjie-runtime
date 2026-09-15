@@ -223,147 +223,29 @@ public:
     // Collector&, can spell it. Phase C changes that one body -- as in ZGC's
     // ZPointer::is_load_bad, zAddress.inline.hpp:626-628 -- instead of ~90 call sites.
 
-    // The colour currently handed out. Flipping a phase swaps it and updates the mask the
-    // compiler tests, which is what replaces walking the heap to strip stale colours.
-    Uptr ZPointerRemappedYoungMask = ZPointerRemapped10 | ZPointerRemapped00;
-    Uptr ZPointerRemappedOldMask = ZPointerRemapped01 | ZPointerRemapped00;
-    Uptr currentRemapColour = ZPointerRemapped00;
-    Uptr currentMarkedYoung = MARKED_YOUNG_0;
-    Uptr currentMarkedOld = MARKED_OLD_0;
-    // OpenJDK ZPointerRemembered (zAddress.cpp:125); flips with young mark start (:133-134).
-    Uptr currentRemembered = REMEMBERED_0;
-    size_t youngMarkFlipCount = 0;
-    size_t oldMarkFlipCount = 0;
-
-    // The five epoch words this collector currently hands out, as the POD the shared formula
-    // takes. Order matches EpochColours (ColourMask.h) and the member declarations above.
-    EpochColours current_epoch_colours() const
-    {
-        return EpochColours{ static_cast<uintptr_t>(ZPointerRemappedYoungMask),
-                             static_cast<uintptr_t>(ZPointerRemappedOldMask),
-                             static_cast<uintptr_t>(currentMarkedYoung),
-                             static_cast<uintptr_t>(currentMarkedOld),
-                             static_cast<uintptr_t>(currentRemembered) };
-    }
-
-    // Mirrors ZGlobalsPointers::set_good_masks (OpenJDK zAddress.cpp:78-94):
-    //   :81 LoadGood  = remap_bits(Remapped)
-    //   :82 MarkGood  = LoadGood | MarkedYoung | MarkedOld
-    //   :83 StoreGood = MarkGood | Remembered
-    // Bad masks are Good ^ Metadata (+ tagged for our ABI). Finalizable not introduced
-    // (ColourMask.h kFinalizableWired).
-    //
-    // c4unify: the arithmetic moved to ColourMask.h ComputeBadMasks so that this function and
-    // the static initialisers in BaseObject.cpp stop being two independent copies of the
-    // same formula. The positive LoadGood word is published next to LoadBad
-    // (zAddress.cpp:81,85), and StoreGood next to StoreBad (:83,87); the four
-    // flip_* functions still all funnel through this one writer.
-    // flipseq: a monotonic count of colour publications.  The remap space is four values and a flip
-    // is an xor, so a colour that was good at publication N is good again at N+2 for that
-    // generation's mask -- "the slot recycled into good" and "the slot was painted after the target
-    // moved" produce identical colours and can only be told apart by *when*.  ZGC has the same
-    // four-value space (zAddress.hpp:59-130) so this is not a divergence by itself; it is the axis
-    // on which the two stories separate.
-    static std::atomic<uint64_t>& FlipSeq()
-    {
-        static std::atomic<uint64_t> seq{ 0 };
-        return seq;
-    }
-
-    void set_good_masks()
-    {
-        FlipSeq().fetch_add(1, std::memory_order_relaxed);
-        const EpochColours e = current_epoch_colours();
-        const BadMasks m = ComputeBadMasks(e);
-        currentRemapColour = m.remapColour;
-        ::g_cjLoadGoodMask = m.remapColour;
-        ::g_cjLoadBadMask = m.loadBad;
-        ::g_cjMarkBadMask = m.markBad;
-        ::g_cjStoreBadMask = m.storeBad;
-        ::g_cjStoreGoodMask = m.storeGood;
-        // zAddress.cpp:87 StoreBad = StoreGood ^ StoreMetadataMask. Checked on every
-        // publication so the two exported words cannot drift (ColourMask.h ComputeBadMasks
-        // is the only writer; this CHECK is the runtime witness of that identity).
-        CHECK((m.storeGood ^ STORE_METADATA_MASK) == m.storeBad);
-        CHECK(::g_cjLoadGoodMask == m.remapColour);
-        CHECK((::g_cjLoadGoodMask | ::g_cjLoadBadMask) ==
-              (REMAP_COLOUR_MASK | TAGGED_BITS_MASK));
-        CHECK((::g_cjLoadGoodMask & ::g_cjLoadBadMask) == 0);
-        CHECK(::g_cjStoreGoodMask == m.storeGood);
-        CHECK(::g_cjStoreBadMask == m.storeBad);
-    }
-
-    // OpenJDK ZGlobalsPointers::flip_young_relocate_start/flip_old_relocate_start
-    // (zAddress.cpp:138-151): each generation independently alternates the two accepted pairs.
-    void flip_young_relocate_start()
-    {
-        ZPointerRemappedYoungMask ^= REMAP_COLOUR_MASK;
-        set_good_masks();
-        // Heal coverage before colour reuse (zGeneration.cpp:1503-1508).
-        // Gate is a compile-time constant so the product rec=stw arm pays no walk.
-    }
-
-    void flip_old_relocate_start()
-    {
-        ZPointerRemappedOldMask ^= REMAP_COLOUR_MASK;
-        set_good_masks();
-    }
-
-    // OpenJDK zAddress.cpp:132-136: young mark-start flips MarkedYoung and Remembered together.
-    void flip_young_mark_start()
-    {
-        currentMarkedYoung ^= MARKED_YOUNG_MASK;
-        currentRemembered ^= REMEMBERED_MASK;
-        set_good_masks();
-        if (++youngMarkFlipCount == 1) {
-            LOG(RTLOG_ERROR,
-                "[ZCOLOR2][mark-mask-flip] generation=young count=%zu g_cjMarkBadMask=%#lx g_cjStoreBadMask=%#lx",
-                youngMarkFlipCount, ::g_cjMarkBadMask, ::g_cjStoreBadMask);
-        }
-    }
-
-    void flip_old_mark_start()
-    {
-        currentMarkedOld ^= MARKED_OLD_MASK;
-        set_good_masks();
-        if (++oldMarkFlipCount == 1) {
-            LOG(RTLOG_ERROR, "[ZCOLOR2][mark-mask-flip] generation=old count=%zu g_cjMarkBadMask=%#lx",
-                oldMarkFlipCount, ::g_cjMarkBadMask);
-        }
-    }
-
     // note this api is not atomic, caller should take care of this.
     // Stale remap colour (ZGC: the value itself says it may be stale). No pointer tagID.
     bool IsOldPointer(RefField<>& ref) const override { return IsLoadBad(ref); }
 
     // note this api is not atomic, caller should take care of this.
     // Current colour: has the remap bit being handed out now. Plain (no colour) is neither.
-    bool IsCurrentPointer(RefField<>& ref) const override { return is_load_good(ref); }
+    bool IsCurrentPointer(RefField<>& ref) const override { return ZPointer::is_load_good(ref.GetFieldValue()); }
 
     // OpenJDK ZPointer::is_young_load_good/is_old_load_good
     // (zAddress.inline.hpp:648-655): the conceptual generation epoch is represented by the two
     // accepted bits in that generation's mask.
-    bool is_young_load_good(RefField<>& ref) const override
-    {
-        // 凭什么 raw: 掩码测位型，不解引用。
-        return (raw(ref.GetFieldValue()) & ZPointerRemappedYoungMask) != 0;
-    }
 
-    bool is_old_load_good(RefField<>& ref) const override
-    {
-        return (raw(ref.GetFieldValue()) & ZPointerRemappedOldMask) != 0;
-    }
 
     // OpenJDK ZBarrier::remap_generation (zBarrier.inline.hpp:110-137): one generation-good
     // bit identifies the other generation; a double-bad colour consults the forwarding side table.
     ZGenerationId remap_generation(RefField<>& ref) const override
     {
-        CHECK_DETAIL(!is_load_good(ref), "load-good reference does not need remap");
-        if (is_old_load_good(ref)) return ZGenerationId::young;
-        if (is_young_load_good(ref)) return ZGenerationId::old;
+        CHECK_DETAIL(!ZPointer::is_load_good(ref.GetFieldValue()), "load-good reference does not need remap");
+        if (ZPointer::is_old_load_good(ref.GetFieldValue())) return ZGenerationId::young;
+        if (ZPointer::is_young_load_good(ref.GetFieldValue())) return ZGenerationId::old;
         // zBarrier.inline.hpp:124-136: the remembered bits disambiguate old
         // heap fields; otherwise test the young generation's forwarding map.
-        if ((raw(ref.GetFieldValue()) & REMEMBERED_MASK) == REMEMBERED_MASK) {
+        if ((raw(ref.GetFieldValue()) & ZPointerRememberedMask) == ZPointerRememberedMask) {
             return ZGenerationId::old;
         }
         const MAddress address = raw(ref.GetTargetObject());
@@ -631,20 +513,14 @@ protected:
 
     // Sole colouring site for a value already proven to be the live to-version.
     // Store-good colour: mark-good | current Remembered (OpenJDK zAddress.cpp:83).
-    RefField<> ColourStoreGood(zaddress live) const
-    {
-        const Uptr storeColour = currentRemapColour | currentMarkedYoung | currentMarkedOld | currentRemembered;
-        return RefField<>(to_object(live), storeColour);
-    }
-
     // Produce the load-bad member of the full-colour family without changing
     // the address.  This is deliberately separate from GetAndTryTagRefField:
     // unclassified store values still have to pass ResolveStoreValue first.
     RefField<> ColourStaleLoadBad(zaddress_unsafe stale) const
     {
-        const Uptr notCurrent = REMAP_COLOUR_MASK ^ currentRemapColour;
+        const Uptr notCurrent = ZPointerRemappedMask ^ ZPointerRemapped;
         const Uptr staleOneHot = notCurrent & -notCurrent;
-        const Uptr storeColour = staleOneHot | currentMarkedYoung | currentMarkedOld | currentRemembered;
+        const Uptr storeColour = staleOneHot | ZPointerMarkedYoung | ZPointerMarkedOld | ZPointerRemembered;
         return RefField<>(from_region_addr(raw(stale)), storeColour);
     }
 
@@ -691,7 +567,7 @@ protected:
         if (kColourWhoProbe) {
             NoteColourStoreGoodOnBadTarget(target);
         }
-        return ColourStoreGood(from_object(target));
+        return RefField<>(ZAddress::store_good(from_object(target)));
     }
 
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
@@ -711,7 +587,7 @@ protected:
         // but a non-null HeapSlot word is still coloured.  The load-good mask
         // fast path peels it without routing through the collector.
         if (!Heap::IsHeapAddress(target)) {
-            return ColourStoreGood(from_object(target));
+            return RefField<>(ZAddress::store_good(from_object(target)));
         }
         // ZPointer::uncolor is the sole producer accepted by ZAddress::store_good
         // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
@@ -732,7 +608,7 @@ protected:
         if (kColourWhoProbe) {
             NoteColourStoreGoodOnBadTarget(target);
         }
-        return ColourStoreGood(from_object(target));
+        return RefField<>(ZAddress::store_good(from_object(target)));
     }
 
     // holdermark: probe-only view of the old-generation mark bit.
@@ -742,7 +618,7 @@ protected:
     }
 
     // flipwitness: the probe needs the colour currently handed out, without reaching into members.
-    Uptr CurrentRemapColourForProbe() const override { return currentRemapColour; }
+    Uptr CurrentRemapColourForProbe() const override { return ZPointerRemapped; }
 
     // colourwho: compile-time gated -- this is the funnel every coloured write goes through.
     static constexpr bool kColourWhoProbe = true;

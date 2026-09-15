@@ -107,12 +107,12 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     // Non-heap ELF literals are not GC roots and keep the skip below.
     CHECK_DETAIL(!Heap::IsHeapAddress(to_object(oldField.GetTargetObject())) ||
                      (raw(oldField.GetFieldValue()) &
-                      (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
+                      (ZPointerRemappedMask | ZPointerMarkedYoungMask | ZPointerMarkedOldMask)) != 0,
                  "NativeSlot requires colored value at EnumRefFieldRoot slot=%p word=%#zx",
                  &field, raw(oldField.GetFieldValue()));
     // A mark-good root has passed this mark epoch and is necessarily load-good
     // (OpenJDK zAddress.inline.hpp:658-664).
-    if (is_mark_good(oldField)) {
+    if (ZPointer::is_mark_good(oldField.GetFieldValue())) {
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
         BaseObject* target = to_object(oldField.GetTargetObject());
         // Reject non-heap: do not call make_load_good (remap would touch non-heap).
@@ -230,7 +230,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             }
         }
     }
-    if (is_mark_good(oldField) && !staleTarget) {
+    if (ZPointer::is_mark_good(oldField.GetFieldValue()) && !staleTarget) {
         BaseObject* targetObj = to_object(oldField.GetTargetObject());
         // zbisect: plain non-heap (0x55–0x65) was admitted here → IsMarkedObject → GetUnitIdxAt OOB.
         // Skip field on reject — same as pre-zcolor7 slow path for plain non-heap.
@@ -268,7 +268,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     // not relocate phase, so do not TryMutatorRelocate / forward_object here.
     {
         const MAddress fromAddr = reinterpret_cast<MAddress>(latest);
-        MAddress stored = is_load_good(oldField) ? 0 : ForwardingTable::FindTo(
+        MAddress stored = ZPointer::is_load_good(oldField.GetFieldValue()) ? 0 : ForwardingTable::FindTo(
             raw(oldField.GetTargetObject()), static_cast<Generation>(remap_generation(oldField)));
         if (stored != 0) {
             BaseObject* to = reinterpret_cast<BaseObject*>(stored);
@@ -442,7 +442,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     RefField<> oldField(field);
     const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
     BaseObject* latest = nullptr;
-    if (is_mark_good(oldField)) {
+    if (ZPointer::is_mark_good(oldField.GetFieldValue())) {
         BaseObject* targetObj = to_object(oldField.GetTargetObject());
         if (!Heap::IsHeapAddress(targetObj)) {
             return nullptr;

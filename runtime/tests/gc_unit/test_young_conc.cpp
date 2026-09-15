@@ -837,7 +837,7 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     TestBarrier barrier(collector, rs);
 
-    field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ MARKED_YOUNG_MASK ^ MARKED_OLD_MASK));
+    field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     std::unordered_set<MAddress> records;
     rs.DrainForMinor(records);
@@ -863,7 +863,7 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     TestBarrier barrier(collector, remembered);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ MARKED_YOUNG_MASK ^ MARKED_OLD_MASK));
+    field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     BaseObject* incoming = nullptr;
     barrier.WriteStruct(fx.obj0, reinterpret_cast<MAddress>(&field), sizeof(incoming),
                         reinterpret_cast<MAddress>(&incoming), sizeof(incoming));
@@ -893,7 +893,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     TestBarrier barrier(collector, remembered);
     // ZBarrier::store_barrier_on_heap_oop_field reads prev before the store
     // (zBarrier.inline.hpp:695-705); stale mark colors force its slow path.
-    field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ MARKED_YOUNG_MASK ^ MARKED_OLD_MASK));
+    field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     barrier.WriteReference(fx.obj0, field, incoming);
     std::vector<BaseObject*> work;
     markFixture.DrainObjects(work);
@@ -920,7 +920,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     RememberedSet remembered;
     remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     TestBarrier barrier(collector, remembered);
-    field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ MARKED_YOUNG_MASK ^ MARKED_OLD_MASK));
+    field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     barrier.WriteReference(fx.obj0, field, nullptr);
     std::vector<BaseObject*> work;
     markFixture.DrainObjects(work);

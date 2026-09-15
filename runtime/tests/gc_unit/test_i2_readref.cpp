@@ -63,7 +63,7 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
     Barrier barrier(collector, rs);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
     const uintptr_t remap = staleRemaps & (~staleRemaps + 1);
     GC_EXPECT_TRUE(remap != 0);
     field->StoreColoured(GcUnit::ColouredPointer(fx.obj0, remap));
@@ -104,7 +104,7 @@ GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)
     Barrier barrier(collector, rs);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    const uintptr_t stale = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    const uintptr_t stale = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
     GC_EXPECT_TRUE(stale != 0);
     const auto previous = GcUnit::ColouredPointer(fx.obj0, stale & (~stale + 1));
     field->StoreColoured(previous);

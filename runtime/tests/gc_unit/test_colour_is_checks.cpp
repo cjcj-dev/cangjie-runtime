@@ -62,16 +62,16 @@ enum class Remember { Absent, R0, R1, Both };
 // flip_old_mark_start, each of which is one xor followed by set_good_masks).
 struct Epoch {
     EpochColours e{ ZPointerRemapped10 | ZPointerRemapped00, ZPointerRemapped01 | ZPointerRemapped00,
-                    MARKED_YOUNG_0, MARKED_OLD_0, REMEMBERED_0 };
+                    ZPointerMarkedYoung0, ZPointerMarkedOld0, ZPointerRemembered0 };
 
-    void FlipYoungRelocateStart() { e.remappedYoungMask ^= REMAP_COLOUR_MASK; }
-    void FlipOldRelocateStart() { e.remappedOldMask ^= REMAP_COLOUR_MASK; }
+    void FlipYoungRelocateStart() { e.remappedYoungMask ^= ZPointerRemappedMask; }
+    void FlipOldRelocateStart() { e.remappedOldMask ^= ZPointerRemappedMask; }
     void FlipYoungMarkStart()
     {
-        e.markedYoung ^= MARKED_YOUNG_MASK;
-        e.remembered ^= REMEMBERED_MASK;
+        e.markedYoung ^= ZPointerMarkedYoungMask;
+        e.remembered ^= ZPointerRememberedMask;
     }
-    void FlipOldMarkStart() { e.markedOld ^= MARKED_OLD_MASK; }
+    void FlipOldMarkStart() { e.markedOld ^= ZPointerMarkedOldMask; }
 
     BadMasks Masks() const { return ComputeBadMasks(e); }
 };
@@ -94,18 +94,18 @@ uintptr_t RemapBitFor(YoungRemap y, OldRemap o)
 
 uintptr_t MarkYoungBitFor(YoungMark m)
 {
-    return m == YoungMark::Absent ? 0 : (m == YoungMark::M0 ? MARKED_YOUNG_0 : MARKED_YOUNG_1);
+    return m == YoungMark::Absent ? 0 : (m == YoungMark::M0 ? ZPointerMarkedYoung0 : ZPointerMarkedYoung1);
 }
 uintptr_t MarkOldBitFor(OldMark m)
 {
-    return m == OldMark::Absent ? 0 : (m == OldMark::M0 ? MARKED_OLD_0 : MARKED_OLD_1);
+    return m == OldMark::Absent ? 0 : (m == OldMark::M0 ? ZPointerMarkedOld0 : ZPointerMarkedOld1);
 }
 uintptr_t RememberBitFor(Remember r)
 {
     return r == Remember::Absent ? 0
-        : r == Remember::R0 ? REMEMBERED_0
-        : r == Remember::R1 ? REMEMBERED_1
-                            : REMEMBERED_MASK;
+        : r == Remember::R0 ? ZPointerRemembered0
+        : r == Remember::R1 ? ZPointerRemembered1
+                            : ZPointerRememberedMask;
 }
 
 // zAddress test's valid_value: any non-zero address payload. LogMinObjectAlignment there; here the
@@ -306,7 +306,7 @@ GC_TEST(ColourIsChecks, ExportedLoadGoodIsCurrentOneHotComplement)
     const uintptr_t loadBad = static_cast<uintptr_t>(::g_cjLoadBadMask);
     GC_EXPECT_NE(loadGood, uintptr_t(0));
     GC_EXPECT_EQ(loadGood & (loadGood - 1), uintptr_t(0));
-    GC_EXPECT_EQ(loadGood, REMAP_COLOUR_MASK & ~loadBad);
+    GC_EXPECT_EQ(loadGood, ZPointerRemappedMask & ~loadBad);
     GC_EXPECT_EQ(loadGood & loadBad, uintptr_t(0));
 }
 
@@ -323,7 +323,7 @@ GC_TEST(ColourIsChecks, RemapPairIsABijectionWithTheFourColours)
     for (YoungRemap y : ys) {
         for (OldRemap o : os) {
             const uintptr_t bit = RemapBitFor(y, o);
-            GC_EXPECT_EQ(bit & REMAP_COLOUR_MASK, bit); // inside the remap field
+            GC_EXPECT_EQ(bit & ZPointerRemappedMask, bit); // inside the remap field
             GC_EXPECT_EQ(bit & (bit - 1), uintptr_t(0)); // exactly one bit
             GC_EXPECT_EQ(seen & bit, uintptr_t(0));      // not already used by another pair
             seen |= bit;
@@ -331,7 +331,7 @@ GC_TEST(ColourIsChecks, RemapPairIsABijectionWithTheFourColours)
         }
     }
     GC_EXPECT_EQ(count, 4u);
-    GC_EXPECT_EQ(seen, REMAP_COLOUR_MASK);
+    GC_EXPECT_EQ(seen, ZPointerRemappedMask);
 
     // And the product's own arithmetic agrees: intersection of the two masks is the handed-out
     // colour, at the starting epoch and after each kind of flip.
@@ -353,12 +353,12 @@ GC_TEST(ColourIsChecks, RemapPairIsABijectionWithTheFourColours)
 static void CheckStoreGoodComplement(const Epoch& epoch)
 {
     const BadMasks m = epoch.Masks();
-    GC_EXPECT_EQ(m.storeGood ^ STORE_METADATA_MASK, m.storeBad);
+    GC_EXPECT_EQ(m.storeGood ^ ZPointerStoreMetadataMask, m.storeBad);
     GC_EXPECT_EQ(m.storeGood, m.remapColour | epoch.e.markedYoung | epoch.e.markedOld | epoch.e.remembered);
 
     // Fully specified one-hot-per-family colours only (ZGC heap words never omit a
     // family). On that cube (v & StoreBad)==0 iff v carries every StoreGood bit,
-    // because StoreBad = StoreGood ^ STORE_METADATA_MASK (zAddress.cpp:87).
+    // because StoreBad = StoreGood ^ ZPointerStoreMetadataMask (zAddress.cpp:87).
     const YoungRemap ys[] = { YoungRemap::Y0, YoungRemap::Y1 };
     const OldRemap os[] = { OldRemap::O0, OldRemap::O1 };
     const YoungMark mys[] = { YoungMark::M0, YoungMark::M1 };
@@ -400,7 +400,7 @@ GC_TEST(ColourIsChecks, StoreGoodComplementAtTheStartingEpoch)
     // Live exported pair must stay complementary even if InitCJRuntime already
     // flipped past the starting epoch (zAddress.cpp:87).
     GC_EXPECT_NE(::g_cjStoreGoodMask, 0ul);
-    GC_EXPECT_EQ(::g_cjStoreGoodMask ^ static_cast<unsigned long>(STORE_METADATA_MASK), ::g_cjStoreBadMask);
+    GC_EXPECT_EQ(::g_cjStoreGoodMask ^ static_cast<unsigned long>(ZPointerStoreMetadataMask), ::g_cjStoreBadMask);
 }
 
 GC_TEST(ColourIsChecks, StoreGoodComplementAcrossAnIrregularFlipSchedule)
@@ -458,21 +458,21 @@ GC_TEST(ColourIsChecks, BarrierColouredNullAndDoubleRemembered)
 {
     const EpochColours epoch{ ZPointerRemapped10 | ZPointerRemapped00,
                               ZPointerRemapped01 | ZPointerRemapped00,
-                              MARKED_YOUNG_0, MARKED_OLD_0, REMEMBERED_0 };
+                              ZPointerMarkedYoung0, ZPointerMarkedOld0, ZPointerRemembered0 };
     const BadMasks masks = ComputeBadMasks(epoch);
-    const uintptr_t good = ZPointerRemapped00 | MARKED_YOUNG_0 | MARKED_OLD_0 | REMEMBERED_0;
+    const uintptr_t good = ZPointerRemapped00 | ZPointerMarkedYoung0 | ZPointerMarkedOld0 | ZPointerRemembered0;
     const uintptr_t colouredNull = MakeStoreGoodSlotWord(0, good);
     GC_EXPECT_EQ(ClassifySlotWord(colouredNull), SlotWordVerdict::kColoured);
     GC_EXPECT_FALSE(ColourPredicates::has_address(colouredNull));
     GC_EXPECT_TRUE(ColourPredicates::is_store_good(colouredNull, masks.loadBad, masks.storeBad));
     GC_EXPECT_FALSE(ColourPredicates::is_store_good(0, masks.loadBad, masks.storeBad));
 
-    const uintptr_t loadHealed = MakeStoreGoodSlotWord(0x1000, good) | REMEMBERED_MASK;
+    const uintptr_t loadHealed = MakeStoreGoodSlotWord(0x1000, good) | ZPointerRememberedMask;
     GC_EXPECT_EQ(ClassifySlotWord(loadHealed), SlotWordVerdict::kColoured);
     GC_EXPECT_TRUE(ColourPredicates::is_load_good(loadHealed, masks.loadBad));
     GC_EXPECT_TRUE(ColourPredicates::is_mark_good(loadHealed, masks.loadBad, masks.markBad));
     GC_EXPECT_FALSE(ColourPredicates::is_store_good(loadHealed, masks.loadBad, masks.storeBad));
-    GC_EXPECT_EQ(ClassifySlotWord(loadHealed & ~REMEMBERED_MASK), SlotWordVerdict::kIllegal);
+    GC_EXPECT_EQ(ClassifySlotWord(loadHealed & ~ZPointerRememberedMask), SlotWordVerdict::kIllegal);
 }
 
 // ZBarrier::self_heal CAS convergence and null policy (zBarrier.inline.hpp:72-110).
@@ -481,10 +481,10 @@ GC_TEST(ColourIsChecks, BarrierSelfHealUpgradeAndCompetingStore)
 {
     const uintptr_t good = ::g_cjStoreGoodMask;
     const uintptr_t remapped = ::g_cjLoadGoodMask;
-    const uintptr_t staleRemap = (REMAP_COLOUR_MASK ^ remapped) &
-                                 (~(REMAP_COLOUR_MASK ^ remapped) + 1);
-    const zpointer old = to_zpointer(0x1000 | (good & ~REMAP_COLOUR_MASK) | staleRemap);
-    const zpointer healed = to_zpointer(0x1000 | good | REMEMBERED_MASK);
+    const uintptr_t staleRemap = (ZPointerRemappedMask ^ remapped) &
+                                 (~(ZPointerRemappedMask ^ remapped) + 1);
+    const zpointer old = to_zpointer(0x1000 | (good & ~ZPointerRemappedMask) | staleRemap);
+    const zpointer healed = to_zpointer(0x1000 | good | ZPointerRememberedMask);
     auto fast = [](zpointer word) {
         return ColourPredicates::is_load_good_or_null(raw(word), ::g_cjLoadBadMask);
     };
@@ -498,7 +498,7 @@ GC_TEST(ColourIsChecks, BarrierSelfHealUpgradeAndCompetingStore)
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(writer));
 
     slot.StoreColoured(old);
-    const zpointer colouredNull = to_zpointer(good | REMEMBERED_MASK);
+    const zpointer colouredNull = to_zpointer(good | ZPointerRememberedMask);
     GC_EXPECT_FALSE(ZgcSelfHeal(slot, old, colouredNull, fast, HealSite::BarrierReadReference));
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(old));
 }

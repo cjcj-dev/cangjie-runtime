@@ -64,7 +64,7 @@ void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, Remembe
     const uintptr_t colors = ::g_cjStoreGoodMask;
     // zStoreBarrierBuffer.cpp:199-222: at a phase change, only stores made
     // during this old mark and through an old location belong to the snapshot.
-    const bool storedDuringOldMark = (lastProcessedColor & MARKED_OLD_MASK) == (colors & MARKED_OLD_MASK);
+    const bool storedDuringOldMark = (lastProcessedColor & ZPointerMarkedOldMask) == (colors & ZPointerMarkedOldMask);
     if (!is_null(entry.prev) && (!phaseChanged || (oldSlot && oldMark && storedDuringOldMark))) {
         RefField<> previous(entry.prev);
         const ForwardingProvenance provenance{
@@ -85,7 +85,7 @@ void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, Remembe
     if (oldSlot) {
         // zStoreBarrierBuffer.cpp:161-185: a young flip makes the previous
         // remembered face read-only; scan the current field into young mark.
-        if (phaseChanged && (lastProcessedColor & MARKED_YOUNG_MASK) != (colors & MARKED_YOUNG_MASK)) {
+        if (phaseChanged && (lastProcessedColor & ZPointerMarkedYoungMask) != (colors & ZPointerMarkedYoungMask)) {
             RefField<> field(HeapSlotAt<>(remapped.p));
             const ForwardingProvenance provenance{
                 ForwardingHolderKind::StoreBuffer, entry.pBase, reinterpret_cast<const void*>(remapped.p)

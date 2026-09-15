@@ -126,7 +126,7 @@ GC_TEST(RelocateInterior, MinorFixPublishesCurrentStoreGoodColour)
     // Change only the remembered epoch.  The word remains load/mark-good, so
     // ResolveMinorReference returns the payload without rewriting the slot;
     // the interior StoreGood publication below is therefore the sole repair.
-    const uintptr_t initial = desired ^ REMEMBERED_MASK;
+    const uintptr_t initial = desired ^ ZPointerRememberedMask;
     field->StoreColoured(to_zpointer(initial));
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -211,7 +211,7 @@ private:
 // and store-good slots intentionally do not. Keep all other colour families good.
 zpointer PreviousRememberedPointer(BaseObject* object)
 {
-    return to_zpointer(raw(GcUnit::StoreGoodPointer(object)) ^ REMEMBERED_MASK);
+    return to_zpointer(raw(GcUnit::StoreGoodPointer(object)) ^ ZPointerRememberedMask);
 }
 
 bool ExpectRecorded(RememberedSet& rs, MAddress fieldAddr)

@@ -35,9 +35,9 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
             ::g_cjStoreBadMask = bad;
         }
     } masks;
-    ::g_cjMarkBadMask ^= MARKED_YOUNG_MASK;
-    ::g_cjStoreGoodMask ^= MARKED_YOUNG_MASK;
-    ::g_cjStoreBadMask ^= MARKED_YOUNG_MASK;
+    ::g_cjMarkBadMask ^= ZPointerMarkedYoungMask;
+    ::g_cjStoreGoodMask ^= ZPointerMarkedYoungMask;
+    ::g_cjStoreBadMask ^= ZPointerMarkedYoungMask;
     processor.RegisterFinalizers(local);
     size_t seen = 0;
     processor.VisitFinalizers([&](NativeSlot& slot) {
