@@ -58,7 +58,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
         TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin);
     }
 #endif
-    flip_young_mark_start();
+    collector.flip_young_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
@@ -128,7 +128,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
         TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin);
     }
 #endif
-    flip_old_mark_start();
+    collector.flip_old_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
@@ -208,7 +208,7 @@ void WCollector::DoYoungGarbageCollection()
     collectorResources.NoteYoungMarkStart(youngCycle.YoungType());
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
-    const YoungCollectionStats stats = youngCycle.StartYoungMark(*this);
+    YoungCollectionStats stats = youngCycle.StartYoungMark(*this);
     if (youngCycle.IsMajorRoots()) {
         oldCycle.Begin(oldCycle.Snapshot().requestIndex);
         oldCycle.StartOldMark(*this);

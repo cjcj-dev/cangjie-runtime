@@ -4,7 +4,6 @@
 #define MRT_GENERATION_SEQUENCE_FIXTURE 1
 #include "Heap/z/zGeneration.hpp"
 #undef MRT_GENERATION_SEQUENCE_FIXTURE
-#include "Heap/z/zRememberedSet.hpp"
 namespace MapleRuntime {
 struct GenerationSequenceFixture {
     static void Advance(GenerationCycle& cycle)
@@ -14,7 +13,8 @@ struct GenerationSequenceFixture {
         CHECK(cycle.sequence != UINT64_MAX);
         ++cycle.sequence;
     }
-    static void AdvanceYoung(GenerationCycle& cycle, RememberedSet& remembered)
+    template<class Remembered>
+    static void AdvanceYoung(GenerationCycle& cycle, Remembered& remembered)
     {
         Advance(cycle);
         remembered.FlipForMinor();
