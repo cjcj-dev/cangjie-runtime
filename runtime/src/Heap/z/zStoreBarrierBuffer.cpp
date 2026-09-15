@@ -38,7 +38,7 @@ MAddress RemapPendingField(const StoreBarrierEntry& entry, uintptr_t color)
         entry.pBase,
         reinterpret_cast<const void*>(entry.p)
     };
-    RefField<> coloredBase(to_zpointer(reinterpret_cast<uintptr_t>(entry.pBase) | color));
+    RefField<> coloredBase(ZAddress::color(from_object(entry.pBase), color));
     BaseObject* const remappedBase =
         Heap::GetHeap().GetCollector().make_load_good(coloredBase, provenance);
     CHECK_DETAIL(remappedBase != nullptr && Heap::IsHeapAddress(remappedBase),

@@ -883,9 +883,9 @@ static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
         return false;
     }
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    RefField<> value(to_zpointer(raw(observed)));
-    const ForwardingProvenance provenance{ForwardingHolderKind::StackSlot, nullptr, &root};
-    BaseObject* current = collector.make_load_good(value, provenance);
+    // The eager relocation handshake makes saved uncolored roots current
+    // before this mark pass (ZUncoloredRoot::make_load_good's current-color arm).
+    BaseObject* current = object;
     collector.PublishThreadRoot(current, young, follow);
     HealRoot(root, from_object(current), HealSite::MutatorMarkRoot);
     return true;

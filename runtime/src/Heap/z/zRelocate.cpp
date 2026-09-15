@@ -232,8 +232,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
 BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generation)
 {
     zaddress_unsafe observed = root.LoadPlain();
-    HeapSlot<> observedBits(to_zpointer(raw(observed)));
-    BaseObject* oldObj = to_object(observedBits.GetTargetObject());
+    BaseObject* oldObj = to_object(safe(observed));
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
     // Static / RO slots (e.g. .data.rel.ro under GNU_RELRO) hold non-heap objects that
     // are never evacuated. Keep their existing plain value and skip write-back.
@@ -632,8 +631,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
 {
     (void)stw;
     zaddress_unsafe observed = root.LoadPlain();
-    HeapSlot<> observedBits(to_zpointer(raw(observed)));
-    BaseObject* from = to_object(observedBits.GetTargetObject());
+    BaseObject* from = to_object(safe(observed));
     if (from == nullptr || !Heap::IsHeapAddress(from)) {
         return from;
     }
@@ -647,10 +645,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
     CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    const HealSite site = IsOldPointer(observedBits)
-        ? HealSite::WCollectorResolveRootOldForward
-        : HealSite::WCollectorResolveRootLoadGoodForward;
-    HealRootWriteback(root, resolved, site);
+    HealRootWriteback(root, resolved, HealSite::WCollectorResolveRootLoadGoodForward);
     return resolved;
 }
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
@@ -769,14 +764,11 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
 bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     MAddress oldValue = raw(root.LoadPlain());
-    HeapSlot<> observedBits(to_zpointer(oldValue));
-    BaseObject* observed = to_object(observedBits.GetTargetObject());
     BaseObject* target = ResolveMinorReference(root, stw);
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
-    HeapSlot<> oldBits(to_zpointer(oldValue));
-    BaseObject* oldObj = to_object(oldBits.GetTargetObject());
+    BaseObject* oldObj = to_object(to_zaddress(oldValue));
     // resolveto: Resolve already remapped FROM→TO. Do not Admit the to-address
     // against the from-offset bitmap (offpast same-target probe: sameObj=0).
     RegionInfo* targetRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
