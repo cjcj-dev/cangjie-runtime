@@ -8,6 +8,7 @@
 #ifndef MRT_MARRAY_INLINE_H
 #define MRT_MARRAY_INLINE_H
 
+#include "ObjectModel/Field.inline.h"
 #include "Inspector/CjAllocData.h"
 // model interface
 #include "ExceptionManager.h"

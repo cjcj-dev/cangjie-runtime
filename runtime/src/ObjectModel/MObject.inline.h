@@ -8,6 +8,7 @@
 #define MRT_MOBJECT_INLINE_H
 
 // language dependence
+#include "ObjectModel/Field.inline.h"
 #include <type_traits>
 
 // cross module dependence
