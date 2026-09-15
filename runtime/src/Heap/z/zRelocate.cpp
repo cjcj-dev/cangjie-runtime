@@ -244,7 +244,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
         const MAddress mappedAddr = ForwardingTable::FindTo(reinterpret_cast<MAddress>(oldObj), generation);
         if (mappedAddr != 0) {
             BaseObject* mapped = reinterpret_cast<BaseObject*>(mappedAddr);
-            HealRootWriteback(root, mapped, HealSite::WCollectorForwardRawGhost);
+            HealRoot(root, from_object(mapped), HealSite::WCollectorForwardRawGhost);
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
             return mapped;
         }
@@ -262,11 +262,11 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
                 reinterpret_cast<uintptr_t>(&root),
                 ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
         }
-        HealRootWriteback(root, toVersion, HealSite::WCollectorForwardRawGhost);
+        HealRoot(root, from_object(toVersion), HealSite::WCollectorForwardRawGhost);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
     } else {
-        HealRootWriteback(root, oldObj, HealSite::WCollectorNormalizeRawRoot);
+        HealRoot(root, from_object(oldObj), HealSite::WCollectorNormalizeRawRoot);
     }
 
     return oldObj;
@@ -645,7 +645,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
     CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    HealRootWriteback(root, resolved, HealSite::WCollectorResolveRootLoadGoodForward);
+    HealRoot(root, from_object(resolved), HealSite::WCollectorResolveRootLoadGoodForward);
     return resolved;
 }
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
@@ -801,7 +801,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             "WCollector::FixMinorEvacuatedSlot", provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
-            HealRootWriteback(root, viaTable, HealSite::WCollectorFixRootForwarded);
+            HealRoot(root, from_object(viaTable), HealSite::WCollectorFixRootForwarded);
             return true;
         }
         Collector::FailClosedLoad(
@@ -813,7 +813,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
         return false;
     }
-    HealRootWriteback(root, current, HealSite::WCollectorFixRootForwarded);
+    HealRoot(root, from_object(current), HealSite::WCollectorFixRootForwarded);
     return true;
 }
 

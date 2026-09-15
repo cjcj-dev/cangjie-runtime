@@ -342,11 +342,6 @@ private:
         zaddress_unsafe unsafeDesired = to_zaddress_unsafe(raw(desired));
         return __atomic_compare_exchange(&rootValue, &expected, &unsafeDesired, false, succOrder, failOrder);
     }
-    // PLAIN_ROOTS=0 escape hatch; private to WCollector so ordinary root writers stay plain-only.
-    void StoreCollectorRollback(zpointer value, std::memory_order order) {
-        zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
-        __atomic_store(&rootValue, &unsafeValue, order);
-    }
     zaddress_unsafe rootValue;
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);

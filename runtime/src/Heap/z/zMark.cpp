@@ -172,11 +172,8 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
         return;
     }
 
-    // RootSlot contains an uncoloured address. Constructing a local HeapSlot is
-    // only a bit-layout decoder for legacy coloured roots at external ABI edges;
-    // the root storage itself is never exposed as a HeapSlot.
-    HeapSlot<> observedBits(to_zpointer(raw(observed)));
-    BaseObject* root = to_object(observedBits.GetTargetObject());
+    // ZUncoloredRoot supplies an address, never a colored HeapSlot word.
+    BaseObject* root = to_object(safe(observed));
     if (root == nullptr || !Heap::IsHeapAddress(root)) {
         return;
     }
@@ -189,7 +186,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
         }
     }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-    HealRootWriteback(ref, root, HealSite::WCollectorEnumRawRoot);
+    HealRoot(ref, from_object(root), HealSite::WCollectorEnumRawRoot);
     rootSet.push_back(root);
 }
 

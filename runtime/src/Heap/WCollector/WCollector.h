@@ -679,20 +679,6 @@ protected:
         return GetAndTryTagRefField(target);
     }
 
-    RefField<> RootSlotWriteback(BaseObject* target, const RootSlot& /*slot*/) const
-    {
-        return RefField<>(target);
-    }
-
-    bool HealRootWriteback(RootSlot& root, BaseObject* target, HealSite site,
-                           std::memory_order order = std::memory_order_relaxed) const
-    {
-        RefField<> desired = RootSlotWriteback(target, root);
-        root.StoreCollectorRollback(desired.GetFieldValue(), order);
-        (void)site;
-        return true;
-    }
-
     void CollectLargeGarbage()
     {
         MRT_PHASE_TIMER(ZStatPhases::PCollectLargeGarbage);
