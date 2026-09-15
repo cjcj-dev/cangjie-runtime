@@ -43,6 +43,7 @@ void PrepareIsolatedGcUnitProcess()
 
 int main(int argc, char** argv)
 {
+    MapleRuntime::ZGlobalsPointers::initialize();
     constexpr const char* filterPrefix = "--gtest_filter=";
     constexpr const char* listTests = "--gtest_list_tests";
     bool isolatedTest = false;

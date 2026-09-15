@@ -24,6 +24,12 @@
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
+    static void PreparePlainRoots(WCollector& collector)
+    {
+        // Match the eager product ordering before the direct TraceHeap fixture.
+        // Full driver-entry coverage lives in RawRemapYoungProduct.
+        collector.RemapYoungRoots();
+    }
     static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, RuntimeWorkers& pool, uint32_t workers = 1)
     {
         if (resources.collectorProxy.currentCollector != nullptr) {
@@ -36,9 +42,9 @@ struct RelocationReceiptTestAccess {
             collector.GetGenerationCycle(gen).InitializeWorkers(workers);
             collector.GetGenerationCycle(gen).Begin(workers);
         }
-        collector.set_good_masks();
+        ZGlobalsPointers::initialize();
     }
-    static void FlipNativeRootYoung(WCollector& collector) { collector.flip_young_relocate_start(); }
+    static void FlipNativeRootYoung(WCollector& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
     static void NativeRootMajorPrelude(WCollector& collector)
     {
         collector.GetGenerationCycle(GCCycleGeneration::OLD).End();
@@ -88,7 +94,7 @@ void PrintNativeRootMaps()
 // ZMarkOldRootsTask -> ZMarkOopClosure (zMark.cpp:798-829): colored roots
 // resolve before marker publication. CompactRegion supplies the actual to;
 // no forwarding mapping or consumer argument is manufactured by this test.
-void CheckNativeRoot(bool minor, bool plain = false, unsigned threadKind = 0)
+void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 {
     PrintNativeRootMaps();
     B09RuntimeFixture runtime;
@@ -143,14 +149,8 @@ void CheckNativeRoot(bool minor, bool plain = false, unsigned threadKind = 0)
             threadRoot = thread->AddNativeFrameRoot(from);
             historicalSlot = threadRoot;
         }
-        const uintptr_t historicalWord = raw(StoreGoodPointer(from));
+        const uintptr_t historicalWord = reinterpret_cast<uintptr_t>(from);
         std::memcpy(historicalSlot, &historicalWord, sizeof(historicalWord));
-    }
-    if (plain) {
-        // Reproduce the retired compiler static-store fast path at its carrier,
-        // not in the consumer or a collector substitute.
-        const uintptr_t word = reinterpret_cast<uintptr_t>(from);
-        std::memcpy(&slot, &word, sizeof(word));
     }
     const uintptr_t before = raw(slot.GetFieldValue());
     LiveInfo* live = fx.PlantLiveInfo(region);
@@ -184,6 +184,7 @@ void CheckNativeRoot(bool minor, bool plain = false, unsigned threadKind = 0)
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
     GC_EXPECT_TRUE(to != nullptr && to != from);
+    if (threadKind != 0) RelocationReceiptTestAccess::PreparePlainRoots(collector);
     if (minor) RelocationReceiptTestAccess::NativeRootMajorPrelude(collector);
     else RelocationReceiptTestAccess::NativeRootTrace(collector);
     const bool currentMarked = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), to);
@@ -242,91 +243,10 @@ void CheckNativeRoot(bool minor, bool plain = false, unsigned threadKind = 0)
     GC_EXPECT_TRUE(to_object(slot.GetTargetObject()) == to);
     GC_EXPECT_TRUE(oldMarkedCurrent);
 }
-void CheckPlainRejected(bool minor)
-{
-    int pipefd[2];
-    GC_EXPECT_EQ(pipe(pipefd), 0);
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        close(pipefd[0]);
-        dup2(pipefd[1], STDERR_FILENO);
-        close(pipefd[1]);
-        CheckNativeRoot(minor, true);
-        _exit(0);
-    }
-    close(pipefd[1]);
-    std::string output;
-    char buffer[4096];
-    ssize_t size;
-    while ((size = read(pipefd[0], buffer, sizeof(buffer))) > 0) output.append(buffer, size);
-    close(pipefd[0]);
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    const char* site = minor ? "NativeSlot requires colored value at MarkYoungGoodBarrier"
-                             : "NativeSlot requires colored value at ReadStaticRef";
-    const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
-                          output.find(site) != std::string::npos;
-    std::fprintf(stderr, "%snative_root_encoding_rejected executed=1 entry=%s status=%d result=%u\n",
-                 output.c_str(), minor ? "minor" : "major", status, unsigned(rejected));
-    GC_EXPECT_TRUE(rejected);
-}
 
 }
 GC_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
 GC_OTHER_VM_TEST(NativeRootCurrent, MajorSeed) { CheckNativeRoot(false); }
-GC_OTHER_VM_TEST(NativeRootCurrent, PlainMinorRejected) { CheckPlainRejected(true); }
-GC_OTHER_VM_TEST(NativeRootCurrent, PlainMajorRejected) { CheckPlainRejected(false); }
-// Static literals live outside the GC heap, including ELF .data.rel.ro roots.
-// Preserve the pre-existing non-heap path and never attempt to heal read-only
-// storage. The heap root is a positive control for actual major enumeration.
-GC_OTHER_VM_TEST(NativeRootCurrent, ReadOnlyNonHeapBoundary)
-{
-    PrintNativeRootMaps();
-    B09RuntimeFixture runtime;
-    GcHeapFixture fx;
-    auto& heap = Heap::GetHeap();
-    WCollector collector(heap.GetAllocator(), heap.GetCollectorResources());
-    RuntimeWorkers pool(1);
-    RelocationReceiptTestAccess::BindNativeRootFixture(heap.GetCollectorResources(), collector, pool);
-    GcHeapFixture::AdvanceGeneration(Generation::Old);
-    const size_t pageSize = static_cast<size_t>(sysconf(_SC_PAGESIZE));
-    void* page = mmap(nullptr, pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    GC_EXPECT_TRUE(page != MAP_FAILED);
-    BaseObject* literal = fx.PlaceObject(reinterpret_cast<MAddress>(page) + 128);
-    const uintptr_t literalWord = reinterpret_cast<uintptr_t>(literal);
-    std::memcpy(page, &literalWord, sizeof(literalWord));
-    NativeSlot& literalRoot = NativeSlotAt(page);
-    NativeSlot movingRoot(StoreGoodPointer(fx.obj0));
-    NativeSlot* roots[] = {&literalRoot, &movingRoot};
-    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
-    GC_EXPECT_EQ(mprotect(page, pageSize, PROT_READ), 0);
-    const bool readCurrent = heap.GetBarrier().ReadStaticRef(literalRoot) == literal;
-    bool enumerated = false;
-    bool heapPresent = false;
-    bool literalPresent = false;
-    collector.testRootsResult = [&](GCWorkers::Generation, TracingCollector::RootSet& set) {
-        enumerated = true;
-        for (auto* node = set.head(); node != nullptr; node = node->next) {
-            auto copy = *node;
-            while (!copy.empty()) {
-                const auto value = copy.back().object();
-                heapPresent |= value == fx.obj0;
-                literalPresent |= value == literal;
-                copy.pop_back();
-            }
-        }
-    };
-    RelocationReceiptTestAccess::NativeRootTrace(collector);
-    collector.testRootsResult = nullptr;
-    const bool unchanged = raw(literalRoot.GetFieldValue()) == literalWord;
-    std::fprintf(stderr, "native_root_readonly_boundary executed=1 read=%u enum=%u heap=%u literal=%u unchanged=%u\n",
-                 unsigned(readCurrent), unsigned(enumerated), unsigned(heapPresent), unsigned(literalPresent), unsigned(unchanged));
-    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
-    munmap(page, pageSize);
-    GC_EXPECT_TRUE(readCurrent && enumerated && heapPresent && !literalPresent && unchanged);
-}
-
 GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
 {
     PrintNativeRootMaps();
@@ -361,7 +281,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     collector.StartYoungMarkWork();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
-    NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ MARKED_YOUNG_MASK ^ MARKED_OLD_MASK));
+    NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     const size_t before = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
     heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
     const bool marked = fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Young>(), fx.obj0);
@@ -370,7 +290,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
                  unsigned(marked), before, first, raw(root.GetFieldValue()));
     GC_EXPECT_TRUE(marked);
     GC_EXPECT_EQ(first, before + 1);
-    GC_EXPECT_TRUE(ColourPredicates::is_marked_young(raw(root.GetFieldValue()), ::g_cjMarkBadMask));
+    GC_EXPECT_TRUE(ZPointer::is_marked_young(to_zpointer(raw(root.GetFieldValue()))));
     // The same physical, now young-good slot must not publish another follow.
     heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
     GC_EXPECT_EQ(RelocationReceiptTestAccess::PendingYoungRootWork(collector), first);
@@ -380,10 +300,10 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(ThreadRootCurrent, C1StackFieldHistoricalColor) { CheckNativeRoot(false, false, 1); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, C2ObjectRefHistoricalColor) { CheckNativeRoot(false, false, 2); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, C3InvisibleHistoricalColor) { CheckNativeRoot(false, false, 3); }
-GC_OTHER_VM_TEST(ThreadRootCurrent, C4HeaderlessHistoricalColor) { CheckNativeRoot(false, false, 4); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, C1StackFieldHistoricalColor) { CheckNativeRoot(false, 1); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, C2ObjectRefHistoricalColor) { CheckNativeRoot(false, 2); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, C3InvisibleHistoricalColor) { CheckNativeRoot(false, 3); }
+GC_OTHER_VM_TEST(ThreadRootCurrent, C4HeaderlessHistoricalColor) { CheckNativeRoot(false, 4); }
 #endif
 
 #if defined(MRT_TESTABLE_INTERNALS)

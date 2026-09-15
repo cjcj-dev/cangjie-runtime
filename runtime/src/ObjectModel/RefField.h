@@ -44,7 +44,6 @@ enum class HealSite : uint16_t {
     MutatorPreForwardHeaderlessRecord,
     MutatorPreForwardRoot,
     MutatorPreForwardStackField,
-    MutatorStripRootColour,
     MutatorMarkRoot,
     WCollectorEnumRawRoot,
     WCollectorEnumRefFieldRoot,
@@ -59,7 +58,6 @@ enum class HealSite : uint16_t {
     WCollectorNormalizeRawRoot,
     WCollectorRemapYoungRoots,
     WCollectorResolveRootLoadGoodForward,
-    WCollectorResolveRootOldForward,
     WCollectorTraceRefField,
     WCollectorTryUntagRefField,
     WCollectorTryUpdateRefField,
@@ -192,11 +190,14 @@ public:
     // 若要当对象指针，经 uncolor_bits(GetFieldValue()) 或 GetTargetObject()。
     MAddress GetAddress() const
     {
-#ifdef __arm__
-        return address << ARM32_MARKED_FLAG_BITS;
-#else
-        return address;
-#endif
+        const zpointer pointer = static_cast<zpointer>(fieldVal);
+        if (is_null_any(pointer)) {
+            return raw(ZPointer::uncolor(pointer));
+        }
+        if (ZPointer::is_store_bad(pointer)) {
+            return raw(ZPointer::uncolor_unsafe(pointer));
+        }
+        return raw(ZPointer::uncolor_store_good(pointer));
     }
 
     ~HeapSlot() = default;
@@ -204,22 +205,8 @@ public:
     // 凭什么: zpointer 就是槽里的带色位模式，与 MAddress 同宽。
     explicit HeapSlot(zpointer val) : fieldVal(static_cast<RefFieldValue>(raw(val))) {}
     HeapSlot(const HeapSlot& ref) : fieldVal(ref.fieldVal) {}
-#ifdef __arm__
     HeapSlot(const BaseObject* obj, MAddress colour)
-    {
-        (void)colour;
-        address = reinterpret_cast<MAddress>(obj) >> ARM32_MARKED_FLAG_BITS;
-    }
-#else
-    HeapSlot(const BaseObject* obj, MAddress colour)
-        : address(reinterpret_cast<MAddress>(obj)),
-          remapColour((colour >> REMAP_COLOUR_SHIFT) & ((MAddress(1) << REMAP_COLOUR_BITS) - 1)),
-          markedYoung((colour >> MARKED_YOUNG_SHIFT) & ((MAddress(1) << MARKED_YOUNG_BITS) - 1)),
-          markedOld((colour >> MARKED_OLD_SHIFT) & ((MAddress(1) << MARKED_OLD_BITS) - 1)),
-          padding((colour >> REMEMBERED_SHIFT) & ((MAddress(1) << TAG_ID_PADDING_BITS) - 1))
-    {
-    }
-#endif
+        : fieldVal(raw(ZAddress::color(from_object(obj), colour))) {}
 
     HeapSlot(HeapSlot&& ref) : fieldVal(ref.fieldVal) {}
     HeapSlot() = delete;
@@ -232,46 +219,11 @@ private:
     // null install) may mint it. Outside code that needs a plain value must say
     // so via zpointer/MAddress or the colour-carrying constructors above —
     // RefField<>(obj) as CompareExchange desired is a compile error.
-    explicit HeapSlot(const BaseObject* obj) : fieldVal(0)
-    {
-#ifdef __arm__
-        address = reinterpret_cast<MAddress>(obj) >> ARM32_MARKED_FLAG_BITS;
-#else
-        address = reinterpret_cast<MAddress>(obj);
-#endif
-    }
+    explicit HeapSlot(const BaseObject* obj)
+        : fieldVal(raw(ZAddress::store_good(from_object(obj)))) {}
     friend class WCollector;
-#ifdef __arm__
-    using RefFieldValue = U32;
-#else
     using RefFieldValue = MAddress;
-#endif
-
-#ifdef __arm__
-    union {
-        struct {
-            MAddress address : 30;
-            MAddress reserved : 2;
-        };
-        RefFieldValue fieldVal;
-    };
-#else
-    union {
-        struct {
-            MAddress address : 48;
-            // ZGC layout (zAddress.hpp:60-128): remap starts at bit 48. No isTagged, no tagID.
-            MAddress remapColour : REMAP_COLOUR_BITS;
-            MAddress markedYoung : MARKED_YOUNG_BITS;
-            MAddress markedOld : MARKED_OLD_BITS;
-            MAddress padding : TAG_ID_PADDING_BITS;
-        };
-        RefFieldValue fieldVal;
-    };
-    static_assert(48 + REMAP_COLOUR_BITS + MARKED_YOUNG_BITS + MARKED_OLD_BITS + TAG_ID_PADDING_BITS == 64,
-                  "HeapSlot colour layout must fill 64 bits");
-    static_assert(TAGGED_BITS_MASK == 0, "pointer no longer carries isTagged/tagID");
-    static_assert(TAG_ID_COUNT > 1 && TAG_ID_COUNT <= (1u << TAG_ID_BITS), "TAG_ID_COUNT out of bit width");
-#endif
+    RefFieldValue fieldVal;
 };
 
 // The sole HeapSlot compare-exchange write.  Match ZBarrier::self_heal: a
@@ -298,10 +250,9 @@ inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr
 {
     // :73-79  Never heal with null since it interacts badly with reference processing.
     // ZGC's guard is `is_null_assert_load_good(heal_ptr) && !is_null_any(ptr)`; is_null_any
-    // tests the address bits rather than the whole word, and ColourPredicates::has_address
-    // (ColourPredicates.h:37-40) is that test.
-    if (allowNull == HealNull::Disallow && !ColourPredicates::has_address(raw(healPtr)) &&
-        ColourPredicates::has_address(static_cast<uintptr_t>(raw(ptr)))) {
+    // tests the address bits rather than the whole word.
+    if (allowNull == HealNull::Disallow && is_null_any(healPtr) &&
+        !is_null_any(ptr)) {
 
         return false;
     }
@@ -313,7 +264,7 @@ inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr
 
     CHECK_DETAIL(!ptrFastPath, "ZBarrier::self_heal input must be load-bad");
     CHECK_DETAIL(healFastPath, "ZBarrier::self_heal value must satisfy fast path");
-    CHECK(ColourPredicates::is_remapped(raw(healPtr), ::g_cjLoadBadMask));
+    CHECK(ZPointer::is_remapped(to_zpointer(raw(healPtr))));
 
     // :89
     for (;;) {
@@ -390,11 +341,6 @@ private:
     {
         zaddress_unsafe unsafeDesired = to_zaddress_unsafe(raw(desired));
         return __atomic_compare_exchange(&rootValue, &expected, &unsafeDesired, false, succOrder, failOrder);
-    }
-    // PLAIN_ROOTS=0 escape hatch; private to WCollector so ordinary root writers stay plain-only.
-    void StoreCollectorRollback(zpointer value, std::memory_order order) {
-        zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
-        __atomic_store(&rootValue, &unsafeValue, order);
     }
     zaddress_unsafe rootValue;
 
@@ -480,7 +426,7 @@ inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expec
 {
     MAddress address = reinterpret_cast<MAddress>(host) + offset;
     return HealSlot(field, expected,
-                    to_zpointer(MakeStoreGoodSlotWord(address, ::g_cjStoreGoodMask)), site);
+                    to_zpointer(raw(ZAddress::store_good(to_zaddress(address)))), site);
 }
 
 // When the host is unknown, preserve the interior payload but still publish a
@@ -492,7 +438,7 @@ inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expec
 {
     MAddress address = reinterpret_cast<MAddress>(interior);
     return HealSlot(field, expected,
-                    to_zpointer(MakeStoreGoodSlotWord(address, ::g_cjStoreGoodMask)), site);
+                    to_zpointer(raw(ZAddress::store_good(to_zaddress(address)))), site);
 }
 
 static_assert(sizeof(HeapSlot<>) == sizeof(MAddress), "HeapSlot must remain one machine word");

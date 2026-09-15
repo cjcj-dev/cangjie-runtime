@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zAddress.cpp b/runtime/src/Heap/z/zAddress.cpp
+index f3a626cdc..7485602e9 100644
+--- a/runtime/src/Heap/z/zAddress.cpp
++++ b/runtime/src/Heap/z/zAddress.cpp
+@@ -173,7 +173,7 @@ void ZGlobalsPointers::flip_young_relocate_start()
+ void ZGlobalsPointers::flip_old_mark_start()
+ {
+     ZPointerMarkedOld ^= ZPointerMarkedOld0 | ZPointerMarkedOld1;
+-    ZPointerFinalizable ^= ZPointerFinalizable0 | ZPointerFinalizable1;
++    // Controlled arm: omit the finalizable epoch flip.
+     set_good_masks();
+ }
+ void ZGlobalsPointers::flip_old_relocate_start()

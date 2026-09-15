@@ -27,12 +27,18 @@ template void HeapSlot<false>::StoreColoured(zpointer, std::memory_order);
 
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
 {
+#if defined(MRT_DEBUG) && MRT_DEBUG == 1
     if (LIKELY(!Heap::IsHeapAddress(slot))) {
         return;
     }
+    // ZGC zAddress.inline.hpp:423-427: slot validity is a debug assertion.
     const SlotWordVerdict verdict = ClassifySlotWord(newVal);
     CHECK_DETAIL(verdict != SlotWordVerdict::kIllegal,
                  "full-colour heap write rejected: slot=%p value=%#zx", slot, newVal);
+#else
+    (void)slot;
+    (void)newVal;
+#endif
 }
 
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }

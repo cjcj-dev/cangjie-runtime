@@ -201,10 +201,13 @@ GC_TEST(ZListAuthority, OwnerMustBeReleasedBeforeRegionLifeReset)
     GcHeapFixture fixture;
     const RegionLifeId oldLife = fixture.region0->GetRegionLifeId();
     ExpectListAbort([&]() {
+        // Product heap backing is shared across fork. Give the abort arm its
+        // own page so its deliberately retained owner cannot alter the parent.
+        GcHeapFixture childFixture;
         RegionList owner("zlist-life-owner");
-        owner.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-        RegionInfo::RetirePage(fixture.region0, [&]() {
-            fixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        owner.PrependRegion(childFixture.region0, RegionInfo::RegionType::FROM_REGION);
+        RegionInfo::RetirePage(childFixture.region0, [&]() {
+            childFixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         });
     });
 

@@ -131,7 +131,7 @@ struct RelocSelectResult {
 };
 
 // ZRelocationSetSelectorGroup::pre_filter_page (zRelocationSetSelector.inline.hpp:75-104)
-inline bool PreFilterRelocRegion(const RelocRegionDesc& page)
+inline bool PreFilterRelocRegion(const RelocRegionDesc& page, double fragmentationLimit)
 {
     // zGeneration.cpp:211-213: allocating pages are not relocatable candidates.
     if (page.allocating) {
@@ -145,7 +145,7 @@ inline bool PreFilterRelocRegion(const RelocRegionDesc& page)
     }
     const size_t garbage = page.capacity > page.liveBytes ? page.capacity - page.liveBytes : 0;
     const size_t pageFragLimit =
-        static_cast<size_t>(static_cast<double>(page.capacity) * (kRelocationFragmentationLimitPercent / 100.0));
+        static_cast<size_t>(static_cast<double>(page.capacity) * (fragmentationLimit / 100.0));
     return garbage > pageFragLimit;
 }
 
@@ -187,13 +187,13 @@ inline void SemiSortRelocationPages(std::vector<RelocRegionDesc>& pages)
 }
 
 // ZRelocationSetSelectorGroup::select_inner (zRelocationSetSelector.cpp:114-196)
-inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>& pages)
+inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>& pages, double fragmentationLimit)
 {
     RelocSelectResult out;
     std::vector<RelocRegionDesc> live;
     live.reserve(pages.size());
     for (const RelocRegionDesc& p : pages) {
-        if (PreFilterRelocRegion(p)) {
+        if (PreFilterRelocRegion(p, fragmentationLimit)) {
             live.push_back(p);
         }
     }
@@ -213,7 +213,7 @@ inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>&
         const double percentToOfFrom =
             (diffFrom != 0) ? (static_cast<double>(diffTo) / static_cast<double>(diffFrom) * 100.0) : 0.0;
         const double diffReclaimable = 100.0 - percentToOfFrom;
-        if (diffReclaimable > kRelocationFragmentationLimitPercent) {
+        if (diffReclaimable > fragmentationLimit) {
             selectedFrom = from;
             selectedTo = to;
         }

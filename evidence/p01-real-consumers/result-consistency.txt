@@ -1,0 +1,2 @@
+Log-derived check rc=0: all three complete samples and four filters match the expected assertion sets; green/restored six tested artifact hashes match.
+Positive control: cut has exactly hole.write and hole.read failures in complete/hole samples.

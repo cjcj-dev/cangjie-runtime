@@ -1,0 +1,38 @@
+Base 3140f19160afc759ae540e8cc21cb323905d8cc9
+
+Added
+- TrustP1.DerivedInteriorPlainIsDistinctFromObjectRoot
+- TrustP1.HeapSlotWritebackIsColoured
+- TrustP1.PlainWritebackIsEncodingIllegal
+- TrustP1.SlotClassifierRejectsPlainShape
+- ZAddress.AddressValidity
+- ZAddress.FinalizableFlip
+- ZAddress.GenerationFragmentationPolicy
+- ZAddress.IsChecks
+- ZAddress.UncolorRoundTrip
+
+Removed
+- ColourAddress.AddressAndColourMasksDisjoint
+- ColourAddress.BitFieldMarkBitsIndependentOfRemap
+- ColourAddress.BitFieldRemapOneHotMatrix
+- ColourAddress.LoadBadMaskRejectsStaleRemap
+- ColourAddress.PeelForRootWriteBackClearsHighBits
+- ColourAddress.RootSlotRejectsColouredValue
+- ColourAddress.StaleRemapAlwaysLoadBad
+- ColourAddress.UncolorRoundTripAllRemapOneHot
+- ColourAddress.UncolorRoundTripWithMarkBits
+- ColourAddress.YoungRootColorPreservesOldEpochAndFinalizable
+- ColourIsChecks.EveryColourAcrossAnIrregularFlipSchedule
+- ColourIsChecks.EveryColourAtTheStartingEpoch
+- ColourIsChecks.ExportedLoadGoodIsCurrentOneHotComplement
+- ColourIsChecks.PlainNonNullIsMaskGoodButEncodingIllegal
+- ColourIsChecks.RawNullIsGoodOrNullAndNeverBad
+- ColourIsChecks.RemapPairIsABijectionWithTheFourColours
+- ColourIsChecks.StoreGoodComplementAcrossAnIrregularFlipSchedule
+- ColourIsChecks.StoreGoodComplementAtTheStartingEpoch
+- DefectRegress.FieldPlaceColourMustStripAtAbi
+- ForwardingPublicationProduct.IdentityForwardStillWritesBackRootWord
+- TrustP1.ColouredWriteGuardRejectsPlainShape
+- TrustP1.DerivedInteriorPlainIsDistinctFromK1ObjectRoot
+- TrustP1.PlainUntagWritebackWouldBeCensusHit
+- TrustP1.TryUntagHeapSlotWritebackIsColoured

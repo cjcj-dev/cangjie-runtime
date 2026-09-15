@@ -83,7 +83,7 @@ public:
     }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>& field) const override { return IsLoadBad(field); }
-    bool IsCurrentPointer(RefField<>& field) const override { return is_load_good(field); }
+    bool IsCurrentPointer(RefField<>& field) const override { return ZPointer::is_load_good(field.GetFieldValue()); }
     bool IsFromObject(BaseObject* object) const override { return object == from && to != nullptr; }
     bool IsGhostFromObject(BaseObject*) const override { return false; }
     bool IsUnmovableFromObject(BaseObject*) const override { return false; }
@@ -100,7 +100,7 @@ public:
     }
     RefField<> GetAndTryTagRefField(BaseObject* object) const override
     {
-        const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
+        const uintptr_t remap = ZPointerRemapped;
         return RefField<>(GcUnit::ColouredPointer(object, remap));
     }
 
@@ -191,7 +191,7 @@ private:
 
 zpointer LoadBadPointer(BaseObject* object)
 {
-    const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
     const uintptr_t staleRemap = staleRemaps & (~staleRemaps + 1);
     GC_EXPECT_TRUE(staleRemap != 0);
     return GcUnit::ColouredPointer(object, staleRemap);
@@ -226,7 +226,7 @@ struct StoreFixture {
         newValue = heap.obj1;
         regionOld->SetRegionAllocPtr(reinterpret_cast<MAddress>(oldValue) + oldValue->GetSize());
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
-        field->StoreColoured(to_zpointer(raw(GcUnit::StoreGoodPointer(oldValue)) ^ MARKED_OLD_MASK));
+        field->StoreColoured(to_zpointer(raw(GcUnit::StoreGoodPointer(oldValue)) ^ ZPointerMarkedOldMask));
         remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
         (void)DrainReceipts(oldValue, newValue);
     }
@@ -315,12 +315,12 @@ GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
     std::fprintf(stderr, "DETAIL arm=atomic_colour before=%#zx after=%#zx returned=%p target=%p load_good=%u\n",
                  static_cast<size_t>(raw(before)), static_cast<size_t>(raw(terminal.GetFieldValue())), returned,
                  static_cast<void*>(to_object(terminal.GetTargetObject())),
-                 static_cast<unsigned>(collector.is_load_good(terminal)));
+                 static_cast<unsigned>(ZPointer::is_load_good((terminal).GetFieldValue())));
     std::fflush(stderr);
 
     GC_EXPECT_TRUE(returned == heap.obj0);
     GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == heap.obj0);
-    GC_EXPECT_TRUE(collector.is_load_good(terminal));
+    GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
 }
 
 GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
@@ -343,12 +343,12 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
     std::fprintf(stderr, "DETAIL arm=atomic_from_to before=%#zx after=%#zx returned=%p target=%p load_good=%u\n",
                  static_cast<size_t>(raw(before)), static_cast<size_t>(raw(terminal.GetFieldValue())), returned,
                  static_cast<void*>(to_object(terminal.GetTargetObject())),
-                 static_cast<unsigned>(collector.is_load_good(terminal)));
+                 static_cast<unsigned>(ZPointer::is_load_good((terminal).GetFieldValue())));
     std::fflush(stderr);
 
     GC_EXPECT_TRUE(returned == collector.to);
     GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == collector.to);
-    GC_EXPECT_TRUE(collector.is_load_good(terminal));
+    GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
 }
 
 GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
@@ -389,7 +389,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
         RefField<> terminal(field.GetFieldValue());
         GC_EXPECT_TRUE(returned == heap.obj0);
         GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == winner);
-        GC_EXPECT_TRUE(collector.is_load_good(terminal));
+        GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
     }
     std::fprintf(stderr,
                  "DETAIL arm=atomic_cas_lost forced_failures=%zu winner_store_good=1 winner=%p\n",

@@ -22,6 +22,13 @@
 #include "RuntimeConfig.h"
 
 #include <unordered_set>
+extern "C" {
+extern uintptr_t g_cjHeapStart;
+extern uintptr_t g_cjHeapEnd;
+extern uintptr_t g_cjHeapRangeCount;
+extern uintptr_t g_cjHeapRangeStart[];
+extern uintptr_t g_cjHeapRangeEnd[];
+}
 namespace MapleRuntime {
 class OopStorage;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
@@ -151,6 +158,9 @@ public:
         heapStartAddr = startAddr;
         heapCurrentEnd = 0;
         heapReservations.clear();
+        g_cjHeapStart = startAddr;
+        g_cjHeapEnd = 0;
+        PublishCompilerHeapRanges();
     }
 
     static void OnHeapCreated(MAddress startAddr, const std::vector<HeapSlotAddressRange>& reservations)
@@ -160,6 +170,11 @@ public:
             CHECK(range.end > range.start && IsRepresentableLow48Range(range.start, range.end - range.start));
         }
         heapReservations = reservations;
+        if (!reservations.empty()) {
+            g_cjHeapStart = reservations.front().start;
+            g_cjHeapEnd = reservations.back().end;
+        }
+        PublishCompilerHeapRanges();
     }
 
     static void OnHeapExtended(MAddress newEnd)
@@ -171,6 +186,11 @@ public:
             heapReservations.back().end = newEnd;
         }
         heapCurrentEnd = newEnd;
+        g_cjHeapEnd = newEnd;
+        if (g_cjHeapStart == 0) {
+            g_cjHeapStart = heapStartAddr;
+        }
+        PublishCompilerHeapRanges();
     }
 
     virtual ~Heap() {}
@@ -178,6 +198,22 @@ public:
     static MAddress heapCurrentEnd;
 
 private:
+    static void PublishCompilerHeapRanges()
+    {
+        constexpr unsigned kCap = 8;
+        for (unsigned i = 0; i < kCap; ++i) {
+            g_cjHeapRangeStart[i] = 0;
+            g_cjHeapRangeEnd[i] = 0;
+        }
+        const unsigned n = static_cast<unsigned>(
+            heapReservations.size() < kCap ? heapReservations.size() : kCap);
+        g_cjHeapRangeCount = n;
+        for (unsigned i = 0; i < n; ++i) {
+            g_cjHeapRangeStart[i] = heapReservations[i].start;
+            g_cjHeapRangeEnd[i] = heapReservations[i].end;
+        }
+    }
+
     static MAddress heapStartAddr;
     static std::vector<HeapSlotAddressRange> heapReservations;
 };

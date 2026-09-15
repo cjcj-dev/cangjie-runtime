@@ -861,24 +861,14 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     }
 }
 
-// Decode legacy ABI root words before classifying heap and stack storage.
-static BaseObject* PlainRootObject(zaddress_unsafe maybeColoured)
+// Stack-map and FFI root carriers contain plain addresses and remain committed
+// until this root pass completes; no colored-value decode applies here.
+static BaseObject* PlainRootObject(zaddress_unsafe address)
 {
-    if (is_null(maybeColoured)) {
-        return nullptr;
-    }
-    // Stack-map/FFI roots remain committed until this GC root pass heals them.
-    return to_object(safe(uncolor_bits(to_zpointer(raw(maybeColoured)))));
+    return to_object(safe(address));
 }
 
-static void StripRootObjectColour(ObjectRef& root)
-{
-    zaddress_unsafe oldValue = root.LoadPlain();
-    BaseObject* plain = PlainRootObject(oldValue);
-    if (reinterpret_cast<MAddress>(plain) != raw(oldValue)) {
-        HealRoot(root, from_object(plain), HealSite::MutatorStripRootColour);
-    }
-}
+
 
 // Eager ZUncoloredRoot::barrier (zUncoloredRoot.inline.hpp:38-59).
 // The handshake owns the actual ABI slot. Keep its observed color through
@@ -893,9 +883,9 @@ static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
         return false;
     }
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    RefField<> value(to_zpointer(raw(observed)));
-    const ForwardingProvenance provenance{ForwardingHolderKind::StackSlot, nullptr, &root};
-    BaseObject* current = collector.make_load_good(value, provenance);
+    // The eager relocation handshake makes saved uncolored roots current
+    // before this mark pass (ZUncoloredRoot::make_load_good's current-color arm).
+    BaseObject* current = object;
     collector.PublishThreadRoot(current, young, follow);
     HealRoot(root, from_object(current), HealSite::MutatorMarkRoot);
     return true;
@@ -1142,7 +1132,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                            &refVisitor](ObjectRef& root) {
         // interiorsrc2: peel colour before ghost/forward checks; write plain back so mutator
         // does not resume with a coloured interior (si_code=128 in arrayInitByFunction).
-        StripRootObjectColour(root);
         BaseObject* oldObj = PlainRootObject(root.LoadPlain());
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
@@ -1181,7 +1170,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     DerivedPtrVisitor derivedPtrVisitor = MakeDerivedRootVisitor(visitor);
     ForwardLocalFinalizers(collector);
     size_t frames = 0;
-    const uint64_t epoch = WCollector::FlipSeq().load(std::memory_order_acquire) + 1;
+    const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
     const auto owner = GetMutator() == this ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
     if (!DrainStackWatermark(visitor, visitor, epoch, owner, &derivedPtrVisitor, frames, false,
                              StackWatermark::ProcessingPhase::REMAP)) {

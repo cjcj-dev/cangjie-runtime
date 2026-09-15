@@ -51,6 +51,8 @@ public:
     void WriteStaticRef(NativeSlot& field, BaseObject* ref) const;
     void WritePlainRoot(RootSlot& field, BaseObject* ref) const;
     void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
+    void WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib) const;
+    void ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib) const;
     void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const;
 
     void CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize,

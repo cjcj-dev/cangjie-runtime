@@ -36,36 +36,22 @@ static_assert(!std::is_polymorphic<Barrier>::value, "Barrier must not regain vir
 void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr)
 {
     const uintptr_t oldRaw = raw(oldPtr), newRaw = raw(newPtr);
-    const uintptr_t loadBad = ::g_cjLoadBadMask;
-    const uintptr_t markBad = ::g_cjMarkBadMask;
-    const uintptr_t storeBad = ::g_cjStoreBadMask;
-    CHECK(!ColourPredicates::is_load_good(oldRaw, loadBad) ||
-          ColourPredicates::is_load_good(newRaw, loadBad));
-    CHECK(!ColourPredicates::is_mark_good(oldRaw, loadBad, markBad) ||
-          ColourPredicates::is_mark_good(newRaw, loadBad, markBad));
-    CHECK(!ColourPredicates::is_store_good(oldRaw, loadBad, storeBad) ||
-          ColourPredicates::is_store_good(newRaw, loadBad, storeBad));
-    if (!ColourPredicates::has_address(newRaw)) {
+    CHECK(!ZPointer::is_load_good(to_zpointer(oldRaw)) ||
+          ZPointer::is_load_good(to_zpointer(newRaw)));
+    CHECK(!ZPointer::is_mark_good(to_zpointer(oldRaw)) ||
+          ZPointer::is_mark_good(to_zpointer(newRaw)));
+    CHECK(!ZPointer::is_store_good(to_zpointer(oldRaw)) ||
+          ZPointer::is_store_good(to_zpointer(newRaw)));
+    if (!(!is_null_any(to_zpointer(newRaw)))) {
         return;
     }
-    CHECK(!ColourPredicates::is_marked_young(oldRaw, markBad) ||
-          ColourPredicates::is_marked_young(newRaw, markBad));
-    CHECK(!ColourPredicates::is_marked_old(oldRaw, markBad) ||
-          ColourPredicates::is_marked_old(newRaw, markBad));
-    CHECK(!ColourPredicates::is_marked_finalizable(oldRaw, markBad) ||
-          ColourPredicates::is_marked_finalizable(newRaw, markBad) ||
-          ColourPredicates::is_marked_old(newRaw, markBad));
-}
-
-// Preserve mark/remember metadata when upgrading a load (ZAddress::load_good).
-static zpointer ColourLoadGood(BaseObject* target, zpointer observed)
-{
-    if (!ColourPredicates::has_address(raw(observed))) {
-        return to_zpointer(::g_cjStoreGoodMask | REMEMBERED_MASK);
-    }
-    return to_zpointer(reinterpret_cast<uintptr_t>(target) | REMEMBERED_MASK |
-        (raw(observed) & ~kPointerAddressMask & ~REMAP_COLOUR_MASK) |
-        (::g_cjLoadBadMask ^ REMAP_COLOUR_MASK));
+    CHECK(!ZPointer::is_marked_young(to_zpointer(oldRaw)) ||
+          ZPointer::is_marked_young(to_zpointer(newRaw)));
+    CHECK(!ZPointer::is_marked_old(to_zpointer(oldRaw)) ||
+          ZPointer::is_marked_old(to_zpointer(newRaw)));
+    CHECK(!ZPointer::is_marked_finalizable(to_zpointer(oldRaw)) ||
+          ZPointer::is_marked_finalizable(to_zpointer(newRaw)) ||
+          ZPointer::is_marked_old(to_zpointer(newRaw)));
 }
 
 namespace {
@@ -124,6 +110,28 @@ void CopyReferenceSlots(const Barrier& barrier,
 }
 } // namespace
 
+// Value-type ABI entries carry their GC layout even when the optional holder
+// is null. Process the same slots as object-layout copies without guessing a base.
+void Barrier::WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib) const
+{
+    std::vector<size_t> offsets;
+    gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
+        offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
+    }, src, src + srcLen);
+    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+        Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
+}
+
+void Barrier::ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib) const
+{
+    std::vector<size_t> offsets;
+    gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
+        offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
+    }, src, src + size);
+    CopyReferenceSlots(*this, dst, size, src, size, std::move(offsets),
+        CopySlotKind::Heap, CopySlotKind::Uncolored);
+}
+
 void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
 
 void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
@@ -146,7 +154,7 @@ void Barrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
     RefField<> previous(observed);
     auto fastPath = [this, heal, strength](zpointer word) {
         RefField<> value(word);
-        return theCollector.is_store_good(value) ||
+        return ZPointer::is_store_good(value.GetFieldValue()) ||
             (strength == ReferenceStrength::Strong && !heal && is_null(word));
     };
     if (fastPath(observed)) {
@@ -169,8 +177,7 @@ void Barrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
         if (Heap::IsHeapAddress(address) && !RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
             theRememberedSet.Record(address, true);
         }
-        const zpointer good = to_zpointer(MakeStoreGoodSlotWord(
-            reinterpret_cast<uintptr_t>(target), ::g_cjStoreGoodMask));
+        const zpointer good = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(target)))));
         ZgcSelfHeal(field, observed, good, fastPath, HealSite::BarrierReadReference);
     } else {
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), target, observed);
@@ -193,7 +200,7 @@ void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseOb
         address == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     // ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field uses store-good,
     // including raw null in the slow path so that remember(p) is not skipped.
-    if (!theCollector.is_store_good(previous) && (weakReferent || !is_null(prev))) {
+    if (!ZPointer::is_store_good(previous.GetFieldValue()) && (weakReferent || !is_null(prev))) {
         if (weakReferent) {
             if (!RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
                 theRememberedSet.Record(address, true);
@@ -206,8 +213,7 @@ void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseOb
 
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
-    field.StoreColoured(to_zpointer(MakeStoreGoodSlotWord(
-        reinterpret_cast<uintptr_t>(ref), ::g_cjStoreGoodMask)));
+    field.StoreColoured(to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(ref))))));
 }
 
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -239,7 +245,7 @@ void Barrier::NativeStoreBarrier(RefField<atomic>& field, bool heal) const
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
     auto fastPath = [this, heal](zpointer word) {
         RefField<> value(word);
-        return theCollector.is_store_good(value) || (!heal && is_null(word));
+        return ZPointer::is_store_good(value.GetFieldValue()) || (!heal && is_null(word));
     };
     if (fastPath(observed)) {
         return;
@@ -249,8 +255,7 @@ void Barrier::NativeStoreBarrier(RefField<atomic>& field, bool heal) const
     BaseObject* target = theCollector.make_load_good(previous, provenance);
     theCollector.MarkObjectIfActive(target);
     if (heal) {
-        const zpointer good = to_zpointer(MakeStoreGoodSlotWord(
-            reinterpret_cast<uintptr_t>(target), ::g_cjStoreGoodMask));
+        const zpointer good = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(target)))));
         ZgcSelfHeal(field, observed, good, fastPath, HealSite::BarrierReadReference);
     }
 }
@@ -264,14 +269,6 @@ void Barrier::WriteStaticRef(NativeSlot& field, BaseObject* ref) const
 BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
 {
     const zpointer observed = field.GetFieldValue();
-    // ZPointer::assert_is_valid (zAddress.inline.hpp:320-393): colored roots
-    // must carry their own epoch. A plain non-null word passes a bad-mask
-    // test, but has no remap history and cannot be handed to a marker.
-    // Cangjie also registers read-only ELF literals. Their non-heap payloads
-    // never relocate and retain the existing uncolored read-only contract.
-    CHECK_DETAIL(!Heap::IsHeapAddress(to_object(RefField<>(observed).GetTargetObject())) ||
-                     (raw(observed) & (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
-                 "NativeSlot requires colored value at ReadStaticRef slot=%p word=%#zx", &field, raw(observed));
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
 }
 
@@ -319,8 +316,8 @@ BaseObject* Barrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoin
     auto fastPath = [this, strength](zpointer word) {
         RefField<> value(word);
         return strength == ReferenceStrength::Strong
-            ? ColourPredicates::is_load_good_or_null(raw(word), ::g_cjLoadBadMask)
-            : theCollector.is_mark_good(value);
+            ? ZPointer::is_load_good_or_null(to_zpointer(raw(word)))
+            : ZPointer::is_mark_good(value.GetFieldValue());
     };
     RefField<> value(observed);
     if (fastPath(observed)) {
@@ -328,7 +325,7 @@ BaseObject* Barrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoin
     }
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
     BaseObject* target = theCollector.make_load_good(value, provenance);
-    CHECK_DETAIL(target != nullptr || !ColourPredicates::has_address(raw(observed)),
+    CHECK_DETAIL(target != nullptr || !(!is_null_any(to_zpointer(raw(observed)))),
                  "load barrier relocation must preserve a non-null reference");
     if (strength != ReferenceStrength::Strong && target != nullptr && Heap::IsHeapAddress(target)) {
         // Only the shared resurrection rendezvous publishes the blocked window.
@@ -349,8 +346,8 @@ BaseObject* Barrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoin
         }
     }
     const zpointer healed = strength == ReferenceStrength::Strong
-        ? ColourLoadGood(target, observed)
-        : to_zpointer(reinterpret_cast<uintptr_t>(target) | ::g_cjStoreGoodMask | REMEMBERED_MASK);
+        ? ZAddress::load_good(from_object(target), observed)
+        : ZAddress::mark_good(from_object(target), observed);
     ZgcSelfHeal(field, observed, healed, fastPath, HealSite::BarrierReadReference);
     return target;
 }
@@ -384,8 +381,7 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
-    field.StoreColoured(to_zpointer(MakeStoreGoodSlotWord(
-        reinterpret_cast<uintptr_t>(ref), ::g_cjStoreGoodMask)), order);
+    field.StoreColoured(to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(ref))))), order);
 }
 
 BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
@@ -402,8 +398,7 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
 BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
-    const zpointer desired = to_zpointer(MakeStoreGoodSlotWord(
-        reinterpret_cast<uintptr_t>(newRef), ::g_cjStoreGoodMask));
+    const zpointer desired = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(newRef)))));
     RefField<> previous(field.Exchange(desired, order));
     return to_object(previous.GetTargetObject());
 }
@@ -427,10 +422,8 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
 bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
-    const zpointer expected = to_zpointer(MakeStoreGoodSlotWord(
-        reinterpret_cast<uintptr_t>(oldRef), ::g_cjStoreGoodMask));
-    const zpointer desired = to_zpointer(MakeStoreGoodSlotWord(
-        reinterpret_cast<uintptr_t>(newRef), ::g_cjStoreGoodMask));
+    const zpointer expected = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(oldRef)))));
+    const zpointer desired = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(newRef)))));
     return HealSlot(field, expected, desired, HealSite::BarrierCompareAndSwapReference,
                     HealNull::Allow, succOrder, failOrder);
 }

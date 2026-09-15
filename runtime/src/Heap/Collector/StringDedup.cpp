@@ -69,7 +69,7 @@ void StringDedup::RequestString(const uint8_t* data, size_t length)
         object->GetComponentTypeInfo()->GetType() != TypeKind::TYPE_KIND_UINT8 ||
         object->GetLength() != length) return;
     std::lock_guard<std::recursive_mutex> guard(mutex);
-    requests.push_back({to_zpointer(reinterpret_cast<uintptr_t>(object) | ::g_cjStoreGoodMask)});
+    requests.push_back({ZAddress::store_good(from_object(object))});
     condition.notify_all();
 }
 
@@ -77,8 +77,7 @@ BaseObject* StringDedup::Resolve(WeakSlot& slot)
 {
     RefField<> reference(slot.value);
     BaseObject* object = Heap::GetHeap().GetCollector().make_load_good(reference, {});
-    slot.value = to_zpointer(object == nullptr ? 0 :
-        reinterpret_cast<uintptr_t>(object) | ::g_cjStoreGoodMask);
+    slot.value = ZAddress::store_good_or_null(from_object(object));
     return object;
 }
 

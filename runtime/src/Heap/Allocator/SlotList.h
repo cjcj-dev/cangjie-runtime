@@ -27,7 +27,7 @@ public:
             // pinned allocation storage. The slot stays stranded until region reclamation.
             return;
         }
-        if (head != nullptr && MetadataWordHasColour(reinterpret_cast<Uptr>(head))) {
+        if (head != nullptr && MetadataWordIsNotAddress(reinterpret_cast<Uptr>(head))) {
             head = nullptr;
         }
         headSlot->next = head;
@@ -50,9 +50,9 @@ public:
 private:
     friend struct FreePinnedSlotLists;
     friend struct SlotListTestAccess;
-    static bool MetadataWordHasColour(Uptr bits)
+    static bool MetadataWordIsNotAddress(Uptr bits)
     {
-        return bits != raw(uncolor_bits(to_zpointer(bits)));
+        return bits != 0 && !is_valid(static_cast<zaddress>(bits));
     }
 
     uintptr_t PopFront(size_t size)
@@ -68,7 +68,7 @@ private:
             return 0;
         }
         Uptr rawHead = reinterpret_cast<Uptr>(head);
-        if (MetadataWordHasColour(rawHead)) {
+        if (MetadataWordIsNotAddress(rawHead)) {
             head = nullptr;
             return 0;
         }
@@ -78,7 +78,7 @@ private:
         }
         ObjectSlot* allocSlot = head;
         Uptr rawNext = reinterpret_cast<Uptr>(allocSlot->next);
-        head = MetadataWordHasColour(rawNext) ? nullptr : allocSlot->next;
+        head = MetadataWordIsNotAddress(rawNext) ? nullptr : allocSlot->next;
         allocSlot->next = nullptr;
         return reinterpret_cast<uintptr_t>(allocSlot);
     }

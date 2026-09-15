@@ -140,13 +140,13 @@ void* Exercise(void*)
         if (collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
             ++combinedMarkStarts;
             preludeOld = old;
-            preludeOldColor = ::g_cjMarkBadMask & MARKED_OLD_MASK;
+            preludeOldColor = ::g_cjMarkBadMask & ZPointerMarkedOldMask;
             Expect(old.active && old.phase == GC_PHASE_ENUM && old.reason == GC_REASON_USER,
                    "prelude_starts_old_mark");
             StoreBarrierBuffer buffer;
             RootSlot slot;
             buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
-            Expect((buffer.LastProcessedColorForTest() & MARKED_OLD_MASK) == (::g_cjStoreGoodMask & MARKED_OLD_MASK), "prelude_store_buffer_old_obligation");
+            Expect((buffer.LastProcessedColorForTest() & ZPointerMarkedOldMask) == (::g_cjStoreGoodMask & ZPointerMarkedOldMask), "prelude_store_buffer_old_obligation");
             buffer.Discard();
         } else {
             ++minorMarkStarts;
@@ -192,7 +192,7 @@ void* Exercise(void*)
             const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
             Expect(old.sequence == preludeOld.sequence && old.requestIndex == preludeOld.requestIndex,
                    "old_body_keeps_prelude_identity");
-            Expect((::g_cjMarkBadMask & MARKED_OLD_MASK) == preludeOldColor,
+            Expect((::g_cjMarkBadMask & ZPointerMarkedOldMask) == preludeOldColor,
                    "old_body_keeps_prelude_color");
             for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
             GenerationCycleRootTestAccess::Install(tracing, witnesses);

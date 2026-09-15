@@ -455,7 +455,8 @@ size_t RegionManager::ExemptFromRegions()
         descs.push_back(d);
         descRegions.push_back(fromRegion);
     }
-    const RelocSelectResult selected = SelectRelocationSet(descs);
+    const RelocSelectResult selected = SelectRelocationSet(descs,
+        Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).FragmentationLimit());
     std::vector<char> keep(descs.size(), 0);
     for (uint32_t id : selected.selectedIds) {
         if (id < keep.size()) {
