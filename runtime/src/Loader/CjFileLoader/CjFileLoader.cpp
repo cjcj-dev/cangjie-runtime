@@ -74,8 +74,9 @@ void CJFileLoader::UnregisterLoadFile(Uptr fileMetaAddr)
 }
 void CJFileLoader::AddLoadedFiles(BaseFile* baseFile)
 {
+    // Platform loader queries happen before catalog/admission/pending locks.
+    baseFile->SetImageAddressMap(ElfUnloadQuiescence::LinkImage(baseFile->GetFileMetaAddr()));
     std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
-    ElfUnloadQuiescence::LinkImage(baseFile->GetFileMetaAddr());
     loadedFiles.push_back(baseFile);
 }
 

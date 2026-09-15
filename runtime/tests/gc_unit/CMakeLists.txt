@@ -119,6 +119,11 @@ elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
         INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
 endif()
 
+add_library(cj_package_init_fixture SHARED package_init_image.cpp)
+target_include_directories(cj_package_init_fixture PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
+add_dependencies(cj_gc_unit cj_package_init_fixture)
+
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)
 

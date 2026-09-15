@@ -52,11 +52,17 @@ public:
     const CString& GetBaseName() const;
     void SetFileCompatibility(bool isComp) { isCompatible = isComp; }
     bool IsCompatible() const { return isCompatible; }
+    void SetImageAddressMap(std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> map)
+    {
+        imageAddressMap = std::move(map);
+    }
+    const ElfUnloadQuiescence::ImageAddressMap& GetImageAddressMap() const { return *imageAddressMap; }
     bool IsRegistered() const { return registered; }
     void SetRegistered(bool value) { registered = value; }
     PackageInitTable& GetPackageInitTable() { return packageInitTable; }
 private:
     PackageInitTable packageInitTable;
+    std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> imageAddressMap;
     CString realPath; // file real path
     CString baseName;
     bool isCompatible { false };

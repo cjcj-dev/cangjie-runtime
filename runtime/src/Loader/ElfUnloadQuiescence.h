@@ -8,6 +8,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <memory>
+#include <vector>
 #include <shared_mutex>
 #include <unordered_set>
 
@@ -25,6 +27,13 @@ namespace MapleRuntime {
 // registries.
 class ElfUnloadQuiescence final {
 public:
+    struct ImageAddressMap {
+        struct Range { Uptr start; size_t size; bool executable; };
+        Uptr metadata { 0 };
+        Uptr identity { 0 };
+        std::vector<Range> ranges;
+        bool Contains(Uptr address, bool codeOnly = false) const;
+    };
     enum class ReaderKind : U8 {
         GENERIC,
         GC_STACK_ENTRY,
@@ -102,6 +111,7 @@ public:
         void MarkCompleted();
 
         Uptr entry { 0 };
+        std::shared_ptr<const ImageAddressMap> image;
         bool pending { false };
     };
 
@@ -144,7 +154,7 @@ public:
     // Outside exclusive admission: owners must be able to admit dependencies
     // while a direct unload waits. Caller must reacquire and recheck afterwards.
     static void WaitForPendingTasks(Uptr imageAddress);
-    static void LinkImage(Uptr imageAddress);
+    static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address);
     static bool IsAddressInImage(Uptr address, Uptr imageAddress);
@@ -187,6 +197,9 @@ private:
     static std::condition_variable& PendingTaskCondition();
     static std::unordered_set<PendingTask*>& PendingTasks();
     static Uptr ResolveImageIdentity(Uptr address);
+    static std::shared_ptr<const ImageAddressMap> RegisteredImage(Uptr metadata);
+    static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address);
+    static Uptr RegisteredIdentity(Uptr metadata);
 };
 
 } // namespace MapleRuntime

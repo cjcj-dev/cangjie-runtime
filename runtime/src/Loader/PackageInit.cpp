@@ -16,14 +16,6 @@
 #include "Base/Panic.h"
 #include "Base/ImmortalWrapper.h"
 #include "LoaderManager.h"
-#if defined(_WIN64)
-#include <windows.h>
-#elif defined(__APPLE__)
-#include <mach/mach.h>
-#include <mach/mach_vm.h>
-#else
-#include <link.h>
-#endif
 #include "Common/ScopedObjectAccess.h"
 #include "schedule.h"
 #include "waitqueue.h"
@@ -73,57 +65,18 @@ InitCoordinator& Coordinator()
     return *coordinator;
 }
 
-bool IsCodeAddress(Uptr address)
-{
-#if defined(_WIN64)
-    MEMORY_BASIC_INFORMATION info {};
-    constexpr DWORD executable = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    return VirtualQuery(reinterpret_cast<const void*>(address), &info, sizeof(info)) != 0 &&
-        info.State == MEM_COMMIT && (info.Protect & executable) != 0;
-#elif defined(__APPLE__)
-    mach_vm_address_t region = address;
-    mach_vm_size_t size = 0;
-    vm_region_basic_info_data_64_t info {};
-    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
-    mach_port_t object = MACH_PORT_NULL;
-    const auto rc = mach_vm_region(mach_task_self(), &region, &size, VM_REGION_BASIC_INFO_64,
-        reinterpret_cast<vm_region_info_t>(&info), &count, &object);
-    if (object != MACH_PORT_NULL) { mach_port_deallocate(mach_task_self(), object); }
-    return rc == KERN_SUCCESS && address >= region && address - region < size &&
-        (info.protection & VM_PROT_EXECUTE) != 0;
-#else
-    struct Query { Uptr address; bool executable; } query { address, false };
-    dl_iterate_phdr([](dl_phdr_info* image, size_t, void* context) {
-        auto& q = *static_cast<Query*>(context);
-        for (size_t i = 0; i != image->dlpi_phnum; ++i) {
-            const auto& segment = image->dlpi_phdr[i];
-            const Uptr start = image->dlpi_addr + segment.p_vaddr;
-            if (segment.p_type == PT_LOAD && (segment.p_flags & PF_X) != 0 &&
-                q.address >= start && q.address - start < segment.p_memsz) {
-                q.executable = true;
-                return 1;
-            }
-        }
-        return 0;
-    }, &query);
-    return query.executable;
-#endif
-}
-
 BaseFile* ResolvePackageFile(const void* package, const void* unit)
 {
     const Uptr entry = reinterpret_cast<Uptr>(package);
     const Uptr unitEntry = reinterpret_cast<Uptr>(unit);
-    if (!IsCodeAddress(entry) || !IsCodeAddress(unitEntry)) { return nullptr; }
     BaseFile* exact = nullptr;
     BaseFile* imageOwner = nullptr;
     size_t exactCount = 0;
     size_t imageCount = 0;
     LoaderManager::GetInstance()->GetLoader()->VisitBaseFile([&](BaseFile* file) {
         if (!file->IsRegistered()) { return false; }
-        const Uptr metadata = file->GetFileMetaAddr();
-        if (!ElfUnloadQuiescence::IsAddressInImage(entry, metadata) ||
-            !ElfUnloadQuiescence::IsAddressInImage(unitEntry, metadata)) { return false; }
+        const auto& image = file->GetImageAddressMap();
+        if (!image.Contains(entry, true) || !image.Contains(unitEntry, true)) { return false; }
         imageOwner = file;
         ++imageCount;
         std::vector<Uptr> entries;

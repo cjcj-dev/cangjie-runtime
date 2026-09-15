@@ -292,6 +292,10 @@ MAIN_COMPILE_FLAGS=(
   "${TESTABLE_FLAGS[@]}"
   "${INC_FLAGS[@]}"
 )
+# A real second image for package-cache generation and code-identity tests.
+"$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/package_init_image.cpp" \
+  -o "$OUT/libcj_package_init_fixture.so" > "$OUT/package-init-image-build.log" 2>&1 &
+PACKAGE_INIT_IMAGE_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/gc_unit_stubs.cpp"
@@ -451,6 +455,7 @@ if [[ $main_link_rc -ne 0 || $publication_link_rc -ne 0 ]]; then
   echo "GC_UNIT_LINK_FAIL main_rc=$main_link_rc publication_rc=$publication_link_rc" >&2
   exit 2
 fi
+wait "$PACKAGE_INIT_IMAGE_PID"
 echo "GC_UNIT_COMPILE_PARALLEL jobs=$BUILD_JOBS tus=$((${#MAIN_SOURCES[@]} + ${#PUBLICATION_SOURCES[@]}))"
 # Capture the just-linked test identity before any case is executed.
 sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \

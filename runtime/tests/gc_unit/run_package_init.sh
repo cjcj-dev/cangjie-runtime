@@ -18,6 +18,12 @@ start=$SECONDS
 if [[ -z "${PACKAGE_INIT_ELF:-}" ]]; then
     objects=()
     pids=()
+    clang++ -std=gnu++17 -O0 -g -pthread -fno-rtti -fPIC -shared \
+        -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" -I"$ROOT/runtime/include" \
+        -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+        -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" -I"$HEADERS" \
+        "$SRC/package_init_image.cpp" -o "$OUT/libcj_package_init_fixture.so" > "$OUT/plugin.build.log" 2>&1 &
+    pids+=("$!")
     for source in gc_unit_main.cpp gc_cycle_sequence_fixture.cpp test_package_init.cpp; do
         object="$OUT/$source.o"
         objects+=("$object")
@@ -36,13 +42,13 @@ if [[ -z "${PACKAGE_INIT_ELF:-}" ]]; then
         build_rc=$?
     fi
     echo "$build_rc" > "$OUT/build.rc"
-    echo "build wall=$((SECONDS-start)) rc=$build_rc parallel_tus=3"
+    echo "build wall=$((SECONDS-start)) rc=$build_rc parallel_tus=4"
     if [[ $build_rc -ne 0 ]]; then
         grep -n -m 12 -E 'error:|undefined reference' "$OUT"/*.log
         exit "$build_rc"
     fi
 fi
-sha256sum "$ELF" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so" > "$OUT/lineage.sha256"
+sha256sum "$(dirname "$ELF")/libcj_package_init_fixture.so" "$ELF" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so" > "$OUT/lineage.sha256"
 nm --defined-only "$LIB/libcangjie-runtime.so" > "$OUT/product.defined.txt"
 nm --defined-only "$ELF" > "$OUT/fixture.defined.txt"
 start=$SECONDS

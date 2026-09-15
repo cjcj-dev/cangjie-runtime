@@ -5,6 +5,8 @@
 #include "Loader/ElfUnloadQuiescence.h"
 
 #include <array>
+#include <algorithm>
+#include "Base/ImmortalWrapper.h"
 #include <climits>
 #include <condition_variable>
 #include <new>
@@ -21,6 +23,12 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#else
+#include <link.h>
+#endif
 #endif
 
 namespace MapleRuntime {
@@ -41,6 +49,15 @@ void WakeAdmissionWaiters()
     CHECK_DETAIL(rc == 0 || rc == ERRNO_QUEUE_IS_EMPTY, "ELF admission wake failed: %d", rc);
 }
 std::array<std::atomic<Uptr>, MAX_LINKED_IMAGES> linkedImages {};
+struct ImageDirectory {
+    std::mutex mutex;
+    std::vector<std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap>> images;
+};
+ImageDirectory& ImageMaps()
+{
+    static ImmortalWrapper<ImageDirectory> maps;
+    return *maps;
+}
 thread_local U32 readerDepth = 0;
 thread_local bool unloadWriter = false;
 thread_local Uptr unloadWriterImage = 0;
@@ -132,6 +149,43 @@ Uptr ElfUnloadQuiescence::ResolveImageIdentity(Uptr address)
 #endif
 }
 
+bool ElfUnloadQuiescence::ImageAddressMap::Contains(Uptr address, bool codeOnly) const
+{
+    for (const auto& range : ranges) {
+        if ((!codeOnly || range.executable) && address >= range.start && address - range.start < range.size) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::RegisteredImage(Uptr metadata)
+{
+    auto& maps = ImageMaps();
+    std::lock_guard<std::mutex> lock(maps.mutex);
+    for (const auto& image : maps.images) {
+        if (image->metadata == metadata) { return image; }
+    }
+    return nullptr;
+}
+
+std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::RegisteredImageForAddress(Uptr address)
+{
+    auto& maps = ImageMaps();
+    std::lock_guard<std::mutex> lock(maps.mutex);
+    for (const auto& image : maps.images) {
+        if (image->Contains(address)) { return image; }
+    }
+    return nullptr;
+}
+
+Uptr ElfUnloadQuiescence::RegisteredIdentity(Uptr metadata)
+{
+    const auto image = RegisteredImage(metadata);
+    CHECK_DETAIL(image != nullptr, "ELF image metadata was not registered: %p", reinterpret_cast<void*>(metadata));
+    return image->identity;
+}
+
 ElfUnloadQuiescence::ReadScope::ReadScope(ReaderKind kind)
 {
 #ifdef MRT_TESTABLE_INTERNALS
@@ -181,7 +235,7 @@ ElfUnloadQuiescence::ReadScope::~ReadScope()
 }
 
 ElfUnloadQuiescence::UnloadScope::UnloadScope(Uptr imageAddress)
-    : writerLock(WriterMutex()), imageIdentity(ResolveImageIdentity(imageAddress))
+    : writerLock(WriterMutex()), imageIdentity(RegisteredIdentity(imageAddress))
 {
     CHECK_DETAIL(readerDepth == 0 && !unloadWriter,
                  "ELF unload cannot begin from inside a metadata reader");
@@ -249,6 +303,7 @@ ElfUnloadQuiescence::PendingTask::PendingTask(Uptr entryAddress, const SharedTas
     : entry(entryAddress)
 {
     CHECK_DETAIL(admission.admissionLock.owns_lock(), "ELF task registration requires shared admission");
+    image = RegisteredImageForAddress(entryAddress);
     std::lock_guard<std::mutex> lock(PendingTaskMutex());
     pending = PendingTasks().insert(this).second;
     CHECK_DETAIL(pending, "ELF pending task must be registered exactly once");
@@ -296,9 +351,10 @@ ElfUnloadQuiescence::TaskAdmissionScope::~TaskAdmissionScope()
 
 bool ElfUnloadQuiescence::TaskAdmissionScope::HasPendingForImage(Uptr imageAddress) const
 {
+    const Uptr identity = RegisteredIdentity(imageAddress);
     std::lock_guard<std::mutex> lock(PendingTaskMutex());
     for (const PendingTask* task : PendingTasks()) {
-        if (IsAddressInImage(task->entry, imageAddress)) {
+        if (task->image != nullptr && task->image->identity == identity) {
             return true;
         }
     }
@@ -312,33 +368,34 @@ void ElfUnloadQuiescence::TaskAdmissionScope::WaitUntilNoPendingForImage(Uptr im
 
 void ElfUnloadQuiescence::WaitForPendingTasks(Uptr imageAddress)
 {
-    const auto empty = [](Uptr image) {
+    Uptr identity = RegisteredIdentity(imageAddress);
+    const auto empty = [](Uptr identity) {
         for (const PendingTask* task : PendingTasks()) {
-            if (IsAddressInImage(task->entry, image)) { return false; }
+            if (task->image != nullptr && task->image->identity == identity) { return false; }
         }
         return true;
     };
     if (CJThreadGetHandle() == nullptr) {
         std::unique_lock<std::mutex> lock(PendingTaskMutex());
-        PendingTaskCondition().wait(lock, [&]() { return empty(imageAddress); });
+        PendingTaskCondition().wait(lock, [&]() { return empty(identity); });
         return;
     }
     ScopedEnterSaferegion safe(false);
     const auto finished = [](void* address) {
         std::lock_guard<std::mutex> lock(PendingTaskMutex());
         for (const PendingTask* task : PendingTasks()) {
-            if (IsAddressInImage(task->entry, *static_cast<Uptr*>(address))) { return false; }
+            if (task->image != nullptr && task->image->identity == *static_cast<const Uptr*>(address)) { return false; }
         }
         return true;
     };
-    while (!finished(&imageAddress)) {
-        const int rc = WaitqueuePark(AdmissionWaiters(), LLONG_MAX, finished, &imageAddress, false);
+    while (!finished(&identity)) {
+        const int rc = WaitqueuePark(AdmissionWaiters(), LLONG_MAX, finished, &identity, false);
         CHECK_DETAIL(rc == 0 || rc == ERRNO_CALLBACK_RETURN_TRUE, "ELF pending task park failed: %d", rc);
     }
 }
 
 ElfUnloadQuiescence::PurgeAuthorizationScope::PurgeAuthorizationScope(Uptr imageAddress)
-    : imageIdentity(ResolveImageIdentity(imageAddress)), previousImageIdentity(purgeAuthorizedImage),
+    : imageIdentity(RegisteredIdentity(imageAddress)), previousImageIdentity(purgeAuthorizedImage),
       previousAdmission(purgeAdmission)
 {
     CHECK_DETAIL(imageIdentity != 0, "ELF purge authorization image is unavailable for %p",
@@ -361,37 +418,101 @@ ElfUnloadQuiescence::PurgeAuthorizationScope::~PurgeAuthorizationScope()
     purgeAdmission = previousAdmission;
 }
 
-void ElfUnloadQuiescence::LinkImage(Uptr imageAddress)
+std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence::LinkImage(Uptr imageAddress)
 {
-    Uptr identity = ResolveImageIdentity(imageAddress);
-    CHECK_DETAIL(identity != 0, "ELF load image identity is unavailable for %p",
-                 reinterpret_cast<void*>(imageAddress));
+    // Capture once while the image is being registered, before runtime locks.
+    // Dependency Begin and pending checks must not call into the platform
+    // loader while dlclose is waiting in an image's fini callback.
+    auto image = std::make_shared<ImageAddressMap>();
+    image->metadata = imageAddress;
+    image->identity = ResolveImageIdentity(imageAddress);
+    CHECK_DETAIL(image->identity != 0, "ELF load image identity is unavailable");
+#if defined(_WIN64)
+    Uptr cursor = image->identity;
+    MEMORY_BASIC_INFORMATION info {};
+    constexpr DWORD executable = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    while (VirtualQuery(reinterpret_cast<const void*>(cursor), &info, sizeof(info)) != 0 &&
+           reinterpret_cast<Uptr>(info.AllocationBase) == image->identity) {
+        if (info.State == MEM_COMMIT) {
+            image->ranges.push_back({ reinterpret_cast<Uptr>(info.BaseAddress), info.RegionSize,
+                                      (info.Protect & executable) != 0 });
+        }
+        cursor = reinterpret_cast<Uptr>(info.BaseAddress) + info.RegionSize;
+    }
+#elif defined(__APPLE__)
+    for (uint32_t i = 0; i != _dyld_image_count(); ++i) {
+        const auto* header = _dyld_get_image_header(i);
+        if (reinterpret_cast<Uptr>(header) != image->identity) { continue; }
+        const auto slide = _dyld_get_image_vmaddr_slide(i);
+        auto* command = reinterpret_cast<const load_command*>(reinterpret_cast<const mach_header_64*>(header) + 1);
+        for (uint32_t n = 0; n != header->ncmds; ++n) {
+            if (command->cmd == LC_SEGMENT_64) {
+                auto* segment = reinterpret_cast<const segment_command_64*>(command);
+                if (segment->initprot != 0 && segment->vmsize != 0) {
+                    image->ranges.push_back({ static_cast<Uptr>(segment->vmaddr + slide),
+                        static_cast<size_t>(segment->vmsize), (segment->initprot & VM_PROT_EXECUTE) != 0 });
+                }
+            }
+            command = reinterpret_cast<const load_command*>(reinterpret_cast<const char*>(command) + command->cmdsize);
+        }
+        break;
+    }
+#else
+    dl_iterate_phdr([](dl_phdr_info* loaded, size_t, void* argument) {
+        auto& map = *static_cast<ImageAddressMap*>(argument);
+        bool containsMetadata = false;
+        for (size_t i = 0; i != loaded->dlpi_phnum; ++i) {
+            const auto& segment = loaded->dlpi_phdr[i];
+            const Uptr start = loaded->dlpi_addr + segment.p_vaddr;
+            containsMetadata |= segment.p_type == PT_LOAD && map.metadata >= start &&
+                map.metadata - start < segment.p_memsz;
+        }
+        if (!containsMetadata) { return 0; }
+        for (size_t i = 0; i != loaded->dlpi_phnum; ++i) {
+            const auto& segment = loaded->dlpi_phdr[i];
+            if (segment.p_type == PT_LOAD && segment.p_memsz != 0) {
+                map.ranges.push_back({ static_cast<Uptr>(loaded->dlpi_addr + segment.p_vaddr),
+                    static_cast<size_t>(segment.p_memsz), (segment.p_flags & PF_X) != 0 });
+            }
+        }
+        return 1;
+    }, image.get());
+#endif
+    CHECK_DETAIL(image->Contains(imageAddress), "registered image must contain its metadata");
+    auto& maps = ImageMaps();
+    std::lock_guard<std::mutex> lock(maps.mutex);
+    maps.images.push_back(image);
     for (auto& slot : linkedImages) {
         Uptr observed = slot.load(std::memory_order_acquire);
-        if (observed == identity) {
-            return;
-        }
-        if (observed == 0 && slot.compare_exchange_strong(observed, identity,
+        if (observed == image->identity) { return image; }
+        if (observed == 0 && slot.compare_exchange_strong(observed, image->identity,
                                                           std::memory_order_release,
-                                                          std::memory_order_relaxed)) {
-            return;
-        }
+                                                          std::memory_order_relaxed)) { return image; }
     }
     CHECK_DETAIL(false, "ELF linked-image registry capacity %zu exhausted", MAX_LINKED_IMAGES);
+    return image;
 }
 
 void ElfUnloadQuiescence::UnlinkImage(Uptr imageAddress)
 {
-    Uptr identity = ResolveImageIdentity(imageAddress);
-    CHECK_DETAIL(identity != 0, "ELF unload image identity is unavailable for %p",
-                 reinterpret_cast<void*>(imageAddress));
+    auto& maps = ImageMaps();
+    std::lock_guard<std::mutex> lock(maps.mutex);
+    auto found = std::find_if(maps.images.begin(), maps.images.end(), [imageAddress](const auto& image) {
+        return image->metadata == imageAddress;
+    });
+    CHECK_DETAIL(found != maps.images.end(), "ELF unload image was not linked");
+    const Uptr identity = (*found)->identity;
+    maps.images.erase(found);
+    for (const auto& image : maps.images) {
+        if (image->identity == identity) { return; }
+    }
     for (auto& slot : linkedImages) {
         if (slot.load(std::memory_order_acquire) == identity) {
             slot.store(0, std::memory_order_release);
             return;
         }
     }
-    CHECK_DETAIL(false, "ELF unload image %p was not linked", reinterpret_cast<void*>(identity));
+    CHECK_DETAIL(false, "ELF unload image identity was not linked");
 }
 
 bool ElfUnloadQuiescence::IsLinkedAddress(Uptr address)
@@ -415,13 +536,13 @@ bool ElfUnloadQuiescence::IsLinkedAddress(Uptr address)
 
 bool ElfUnloadQuiescence::IsAddressInImage(Uptr address, Uptr imageAddress)
 {
-    Uptr identity = ResolveImageIdentity(address);
-    return identity != 0 && identity == ResolveImageIdentity(imageAddress);
+    const auto image = RegisteredImage(imageAddress);
+    return image != nullptr && image->Contains(address);
 }
 
 bool ElfUnloadQuiescence::IsPurgeAuthorized(Uptr imageAddress)
 {
-    return purgeAuthorizedImage != 0 && purgeAuthorizedImage == ResolveImageIdentity(imageAddress);
+    return purgeAuthorizedImage != 0 && purgeAuthorizedImage == RegisteredIdentity(imageAddress);
 }
 
 bool ElfUnloadQuiescence::HasCallerPurgeProtection()
