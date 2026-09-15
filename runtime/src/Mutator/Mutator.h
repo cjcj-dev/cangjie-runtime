@@ -528,12 +528,7 @@ public:
         return obj;
     }
 
-    void AddLocalFinalizer(BaseObject* obj)
-    {
-        RootSlot root;
-        StorePlain(root, from_object(obj));
-        localFinalizers.push_back(root);
-    }
+    void AddLocalFinalizer(BaseObject* obj);
 
     void MutatorLock() { mutatorLock.lock(); }
 
@@ -648,7 +643,7 @@ protected:
     void CreateCurrentGCInfo();
 
 private:
-    ManagedList<RootSlot>& GetLocalFinalizers() { return localFinalizers; }
+    ManagedList<NativeSlot>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
     std::atomic<GCPhase> mutatorPhase = { GCPhase::GC_PHASE_UNDEF };
@@ -682,7 +677,7 @@ private:
     ObjectRef rawObject{};
     std::list<ObjectRef> nativeFrameRoots;
 
-    ManagedList<RootSlot> localFinalizers;
+    ManagedList<NativeSlot> localFinalizers;
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     GCInfos gcInfos;

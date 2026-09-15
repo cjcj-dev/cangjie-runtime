@@ -172,6 +172,14 @@ void Mutator::InitProtectStackAddr()
     ThreadLocal::SetProtectAddr(reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(stackBoundAddr) + reversedSize));
 }
 
+// NativeAccess::oop_store at handle creation (weakHandle.cpp:39-50 /
+// zBarrierSet.inline.hpp:258-265). Keep that slot and its epoch through transfer.
+void Mutator::AddLocalFinalizer(BaseObject* object)
+{
+    localFinalizers.emplace_back(zpointer::null);
+    Heap::GetBarrier().WriteStaticRef(localFinalizers.back(), object);
+}
+
 void Mutator::ResetMutator()
 {
     CHECK_DETAIL(nativeFrameRoots.empty(), "native frame roots are not released");
@@ -1075,12 +1083,10 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
     return scanned;
 }
 
-inline void Mutator::ForwardLocalFinalizers(Collector& collector)
+inline void Mutator::ForwardLocalFinalizers(Collector&)
 {
-    WCollector& wcollector = reinterpret_cast<WCollector&>(collector);
-    RootVisitor visitor = [this, &wcollector](ObjectRef& root) { wcollector.ForwardUpdateRawRef(root, EnumYoung() ? Generation::Young : Generation::Old); };
-    for (RootSlot& root : localFinalizers) {
-        visitor(root);
+    for (NativeSlot& root : localFinalizers) {
+        (void)Heap::GetBarrier().ReadStaticRef(root);
     }
 }
 

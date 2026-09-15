@@ -280,6 +280,12 @@ BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
 BaseObject* Barrier::MarkBarrier(MarkFastPath fast, MarkSlowPath slow, MarkColor color,
                                  NativeSlot& field, zpointer observed) const
 {
+    // Cangjie NativeSlot tables also contain plain, read-only ELF literals.
+    // They have no ZGC heap-root counterpart and must retain their plain word.
+    BaseObject* payload = to_object(RefField<>(observed).GetTargetObject());
+    if (payload != nullptr && !Heap::IsHeapAddress(payload)) {
+        return payload;
+    }
     if (fast(observed)) {
         return to_object(RefField<>(observed).GetTargetObject());
     }

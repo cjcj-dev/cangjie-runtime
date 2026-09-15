@@ -575,7 +575,6 @@ thread_local const char* gMinorRootOrigin = "unknown";
 } // namespace
 
 void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
-                                     const NativeSlotVisitor& nativeVisitor,
                                      uint64_t stackScanEpoch)
 {
 #if defined(MRT_GC_UNIT_TESTS)
@@ -622,16 +621,6 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
             "stack_scan=required",
             static_cast<unsigned long long>(stackScanEpoch), concurrentDone, stwFallback);
     }
-    gMinorRootOrigin = "colored";
-#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    VisitAllColoredRoots([&remset, &nativeVisitor](NativeSlot& root) {
-        remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&root));
-        nativeVisitor(root);
-    });
-    remset.CheckStaticCoverageForMinor();
-#else
-    VisitAllColoredRoots(nativeVisitor);
-#endif
     gMinorRootOrigin = "unknown";
 }
 
@@ -662,6 +651,46 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
     gMinorRootOrigin = "unknown";
 }
 
+namespace {
+// ZMarkYoungOopClosure, zMark.cpp:678-681.
+class MarkYoungOopClosure {
+public:
+    void DoOop(NativeSlot& slot) const
+    {
+        Heap::GetBarrier().MarkYoungGoodBarrierOnOopField(slot);
+    }
+};
+
+// ZMarkYoungRootsTask, zMark.cpp:852-891. Colored roots share one closure;
+// Cangjie's stack/value-root scanner replaces HotSpot thread/nmethod closures.
+class MarkYoungRootsTask final : public GCWorkerTask {
+public:
+    MarkYoungRootsTask(const TracingCollector& collector, MarkDomain& domain,
+                       std::function<void()> uncolored)
+        : rootsColored(collector), domain(domain), uncolored(std::move(uncolored)) {}
+
+    void Work(uint32_t) override
+    {
+        rootsColored.Apply([this](NativeSlot& slot) {
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+            Heap::GetHeap().GetRememberedSet().VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&slot));
+#endif
+            coloredClosure.DoOop(slot);
+        });
+        if (!uncoloredClaimed.exchange(true, std::memory_order_relaxed)) {
+            uncolored();
+        }
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
+    }
+private:
+    RootsIteratorAllColored rootsColored;
+    MarkYoungOopClosure coloredClosure;
+    MarkDomain& domain;
+    std::function<void()> uncolored;
+    std::atomic<bool> uncoloredClaimed{false};
+};
+} // namespace
+
 void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
                                  const std::function<void(BaseObject*)>& invisibleVisitor,
                                  uint64_t stackScanEpoch)
@@ -674,13 +703,14 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
         BaseObject* obj = ResolveMinorReference(root);
         invisibleVisitor(obj);
     };
-    // ZMarkYoungOopClosure::do_oop, zMark.cpp:678-681. All colored root
-    // families use this closure; owner routing belongs to the barrier.
-    NativeSlotVisitor nativeVisitor = [](NativeSlot& root) {
-        Heap::GetBarrier().MarkYoungGoodBarrierOnOopField(root);
-    };
-    VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, nativeVisitor, stackScanEpoch);
-    VisitMinorValueRoots(visitor);
+    MarkYoungRootsTask task(*this, *youngMarkDomain, [&] {
+        VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
+        VisitMinorValueRoots(visitor);
+    });
+    GetWorkers(GCCycleGeneration::YOUNG).Run(task);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    Heap::GetHeap().GetRememberedSet().CheckStaticCoverageForMinor();
+#endif
 }
 
 void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
@@ -1074,20 +1104,19 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
                      MarkStackEntry::MarkAndFollow(object), true);
 }
 
-// ZGenerationYoung::mark_object -> ZMark::mark_object (GCThread/Strong/Follow),
-// zGeneration.inline.hpp:119-123 / zMark.inline.hpp:49-94.
-void WCollector::MarkYoungRootObject(BaseObject* object) const
+// ZMark::mark_object<DontResurrect, GCThread, Follow, Strong>,
+// zMark.inline.hpp:49-94. Claim before publishing; retain the live-count duty.
+void MarkDomain::MarkRootObject(BaseObject* object)
 {
-    CHECK_DETAIL(youngMarkDomain != nullptr, "young root mark requires its mark domain");
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
     bool firstLive = false;
-    if (region->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, firstLive)) {
+    if (region->MarkObjectWithLiveClaim(region->GetMarkView<MapleRuntime::Generation::Young>(),
+                                       object, object->GetSize(), false, firstLive)) {
         return;
     }
-    MarkStripeSet& stripes = youngMarkDomain->Stripes();
-    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*youngMarkDomain);
+    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*this);
     publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-                     MarkStackEntry::Claimed(object, firstLive, true, false), true);
+                     MarkStackEntry::Claimed(object, firstLive, true, false), false);
 }
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
