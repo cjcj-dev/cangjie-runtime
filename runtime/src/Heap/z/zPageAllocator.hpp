@@ -12,6 +12,8 @@
 #include <functional>
 #include <mutex>
 #include <vector>
+#include "Heap/z/zFuture.inline.hpp"
+#include "Heap/z/zList.inline.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
@@ -348,8 +350,6 @@ private:
 #include "Common/RunType.h"
 
 #include "Heap/z/zDeferredConstructed.hpp"
-#include "Heap/z/zFuture.inline.hpp"
-#include "Heap/z/zList.inline.hpp"
 #include "Heap/z/zRangeRegistry.hpp"
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zValue.hpp"
