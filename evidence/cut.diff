@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zGeneration.cpp b/runtime/src/Heap/z/zGeneration.cpp
+index 9d694cdfa..0d5156470 100644
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -687,7 +687,7 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
+     ZRendezvousHandshakeClosure rendezvous;
+     Handshake::execute(&rendezvous);
+     collectorResources.UnblockResurrection();
+-    collectorResources.GetFinalizerProcessor().EnqueueReferences();
++    // B19 consumer cut: collectorResources.GetFinalizerProcessor().EnqueueReferences();
+     // zGeneration.cpp:1147-1168: the serial driver excludes young collections
+     // while this verification safepoint observes the weak-inclusive graph.
+     if (ZVerifyRoots || ZVerifyObjects) {

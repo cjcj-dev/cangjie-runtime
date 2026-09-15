@@ -1,0 +1,75 @@
+[
+  {
+    "file": "/root/sym_cangjie_runtime_596_implement_r5673746875-green/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so",
+    "command": [
+      "nm",
+      "--defined-only",
+      "/root/sym_cangjie_runtime_596_implement_r5673746875-green/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so"
+    ],
+    "rc": 0,
+    "matches": [
+      "0000000000532080 T MapleRuntime::WCollector::PublishThreadRoot(MapleRuntime::BaseObject*, bool, bool)",
+      "000000000052ebb0 T MapleRuntime::WCollector::TraceHeap()",
+      "000000000051f940 T MapleRuntime::ReferenceProcessor::DiscoverReference(MapleRuntime::BaseObject*, MapleRuntime::ReferenceType)",
+      "00000000004afcd0 T MapleRuntime::Mutator::GcPhaseEnum(MapleRuntime::GCPhase, bool, unsigned long, bool, unsigned long*)",
+      "00000000004a90b0 T MapleRuntime::HeapImpl::CrossAccessBarrier(long)",
+      "00000000004b3610 t MapleRuntime::PushHeapRoot(MapleRuntime::RootSlot&, bool, bool)",
+      "0000000000538ca0 t std::_Function_handler<void (MapleRuntime::Mutator&), MapleRuntime::WCollector::TraceHeap()::$_2>::_M_manager(std::_Any_data&, std::_Any_data const&, std::_Manager_operation)",
+      "0000000000538c10 t std::_Function_handler<void (MapleRuntime::Mutator&), MapleRuntime::WCollector::TraceHeap()::$_2>::_M_invoke(std::_Any_data const&, MapleRuntime::Mutator&)",
+      "00000000004b35a0 t std::_Function_handler<void (MapleRuntime::HeapSlot<false>&), MapleRuntime::Mutator::GcPhaseEnum(MapleRuntime::GCPhase, bool, unsigned long, bool, unsigned long*)::$_7>::_M_manager(std::_Any_data&, std::_Any_data const&, std::_Manager_operation)",
+      "00000000004b34a0 t std::_Function_handler<void (MapleRuntime::HeapSlot<false>&), MapleRuntime::Mutator::GcPhaseEnum(MapleRuntime::GCPhase, bool, unsigned long, bool, unsigned long*)::$_7>::_M_invoke(std::_Any_data const&, MapleRuntime::HeapSlot<false>&)",
+      "00000000004b38f0 t std::_Function_handler<void (MapleRuntime::RootSlot&), MapleRuntime::Mutator::GcPhaseEnum(MapleRuntime::GCPhase, bool, unsigned long, bool, unsigned long*)::$_8>::_M_manager(std::_Any_data&, std::_Any_data const&, std::_Manager_operation)",
+      "00000000004b3760 t std::_Function_handler<void (MapleRuntime::RootSlot&), MapleRuntime::Mutator::GcPhaseEnum(MapleRuntime::GCPhase, bool, unsigned long, bool, unsigned long*)::$_8>::_M_invoke(std::_Any_data const&, MapleRuntime::RootSlot&)",
+      "00000000004b3980 t std::_Function_handler<void (MapleRuntime::RootSlot&), MapleRuntime::Mutator::GcPhaseEnum(MapleRuntime::GCPhase, bool, unsigned long, bool, unsigned long*)::$_9>::_M_manager(std::_Any_data&, std::_Any_data const&, std::_Manager_operation)",
+      "00000000004b3960 t std::_Function_handler<void (MapleRuntime::RootSlot&), MapleRuntime::Mutator::GcPhaseEnum(MapleRuntime::GCPhase, bool, unsigned long, bool, unsigned long*)::$_9>::_M_invoke(std::_Any_data const&, MapleRuntime::RootSlot&)"
+    ]
+  },
+  {
+    "file": "/root/sym_cangjie_runtime_596_implement_r5673746875/units/testable/cj_gc_unit",
+    "command": [
+      "nm",
+      "--defined-only",
+      "/root/sym_cangjie_runtime_596_implement_r5673746875/units/testable/cj_gc_unit"
+    ],
+    "rc": 0,
+    "matches": [
+      "00000000000297d0 T main"
+    ]
+  },
+  {
+    "file": "/root/sym_cangjie_runtime_596_implement_r5673746875/units/testable/cj_gc_unit",
+    "command": [
+      "nm",
+      "-u",
+      "/root/sym_cangjie_runtime_596_implement_r5673746875/units/testable/cj_gc_unit"
+    ],
+    "rc": 0,
+    "matches": [
+      "                 U MapleRuntime::WCollector::PublishThreadRoot(MapleRuntime::BaseObject*, bool, bool)@CANGJIE",
+      "                 U MapleRuntime::WCollector::TraceHeap()@CANGJIE",
+      "                 U MapleRuntime::ReferenceProcessor::DiscoverReference(MapleRuntime::BaseObject*, MapleRuntime::ReferenceType)@CANGJIE"
+    ]
+  },
+  {
+    "file": "/root/sym_cangjie_runtime_596_implement_r5673746875/units/testable/cj_gc_forwarding_publication_unit",
+    "command": [
+      "nm",
+      "--defined-only",
+      "/root/sym_cangjie_runtime_596_implement_r5673746875/units/testable/cj_gc_forwarding_publication_unit"
+    ],
+    "rc": 0,
+    "matches": [
+      "000000000000bf70 T main"
+    ]
+  },
+  {
+    "file": "/root/sym_cangjie_runtime_596_implement_r5673746875/units/testable/cj_gc_forwarding_publication_unit",
+    "command": [
+      "nm",
+      "-u",
+      "/root/sym_cangjie_runtime_596_implement_r5673746875/units/testable/cj_gc_forwarding_publication_unit"
+    ],
+    "rc": 0,
+    "matches": []
+  }
+]
