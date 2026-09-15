@@ -101,6 +101,7 @@ GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
     producer.Push(domain.Stripes(), 0, MarkStackEntry::MarkAndFollow(fx.obj1), true);
     GC_EXPECT_TRUE(domain.FlushStacks());
     std::vector<MarkStackEntry> delivered;
+    WorkerFixture worker;
     MarkThreadLocalStacks consumer(64);
     MarkStackEntry entry;
     while (consumer.Pop(domain.Smr(), 0, domain.Stripes(), 0, entry)) {
@@ -140,6 +141,7 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact
     two.join();
     GC_EXPECT_TRUE(owners[0] != owners[1]);
     std::vector<MarkStackEntry> delivered;
+    WorkerFixture worker;
     MarkThreadLocalStacks consumer(64);
     MarkStackEntry entry;
     for (size_t stripe = 0; stripe < 2; ++stripe) {

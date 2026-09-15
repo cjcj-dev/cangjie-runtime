@@ -10,6 +10,7 @@
 #ifndef MRT_GC_HEAP_FIXTURE_HPP
 #define MRT_GC_HEAP_FIXTURE_HPP
 
+#include "gc_worker_fixture.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
 #include <cstdlib>
 #include <cstring>

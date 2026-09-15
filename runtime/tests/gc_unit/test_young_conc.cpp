@@ -1106,6 +1106,7 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     MarkStackEntry entry;
                     size_t entries = 0;
                     for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
+                        WorkerFixture worker;
                         while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
                             ++entries;
                             GC_EXPECT_TRUE(entry.object() == fx.obj0);

@@ -44,6 +44,9 @@ void PrepareIsolatedGcUnitProcess()
 
 int main(int argc, char** argv)
 {
+    // Standalone fixtures create worker pools without GCThread::Init. Set the
+    // maximum before any ZPerWorker storage; logical active counts may vary.
+    MapleRuntime::ConcGCThreads = 64;
     MapleRuntime::ZGlobalsPointers::initialize();
     // zInitialize.cpp:62: the CPU affinity table precedes any ZCPU::id() reader.
     MapleRuntime::ZCPU::initialize();

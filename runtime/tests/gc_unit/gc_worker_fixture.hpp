@@ -16,8 +16,6 @@ class WorkerFixture {
 public:
     explicit WorkerFixture(uint32_t id = 0) : saved(WorkerThread::worker_id())
     {
-        static const bool initialized = [] { ConcGCThreads = 64; return true; }();
-        (void)initialized;
         WorkerThread::set_worker_id(id);
     }
     ~WorkerFixture() { WorkerThread::set_worker_id(saved); }
