@@ -653,43 +653,56 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
     gMinorRootOrigin = "unknown";
 }
 
-void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
+namespace {
+// ZMarkOopClosure (zMark.cpp:666-670). P08 owns the missing dedicated old
+// mark barrier; this adapter consumes the existing old publication producer.
+class MarkOopClosure {
+public:
+    explicit MarkOopClosure(const TracingCollector& collector) : collector(collector) {}
+    void DoOop(NativeSlot& slot) const
+    {
+        BaseObject* object = Heap::GetBarrier().ReadStaticRef(slot);
+        collector.MarkOldObjectIfActive(object);
+    }
+private:
+    const TracingCollector& collector;
+};
+
+// ZMarkOldRootsTask, zMark.cpp:797-834. Root results are published to the
+// generation mark domain by closures, then flushed by each participating worker.
+class MarkOldRootsTask final : public GCWorkerTask {
+public:
+    MarkOldRootsTask(const TracingCollector& collector, MarkDomain& domain,
+                     std::function<void()> uncolored)
+        : rootsColored(collector), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
+    void Work(uint32_t) override
+    {
+        rootsColored.Apply([&](NativeSlot& slot) { coloredClosure.DoOop(slot); });
+        rootsUncolored.Apply(uncolored);
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
+    }
+private:
+    RootsIteratorStrongColored rootsColored;
+    RootsIteratorStrongUncolored rootsUncolored;
+    MarkOopClosure coloredClosure;
+    MarkDomain& domain;
+    std::function<void()> uncolored;
+};
+} // namespace
+
+void TracingCollector::EnumAllCommonRoots(GCWorkers& workers)
 {
-    // zRootsIterator.cpp: generation workers claim independent root families.
-    const uint32_t count = workers.ActiveWorkers();
-    std::vector<RootSet> roots(count);
-    class MarkOldRootsTask final : public GCWorkerTask {
-    public:
-        MarkOldRootsTask(const TracingCollector& collector,
-                         std::function<void(uint32_t, RootsIteratorStrongColored&,
-                                            RootsIteratorStrongUncolored&)> body)
-            : rootsColored(collector), body(std::move(body)) {}
-        void Work(uint32_t id) override { body(id, rootsColored, rootsUncolored); }
-    private:
-        RootsIteratorStrongColored rootsColored;
-        RootsIteratorStrongUncolored rootsUncolored;
-        std::function<void(uint32_t, RootsIteratorStrongColored&, RootsIteratorStrongUncolored&)> body;
-    } task(*this, [&](uint32_t id, RootsIteratorStrongColored& colored,
-                     RootsIteratorStrongUncolored& uncolored) {
-        colored.Apply([&](NativeSlot& root) { EnumRefFieldRoot(root, roots[id]); });
-        uncolored.Apply([&] {
-            VisitStrongPlainRoots([&](ObjectRef& root) {
-                EnumAndTagRawRoot(root, roots[id], Generation::Old);
-            }, {});
-            EnumAllSurrectedExportRoots(roots[id]);
-        });
+    CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before roots");
+    MarkOldRootsTask task(*this, *majorMarkDomain, [&] {
+        VisitStrongPlainRoots([&](ObjectRef& root) {
+            MarkOldObjectIfActive(Heap::GetBarrier().ReadPlainRoot(root));
+        }, {});
+        VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
     });
     workers.Run(task);
-    MergeMutatorRoots(rootSet);
-    for (auto& result : roots) {
-        rootSet.insert(result);
-    }
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (testRootsResult) {
-        testRootsResult(workers.GetSnapshot().generation, rootSet);
-    }
+    ObservePublishedRoots(workers.GetSnapshot().generation);
 #endif
-    VLOG(REPORT, "Total roots: %zu(exclude stack roots)", rootSet.size());
 }
 
 namespace {

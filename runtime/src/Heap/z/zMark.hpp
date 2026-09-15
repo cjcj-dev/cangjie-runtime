@@ -301,6 +301,7 @@ public:
     // Observers see the product result after dispatch; neither supplies work.
     // Static storage keeps the instance layout identical in both build shapes.
     static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
+    void ObservePublishedRoots(GCWorkers::Generation generation);
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
     static std::function<void()> testYoungMarkCompleted;
@@ -519,7 +520,7 @@ protected:
 
 
     // enum all common roots.
-    void EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet);
+    void EnumAllCommonRoots(GCWorkers& workers);
     GCWorkers& GetWorkers(GCCycleGeneration generation) const
     {
         return *(generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Workers();
@@ -553,6 +554,7 @@ private:
     size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
+    void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
 
     void VisitStaticRoots(const NativeSlotVisitor& visitor) const;
     void VisitFinalizerRoots(const NativeSlotVisitor& visitor) const;

@@ -855,17 +855,22 @@ void TracingCollector::CurrentizeValueRootMap(
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
 
 
-void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
+void TracingCollector::EnumAllSurrectedExportRoots(RootSet& rootSet)
+{
+    VisitSurrectedExportRoots([&](BaseObject* object) { rootSet.push_back(object); });
+}
+
+void TracingCollector::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor)
 {
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
         CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Old);
         CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Old);
         for (BaseObject* obj : resurrectedExportObjectes) {
-            rootSet.push_back(obj);
+            visitor(obj);
         }
         for (BaseObject* obj : resurrectedExportObjectesForwardPhase) {
-            rootSet.push_back(obj);
+            visitor(obj);
         }
     }
     std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
@@ -873,9 +878,9 @@ void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
     auto it = cycleRefWorkStack.begin();
     while (it != cycleRefWorkStack.end()) {
         BaseObject* exportObj = it->first;
-        rootSet.push_back(exportObj);
+        visitor(exportObj);
         for (auto &externObj : it->second) {
-            rootSet.push_back(externObj.object);
+            visitor(externObj.object);
         }
         it++;
     }

@@ -225,7 +225,7 @@ GC_OTHER_VM_TEST(FnlzRoots, ExportBlockGrowthKeepsSlotsAndReleaseSkipsVacancies)
                  seen, static_cast<void*>(first), static_cast<void*>(grown));
     GC_EXPECT_EQ(seen, size_t(130));
     GC_EXPECT_TRUE(first != nullptr && first == grown);
-    for (U64 handle : handles) { heap.RemoveExportRoot(handle); }
+    for (U64 handle : handles) { heap.RemoveExportObject(handle); }
     size_t releasedSeen = 0;
     heap.VisitAllExportRoots([&](NativeSlot& slot) {
         for (auto& object : objects) {

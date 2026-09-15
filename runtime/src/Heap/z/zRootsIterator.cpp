@@ -323,7 +323,8 @@ void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_ENUM");
-    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD), workStack);
+    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD));
+    MergeMutatorRoots(workStack);
     EnumAllExportRoots(foreignRootsSet);
 }
 
