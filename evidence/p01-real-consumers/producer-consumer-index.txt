@@ -1,0 +1,59 @@
+COMMAND ['rg', '-n', 'InitCJRuntime|RegionSpace::Init|OnHeapCreated|PublishCompilerHeapRanges|TryMapMemory', 'runtime/src/CangjieRuntime.cpp', 'runtime/src/Heap/z/zPageAllocator.cpp', 'runtime/src/Heap/z/zHeap.hpp', 'runtime/src/Heap/z/zVirtualMemoryManager.cpp']
+RC=0
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:430:MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:525:    MemMap* memMap = TryMapMemory(reqSize, initSize, opt, budget, topology, NativeBackend());
+runtime/src/Heap/z/zHeap.hpp:151:    // writes remain confined to OnHeapCreated below.
+runtime/src/Heap/z/zHeap.hpp:155:    static void OnHeapCreated(MAddress startAddr)
+runtime/src/Heap/z/zHeap.hpp:163:        PublishCompilerHeapRanges();
+runtime/src/Heap/z/zHeap.hpp:166:    static void OnHeapCreated(MAddress startAddr, const std::vector<HeapSlotAddressRange>& reservations)
+runtime/src/Heap/z/zHeap.hpp:168:        OnHeapCreated(startAddr);
+runtime/src/Heap/z/zHeap.hpp:177:        PublishCompilerHeapRanges();
+runtime/src/Heap/z/zHeap.hpp:193:        PublishCompilerHeapRanges();
+runtime/src/Heap/z/zHeap.hpp:201:    static void PublishCompilerHeapRanges()
+runtime/src/Heap/z/zPageAllocator.cpp:1136:void RegionSpace::Init(const HeapParam& vmHeapParam)
+runtime/src/Heap/z/zPageAllocator.cpp:1189:    Heap::OnHeapCreated(reservedStart, heapReservations);
+
+COMMAND ['rg', '-n', 'RegisterStaticRoots|MCC_WriteRefField|CJ_MCC_ReadRefField|Heap::IsHeapAddress\\(plainField\\)|Heap::IsHeapAddress\\(field\\)', 'runtime/src/Heap/z/zHeap.cpp', 'runtime/src/CompilerCalls.cpp']
+RC=0
+runtime/src/CompilerCalls.cpp:314:extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
+runtime/src/CompilerCalls.cpp:328:    if (Heap::IsHeapAddress(plainField)) {
+runtime/src/CompilerCalls.cpp:1868:extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
+runtime/src/CompilerCalls.cpp:1870:    if (Heap::IsHeapAddress(field)) {
+runtime/src/Heap/z/zHeap.cpp:143:    void RegisterStaticRoots(Uptr addr, U32) override;
+runtime/src/Heap/z/zHeap.cpp:262:void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
+
+COMMAND ['rg', '-n', 'emitReservedHeapSlot|readFastPath\\(|storeFastPath\\(', '/root/cj_build/llvm_rebase_wt/sym_cangjie_runtime_608_implement_r5676392826/llvm/lib/CodeGen/CJBarrierLowering.cpp']
+RC=0
+59:static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *PlaceI,
+664:  void readFastPath(CallInst *ReadBarrier, Value *RefFieldPtr,
+685:      Value *InHeap = emitReservedHeapSlot(Builder, M, PlaceI, "cj.read.inheap");
+814:  void storeFastPath(CallInst *CI) {
+840:    Value *InHeap = emitReservedHeapSlot(Builder, M, PlaceI, "cj.store.inheap");
+1040:      WB.storeFastPath(CI);
+1079:      RB.readFastPath(CI, getPointerArg(CI));
+1084:        RB.readFastPath(CI, CI->getArgOperand(AtomicLoad::Field),
+
+COMMAND ['rg', '-n', 'llvm.cj.gcread.ref|llvm.cj.gcwrite.ref|slot_domain_(read|write)', 'runtime/tests/gc_unit/slot_domain_consumer.ll', 'runtime/tests/gc_unit/slot_domain_driver.cpp']
+RC=0
+runtime/tests/gc_unit/slot_domain_driver.cpp:15:extern "C" void slot_domain_write(void*, void*, void**);
+runtime/tests/gc_unit/slot_domain_driver.cpp:16:extern "C" void* slot_domain_read(void*, void**);
+runtime/tests/gc_unit/slot_domain_driver.cpp:95:        slot_domain_write(payload, owner, slot);
+runtime/tests/gc_unit/slot_domain_driver.cpp:100:        void* result = slot_domain_read(owner, slot);
+runtime/tests/gc_unit/slot_domain_consumer.ll:5:declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
+runtime/tests/gc_unit/slot_domain_consumer.ll:6:declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
+runtime/tests/gc_unit/slot_domain_consumer.ll:8:define i8 addrspace(1)* @slot_domain_read(i8 addrspace(1)* %base,
+runtime/tests/gc_unit/slot_domain_consumer.ll:11:  %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %base,
+runtime/tests/gc_unit/slot_domain_consumer.ll:16:define void @slot_domain_write(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
+runtime/tests/gc_unit/slot_domain_consumer.ll:19:  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
+
+
+COMMAND ['rg', '-n', 'InitCJRuntime\\(|CreateAndInit\\(|heapManager =|HeapManager::Init|theSpace->Init|RegisterStaticRoots', 'runtime/src/CangjieRuntimeApi.cpp', 'runtime/src/CangjieRuntime.cpp', 'runtime/src/HeapManager.cpp', 'runtime/src/Heap/z/zHeap.cpp']
+RC=0
+runtime/src/Heap/z/zHeap.cpp:143:    void RegisterStaticRoots(Uptr addr, U32) override;
+runtime/src/Heap/z/zHeap.cpp:215:    theSpace->Init(param);
+runtime/src/Heap/z/zHeap.cpp:262:void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
+runtime/src/HeapManager.cpp:20:void HeapManager::Init(const HeapParam& param) { Heap::GetHeap().Init(param); }
+runtime/src/CangjieRuntimeApi.cpp:171:    MapleRuntime::CangjieRuntime::CreateAndInit(*p);
+runtime/src/CangjieRuntimeApi.cpp:183:RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
+runtime/src/CangjieRuntime.cpp:147:void CangjieRuntime::CreateAndInit(const RuntimeParam& runtimeParam)
+runtime/src/CangjieRuntime.cpp:216:    heapManager = NewAndInit<HeapManager>(param.heapParam);

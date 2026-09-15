@@ -3,6 +3,18 @@
 // with Runtime Library Exception.
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 // Per-generation publication and independent product mark consumption.
+//
+// Companion of run_generation_cycle_context.sh. Its fixtures reach product
+// internals through MRT_TESTABLE_INTERNALS friend access (MarkPublicationFixture
+// in WCollector.h/CollectorProxy.h/zMark.hpp/zDriver.hpp), so it only exists in
+// the testable configuration; the runner builds it only against a testable
+// product SO and reports SATB_RC=NOT_RUN otherwise. The process entry is
+// gc_unit_main.cpp, the same one as cj_gc_unit, so --gtest_filter= /
+// --gtest_list_tests and the GC_OTHER_VM_TEST child re-exec (gc_unittest.hpp
+// RunInOtherVm) are handled identically here, one process per test.
+#if !defined(MRT_TESTABLE_INTERNALS)
+#error "test_generation_satb_obligations.cpp requires MRT_TESTABLE_INTERNALS; build it against a testable product SO"
+#endif
 
 #include "Common/Runtime.h"
 #include "gc_heap_fixture.hpp"
@@ -138,10 +150,4 @@ GC_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
     mark.DrainOld([&](BaseObject* object, bool) { published.push_back(object); });
     GC_EXPECT_EQ(published.size(), 1u);
     GC_EXPECT_TRUE(published.front() == fx.obj0);
-}
-
-int main(int argc, char** argv)
-{
-    if (argc == 2) setenv("GC_UNIT_FILTER", argv[1], 1);
-    return RunAll();
 }
