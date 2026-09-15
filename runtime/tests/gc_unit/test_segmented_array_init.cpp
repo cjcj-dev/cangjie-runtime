@@ -891,7 +891,7 @@ void* RunVisibleArrayGraph(void*)
 {
     Mutator::GetMutator()->SetManagedContext(false);
     MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
-    NativeSlot root;
+    NativeSlot root(zpointer::null);
     Heap::GetBarrier().WriteStaticRef(root, array);
     NativeSlot* roots[] = { &root };
     Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
