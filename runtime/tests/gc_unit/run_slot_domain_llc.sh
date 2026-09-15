@@ -10,8 +10,10 @@ mkdir -p "$OUT"
   "$SRC/slot_domain_consumer.ll"
 clang -O0 -fPIC -shared -o "$OUT/libslot_mcc_stubs.so" "$SRC/slot_domain_mcc_stubs.c"
 clang++ -std=gnu++17 -O0 -g -fno-rtti \
-  -I"$ROOT/runtime/src" -I"$ROOT/runtime/include" \
+  -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" -I"$ROOT/runtime/include" \
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+  -I"$ROOT/runtime/src/CJThread/src/base/log/include" \
+  -I"$ROOT/runtime/src/CJThread/src/runtime/log/include" \
   -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
   "$SRC/slot_domain_driver.cpp" "$OUT/slot_domain_consumer.o" \
   -L"$SO" -Wl,-rpath,"$SO" -lcangjie-runtime -lboundscheck -ldl -lpthread \

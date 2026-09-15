@@ -1,5 +1,4 @@
 #include "Heap/z/zAddress.hpp"
-#include "Heap/z/zHeap.hpp"
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -7,6 +6,13 @@
 #include <unistd.h>
 
 using namespace MapleRuntime;
+extern "C" {
+extern uintptr_t g_cjHeapStart;
+extern uintptr_t g_cjHeapEnd;
+extern uintptr_t g_cjHeapRangeCount;
+extern uintptr_t g_cjHeapRangeStart[];
+extern uintptr_t g_cjHeapRangeEnd[];
+}
 
 extern "C" void slot_domain_write(void *val, void *base, void **field);
 
@@ -32,8 +38,17 @@ int main()
     uintptr_t hole = r0e;
     uintptr_t r1s = r0e + page;
     uintptr_t r1e = r1s + page;
-    Heap::OnHeapCreated(r0s, { { r0s, r0e }, { r1s, r1e } });
-    Heap::OnHeapExtended(r1e);
+    g_cjHeapStart = r0s;
+    g_cjHeapEnd = r1e;
+    g_cjHeapRangeCount = 2;
+    g_cjHeapRangeStart[0] = r0s;
+    g_cjHeapRangeEnd[0] = r0e;
+    g_cjHeapRangeStart[1] = r1s;
+    g_cjHeapRangeEnd[1] = r1e;
+    for (unsigned i = 2; i < 8; ++i) {
+        g_cjHeapRangeStart[i] = 0;
+        g_cjHeapRangeEnd[i] = 0;
+    }
 
     std::printf("SLOT_DOMAIN_RANGES n=%lu r0=%lx-%lx hole=%lx r1=%lx-%lx start=%lx end=%lx\n",
                 static_cast<unsigned long>(g_cjHeapRangeCount), r0s, r0e, hole, r1s, r1e,
