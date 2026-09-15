@@ -1,0 +1,26 @@
+20K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/compile-manifest.bin
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/df-before.txt
+0	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/elf.sha256
+51M	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/objects
+500K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/remap-young-roots-receipt-exports.txt
+176K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/run.log
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/run.rc
+392K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/runtime-dynamic-symbols.txt
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/so.sha256
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/uptime-after.txt
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/uptime-before.txt
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-default/wall.txt
+20K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/compile-manifest.bin
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/df-before.txt
+0	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/elf.sha256
+71M	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/objects
+524K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/remap-young-roots-receipt-exports.txt
+196K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/run.log
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/run.rc
+408K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/runtime-dynamic-symbols.txt
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/so.sha256
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/uptime-after.txt
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/uptime-before.txt
+4.0K	/root/sym_cangjie_runtime_610_implement_r5687426297-b2/unit-testable/wall.txt
+文件系统        大小  已用  可用 已用% 挂载点
+/dev/nvme0n1p5  443G  414G  6.1G   99% /

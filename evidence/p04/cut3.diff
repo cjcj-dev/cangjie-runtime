@@ -1,11 +1,13 @@
+diff --git a/runtime/src/Heap/z/zPageAllocator.cpp b/runtime/src/Heap/z/zPageAllocator.cpp
+index 81f13cbc0..a036ad1bb 100644
 --- a/runtime/src/Heap/z/zPageAllocator.cpp
 +++ b/runtime/src/Heap/z/zPageAllocator.cpp
-@@ -490,7 +490,7 @@
+@@ -491,7 +491,7 @@ void FreeRegionManager::UncommitFlushed(size_t flushed)
          const size_t part = std::min(remaining, partition->claimed);
          if (part == 0) { continue; }
          partition->claimed -= part;
 -        decrease_capacity(partition->numaId, part, false /* set_max_capacity */);
-+        // Deliberately omit uncommitted capacity accounting.
++        // Control: omit uncommitted capacity accounting.
          remaining -= part;
      }
      CHECK(remaining == 0);

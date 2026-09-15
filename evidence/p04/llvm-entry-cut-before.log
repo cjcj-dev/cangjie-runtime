@@ -1,0 +1,8 @@
+✅ evidence/p04/llvm-cuts/cut-read/cut.diff :: llvm/lib/CodeGen/CJBarrierLowering.cpp
+   ✅ 产品树文件 —— llvm/lib/CodeGen/CJBarrierLowering.cpp
+   ✅ 文件在基线存在 —— 1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp
+   ✅ 被断开的行在基线逐字存在 —— 1 行全在基线
+   ✅ 没有断在候选自己新增的行上 —— 无
+⛔ * :: *
+   ⛔ 至少一处断线落在真实相位入口函数 —— RunGarbageCollection, RequestGC, DoGarbageCollection, PushYoungObject, FindUselessExternObjects, Preforward, PostTrace, PublishMarkCoverage, ReclaimRetired, RehomeCompactedInPlaceRegion, TryAllocateForRelocation, SetRelocationRegion, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, PostResolveCycleTask, VerifyFaceEnabled, VerifyPhaseEnter, GCPhasePreForward, TransitionToGCPhaseExclusive, ForwardObjectImpl, ForwardObjectExclusive, RelocateObjectInner, TryMutatorRelocate, WaitForPageForwarding, RunCycle, Uncommit, VisitHeapRootSlots, WriteReference, RecordCrossGenEdge, ZeroAndFill, runtime/src/Heap/z/zStat.cpp:Sort, PublishForwardingCarrier, PrepareForwardableRegion, DoYoungGarbageCollection, DoTracing, ProcessOldNonStrongReferences, PostWriteReference, WaitForAck, ProcessDriverRequest, RequestGCAndWait, DrainStackWatermark, VisitRawObjects, NoteLargeArrayInitRootVisit, runtime/src/Heap/z/zMarkingSMR.cpp:free_node, runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:MRT_TransitMutatorToExit, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:LibInit, runtime/src/Heap/z/workerThread.cpp:coordinator_distribute_task, runtime/src/Heap/z/zWorkers.cpp:run
+⇒ ⛔ 断线补丁不合法：断的是候选自己新增的行/测试文件，或该行不在基线

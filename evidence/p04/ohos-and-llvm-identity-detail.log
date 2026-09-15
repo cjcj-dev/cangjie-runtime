@@ -1,0 +1,22 @@
+In file included from /root/sym_cangjie_runtime_610_implement_r5687426297-green/default/runtime/src/Heap/WCollector/WCollector.h:23:
+In file included from /root/sym_cangjie_runtime_610_implement_r5687426297-green/default/runtime/src/Heap/Allocator/RegionSpace.h:24:
+In file included from /root/sym_cangjie_runtime_610_implement_r5687426297-green/default/runtime/src/Heap/z/zPageAllocator.hpp:16:
+/root/sym_cangjie_runtime_610_implement_r5687426297-green/default/runtime/src/Heap/z/zList.inline.hpp:84:35: warning: offset of on non-standard-layout type 'MapleRuntime::AllocationStallRequest' [-Winvalid-offsetof]
+    return (T*)((uintptr_t)node - offsetof(T, _node));
+                                  ^           ~~~~~
+/usr/lib/llvm-14/lib/clang/14.0.0/include/stddef.h:104:24: note: expanded from macro 'offsetof'
+#define offsetof(t, d) __builtin_offsetof(t, d)
+                       ^                     ~
+/root/sym_cangjie_runtime_610_implement_r5687426297-green/default/runtime/src/Heap/z/zList.inline.hpp:124:35: note: in instantiation of member function 'MapleRuntime::ZList<MapleRuntime::AllocationStallRequest>::cast_to_outer' requested here
+    return is_empty() ? nullptr : cast_to_outer(_head._next);
+                                  ^
+/root/sym_cangjie_runtime_610_implement_r5687426297-green/default/runtime/src/Heap/z/zPageAllocator.hpp:128:56: note: in instantiation of member function 'MapleRuntime::ZList<MapleRuntime::AllocationStallRequest>::first' requested here
+            AllocationStallRequest* request = requests.first();
+                                                       ^
+17 warnings generated.
+fatal: 不是 git 仓库（或者任何父目录）：.git
+fatal: 不是 git 仓库（或者任何父目录）：.git
+same source True
+green objects [('tools/llc/CMakeFiles/llc.dir/llc.cpp.o', '89b1a8ab16226f7e6446f0d58b4ea440b8582af656ae6fb89df91af725daab83'), ('lib/CodeGen/CMakeFiles/LLVMCodeGen.dir/CJBarrierLowering.cpp.o', 'd446139b28b9d535073cc39064f326aa0b610b371058cd8bcbe1387552a0cd44'), ('llc', None)]
+restored objects [('tools/llc/CMakeFiles/llc.dir/llc.cpp.o', '89b1a8ab16226f7e6446f0d58b4ea440b8582af656ae6fb89df91af725daab83'), ('lib/CodeGen/CMakeFiles/LLVMCodeGen.dir/CJBarrierLowering.cpp.o', 'f46da728f062dcef6106bc150a89b4336ecd29db22667b8b5c626444dae1d00f'), ('llc', None)]
+same link inputs True

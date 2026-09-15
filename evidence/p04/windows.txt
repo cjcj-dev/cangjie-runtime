@@ -1,0 +1,12 @@
+⭐ 已占窗口 48-63 · holder=sym645-1 · claimed=2026-09-15T19:59:19.236Z · host=kkk2
+⭐ 已占窗口 112-127 · holder=sym645-2 · claimed=2026-09-15T19:59:19.236Z · host=kkk2
+⭐ 已占窗口 128-143 · holder=sym645-3 · claimed=2026-09-15T19:59:19.236Z · host=kkk2
+⭐ 已占窗口 0-15 · holder=sym_cangjie_runtime_646_implement_r5686136394-1 · claimed=2026-09-15T20:26:19.420Z · host=kkk2
+⭐ 已占窗口 80-95 · holder=sym_cangjie_runtime_612_implement_r5687430155-1 · claimed=2026-09-15T20:41:27.367Z · host=kkk2
+⭐ 已占窗口 96-111 · holder=sym_cangjie_runtime_612_implement_r5687430155-2 · claimed=2026-09-15T20:41:27.367Z · host=kkk2
+⭐ 已占窗口 144-159 · holder=sym_cangjie_runtime_612_implement_r5687430155-3 · claimed=2026-09-15T20:41:27.367Z · host=kkk2
+⭐ 已占：预约(未过期) 48-63,112-127,128-143,0-15,80-95,96-111,144-159 · 实测 无
+⭐ 已登记 3 条预约（前缀 sym_cangjie_runtime_610_implement_r5687426297，2h 后过期）
+16-31
+32-47
+160-175

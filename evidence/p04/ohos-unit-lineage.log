@@ -1,0 +1,7 @@
+# slot test0 acquired 2026-09-16T05:24:25+08:00
+UNIT_OHOS_RC=0
+GC_UNIT_OHOS_HOST_REUSING_ELF elf=/root/sym_cangjie_runtime_610_implement_r5687426297-green/ohos/unit/cj_gc_ohos_host_unit
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.MajorEntryPostsResolveTask state=PASS rc=0 log=/root/sym_cangjie_runtime_610_implement_r5687426297-green/ohos/unit-lineage/ohos_host_major.log
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.PostResolvePostsProductTask state=PASS rc=0 log=/root/sym_cangjie_runtime_610_implement_r5687426297-green/ohos/unit-lineage/ohos_host_post.log
+GC_UNIT_OHOS_HOST_FILTER test=OHOSCycle.EmptyWorkDoesNotPost state=PASS rc=0 log=/root/sym_cangjie_runtime_610_implement_r5687426297-green/ohos/unit-lineage/ohos_host_empty.log
+GC_UNIT_OHOS_HOST_OK filters=3 receipt=/root/sym_cangjie_runtime_610_implement_r5687426297-green/ohos/unit-lineage/ohos_host.receipt elf=/root/sym_cangjie_runtime_610_implement_r5687426297-green/ohos/unit/cj_gc_ohos_host_unit

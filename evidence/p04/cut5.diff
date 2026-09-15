@@ -1,11 +1,13 @@
+diff --git a/runtime/src/Heap/z/zUncommitter.cpp b/runtime/src/Heap/z/zUncommitter.cpp
+index ce7b430bb..ba197346f 100644
 --- a/runtime/src/Heap/z/zUncommitter.cpp
 +++ b/runtime/src/Heap/z/zUncommitter.cpp
-@@ -223,7 +223,7 @@
+@@ -223,7 +223,7 @@ size_t Uncommitter::Uncommit()
          // zUncommitter.cpp:413-420: rejoin, adjust claimed and capacity.
          ScopedObjectAccess participation;
          std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
 -        regions.freeRegionManager.UncommitFlushed(flushed);
-+        // Deliberately disconnect the uncommit capacity consumer.
++        // Control: disconnect the uncommit capacity consumer.
          RegisterUncommit(flushed);
          return flushed;
      }

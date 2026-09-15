@@ -1,0 +1,8 @@
+# slot test1 acquired 2026-09-16T04:52:11+08:00
+unit=testable rc=1
+[==========] 719 tests from 112 test suites ran.
+[  PASSED  ] 717 tests.
+[  FAILED  ] 2 tests, listed below:
+[  FAILED  ] NativeRootCurrent.MajorSeed
+[  FAILED  ] ColourCensus.PlainWriteFunnelFailsClosed
+GC_UNIT_PARALLEL jobs=192 tests=719 wall=10.385

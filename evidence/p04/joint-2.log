@@ -1,0 +1,16 @@
+# slot test0 acquired 2026-09-16T04:53:11+08:00
+reservations=2 rc=0
+SLOT_DOMAIN_INPUT domain=0x40000000000 size=4398046511104 windows=2 segment=67108864
+SLOT_DOMAIN_ASSERT name=reservation.count actual=0x2 expected=0x2 pass=1
+SLOT_DOMAIN_TARGET_RESERVATION index=0 start=0x40000000000 end=0x40004000000 holder=0x40000000000
+SLOT_DOMAIN_SETUP ranges=2 first=0x40000000000-0x40004000000 second=0x40008000000-0x4000c000000 heap=0x40000000010 hole=0x40004000000 global=0x5d78ae02c200 payload=0x40000000050
+SLOT_DOMAIN_ASSERT name=heap_dyn.write actual=0x800000000a1510 expected=0x800000000a1510 pass=1
+SLOT_DOMAIN_ASSERT name=heap_dyn.read actual=0x40000000050 expected=0x40000000050 pass=1
+SLOT_DOMAIN_ASSERT name=heap_null.write actual=0x800000000a1510 expected=0x800000000a1510 pass=1
+SLOT_DOMAIN_ASSERT name=heap_null.read actual=0x40000000050 expected=0x40000000050 pass=1
+SLOT_DOMAIN_ASSERT name=hole.write actual=0x40000000050 expected=0x40000000050 pass=1
+SLOT_DOMAIN_ASSERT name=hole.read actual=0x40000000050 expected=0x40000000050 pass=1
+SLOT_DOMAIN_ASSERT name=global.write actual=0x800000000a1510 expected=0x800000000a1510 pass=1
+SLOT_DOMAIN_ASSERT name=global.read actual=0x40000000050 expected=0x40000000050 pass=1
+SLOT_DOMAIN_RESULT assertions=9 failures=0
+SLOT_DOMAIN_DRIVER_RC=0
