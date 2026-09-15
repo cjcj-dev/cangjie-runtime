@@ -17,6 +17,7 @@ set(GC_UNIT_SOURCES
     test_region_list.cpp
     test_zArray.cpp
     test_zIndexDistributor.cpp
+    test_zValue.cpp
     test_zstat.cpp
     test_zserviceability.cpp
     test_trustp1_phase1.cpp
