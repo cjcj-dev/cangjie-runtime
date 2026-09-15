@@ -445,13 +445,13 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     GC_EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
-// T6 control arm: a non-heap destination remains a root slot even when the
-// optional holder is null, and uses the native zpointer encoding.
-GC_TEST(DefectRegress, CompilerWriteNullHolderStaticSlotUsesRootPath)
+// P01: mutable global value fields carry the explicit $BP=1 owner;
+// $BP=0 is reserved for plain value-type storage.
+GC_TEST(DefectRegress, CompilerWriteGlobalOwnerStaticSlotUsesRootPath)
 {
     ExportHandleFixture fx;
     RefField<false> staticField(zpointer::null);
-    MCC_WriteRefField(fx.heap.obj0, nullptr, &staticField);
+    MCC_WriteRefField(fx.heap.obj0, reinterpret_cast<ObjectPtr>(uintptr_t(1)), &staticField);
 
     const uintptr_t installed = static_cast<uintptr_t>(raw(staticField.GetFieldValue()));
     GC_EXPECT_EQ(installed, raw(StoreGoodPointer(fx.heap.obj0)));
