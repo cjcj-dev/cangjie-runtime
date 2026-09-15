@@ -58,7 +58,6 @@ enum class HealSite : uint16_t {
     WCollectorNormalizeRawRoot,
     WCollectorRemapYoungRoots,
     WCollectorResolveRootLoadGoodForward,
-    WCollectorTraceRefField,
     WCollectorTryUntagRefField,
     WCollectorTryUpdateRefField,
 };

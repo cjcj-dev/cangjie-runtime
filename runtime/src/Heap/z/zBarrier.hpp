@@ -31,7 +31,7 @@ public:
     ~Barrier() = default;
 
 #if defined(MRT_TESTABLE_INTERNALS)
-    enum class FieldMarkKind { Old, Young, Remset };
+    enum class FieldMarkKind { Old, Finalizable, Young, Remset };
     // Read-only result observation after the product barrier, never a work producer.
     static std::function<void(FieldMarkKind, RefField<>&, zpointer, zaddress)> testFieldMarkResult;
 #endif
@@ -47,7 +47,7 @@ public:
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
     BaseObject* ReadStaticRef(NativeSlot& field) const;
     void MarkYoungGoodBarrierOnOopField(NativeSlot& field) const;
-    void MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field) const;
+    void MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable) const;
     void MarkBarrierOnYoungOopField(RefField<>& field) const;
     zaddress RemsetBarrierOnOopField(RefField<>& field) const;
     BaseObject* ReadPlainRoot(RootSlot& field) const;
@@ -136,6 +136,9 @@ private:
     template<typename SlowPath>
     zaddress MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
                            RefField<>& field, zpointer observed, const ForwardingProvenance& provenance) const;
+    static bool IsFinalizableGoodFastPath(zpointer value);
+    static zpointer ColorFinalizableGood(zaddress address, zpointer previous);
+    zaddress MarkFinalizableFromOldSlowPath(zaddress address) const;
     static bool IsMarkGoodFastPath(zpointer value);
     static bool IsStoreGoodOrNullAnyFastPath(zpointer value);
     static zpointer ColorMarkGood(zaddress address, zpointer previous);

@@ -182,7 +182,6 @@ public:
     bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo) override;
 
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
-    void TraceFinalizableRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const;
     void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack, bool finalizable = false) const;
     void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false) override;
     void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;

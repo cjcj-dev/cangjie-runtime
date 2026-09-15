@@ -11,7 +11,7 @@ HOST="${GC_UNIT_CJC_RUNTIME_LIB_DIR:?set compiler host runtime}"
 HEADERS=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" "$ROOT/runtime" "$LIB")
 mkdir -p "$OUT"
 "${CXX:-clang++}" -shared -fPIC -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
-  -fvisibility-inlines-hidden -DMRT_TESTABLE_INTERNALS=1 \
+  -fvisibility-inlines-hidden -DMRT_TESTABLE_INTERNALS=1 -DMRT_GC_UNIT_TESTS=1 \
   -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
   -I"$ROOT/runtime/include" -I"$HEADERS/include" \
@@ -26,7 +26,7 @@ main(): Int64 {
 }
 CJ
 LD_LIBRARY_PATH="$HOST:$SDK/tools/lib:$SDK/third_party/llvm/lib" \
-  "$SDK/bin/cjc" "$OUT/p2_field_barrier.cj" -O0 --static-std -L "$LIB" -L "$OUT" \
+  "${P2_CJC:-$SDK/bin/cjc}" "$OUT/p2_field_barrier.cj" -O0 --static-std -L "$LIB" -L "$OUT" \
   -lp2_field_barrier -o "$OUT/p2_field_barrier"
 sha256sum "$OUT/p2_field_barrier" "$OUT/libp2_field_barrier.so" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so"
 LD_LIBRARY_PATH="$OUT:$LIB:$SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \

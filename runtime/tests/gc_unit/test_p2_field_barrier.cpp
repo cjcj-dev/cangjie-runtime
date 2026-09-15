@@ -81,8 +81,8 @@ extern "C" int p2FieldBarrierExercise()
                 Expect(page->IsYoungRegion(), "remset_child_still_young");
                 Expect(page->IsMarkedObject(page->GetMarkView<Generation::Young>(), currentChild), "remset_child_marked");
             }
-            Expect(ColourPredicates::is_load_good(raw(field.GetFieldValue()), ::g_cjLoadBadMask) &&
-                   ColourPredicates::is_marked_young(raw(field.GetFieldValue()), ::g_cjMarkBadMask), "remset_slot_young_good");
+            Expect(ZPointer::is_load_good(field.GetFieldValue()) &&
+                   ZPointer::is_marked_young(field.GetFieldValue()), "remset_slot_young_good");
         }
         if (&field == &Slot(holder, 1) && kind == Barrier::FieldMarkKind::Old) {
             ++oldOld;
@@ -93,14 +93,14 @@ extern "C" int p2FieldBarrierExercise()
         if (&field == &Slot(holder) && kind == Barrier::FieldMarkKind::Old && currentChild != nullptr &&
             RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(currentChild))->IsYoungRegion()) {
             ++oldYoung;
-            Expect(!ColourPredicates::is_mark_good(raw(observed), ::g_cjLoadBadMask, ::g_cjMarkBadMask), "old_young_reached_bad_color");
+            Expect(!ZPointer::is_mark_good(observed), "old_young_reached_bad_color");
             Expect(is_null(result), "old_young_no_object_result");
             Expect(field.GetFieldValue() == observed, "old_young_slot_unchanged");
         }
         if (currentChild != nullptr && &field == &Slot(currentChild) && kind == Barrier::FieldMarkKind::Young) {
             ++youngFollow;
             Expect(!is_null(result), "young_child_follows_sentinel");
-            Expect(!ColourPredicates::is_store_bad(raw(field.GetFieldValue()), ::g_cjStoreBadMask), "young_field_store_good");
+            Expect(!ZPointer::is_store_bad(field.GetFieldValue()), "young_field_store_good");
         }
     };
     const bool minorOnly = std::getenv("P2_MINOR_ONLY") != nullptr;

@@ -65,18 +65,6 @@ inline zpointer Barrier::ColorMarkYoungGood(zaddress address, zpointer previous)
 inline void Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    // Cangjie NativeSlot tables also contain plain, read-only ELF literals.
-    // They have no ZGC heap-root counterpart and must retain their plain word.
-    BaseObject* payload = to_object(RefField<>(observed).GetTargetObject());
-    if (payload != nullptr && !Heap::IsHeapAddress(payload)) {
-        return;
-    }
-    // Retain the colored native-root admission invariant from ReadStaticRef.
-    // ZPointer::assert_is_valid, zAddress.inline.hpp:320-393.
-    CHECK_DETAIL(payload == nullptr ||
-                     (raw(observed) & (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
-                 "NativeSlot requires colored value at MarkYoungGoodBarrier slot=%p word=%#zx", &field,
-                 raw(observed));
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     MarkBarrier(IsMarkYoungGoodFastPath, &Barrier::MarkYoungSlowPath,
                 ColorMarkYoungGood, field, observed, provenance);
@@ -85,27 +73,34 @@ inline void Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const
 // ZBarrier fast/color functions, zBarrier.inline.hpp:379-448.
 inline bool Barrier::IsMarkGoodFastPath(zpointer value)
 {
-    return ColourPredicates::is_mark_good(raw(value), ::g_cjLoadBadMask, ::g_cjMarkBadMask);
+    return ZPointer::is_mark_good(value);
 }
 
 inline bool Barrier::IsStoreGoodOrNullAnyFastPath(zpointer value)
 {
-    return !ColourPredicates::has_address(raw(value)) ||
-           !ColourPredicates::is_store_bad(raw(value), ::g_cjStoreBadMask);
+    return is_null_any(value) || !ZPointer::is_store_bad(value);
 }
 
 inline zpointer Barrier::ColorMarkGood(zaddress address, zpointer previous)
 {
-    if (!ColourPredicates::has_address(raw(previous))) {
-        return to_zpointer(::g_cjStoreGoodMask | REMEMBERED_MASK);
-    }
-    return to_zpointer(raw(address) | (REMAP_COLOUR_MASK ^ ::g_cjLoadBadMask) |
-                      ((MARKED_YOUNG_MASK | MARKED_OLD_MASK) & ~::g_cjMarkBadMask) | REMEMBERED_MASK);
+    return ZAddress::mark_good(address, previous);
+}
+
+// ZBarrier::is_finalizable_good_fast_path / color_finalizable_good, :396/:418.
+inline bool Barrier::IsFinalizableGoodFastPath(zpointer value)
+{
+    return ZPointer::is_load_good(value) && ZPointer::is_marked_any_old(value);
+}
+
+inline zpointer Barrier::ColorFinalizableGood(zaddress address, zpointer previous)
+{
+    return ZPointer::is_marked_old(previous) ? ZAddress::mark_old_good(address, previous)
+                                           : ZAddress::finalizable_good(address, previous);
 }
 
 inline zpointer Barrier::ColorStoreGood(zaddress address, zpointer)
 {
-    return to_zpointer(MakeStoreGoodSlotWord(raw(address), ::g_cjStoreGoodMask));
+    return ZAddress::store_good(address);
 }
 
 inline zpointer Barrier::ColorRemsetGood(zaddress address, zpointer previous)
@@ -117,14 +112,18 @@ inline zpointer Barrier::ColorRemsetGood(zaddress address, zpointer previous)
 }
 
 // ZBarrier::mark_barrier_on_old_oop_field, zBarrier.inline.hpp:626-660.
-inline void Barrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field) const
+inline void Barrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable) const
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, holder, &field };
-    const zaddress result = MarkBarrier(IsMarkGoodFastPath, &Barrier::MarkFromOldSlowPath,
-                                       ColorMarkGood, field, observed, provenance);
+    const zaddress result = finalizable
+        ? MarkBarrier(IsFinalizableGoodFastPath, &Barrier::MarkFinalizableFromOldSlowPath,
+                      ColorFinalizableGood, field, observed, provenance)
+        : MarkBarrier(IsMarkGoodFastPath, &Barrier::MarkFromOldSlowPath,
+                      ColorMarkGood, field, observed, provenance);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Old, field, observed, result);
+    if (testFieldMarkResult) testFieldMarkResult(finalizable ? FieldMarkKind::Finalizable : FieldMarkKind::Old,
+                                                field, observed, result);
 #endif
     (void)result;
 }

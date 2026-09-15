@@ -301,6 +301,19 @@ zaddress Barrier::MarkFromOldSlowPath(zaddress address) const
     return zaddress::null;
 }
 
+// ZBarrier::mark_finalizable_from_old_slow_path, zBarrier.cpp:234-250.
+zaddress Barrier::MarkFinalizableFromOldSlowPath(zaddress address) const
+{
+    auto& old = theCollector.GetGenerationCycle(GCCycleGeneration::OLD);
+    CHECK(old.IsPhaseMark() || theCollector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsPhaseMark());
+    if (is_null(address)) return address;
+    if (!RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+        old.MarkObject<false, true, true, true>(address);
+        return address;
+    }
+    return zaddress::null;
+}
+
 // ZBarrier::mark_young_slow_path, zBarrier.cpp:206-215.
 zaddress Barrier::MarkYoungSlowPath(zaddress address) const
 {
