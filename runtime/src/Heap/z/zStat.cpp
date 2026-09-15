@@ -202,7 +202,7 @@ void ZStatCycle::AtEnd(uint64_t now, ZStatWorkers* statWorkers, bool warmup, boo
     const double workersDuration = statWorkers->get_and_reset_duration();
     const double workersTime = statWorkers->get_and_reset_time();
     const double serialTime = duration - std::min(duration, workersDuration);
-    lastActiveWorkers = workersDuration == 0 ? 1.0 : workersTime / workersDuration;
+    lastActiveWorkers = workersDuration > 0.0 ? workersTime / workersDuration : 1.0;
     if (recordStats) {
         serial.Add(serialTime);
         parallel.Add(workersTime);
