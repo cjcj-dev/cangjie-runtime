@@ -334,16 +334,6 @@ inline void RegionManager::LockRegionListInSaferegion(std::mutex& listMutex)
         }
     }
 
-inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
-    {
-        uintptr_t addr = 0;
-        RegionInfo* headRegion = recentPinnedRegionList.GetHeadRegion();
-        if (headRegion != nullptr) {
-            addr = headRegion->Alloc(size);
-        }
-        return addr;
-    }
-
     template<Generation G>
 inline void RegionManager::ClearLiveInfo(RegionList& list)
     {

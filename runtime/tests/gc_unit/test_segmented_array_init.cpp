@@ -912,6 +912,71 @@ void* RunMarkAllocationCase(void* rawExisting)
 }
 #endif
 
+#if defined(MRT_TESTABLE_INTERNALS)
+void ObservePinnedAllocationWindow()
+{
+    if (MarkAllocationWindow::entered.exchange(true)) return;
+    MarkAllocationWindow::timedOut = !MarkAllocationWindow::Wait(MarkAllocationWindow::released);
+    MarkAllocationWindow::completed.store(true, std::memory_order_release);
+}
+
+void* RunPinnedMarkStartCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    auto& collector = heap.GetCollector();
+    auto* mutator = Mutator::GetMutator();
+    TypeInfo* type = GetReferenceArrayTypeInfos().component;
+    const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
+    MObject* first = MObject::NewPinnedObject(type, size);
+    MObject* second = MObject::NewPinnedObject(type, size);
+    RegionInfo* before = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(first));
+    const bool reused = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(second)) == before;
+    const U64 root = heap.RegisterExportRoot(first);
+    MarkAllocationWindow::entered = false;
+    MarkAllocationWindow::released = false;
+    MarkAllocationWindow::completed = false;
+    MarkAllocationWindow::timedOut = false;
+    TracingCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
+    mutator->SetManagedContext(false);
+    collector.RequestGC(GC_REASON_USER, true);
+    bool entered;
+    {
+        ScopedEnterSaferegion safe(false);
+        entered = MarkAllocationWindow::Wait(MarkAllocationWindow::entered);
+    }
+    if (!entered) {
+        MarkAllocationWindow::released = true;
+        TracingCollector::testOldMarkStarted = nullptr;
+        mutator->SetManagedContext(true);
+        return reinterpret_cast<void*>(2);
+    }
+    mutator->SetManagedContext(true);
+    MObject* fresh = MObject::NewPinnedObject(type, size);
+    RegionInfo* after = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
+    const bool current = after->IsAllocating();
+    const bool different = after != before;
+    const bool noMark = !after->IsCurrentFacePublished();
+    const bool window = collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_TRACE;
+    std::fprintf(stderr, "P1_PINNED_WINDOW_ASSERT_EXECUTED reuse=%d different=%d current=%d no_bitmap=%d trace=%d birth=%llu owner=%llu\n",
+        reused, different, current, noMark, window,
+        static_cast<unsigned long long>(after->BirthSequence()),
+        static_cast<unsigned long long>(after->GetSnapshotEpoch()));
+    MarkAllocationWindow::released = true;
+    mutator->SetManagedContext(false);
+    {
+        ScopedEnterSaferegion safe(false);
+        MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
+    }
+    collector.RequestGC(GC_REASON_USER, false);
+    TracingCollector::testOldMarkStarted = nullptr;
+    const bool retained = heap.GetExportObject(root) == first;
+    heap.RemoveExportObject(root);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>((reused && different && current && noMark && window && retained &&
+        !MarkAllocationWindow::timedOut) ? 0 : 1);
+}
+#endif
+
 void* RunPinnedBirthCase(void*)
 {
     auto& heap = Heap::GetHeap();
@@ -1222,5 +1287,12 @@ GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 2), 0);
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunPinnedMarkStartCase, 0), 0);
+}
+#endif
 
 #endif // MRT_GC_UNIT_TESTS

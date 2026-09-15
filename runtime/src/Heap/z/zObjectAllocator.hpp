@@ -18,9 +18,16 @@ namespace MapleRuntime {
         explicit PerAgeObjectAllocator(PageAge pageAge);
         const PageAge age;
         std::unique_ptr<SharedSmallPage[]> smallPages;
+        std::atomic<RegionInfo*> pinnedPage{nullptr};
     };
 
 
+
+inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
+{
+    RegionInfo* page = objectAllocators[untype(PageAge::old)]->pinnedPage.load(std::memory_order_acquire);
+    return page == nullptr ? 0 : page->Alloc(size);
+}
 
 inline uintptr_t RegionManager::AllocPinned(size_t size)
     {
@@ -68,6 +75,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
             }
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
             recentPinnedRegionList.PrependRegionLocked(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
+            objectAllocators[untype(PageAge::old)]->pinnedPage.store(region, std::memory_order_release);
             addr = region->Alloc(size);
             region = nullptr;
         }

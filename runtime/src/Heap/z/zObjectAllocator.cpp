@@ -263,6 +263,7 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
 void RegionManager::RetireSharedPages(PageAgeRange ages)
 {
     for (PageAge age : ages) {
+        objectAllocators[untype(age)]->pinnedPage.store(nullptr, std::memory_order_release);
         for (size_t cpu = 0; cpu < SharedPageCPUCount(); ++cpu) {
             objectAllocators[untype(age)]->smallPages[cpu].page.store(nullptr, std::memory_order_release);
         }

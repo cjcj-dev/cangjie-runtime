@@ -1199,6 +1199,11 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     ScopedEntryTrace trace("CJRT_GC_TRACE");
     MRT_PHASE_TIMER(ZStatPhases::PDoTracing);
     VLOG(REPORT, "roots size: %zu", workStack.size());
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testOldMarkStarted) {
+        testOldMarkStarted();
+    }
+#endif
 
     {
         MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
