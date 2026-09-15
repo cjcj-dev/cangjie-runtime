@@ -132,18 +132,6 @@ void Barrier::ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib) c
         CopySlotKind::Heap, CopySlotKind::Uncolored);
 }
 
-void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteI32(BaseObject* obj, Field<int32_t>& field, int32_t val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteI64(BaseObject* obj, Field<int64_t>& field, int64_t val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteF32(BaseObject* obj, Field<float>& field, float val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const { field.SetFieldValue(obj, val); }
-
 // ZBarrier::store_barrier_on_heap_oop_field, zBarrier.inline.hpp:695-706.
 // Atomic operations heal before attempting the exchange, ordinary stores buffer prev.
 template<bool atomic>
@@ -280,18 +268,6 @@ zaddress Barrier::MarkYoungSlowPath(zaddress address) const
     }
     MarkIfYoung(address);
     return address;
-}
-
-// Thread-owned uncolored roots are made load-good by the shared root handshake
-// before their mutator resumes (ZStackWatermark). Mutator access does not remap.
-BaseObject* Barrier::ReadPlainRoot(RootSlot& field) const
-{
-    return to_object(safe(field.LoadPlain()));
-}
-
-void Barrier::WritePlainRoot(RootSlot& field, BaseObject* ref) const
-{
-    StorePlain(field, from_object(ref));
 }
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const

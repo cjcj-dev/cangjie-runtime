@@ -86,7 +86,7 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
     if (visitWeaks) { collector.VisitWeakColoredRoots(colored); }
     RootVisitor plain = [&](ObjectRef& root) {
         if (fieldVisitor) { fieldVisitor(nullptr, &root, raw(root.LoadPlain())); }
-        Push(Heap::GetBarrier().ReadPlainRoot(root), objectVisitor);
+        Push(to_object(safe(root.LoadPlain())), objectVisitor);
     };
     collector.VisitStrongPlainRoots(plain, [&](Mutator& mutator) {
         // Complete root processing for graph traversal, after ZVerify's raw-root
