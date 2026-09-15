@@ -9,6 +9,15 @@
 alignas(16) static uintptr_t source[100];
 alignas(16) static uintptr_t target[100];
 
+static void Report(const char* text, size_t size)
+{
+    register long fd __asm__("x0") = 1;
+    register const char* data __asm__("x1") = text;
+    register size_t length __asm__("x2") = size;
+    register long syscallNumber __asm__("x8") = 64;
+    __asm__ volatile("svc 0" : "+r"(fd) : "r"(data), "r"(length), "r"(syscallNumber) : "memory");
+}
+
 extern "C" int copy_atomic_platform_test()
 {
     // Include all small counts, both source alignments, both destination
@@ -25,12 +34,18 @@ extern "C" int copy_atomic_platform_test()
                     const uintptr_t expected = i >= toOffset && i < toOffset + count
                         ? 0x12340000 + i - toOffset + fromOffset : 0xfeed;
                     if (target[i] != expected || source[i] != 0x12340000 + i) {
+                        const char message[] = "ARM_COPY_TARGET_MISMATCH count=";
+                        Report(message, sizeof(message) - 1);
+                        const char number[] = { char('0' + count / 10), char('0' + count % 10), '\n' };
+                        Report(number, sizeof(number));
                         return 1;
                     }
                 }
             }
         }
     }
+    const char message[] = "ARM_COPY_TARGET_OK cases=324\n";
+    Report(message, sizeof(message) - 1);
     return 0;
 }
 
