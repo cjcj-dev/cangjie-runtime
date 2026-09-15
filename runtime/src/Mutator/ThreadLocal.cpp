@@ -66,9 +66,22 @@ bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain)
 
 void ThreadLocal::FlushCurrentThreadMarkStacks()
 {
-    if (GetThreadLocalData()->gcData != nullptr) {
-        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-        (void)collector.FlushThreadMarkProducers(GetThreadLocalData());
+    ThreadLocalData* tls = GetThreadLocalData();
+    auto empty = [](const ThreadGCData* data) {
+        return data == nullptr || (data->markStacks[0].IsEmpty() && data->markStacks[1].IsEmpty() &&
+                                    data->storeBarrierBuffer->IsEmpty());
+    };
+    // Native workers can exist before the heap collector is bound and after
+    // it is detached. An idle owner has no publication to perform. Pending
+    // stacks, buffered stores, or an allocation-context producer still take
+    // the collector path; never use collector absence to discard work.
+    if (tls->buffer == nullptr && empty(tls->gcData) && empty(tls->nativeGCData)) {
+        return;
+    }
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    (void)collector.FlushThreadMarkProducers(tls);
+    if (tls->nativeGCData != nullptr && tls->nativeGCData != tls->gcData) {
+        (void)collector.FlushGCDataMarkProducers(*tls->nativeGCData);
     }
 }
 
