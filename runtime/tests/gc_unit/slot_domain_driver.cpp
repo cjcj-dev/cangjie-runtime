@@ -136,6 +136,15 @@ int main(int argc, char** argv)
     param.heapParam.heapSize = 128 * 1024;
     param.coParam.processorNum = 1;
     if (InitCJRuntime(&param) != E_OK) return 95;
+    if (const char* path = std::getenv("SLOT_DOMAIN_MAPS")) {
+        FILE* source = std::fopen("/proc/self/maps", "r");
+        FILE* output = std::fopen(path, "w");
+        if (!source || !output) return 97;
+        char line[4096];
+        while (std::fgets(line, sizeof(line), source)) std::fputs(line, output);
+        std::fclose(source);
+        std::fclose(output);
+    }
     auto& manager = MutatorManager::Instance();
     manager.CreateRuntimeMutator(ThreadType::GC_THREAD);
     Mutator::GetMutator()->SetManagedContext(false);
