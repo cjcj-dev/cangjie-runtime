@@ -175,7 +175,7 @@ namespace MapleRuntime {
 using RegionLifeId = uint64_t;
 
 class RegionInfo;
-class LiveInfo;
+class ZLiveMap;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.
 // _entries is a ZAttachedArray sitting after this object (zAttachedArray.inline.hpp:44-54).
@@ -202,7 +202,7 @@ public:
     // The carrier is installed before relocation and retired as a unit after
     // the last from-page reader drains.
     struct FromPageView {
-        LiveInfo* liveInfo = nullptr;
+        ZLiveMap* livemap = nullptr;
         uint64_t epoch = 0;
         MAddress topAtStart = 0;
         uint64_t birthSequence = 0;
@@ -240,14 +240,14 @@ public:
     void verify() const;
     size_t length() const { return _entries.length(); }
 
-    void publish_from_page_view(LiveInfo* liveInfo, uint64_t epoch, MAddress topAtStart,
+    void publish_from_page_view(ZLiveMap* livemap, uint64_t epoch, MAddress topAtStart,
                                 uint64_t birthSequence,
                                 uint8_t owner, uint8_t largeMarked, RegionLifeId lifeId)
     {
         // lifeId is the publication word. Readers either reject the zero word
         // or acquire the complete immutable replacement.
         __atomic_store_n(&_from_page.lifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);
-        _from_page.liveInfo = liveInfo;
+        _from_page.livemap = livemap;
         _from_page.epoch = epoch;
         _from_page.topAtStart = topAtStart;
         _from_page.birthSequence = birthSequence;

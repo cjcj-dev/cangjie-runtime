@@ -25,7 +25,6 @@
 test_runtime_copied_headers.py            manual     real copied-SO header identity regression; requires a published runtime pair and isolated work directory
 
 slot_type_split_compile_probe.cpp         configure  three-arm negative compile gate for HeapSlot/RootSlot/DerivedSlot
-mark_generation_compile_probe.cpp         configure  control plus young-as-old and old-as-young negative compile gates for MarkView
 
 run_colour_table_witness.sh               manual     host g++/clang++ with C++14 only; prints the readable collision witness and per-family counts. Judgement is the configure arm above
 run_colour_predicates_unit.sh             manual     host g++/clang++ with C++14 only; 17 ZGC-named predicates x positive/negative words, 32 mask epochs, and 16 phase-colour rows

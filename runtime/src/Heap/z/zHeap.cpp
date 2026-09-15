@@ -116,7 +116,8 @@ public:
 
     bool IsSurvivedObject(const BaseObject* obj) const override
     {
-        return RegionSpace::IsMarkedObject<Generation::Old>(obj) || RegionSpace::IsResurrectedObject(obj);
+        // ZPage::is_object_live (zPage.inline.hpp:254-256).
+        return RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
     }
 
     bool IsGcStarted() const override { return collectorResources.IsGcStarted(); }
@@ -424,8 +425,7 @@ void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& vis
         if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
             return;
         }
-        MarkView<Generation::Old> oldView = region->GetMarkView<Generation::Old>();
-        if (skipKnownEmptyRegions && region->IsKnownEmpty(oldView)) {
+        if (skipKnownEmptyRegions && region->IsKnownEmpty()) {
             return;
         }
         region->VisitAllObjects([&visitor](BaseObject* object) { visitor(object); });

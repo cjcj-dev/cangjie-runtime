@@ -4,226 +4,96 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef MRT_LIVE_INFO_H
-#define MRT_LIVE_INFO_H
+#ifndef MRT_Z_LIVEMAP_HPP
+#define MRT_Z_LIVEMAP_HPP
+
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
-#include <algorithm>
-#include "Base/ImmortalWrapper.h"
-#include "Base/Log.h"
-#include "Base/MemUtils.h"
-#include "Base/SysCall.h"
-#include "Heap/z/zHeap.hpp"
-#if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
-#include <sys/mman.h>
-#endif
 
+#include "Base/BitMap.h"
+#include "Heap/z/zBitMap.hpp"
 #include "Heap/z/zGenerationId.hpp"
+
 namespace MapleRuntime {
-using RegionLifeId = uint64_t;
-constexpr size_t kBitsPerByte = 8;
-constexpr size_t kMarkedBytesPerBit = 8;
-constexpr size_t kBitsPerWord = sizeof(uint64_t) * kBitsPerByte;
-class RegionInfo;
 
-// The collector whose transitive closure owns a mark face.  This is deliberately
-// distinct from RegionInfo::_generation_id: major marking visits the whole heap,
-// including regions which are currently young.
+// ZGC zLiveMap.hpp:35-101. One object per page: the marking seqnum, the live
+// counters, the 64 segment live/claim bits and the lazily initialized bit-pair
+// map live together and are reset together (reset(id)).
+class ZLiveMap {
+    friend class ZLiveMapTest;
 
+private:
+    static const uint32_t NumSegments = 64;
+    static const uint32_t BitsPerObject = 2;
 
-// A mark read is not representable without naming the closure which produced it.
-// Construction is restricted to RegionInfo so MarkView<Young> can reject an old
-// region at the minting boundary.  The two instantiations intentionally have no
-// conversion between them; runtime/tests/mark_generation_compile_probe.cpp keeps
-// that property under an always-run negative compile gate.
-template<Generation G>
-class MarkView {
+    const uint32_t _segment_size;
+    const int _segment_shift;
+
+    std::atomic<uint64_t> _seqnum;
+    std::atomic<uint32_t> _live_objects;
+    std::atomic<size_t> _live_bytes;
+    BitMap::bm_word_t _segment_live_bits;
+    BitMap::bm_word_t _segment_claim_bits;
+    ZBitMap _bitmap;
+
+    static uint32_t segment_size(uint32_t object_max_count);
+    static int segment_shift(uint32_t segment_size);
+
+    const BitMapView segment_live_bits() const;
+    const BitMapView segment_claim_bits() const;
+
+    BitMapView segment_live_bits();
+    BitMapView segment_claim_bits();
+
+    BitMap::idx_t segment_start(BitMap::idx_t segment) const;
+    BitMap::idx_t segment_end(BitMap::idx_t segment) const;
+
+    bool is_segment_live(BitMap::idx_t segment) const;
+    bool set_segment_live(BitMap::idx_t segment);
+
+    BitMap::idx_t first_live_segment() const;
+    BitMap::idx_t next_live_segment(BitMap::idx_t segment) const;
+    BitMap::idx_t index_to_segment(BitMap::idx_t index) const;
+
+    bool claim_segment(BitMap::idx_t segment);
+
+    void initialize_bitmap();
+
+    void reset(ZGenerationId id);
+    void reset_segment(BitMap::idx_t segment);
+
+    template <typename Function>
+    void iterate_segment(BitMap::idx_t segment, Function function);
+
 public:
-    RegionInfo* GetRegion() const { return region; }
-    uint64_t GetEpoch() const { return epoch; }
-    RegionLifeId GetLifeId() const { return lifeId; }
+    // ZGeneration::generation(id)->seqnum() (zGeneration.inline.hpp). The
+    // generation object is owned by the generation package; the sequence is
+    // read live from the collector's per-generation cycle state.
+    static uint64_t generation_seqnum(ZGenerationId id);
 
-private:
-    MarkView(RegionInfo* regionIn, uint64_t epochIn, RegionLifeId lifeIdIn)
-        : region(regionIn), epoch(epochIn), lifeId(lifeIdIn)
-    {
-    }
+    ZLiveMap(uint32_t object_max_count);
+    ZLiveMap(const ZLiveMap& other) = delete;
 
-    RegionInfo* region;
-    uint64_t epoch;
-    RegionLifeId lifeId;
+    void reset();
 
-    friend class RegionInfo;
-};
+    bool is_marked(ZGenerationId id) const;
 
-struct RegionBitmap {
-    // A 64-bit mark word carries one live/finalizable + strong pair per slot.
-    // Keep this geometry in one named constant so allocation and test fixtures
-    // cannot silently drift back to the pre-pair 512-byte rule.
-    static constexpr size_t kRegionBytesPerWord =
-        (kMarkedBytesPerBit * kBitsPerWord) / 2;
-    std::atomic<size_t> liveBytes;
-    std::atomic<size_t> liveObjects;
-    std::atomic<uint64_t> segmentLiveBits;
-    std::atomic<uint64_t> segmentClaimBits;
-    // Two adjacent bits describe each 8-byte slot: live/finalizable then
-    // strong. One word therefore covers 32 slots (256 region bytes).
-    std::atomic<size_t> wordCnt;
-    std::atomic<uint64_t> markWords[0];
+    uint32_t live_objects() const;
+    size_t live_bytes() const;
 
-    static size_t GetRegionBitmapSize(size_t regionSize)
-    {
-        const size_t words = regionSize / kRegionBytesPerWord;
-        return sizeof(RegionBitmap) + (words * sizeof(uint64_t));
-    }
+    bool get(ZGenerationId id, BitMap::idx_t index) const;
+    bool set(ZGenerationId id, BitMap::idx_t index, bool finalizable, bool& inc_live);
 
-    struct BitMaskInfo {
-        size_t headWordIdx;
-        uint64_t liveStartBitMask;
-        uint64_t strongStartBitMask;
-    };
+    void inc_live(uint32_t objects, size_t bytes);
 
-    static void GetBitMaskInfo(size_t start, BitMaskInfo& maskInfo)
-    {
-        const size_t pairBitStart = 2 * (start / kMarkedBytesPerBit);
-        size_t headMaskBitStart = pairBitStart % kBitsPerWord;
-        maskInfo.headWordIdx = pairBitStart / kBitsPerWord;
-        maskInfo.liveStartBitMask = static_cast<uint64_t>(1) << headMaskBitStart;
-        maskInfo.strongStartBitMask = static_cast<uint64_t>(1) << (headMaskBitStart + 1);
-    }
+    template <typename Function>
+    void iterate(ZGenerationId id, Function function);
 
-    // ZLiveMap::inc_live: consumed by direct marking or the worker live cache.
-    void AddLiveCounts(size_t objects, size_t bytes);
-
-    explicit RegionBitmap(size_t regionSize)
-        : liveBytes(0), liveObjects(0), segmentLiveBits(0), segmentClaimBits(0),
-          wordCnt(regionSize / kRegionBytesPerWord)
-    {}
-
-    bool CoversRegionSize(size_t regionSize) const
-    {
-        return wordCnt.load(std::memory_order_relaxed) == regionSize / kRegionBytesPerWord;
-    }
-
-    size_t CoveredRegionSize() const
-    {
-        return wordCnt.load(std::memory_order_relaxed) * kRegionBytesPerWord;
-    }
-
-    // ZLiveMap::reset: metadata only; bitmap storage is cleared on first touch.
-    void Reset();
-
-    static constexpr size_t kNumSegments = 64;
-
-    size_t SegmentBits() const
-    {
-        // Small runtime regions use a full atomic word as the minimum clear range.
-        const size_t words = wordCnt.load(std::memory_order_relaxed);
-        return std::max(size_t(1), (words + kNumSegments - 1) / kNumSegments) * kBitsPerWord;
-    }
-
-    bool IsSegmentLive(size_t segment) const;
-
-    // ZLiveMap::reset_segment: claim -> clear range -> release live bit.
-    void EnsureSegmentLive(size_t pairBit);
-
-    // Iterators and snapshot consumers must skip segments not live this cycle.
-    uint64_t GetLiveWord(size_t word) const
-    {
-        return IsSegmentLive(word * kBitsPerWord / SegmentBits())
-            ? markWords[word].load(std::memory_order_relaxed) : 0;
-    }
-
-    size_t GetLiveObjects() const;
-
-    // ZLiveMap::set: true means newly marked; incLive is the first live claim.
-    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive);
-
-    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize);
-
-    bool MarkFinalizableBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive);
-
-    bool IsMarked(size_t start) const;
-
-    bool IsLive(size_t start) const;
-
-    bool IsFinalizable(size_t start) const;
-
-    // zLiveMap.inline.hpp:219-221: pair with either strong or finalizable bit is an object start.
-    bool IsObjectStart(size_t start) const { return IsLive(start) || IsMarked(start); }
-
-    size_t GetLiveBytes() const;
-
-    size_t RecomputeLiveBytes() const { return GetLiveBytes(); }
-};
-struct LiveInfo {
-    RegionInfo* bindedRegion = nullptr;
-    RegionBitmap* resurrectBitmap = nullptr;
-    RegionBitmap* enqueueBitmap = nullptr;
-
-    template<Generation G>
-    bool IsSurvivedObject(MarkView<G> view, size_t offset) const
-    {
-        const MarkFace& face = GetMarkFace();
-        const bool current = view.GetEpoch() != 0 &&
-            face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
-        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
-        if (current && markBitmap != nullptr &&
-            markBitmap->IsLive(offset)) {
-            return true;
-        }
-        // Resurrection is a major/old decision.  A young closure is not complete
-        // for old/large objects and must not inherit an old resurrection verdict.
-        return G == Generation::Old && resurrectBitmap != nullptr &&
-            resurrectBitmap->IsMarked(offset);
-    }
-
-    template<Generation G>
-    size_t GetBitmapLiveBytes(MarkView<G> view) const
-    {
-        const MarkFace& face = GetMarkFace();
-        const bool current = view.GetEpoch() != 0 &&
-            face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
-        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
-        return (!current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
-            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->GetLiveBytes());
-    }
-
-    template<Generation G>
-    size_t RecomputeBitmapLiveBytes(MarkView<G> view) const
-    {
-        const MarkFace& face = GetMarkFace();
-        const bool current = view.GetEpoch() != 0 &&
-            face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
-        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
-        return (!current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
-            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
-    }
-
-private:
-    struct MarkFace {
-        // ZGC ZLiveMap::_seqnum counterpart, one per page metadata incarnation.
-        std::atomic<uint64_t> epoch{ 0 };
-        RegionBitmap* bitmap = nullptr;
-    };
-
-    // A page metadata object owns exactly one ordinary livemap. Generation is
-    // carried by the page/current-or-from metadata which owns this LiveInfo,
-    // never by a second bitmap hidden inside the same carrier.
-    MarkFace markFace;
-
-    MarkFace& GetMarkFace()
-    {
-        return markFace;
-    }
-
-    const MarkFace& GetMarkFace() const
-    {
-        return markFace;
-    }
-
-    friend class RegionInfo;
-    friend class LiveInfoArena;
+    BitMap::idx_t find_base_bit(BitMap::idx_t index);
+    BitMap::idx_t find_base_bit_in_segment(BitMap::idx_t start, BitMap::idx_t index);
 };
 
 } // namespace MapleRuntime
-#endif // MRT_LIVE_INFO_H
+
+#endif // MRT_Z_LIVEMAP_HPP

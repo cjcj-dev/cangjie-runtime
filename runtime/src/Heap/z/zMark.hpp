@@ -124,7 +124,6 @@ private:
 #include "Heap/z/zDriver.hpp"
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/LiveInfoArena.h"
 #include "Heap/z/zMarkStackEntry.hpp"
 #include "Mutator/MutatorManager.h"
 
@@ -406,10 +405,16 @@ public:
     }
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
+    // ZPage::mark_object(addr, finalizable = true) with direct inc_live accounting.
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
     {
-        // livesame: ResurrectObject counts on 0→1 inside.
-        bool resurrected = !regionInfo->ResurrectObject(obj, offset);
+        (void)offset;
+        bool incLive = false;
+        const bool newlyMarked = regionInfo->mark_object(from_object(obj), true, incLive);
+        if (incLive) {
+            regionInfo->inc_live(1, obj->GetSize());
+        }
+        bool resurrected = !newlyMarked;
         if (!resurrected) {
             size_t objSize = obj->GetSize();
             if (!fixReferences && regionInfo->IsFromRegion()) {

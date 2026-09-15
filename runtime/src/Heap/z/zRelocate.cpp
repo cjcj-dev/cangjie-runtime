@@ -432,9 +432,23 @@ std::atomic<size_t> g_minorRefCasOk{ 0 };
 //       current liveInfo; PrepareForwardable does liveInfo0 = liveInfo (pointer copy)
 //       so the paint is snapshotted into the route domain.
 //   (2) after PrepareForwardable while routeState==FORWARDABLE: MarkObject writes the
-//       same LiveInfo that liveInfo0 points at — visible to GetRoute, not wiped by
-//       ClearLiveInfo (that already ran at PrepareYoung).
+//       same livemap the carrier points at — visible to GetRoute.
 // After ROUTED, liveByteCount/geometry are frozen — do not paint (tooLate counter).
+// Livemap the route reads for this region: the from-page carrier's map when
+// one is published, otherwise the page's own (zForwarding.hpp:44-110 keeps
+// the whole from ZPage; only its livemap is retained here).
+static ZLiveMap* RouteLiveMap(RegionInfo* region, ZGenerationId& id)
+{
+    const ZForwarding::FromPageView* from = region->GetFromPageView();
+    if (from != nullptr) {
+        id = static_cast<Generation>(from->owner) == Generation::Young ? ZGenerationId::young
+                                                                       : ZGenerationId::old;
+        return from->livemap;
+    }
+    id = region->generation_id();
+    return region->livemap();
+}
+
 void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
 {
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
@@ -461,24 +475,15 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
         return;
     }
     size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-    // Prefer ghost face when present (what GetRoute reads); else current liveInfo.
-    LiveInfo* face = region->GetLiveInfo0ForProbe();
-    if (face == nullptr) {
-        face = region->GetLiveInfo();
-    }
+    const zaddress addr = from_object(obj);
     bool alreadyInDomain = false;
     if (isGhost) {
         alreadyInDomain = region->IsRouteSurvivedObject(offset);
-    } else if (region->IsYoungRegion()) {
-        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-        alreadyInDomain = region->IsSurvivedObject(view, face, offset);
     } else {
-        // oracleblack round 10, face b: the nested young cycle can promote this region
-        // before its discharge walk resolves a slot into it. A promoted region is an old
-        // region now; binding the young view trips GetMarkView's sole-constructor CHECK
-        // (RegionInfo.h:211). Consult the old face for the same survivorship question.
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        alreadyInDomain = region->IsSurvivedObject(view, face, offset);
+        // Prefer ghost face when present (what GetRoute reads); else the page's own livemap.
+        ZGenerationId id;
+        ZLiveMap* face = RouteLiveMap(region, id);
+        alreadyInDomain = face != nullptr && face->get(id, region->bit_index(addr));
     }
     if (alreadyInDomain) {
         g_installDomainAlready.fetch_add(1, std::memory_order_relaxed);
@@ -491,30 +496,25 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
             return;
         }
     }
-    // Mark current liveInfo (post-snapshot: same pointer as liveInfo0 when non-null).
+    // Mark the current livemap (post-snapshot: same map as the carrier's when non-null).
     (void)collector->MarkObject(obj);
-    // If ghost face was null (snapshot of empty liveInfo), bind freshly allocated liveInfo
-    // so GetRoute's liveInfo0!=null gate opens on the bits we just painted.
+    // If ghost face was null (snapshot of empty livemap), bind freshly allocated livemap
+    // so GetRoute's from-livemap gate opens on the bits we just painted.
     if (isGhost) {
-        region->BindLiveInfo0FromLiveIfNull();
+        region->BindFromPageLiveMapIfNull();
     }
-    LiveInfo* live = region->GetLiveInfo();
-    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-    RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : region->GetOwnerMarkBitmap(ghost);
-    if (ghost != nullptr && ghost != live && ghostBitmap != nullptr) {
-        const size_t objSize = obj->GetSize();
-
-        MAddress regionStart = region->GetRegionStart();
-        size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - regionStart);
-        if (objSize > 0 && offset + objSize <= regionSize) {
-
-            // MarkObject already maintained liveByteCount on the live face; ghost paint is
-            // domain-visible bits only (do not double-count).
-            (void)ghostBitmap->MarkBits(offset, objSize, regionSize);
-        }
+    ZLiveMap* live = region->livemap();
+    ZLiveMap* ghost = region->FromPageLiveMap();
+    if (ghost != nullptr && ghost != live) {
+        // MarkObject already maintained live bytes on the live face; ghost paint is
+        // domain-visible bits only (do not double-count).
+        ZGenerationId id;
+        (void)RouteLiveMap(region, id);
+        bool incLive = false;
+        (void)ghost->set(id, region->bit_index(addr), false, incLive);
     }
     // Re-check: grant only counts if GetRoute face now accepts (positive control truth).
-    ghost = region->GetLiveInfo0ForProbe();
+    ghost = region->FromPageLiveMap();
     if (isGhost) {
         if (ghost != nullptr && region->IsRouteSurvivedObject(offset)) {
             g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
@@ -522,12 +522,12 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
             g_installDomainTooLate.fetch_add(1, std::memory_order_relaxed);
         }
     } else {
-        // pre-snapshot from: paint lands on liveInfo; PrepareForwardable will copy pointer.
+        // pre-snapshot from: paint lands on the page livemap; PrepareForwardable will copy pointer.
         g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
-// statresid: force ghost liveInfo0 paint while still FORWARDABLE (before any Route
+// statresid: force ghost livemap paint while still FORWARDABLE (before any Route
 // freezes geometry). Used by the root grant pass and as last-chance before Forward.
 // Returns true when AdmitForRoute would accept `obj` after the paint attempt.
 bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj)
@@ -543,32 +543,24 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
     if (region == nullptr || !region->IsYoungRegion()) {
         return false;
     }
+    size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
     // Only paint while FORWARDABLE — after ROUTING/ROUTED/COMPACTED liveByteCount is
-    // frozen (S2); late MarkBits would desync Admit from geometry.
+    // frozen (S2); late marking would desync Admit from geometry.
     if (region->IsForwardingDone() || region->IsRoutingState()) {
-        LiveInfo* g0 = region->GetLiveInfo0ForProbe();
-        size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        return g0 != nullptr && region->IsRouteSurvivedObject(offset);
+        return region->FromPageLiveMap() != nullptr && region->IsRouteSurvivedObject(offset);
     }
     (void)collector->MarkObject(obj);
-    region->BindLiveInfo0FromLiveIfNull();
-    LiveInfo* g0 = region->GetLiveInfo0ForProbe();
-    size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-    RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetOwnerMarkBitmap(g0);
-    if (g0 != nullptr && ghostBitmap != nullptr) {
-        if (!region->IsRouteSurvivedObject(offset)) {
-            const size_t objSize = obj->GetSize();
-
-            size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
-            if (objSize > 0 && offset + objSize <= regionSize) {
-
-                // MarkObject above already counted liveByteCount when first paint on live.
-                // Ghost-only MarkBits must not double-count (FYS0 OverflowException risk).
-                (void)ghostBitmap->MarkBits(offset, objSize, regionSize);
-            }
-        }
+    region->BindFromPageLiveMapIfNull();
+    ZLiveMap* g0 = region->FromPageLiveMap();
+    if (g0 != nullptr && !region->IsRouteSurvivedObject(offset)) {
+        // MarkObject above already counted live bytes when first paint on live.
+        // Ghost-only paint must not double-count (FYS0 OverflowException risk).
+        ZGenerationId id;
+        (void)RouteLiveMap(region, id);
+        bool incLive = false;
+        (void)g0->set(id, region->bit_index(from_object(obj)), false, incLive);
     }
-    g0 = region->GetLiveInfo0ForProbe();
+    g0 = region->FromPageLiveMap();
     return g0 != nullptr && region->IsRouteSurvivedObject(offset);
 }
 } // namespace
@@ -718,7 +710,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
     const bool alreadyTo = (target != oldObj) || compactDestination;
     BaseObject* current = target;
-    const bool hasForwardingFace = targetRegion != nullptr && targetRegion->GetLiveInfo0ForProbe() != nullptr;
+    const bool hasForwardingFace = targetRegion != nullptr && targetRegion->FromPageLiveMap() != nullptr;
     if (!alreadyTo && hasForwardingFace && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         // installdomain: route-domain grant before ForwardObject → GetRoute.
         EnsureRouteDomainMembership(const_cast<WCollector*>(this), target);
@@ -782,7 +774,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
         targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
     const bool alreadyTo = (target != oldObj) || compactDestination;
     BaseObject* current = target;
-    const bool hasForwardingFace = targetRegion != nullptr && targetRegion->GetLiveInfo0ForProbe() != nullptr;
+    const bool hasForwardingFace = targetRegion != nullptr && targetRegion->FromPageLiveMap() != nullptr;
     if (!alreadyTo && hasForwardingFace && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         // Last-chance domain paint while FORWARDABLE (grant pass covers the bulk case;
         // this catches roots dirtied after the grant pass or parallel races).
@@ -1037,13 +1029,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         for (RegionInfo* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
                 // markwater2: allocating pages never entered the route plan
-                // (zGeneration.cpp:211-213). Leave them young on unmovableFrom;
-                // next PrepareYoung ClearLiveInfo re-snapshots the watermark.
-                MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-                const bool hasObjectLiveness = region->IsLargeRegion() ||
-                    region->GetMarkBitmap(promotionView) != nullptr || region->GetResurrectBitmap() != nullptr;
-                if (region->IsAllocating() || !region->IsLiveCountAuthoritative() ||
-                    !hasObjectLiveness) {
+                // (zGeneration.cpp:211-213). Leave them young on unmovableFrom.
+                // ZPage::is_marked (zPage.inline.hpp:223-226): only a page marked
+                // this cycle has object liveness to promote.
+                if (region->IsAllocating() || !region->is_marked()) {
                     continue;
                 }
                 if (kPageAgeAdaptiveTenuring &&
@@ -1796,20 +1785,21 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
 template<typename Fn>
 void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPtr, Fn&& fn)
 {
-    // ZPage::object_iterate over the original page's ordinary livemap.
-    RegionBitmap* bitmap = region->GetLiveStartBitmap();
-    if (bitmap == nullptr) {
+    // ZPage::object_iterate (zPage.inline.hpp:319-331) over the original page's
+    // livemap: the from-page carrier's map when published, else the page's own.
+    ZGenerationId id;
+    ZLiveMap* map = RouteLiveMap(region, id);
+    if (map == nullptr) {
         return;
     }
-    const size_t regionBytes = allocPtr > start ? static_cast<size_t>(allocPtr - start) : 0;
-    for (size_t offset = 0; offset < regionBytes; offset += kMarkedBytesPerBit) {
-        if (bitmap->IsObjectStart(offset)) {
+    const int shift = region->object_alignment_shift();
+    map->iterate(id, [&](BitMap::idx_t index) -> bool {
+        const size_t offset = (index / 2) << shift;
+        if (start + offset < allocPtr) {
             fn(from_region_addr(start + offset), offset);
         }
-        if (region->IsLargeRegion()) {
-            break;
-        }
-    }
+        return true;
+    });
 }
 
 // ZGC's relocate() marks a forwarding life done only after every survivor has
@@ -1952,7 +1942,7 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
                      "— cycle-end from-page not in {FORWARDED,COMPACTED,Exempt-kept}",
                      region, region->GetRegionStart(), static_cast<unsigned>(region->RelocateObserve()),
                      static_cast<unsigned>(region->IsForwardingDone()),
-                     static_cast<unsigned>(region->GetRegionType()), region->GetLiveByteCount());
+                     static_cast<unsigned>(region->GetRegionType()), (region->is_marked() ? region->live_bytes() : 0));
     }
 }
 
@@ -1973,7 +1963,7 @@ void RegionManager::CollectFromSpaceGarbage()
                     "[GCV2][from-garbage-skip] n=%zu region=%p start=%#zx route=%u done=%u live=%zu "
                     "— skip CollectFromSpaceGarbage, Exempt",
                     n, region, region->GetRegionStart(), region->IsForwardingDone() ? 1u : 0u,
-                    static_cast<unsigned>(region->IsForwardingDone()), region->GetLiveByteCount());
+                    static_cast<unsigned>(region->IsForwardingDone()), (region->is_marked() ? region->live_bytes() : 0));
             }
             ExemptFromRegion(region);
         } else {
@@ -2047,7 +2037,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
-        region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+        (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), region->GetRegionType());
     MAddress regionLimit = region->GetRegionAllocPtr();
     ForwardingTable::Publication publication =
         ForwardingTable::EnsurePublicationBeforeCopy(region, regionStart);
@@ -2068,11 +2058,10 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // so promotion publishes its old identity here. PublishFromPageMetadata
     // already saved the source generation, livemap and birth sequence in
     // the forwarding carrier; ForEachLiveObjectStart consumes that snapshot,
-    // not the new destination LiveInfo allocated by PromoteYoungRegion.
+    // not the new destination livemap allocated by PromoteYoungRegion.
     if (fromYoung) {
         if (toAge == PageAge::old) {
-            MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-            (void)region->PromoteYoungRegion(view);
+            region->PromoteYoungRegion();
         } else {
             region->SetYoungAge(untype(toAge));
         }
@@ -2287,7 +2276,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
 
     DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
-        region->GetRegionType(), region->GetLiveByteCount());
+        region->GetRegionType(), (region->is_marked() ? region->live_bytes() : 0));
 
     bool youngRegion = region->IsYoungRegion();
     if (youngRegion && !GenerationMayRelocateYoung(G)) {
@@ -2297,19 +2286,17 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         EnlistStayYoungSurvivor(region, false);
         return;
     }
-    MarkView<G> markView = region->GetRouteMarkView<G>();
     // oracleblack: the generational contract also guards this arm. The OLD pass stamps a
     // current-epoch mark face on young regions it never actually examines, so
     // "markedThisCycle ∧ live==0" holds vacuously for them and the residual f3-livehole
     // census (~128/run after the unmarked-arm gate below) was fed from here. Only the
     // YOUNG pass may prove a young region empty (zGeneration.cpp:216-221: each generation
     // frees only pages its own mark examined).
-    if (IsKnownEmptyForView(region, markView) && !(youngRegion && G == Generation::Old)) {
+    if (region->IsRouteKnownEmpty() && !(youngRegion && G == Generation::Old)) {
         // cjpmnull2: IsKnownEmpty is now ZGC-shaped (this-cycle marked ∧ live==0).
         // Only those pages are empty; collect them (zGeneration.cpp:216-221).
         if (youngRegion) {
-            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            (void)region->PromoteYoungRegion(promotionView);
+            region->PromoteYoungRegion();
         }
 
         CollectRegion<G>(region);
@@ -2322,7 +2309,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     // that has not been copied (route=3). live==0 FORWARDABLE is true dead.
     {
         const bool incompleteRoute = region->IsRoutingState() && !region->IsForwardingDone();
-        const bool liveResidual = region->GetLiveByteCount() > 0;
+        ZGenerationId routeId;
+        ZLiveMap* routeMap = RouteLiveMap(region, routeId);
+        const bool routeMarked = routeMap != nullptr && routeMap->is_marked(routeId);
+        const bool liveResidual = routeMarked && routeMap->live_bytes() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
         // live==0 after THIS cycle's mark is freed at ExemptFromRegions
@@ -2342,7 +2332,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // proved it empty (zPage.inline.hpp:223-225 seqnum, zGeneration.cpp:216-221).
         // Keep unexamined young in the OLD pass; the YOUNG pass keeps its collect right,
         // so the hangfloor regression (young garbage never reclaimed) cannot return.
-        if (region->GetMarkBitmap(markView) == nullptr &&
+        if (!routeMarked &&
             region->GetRegionAllocPtr() > region->GetRegionStart() &&
             (incompleteRoute || liveResidual || !youngRegion || G == Generation::Old)) {
         static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
@@ -2352,7 +2342,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 "[GCV2][fwd-unmarked-keep] n=%zu region=%p start=%#zx alloc=%#zx "
                 "route=%u live=%zu — ExemptFromRegion (not marked this cycle)",
                 n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                static_cast<unsigned>(region->RelocateObserve()), region->GetLiveByteCount());
+                static_cast<unsigned>(region->RelocateObserve()), routeMarked ? routeMap->live_bytes() : 0);
         }
         if (youngRegion && StayYoungThisCycle(region)) {
             EnlistStayYoungSurvivor(region);
@@ -2430,13 +2420,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
         VerifyRelocatedPage(region, "ForwardRegion");
         region->MarkForwardingDone();
-        // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
-        // live bytes + mark face (ResetLiveMapAfterForward).
+        // ZGC reset_livemap (zForwarding.cpp:71-74 / zPage.cpp:115-117).
         {
-            region->ResetLiveMapAfterForward(markView);
+            region->reset_livemap();
             if (youngRegion) {
-                MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-                (void)region->PromoteYoungRegion(promotionView);
+                region->PromoteYoungRegion();
             }
         }
         // After-copy Collect zeros the from payload while live holders still name

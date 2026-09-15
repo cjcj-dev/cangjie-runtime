@@ -14,6 +14,7 @@
 #include <unordered_set>
 
 #include "Common/MarkWorkStack.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMarkStackEntry.hpp"
 #include "Heap/Allocator/RegionList.h"
 
@@ -76,7 +77,7 @@ public:
             pending.swap(y2yDirtyHolders);
         }
         for (BaseObject* obj : pending) {
-            workStack.push_back(obj);
+            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, true, false));
         }
     }
 
