@@ -1,0 +1,39 @@
+# slot test0 acquired 2026-09-16T05:18:34+08:00
+[
+  {
+    "arm": "candidate",
+    "opt": "O0",
+    "llc_rc": 0,
+    "check_rc": 0,
+    "wall": 0.011711583938449621,
+    "llc_sha256": "8df567c2f0a2a59b6c04d8634def82135d535a4cd45d4af536c7c8a4e1176033",
+    "ir": "/root/sym_cangjie_runtime_614_implement_r5687433872-llvm/phase-test/candidate-O0.ir"
+  },
+  {
+    "arm": "candidate",
+    "opt": "O2",
+    "llc_rc": 0,
+    "check_rc": 0,
+    "wall": 0.013224190915934741,
+    "llc_sha256": "8df567c2f0a2a59b6c04d8634def82135d535a4cd45d4af536c7c8a4e1176033",
+    "ir": "/root/sym_cangjie_runtime_614_implement_r5687433872-llvm/phase-test/candidate-O2.ir"
+  },
+  {
+    "arm": "baseline",
+    "opt": "O0",
+    "llc_rc": 0,
+    "check_rc": 1,
+    "wall": 0.011762924958020449,
+    "llc_sha256": "b71a256f4db199ffcb452e1ed1ec5b12b96544058b0d77c286293b252443ad30",
+    "ir": "/root/sym_cangjie_runtime_614_implement_r5687433872-llvm/phase-test/baseline-O0.ir"
+  },
+  {
+    "arm": "baseline",
+    "opt": "O2",
+    "llc_rc": 0,
+    "check_rc": 1,
+    "wall": 0.012888527009636164,
+    "llc_sha256": "b71a256f4db199ffcb452e1ed1ec5b12b96544058b0d77c286293b252443ad30",
+    "ir": "/root/sym_cangjie_runtime_614_implement_r5687433872-llvm/phase-test/baseline-O2.ir"
+  }
+]

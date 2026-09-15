@@ -1,0 +1,46 @@
+# slot test0 acquired 2026-09-16T05:25:01+08:00
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+process 1065112 is executing new program: /root/sym_cangjie_runtime_614_implement_r5687433872-build02/unit-testable/cj_gc_unit
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+[  RUN   ] YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong
+2026-09-16 05:25:12.597408 1065112 E [FWDTABLE] armed base=0x40000001000 size=24576 unit=4096 entries=6
+[New Thread 0x7ffff78bd640 (LWP 1065120)]
+[New Thread 0x7ffff7553640 (LWP 1065121)]
+[New Thread 0x7ffff74d2640 (LWP 1065122)]
+[New Thread 0x7ffff7451640 (LWP 1065123)]
+2026-09-16 05:25:12.598201 1065112 E [GCV2][epoch-handshake] source=pre-minor-stack epoch=1 requested=0 acked=0 acked_twice=0 self=0 gc_assisted=0 starting=0 running=0 parked=0 exiting=0 deferred_create=0 born_clean=0 exit_transition=0 destroy_deferred=0 stw_calls=0 stack_scanned=0 stack_fallback=0 stack_frames=0 wlock_us=0 timeout_ms=0 epoch_handshake=required stack_scan=required
+2026-09-16 05:25:12.598342 1065120 E [GCV2][stack-scan-fallback] epoch=1 concurrent_done=0 stw_fallback=0 stack_scan=required
+2026-09-16 05:25:12.598612 1065112 E [GhostRetention] retained_regions=0 retained_bytes=0
+TARGET_YOUNG_STRONG_CLOSURE workers=1 root=1 weak=1 referent=1 child=1
+P1_FIELD_FOLLOW_ASSERT referent=1 child=1
+[Thread 0x7ffff78bd640 (LWP 1065120) exited]
+[Thread 0x7ffff74d2640 (LWP 1065122) exited]
+[Thread 0x7ffff7553640 (LWP 1065121) exited]
+
+Thread 2.5 "RuntimeWorker" received signal SIGSEGV, Segmentation fault.
+[Switching to Thread 0x7ffff7451640 (LWP 1065123)]
+MapleRuntime::WCollector::FlushThreadMarkProducers (this=0x0, tls=0x7ffff7451500) at ../../../../runtime/src/Heap/z/zMark.cpp:1250
+1250	../../../../runtime/src/Heap/z/zMark.cpp: 没有那个文件或目录.
+$1 = {si_signo = 11, si_errno = 0, si_code = 1, _sifields = {_pad = {1568, 0 <repeats 27 times>}, _kill = {si_pid = 1568, si_uid = 0}, _timer = {si_tid = 1568, si_overrun = 0, si_sigval = {sival_int = 0, sival_ptr = 0x0}}, _rt = {si_pid = 1568, si_uid = 0, si_sigval = {sival_int = 0, sival_ptr = 0x0}}, _sigchld = {si_pid = 1568, si_uid = 0, si_status = 0, si_utime = 0, si_stime = 0}, _sigfault = {si_addr = 0x620, _addr_lsb = 0, _addr_bnd = {_lower = 0x0, _upper = 0x0}}, _sigpoll = {si_band = 1568, si_fd = 0}, _sigsys = {_call_addr = 0x620, _syscall = 0, _arch = 0}}}
+
+Thread 2.5 (Thread 0x7ffff7451640 (LWP 1065123) "RuntimeWorker"):
+#0  MapleRuntime::WCollector::FlushThreadMarkProducers (this=0x0, tls=0x7ffff7451500) at ../../../../runtime/src/Heap/z/zMark.cpp:1250
+#1  0x00007ffff7e9871e in MapleRuntime::ThreadLocal::FlushCurrentThreadMarkStacks () at ../../../runtime/src/Mutator/ThreadLocal.cpp:71
+#2  MapleRuntime::CleanThreadLocalData::~CleanThreadLocalData (this=0x7ffff7451570) at ../../../runtime/src/Mutator/ThreadLocal.cpp:110
+#3  0x00007ffff7645d9f in __GI___call_tls_dtors () at ./stdlib/cxa_thread_atexit_impl.c:159
+#4  0x00007ffff7694905 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:450
+#5  0x00007ffff77268e0 in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:81
+
+Thread 2.1 (Thread 0x7ffff7cabd40 (LWP 1065112) "exe"):
+#0  __futex_abstimed_wait_common64 (private=128, cancel=true, abstime=0x0, op=265, expected=1065123, futex_word=0x7ffff7451910) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=128, abstime=0x0, clockid=0, expected=1065123, futex_word=0x7ffff7451910) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ffff7451910, expected=1065123, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=128) at ./nptl/futex-internal.c:139
+#3  0x00007ffff76965e4 in __pthread_clockjoin_ex (threadid=140737341888064, thread_return=0x0, clockid=0, abstime=0x0, block=<optimized out>) at ./nptl/pthread_join_common.c:105
+#4  0x00007ffff7e89e44 in MapleRuntime::RuntimeWorkers::~RuntimeWorkers (this=0x7fffffffd7f0) at ../../../runtime/src/Heap/z/zRuntimeWorkers.cpp:65
+#5  0x0000555555650583 in (anonymous namespace)::RunYoungWeakVariant (helpers=0) at sym_cangjie_runtime_614_implement_r5687433872-build02/testable/runtime/tests/gc_unit/test_young_weak.cpp:451
+#6  0x000055555564b0ad in YoungWeakClosure_SingleWorkerKeepsYoungReferentStrong () at sym_cangjie_runtime_614_implement_r5687433872-build02/testable/runtime/tests/gc_unit/test_young_weak.cpp:633
+#7  0x000055555557e6a6 in MapleRuntime::GcUnit::RunAll () at sym_cangjie_runtime_614_implement_r5687433872-build02/testable/runtime/tests/gc_unit/gc_unittest.hpp:252
+[  FAIL  ] YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong
+  other-vm child did not exit cleanly with sentinel for YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong
+[========] 1 tests: 0 passed, 1 failed
