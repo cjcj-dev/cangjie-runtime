@@ -1,0 +1,10 @@
+--- a/runtime/src/Heap/z/zGeneration.cpp
++++ b/runtime/src/Heap/z/zGeneration.cpp
+@@ -139,6 +139,7 @@
+ #endif
+     auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
+     space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
++    space.AssembleGarbageCandidates();
+ #if defined(MRT_TESTABLE_INTERNALS)
+     if (TracingCollector::testMarkStartState) {
+         TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, markDomain);
