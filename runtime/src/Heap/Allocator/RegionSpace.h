@@ -10,12 +10,13 @@
 
 #include <cassert>
 #include <list>
+#include <memory>
+#include <sys/mman.h>
 #include <map>
 #include <set>
 #include <thread>
 #include <vector>
 
-#include "AllocUtil.h"
 #include "Heap/z/zServiceability.hpp"
 #include "Allocator.h"
 #include "ExceptionManager.h"
@@ -51,12 +52,16 @@ public:
             allocBufferManager = nullptr;
         }
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
-        for (const auto& range : map->GetReservationRegistry().Ranges()) {
-            Sanitizer::OnHeapDeallocated(reinterpret_cast<void*>(range.start), range.size);
+        if (reservedEnd > reservedStart) {
+            Sanitizer::OnHeapDeallocated(reinterpret_cast<void*>(reservedStart), reservedEnd - reservedStart);
         }
 #endif
-        MemMap::DestroyMemMap(map);
-        MemMap::DestroyMemMap(metadataMap);
+        physicalMemory.reset();
+        virtualMemory.reset();
+        if (metadata != nullptr) {
+            (void)munmap(metadata, metadataSize);
+            metadata = nullptr;
+        }
     }
 
     void Init(const HeapParam&) override;
@@ -238,8 +243,14 @@ private:
     MAddress reservedStart = 0;
     MAddress reservedEnd = 0;
     RegionManager regionManager;
-    MemMap* map{ nullptr };
-    MemMap* metadataMap{ nullptr };
+    // ZPageAllocator::_virtual / _physical (zPageAllocator.hpp:196-197),
+    // constructed for max_capacity once the heap parameters are known.
+    std::unique_ptr<ZVirtualMemoryManager> virtualMemory;
+    std::unique_ptr<ZPhysicalMemoryManager> physicalMemory;
+    // Reverse per-unit metadata array (ABI adapter, outside the heap address
+    // domain; ZPage descriptors live on the C heap in ZGC).
+    void* metadata{ nullptr };
+    size_t metadataSize{ 0 };
 };
 } // namespace MapleRuntime
 #endif // MRT_REGION_SPACE_H

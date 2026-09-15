@@ -201,8 +201,124 @@ inline zoffset_end to_zoffset_end(zoffset offset) {
 
 CREATE_ZOFFSET_OPERATORS(zoffset)
 
+// zbacking_offset functions (ZGC zAddress.inline.hpp:198-238)
+
+inline uintptr_t untype(zbacking_offset offset) {
+  const uintptr_t value = static_cast<uintptr_t>(offset);
+  assert(value < ZBackingOffsetMax);
+  return value;
+}
+
+inline uintptr_t untype(zbacking_offset_end offset) {
+  const uintptr_t value = static_cast<uintptr_t>(offset);
+  assert(value <= ZBackingOffsetMax);
+  return value;
+}
+
+inline zbacking_offset to_zbacking_offset(uintptr_t value) {
+  assert(value < ZBackingOffsetMax);
+  return zbacking_offset(value);
+}
+
+inline zbacking_offset to_zbacking_offset(zbacking_offset_end offset) {
+  const uintptr_t value = untype(offset);
+  return to_zbacking_offset(value);
+}
+
+inline zbacking_offset_end to_zbacking_offset_end(zbacking_offset start, size_t size) {
+  const uintptr_t value = untype(start) + size;
+  assert(value <= ZBackingOffsetMax);
+  return zbacking_offset_end(value);
+}
+
+inline zbacking_offset_end to_zbacking_offset_end(uintptr_t value) {
+  assert(value <= ZBackingOffsetMax);
+  return zbacking_offset_end(value);
+}
+
+inline zbacking_offset_end to_zbacking_offset_end(zbacking_offset offset) {
+  return zbacking_offset_end(untype(offset));
+}
+
+CREATE_ZOFFSET_OPERATORS(zbacking_offset)
+
+// zbacking_index functions (ZGC zAddress.inline.hpp:240-281)
+
+inline uint32_t untype(zbacking_index index) {
+  const uint32_t value = static_cast<uint32_t>(index);
+  assert(value < ZBackingIndexMax);
+  return value;
+}
+
+inline uint32_t untype(zbacking_index_end index) {
+  const uint32_t value = static_cast<uint32_t>(index);
+  assert(value <= ZBackingIndexMax);
+  return value;
+}
+
+inline zbacking_index to_zbacking_index(uint32_t value) {
+  assert(value < ZBackingIndexMax);
+  return zbacking_index(value);
+}
+
+inline zbacking_index to_zbacking_index(zbacking_index_end index) {
+  const uint32_t value = untype(index);
+  return to_zbacking_index(value);
+}
+
+inline zbacking_index_end to_zbacking_index_end(zbacking_index start, size_t size) {
+  const uint32_t start_value = untype(start);
+  const uint32_t value = start_value + static_cast<uint32_t>(size);
+  assert(value <= ZBackingIndexMax && start_value <= value);
+  return zbacking_index_end(value);
+}
+
+inline zbacking_index_end to_zbacking_index_end(uint32_t value) {
+  assert(value <= ZBackingIndexMax);
+  return zbacking_index_end(value);
+}
+
+inline zbacking_index_end to_zbacking_index_end(zbacking_index index) {
+  return zbacking_index_end(untype(index));
+}
+
+CREATE_ZOFFSET_OPERATORS(zbacking_index)
 
 #undef CREATE_ZOFFSET_OPERATORS
+
+// zbacking_offset <-> zbacking_index conversion functions (ZGC zAddress.inline.hpp:285-296).
+// The backing granule is ZGranuleSize once P03/P05 move pages onto 2MB
+// granules; until then our page allocator hands out MRT_PAGE_SIZE units, so
+// the physical manager indexes backing per MRT_PAGE_SIZE (see zVirtualMemory).
+
+inline zbacking_index to_zbacking_index(zbacking_offset offset) {
+  const uintptr_t value = untype(offset);
+  assert(value % ZBackingGranuleSize == 0);
+  return to_zbacking_index(static_cast<uint32_t>(value / ZBackingGranuleSize));
+}
+
+inline zbacking_offset to_zbacking_offset(zbacking_index index) {
+  const uintptr_t value = untype(index);
+  return to_zbacking_offset(value * ZBackingGranuleSize);
+}
+
+// ZRange helper functions (ZGC zAddress.inline.hpp:298-314)
+
+inline zoffset to_start_type(zoffset_end offset) {
+  return to_zoffset(offset);
+}
+
+inline zbacking_index to_start_type(zbacking_index_end offset) {
+  return to_zbacking_index(offset);
+}
+
+inline zoffset_end to_end_type(zoffset start, size_t size) {
+  return to_zoffset_end(start, size);
+}
+
+inline zbacking_index_end to_end_type(zbacking_index start, size_t size) {
+  return to_zbacking_index_end(start, size);
+}
 #define report_is_valid_failure(str) assert(!assert_on_failure);
 
 inline bool is_valid(zpointer ptr, bool assert_on_failure = false) {

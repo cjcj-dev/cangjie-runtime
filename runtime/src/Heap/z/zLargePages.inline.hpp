@@ -4,21 +4,23 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zVirtualMemory.hpp:31-38.
+// ZGC zLargePages.inline.hpp:29-39.
 
 #pragma once
-#include "Heap/z/zAddress.hpp"
-#include "Heap/z/zRange.hpp"
+#include "Heap/z/zLargePages.hpp"
 
 namespace MapleRuntime {
 
-class ZVirtualMemory : public ZRange<zoffset, zoffset_end> {
-public:
-  ZVirtualMemory();
-  ZVirtualMemory(zoffset start, size_t size);
-  ZVirtualMemory(const ZRange<zoffset, zoffset_end>& range);
+inline bool ZLargePages::is_enabled() {
+  return _state != Disabled;
+}
 
-  int granule_count() const;
-};
+inline bool ZLargePages::is_explicit() {
+  return _state == Explicit;
+}
+
+inline bool ZLargePages::is_transparent() {
+  return _state == Transparent;
+}
 
 } // namespace MapleRuntime

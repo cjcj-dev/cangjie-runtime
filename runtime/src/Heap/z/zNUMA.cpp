@@ -4,39 +4,20 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
-#include "Heap/z/zVirtualMemoryManager.hpp"
+#include "Heap/z/zNUMA.inline.hpp"
 
 #include <algorithm>
-#include <limits>
-#include <new>
-#include <utility>
 #if defined(__linux__)
-#include <sys/resource.h>
 #include <sys/syscall.h>
-#include <sys/vfs.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <linux/falloc.h>
-#include <cerrno>
-#elif !defined(_WIN64)
-#include <sys/resource.h>
 #endif
-#ifdef _WIN64
-#include <errhandlingapi.h>
-#include <handleapi.h>
-#include <memoryapi.h>
-#include <sysinfoapi.h>
-#endif
-
-#include "Base/Log.h"
-#include "Base/LogFile.h"
-#include "Base/Panic.h"
-#include "Base/SysCall.h"
-
-#include "Heap/z/zVirtualMemory.inline.hpp"
 
 namespace MapleRuntime {
+namespace {
+constexpr unsigned long kMaxNumaNodes = sizeof(unsigned long) * 8;
+constexpr int kMpolMemsAllowed = 2;
+}
+
 NumaTopology NumaTopology::Seal(const std::vector<uint32_t>& nodeIds)
 {
     NumaTopology topology;
@@ -73,5 +54,3 @@ bool NumaTopology::Contains(uint32_t node) const
 }
 
 }
-
-#include "Heap/z/zNUMA.inline.hpp"

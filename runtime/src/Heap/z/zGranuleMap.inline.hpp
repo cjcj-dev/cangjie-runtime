@@ -89,3 +89,19 @@ inline size_t ZGranuleMap<T>::index_for_offset(zoffset offset) const
         return static_cast<size_t>(raw(offset)) / _granule;
     }
 }
+
+namespace MapleRuntime {
+template<typename T>
+inline const T* ZGranuleMap<T>::addr(zoffset offset) const
+{
+        static_assert(sizeof(std::atomic<T>) == sizeof(T), "atomic slot must alias T");
+        return reinterpret_cast<const T*>(_map + index_for_offset(offset));
+    }
+
+template<typename T>
+inline T* ZGranuleMap<T>::addr(zoffset offset)
+{
+        static_assert(sizeof(std::atomic<T>) == sizeof(T), "atomic slot must alias T");
+        return reinterpret_cast<T*>(_map + index_for_offset(offset));
+    }
+}

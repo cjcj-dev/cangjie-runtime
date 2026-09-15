@@ -63,6 +63,12 @@ extern size_t    ZBackingOffsetMax;
 // Describes the maximal granule index inside the backing storage.
 extern uint32_t  ZBackingIndexMax;
 
+// Granule of the virtual/physical memory managers. ZGC uses ZGranuleSize
+// (2MB, zGlobals.hpp:33-34) because every page is a granule multiple. Our
+// page allocator still hands out MRT_PAGE_SIZE units (P03/P05 move pages onto
+// 2MB granules), so the managers index address space and backing per unit.
+extern const size_t ZBackingGranuleSize;
+
 // Layout of metadata bits in colored pointer / zpointer.
 //
 // A zpointer is a combination of the address bits (heap base bit + offset)
@@ -231,6 +237,16 @@ constexpr uintptr_t ZPointerFinalizableMask = ZPointerFinalizable0 | ZPointerFin
 extern uint32_t* ZPointerStoreGoodMaskLowOrderBitsAddr;
 enum class zoffset : Uptr { zero = 0, invalid = UINTPTR_MAX };
 enum class zoffset_end : Uptr { invalid = UINTPTR_MAX };
+
+// - Physical memory segment offsets (ZGC zAddress.hpp:236-244)
+enum class zbacking_offset : Uptr {};
+// Offsets including end of offset range
+enum class zbacking_offset_end : Uptr {};
+
+// - Physical memory segment indicies
+enum class zbacking_index : uint32_t { zero = 0, invalid = UINT32_MAX };
+// Offsets including end of indicies range
+enum class zbacking_index_end : uint32_t { zero = 0, invalid = UINT32_MAX };
 enum class zpointer : Uptr { null = 0 };
 enum class zaddress : Uptr { null = 0 };
 enum class zaddress_unsafe : Uptr { null = 0 };

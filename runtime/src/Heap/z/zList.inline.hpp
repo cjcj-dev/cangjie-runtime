@@ -4,108 +4,232 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// ZGC zList.inline.hpp:32-253.
+
+#pragma once
 #include "Heap/z/zList.hpp"
+
+#include <cassert>
+
 namespace MapleRuntime {
-void RegionList::MergeRegionList(RegionList& srcList, RegionInfo::RegionType regionType)
-{
-    RegionList regionList("region list cache");
-    srcList.MoveTo(regionList);
-    RegionInfo* head = regionList.GetHeadRegion();
-    RegionInfo* tail = regionList.GetTailRegion();
-    if (head == nullptr) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(listMutex);
-    regionList.SetElementType(regionType);
-    IncCounts(regionList.GetRegionCount(), regionList.GetUnitCount());
-    if (listHead == nullptr) {
-        listHead = head;
-        listTail = tail;
-    } else {
-        tail->SetNextRegion(listHead);
-        listHead->SetPrevRegion(tail);
-        listHead = head;
-    }
-    for (RegionInfo* node = head; node != nullptr; node = node->GetNextRegion()) {
-        node->SetRegionListOwner(this);
-    }
+
+template <typename T>
+inline ZListNode<T>::ZListNode()
+  : _next(this),
+    _prev(this) {}
+
+template <typename T>
+inline void ZListNode<T>::verify_links() const {
+  assert(_next->_prev == this);
+  assert(_prev->_next == this);
 }
 
-void RegionList::PrependRegion(RegionInfo* region, RegionInfo::RegionType type)
-{
-    std::lock_guard<std::mutex> lock(listMutex);
-    PrependRegionLocked(region, type);
+template <typename T>
+inline void ZListNode<T>::verify_links_linked() const {
+  assert(_next != this);
+  assert(_prev != this);
+  verify_links();
 }
 
-void RegionList::PrependRegionLocked(RegionInfo* region, RegionInfo::RegionType type)
-{
-    if (region == nullptr) {
-        return;
-    }
-
-    CHECK_DETAIL(region->GetRegionListOwner() == nullptr, "region already belongs to a list");
-
-    DLOG(REGION, "list %p (%zu, %zu)+(%zu, %zu) prepend region %p@[%#zx+%zu, %#zx) type %u->%u", this,
-        regionCount, unitCount, 1llu, region->GetUnitCount(), region, region->GetRegionStart(),
-        region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType(), type);
-
-    region->SetRegionType(type);
-    region->SetRegionListOwner(this);
-    region->SetPrevRegion(nullptr);
-    IncCounts(1, region->GetUnitCount());
-    region->SetNextRegion(listHead);
-    if (listHead == nullptr) {
-        MRT_ASSERT(listTail == nullptr, "PrependRegion listTail is not null");
-        listTail = region;
-    } else {
-        listHead->SetPrevRegion(region);
-    }
-    listHead = region;
+template <typename T>
+inline void ZListNode<T>::verify_links_unlinked() const {
+  assert(_next == this);
+  assert(_prev == this);
 }
 
-void RegionList::DeleteRegionLocked(RegionInfo* del)
-{
-    MRT_ASSERT(listHead != nullptr && listTail != nullptr, "illegal region list");
-    CHECK_DETAIL(del != nullptr && del->GetRegionListOwner() == this, "region belongs to another list");
-
-    RegionInfo* pre = del->GetPrevRegion();
-    RegionInfo* next = del->GetNextRegion();
-
-    del->SetNextRegion(nullptr);
-    del->SetPrevRegion(nullptr);
-    del->SetRegionListOwner(nullptr);
-
-    DLOG(REGION, "list %p (%zu, %zu)-(%zu, %zu) delete region %p@[%#zx+%zu, %#zx) type %u", this,
-        regionCount, unitCount, 1llu, del->GetUnitCount(),
-        del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(), del->GetRegionType());
-
-    DecCounts(1, del->GetUnitCount());
-
-    if (listHead == del) { // delete head
-        MRT_ASSERT(pre == nullptr, "Delete Region pre is not null");
-        listHead = next;
-        if (listHead == nullptr) { // now empty
-            listTail = nullptr;
-            return;
-        }
-    } else if (pre != nullptr) {
-        pre->SetNextRegion(next);
-    }
-
-    if (listTail == del) { // delete tail
-        MRT_ASSERT(next == nullptr, "Delete Region next is not null");
-        listTail = pre;
-        if (listTail == nullptr) { // now empty
-            listHead = nullptr;
-            return;
-        }
-    } else if (next != nullptr) {
-        next->SetPrevRegion(pre);
-    } else if (pre != nullptr) {
-        // next was stolen (region re-homed onto another list) while this list
-        // still named it. Treat del as the last node we still own.
-        listTail = pre;
-    }
+template <typename T>
+inline void ZList<T>::verify_head() const {
+  _head.verify_links();
 }
 
+template <typename T>
+inline void ZList<T>::verify_head_error_reporter_safe() const {
+  // No error-reporter thread state to consult here; verify unconditionally.
+  verify_head();
 }
+
+template <typename T>
+inline void ZList<T>::insert(ZListNode<T>* before, ZListNode<T>* node) {
+  verify_head();
+
+  before->verify_links();
+  node->verify_links_unlinked();
+
+  node->_prev = before;
+  node->_next = before->_next;
+  before->_next = node;
+  node->_next->_prev = node;
+
+  before->verify_links_linked();
+  node->verify_links_linked();
+
+  _size++;
+}
+
+template <typename T>
+inline ZListNode<T>* ZList<T>::cast_to_inner(T* elem) const {
+  return &elem->_node;
+}
+
+template <typename T>
+inline T* ZList<T>::cast_to_outer(ZListNode<T>* node) const {
+  return (T*)((uintptr_t)node - offsetof(T, _node));
+}
+
+template <typename T>
+inline ZList<T>::ZList()
+  : _head(),
+    _size(0) {
+  verify_head();
+}
+
+template <typename T>
+inline size_t ZList<T>::size_error_reporter_safe() const {
+  verify_head_error_reporter_safe();
+  return _size;
+}
+
+template <typename T>
+inline bool ZList<T>::is_empty_error_reporter_safe() const {
+  return size_error_reporter_safe() == 0;
+}
+
+template <typename T>
+inline size_t ZList<T>::size() const {
+  verify_head();
+  return _size;
+}
+
+template <typename T>
+inline bool ZList<T>::is_empty() const {
+  return size() == 0;
+}
+
+template <typename T>
+inline T* ZList<T>::first() const {
+  return is_empty() ? nullptr : cast_to_outer(_head._next);
+}
+
+template <typename T>
+inline T* ZList<T>::last() const {
+  return is_empty() ? nullptr : cast_to_outer(_head._prev);
+}
+
+template <typename T>
+inline T* ZList<T>::next(T* elem) const {
+  verify_head();
+
+  ZListNode<T>* const node = cast_to_inner(elem);
+  node->verify_links_linked();
+
+  ZListNode<T>* const next = node->_next;
+  next->verify_links_linked();
+
+  return (next == &_head) ? nullptr : cast_to_outer(next);
+}
+
+template <typename T>
+inline T* ZList<T>::prev(T* elem) const {
+  verify_head();
+
+  ZListNode<T>* const node = cast_to_inner(elem);
+  node->verify_links_linked();
+
+  ZListNode<T>* const prev = node->_prev;
+  prev->verify_links_linked();
+
+  return (prev == &_head) ? nullptr : cast_to_outer(prev);
+}
+
+template <typename T>
+inline void ZList<T>::insert_first(T* elem) {
+  insert(&_head, cast_to_inner(elem));
+}
+
+template <typename T>
+inline void ZList<T>::insert_last(T* elem) {
+  insert(_head._prev, cast_to_inner(elem));
+}
+
+template <typename T>
+inline void ZList<T>::insert_before(T* before, T* elem) {
+  insert(cast_to_inner(before)->_prev, cast_to_inner(elem));
+}
+
+template <typename T>
+inline void ZList<T>::insert_after(T* after, T* elem) {
+  insert(cast_to_inner(after), cast_to_inner(elem));
+}
+
+template <typename T>
+inline void ZList<T>::remove(T* elem) {
+  verify_head();
+
+  ZListNode<T>* const node = cast_to_inner(elem);
+  node->verify_links_linked();
+
+  ZListNode<T>* const next = node->_next;
+  ZListNode<T>* const prev = node->_prev;
+  next->verify_links_linked();
+  prev->verify_links_linked();
+
+  node->_next = prev->_next;
+  node->_prev = next->_prev;
+  node->verify_links_unlinked();
+
+  next->_prev = prev;
+  prev->_next = next;
+  next->verify_links();
+  prev->verify_links();
+
+  _size--;
+}
+
+template <typename T>
+inline T* ZList<T>::remove_first() {
+  T* elem = first();
+  if (elem != nullptr) {
+    remove(elem);
+  }
+
+  return elem;
+}
+
+template <typename T>
+inline T* ZList<T>::remove_last() {
+  T* elem = last();
+  if (elem != nullptr) {
+    remove(elem);
+  }
+
+  return elem;
+}
+
+template <typename T, bool Forward>
+inline ZListIteratorImpl<T, Forward>::ZListIteratorImpl(const ZList<T>* list)
+  : _list(list),
+    _next(Forward ? list->first() : list->last()) {}
+
+template <typename T, bool Forward>
+inline bool ZListIteratorImpl<T, Forward>::next(T** elem) {
+  if (_next != nullptr) {
+    *elem = _next;
+    _next = Forward ? _list->next(_next) : _list->prev(_next);
+    return true;
+  }
+
+  // No more elements
+  return false;
+}
+
+template <typename T, bool Forward>
+inline ZListRemoveIteratorImpl<T, Forward>::ZListRemoveIteratorImpl(ZList<T>* list)
+  : _list(list) {}
+
+template <typename T, bool Forward>
+inline bool ZListRemoveIteratorImpl<T, Forward>::next(T** elem) {
+  *elem = Forward ? _list->remove_first() : _list->remove_last();
+  return *elem != nullptr;
+}
+
+} // namespace MapleRuntime

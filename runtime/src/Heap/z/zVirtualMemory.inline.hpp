@@ -4,21 +4,39 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// ZGC zVirtualMemory.inline.hpp:35-55. The granule is ZBackingGranuleSize
+// (one page-allocator unit) until P03/P05 move pages onto ZGranuleSize.
+
 #pragma once
+#include "Heap/z/zVirtualMemory.hpp"
+
+#include <cassert>
 #include <limits>
-#include <cstddef>
-#include <cstdint>
+
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zRange.inline.hpp"
+
 namespace MapleRuntime {
-namespace {
-constexpr size_t kDefaultSafeFraction = 2;
-constexpr unsigned long kMaxNumaNodes = sizeof(unsigned long) * 8;
-constexpr int kMpolPreferred = 1;
-constexpr int kMpolMemsAllowed = 2;
 
-bool AddOverflows(uintptr_t start, size_t size)
-{
-    return size > std::numeric_limits<uintptr_t>::max() - start;
+inline ZVirtualMemory::ZVirtualMemory()
+  : ZRange() {}
+
+inline ZVirtualMemory::ZVirtualMemory(zoffset start, size_t size)
+  : ZRange(start, size) {
+  // ZVirtualMemory is only used for granule multiple ranges
+  assert(untype(start) % ZBackingGranuleSize == 0);
+  assert(size % ZBackingGranuleSize == 0);
 }
 
+inline ZVirtualMemory::ZVirtualMemory(const ZRange<zoffset, zoffset_end>& range)
+  : ZVirtualMemory(range.start(), range.size()) {}
+
+inline int ZVirtualMemory::granule_count() const {
+  const size_t granule_count = size() / ZBackingGranuleSize;
+
+  assert(granule_count <= static_cast<size_t>(std::numeric_limits<int>::max()));
+
+  return static_cast<int>(granule_count);
 }
-}
+
+} // namespace MapleRuntime

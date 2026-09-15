@@ -103,6 +103,11 @@ public:
 
     T exchange(zoffset offset, T value);
 
+    // zGranuleMap.inline.hpp:104-114: raw slot address for callers that
+    // treat a run of granules as an array (ZPhysicalMemoryManager pmem).
+    const T* addr(zoffset offset) const;
+    T* addr(zoffset offset);
+
     size_t granule() const;
     size_t size() const;
     MAddress base() const;

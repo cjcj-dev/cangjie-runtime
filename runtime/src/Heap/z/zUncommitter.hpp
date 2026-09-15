@@ -29,7 +29,15 @@ public:
     static constexpr size_t kMaxUncommitChunk = 256 * MB;
 
     static uint64_t DelayNs();
-    static bool Enabled() { return DelayNs() > 0; }
+    // ZUncommit / ZUncommitDelay (HotSpot gc_globals.hpp flags; here the
+    // cjUncommit / cjUncommitDelay environment variables, PLAN infra I15).
+    // ZPhysicalMemoryManager::try_enable_uncommit clears ZUncommit when the
+    // platform or the heap geometry rules uncommit out.
+    static bool ZUncommit();
+    static void SetZUncommit(bool enabled);
+    static size_t ZUncommitDelay();
+    static void SetZUncommitDelay(size_t seconds);
+    static bool Enabled() { return ZUncommit() && DelayNs() > 0; }
 
     static size_t ChunkLimit(size_t maxCapacity);
     static size_t MinCapacity(size_t liveBytes, size_t youngReserve);

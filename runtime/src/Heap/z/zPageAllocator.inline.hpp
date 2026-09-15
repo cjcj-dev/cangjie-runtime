@@ -345,26 +345,6 @@ inline void RegionManager::ClearLiveInfo(RegionList& list)
         });
     }
 
-inline void RegionManager::TagHugePage(RegionInfo* region, size_t num) const
-{
-#if defined (__linux__) || defined(__OHOS__) || defined(__ANDROID__)
-    (void)madvise(reinterpret_cast<void*>(region->GetRegionStart()), num * RegionInfo::UNIT_SIZE, MADV_HUGEPAGE);
-#else
-    (void)region;
-    (void)num;
-#endif
-}
-
-inline void RegionManager::UntagHugePage(RegionInfo* region, size_t num) const
-{
-#if defined (__linux__) || defined(__OHOS__) || defined(__ANDROID__)
-    (void)madvise(reinterpret_cast<void*>(region->GetRegionStart()), num * RegionInfo::UNIT_SIZE, MADV_NOHUGEPAGE);
-#else
-    (void)region;
-    (void)num;
-#endif
-}
-
 } // namespace MapleRuntime
 #endif
 

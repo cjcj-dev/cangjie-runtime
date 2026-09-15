@@ -4,319 +4,464 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include <algorithm>
-#include <limits>
+// ZGC zRangeRegistry.inline.hpp:34-468.
 
-#ifdef MRT_TESTABLE_INTERNALS
-#define MRT_RANGE_REGISTRY_INLINE
-#else
-#define MRT_RANGE_REGISTRY_INLINE inline
-#endif
+#pragma once
+#include "Heap/z/zRangeRegistry.hpp"
+
+#include <cassert>
+
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zList.inline.hpp"
 
 namespace MapleRuntime {
 
-namespace {
-bool AddOverflows(uintptr_t start, size_t size)
-{
-    return size > std::numeric_limits<uintptr_t>::max() - start;
-}
-} // namespace
+template <typename Range>
+void ZRangeRegistry<Range>::move_into(const Range& range) {
+  assert(!range.is_null());
+  assert(check_limits(range));
 
-MRT_RANGE_REGISTRY_INLINE Range::Range(uintptr_t rangeStart, size_t rangeSize) : start(rangeStart), size(rangeSize) {}
+  const offset start = range.start();
+  const offset_end end = range.end();
+  const size_t size = range.size();
 
-MRT_RANGE_REGISTRY_INLINE bool Range::IsNull() const
-{
-    return size == 0;
-}
-
-MRT_RANGE_REGISTRY_INLINE bool Range::IsValid() const
-{
-    return !IsNull() && !AddOverflows(start, size);
-}
-
-MRT_RANGE_REGISTRY_INLINE uintptr_t Range::Start() const
-{
-    return start;
-}
-
-MRT_RANGE_REGISTRY_INLINE uintptr_t Range::End() const
-{
-    return start + size;
-}
-
-MRT_RANGE_REGISTRY_INLINE size_t Range::Size() const
-{
-    return size;
-}
-
-MRT_RANGE_REGISTRY_INLINE bool Range::Contains(const Range& other) const
-{
-    return IsValid() && other.IsValid() && start <= other.start && other.End() <= End();
-}
-
-MRT_RANGE_REGISTRY_INLINE bool Range::AdjacentTo(const Range& other) const
-{
-    return IsValid() && other.IsValid() && (End() == other.start || other.End() == start);
-}
-
-MRT_RANGE_REGISTRY_INLINE bool Range::GrowFromFront(size_t growSize)
-{
-    if (!IsValid() || growSize > start || growSize > std::numeric_limits<size_t>::max() - size) {
-        return false;
-    }
-    start -= growSize;
-    size += growSize;
-    return true;
-}
-
-MRT_RANGE_REGISTRY_INLINE bool Range::GrowFromBack(size_t growSize)
-{
-    if (!IsValid() || AddOverflows(End(), growSize)) {
-        return false;
-    }
-    size += growSize;
-    return true;
-}
-
-MRT_RANGE_REGISTRY_INLINE Range Range::ShrinkFromFront(size_t shrinkSize)
-{
-    if (!IsValid() || shrinkSize == 0 || shrinkSize > size) {
-        return Range();
-    }
-    const Range claimed(start, shrinkSize);
-    start += shrinkSize;
-    size -= shrinkSize;
-    return claimed;
-}
-
-MRT_RANGE_REGISTRY_INLINE Range Range::ShrinkFromBack(size_t shrinkSize)
-{
-    if (!IsValid() || shrinkSize == 0 || shrinkSize > size) {
-        return Range();
-    }
-    size -= shrinkSize;
-    return Range(start + size, shrinkSize);
-}
-
-MRT_RANGE_REGISTRY_INLINE Range Range::Partition(size_t offset, size_t partitionSize) const
-{
-    if (!IsValid() || partitionSize == 0 || offset > size || partitionSize > size - offset) {
-        return Range();
-    }
-    return Range(start + offset, partitionSize);
-}
-
-MRT_RANGE_REGISTRY_INLINE Range Range::FirstPart(size_t splitOffset) const
-{
-    return Partition(0, splitOffset);
-}
-
-MRT_RANGE_REGISTRY_INLINE Range Range::LastPart(size_t splitOffset) const
-{
-    if (!IsValid() || splitOffset >= size) {
-        return Range();
-    }
-    return Partition(splitOffset, size - splitOffset);
-}
-
-MRT_RANGE_REGISTRY_INLINE bool Range::operator==(const Range& other) const
-{
-    return start == other.start && size == other.size;
-}
-
-MRT_RANGE_REGISTRY_INLINE bool Range::operator!=(const Range& other) const
-{
-    return !operator==(other);
-}
-
-MRT_RANGE_REGISTRY_INLINE void RangeRegistry::RegisterCallbacks(const Callbacks& newCallbacks)
-{
-    std::lock_guard<std::mutex> guard(lock);
-    callbacks = newCallbacks;
-}
-
-MRT_RANGE_REGISTRY_INLINE bool RangeRegistry::RegisterRange(const Range& range)
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return InsertLocked(range, false);
-}
-
-MRT_RANGE_REGISTRY_INLINE bool RangeRegistry::Insert(const Range& range)
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return InsertLocked(range, true);
-}
-
-MRT_RANGE_REGISTRY_INLINE bool RangeRegistry::InsertLocked(const Range& range, bool prepareForHandBack)
-{
-    if (!range.IsValid()) {
-        return false;
+  ZListIterator<Node> iter(&_list);
+  for (Node* node; iter.next(&node);) {
+    if (node->start() < start) {
+      continue;
     }
 
-    auto next = std::lower_bound(ranges.begin(), ranges.end(), range.Start(),
-                                 [](const Range& current, uintptr_t start) { return current.Start() < start; });
-    auto prev = next == ranges.begin() ? ranges.end() : std::prev(next);
-    if ((prev != ranges.end() && prev->End() > range.Start()) ||
-        (next != ranges.end() && range.End() > next->Start())) {
-        return false;
-    }
-
-    if (prepareForHandBack && callbacks.prepareForHandBack != nullptr) {
-        callbacks.prepareForHandBack(range, callbacks.context);
-    }
-
-    const bool joinsPrev = prev != ranges.end() && prev->End() == range.Start();
-    const bool joinsNext = next != ranges.end() && range.End() == next->Start();
-    if (joinsPrev) {
-        GrowFromBackLocked(*prev, range.Size());
-        if (joinsNext) {
-            GrowFromBackLocked(*prev, next->Size());
-            ranges.erase(next);
-        }
-    } else if (joinsNext) {
-        GrowFromFrontLocked(*next, range.Size());
+    Node* const prev = _list.prev(node);
+    if (prev != nullptr && start == prev->end()) {
+      if (end == node->start()) {
+        // Merge with prev and current ranges
+        grow_from_back(prev->range(), size);
+        grow_from_back(prev->range(), node->size());
+        _list.remove(node);
+        delete node;
+      } else {
+        // Merge with prev range
+        grow_from_back(prev->range(), size);
+      }
+    } else if (end == node->start()) {
+      // Merge with current range
+      grow_from_front(node->range(), size);
     } else {
-        ranges.insert(next, range);
+      // Insert range before current range
+      assert(end < node->start());
+      Node* const new_node = new Node(start, size);
+      _list.insert_before(node, new_node);
     }
+
+    // Done
+    return;
+  }
+
+  // Insert last
+  Node* const last = _list.last();
+  if (last != nullptr && start == last->end()) {
+    // Merge with last range
+    grow_from_back(last->range(), size);
+  } else {
+    // Insert new node last
+    Node* const new_node = new Node(start, size);
+    _list.insert_last(new_node);
+  }
+}
+
+template <typename Range>
+void ZRangeRegistry<Range>::insert_inner(const Range& range) {
+  if (_callbacks._prepare_for_hand_back != nullptr) {
+    _callbacks._prepare_for_hand_back(range);
+  }
+  move_into(range);
+}
+
+template <typename Range>
+void ZRangeRegistry<Range>::register_inner(const Range& range) {
+  move_into(range);
+}
+
+template <typename Range>
+void ZRangeRegistry<Range>::grow_from_front(Range* range, size_t size) {
+  if (_callbacks._grow != nullptr) {
+    const Range from = *range;
+    const Range to = Range(from.start() - size, from.size() + size);
+    _callbacks._grow(from, to);
+  }
+  range->grow_from_front(size);
+}
+
+template <typename Range>
+void ZRangeRegistry<Range>::grow_from_back(Range* range, size_t size) {
+  if (_callbacks._grow != nullptr) {
+    const Range from = *range;
+    const Range to = Range(from.start(), from.size() + size);
+    _callbacks._grow(from, to);
+  }
+  range->grow_from_back(size);
+}
+
+template <typename Range>
+Range ZRangeRegistry<Range>::shrink_from_front(Range* range, size_t size) {
+  if (_callbacks._shrink != nullptr) {
+    const Range from = *range;
+    const Range to = from.last_part(size);
+    _callbacks._shrink(from, to);
+  }
+  return range->shrink_from_front(size);
+}
+
+template <typename Range>
+Range ZRangeRegistry<Range>::shrink_from_back(Range* range, size_t size) {
+  if (_callbacks._shrink != nullptr) {
+    const Range from = *range;
+    const Range to = from.first_part(from.size() - size);
+    _callbacks._shrink(from, to);
+  }
+  return range->shrink_from_back(size);
+}
+
+template <typename Range>
+Range ZRangeRegistry<Range>::remove_from_low_inner(size_t size) {
+  ZListIterator<Node> iter(&_list);
+  for (Node* node; iter.next(&node);) {
+    if (node->size() >= size) {
+      Range range;
+
+      if (node->size() == size) {
+        // Exact match, remove range
+        _list.remove(node);
+        range = *node->range();
+        delete node;
+      } else {
+        // Larger than requested, shrink range
+        range = shrink_from_front(node->range(), size);
+      }
+
+      if (_callbacks._prepare_for_hand_out != nullptr) {
+        _callbacks._prepare_for_hand_out(range);
+      }
+
+      return range;
+    }
+  }
+
+  // Out of memory
+  return Range();
+}
+
+template <typename Range>
+Range ZRangeRegistry<Range>::remove_from_low_at_most_inner(size_t size) {
+  Node* const node = _list.first();
+  if (node == nullptr) {
+    // List is empty
+    return Range();
+  }
+
+  Range range;
+
+  if (node->size() <= size) {
+    // Smaller than or equal to requested, remove range
+    _list.remove(node);
+    range = *node->range();
+    delete node;
+  } else {
+    // Larger than requested, shrink range
+    range = shrink_from_front(node->range(), size);
+  }
+
+  if (_callbacks._prepare_for_hand_out) {
+    _callbacks._prepare_for_hand_out(range);
+  }
+
+  return range;
+}
+
+template <typename Range>
+size_t ZRangeRegistry<Range>::remove_from_low_many_at_most_inner(size_t size, ZArray<Range>* out) {
+  size_t to_remove = size;
+
+  while (to_remove > 0) {
+    const Range range = remove_from_low_at_most_inner(to_remove);
+
+    if (range.is_null()) {
+      // The requested amount is not available
+      return size - to_remove;
+    }
+
+    to_remove -= range.size();
+    out->push_back(range);
+  }
+
+  return size;
+}
+
+template <typename Range>
+ZRangeRegistry<Range>::Callbacks::Callbacks()
+  : _prepare_for_hand_out(nullptr),
+    _prepare_for_hand_back(nullptr),
+    _grow(nullptr),
+    _shrink(nullptr) {}
+
+template <typename Range>
+ZRangeRegistry<Range>::ZRangeRegistry()
+  : _list(),
+    _callbacks(),
+    _limits() {}
+
+template <typename Range>
+ZRangeRegistry<Range>::~ZRangeRegistry() {
+  // ZGC registries live for the whole VM; ours are also built and torn down
+  // by gtests, so hand every remaining node back to the C heap.
+  ZListRemoveIterator<Node> iter(&_list);
+  for (Node* node; iter.next(&node);) {
+    delete node;
+  }
+}
+
+template <typename Range>
+void ZRangeRegistry<Range>::register_callbacks(const Callbacks& callbacks) {
+  _callbacks = callbacks;
+}
+
+template <typename Range>
+void ZRangeRegistry<Range>::register_range(const Range& range) {
+  std::lock_guard<std::mutex> locker(_lock);
+  register_inner(range);
+}
+
+template <typename Range>
+bool ZRangeRegistry<Range>::unregister_first(Range* out) {
+  // Unregistering a range doesn't call a "prepare_to_hand_out" callback
+  // because the range is unregistered and not handed out to be used.
+
+  std::lock_guard<std::mutex> locker(_lock);
+
+  if (_list.is_empty()) {
+    return false;
+  }
+
+  // Don't invoke the "prepare_to_hand_out" callback
+
+  Node* const node = _list.remove_first();
+
+  // Return the range
+  *out = *node->range();
+
+  delete node;
+
+  return true;
+}
+
+template <typename Range>
+inline bool ZRangeRegistry<Range>::is_empty() const {
+  return _list.is_empty();
+}
+
+template <typename Range>
+bool ZRangeRegistry<Range>::is_contiguous() const {
+  return _list.size() == 1;
+}
+
+template <typename Range>
+void ZRangeRegistry<Range>::anchor_limits() {
+  assert(_limits.is_null());
+
+  if (_list.is_empty()) {
+    return;
+  }
+
+  const offset start = _list.first()->start();
+  const size_t size = _list.last()->end() - start;
+
+  _limits = Range(start, size);
+}
+
+template <typename Range>
+bool ZRangeRegistry<Range>::limits_contain(const Range& range) const {
+  if (_limits.is_null() || range.is_null()) {
+    return false;
+  }
+
+  return range.start() >= _limits.start() && range.end() <= _limits.end();
+}
+
+template <typename Range>
+bool ZRangeRegistry<Range>::check_limits(const Range& range) const {
+  if (_limits.is_null()) {
+    // Limits not anchored
     return true;
+  }
+
+  // Otherwise, check that other is within the limits
+  return limits_contain(range);
 }
 
-MRT_RANGE_REGISTRY_INLINE void RangeRegistry::GrowFromFrontLocked(Range& range, size_t growSize)
-{
-    const Range from = range;
-    const Range to(from.Start() - growSize, from.Size() + growSize);
-    if (callbacks.grow != nullptr) {
-        callbacks.grow(from, to, callbacks.context);
-    }
-    (void)range.GrowFromFront(growSize);
+template <typename Range>
+typename ZRangeRegistry<Range>::offset ZRangeRegistry<Range>::peek_low_address() const {
+  std::lock_guard<std::mutex> locker(_lock);
+
+  const Node* const node = _list.first();
+  if (node != nullptr) {
+    return node->start();
+  }
+
+  // Out of memory
+  return offset::invalid;
 }
 
-MRT_RANGE_REGISTRY_INLINE void RangeRegistry::GrowFromBackLocked(Range& range, size_t growSize)
-{
-    const Range from = range;
-    const Range to(from.Start(), from.Size() + growSize);
-    if (callbacks.grow != nullptr) {
-        callbacks.grow(from, to, callbacks.context);
-    }
-    (void)range.GrowFromBack(growSize);
+template <typename Range>
+typename ZRangeRegistry<Range>::offset_end ZRangeRegistry<Range>::peak_high_address_end() const {
+  std::lock_guard<std::mutex> locker(_lock);
+
+  const Node* const node = _list.last();
+  if (node != nullptr) {
+    return node->end();
+  }
+
+  // Out of memory
+  return offset_end::invalid;
 }
 
-MRT_RANGE_REGISTRY_INLINE Range RangeRegistry::ShrinkFromFrontLocked(Range& range, size_t shrinkSize)
-{
-    const Range from = range;
-    const Range to = from.LastPart(shrinkSize);
-    if (callbacks.shrink != nullptr) {
-        callbacks.shrink(from, to, callbacks.context);
-    }
-    return range.ShrinkFromFront(shrinkSize);
+template <typename Range>
+void ZRangeRegistry<Range>::insert(const Range& range) {
+  std::lock_guard<std::mutex> locker(_lock);
+  insert_inner(range);
 }
 
-MRT_RANGE_REGISTRY_INLINE Range RangeRegistry::ShrinkFromBackLocked(Range& range, size_t shrinkSize)
-{
-    const Range from = range;
-    const Range to = from.FirstPart(from.Size() - shrinkSize);
-    if (callbacks.shrink != nullptr) {
-        callbacks.shrink(from, to, callbacks.context);
-    }
-    return range.ShrinkFromBack(shrinkSize);
+template <typename Range>
+void ZRangeRegistry<Range>::insert_and_remove_from_low_many(const Range& range, ZArray<Range>* out) {
+  std::lock_guard<std::mutex> locker(_lock);
+
+  const size_t size = range.size();
+
+  // Insert the range
+  insert_inner(range);
+
+  // Remove (hopefully) at a lower address
+  const size_t removed = remove_from_low_many_at_most_inner(size, out);
+
+  // This should always succeed since we freed the same amount.
+  assert(removed == size);
+  (void)removed;
 }
 
-MRT_RANGE_REGISTRY_INLINE void RangeRegistry::PrepareForHandOutLocked(const Range& range) const
-{
-    if (callbacks.prepareForHandOut != nullptr) {
-        callbacks.prepareForHandOut(range, callbacks.context);
-    }
+template <typename Range>
+Range ZRangeRegistry<Range>::insert_and_remove_from_low_exact_or_many(size_t size, ZArray<Range>* in_out) {
+  std::lock_guard<std::mutex> locker(_lock);
+
+  size_t inserted = 0;
+
+  // Insert everything
+  for (const Range& mem : *in_out) {
+    insert_inner(mem);
+    inserted += mem.size();
+  }
+
+  // Clear stored memory so that we can populate it below
+  in_out->clear();
+
+  // Try to find and remove a contiguous chunk
+  Range range = remove_from_low_inner(size);
+  if (!range.is_null()) {
+    return range;
+  }
+
+  // Failed to find a contiguous chunk, split it up into smaller chunks and
+  // only remove up to as much that has been inserted.
+  size_t removed = remove_from_low_many_at_most_inner(inserted, in_out);
+  assert(removed == inserted);
+  (void)removed;
+  return Range();
 }
 
-MRT_RANGE_REGISTRY_INLINE Range RangeRegistry::ClaimLow(size_t claimSize)
-{
-    if (claimSize == 0) {
-        return Range();
-    }
-    std::lock_guard<std::mutex> guard(lock);
-    for (auto current = ranges.begin(); current != ranges.end(); ++current) {
-        if (current->Size() < claimSize) {
-            continue;
-        }
-        Range claimed;
-        if (current->Size() == claimSize) {
-            claimed = *current;
-            ranges.erase(current);
-        } else {
-            claimed = ShrinkFromFrontLocked(*current, claimSize);
-        }
-        PrepareForHandOutLocked(claimed);
-        return claimed;
-    }
-    return Range();
+template <typename Range>
+Range ZRangeRegistry<Range>::remove_from_low(size_t size) {
+  std::lock_guard<std::mutex> locker(_lock);
+  Range range = remove_from_low_inner(size);
+  return range;
 }
 
-MRT_RANGE_REGISTRY_INLINE Range RangeRegistry::ClaimHigh(size_t claimSize)
-{
-    if (claimSize == 0) {
-        return Range();
-    }
-    std::lock_guard<std::mutex> guard(lock);
-    for (auto current = ranges.end(); current != ranges.begin();) {
-        --current;
-        if (current->Size() < claimSize) {
-            continue;
-        }
-        Range claimed;
-        if (current->Size() == claimSize) {
-            claimed = *current;
-            ranges.erase(current);
-        } else {
-            claimed = ShrinkFromBackLocked(*current, claimSize);
-        }
-        PrepareForHandOutLocked(claimed);
-        return claimed;
-    }
-    return Range();
+template <typename Range>
+Range ZRangeRegistry<Range>::remove_from_low_at_most(size_t size) {
+  std::lock_guard<std::mutex> lock(_lock);
+  Range range = remove_from_low_at_most_inner(size);
+  return range;
 }
 
-MRT_RANGE_REGISTRY_INLINE bool RangeRegistry::IsEmpty() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return ranges.empty();
+template <typename Range>
+size_t ZRangeRegistry<Range>::remove_from_low_many_at_most(size_t size, ZArray<Range>* out) {
+  std::lock_guard<std::mutex> lock(_lock);
+  return remove_from_low_many_at_most_inner(size, out);
 }
 
-MRT_RANGE_REGISTRY_INLINE bool RangeRegistry::IsContiguous() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return ranges.size() == 1;
-}
+template <typename Range>
+Range ZRangeRegistry<Range>::remove_from_high(size_t size) {
+  std::lock_guard<std::mutex> locker(_lock);
 
-MRT_RANGE_REGISTRY_INLINE bool RangeRegistry::Contains(const Range& range) const
-{
-    if (!range.IsValid()) {
-        return false;
+  ZListReverseIterator<Node> iter(&_list);
+  for (Node* node; iter.next(&node);) {
+    if (node->size() >= size) {
+      Range range;
+
+      if (node->size() == size) {
+        // Exact match, remove range
+        _list.remove(node);
+        range = *node->range();
+        delete node;
+      } else {
+        // Larger than requested, shrink range
+        range = shrink_from_back(node->range(), size);
+      }
+
+      if (_callbacks._prepare_for_hand_out != nullptr) {
+        _callbacks._prepare_for_hand_out(range);
+      }
+
+      return range;
     }
-    std::lock_guard<std::mutex> guard(lock);
-    auto next = std::upper_bound(ranges.begin(), ranges.end(), range.Start(),
-                                 [](uintptr_t start, const Range& current) { return start < current.Start(); });
-    if (next == ranges.begin()) {
-        return false;
-    }
-    return std::prev(next)->Contains(range);
+  }
+
+  // Out of memory
+  return Range();
 }
 
-MRT_RANGE_REGISTRY_INLINE size_t RangeRegistry::TotalSize() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    size_t total = 0;
-    for (const Range& range : ranges) {
-        total += range.Size();
-    }
-    return total;
-}
+template <typename Range>
+void ZRangeRegistry<Range>::transfer_from_low(ZRangeRegistry* other, size_t size) {
+  assert(other->_list.is_empty());
 
-MRT_RANGE_REGISTRY_INLINE std::vector<Range> RangeRegistry::Snapshot() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return ranges;
+  std::lock_guard<std::mutex> locker(_lock);
+  size_t to_move = size;
+
+  ZListIterator<Node> iter(&_list);
+  for (Node* node; iter.next(&node);) {
+    Node* to_transfer;
+
+    if (node->size() <= to_move) {
+      // Smaller than or equal to requested, remove range
+      _list.remove(node);
+      to_transfer = node;
+    } else {
+      // Larger than requested, shrink range
+      const Range range = shrink_from_front(node->range(), to_move);
+      to_transfer = new Node(range);
+    }
+
+    // Insert into the other list
+    //
+    // The from list is sorted, the other list starts empty, and the inserts
+    // come in sort order, so we can insert_last here.
+    other->_list.insert_last(to_transfer);
+
+    to_move -= to_transfer->size();
+    if (to_move == 0) {
+      break;
+    }
+  }
+
+  assert(to_move == 0);
+  (void)to_move;
 }
 
 } // namespace MapleRuntime
-
-#undef MRT_RANGE_REGISTRY_INLINE

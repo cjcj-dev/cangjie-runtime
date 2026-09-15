@@ -820,13 +820,22 @@ inline void RegionInfo::RetirePage(RegionInfo* region, std::function<void()> ret
         retire();
     }
 
-inline size_t RegionInfo::IndexedUnitCount(const std::vector<MemoryRange>& ranges)
+inline size_t RegionInfo::IndexedUnitCount(const std::vector<ZVirtualMemory>& ranges)
+    {
+        std::vector<UnitSegment> segments;
+        for (const ZVirtualMemory& range : ranges) {
+            segments.push_back(UnitSegment{ untype(ZOffset::address_unsafe(range.start())), range.size(), 0 });
+        }
+        return IndexedUnitCount(segments);
+    }
+
+inline size_t RegionInfo::IndexedUnitCount(const std::vector<UnitSegment>& segments)
     {
         CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
         size_t count = 0;
         uintptr_t previousEnd = 0;
-        for (const auto& range : ranges) {
-            CHECK(!range.IsNull() && IsRepresentableLow48Range(range.start, range.size));
+        for (const auto& range : segments) {
+            CHECK(range.size != 0 && IsRepresentableLow48Range(range.start, range.size));
             CHECK(range.start >= previousEnd);
             CHECK(range.start % UNIT_SIZE == 0 && range.size % UNIT_SIZE == 0);
             CHECK(CheckedAddSize(count, range.size / UNIT_SIZE + 1, count));
@@ -836,39 +845,46 @@ inline size_t RegionInfo::IndexedUnitCount(const std::vector<MemoryRange>& range
         return count - 1;
     }
 
-inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vector<MemoryRange>& ranges,
-                                   MemMap* memoryOwner)
+inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vector<ZVirtualMemory>& ranges)
     {
-        UnitInfo::totalUnitCount = IndexedUnitCount(ranges);
+        std::vector<UnitSegment> segments;
+        for (const ZVirtualMemory& range : ranges) {
+            segments.push_back(UnitSegment{ untype(ZOffset::address_unsafe(range.start())), range.size(), 0 });
+        }
+        InitializeSegments(metadataEnd, segments);
+    }
+
+inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vector<UnitSegment>& segments)
+    {
+        UnitInfo::totalUnitCount = IndexedUnitCount(segments);
         UnitInfo::heapStartAddress = metadataEnd;
-        UnitInfo::memoryOwner = memoryOwner;
         unitSegments.clear();
         size_t index = 0;
-        for (const auto& range : ranges) {
+        for (const auto& range : segments) {
             CHECK(IsRepresentableLow48Range(range.start, range.size));
-            unitSegments.push_back(UnitSegment{ range, index });
+            unitSegments.push_back(UnitSegment{ range.start, range.size, index });
             index += range.size / UNIT_SIZE + 1;
         }
         pageOwners.Reset();
-        CHECK(pageOwners.Initialize(ranges.front().start, ranges.back().End() - ranges.front().start, UNIT_SIZE));
+        CHECK(pageOwners.Initialize(segments.front().start, segments.back().End() - segments.front().start, UNIT_SIZE));
     }
 
 inline size_t RegionInfo::FindUnitIndex(uintptr_t address)
     {
         auto next = std::upper_bound(unitSegments.begin(), unitSegments.end(), address,
-            [](uintptr_t addr, const UnitSegment& segment) { return addr < segment.range.start; });
+            [](uintptr_t addr, const UnitSegment& segment) { return addr < segment.start; });
         if (next == unitSegments.begin()) {
             return UnitInfo::INVALID_IDX;
         }
         const auto& segment = *std::prev(next);
-        return address < segment.range.End()
-            ? segment.firstIndex + (address - segment.range.start) / UNIT_SIZE : UnitInfo::INVALID_IDX;
+        return address < segment.End()
+            ? segment.firstIndex + (address - segment.start) / UNIT_SIZE : UnitInfo::INVALID_IDX;
     }
 
 inline bool RegionInfo::ContainsUnitRange(uintptr_t start, size_t size)
     {
         for (const auto& segment : unitSegments) {
-            if (start >= segment.range.start && start < segment.range.End() && size <= segment.range.End() - start) {
+            if (start >= segment.start && start < segment.End() && size <= segment.End() - start) {
                 return true;
             }
         }
@@ -960,55 +976,6 @@ inline void RegionInfo::ClearUnits(size_t idx, size_t cnt)
              unitAddress + size);
 
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
-    }
-
-inline size_t RegionInfo::CommitUnits(size_t idx, size_t cnt)
-    {
-        void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
-        const size_t size = cnt * RegionInfo::UNIT_SIZE;
-        // zPhysicalMemoryManager.cpp:230: retain and report the prefix.
-        return UnitInfo::memoryOwner == nullptr ? 0 :
-               UnitInfo::memoryOwner->CommitMemory(unitAddress, size);
-    }
-
-inline size_t RegionInfo::GetCommittedUnitBytes(size_t idx, size_t cnt)
-    {
-        return UnitInfo::memoryOwner == nullptr ? 0 :
-               UnitInfo::memoryOwner->GetCommittedSize(GetUnitAddress(idx), cnt * UNIT_SIZE);
-    }
-
-inline void RegionInfo::ReleaseUnits(size_t idx, size_t cnt)
-    {
-        const size_t released = ReleaseUnitsPartial(idx, cnt);
-        CHECK_DETAIL(released == cnt * RegionInfo::UNIT_SIZE,
-                     "release outside heap reservation idx=%zu units=%zu released=%zu", idx, cnt, released);
-    }
-
-inline size_t RegionInfo::PublishUnitsRelease(size_t idx, size_t completed)
-    {
-        return UnitInfo::memoryOwner == nullptr ? 0 : UnitInfo::memoryOwner->PublishMemoryRelease(
-            reinterpret_cast<void*>(GetUnitAddress(idx)), completed);
-    }
-
-inline size_t RegionInfo::ReleaseUnitsPartialImpl(size_t idx, size_t cnt, bool deferred)
-    {
-        void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
-        size_t size = cnt * RegionInfo::UNIT_SIZE;
-        CHECK(ContainsUnitRange(reinterpret_cast<uintptr_t>(unitAddress), size));
-        RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
-        WaitCopiedBeforePayloadWipe(wipeRegion, "ReleaseUnits");
-
-        DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
-             unitAddress, size, reinterpret_cast<uintptr_t>(unitAddress) + size);
-        const size_t released = UnitInfo::memoryOwner == nullptr ? 0 :
-                                (deferred ? UnitInfo::memoryOwner->ReleaseMemoryDeferred(unitAddress, size) :
-                                            UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size));
-#ifdef CANGJIE_ASAN_SUPPORT
-        if (released != 0) {
-            Sanitizer::OnHeapMadvise(unitAddress, released);
-        }
-#endif
-        return released;
     }
 
 inline bool RegionInfo::IsEmpty() const

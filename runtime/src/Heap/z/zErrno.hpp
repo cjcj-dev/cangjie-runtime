@@ -4,21 +4,24 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zVirtualMemory.hpp:31-38.
+// ZGC zErrno.hpp:29-41.
 
 #pragma once
-#include "Heap/z/zAddress.hpp"
-#include "Heap/z/zRange.hpp"
 
 namespace MapleRuntime {
 
-class ZVirtualMemory : public ZRange<zoffset, zoffset_end> {
-public:
-  ZVirtualMemory();
-  ZVirtualMemory(zoffset start, size_t size);
-  ZVirtualMemory(const ZRange<zoffset, zoffset_end>& range);
+class ZErrno {
+private:
+  const int _error;
 
-  int granule_count() const;
+public:
+  ZErrno();
+  ZErrno(int error);
+
+  operator bool() const;
+  bool operator==(int error) const;
+  bool operator!=(int error) const;
+  const char* to_string() const;
 };
 
 } // namespace MapleRuntime

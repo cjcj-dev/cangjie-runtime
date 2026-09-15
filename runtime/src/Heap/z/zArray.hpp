@@ -4,21 +4,16 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zVirtualMemory.hpp:31-38.
+// Placeholder for ZGC zArray.hpp:37-126 (P06 replaces this file with the
+// ZArray/ZArraySlice/ZArrayIterator family). Until then ZArray<T> is the
+// growable array the memory managers hand ranges through.
 
 #pragma once
-#include "Heap/z/zAddress.hpp"
-#include "Heap/z/zRange.hpp"
+#include <vector>
 
 namespace MapleRuntime {
 
-class ZVirtualMemory : public ZRange<zoffset, zoffset_end> {
-public:
-  ZVirtualMemory();
-  ZVirtualMemory(zoffset start, size_t size);
-  ZVirtualMemory(const ZRange<zoffset, zoffset_end>& range);
-
-  int granule_count() const;
-};
+template <typename T>
+using ZArray = std::vector<T>;
 
 } // namespace MapleRuntime

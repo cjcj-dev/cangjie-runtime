@@ -214,7 +214,6 @@ void RegionManager::UndoSharedPage(RegionInfo* page)
     RegionInfo::RetirePage(page, [this, page] {
         const size_t units = page->GetUnitCount();
         const size_t index = page->GetUnitIdx();
-        if (units >= HUGE_PAGE) { UntagHugePage(page, units); }
         page->InitFreeUnits();
         ReturnRetiredPageMemory(PageMemory{index, units, 0, true}, false);
     });

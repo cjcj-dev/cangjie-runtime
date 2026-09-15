@@ -31,7 +31,7 @@ struct PageMemory {
     bool committed{ false };
     // ZMemoryAllocation::partial_vmems: these extents leave the mapped cache
     // under the allocator owner and travel with the allocation request.
-    std::vector<MemoryRange> partialMappings;
+    std::vector<ZVirtualMemory> partialMappings;
     bool virtualClaimed{ true };
     size_t harvestedUnits{ 0 };
 
@@ -206,7 +206,9 @@ private:
 
 #include <vector>
 #include <memory>
-#include "Heap/z/zRangeRegistry.hpp"
+#include "Heap/z/zPhysicalMemoryManager.hpp"
+#include "Heap/z/zVirtualMemory.inline.hpp"
+#include "Heap/z/zVirtualMemoryManager.inline.hpp"
 
 
 #include "Heap/Allocator/CartesianTree.h"
@@ -226,41 +228,52 @@ public:
     explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
 
     virtual ~FreeRegionManager() { markQuarantineTree.Fini(); }
-    void Initialize(UnitCount regionCnt, const std::vector<MemoryRange>& reservations, MemMap& owner);
+    // ZPageAllocator(min/initial/max capacity) owns _virtual/_physical and one
+    // ZPartition per NUMA id (zPageAllocator.cpp:1201-1260); the partitions
+    // here consume the two managers the same way.
+    void Initialize(UnitCount regionCnt, ZVirtualMemoryManager& virtualMemory,
+                    ZPhysicalMemoryManager& physicalMemory, size_t maxCapacity);
     bool ClaimPageMemory(size_t num, PageMemory& memory);
     bool PreparePageMemory(PageMemory& memory);
 
-    // zPageAllocator.cpp:1470-1515: consume the already-owned vmem outside
-    // the allocator lock. A02p owns partial-commit results and suffix cleanup.
+    // zPageAllocator.cpp:1470-1515 alloc_page_inner: consume the already-owned
+    // vmem outside the allocator lock: claim_physical_for_increased_capacity →
+    // commit_and_map (cleanup_failed_commit on a partial commit) → create_page.
     RegionInfo* MaterializePageMemory(PageMemory& memory, RegionInfo::UnitRole role,
                                      bool expectPhysicalMem, bool clearPayload, size_t& committedUnits,
-                                     PageAge age = PageAge::old)
-    {
-        (void)expectPhysicalMem;
-        committedUnits = 0;
-        if (!PreparePageMemory(memory)) { return nullptr; }
-        const size_t idx = memory.index;
-        const size_t num = memory.units;
-        committedUnits = memory.committed ? num : 0;
-        const bool wasCommitted = memory.committed;
-        if (!wasCommitted) {
-            const size_t committed = RegionInfo::CommitUnits(idx, num);
-            CHECK(committed <= num * RegionInfo::UNIT_SIZE && committed % RegionInfo::UNIT_SIZE == 0);
-            committedUnits = committed / RegionInfo::UNIT_SIZE;
-            if (committedUnits != num) {
-                return nullptr;
-            }
-            memory.committed = true;
-        }
-        if ((wasCommitted || memory.harvestedUnits != 0) && clearPayload) {
-            RegionInfo::ClearUnits(idx, num);
-        }
-        RegionInfo* region = RegionInfo::InitRegion(idx, num, role, age);
-        if (!wasCommitted) {
-            PrehandleReleasedUnit(clearPayload, idx, num);
-        }
-        return region;
-    }
+                                     PageAge age = PageAge::old);
+    // ZPartition::free_memory_alloc_failed (zPageAllocator.cpp:1079-1101).
+    // Requires the owning RegionManager page allocator lock.
+    void FreeMemoryAllocFailed(PageMemory& memory);
+
+    // ZPartition thin functions (zPageAllocator.cpp:790-920). They forward to
+    // the two managers with this partition's numa id.
+    ZVirtualMemory claim_virtual(size_t size, uint32_t partition_id);
+    size_t claim_virtual(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out);
+    void free_virtual(const ZVirtualMemory& vmem, uint32_t partition_id);
+    ZVirtualMemory free_and_claim_virtual_from_low_exact_or_many(size_t size, uint32_t partition_id,
+                                                                 ZArray<ZVirtualMemory>* vmems_in_out);
+    void claim_physical(const ZVirtualMemory& vmem, uint32_t partition_id);
+    void free_physical(const ZVirtualMemory& vmem, uint32_t partition_id);
+    size_t commit_physical(const ZVirtualMemory& vmem, uint32_t partition_id);
+    size_t uncommit_physical(const ZVirtualMemory& vmem);
+    void map_virtual(const ZVirtualMemory& vmem, uint32_t partition_id);
+    void unmap_virtual(const ZVirtualMemory& vmem);
+    void sort_segments_physical(const ZVirtualMemory& vmem);
+    void stash_segments(const ZArray<ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const;
+    void restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash);
+    void restore_segments(const ZArray<ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash);
+
+    // ZPartition::_capacity accounting (zPageAllocator.cpp:648-676). The
+    // committed capacity account lives here and nowhere else.
+    size_t increase_capacity(uint32_t partition_id, size_t size);
+    void decrease_capacity(uint32_t partition_id, size_t size, bool set_max_capacity);
+    size_t capacity() const;
+
+    // Unit index <-> ZVirtualMemory (RegionInfo metadata is indexed per unit).
+    static ZVirtualMemory VirtualMemoryOf(UnitIndex index, UnitCount count);
+    static UnitIndex UnitIndexOf(const ZVirtualMemory& vmem);
+    uint32_t PartitionIdOf(const ZVirtualMemory& vmem) const { return virtualMemory->lookup_partition_id(vmem); }
 
     void AddGarbageUnits(UnitIndex idx, UnitCount num, bool allowSaferegion = true);
 
@@ -286,16 +299,15 @@ public:
         return markQuarantineTree.GetTotalCount();
     }
 
-    void AddReleaseUnits(UnitIndex idx, UnitCount num, bool allowSaferegion = true);
     UnitCount GetDirtyUnitCount() const;
-    UnitCount GetVirtualUnitCount() const;
-    UnitCount GetVirtualMaxBlock() const;
     UnitCount GetDirtyMaxBlock() const;
-    size_t GetVirtualNodeCount() const;
     size_t GetDirtyNodeCount() const;
-    // Both calls require the owning RegionManager page allocator lock.
-    bool TakeUncommitMemory(size_t maxBytes, uint64_t idleBeforeNs, PageMemory& memory);
-    void ReturnUncommitMemory(const PageMemory& memory);
+    // zUncommitter.cpp:395-403: flush from the mapped cache under the page
+    // allocator lock and record the flushed amount as claimed.
+    size_t RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>* out);
+    // zUncommitter.cpp:417-419: the flushed memory left the cache and was
+    // uncommitted; adjust claimed and capacity.
+    void UncommitFlushed(size_t flushed);
 
 private:
 
@@ -307,20 +319,22 @@ private:
     }
     RegionManager& regionManager;
 
+    // ZPartition (zPageAllocator.hpp:57-141): numa id, mapped cache and the
+    // capacity account; virtual/physical memory is reached through the managers.
     struct Partition {
-        uint32_t node;
-        std::vector<MemoryRange> reservations;
-        RangeRegistry virtualMemory;
+        uint32_t numaId;
         MappedCache cache;
-        size_t pendingGrowth{ 0 };
-        explicit Partition(uint32_t id) : node(id) {}
+        size_t capacity{ 0 };
+        size_t claimed{ 0 };
+        size_t currentMaxCapacity{ 0 };
+        explicit Partition(uint32_t id) : numaId(id) {}
     };
-    Partition& PartitionFor(uintptr_t address);
     void InsertCommitted(Partition& partition, UnitIndex index, UnitCount count);
-    void ReturnMemory(UnitIndex index, UnitCount count);
+    void FreeMemory(UnitIndex index, UnitCount count);
     mutable std::mutex cacheMutex;
     std::vector<std::unique_ptr<Partition>> partitions;
-    MemMap* backingOwner{ nullptr };
+    ZVirtualMemoryManager* virtualMemory{ nullptr };
+    ZPhysicalMemoryManager* physicalMemory{ nullptr };
     size_t nextPartition{ 0 };
 
     // Post-dispel units held until major mark ends (see AddMarkQuarantineUnits).
@@ -470,17 +484,20 @@ public:
 #if defined(__EULER__)
     void SetCacheRatio(double minSize, double maxSize, double defaultParam);
 #endif
-    void Initialize(size_t regionNum, uintptr_t regionInfoStart, MemMap& memoryOwner,
-                    const HeapParam& heapParam, double garbageThreshold);
-    void InitializeSegments(uintptr_t metadataStart, const std::vector<MemoryRange>& reservations,
-                            MemMap& memoryOwner, const HeapParam& heapParam, double garbageThreshold);
+    // ZPageAllocator::ZPageAllocator(min/initial/max capacity): the two memory
+    // managers are constructed for max_capacity and consumed by the partitions.
+    void Initialize(size_t regionNum, uintptr_t regionInfoStart, ZVirtualMemoryManager& virtualMemory,
+                    ZPhysicalMemoryManager& physicalMemory, const HeapParam& heapParam, double garbageThreshold);
+    // Address span the per-unit metadata covers: [lowest reserved offset, ZAddressOffsetMax).
+    static ZVirtualMemory ReservedAddressSpan(const ZVirtualMemoryManager& virtualMemory);
 
     void VisitPageOwners(const std::function<void(RegionInfo*)>& visitor) const
     {
         RegionInfo::VisitPageOwners(visitor);
     }
 
-    size_t GetCommittedCapacity() const { return RegionInfo::GetCommittedCapacity(); }
+    // ZPageAllocator::capacity(): sum of ZPartition::_capacity.
+    size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
 
     size_t GetHeapCapacity() const { return heapUnitCount * RegionInfo::UNIT_SIZE; }
 
@@ -697,9 +714,10 @@ public:
 
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
     size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
-    size_t GetInactiveUnitCount() const { return freeRegionManager.GetVirtualUnitCount(); }
+    // Address space not yet backed by committed capacity (ZGC: current_max_capacity - capacity).
+    size_t GetInactiveUnitCount() const { return (GetHeapCapacity() - GetCommittedCapacity()) / RegionInfo::UNIT_SIZE; }
 
-    size_t GetActiveUnitCount() const { return heapUnitCount - GetInactiveUnitCount(); }
+    size_t GetActiveUnitCount() const { return GetCommittedCapacity() / RegionInfo::UNIT_SIZE; }
 
     inline size_t GetLargeObjectSize() const
     {
@@ -789,10 +807,7 @@ private:
     uintptr_t AllocPinnedLocked(size_t size);
 
     static const size_t MAX_UNIT_COUNT_PER_REGION;
-    static const size_t HUGE_PAGE;
     inline void CheckRegionWhetherCreatedInFixPhase(RegionInfo* region);
-    inline void TagHugePage(RegionInfo* region, size_t num) const;
-    inline void UntagHugePage(RegionInfo* region, size_t num) const;
 
     template<Generation G>
     void ClearLiveInfo(RegionList& list);
