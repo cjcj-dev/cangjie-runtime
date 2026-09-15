@@ -1,0 +1,225 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+
+#include "Loader/PackageInit.h"
+
+#include <atomic>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
+#include <mutex>
+#include <unordered_map>
+
+#include "Base/Panic.h"
+#include "Common/ScopedObjectAccess.h"
+#include "schedule.h"
+#include "waitqueue.h"
+
+namespace MapleRuntime {
+namespace {
+enum class InitStatus { Uninitialized, Initializing, Initialized, Failed };
+}
+
+struct PackageInitState {
+    const void* package;
+    const void* unit;
+    uint32_t phase;
+    std::atomic<InitStatus> status { InitStatus::Uninitialized };
+    CJThreadHandle owner { nullptr };
+    uint32_t failure { 0 };
+    Waitqueue waiters {};
+    std::unique_ptr<ElfUnloadQuiescence::PendingTask> admission;
+
+    PackageInitState(const void* package, const void* unit, uint32_t phase)
+        : package(package), unit(unit), phase(phase)
+    {
+        CHECK_DETAIL(WaitqueueNew(&waiters) == 0, "package initializer waitqueue creation failed");
+    }
+    ~PackageInitState()
+    {
+        CHECK_DETAIL(status.load(std::memory_order_relaxed) != InitStatus::Initializing,
+                     "package initializer must finish before image purge");
+        CHECK_DETAIL(WaitqueueDelete(&waiters) == 0, "package initializer waitqueue deletion failed");
+    }
+};
+
+namespace {
+// The graph is keyed by logical CJThread handles, never OS TLS. Lock order:
+// admission -> short catalog lookup -> graph; no lock spans managed body/park.
+// Waitqueue callbacks read only the atomic predicate (no graph-lock inversion).
+struct InitCoordinator {
+    std::mutex mutex;
+    std::unordered_map<CJThreadHandle, PackageInitState*> waitingOn;
+    std::unordered_map<uintptr_t, PackageInitState*> tokens;
+    uintptr_t nextToken { 1 };
+};
+
+InitCoordinator& Coordinator()
+{
+    static InitCoordinator coordinator;
+    return coordinator;
+}
+
+bool Finished(void* argument)
+{
+    return static_cast<PackageInitState*>(argument)->status.load(std::memory_order_acquire) !=
+        InitStatus::Initializing;
+}
+
+bool HasCycle(InitCoordinator& graph, CJThreadHandle caller, PackageInitState& target)
+{
+    CJThreadHandle owner = target.owner;
+    while (owner != nullptr) {
+        if (owner == caller) {
+            return true;
+        }
+        auto edge = graph.waitingOn.find(owner);
+        if (edge == graph.waitingOn.end() ||
+            edge->second->status.load(std::memory_order_acquire) != InitStatus::Initializing) {
+            return false;
+        }
+        owner = edge->second->owner;
+    }
+    return false;
+}
+
+// HotSpot instanceKlass.cpp:1653, set_initialization_state_and_notify:
+// publish the terminal state before waking every waiter. Fail does not touch
+// the managed pending exception and performs no allocation.
+void Publish(PackageInitState& state, InitStatus status, uint32_t failure) noexcept
+{
+    state.failure = failure;
+    state.owner = nullptr;
+    state.status.store(status, std::memory_order_release);
+    const int rc = WaitqueueWakeAll(&state.waiters, nullptr, nullptr);
+    CHECK_DETAIL(rc == 0 || rc == ERRNO_QUEUE_IS_EMPTY, "package initializer wake failed: %d", rc);
+    // Woken callers retain their own admission until their acquire recheck.
+    state.admission.reset();
+}
+
+void FinishToken(void* token, InitStatus status, uint32_t failure) noexcept
+{
+    ScopedEnterSaferegion safe(false);
+    auto& graph = Coordinator();
+    std::lock_guard<std::mutex> lock(graph.mutex);
+    auto found = graph.tokens.find(reinterpret_cast<uintptr_t>(token));
+    CHECK_DETAIL(found != graph.tokens.end(), "package initializer token is not active");
+    PackageInitState& state = *found->second;
+    CHECK_DETAIL(state.owner == CJThreadGetHandle() && state.owner != nullptr,
+                 "package initializer token belongs to another logical CJThread");
+    Publish(state, status, failure);
+    graph.tokens.erase(found);
+}
+} // namespace
+
+PackageInitTable::PackageInitTable() = default;
+PackageInitTable::~PackageInitTable() = default;
+
+PackageInitResult PackageInitTable::Begin(const void* package, const void* unit, uint32_t phase, void** token,
+                                         std::unique_ptr<ElfUnloadQuiescence::PendingTask> admission)
+{
+    auto& graph = Coordinator();
+    const CJThreadHandle caller = CJThreadGetHandle();
+    std::unique_lock<std::mutex> lock(graph.mutex);
+    PackageInitState* state = nullptr;
+    for (const auto& candidate : units) {
+        if (candidate->package == package && candidate->unit == unit && candidate->phase == phase) {
+            state = candidate.get();
+            break;
+        }
+    }
+    if (state == nullptr) {
+        units.emplace_back(new PackageInitState(package, unit, phase));
+        state = units.back().get();
+    }
+
+    // HotSpot instanceKlass.cpp:1441-1498: wait, reentrant, ready, failed,
+    // then grant execution. Cache reentry is a distinct result, not Ready.
+    while (state->status.load(std::memory_order_acquire) == InitStatus::Initializing && state->owner != caller) {
+        if (HasCycle(graph, caller, *state)) {
+            return PackageInitResult::Cycle;
+        }
+        graph.waitingOn[caller] = state;
+        lock.unlock();
+        const int rc = WaitqueuePark(&state->waiters, LLONG_MAX, Finished, state, false);
+        lock.lock();
+        graph.waitingOn.erase(caller);
+        if (rc != 0 && rc != ERRNO_CALLBACK_RETURN_TRUE) {
+            return PackageInitResult::Unavailable;
+        }
+    }
+    switch (state->status.load(std::memory_order_acquire)) {
+        case InitStatus::Initializing:
+            return PackageInitResult::Reentrant;
+        case InitStatus::Initialized:
+            return PackageInitResult::Ready;
+        case InitStatus::Failed:
+            return PackageInitResult::Failed;
+        case InitStatus::Uninitialized:
+            break;
+    }
+    // Monotonic opaque identities cannot alias a released token after image
+    // reload, even if both BaseFile and state storage reuse their old addresses.
+    CHECK_DETAIL(graph.nextToken != std::numeric_limits<uintptr_t>::max(), "package initializer token overflow");
+    const uintptr_t identity = graph.nextToken++;
+    graph.tokens.emplace(identity, state);
+    state->admission = std::move(admission);
+    state->owner = caller;
+    state->status.store(InitStatus::Initializing, std::memory_order_relaxed);
+    *token = reinterpret_cast<void*>(identity);
+    return PackageInitResult::Execute;
+}
+
+void PackageInitTable::Complete(void* token) noexcept
+{
+    FinishToken(token, InitStatus::Initialized, 0);
+}
+
+void PackageInitTable::Fail(void* token, uint32_t failure) noexcept
+{
+    FinishToken(token, InitStatus::Failed, failure);
+}
+
+void PackageInitTable::OwnerExit() noexcept
+{
+    const CJThreadHandle caller = CJThreadGetHandle();
+    if (caller == nullptr) {
+        return;
+    }
+    ScopedEnterSaferegion safe(false);
+    auto& graph = Coordinator();
+    std::lock_guard<std::mutex> lock(graph.mutex);
+    for (auto it = graph.tokens.begin(); it != graph.tokens.end();) {
+        if (it->second->owner == caller) {
+            Publish(*it->second, InitStatus::Failed, static_cast<uint32_t>(PackageInitFailure::OwnerExit));
+            it = graph.tokens.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    graph.waitingOn.erase(caller);
+}
+
+extern "C" void MCC_PackageInitComplete(void* ownerToken)
+{
+    PackageInitTable::Complete(ownerToken);
+}
+
+extern "C" void MCC_PackageInitFail(void* ownerToken, uint32_t failureCode) noexcept
+{
+    PackageInitTable::Fail(ownerToken, failureCode);
+}
+
+extern "C" [[noreturn]] void MCC_PackageInitAbort(const void* packageEntry, const void* unitEntry,
+                                                uint32_t phase, uint32_t beginResult)
+{
+    // This path is called before any dependent String cache can be used.
+    // Keep diagnostics native; do not construct a managed exception or String.
+    std::fprintf(stderr, "package cache initialization failed: package=%p unit=%p phase=%u result=%u\n",
+                 packageEntry, unitEntry, phase, beginResult);
+    std::fflush(stderr);
+    std::_Exit(70);
+}
+} // namespace MapleRuntime

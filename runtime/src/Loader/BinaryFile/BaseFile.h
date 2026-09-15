@@ -11,6 +11,7 @@
 #include "Base/CString.h"
 #include "Base/Types.h"
 #include "os/Path.h"
+#include "Loader/PackageInit.h"
 namespace MapleRuntime {
 enum class FileType {
     C_FILE, // cangjie File
@@ -51,7 +52,9 @@ public:
     const CString& GetBaseName() const;
     void SetFileCompatibility(bool isComp) { isCompatible = isComp; }
     bool IsCompatible() const { return isCompatible; }
+    PackageInitTable& GetPackageInitTable() { return packageInitTable; }
 private:
+    PackageInitTable packageInitTable;
     CString realPath; // file real path
     CString baseName;
     bool isCompatible { false };
