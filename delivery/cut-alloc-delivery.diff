@@ -1,0 +1,14 @@
+diff --git a/runtime/src/Heap/z/zMark.inline.hpp b/runtime/src/Heap/z/zMark.inline.hpp
+index 2b9477346..189cff8ff 100644
+--- a/runtime/src/Heap/z/zMark.inline.hpp
++++ b/runtime/src/Heap/z/zMark.inline.hpp
+@@ -17,9 +17,6 @@ inline void MarkDomain::MarkObject(zaddress address)
+ {
+     (void)to_object(address); // ZMark entry validates the current oop before the page query.
+     RegionInfo* page = RegionInfo::GetRegionInfoAt(raw(address));
+-    if (page->IsAllocating()) {
+-        return;
+-    }
+ 
+     const bool markBeforePush = gcThread;
+     bool incLive = false;

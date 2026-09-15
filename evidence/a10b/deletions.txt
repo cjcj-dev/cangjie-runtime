@@ -1,0 +1,393 @@
+
+SYMBOL: isGCActive
+positive_control
+$ git grep -n -F isGCActive 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:89:    bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled() && isGCActive.load(std::memory_order_relaxed); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:221:    std::atomic<bool> isGCActive = { true };
+rc=0
+candidate
+$ git grep -n -F isGCActive HEAD -- runtime/src
+rc=1
+
+SYMBOL: gcMainThread
+positive_control
+$ git grep -n -F gcMainThread 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:589:    gcMainThread = majorDriverThread;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:202:    pthread_t gcMainThread = 0;
+rc=0
+candidate
+$ git grep -n -F gcMainThread HEAD -- runtime/src
+rc=1
+
+SYMBOL: gcTid
+positive_control
+$ git grep -n -F gcTid 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:197:    gcTid.store(MapleRuntime::GetTid(), std::memory_order_release);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:235:    gcTid.store(MapleRuntime::GetTid(), std::memory_order_release);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:206:    std::atomic<pid_t> gcTid{ 0 };
+rc=0
+candidate
+$ git grep -n -F gcTid HEAD -- runtime/src
+rc=1
+
+SYMBOL: criticalNum
+positive_control
+$ git grep -n -F criticalNum 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:227:    std::atomic<int> criticalNum{ 0 };
+rc=0
+candidate
+$ git grep -n -F criticalNum HEAD -- runtime/src
+rc=1
+
+SYMBOL: isHeapMarked
+positive_control
+$ git grep -n -F isHeapMarked 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:81:    bool IsHeapMarked() const { return isHeapMarked; }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:83:    void SetHeapMarked(bool value) { isHeapMarked = value; }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:224:    bool isHeapMarked = false;
+rc=0
+candidate
+$ git grep -n -F isHeapMarked HEAD -- runtime/src
+rc=1
+
+SYMBOL: gcWorking
+positive_control
+$ git grep -n -F gcWorking 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:611:    gcWorking = 0;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:615:    (void)Futex(&gcWorking, FUTEX_WAKE_PRIVATE, INT_MAX);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:228:    int gcWorking = 0;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:230:    std::condition_variable gcWorkingCV;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:231:    std::mutex gcWorkingMtx;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:234:        std::unique_lock<std::mutex> gcWorkingLck(gcWorkingMtx);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:235:        gcWorkingCV.wait(gcWorkingLck);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:240:        std::unique_lock<std::mutex> gcWorkingLck(gcWorkingMtx);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:241:        gcWorkingCV.notify_all();
+rc=0
+candidate
+$ git grep -n -F gcWorking HEAD -- runtime/src
+rc=1
+
+SYMBOL: YoungPreludeRequest
+positive_control
+$ git grep -n -F YoungPreludeRequest 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:68:    const GCDriverRequest* YoungPreludeRequest() const { return youngPreludeRequest; }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zGeneration.cpp:113:    if (const GCDriverRequest* request = collectorResources.YoungPreludeRequest()) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.cpp:806:        if (collectorResources.YoungPreludeRequest() != nullptr) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.cpp:1035:            if (collector->collectorResources.YoungPreludeRequest() != nullptr) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.cpp:1067:            if (shared.collector->collectorResources.YoungPreludeRequest() != nullptr) {
+rc=0
+candidate
+$ git grep -n -F YoungPreludeRequest HEAD -- runtime/src
+rc=1
+
+SYMBOL: youngPreludeRequest
+positive_control
+$ git grep -n -F youngPreludeRequest 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:351:        youngPreludeRequest = &request;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:354:        youngPreludeRequest = nullptr;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:68:    const GCDriverRequest* YoungPreludeRequest() const { return youngPreludeRequest; }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:72:    void NoteYoungMarkStart() { ZStat::Collections().AtYoungMarkStart(youngPreludeRequest != nullptr); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:103:        return youngPreludeRequest != nullptr ? majorDriverPort : minorDriverPort;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:182:    const GCDriverRequest* youngPreludeRequest = nullptr;
+rc=0
+candidate
+$ git grep -n -F youngPreludeRequest HEAD -- runtime/src
+rc=1
+
+SYMBOL: ActiveCycle
+positive_control
+$ git grep -n -F ActiveCycle 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/Collector.cpp:352:    return ActiveCycle().Reason() == GC_REASON_YOUNG ? Generation::Young : Generation::Old;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CopyCollector.cpp:146:    ActiveCycle().End();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:56:    virtual GCPhase GetGCPhase() const { return ActiveCycle().Phase(); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:60:        PublishGenerationPhase(ActiveCycle().Snapshot().generation, phase);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:72:    GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:348:    GenerationCycle& ActiveCycle() const { return *activeCycle.load(std::memory_order_acquire); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRootsIterator.cpp:424:    const bool continuingPrelude = ActiveCycle().Snapshot().active;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRootsIterator.cpp:426:        ActiveCycle().Begin(gcIndex);
+rc=0
+candidate
+$ git grep -n -F ActiveCycle HEAD -- runtime/src
+rc=1
+
+SYMBOL: activeCycle
+positive_control
+$ git grep -n -F activeCycle 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:348:    GenerationCycle& ActiveCycle() const { return *activeCycle.load(std::memory_order_acquire); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:357:        activeCycle.store(cycle, std::memory_order_release);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:361:    std::atomic<GenerationCycle*> activeCycle { &oldCycle };
+rc=0
+candidate
+$ git grep -n -F activeCycle HEAD -- runtime/src
+rc=1
+
+SYMBOL: SelectCycle
+positive_control
+$ git grep -n -F SelectCycle 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CopyCollector.cpp:64:    SelectCycle(reason);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:349:    void SelectCycle(GCReason reason)
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.hpp:476:    inline void SetGCReason(const GCReason reason) { SelectCycle(reason); }
+rc=0
+candidate
+$ git grep -n -F SelectCycle HEAD -- runtime/src
+rc=1
+
+SYMBOL: GetCycleReason
+positive_control
+$ git grep -n -F GetCycleReason 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CopyCollector.cpp:67:    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[GetCycleReason()].name, gcIndex);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CopyCollector.cpp:159:    if (GetCycleReason() == GC_REASON_YOUNG) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.cpp:225:    if (GetCycleReason() == GC_REASON_YOUNG) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:72:    GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.hpp:482:        return collectorResources.GetWorkers(GetCycleReason() == GC_REASON_YOUNG
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:368:    if (GetCycleReason() == GC_REASON_YOUNG) RunRemapWindowTestHook(1, nullptr, nullptr);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:370:    if (GetCycleReason() == GC_REASON_YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:406:    if (GetCycleReason() == GC_REASON_YOUNG) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRootsIterator.cpp:430:         g_gcRequests[GetCycleReason()].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRootsIterator.cpp:440:    GetGCStats().reason = GetCycleReason();
+rc=0
+candidate
+$ git grep -n -F GetCycleReason HEAD -- runtime/src
+rc=1
+
+SYMBOL: ActiveForwardingGeneration
+positive_control
+$ git grep -n -F ActiveForwardingGeneration 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/Collector.cpp:350:Generation Collector::ActiveForwardingGeneration() const
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/Collector.cpp:500:        ? ForwardingTable::LookupTo(from, Heap::GetHeap().GetCollector().ActiveForwardingGeneration())
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CollectorProxy.h:66:    Generation ActiveForwardingGeneration() const override
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CollectorProxy.h:68:        return currentCollector->ActiveForwardingGeneration();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:73:    virtual Generation ActiveForwardingGeneration() const;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zHeap.cpp:394:            recordObj = collector.ForwardObject(recordObj, collector.ActiveForwardingGeneration());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.hpp:320:                obj, &resurrectedExportObjectes, ActiveForwardingGeneration(), ForwardingStage::IncomingNew));
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.hpp:324:                    obj, &resurrectedExportObjectesForwardPhase, ActiveForwardingGeneration(), ForwardingStage::IncomingNew));
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.cpp:918:    BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.cpp:1094:    RootVisitor visitor = [&wcollector](ObjectRef& root) { wcollector.ForwardUpdateRawRef(root, wcollector.ActiveForwardingGeneration()); };
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.cpp:1134:            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.cpp:1159:                    BaseObject* toHost = collector.ForwardObject(host, collector.ActiveForwardingGeneration());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.cpp:1183:            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
+rc=0
+candidate
+$ git grep -n -F ActiveForwardingGeneration HEAD -- runtime/src
+rc=1
+
+SYMBOL: driverRequestActive
+positive_control
+$ git grep -n -F driverRequestActive 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:329:    MRT_ASSERT(!driverRequestActive, "nested driver request lifecycle");
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:330:    driverRequestActive = true;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:361:            driverRequestActive = false;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:373:    driverRequestActive = false;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:500:    if (!driverRequestActive) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:181:    bool driverRequestActive = false;
+rc=0
+candidate
+$ git grep -n -F driverRequestActive HEAD -- runtime/src
+rc=1
+
+SYMBOL: CollectorResources::RunTaskLoop
+positive_control
+$ git grep -n -F CollectorResources::RunTaskLoop 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:192:void CollectorResources::RunTaskLoop()
+rc=0
+candidate
+$ git grep -n -F CollectorResources::RunTaskLoop HEAD -- runtime/src
+rc=1
+
+SYMBOL: GCMainThreadEntry
+positive_control
+$ git grep -n -F GCMainThreadEntry 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:54:void* CollectorResources::GCMainThreadEntry(void* arg)
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:66:    MRT_ASSERT(arg != nullptr, "GCMainThreadEntry arg=nullptr");
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:36:    MRT_EXPORT static void* GCMainThreadEntry(void* arg);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/arm_local_export.map:16:          _ZN12MapleRuntime18CollectorResources17GCMainThreadEntryEPv;MRT_ProcessFinalizers;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/local_export.map:16:          _ZN12MapleRuntime18CollectorResources17GCMainThreadEntryEPv;MRT_ProcessFinalizers;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/ohos_local_export.map:16:          _ZN12MapleRuntime18CollectorResources17GCMainThreadEntryEPv;MRT_ProcessFinalizers;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/windows_x86_64_exports.def:1707:    _ZN12MapleRuntime18CollectorResources17GCMainThreadEntryEPv @1864
+rc=0
+candidate
+$ git grep -n -F GCMainThreadEntry HEAD -- runtime/src
+rc=1
+
+SYMBOL: PostIgnoredGcRequest
+positive_control
+$ git grep -n -F PostIgnoredGcRequest 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:404:void CollectorResources::PostIgnoredGcRequest(bool shouldWait)
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:476:        PostIgnoredGcRequest(ShouldWaitForIgnoredGcRequest(reason, async));
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:135:    void PostIgnoredGcRequest(bool shouldWait);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/windows_x86_64_exports.def:1708:    _ZN12MapleRuntime18CollectorResources20PostIgnoredGcRequestENS_8GCReasonE @1865
+rc=0
+candidate
+$ git grep -n -F PostIgnoredGcRequest HEAD -- runtime/src
+rc=1
+
+SYMBOL: HasSyncTaskCompleted
+positive_control
+$ git grep -n -F HasSyncTaskCompleted 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:418:bool CollectorResources::HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex)
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:141:    MRT_EXPORT static bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:148:    ALWAYS_INLINE static inline bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex)
+rc=0
+candidate
+$ git grep -n -F HasSyncTaskCompleted HEAD -- runtime/src
+rc=1
+
+SYMBOL: finishedGcIndex
+positive_control
+$ git grep -n -F finishedGcIndex 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:109:    finishedGcIndex = GCTask::SYNC_TASK_MIN_INDEX;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:492:        finishedGcIndex.store(gcIndex, std::memory_order_release);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:509:    uint64_t curWaitGcIndex = finishedGcIndex.load();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:511:        return (!IsGcStarted() || (curWaitGcIndex != finishedGcIndex) ||
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:512:                (finishedGcIndex == GCTask::TASK_INDEX_FOR_EXIT));
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:208:    // finishedGcIndex records the currently finished gcIndex
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:210:    std::atomic<uint64_t> finishedGcIndex = { 0 };
+rc=0
+candidate
+$ git grep -n -F finishedGcIndex HEAD -- runtime/src
+rc=1
+
+SYMBOL: isGcStarted
+positive_control
+$ git grep -n -F isGcStarted 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:399:    isGcStarted.store(false, std::memory_order_release);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:406:    if (shouldWait && isGcStarted.load(std::memory_order_seq_cst)) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.cpp:490:    isGcStarted.store(false, std::memory_order_release);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:85:    bool IsGcStarted() const { return isGcStarted.load(std::memory_order_acquire); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:87:    void SetGcStarted(bool val) { isGcStarted.store(val, std::memory_order_release); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:217:    // NOTE: When GC finishes, it clears isGcStarted, must be over-written only by gc thread.
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:218:    std::atomic<bool> isGcStarted = { false };
+rc=0
+candidate
+$ git grep -n -F isGcStarted HEAD -- runtime/src
+rc=1
+
+SYMBOL: currentTagID
+positive_control
+$ git grep -n -F currentTagID 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.h:231:    void FlipTagID() { currentTagID = static_cast<uint16_t>((currentTagID + 1) % TAG_ID_COUNT); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.h:232:    uint16_t GetCurrentTagID() override { return currentTagID; }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.h:235:        return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.h:988:    uint16_t currentTagID = 0;
+rc=0
+candidate
+$ git grep -n -F currentTagID HEAD -- runtime/src
+rc=1
+
+SYMBOL: FlipTagID
+positive_control
+$ git grep -n -F FlipTagID 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.cpp:258:    FlipTagID();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.h:231:    void FlipTagID() { currentTagID = static_cast<uint16_t>((currentTagID + 1) % TAG_ID_COUNT); }
+rc=0
+candidate
+$ git grep -n -F FlipTagID HEAD -- runtime/src
+rc=1
+
+SYMBOL: GetCurrentTagID
+positive_control
+$ git grep -n -F GetCurrentTagID 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.h:232:    uint16_t GetCurrentTagID() override { return currentTagID; }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.hpp:415:    virtual uint16_t GetCurrentTagID()
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.hpp:417:        Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRootsIterator.cpp:432:         static_cast<unsigned>(GetCurrentTagID()));
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/windows_x86_64_exports.def:1090:    _ZN12MapleRuntime10WCollector15GetCurrentTagIDEv @1108
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/windows_x86_64_exports.def:1633:    _ZN12MapleRuntime16TracingCollector15GetCurrentTagIDEv @1758
+rc=0
+candidate
+$ git grep -n -F GetCurrentTagID HEAD -- runtime/src
+rc=1
+
+SYMBOL: TaskQueue<GCExecutor>* taskQueue
+positive_control
+$ git grep -n -F 'TaskQueue<GCExecutor>* taskQueue' 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:173:    TaskQueue<GCExecutor>* taskQueue = nullptr;
+rc=0
+candidate
+$ git grep -n -F 'TaskQueue<GCExecutor>* taskQueue' HEAD -- runtime/src
+rc=1
+
+SYMBOL: GCWorkers* youngWorkers
+positive_control
+$ git grep -n -F 'GCWorkers* youngWorkers' 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:170:    GCWorkers* youngWorkers = nullptr;
+rc=0
+candidate
+$ git grep -n -F 'GCWorkers* youngWorkers' HEAD -- runtime/src
+rc=1
+
+SYMBOL: GCWorkers* oldWorkers
+positive_control
+$ git grep -n -F 'GCWorkers* oldWorkers' 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zDriver.hpp:171:    GCWorkers* oldWorkers = nullptr;
+rc=0
+candidate
+$ git grep -n -F 'GCWorkers* oldWorkers' HEAD -- runtime/src
+rc=1
+
+SYMBOL: GetGCPhase()
+positive_control
+$ git grep -n -F 'GetGCPhase()' 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/CjScheduler.cpp:440:    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/CjScheduler.cpp:582:    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Allocator/RegionInfo.h:118:            GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Allocator/RegionInfo.h:138:        GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Allocator/zPage.cpp:61:    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/Collector.cpp:505:        ? static_cast<unsigned>(Heap::GetHeap().GetGCPhase())
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CollectorProxy.h:36:    GCPhase GetGCPhase() const override
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CollectorProxy.h:38:        return currentCollector != nullptr ? currentCollector->GetGCPhase() : GCPhase::GC_PHASE_UNDEF;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/zRelocate.cpp:33:        GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.cpp:142:        auto phase = GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.cpp:164:            if (GetGCPhase() == GC_PHASE_PREFORWARD) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.h:471:                const GCPhase p = GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/WCollector/WCollector.h:803:            IsGhostFromObject(target) ? 1 : 0, static_cast<int>(Heap::GetHeap().GetGCPhase()));
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zCollectedHeap.hpp:56:    virtual GCPhase GetGCPhase() const { return ActiveCycle().Phase(); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zHeap.cpp:130:    GCPhase GetGCPhase() const override;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zHeap.cpp:233:GCPhase HeapImpl::GetGCPhase() const { return collectorProxy.GetGCPhase(); }
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zHeap.cpp:390:    if (GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD) {
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zHeap.hpp:94:    virtual GCPhase GetGCPhase() const = 0;
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zMark.hpp:316:        auto phase = GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zObjectAllocator.cpp:184:    const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zObjectAllocator.cpp:294:            GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zObjectAllocator.hpp:60:            GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zObjectAllocator.hpp:98:        GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zPageAllocator.cpp:343:            const GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zPageAllocator.inline.hpp:168:                GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:279:        const GCPhase phase = GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:1604:    GCPhase phase = GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:1617:    phase = GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:1752:                static_cast<unsigned>(GetGCPhase()),
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:1883:    const GCPhase phase = GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zRelocate.cpp:1905:    CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zStoreBarrierBuffer.cpp:27:    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:228:            GCPhase heapP = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:248:                GCPhase heapP = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.cpp:47:        tlDataAddr = tlDataAddr | (static_cast<uint64_t>(Heap::GetHeap().GetGCPhase()) << 56);
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.cpp:284:        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.cpp:318:        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.h:115:        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.inline.h:50:            bool result = mutatorPhase.load() == Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.inline.h:53:                    this, mutatorPhase.load(), Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.inline.h:71:            bool phaseMatch = mutatorPhase.load() == Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.inline.h:75:                    this, mutatorPhase.load(), Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/Mutator.inline.h:83:            TransitionToGCPhaseExclusive(Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/MutatorManager.cpp:147:        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/MutatorManager.cpp:156:        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/MutatorManager.cpp:234:    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/MutatorManager.cpp:1118:         Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()), Heap::GetHeap().GetGCPhase(),
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Mutator/MutatorManager.cpp:1242:         Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()), Heap::GetHeap().GetGCPhase(),
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/SignalManager.cpp:179:        GCPhase phase = Heap::GetHeap().GetGCPhase();
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/UnwindStack/UnwindCApi.cpp:173:    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+rc=0
+candidate
+$ git grep -n -F 'GetGCPhase()' HEAD -- runtime/src
+rc=1
+
+SYMBOL: MRT_GCV2_MINOR_DEFERS_HEU
+positive_control
+$ git grep -n -F MRT_GCV2_MINOR_DEFERS_HEU 3c3216a7293b28690411a6283c7fd74076bdcd1b -- runtime/src
+3c3216a7293b28690411a6283c7fd74076bdcd1b:runtime/src/Heap/Collector/CopyCollector.cpp:120:        const char* minorDefersHeuEnv = std::getenv("MRT_GCV2_MINOR_DEFERS_HEU");
+rc=0
+candidate
+$ git grep -n -F MRT_GCV2_MINOR_DEFERS_HEU HEAD -- runtime/src
+rc=1

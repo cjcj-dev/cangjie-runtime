@@ -1,0 +1,108 @@
+[
+  {
+    "file": "runtime/tests/gc_unit/CMakeLists.txt",
+    "removed": [],
+    "added": []
+  },
+  {
+    "file": "runtime/tests/gc_unit/run_standalone.sh",
+    "removed": [],
+    "added": []
+  },
+  {
+    "file": "runtime/tests/gc_unit/test_zserviceability.cpp",
+    "removed": [],
+    "added": [
+      [
+        "ZGCIdPrinter",
+        "MinorAndMajorCoexist"
+      ],
+      [
+        "ZGCIdPrinter",
+        "WorkerScopeRestoresThreadContext"
+      ],
+      [
+        "ZServiceability",
+        "CapacityBeyondSigned32Bits"
+      ],
+      [
+        "ZServiceability",
+        "ConcurrentSamplesClampToCapacity"
+      ],
+      [
+        "ZServiceability",
+        "GenerationCapacityAndLimit"
+      ]
+    ]
+  },
+  {
+    "file": "runtime/tests/gc_unit/test_zstat.cpp",
+    "removed": [
+      [
+        "ZStat",
+        "CounterTickConsumesAndRetainsHistory"
+      ],
+      [
+        "ZStat",
+        "CriticalPhaseRecordsDurationAndFrequency"
+      ],
+      [
+        "ZStat",
+        "HistoryIncludesPartialIntervals"
+      ],
+      [
+        "ZStat",
+        "HistoryRollsOverAllThreeLevels"
+      ],
+      [
+        "ZStat",
+        "PauseAndConcurrentKeepStaticIdentity"
+      ],
+      [
+        "ZStat",
+        "ZeroDurationSampleStillCounts"
+      ]
+    ],
+    "added": []
+  },
+  {
+    "file": "runtime/tests/gc_unit/timer_ledger_contract.cpp",
+    "removed": [],
+    "added": []
+  },
+  {
+    "file": "runtime/tests/perf_vs_official/gclog_schema.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "file": "runtime/tests/perf_vs_official/test_analyze_youngstw.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "file": "runtime/tests/perf_vs_official/test_gclog_schema.py",
+    "removed": [
+      "test_malformed_v3_is_rejected",
+      "test_v2_is_rejected_instead_of_scaled_as_v3",
+      "test_v3_all_record_families_exact"
+    ],
+    "added": [
+      "test_generation_tags_preserved",
+      "test_malformed_v4_is_rejected",
+      "test_missing_unknown_tag_and_v3_rejected",
+      "test_v2_is_rejected_instead_of_scaled_as_v4",
+      "test_v4_all_record_families_exact"
+    ]
+  },
+  {
+    "file": "runtime/tests/perf_vs_official/test_phase_entry_guard.py",
+    "removed": [],
+    "added": []
+  },
+  {
+    "file": "runtime/tests/perf_vs_official/test_phase_leaf_ledger.py",
+    "removed": [],
+    "added": []
+  }
+]

@@ -1,0 +1,8 @@
+冻结回读命令: git -C /root/cj_build/cangjie_runtime rev-parse cjcjdev/main
+rc=0
+403916767341fd0610fdc7a1201f1a0333e0da38
+候选返工起点=c7ba8d459342a78a9b49a5e8d8dfeb524a160ba8
+git fetch cjcjdev && git merge cjcjdev/main
+rc=0
+Already up to date.
+裁定见 advisor-coordinate.md。

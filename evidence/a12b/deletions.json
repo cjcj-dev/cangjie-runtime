@@ -1,0 +1,134 @@
+[
+  {
+    "pattern": "ActiveSeq|CycleCounter|BeginCycle|CompleteCycle",
+    "path": "runtime/src",
+    "baseline_positive": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "ActiveSeq|CycleCounter|BeginCycle|CompleteCycle",
+        "78fc9ce028de705b3ea705b7069759c1036a2796",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Base/GcLog.h:59:    static uint64_t BeginCycle()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Base/GcLog.h:61:        uint64_t seq = CycleCounter().fetch_add(1, std::memory_order_relaxed) + 1;\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Base/GcLog.h:62:        if (seq == 0 || ActiveSeq().exchange(seq, std::memory_order_acq_rel) != 0) {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Base/GcLog.h:68:    static uint64_t CurrentSeq() { return ActiveSeq().load(std::memory_order_acquire); }\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Base/GcLog.h:70:    static void CompleteCycle(uint64_t seq)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Base/GcLog.h:73:        if (seq == 0 || !ActiveSeq().compare_exchange_strong(\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Base/GcLog.h:276:    static std::atomic<uint64_t>& CycleCounter()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Base/GcLog.h:282:    static std::atomic<uint64_t>& ActiveSeq()\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/CopyCollector.cpp:58:    const uint64_t cycleSeq = GcLog::BeginCycle();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/CopyCollector.cpp:86:        GcLog::CompleteCycle(cycleSeq);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/Collector/CopyCollector.cpp:99:    GcLog::CompleteCycle(cycleSeq);\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/windows_x86_64_exports.def:2899:    _ZZN12MapleRuntime5GcLog12CycleCounterEvE7counter @3244 DATA\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "ActiveSeq|CycleCounter|BeginCycle|CompleteCycle",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "pattern": "totalSize",
+    "path": "runtime/src/Inspector/ProfilerAgentImpl.cpp",
+    "baseline_positive": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "totalSize",
+        "78fc9ce028de705b3ea705b7069759c1036a2796",
+        "--",
+        "runtime/src/Inspector/ProfilerAgentImpl.cpp"
+      ],
+      "rc": 0,
+      "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Inspector/ProfilerAgentImpl.cpp:113:    writer->WriteString(\",\\\"totalSize\\\":\");\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Inspector/ProfilerAgentImpl.cpp:114:    ssize_t totalSize = MapleRuntime::Heap::GetHeap().GetMaxCapacity();\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Inspector/ProfilerAgentImpl.cpp:115:    writer->WriteNumber(totalSize);\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "totalSize",
+        "--",
+        "runtime/src/Inspector/ProfilerAgentImpl.cpp"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "pattern": "class ZStatSamplerHistory|struct ZStatSamplerData \\{",
+    "path": "runtime/src/Heap/z/zStat.hpp",
+    "baseline_positive": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "class ZStatSamplerHistory|struct ZStatSamplerData \\{",
+        "78fc9ce028de705b3ea705b7069759c1036a2796",
+        "--",
+        "runtime/src/Heap/z/zStat.hpp"
+      ],
+      "rc": 0,
+      "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zStat.hpp:82:struct ZStatSamplerData {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zStat.hpp:91:class ZStatSamplerHistoryInterval {\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zStat.hpp:122:class ZStatSamplerHistory {\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "class ZStatSamplerHistory|struct ZStatSamplerData \\{",
+        "--",
+        "runtime/src/Heap/z/zStat.hpp"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  },
+  {
+    "pattern": "ZStat::SampleAndCollect|ZStat::Print",
+    "path": "runtime/src/Heap/z/zStat.cpp",
+    "baseline_positive": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "ZStat::SampleAndCollect|ZStat::Print",
+        "78fc9ce028de705b3ea705b7069759c1036a2796",
+        "--",
+        "runtime/src/Heap/z/zStat.cpp"
+      ],
+      "rc": 0,
+      "stdout": "78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zStat.cpp:302:void ZStat::SampleAndCollect(std::vector<ZStatSamplerHistory>& history)\n78fc9ce028de705b3ea705b7069759c1036a2796:runtime/src/Heap/z/zStat.cpp:312:void ZStat::Print(const std::vector<ZStatSamplerHistory>& history)\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "ZStat::SampleAndCollect|ZStat::Print",
+        "--",
+        "runtime/src/Heap/z/zStat.cpp"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  }
+]

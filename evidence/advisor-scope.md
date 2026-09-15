@@ -1,0 +1,2 @@
+lane: sym_cangjie_runtime_490_implement_r5654882260
+主控裁定（0914 01:3x）：批准。① 在全部 runtime 源码消费者（Heap/z 与旧 Allocator/Collector 文件）里删除 D06b 诊断的 include/调用/状态，连同对应测试、CMake 登记、windows_x86_64_exports.def 条目；保留 zVerify 家族与真正的 collector/barrier/page-owner 机制。② tools/diag_registry.py 是共享 tools，你⛔ 不直接改：把要删的登记做成 patch 放到本棒证据目录（evidence/diag_registry.patch，`git diff` 格式，基于 /root/cj_build/tools 当前 master），报告里列出被删开关名；主控收割时应用到 tools。③ 坐标：搬前/冻结 5e04db89，交付前 fetch＋merge 8e1455a5（D03b #482 合入，含 Route* 删除），同分支同 PR。

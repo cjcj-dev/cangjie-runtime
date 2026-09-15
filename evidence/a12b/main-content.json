@@ -1,0 +1,290 @@
+[
+  {
+    "symbol": "ZYoungType::major_full_preclean",
+    "main": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "ZYoungType::major_full_preclean",
+        "cjcjdev/main",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zDriver.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zGeneration.cpp:1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "ZYoungType::major_full_preclean",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zDriver.cpp:2\nHEAD:runtime/src/Heap/z/zGeneration.cpp:1\n",
+      "stderr": ""
+    },
+    "total_main": 2,
+    "total_candidate": 3,
+    "retained": true
+  },
+  {
+    "symbol": "ZYoungType::major_full_roots",
+    "main": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "ZYoungType::major_full_roots",
+        "cjcjdev/main",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zDriver.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zDriver.hpp:2\ncjcjdev/main:runtime/src/Heap/z/zGeneration.hpp:1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "ZYoungType::major_full_roots",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zDriver.cpp:2\nHEAD:runtime/src/Heap/z/zDriver.hpp:2\nHEAD:runtime/src/Heap/z/zGeneration.hpp:1\n",
+      "stderr": ""
+    },
+    "total_main": 4,
+    "total_candidate": 5,
+    "retained": true
+  },
+  {
+    "symbol": "ZYoungType::major_partial_roots",
+    "main": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "ZYoungType::major_partial_roots",
+        "cjcjdev/main",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zDriver.cpp:2\ncjcjdev/main:runtime/src/Heap/z/zDriver.hpp:1\ncjcjdev/main:runtime/src/Heap/z/zGeneration.hpp:1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "ZYoungType::major_partial_roots",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zDriver.cpp:3\nHEAD:runtime/src/Heap/z/zDriver.hpp:1\nHEAD:runtime/src/Heap/z/zGeneration.hpp:1\n",
+      "stderr": ""
+    },
+    "total_main": 4,
+    "total_candidate": 5,
+    "retained": true
+  },
+  {
+    "symbol": "CancelDriverRequestLifecycle",
+    "main": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "CancelDriverRequestLifecycle",
+        "cjcjdev/main",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zDriver.cpp:4\ncjcjdev/main:runtime/src/Heap/z/zDriver.hpp:1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "CancelDriverRequestLifecycle",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zDriver.cpp:4\nHEAD:runtime/src/Heap/z/zDriver.hpp:1\n",
+      "stderr": ""
+    },
+    "total_main": 5,
+    "total_candidate": 5,
+    "retained": true
+  },
+  {
+    "symbol": "GetGenerationCycle",
+    "main": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "GetGenerationCycle",
+        "cjcjdev/main",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/Collector/CollectorProxy.h:6\ncjcjdev/main:runtime/src/Heap/z/zCollectedHeap.hpp:6\ncjcjdev/main:runtime/src/Heap/z/zDirector.cpp:2\ncjcjdev/main:runtime/src/Heap/z/zDriver.cpp:19\ncjcjdev/main:runtime/src/Heap/z/zGeneration.cpp:2\ncjcjdev/main:runtime/src/Heap/z/zMark.cpp:3\ncjcjdev/main:runtime/src/Heap/z/zMark.hpp:1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "GetGenerationCycle",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/Collector/CollectorProxy.h:6\nHEAD:runtime/src/Heap/z/zCollectedHeap.hpp:6\nHEAD:runtime/src/Heap/z/zDirector.cpp:2\nHEAD:runtime/src/Heap/z/zDriver.cpp:19\nHEAD:runtime/src/Heap/z/zGeneration.cpp:2\nHEAD:runtime/src/Heap/z/zMark.cpp:3\nHEAD:runtime/src/Heap/z/zMark.hpp:1\n",
+      "stderr": ""
+    },
+    "total_main": 39,
+    "total_candidate": 39,
+    "retained": true
+  },
+  {
+    "symbol": "GetYoungDriverPort",
+    "main": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "GetYoungDriverPort",
+        "cjcjdev/main",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zDriver.cpp:2\ncjcjdev/main:runtime/src/Heap/z/zDriver.hpp:1\ncjcjdev/main:runtime/src/Heap/z/zGeneration.cpp:5\ncjcjdev/main:runtime/src/Heap/z/zMark.cpp:3\ncjcjdev/main:runtime/src/Heap/z/zRelocate.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zVerify.cpp:2\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "GetYoungDriverPort",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zDriver.cpp:2\nHEAD:runtime/src/Heap/z/zDriver.hpp:1\nHEAD:runtime/src/Heap/z/zGeneration.cpp:5\nHEAD:runtime/src/Heap/z/zMark.cpp:3\nHEAD:runtime/src/Heap/z/zRelocate.cpp:1\nHEAD:runtime/src/Heap/z/zVerify.cpp:2\n",
+      "stderr": ""
+    },
+    "total_main": 14,
+    "total_candidate": 14,
+    "retained": true
+  },
+  {
+    "symbol": "StashSegments",
+    "main": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "StashSegments",
+        "cjcjdev/main",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zPageAllocator.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zPhysicalMemoryManager.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zVirtualMemoryManager.hpp:1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "StashSegments",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zPageAllocator.cpp:1\nHEAD:runtime/src/Heap/z/zPhysicalMemoryManager.cpp:1\nHEAD:runtime/src/Heap/z/zVirtualMemoryManager.hpp:1\n",
+      "stderr": ""
+    },
+    "total_main": 3,
+    "total_candidate": 3,
+    "retained": true
+  },
+  {
+    "symbol": "RestoreSegments",
+    "main": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "RestoreSegments",
+        "cjcjdev/main",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zPageAllocator.cpp:2\ncjcjdev/main:runtime/src/Heap/z/zPhysicalMemoryManager.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zVirtualMemoryManager.hpp:1\n",
+      "stderr": ""
+    },
+    "candidate": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "RestoreSegments",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zPageAllocator.cpp:2\nHEAD:runtime/src/Heap/z/zPhysicalMemoryManager.cpp:1\nHEAD:runtime/src/Heap/z/zVirtualMemoryManager.hpp:1\n",
+      "stderr": ""
+    },
+    "total_main": 4,
+    "total_candidate": 4,
+    "retained": true
+  }
+]

@@ -1,0 +1,48 @@
+{
+  "3c3216a7293b28690411a6283c7fd74076bdcd1b": {
+    "added": [
+      "GcRequestSync.DriverWaitReceivesDirectorRequest",
+      "GcRequestSync.LegacyIgnorePolicyCannotSuppressSyncRequest",
+      "GcRequestSync.MajorFullPrecleanThenCombinedRoots",
+      "GcRequestSync.MajorPartialRootsWithoutPreclean",
+      "GcRequestSync.YoungPreludeAndMinorShareDriverLock",
+      "GenerationState.FullPrecleanPromotesAllAndRootsComputeThreshold",
+      "GenerationState.IndependentPhaseSequenceAndWorkers",
+      "YoungConc.FollowRequiresEpochHandshake",
+      "YoungConc.MarkRequiresEpochHandshake",
+      "YoungConc.StackScanIsRequired"
+    ],
+    "removed": [
+      "DefectRegress.YoungFinishDefersHeuAtMostOncePerMajor",
+      "DefectRegress.YoungFinishDoesNotDeferMajorUnderOldPressure",
+      "DefectRegress.YoungFinishInsideExistingWindowDoesNotExtendHeuThrottle",
+      "DefectRegress.YoungHeuDeferralKillSwitchDoesNotTouchSharedClockOrCredit",
+      "GcRequestSync.DriverWaitInjectsTimeoutBackupRequest",
+      "GcRequestSync.IgnoredStaticSyncReasonsWaitForCurrentGc",
+      "GcRequestSync.IgnoredUserAsyncReturnsWhileCurrentGcIsActive",
+      "GcRequestSync.IgnoredUserSyncWaitsForCurrentGcCompletion",
+      "GcRequestSync.MinorAndMajorDriversSerializeCollections",
+      "YoungConc.LegacyFollowEnvCannotDisableRequiredEpochHandshake",
+      "YoungConc.LegacyMarkEnvCannotDisableRequiredEpochHandshake",
+      "YoungConc.LegacyStackScanEnvCannotDisableRequiredStackScan"
+    ]
+  },
+  "78fc9ce028de705b3ea705b7069759c1036a2796": {
+    "added": [
+      "GcRequestSync.DriverWaitReceivesDirectorRequest",
+      "GcRequestSync.LegacyIgnorePolicyCannotSuppressSyncRequest",
+      "GcRequestSync.MajorFullPrecleanThenCombinedRoots",
+      "GcRequestSync.MajorPartialRootsWithoutPreclean",
+      "GcRequestSync.YoungPreludeAndMinorShareDriverLock",
+      "GenerationState.FullPrecleanPromotesAllAndRootsComputeThreshold",
+      "GenerationState.IndependentPhaseSequenceAndWorkers"
+    ],
+    "removed": [
+      "GcRequestSync.DriverWaitInjectsTimeoutBackupRequest",
+      "GcRequestSync.IgnoredStaticSyncReasonsWaitForCurrentGc",
+      "GcRequestSync.IgnoredUserAsyncReturnsWhileCurrentGcIsActive",
+      "GcRequestSync.IgnoredUserSyncWaitsForCurrentGcCompletion",
+      "GcRequestSync.MinorAndMajorDriversSerializeCollections"
+    ]
+  }
+}

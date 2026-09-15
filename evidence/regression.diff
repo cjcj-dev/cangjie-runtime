@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zBarrier.inline.hpp b/runtime/src/Heap/z/zBarrier.inline.hpp
+index df8971866..2250af09d 100644
+--- a/runtime/src/Heap/z/zBarrier.inline.hpp
++++ b/runtime/src/Heap/z/zBarrier.inline.hpp
+@@ -53,6 +53,8 @@ inline void Barrier::MarkIfYoung(zaddress address) const
+     if (Heap::IsHeapAddress(object) &&
+         RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
+         MarkYoung(address);
++    } else if (Heap::IsHeapAddress(object)) {
++        theCollector.MarkOldObjectIfActive(object, true);
+     }
+ }
+ 

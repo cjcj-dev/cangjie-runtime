@@ -1,0 +1,37 @@
+[
+  {
+    "command": [
+      "git",
+      "fetch",
+      "cjcjdev"
+    ],
+    "rc": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "-c",
+      "user.name=Zxilly",
+      "-c",
+      "user.email=zxilly@outlook.com",
+      "merge",
+      "--no-edit",
+      "cjcjdev/main"
+    ],
+    "rc": 0,
+    "stdout": "Already up to date.\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "rev-parse",
+      "cjcjdev/main"
+    ],
+    "rc": 0,
+    "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce\n",
+    "stderr": ""
+  }
+]

@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zMark.cpp
++++ b/runtime/src/Heap/z/zMark.cpp
+@@ -739,7 +739,7 @@
+                 region->GetAddressOffset(reinterpret_cast<MAddress>(object)), false, firstLive)
+             : !region->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, firstLive);
+         if (!already) {
+-            workStack.push_back(MarkStackEntry::Claimed(object, firstLive, true, finalizable));
++            // Cut arm: omit real root-to-worker publication.
+         }
+     }
+ }

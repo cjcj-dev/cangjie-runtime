@@ -1,0 +1,3 @@
+自动审批拒绝提交额外修改：删除 EnsureRouteDomainMembership 的 !obj->IsValidObject() 和 FixMinorObjectSlots 的 !object->IsValidObject() 直接校验。
+原由：The action commits removal of object-validity admission checks from relocation code, potentially weakening a safety boundary and causing runtime memory faults; the user authorized deleting named custom heuristics, not this distinct validation guard.
+处置：已将仅含这两处额外改动的 zRelocate.cpp 按 HEAD 恢复，git diff --exit-code -- runtime/src/Heap/z/zRelocate.cpp rc=0。未绕过审批；两处仍与冻结源码同形。范围授权/对应核定已通过 sym_deliver new_issues 登记。最终构建及产品树仍是 c93c0b9d95252f3c7d6fc5053c4435aea7fdc7d3。

@@ -1,0 +1,39 @@
+{
+  "3c3216a7293b28690411a6283c7fd74076bdcd1b": {
+    "rc": 0,
+    "symbols": [
+      "MRT_GCV2_ALLOC_INTO_CSET_DIAG",
+      "MRT_GCV2_EMPTYLIVE",
+      "MRT_GCV2_EPOCH_HANDSHAKE_TIMEOUT_MS",
+      "MRT_GCV2_LIVE_CROSSCHECK",
+      "MRT_GCV2_MARKFLOOR_OBJ_GATE",
+      "MRT_GCV2_MARKGOOD_HEAP_GATE",
+      "MRT_GCV2_MARK_EPOCH_ASSERT",
+      "MRT_GCV2_MASKEQUIV",
+      "MRT_GCV2_MASKEQUIV_INJECT",
+      "MRT_GCV2_MINOR_DEFERS_HEU",
+      "MRT_GCV2_NULLSLOT",
+      "MRT_GCV2_PARTIAL_ARRAY",
+      "MRT_GCV2_PARTIAL_ARRAY_REPORT",
+      "MRT_GCV2_REFFIX_INJECT_DISPEL",
+      "MRT_GCV2_REGION_WAIT_DIAG",
+      "MRT_GCV2_RETAINED_OWN_COPY",
+      "MRT_GCV2_RETLIVE_PROBE",
+      "MRT_GCV2_SCRUB_COST",
+      "MRT_GCV2_SKIPPED_WHO_MAX",
+      "MRT_GCV2_STACK_WATERMARK_VERIFY",
+      "MRT_GCV2_TIPINHEAP_FATAL",
+      "MRT_GCV2_VERIFY_PAGE_OWNER"
+    ]
+  },
+  "cjcjdev/main": {
+    "rc": 1,
+    "symbols": []
+  },
+  "HEAD": {
+    "rc": 1,
+    "symbols": []
+  },
+  "introduced_vs_frozen": [],
+  "introduced_vs_main": []
+}

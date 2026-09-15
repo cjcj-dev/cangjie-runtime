@@ -1,0 +1,828 @@
+{
+  "default": {
+    "rc": 1,
+    "counts": [
+      527,
+      526,
+      1
+    ],
+    "failed": [
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-default.log"
+  },
+  "testable": {
+    "rc": 1,
+    "counts": [
+      717,
+      716,
+      1
+    ],
+    "failed": [
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery.log"
+  },
+  "filler": {
+    "rc": 1,
+    "counts": [
+      527,
+      526,
+      1
+    ],
+    "failed": [
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-filler.log"
+  },
+  "cut-alloc": {
+    "rc": 1,
+    "counts": [
+      717,
+      715,
+      2
+    ],
+    "failed": [
+      "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/control-recovery/cut-alloc/suite.log",
+    "new_failures": [
+      "P1Mark.AllocatingAndRelocatablePolicyMatrix"
+    ],
+    "lost_failures": []
+  },
+  "cut-retire": {
+    "rc": 1,
+    "counts": [
+      717,
+      713,
+      4
+    ],
+    "failed": [
+      "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "TLABUsage.AllocationCycleResizesNextRefill",
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/control-recovery/cut-retire/suite.log",
+    "new_failures": [
+      "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "TLABUsage.AllocationCycleResizesNextRefill"
+    ],
+    "lost_failures": []
+  },
+  "cut-consumer": {
+    "rc": 1,
+    "counts": [
+      717,
+      697,
+      20
+    ],
+    "failed": [
+      "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "LoadHealDeliveryProduct.InPlaceRemsetMovesBitAndFeedsConsumer",
+      "MarkPort203Entries.LegacyParallelCollectionConsumesArrayTails",
+      "MarkPort203Entries.ParallelInvisibleThenNormalAccountsOnce",
+      "MarkPort203Entries.ParallelNormalThenInvisibleAccountsOnce",
+      "MarkPort203Entries.SerialCollectionConsumesArrayTails",
+      "MarkPort203Entries.SerialCollectionHandlesExactArrayThreshold",
+      "MarkPort203Entries.SerialCollectionHandlesOnePastArrayThreshold",
+      "MarkPort203Entries.SerialInvisibleThenNormalAccountsOnce",
+      "MarkPort203Entries.SerialNormalThenInvisibleAccountsOnce",
+      "MarkPort203Entries.StripedCollectionConsumesArrayTails",
+      "MarkPort203Entries.StripedInvisibleThenNormalAccountsOnce",
+      "MarkPort203Entries.StripedNormalThenInvisibleAccountsOnce",
+      "MarkPort203Entries.StructArrayCollectionVisitsBothFields",
+      "MarkPort203Storage.YoungCollectionReturnsActualSegments",
+      "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable",
+      "YoungWeakClosure.OldWeakSlotKeepsYoungReferentStrong",
+      "YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong",
+      "YoungWeakClosure.StripedKeepsYoungReferentStrong"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/control-recovery/cut-consumer/suite.log",
+    "new_failures": [
+      "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "LoadHealDeliveryProduct.InPlaceRemsetMovesBitAndFeedsConsumer",
+      "MarkPort203Entries.LegacyParallelCollectionConsumesArrayTails",
+      "MarkPort203Entries.ParallelInvisibleThenNormalAccountsOnce",
+      "MarkPort203Entries.ParallelNormalThenInvisibleAccountsOnce",
+      "MarkPort203Entries.SerialCollectionConsumesArrayTails",
+      "MarkPort203Entries.SerialCollectionHandlesExactArrayThreshold",
+      "MarkPort203Entries.SerialCollectionHandlesOnePastArrayThreshold",
+      "MarkPort203Entries.SerialInvisibleThenNormalAccountsOnce",
+      "MarkPort203Entries.SerialNormalThenInvisibleAccountsOnce",
+      "MarkPort203Entries.StripedCollectionConsumesArrayTails",
+      "MarkPort203Entries.StripedInvisibleThenNormalAccountsOnce",
+      "MarkPort203Entries.StripedNormalThenInvisibleAccountsOnce",
+      "MarkPort203Entries.StructArrayCollectionVisitsBothFields",
+      "MarkPort203Storage.YoungCollectionReturnsActualSegments",
+      "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "YoungWeakClosure.OldWeakSlotKeepsYoungReferentStrong",
+      "YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong",
+      "YoungWeakClosure.StripedKeepsYoungReferentStrong"
+    ],
+    "lost_failures": []
+  },
+  "cut-pinned": {
+    "rc": 1,
+    "counts": [
+      717,
+      715,
+      2
+    ],
+    "failed": [
+      "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/control-recovery/cut-pinned/suite.log",
+    "new_failures": [
+      "P1Mark.PinnedReclaimedSlotIsNotAllocationSource"
+    ],
+    "lost_failures": []
+  },
+  "cut-shared": {
+    "rc": 1,
+    "counts": [
+      717,
+      715,
+      2
+    ],
+    "failed": [
+      "SharedSmallPage.AgeRefillAndRetirement",
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/control-recovery/cut-shared/suite.log",
+    "new_failures": [
+      "SharedSmallPage.AgeRefillAndRetirement"
+    ],
+    "lost_failures": []
+  },
+  "cut-inplace": {
+    "rc": 1,
+    "counts": [
+      717,
+      715,
+      2
+    ],
+    "failed": [
+      "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/control-recovery/cut-inplace/suite.log",
+    "new_failures": [
+      "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab"
+    ],
+    "lost_failures": []
+  },
+  "restored": {
+    "rc": 1,
+    "counts": [
+      717,
+      716,
+      1
+    ],
+    "failed": [
+      "ValueRootCurrentization.NullAndNonHeapControlsRemainStable"
+    ],
+    "log": "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/control-recovery/restored/suite.log"
+  },
+  "focused-recovery": [
+    {
+      "arm": "green",
+      "test": "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "rc": 0,
+      "wall": 0.29362919402774423
+    },
+    {
+      "arm": "green",
+      "test": "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "rc": 0,
+      "wall": 0.2930637620156631
+    },
+    {
+      "arm": "green",
+      "test": "P1Mark.ResurrectAndInactivePhasePolicies",
+      "rc": 0,
+      "wall": 0.2924541989923455
+    },
+    {
+      "arm": "green",
+      "test": "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "rc": 0,
+      "wall": 0.29194780898978934
+    },
+    {
+      "arm": "green",
+      "test": "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "rc": 0,
+      "wall": 0.29120768303982913
+    },
+    {
+      "arm": "green",
+      "test": "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "rc": 0,
+      "wall": 0.2910683900117874
+    },
+    {
+      "arm": "green",
+      "test": "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "rc": 0,
+      "wall": 0.2905207080184482
+    },
+    {
+      "arm": "green",
+      "test": "PinRoot.NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove",
+      "rc": 0,
+      "wall": 0.2903131039929576
+    },
+    {
+      "arm": "green",
+      "test": "LiveMap.PageBirthSequenceIsImplicitLive",
+      "rc": 0,
+      "wall": 0.29009698994923383
+    },
+    {
+      "arm": "green",
+      "test": "MarkStackEntry.ObjectPoliciesAreIndependent",
+      "rc": 0,
+      "wall": 0.28986060398165137
+    },
+    {
+      "arm": "green",
+      "test": "SharedSmallPage.AgeRefillAndRetirement",
+      "rc": 0,
+      "wall": 0.28964691900182515
+    },
+    {
+      "arm": "green",
+      "test": "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "rc": 0,
+      "wall": 0.28944121598033234
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "rc": 1,
+      "wall": 0.24978545401245356
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "rc": 0,
+      "wall": 0.24942985700909048
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "P1Mark.ResurrectAndInactivePhasePolicies",
+      "rc": 0,
+      "wall": 0.24876066198339686
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "rc": 0,
+      "wall": 0.2484469059854746
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "rc": 0,
+      "wall": 0.2479435650166124
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "rc": 0,
+      "wall": 0.24742790398886427
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "rc": 0,
+      "wall": 0.2470288350014016
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "PinRoot.NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove",
+      "rc": 0,
+      "wall": 0.24675024999305606
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "LiveMap.PageBirthSequenceIsImplicitLive",
+      "rc": 0,
+      "wall": 0.24651259498205036
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "MarkStackEntry.ObjectPoliciesAreIndependent",
+      "rc": 0,
+      "wall": 0.2462798689957708
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "SharedSmallPage.AgeRefillAndRetirement",
+      "rc": 0,
+      "wall": 0.2460539350286126
+    },
+    {
+      "arm": "cut-alloc",
+      "test": "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "rc": 0,
+      "wall": 0.24581960000796244
+    },
+    {
+      "arm": "cut-retire",
+      "test": "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "rc": 0,
+      "wall": 0.21338445198489353
+    },
+    {
+      "arm": "cut-retire",
+      "test": "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "rc": 0,
+      "wall": 0.21276419796049595
+    },
+    {
+      "arm": "cut-retire",
+      "test": "P1Mark.ResurrectAndInactivePhasePolicies",
+      "rc": 0,
+      "wall": 0.21224710799288005
+    },
+    {
+      "arm": "cut-retire",
+      "test": "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "rc": 0,
+      "wall": 0.2116811160231009
+    },
+    {
+      "arm": "cut-retire",
+      "test": "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "rc": 1,
+      "wall": 0.21144253097008914
+    },
+    {
+      "arm": "cut-retire",
+      "test": "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "rc": 1,
+      "wall": 0.21080067695584148
+    },
+    {
+      "arm": "cut-retire",
+      "test": "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "rc": 0,
+      "wall": 0.21054291201289743
+    },
+    {
+      "arm": "cut-retire",
+      "test": "PinRoot.NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove",
+      "rc": 0,
+      "wall": 0.2103001259965822
+    },
+    {
+      "arm": "cut-retire",
+      "test": "LiveMap.PageBirthSequenceIsImplicitLive",
+      "rc": 0,
+      "wall": 0.210045370971784
+    },
+    {
+      "arm": "cut-retire",
+      "test": "MarkStackEntry.ObjectPoliciesAreIndependent",
+      "rc": 0,
+      "wall": 0.2097899749642238
+    },
+    {
+      "arm": "cut-retire",
+      "test": "SharedSmallPage.AgeRefillAndRetirement",
+      "rc": 0,
+      "wall": 0.2095241800416261
+    },
+    {
+      "arm": "cut-retire",
+      "test": "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "rc": 0,
+      "wall": 0.2092626139638014
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "rc": 0,
+      "wall": 0.1769890800351277
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "rc": 1,
+      "wall": 0.17663783195894212
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "P1Mark.ResurrectAndInactivePhasePolicies",
+      "rc": 0,
+      "wall": 0.17634616600116715
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "rc": 0,
+      "wall": 0.1757331140106544
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "rc": 0,
+      "wall": 0.1754484680132009
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "rc": 0,
+      "wall": 0.17500477796420455
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "rc": 1,
+      "wall": 0.17475609300890937
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "PinRoot.NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove",
+      "rc": 0,
+      "wall": 0.17449878703337163
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "LiveMap.PageBirthSequenceIsImplicitLive",
+      "rc": 0,
+      "wall": 0.17423651099670678
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "MarkStackEntry.ObjectPoliciesAreIndependent",
+      "rc": 0,
+      "wall": 0.17397876601899043
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "SharedSmallPage.AgeRefillAndRetirement",
+      "rc": 0,
+      "wall": 0.173718361009378
+    },
+    {
+      "arm": "cut-consumer",
+      "test": "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "rc": 0,
+      "wall": 0.17346220498438925
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "rc": 0,
+      "wall": 0.12932845897739753
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "rc": 0,
+      "wall": 0.12891801103251055
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "P1Mark.ResurrectAndInactivePhasePolicies",
+      "rc": 0,
+      "wall": 0.1285981039982289
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "rc": 1,
+      "wall": 0.12828379700658843
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "rc": 0,
+      "wall": 0.12802122201537713
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "rc": 0,
+      "wall": 0.1277433559880592
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "rc": 0,
+      "wall": 0.12748898100107908
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "PinRoot.NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove",
+      "rc": 0,
+      "wall": 0.12722324498463422
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "LiveMap.PageBirthSequenceIsImplicitLive",
+      "rc": 0,
+      "wall": 0.12694511900190264
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "MarkStackEntry.ObjectPoliciesAreIndependent",
+      "rc": 0,
+      "wall": 0.12667940300889313
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "SharedSmallPage.AgeRefillAndRetirement",
+      "rc": 0,
+      "wall": 0.12639340799069032
+    },
+    {
+      "arm": "cut-pinned",
+      "test": "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "rc": 0,
+      "wall": 0.12611465097870678
+    },
+    {
+      "arm": "cut-shared",
+      "test": "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "rc": 0,
+      "wall": 0.0930384109960869
+    },
+    {
+      "arm": "cut-shared",
+      "test": "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "rc": 0,
+      "wall": 0.09247086895629764
+    },
+    {
+      "arm": "cut-shared",
+      "test": "P1Mark.ResurrectAndInactivePhasePolicies",
+      "rc": 0,
+      "wall": 0.09178757498739287
+    },
+    {
+      "arm": "cut-shared",
+      "test": "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "rc": 0,
+      "wall": 0.09142914699623361
+    },
+    {
+      "arm": "cut-shared",
+      "test": "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "rc": 0,
+      "wall": 0.09109878004528582
+    },
+    {
+      "arm": "cut-shared",
+      "test": "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "rc": 0,
+      "wall": 0.09060620894888416
+    },
+    {
+      "arm": "cut-shared",
+      "test": "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "rc": 0,
+      "wall": 0.09008563798852265
+    },
+    {
+      "arm": "cut-shared",
+      "test": "PinRoot.NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove",
+      "rc": 0,
+      "wall": 0.08965105901006609
+    },
+    {
+      "arm": "cut-shared",
+      "test": "LiveMap.PageBirthSequenceIsImplicitLive",
+      "rc": 0,
+      "wall": 0.08930947200860828
+    },
+    {
+      "arm": "cut-shared",
+      "test": "MarkStackEntry.ObjectPoliciesAreIndependent",
+      "rc": 0,
+      "wall": 0.0889803150203079
+    },
+    {
+      "arm": "cut-shared",
+      "test": "SharedSmallPage.AgeRefillAndRetirement",
+      "rc": 1,
+      "wall": 0.08867439901223406
+    },
+    {
+      "arm": "cut-shared",
+      "test": "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "rc": 0,
+      "wall": 0.08783104101894423
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "rc": 0,
+      "wall": 0.055091987014748156
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "rc": 0,
+      "wall": 0.05470756901195273
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "P1Mark.ResurrectAndInactivePhasePolicies",
+      "rc": 0,
+      "wall": 0.054367001983337104
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "rc": 0,
+      "wall": 0.05401521403109655
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "rc": 0,
+      "wall": 0.053633185976650566
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "rc": 0,
+      "wall": 0.05329135904321447
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "rc": 0,
+      "wall": 0.05291264102561399
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "PinRoot.NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove",
+      "rc": 0,
+      "wall": 0.052567034028470516
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "LiveMap.PageBirthSequenceIsImplicitLive",
+      "rc": 0,
+      "wall": 0.052244427031837404
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "MarkStackEntry.ObjectPoliciesAreIndependent",
+      "rc": 0,
+      "wall": 0.05193978000897914
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "SharedSmallPage.AgeRefillAndRetirement",
+      "rc": 0,
+      "wall": 0.05156324204290286
+    },
+    {
+      "arm": "cut-inplace",
+      "test": "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "rc": 1,
+      "wall": 0.05114086403045803
+    },
+    {
+      "arm": "restored",
+      "test": "P1Mark.AllocatingAndRelocatablePolicyMatrix",
+      "rc": 0,
+      "wall": 0.017767835990525782
+    },
+    {
+      "arm": "restored",
+      "test": "P1Mark.DuplicateAnyThreadStopsAtConsumer",
+      "rc": 0,
+      "wall": 0.017359147022943944
+    },
+    {
+      "arm": "restored",
+      "test": "P1Mark.ResurrectAndInactivePhasePolicies",
+      "rc": 0,
+      "wall": 0.016995970043353736
+    },
+    {
+      "arm": "restored",
+      "test": "P1Mark.PinnedReclaimedSlotIsNotAllocationSource",
+      "rc": 0,
+      "wall": 0.02252767700701952
+    },
+    {
+      "arm": "restored",
+      "test": "MarkAllocation.LargeHolderAndNewTargetAreImplicitlyLive",
+      "rc": 0,
+      "wall": 0.02282460394781083
+    },
+    {
+      "arm": "restored",
+      "test": "MarkAllocation.LargeHolderKeepsRootedExistingTargetLive",
+      "rc": 0,
+      "wall": 0.02286341495346278
+    },
+    {
+      "arm": "restored",
+      "test": "LargePageGeneration.ArrayRootKeepsYoungTargetLive",
+      "rc": 0,
+      "wall": 0.02285746397683397
+    },
+    {
+      "arm": "restored",
+      "test": "PinRoot.NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove",
+      "rc": 0,
+      "wall": 0.022473655990324914
+    },
+    {
+      "arm": "restored",
+      "test": "LiveMap.PageBirthSequenceIsImplicitLive",
+      "rc": 0,
+      "wall": 0.0202187990071252
+    },
+    {
+      "arm": "restored",
+      "test": "MarkStackEntry.ObjectPoliciesAreIndependent",
+      "rc": 0,
+      "wall": 0.019861529988702387
+    },
+    {
+      "arm": "restored",
+      "test": "SharedSmallPage.AgeRefillAndRetirement",
+      "rc": 0,
+      "wall": 0.019479222944937646
+    },
+    {
+      "arm": "restored",
+      "test": "ForwardingPublicationProduct.CompactRegionDeadFromHasNoForwardingAndIsNotTlab",
+      "rc": 0,
+      "wall": 0.019147885031998158
+    }
+  ],
+  "identities": {
+    "green": {
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_unit": "320aff694f8bfa9052f4b0059157e530030c4a1f18284b13814759d76771c4dd",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_forwarding_publication_unit": "fa71cd5acf3b18dad6ecda0fe6a4aaa73c84d1667025ee1c8323f7092bec6b7f",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "f3fad5df49dc6f949c8207f23f2ee57b844645722d70e44f7f391cd0ce304047",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "cut-alloc": {
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_unit": "320aff694f8bfa9052f4b0059157e530030c4a1f18284b13814759d76771c4dd",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_forwarding_publication_unit": "fa71cd5acf3b18dad6ecda0fe6a4aaa73c84d1667025ee1c8323f7092bec6b7f",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-alloc-delivery/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "143a703a1e9e525940810fe54beb46ff0cbdf1f2bbd710a2a33aac4184275fd7",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-alloc-delivery/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "cut-retire": {
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_unit": "320aff694f8bfa9052f4b0059157e530030c4a1f18284b13814759d76771c4dd",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_forwarding_publication_unit": "fa71cd5acf3b18dad6ecda0fe6a4aaa73c84d1667025ee1c8323f7092bec6b7f",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-retire-delivery/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "3adb4e5c7d743324e72e474cf0a9f72b87dede3ba0b6846c810e878cf18969c8",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-retire-delivery/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "cut-consumer": {
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_unit": "320aff694f8bfa9052f4b0059157e530030c4a1f18284b13814759d76771c4dd",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_forwarding_publication_unit": "fa71cd5acf3b18dad6ecda0fe6a4aaa73c84d1667025ee1c8323f7092bec6b7f",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-consumer-delivery/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "920ee77c5e13e8db1ffc8b75f36e4537b6fd96c3cebb5cf27e28e0df525f382d",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-consumer-delivery/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "cut-pinned": {
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_unit": "320aff694f8bfa9052f4b0059157e530030c4a1f18284b13814759d76771c4dd",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_forwarding_publication_unit": "fa71cd5acf3b18dad6ecda0fe6a4aaa73c84d1667025ee1c8323f7092bec6b7f",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-pinned-delivery/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "5bd913aaa57290f325a7d5824332634062611a2d8efda40d4a5c12cfdc238720",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-pinned-delivery/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "cut-shared": {
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_unit": "320aff694f8bfa9052f4b0059157e530030c4a1f18284b13814759d76771c4dd",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_forwarding_publication_unit": "fa71cd5acf3b18dad6ecda0fe6a4aaa73c84d1667025ee1c8323f7092bec6b7f",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-shared-delivery/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "950240e6da2c9504e7ace8659970aaf5546655543e5c8b53bb319d15b81aa387",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-shared-delivery/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "cut-inplace": {
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_unit": "320aff694f8bfa9052f4b0059157e530030c4a1f18284b13814759d76771c4dd",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_forwarding_publication_unit": "fa71cd5acf3b18dad6ecda0fe6a4aaa73c84d1667025ee1c8323f7092bec6b7f",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-inplace-delivery/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "497bf674625201befd648700f0c7d5e3cbe47da43cbc2f1ce818d7041fd701cc",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-cut-inplace-delivery/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    },
+    "restored": {
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_unit": "320aff694f8bfa9052f4b0059157e530030c4a1f18284b13814759d76771c4dd",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/unit-recovery/cj_gc_forwarding_publication_unit": "fa71cd5acf3b18dad6ecda0fe6a4aaa73c84d1667025ee1c8323f7092bec6b7f",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": "f3fad5df49dc6f949c8207f23f2ee57b844645722d70e44f7f391cd0ce304047",
+      "/root/sym_cangjie_runtime_606_implement_r5673376405-accept-delivery/testable/build/runtime-staging/lib/x86_64_Release/libboundscheck.so": "f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883"
+    }
+  },
+  "uptime": {
+    "tests-uptime-before.txt": " 10:45:20 up 5 days, 10:53,  1 user,  load average: 18.81, 9.59, 5.56\n",
+    "tests-uptime-after.txt": " 10:45:33 up 5 days, 10:53,  1 user,  load average: 22.40, 10.93, 6.07\n",
+    "focused-recovery/uptime-before.txt": " 11:09:45 up 5 days, 11:18,  1 user,  load average: 3.61, 3.76, 3.29\n",
+    "focused-recovery/uptime-after.txt": " 11:09:46 up 5 days, 11:18,  1 user,  load average: 3.61, 3.76, 3.29\n",
+    "control-recovery/uptime-before.txt": " 11:09:45 up 5 days, 11:18,  1 user,  load average: 3.61, 3.76, 3.29\n",
+    "control-recovery/uptime-after.txt": " 11:09:54 up 5 days, 11:18,  1 user,  load average: 4.21, 3.88, 3.33\n"
+  }
+}
