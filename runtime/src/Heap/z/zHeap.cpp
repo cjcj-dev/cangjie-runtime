@@ -7,7 +7,6 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zInitialize.hpp"
 
-#include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zDriver.hpp"
 #include "Interpreter/Options.h"
@@ -71,13 +70,6 @@ MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
 std::vector<HeapSlotAddressRange> Heap::heapReservations;
 
-void Heap::CheckHeapStartAlignment(MAddress startAddr)
-{
-    CHECK_DETAIL((startAddr & (MarkPartialArray::MIN_SIZE - 1)) == 0,
-                 "heap start address must be aligned to partial-array minimum size: start=%#zx alignment=%zu",
-                 static_cast<size_t>(startAddr), MarkPartialArray::MIN_SIZE);
-}
-
 static bool InitEnabledGCParam()
 {
     auto enableGC = std::getenv("cjEnableGC");
@@ -116,7 +108,8 @@ public:
 
     bool IsSurvivedObject(const BaseObject* obj) const override
     {
-        return RegionSpace::IsMarkedObject<Generation::Old>(obj) || RegionSpace::IsResurrectedObject(obj);
+        // ZPage::is_object_live (zPage.inline.hpp:254-256).
+        return RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
     }
 
     bool IsGcStarted() const override { return collectorResources.IsGcStarted(); }
@@ -424,8 +417,7 @@ void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& vis
         if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
             return;
         }
-        MarkView<Generation::Old> oldView = region->GetMarkView<Generation::Old>();
-        if (skipKnownEmptyRegions && region->IsKnownEmpty(oldView)) {
+        if (skipKnownEmptyRegions && region->IsKnownEmpty()) {
             return;
         }
         region->VisitAllObjects([&visitor](BaseObject* object) { visitor(object); });

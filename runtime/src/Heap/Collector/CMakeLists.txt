@@ -33,7 +33,6 @@ set(SRC_LIST
     "StringDedup.cpp"
     "../z/zUncommitter.cpp"
     "CopyCollector.cpp"
-    "LiveInfoArena.cpp"
     "../z/zForwarding.cpp"
 )
 

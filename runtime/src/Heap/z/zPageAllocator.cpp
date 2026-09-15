@@ -678,13 +678,8 @@ void RegionManager::PromoteAllRegions()
 {
     VisitPageOwners([&](RegionInfo* region) {
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
-            size_t liveBytes = region->GetLiveByteCount();
-            if (liveBytes > 0) {
-            } else if (region->GetRawPointerObjectCount() == 0) {
-            }
             if (region->IsYoungRegion()) {
-                MarkView<Generation::Young> youngView = region->GetMarkView<Generation::Young>();
-                (void)region->PromoteYoungRegion(youngView);
+                region->PromoteYoungRegion();
             } else {
                 // Preserve the pre-genface cleanup for already-old regions.
                 region->SetYoungAge(0);
@@ -782,12 +777,9 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
         return 0;
     }
     // traverse pinned region to reclaim free pinned objects.
-    size_t start = region->GetRegionStart();
     size_t garbageSize = 0;
-    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-    region->VisitAllObjects([this, region, view, start, &garbageSize](BaseObject* object) {
-        size_t offset = reinterpret_cast<MAddress>(object) - start;
-        if (!region->IsSurvivedObject(view, offset)) {
+    region->VisitAllObjects([this, region, &garbageSize](BaseObject* object) {
+        if (!region->is_object_live(from_object(object))) {
             size_t objSize = object->GetSize();
             DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, object->GetTypeInfo(), objSize);
             garbageSize += objSize;
@@ -815,8 +807,7 @@ size_t RegionManager::CollectPinnedGarbage()
             region = region->GetNextRegion();
             continue;
         }
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        if (region->IsKnownEmpty(view)) {
+        if (region->IsKnownEmpty()) {
             RegionInfo* del = region;
             region = region->GetNextRegion();
             oldPinnedRegionList.DeleteRegion(del);
@@ -841,24 +832,8 @@ size_t RegionManager::CollectLargeGarbage()
     size_t garbageSize = 0;
     RegionInfo* region = oldLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
-        // holdercapture: sample the face here, BEFORE the predicate below decides.
-        //
-        // Sampling early is necessary but NOT sufficient, and the earlier version of this
-        // comment claimed otherwise. Through one view the two predicates are ordered, not
-        // equal: for a large region IsMarkedObject(view,0) is GetMarkedRegionFlag(view)==1
-        // while IsSurvivedObject(view,0) is that OR isResurrected, so marked implies
-        // survived. Every region this loop releases failed !IsSurvivedObject(view,0) and
-        // therefore reads marked==0 through that same view - one line earlier just as
-        // surely as at the top of ReleaseRegion. Moving the sample moves the zero; it does
-        // not remove it.
-        //
-        // The mark bit read through the view below is a control, not the finding: it must
-        // be 0 on every released region, and if it ever is not, the reading of this
-        // predicate is wrong and the rest of the measurement is void.
-
-        // for large region, the offset of obj is 0
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        if (!region->IsSurvivedObject(view, 0)) {
+        // for large region, the object is the page start (zPage.inline.hpp:254-256).
+        if (!region->is_object_live(to_zaddress(region->GetRegionStart()))) {
             DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
                  region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
@@ -930,7 +905,7 @@ void RegionManager::DumpRegionStats(const char* msg) const
         ++keptRegions;
         keptUnits += region->GetUnitCount();
         keptSize += region->GetRegionSize();
-        keptLive += region->GetLiveByteCount();
+        keptLive += region->is_marked() ? region->live_bytes() : 0;
     };
     fromRegionList.VisitAllRegions(censusKept);
     unmovableFromRegionList.VisitAllRegions(censusKept);

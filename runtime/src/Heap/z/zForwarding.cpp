@@ -291,7 +291,7 @@ void ZForwarding::verify() const
         ZVerify::Object(object, nullptr);
         bytes += RegionSpace::GetAllocSize(*object);
     }
-    _page->VerifyLive(sources.size(), bytes, in_place());
+    _page->verify_live(static_cast<uint32_t>(sources.size()), bytes, in_place());
 }
 
 } // namespace MapleRuntime

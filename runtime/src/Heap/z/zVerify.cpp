@@ -180,8 +180,9 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
                      "Bad possibly weak oop at %p", &field);
         CHECK_DETAIL(!young || ZPointer::is_marked_young(to_zpointer(raw(value))),
                      "Unmarked young oop at %p", &field);
-        CHECK_DETAIL(young || RegionSpace::IsMarkedObject<Generation::Old>(target) ||
-                     RegionSpace::IsResurrectedObject(target), "Non-live old oop at %p", &field);
+        CHECK_DETAIL(young || RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->is_object_live(
+                                  from_object(target)),
+                     "Non-live old oop at %p", &field);
         const uintptr_t remset = raw(value) & ZPointerRememberedMask;
         const uintptr_t previous = (::g_cjStoreGoodMask & ZPointerRememberedMask) ^ ZPointerRememberedMask;
         CHECK_DETAIL(remset != previous, "Previous remembered color at %p", &field);
@@ -218,7 +219,7 @@ void ZVerify::Objects(bool verifyWeaks)
         Object(object, nullptr);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (region->IsYoungRegion()) { return; }
-        if (!RegionSpace::IsMarkedObject<Generation::Old>(object) && !RegionSpace::IsResurrectedObject(object)) {
+        if (!region->is_object_live(from_object(object))) {
             LOG(RTLOG_ERROR, "ZVerify found non-live object: %p at %p value=%#zx from=%p",
                 object, visitedSlot, visitedValue, visitedBase);
             if (brokenObject == nullptr) { brokenObject = object; }
@@ -272,7 +273,8 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
     const bool activeCurrent = Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent();
     CHECK_DETAIL(remset.IsClearInRange(forwarding->start(), forwarding->size(), !activeCurrent),
                  "Inactive remembered set is not empty for %p", page);
-    page->VisitLiveObjectsUntilFalse([&](BaseObject* object) {
+    // zVerify.cpp:601 forwarding->object_iterate: the source page livemap.
+    page->object_iterate([&](BaseObject* object) {
         const MAddress from = reinterpret_cast<MAddress>(object);
         IterateVerifyFields(object, [&](RefField<>& field) {
             const MAddress slot = reinterpret_cast<MAddress>(&field);
@@ -281,7 +283,6 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
             CHECK_DETAIL(activeCurrent ? remset.Contains(slot) : remset.ContainsPrevious(slot),
                          "Missing remembered field %p in source %p", &field, object);
         });
-        return true;
     });
 }
 

@@ -104,7 +104,7 @@ void* RunMajorCycle(void*)
         for (auto* node = roots.head(); node != nullptr; node = node->next) {
             auto copy = *node;
             while (!copy.empty()) {
-                found = found || copy.back().object() == current;
+                found = found || to_object(ZOffset::address(to_zoffset(copy.back().object_address()))) == current;
                 copy.pop_back();
             }
         }
