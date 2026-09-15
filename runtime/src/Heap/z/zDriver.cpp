@@ -25,6 +25,7 @@
 #include "Common/Runtime.h"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zDirector.hpp"
+#include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Common/RunType.h"
 #include "Common/ScopedObjectAccess.h"
@@ -393,6 +394,9 @@ void CollectorResources::StartGCThreads()
             std::min<size_t>((cpus * 3 + 4) / 5, heapWorkers)));
         concurrentGcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
             std::min<size_t>((cpus + 3) / 4, heapWorkers)));
+        // zArguments.cpp:67-81: ConcGCThreads is the per-generation maximum and
+        // sizes every ZPerWorker (zValue.inline.hpp:108-110); set before workers.
+        ConcGCThreads = static_cast<uint32_t>(concurrentGcThreadCount);
         VLOG(REPORT,
              "runtime worker count %d, concurrent gc thread count %d, "
              "active processor count %u, affinity detected %d, region bytes %zu",

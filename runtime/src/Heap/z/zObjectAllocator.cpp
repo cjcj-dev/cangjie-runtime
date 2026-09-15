@@ -108,61 +108,9 @@ void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
     buffer.AccumulateTLABStatistics(retiredTLABStatistics, GetTLABUsed(), GetTLABCapacity());
 }
 
-// zValue.inline.hpp:80-89 / zCPU.cpp:69-81. Use the configured CPU domain,
-// not the caller's affinity-mask population (CPU ids can be sparse).
-size_t RegionManager::SharedPageCPUCount()
-{
-    static const size_t count = [] {
-#if defined(__linux__) || defined(hongmeng)
-        const long configured = sysconf(_SC_NPROCESSORS_CONF);
-        if (configured > 0) { return static_cast<size_t>(configured); }
-#endif
-        return static_cast<size_t>(std::max(1U, std::thread::hardware_concurrency()));
-    }();
-    return count;
-}
-
-size_t RegionManager::CurrentSharedPageCPU()
-{
-#if defined(__linux__) || defined(hongmeng)
-    const int cpu = sched_getcpu();
-    if (cpu >= 0 && static_cast<size_t>(cpu) < SharedPageCPUCount()) {
-        return static_cast<size_t>(cpu);
-    }
-#elif defined(_WIN64)
-    // os_windows.cpp:1090: Windows reports the current processor number.
-    const size_t cpu = static_cast<size_t>(GetCurrentProcessorNumber());
-    if (cpu < SharedPageCPUCount()) { return cpu; }
-#elif defined(__APPLE__) && defined(__x86_64__)
-    // os_bsd.cpp:2228-2261: compact the initial APIC id into the CPU domain.
-    struct ProcessorMap {
-        std::atomic<int> ids[256];
-        std::atomic<unsigned> next{0};
-        ProcessorMap() { for (auto& id : ids) { id.store(-1, std::memory_order_relaxed); } }
-    };
-    static ProcessorMap processors;
-    unsigned eax = 1, ebx = 0, ecx = 0, edx = 0;
-    __asm__("cpuid" : "+a"(eax), "+b"(ebx), "+c"(ecx), "+d"(edx));
-    auto& entry = processors.ids[(ebx >> 24) & 255];
-    int cpu = entry.load(std::memory_order_acquire);
-    while (cpu < 0) {
-        int expected = -1;
-        if (entry.compare_exchange_strong(expected, -2, std::memory_order_acq_rel)) {
-            cpu = static_cast<int>(processors.next.fetch_add(1, std::memory_order_relaxed) % SharedPageCPUCount());
-            entry.store(cpu, std::memory_order_release);
-        } else {
-            cpu = entry.load(std::memory_order_acquire);
-        }
-    }
-    return static_cast<size_t>(cpu);
-#endif
-    // os_bsd.cpp:2262-2266 / os_linux.cpp:4994-5009: unsupported or invalid
-    // processor ids share slot zero; every page allocation remains atomic.
-    return 0;
-}
-
+// zObjectAllocator.cpp:40-45
 RegionManager::PerAgeObjectAllocator::PerAgeObjectAllocator(PageAge pageAge)
-    : age(pageAge), smallPages(new SharedSmallPage[SharedPageCPUCount()]) {}
+    : age(pageAge), sharedSmallPage(nullptr) {}
 
 // zHeap.cpp:229: shared-page TLAB accounting includes only small eden pages.
 static bool IsSmallEdenPage(const RegionInfo* page)
@@ -223,7 +171,7 @@ void RegionManager::UndoSharedPage(RegionInfo* page)
 uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlocking)
 {
     CHECK(untype(age) < kPageAgeCount);
-    PerAgeObjectAllocator& allocator = *objectAllocators[untype(age)];
+    PerAgeObjectAllocator& allocator = *this->allocator(age);
     if (size > GetLargeObjectThreshold()) {
         // ZObjectAllocator::PerAge::alloc_large_object. This runtime has no
         // medium page class; objects above its small limit use dedicated pages.
@@ -235,8 +183,8 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
     // ZObjectAllocator::PerAge::shared_small_page_addr / alloc_small_object.
     // Keep this stable slot address across refill; a safepoint can retire its
     // value, and the compare-exchange below explicitly handles that case.
-    auto& shared = allocator.smallPages[CurrentSharedPageCPU()].page;
-    RegionInfo* page = shared.load(std::memory_order_acquire);
+    RegionInfo** const shared = allocator.shared_small_page_addr();
+    RegionInfo* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
     uintptr_t addr = page == nullptr ? 0 : page->AtomicAlloc(size);
     if (addr != 0) { return addr; }
 
@@ -248,8 +196,7 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
     addr = fresh->Alloc(size);
     CHECK(addr != 0);
     for (;;) {
-        if (shared.compare_exchange_strong(page, fresh, std::memory_order_acq_rel,
-                                            std::memory_order_acquire)) {
+        if (__atomic_compare_exchange_n(shared, &page, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
             return addr;
         }
         if (page == nullptr) { continue; }
@@ -265,11 +212,10 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
 // lists retain pages; retirement only removes allocation shortcuts.
 void RegionManager::RetireSharedPages(PageAgeRange ages)
 {
+    // zObjectAllocator.cpp:198-203 PerAge::retire_pages: set_all(nullptr).
     for (PageAge age : ages) {
-        objectAllocators[untype(age)]->pinnedPage.store(nullptr, std::memory_order_release);
-        for (size_t cpu = 0; cpu < SharedPageCPUCount(); ++cpu) {
-            objectAllocators[untype(age)]->smallPages[cpu].page.store(nullptr, std::memory_order_release);
-        }
+        allocator(age)->pinnedPage.store(nullptr, std::memory_order_release);
+        allocator(age)->sharedSmallPage.set_all(nullptr);
     }
 }
 
@@ -441,8 +387,9 @@ RegionManager::RegionManager()
           oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
           largeTraceRegions("large trace regions")
     {
+        // zObjectAllocator.cpp:211-215: construct every PerAge in place.
         for (PageAge age : kPageAgeRangeAll) {
-            objectAllocators[untype(age)] = std::make_unique<PerAgeObjectAllocator>(age);
+            objectAllocators[untype(age)].initialize(age);
         }
         tlabAllocatingThreads.Sample(1);
         tlabRequestedFraction.Sample(0.1);

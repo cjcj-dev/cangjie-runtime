@@ -649,12 +649,13 @@ private:
 
 // ZMarkOldRootsTask, zMark.cpp:797-834. Root results are published to the
 // generation mark domain by closures, then flushed by each participating worker.
-class MarkOldRootsTask final : public GCWorkerTask {
+class MarkOldRootsTask final : public ZTask {
 public:
     MarkOldRootsTask(const TracingCollector& collector, MarkDomain& domain,
                      std::function<void()> uncolored, unsigned workers)
-        : rootsColored(collector, workers), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
-    void Work(uint32_t) override
+        : ZTask("ZMarkOldRootsTask"), rootsColored(collector, workers), coloredClosure(collector), domain(domain),
+          uncolored(std::move(uncolored)) {}
+    void work() override
     {
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
@@ -708,13 +709,14 @@ public:
 
 // ZMarkYoungRootsTask, zMark.cpp:852-891. Colored roots share one closure;
 // Cangjie's stack/value-root scanner replaces HotSpot thread/nmethod closures.
-class MarkYoungRootsTask final : public GCWorkerTask {
+class MarkYoungRootsTask final : public ZTask {
 public:
     MarkYoungRootsTask(const TracingCollector& collector, MarkDomain& domain,
                        std::function<void()> uncolored, unsigned workers)
-        : rootsColored(collector, workers), domain(domain), uncolored(std::move(uncolored)) {}
+        : ZTask("ZMarkYoungRootsTask"), rootsColored(collector, workers), domain(domain),
+          uncolored(std::move(uncolored)) {}
 
-    void Work(uint32_t) override
+    void work() override
     {
         rootsColored.Apply([this](NativeSlot& slot) {
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
@@ -956,11 +958,11 @@ struct YoungStripedShared {
     }
 };
 
-class YoungStripedMarkingWork : public GCRestartableWorkerTask {
+class YoungStripedMarkingWork : public ZRestartableTask {
 public:
-    explicit YoungStripedMarkingWork(YoungStripedShared& shared) : shared(shared) {}
+    explicit YoungStripedMarkingWork(YoungStripedShared& shared) : ZRestartableTask("ZMarkTask"), shared(shared) {}
 
-    void ResizeWorkers(uint32_t workers) override
+    void resize_workers(uint32_t workers) override
     {
         shared.workerCount = workers;
         shared.domain->ResizeWorkers(workers);
@@ -969,8 +971,10 @@ public:
         }
     }
 
-    void Work(uint32_t workerId) override
+    // zMark.cpp:456,636: the worker id is thread-local, not a task parameter.
+    void work() override
     {
+        const uint32_t workerId = WorkerThread::worker_id();
         MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks());
         size_t nMarked = 0;
         (void)MarkEngine::FollowWork(local, shared.Smr(), shared.Stripes(), shared.Terminate(), workerId,
@@ -1424,18 +1428,20 @@ struct MajorMarkShared {
     }
 };
 
-class ConcurrentMarkingWork : public GCRestartableWorkerTask {
+class ConcurrentMarkingWork : public ZRestartableTask {
 public:
-    explicit ConcurrentMarkingWork(MajorMarkShared& shared) : shared(shared) {}
+    explicit ConcurrentMarkingWork(MajorMarkShared& shared) : ZRestartableTask("ZMarkTask"), shared(shared) {}
 
-    void ResizeWorkers(uint32_t workers) override
+    void resize_workers(uint32_t workers) override
     {
         shared.workerCount = workers;
         shared.domain->ResizeWorkers(workers);
     }
 
-    void Work(uint32_t workerId) override
+    // zMark.cpp:456,636: the worker id is thread-local, not a task parameter.
+    void work() override
     {
+        const uint32_t workerId = WorkerThread::worker_id();
         MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks());
         size_t nNewlyMarked = 0;
         TracingCollector::WorkStack staging;
@@ -1834,7 +1840,7 @@ MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr,
         }
         if (terminate.TryTerminate(stripes, context.NStripes())) {
             context.Cache().Flush();
-            smr.Reclaim(workerId);
+            smr.reclaim();
             return Result::Completed;
         }
     }
@@ -1848,8 +1854,9 @@ MarkDomain::MarkDomain(size_t capacity, MarkingStacks::MarkingGeneration generat
 
 void MarkDomain::EnsureWorkers(size_t workers)
 {
-    if (smr == nullptr || smr->WorkerCount() < workers) {
-        smr = std::make_unique<MarkingSMR>(workers);
+    CHECK_DETAIL(workers <= ConcGCThreads, "mark workers exceed per-worker storage capacity");
+    if (smr == nullptr) {
+        smr = std::make_unique<MarkingSMR>();
     }
 }
 

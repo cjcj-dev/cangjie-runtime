@@ -46,9 +46,11 @@ public:
 
     // One coordinator per set. Run, RunAll, SetActiveWorkers and cycle changes
     // serialize. Workers must not call these methods or Stop on their own set.
-    void Run(GCWorkerTask& task);
-    void Run(GCRestartableWorkerTask& task);
-    void RunAll(GCWorkerTask& task);
+    // zWorkers.hpp:53-55: tasks arrive as ZTask; the pool runs the
+    // WorkerTask adapter (zTask.hpp:40) and publishes the worker id thread-locally.
+    void Run(ZTask& task);
+    void Run(ZRestartableTask& task);
+    void RunAll(ZTask& task);
     void SetActiveWorkers(uint32_t workers); // Valid range [1, capacity].
     void SetActive(); // Begins a cycle and clears previous resize requests.
     void SetInactive();
@@ -73,7 +75,7 @@ private:
     };
     static void* WorkerEntry(void* argument);
     void WorkerLoop(uint32_t id);
-    void RunBatch(GCWorkerTask& task);
+    void RunBatch(WorkerTask& task);
     void CheckCount(uint32_t workers) const;
     void CheckOpen() const;
 
@@ -97,8 +99,7 @@ private:
     uint64_t completedBatches = 0;
     uint64_t elapsedNanos = 0;
     uint64_t workerNanos = 0;
-    GCWorkerTask* currentTask = nullptr;
-    uint64_t currentGCId = 0;
+    WorkerTask* currentTask = nullptr;
 };
 
 }

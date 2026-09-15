@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
+#include "gc_worker_fixture.hpp"
 #include <csignal>
 #include <cstdlib>
 #include <sys/wait.h>
@@ -695,11 +696,12 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             GC_EXPECT_FALSE(stacks.IsEmpty());
             GC_EXPECT_TRUE(current.Stripes().IsEmpty());
             GC_EXPECT_TRUE(stacks.Flush(current.Stripes(), true));
-            MarkingSMR smr(1);
+            MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
             MarkStripeStack* published = current.Stripes().At(0).StealStack(smr, 0);
             GC_EXPECT_TRUE(published != nullptr);
             MarkStripeStack::Destroy(published);
-            smr.Reclaim(0);
+            smr.reclaim();
             MarkingStacks::VerifyAllEmpty(current);
         }
     }

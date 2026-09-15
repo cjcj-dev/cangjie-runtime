@@ -29,7 +29,7 @@ public:
     RuntimeWorkers(const RuntimeWorkers&) = delete;
     RuntimeWorkers& operator=(const RuntimeWorkers&) = delete;
 
-    void Run(GCWorkerTask& task);
+    void Run(ZTask& task);
     uint32_t ActiveWorkers() const { return threads.size(); }
     void ThreadsDo(const std::function<void(pthread_t)>& visitor);
 #if defined(__linux__) || defined(hongmeng)
@@ -51,7 +51,7 @@ private:
     std::mutex mutex;
     std::condition_variable dispatched;
     std::condition_variable completed;
-    GCWorkerTask* currentTask = nullptr;
+    WorkerTask* currentTask = nullptr;
     uint64_t batch = 0;
     uint32_t remainingWorkers = 0;
     bool shutdown = false;

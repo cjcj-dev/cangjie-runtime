@@ -4,30 +4,40 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
+// gc/z/zTask.hpp:24-59
 #pragma once
+#include <cstdint>
 
-#include <atomic>
-#include <condition_variable>
-#include <functional>
-#include <mutex>
-#include <pthread.h>
-#include <vector>
-
-#include "Base/LogFile.h"
-#include "Base/Macros.h"
+#include "Heap/z/workerThread.hpp"
 
 namespace MapleRuntime {
-class GCWorkerTask {
+class ZTask {
+private:
+    class Task : public WorkerTask {
+    private:
+        ZTask* const _task;
+
+    public:
+        Task(ZTask* task, const char* name);
+
+        virtual void work(uint32_t worker_id);
+    };
+
+    Task _worker_task;
+
 public:
-    virtual ~GCWorkerTask() = default;
-    virtual void Work(uint32_t workerId) = 0;
+    ZTask(const char* name);
+    virtual ~ZTask() = default;
+
+    const char* name() const;
+    WorkerTask* worker_task();
+
+    virtual void work() = 0;
 };
 
-class GCRestartableWorkerTask : public GCWorkerTask {
+class ZRestartableTask : public ZTask {
 public:
-    // Called only after every participant has returned its private work.
-    virtual void ResizeWorkers(uint32_t workers) = 0;
+    ZRestartableTask(const char* name);
+    virtual void resize_workers(uint32_t nworkers);
 };
-
-}
+} // namespace MapleRuntime
