@@ -35,12 +35,12 @@ GC_TEST(ZLiveMapPort, FinalizableUpgradeAccountsOnce)
     constexpr size_t pageSize = 4096;
     RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(pageSize);
     bool incLive = false;
-    GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 32, pageSize, incLive));
+    GC_EXPECT_TRUE(bitmap->MarkFinalizableBits(64, 32, pageSize, incLive));
     GC_EXPECT_TRUE(incLive);
     GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(0));
     bitmap->AddLiveCounts(1, 32);
     GC_EXPECT_TRUE(bitmap->IsFinalizable(64));
-    GC_EXPECT_FALSE(bitmap->MarkBits(64, 32, pageSize, incLive));
+    GC_EXPECT_TRUE(bitmap->MarkBits(64, 32, pageSize, incLive));
     GC_EXPECT_FALSE(incLive);
     GC_EXPECT_TRUE(bitmap->IsMarked(64));
     GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));
@@ -105,7 +105,7 @@ GC_TEST(ZLiveMapPort, GenerationChangeLazilyInitializesProductMap)
     auto* object = fx.obj0;
     auto mark = ProductMark();
     auto first = region->GetMarkView<Generation::Old>();
-    GC_EXPECT_FALSE(mark(region, first, object, object->GetSize(), true));
+    GC_EXPECT_TRUE(mark(region, first, object, object->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
     RegionBitmap* bitmap = region->GetMarkBitmap(first);
@@ -120,7 +120,7 @@ GC_TEST(ZLiveMapPort, GenerationChangeLazilyInitializesProductMap)
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(0));
     GC_EXPECT_EQ(LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young).Sequence(), youngSequence);
-    GC_EXPECT_FALSE(mark(region, next, object, object->GetSize(), true));
+    GC_EXPECT_TRUE(mark(region, next, object, object->GetSize(), true));
     GC_EXPECT_TRUE(region->GetMarkBitmap(next) == bitmap);
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
@@ -147,10 +147,10 @@ GC_TEST(ZLiveMapPort, ConcurrentProductFirstMarkPublishesMetadata)
     for (size_t i = 0; i < workers; ++i) {
         threads[i] = std::thread([&, i]() {
             while (!go.load(std::memory_order_acquire)) {}
-            if (!mark(region, view, fx.obj0, fx.obj0->GetSize(), true)) {
+            if (mark(region, view, fx.obj0, fx.obj0->GetSize(), true)) {
                 firstMarks.fetch_add(1, std::memory_order_relaxed);
             }
-            if (!mark(region, view, objects[i], objects[i]->GetSize(), true)) {
+            if (mark(region, view, objects[i], objects[i]->GetSize(), true)) {
                 firstMarks.fetch_add(1, std::memory_order_relaxed);
             }
         });
@@ -182,7 +182,7 @@ GC_TEST(ZLiveMapPort, PageRetirementReclaimsMapStorage)
         BaseObject* object = fx.PlaceObject(region->GetRegionStart() + 64);
         region->SetRegionAllocPtr(region->GetRegionStart() + 64 + object->GetSize());
         auto view = region->GetMarkView<Generation::Old>();
-        GC_EXPECT_FALSE(mark(region, view, object, object->GetSize(), true));
+        GC_EXPECT_TRUE(mark(region, view, object, object->GetSize(), true));
         GC_EXPECT_EQ(region->GetMarkBitmap(view)->GetLiveObjects(), size_t(1));
         RegionInfo::RetirePage(region, [region]() { region->InitFreeUnits(); });
         fx.region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
@@ -200,7 +200,7 @@ GC_TEST(ZLiveMapPort, DeferredProductCountsUseOnlyLiveMap)
     auto* object = fx.obj0;
     auto view = region->GetMarkView<Generation::Old>();
     auto mark = ProductMark();
-    GC_EXPECT_FALSE(mark(region, view, object, object->GetSize(), false));
+    GC_EXPECT_TRUE(mark(region, view, object, object->GetSize(), false));
     RegionBitmap* bitmap = region->GetMarkBitmap(view);
     GC_EXPECT_TRUE(bitmap != nullptr);
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
@@ -212,7 +212,7 @@ GC_TEST(ZLiveMapPort, DeferredProductCountsUseOnlyLiveMap)
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
     GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), size_t(object->GetSize()));
-    GC_EXPECT_TRUE(mark(region, view, object, object->GetSize(), true));
+    GC_EXPECT_FALSE(mark(region, view, object, object->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
 }
@@ -226,12 +226,12 @@ GC_TEST(ZLiveMapPort, ProductFinalizableUpgradeKeepsSingleCount)
     auto* object = fx.obj0;
     auto view = region->GetMarkView<Generation::Old>();
     bool firstLive = false;
-    GC_EXPECT_FALSE(region->ResurrectObjectWithLiveClaim(object,
+    GC_EXPECT_TRUE(region->ResurrectObjectWithLiveClaim(object,
         region->GetAddressOffset(reinterpret_cast<MAddress>(object)), false, firstLive));
     GC_EXPECT_TRUE(firstLive);
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
     region->AddLiveCounts(1, object->GetSize());
-    GC_EXPECT_FALSE(ProductMark()(region, view, object, object->GetSize(), true));
+    GC_EXPECT_TRUE(ProductMark()(region, view, object, object->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
     GC_EXPECT_EQ(region->GetMarkBitmap(view)->GetLiveObjects(), size_t(1));
@@ -243,13 +243,70 @@ GC_TEST(ZLiveMapPort, YoungSequenceInvalidatesCountsWithoutPageClear)
     auto* region = fx.region0;
     region->SetYoungRegionFlag(1);
     auto first = region->GetMarkView<Generation::Young>();
-    GC_EXPECT_FALSE(region->MarkObject(first, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_TRUE(region->MarkObject(first, fx.obj0, fx.obj0->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto next = region->GetMarkView<Generation::Young>();
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(0));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
-    GC_EXPECT_FALSE(region->MarkObject(next, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_TRUE(region->MarkObject(next, fx.obj0, fx.obj0->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(fx.obj0->GetSize()));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
+}
+
+// ZBitMap::par_set_bit_pair_strong/finalizable: claim result and live claim
+// are independent when finalizable is upgraded to strong. Calls link to the
+// product zLiveMap.cpp; this TU does not include zLiveMap.inline.hpp.
+GC_TEST(P1BitMap, StrongClaimResult)
+{
+    constexpr size_t pageSize = 4096;
+    auto* bitmap = GcHeapFixture::AllocPlantedBitmap(pageSize);
+    bool firstLive = false;
+    bool duplicateLive = true;
+    const bool first = bitmap->MarkBits(64, 32, pageSize, firstLive);
+    const bool duplicate = bitmap->MarkBits(64, 32, pageSize, duplicateLive);
+    const bool marked = bitmap->IsMarked(64);
+    std::fprintf(stderr, "P1_BITMAP_STRONG_RESULT first=%d duplicate=%d first_live=%d duplicate_live=%d marked=%d\n",
+                 first, duplicate, firstLive, duplicateLive, marked);
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+    GC_EXPECT_TRUE(first && !duplicate);
+    GC_EXPECT_TRUE(firstLive && !duplicateLive && marked);
+}
+
+GC_TEST(P1BitMap, FinalizableClaimResult)
+{
+    constexpr size_t pageSize = 4096;
+    auto* bitmap = GcHeapFixture::AllocPlantedBitmap(pageSize);
+    bool firstLive = false;
+    bool duplicateLive = true;
+    const bool first = bitmap->MarkFinalizableBits(64, 32, pageSize, firstLive);
+    const bool duplicate = bitmap->MarkFinalizableBits(64, 32, pageSize, duplicateLive);
+    const bool finalizable = bitmap->IsFinalizable(64);
+    std::fprintf(stderr, "P1_BITMAP_FINALIZABLE_RESULT first=%d duplicate=%d first_live=%d duplicate_live=%d finalizable=%d\n",
+                 first, duplicate, firstLive, duplicateLive, finalizable);
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+    GC_EXPECT_TRUE(first && !duplicate);
+    GC_EXPECT_TRUE(firstLive && !duplicateLive && finalizable);
+}
+
+GC_TEST(P1BitMap, ClaimContentsAndUpgradeControl)
+{
+    constexpr size_t pageSize = 4096;
+    auto* bitmap = GcHeapFixture::AllocPlantedBitmap(pageSize);
+    bool firstLive = false;
+    (void)bitmap->MarkFinalizableBits(64, 32, pageSize, firstLive);
+    if (firstLive) bitmap->AddLiveCounts(1, 32);
+    const bool finalizable = bitmap->IsFinalizable(64);
+    bool upgradeLive = true;
+    (void)bitmap->MarkBits(64, 32, pageSize, upgradeLive);
+    if (upgradeLive) bitmap->AddLiveCounts(1, 32);
+    const bool marked = bitmap->IsMarked(64);
+    const size_t bytes = bitmap->GetLiveBytes();
+    const size_t objects = bitmap->GetLiveObjects();
+    std::fprintf(stderr, "P1_BITMAP_CONTENTS finalizable=%d marked=%d first_live=%d upgrade_live=%d bytes=%zu objects=%zu\n",
+                 finalizable, marked, firstLive, upgradeLive, bytes, objects);
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+    GC_EXPECT_TRUE(finalizable && marked && firstLive && !upgradeLive);
+    GC_EXPECT_EQ(bytes, size_t(32));
+    GC_EXPECT_EQ(objects, size_t(1));
 }

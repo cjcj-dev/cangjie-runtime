@@ -1,0 +1,36 @@
+{
+  "/root/sym_cangjie_runtime_606_implement_r5674249495-final2/testable/build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so": {
+    "rc": 0,
+    "target_definitions": [
+      "0000000000526f50 T MapleRuntime::WCollector::DoYoungGarbageCollection()",
+      "00000000004e21c0 T MapleRuntime::RegionBitmap::MarkFinalizableBits(unsigned long, unsigned long, unsigned long, bool&)",
+      "00000000004e1ff0 T MapleRuntime::RegionBitmap::MarkBits(unsigned long, unsigned long, unsigned long)",
+      "00000000004e1e20 T MapleRuntime::RegionBitmap::MarkBits(unsigned long, unsigned long, unsigned long, bool&)",
+      "0000000000526a50 T MapleRuntime::GenerationCycle::StartOldMark(MapleRuntime::WCollector&)",
+      "0000000000526230 T MapleRuntime::GenerationCycle::StartYoungMark(MapleRuntime::WCollector&)",
+      "0000000000511230 T MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)"
+    ],
+    "positive_control": []
+  },
+  "/root/sym_cangjie_runtime_606_implement_r5674249495-final2/unit-testable/cj_gc_unit": {
+    "rc": 0,
+    "target_definitions": [],
+    "positive_control": [
+      "0000000000029980 T main"
+    ]
+  },
+  "/root/sym_cangjie_runtime_606_implement_r5674249495-final2/p1-managed/libp1_mark_start.so": {
+    "rc": 0,
+    "target_definitions": [],
+    "positive_control": [
+      "0000000000002310 T p1MarkStartExercise"
+    ]
+  },
+  "/root/sym_cangjie_runtime_606_implement_r5674249495-final2/p1-managed/p1_mark_start": {
+    "rc": 0,
+    "target_definitions": [],
+    "positive_control": [
+      "0000000000026290 T main"
+    ]
+  }
+}

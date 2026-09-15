@@ -63,7 +63,7 @@ private:
         // resetting page metadata, never by following a coloured oop as
         // a free-list next. Uncolor-and-hand-out would revive a live
         // Future. Drop the metadata chain; bump alloc still works.
-        // AllocPinnedFromFreeList (RegionManager.cpp:3611) is the soak caller.
+        // Product allocation no longer consumes this resource-cleanup storage.
         if (head == nullptr) {
             return 0;
         }

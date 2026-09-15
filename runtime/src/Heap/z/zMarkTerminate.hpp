@@ -7,6 +7,7 @@
 #ifndef MRT_ZMARKTERMINATE_HPP
 #define MRT_ZMARKTERMINATE_HPP
 #include <cstddef>
+#include <atomic>
 #include <mutex>
 #include <condition_variable>
 
@@ -14,6 +15,8 @@ namespace MapleRuntime {
 class MarkStripeSet;
 class MarkTerminate {
 public:
+    void SetResurrected(bool value) { resurrected.store(value, std::memory_order_relaxed); }
+    bool Resurrected() const { return resurrected.load(std::memory_order_relaxed); }
     void Reset(size_t workers);
     void Leave();
     bool TryTerminate(MarkStripeSet& stripes, size_t usedNStripes);
@@ -25,6 +28,7 @@ public:
 private:
     void MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStripes);
 
+    std::atomic<bool> resurrected{false};
     size_t workerCount = 0;
     size_t working = 0;
     size_t awakening = 0;

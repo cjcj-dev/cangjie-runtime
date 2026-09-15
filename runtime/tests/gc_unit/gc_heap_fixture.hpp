@@ -10,6 +10,7 @@
 #ifndef MRT_GC_HEAP_FIXTURE_HPP
 #define MRT_GC_HEAP_FIXTURE_HPP
 
+#include "gc_cycle_sequence_fixture.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <new>
@@ -80,7 +81,33 @@ struct GcHeapFixture {
             alignas(8) uint64_t storage[16] {};
             RememberedSet remembered;
             remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-            cycle.StartYoungMark(remembered);
+            GenerationSequenceFixture::AdvanceYoung(cycle, remembered);
+        } else {
+            GenerationSequenceFixture::Advance(cycle);
+        }
+    }
+
+    // When a fixture replaces the collector, page birth/livemap sequence values
+    // must keep the same meaning. Advance the replacement through product starts.
+    static void AdoptGenerationIdentity(Collector& next, Collector& previous)
+    {
+        if (&next == &previous) return;
+        for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+            auto& cycle = next.GetGenerationCycle(generation);
+            const uint64_t sequence = previous.GetCycleSnapshot(generation).sequence;
+            while (cycle.Sequence() < sequence) {
+                if (cycle.Snapshot().active) cycle.End();
+                cycle.Begin(0);
+                if (generation == GCCycleGeneration::YOUNG) {
+                    alignas(8) uint64_t storage[16] {};
+                    RememberedSet remembered;
+                    remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
+                    GenerationSequenceFixture::AdvanceYoung(cycle, remembered);
+                } else {
+                    GenerationSequenceFixture::Advance(cycle);
+                }
+                cycle.End();
+            }
         }
     }
 
@@ -115,6 +142,9 @@ struct GcHeapFixture {
         RegionInfo::Initialize(kUnits, heapStart, memoryOwner);
         region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
+        AdvanceGeneration(Generation::Old);
+        AdvanceGeneration(Generation::Young);
         ForwardingTable::Initialize(heapStart, kUnits * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
@@ -211,7 +241,7 @@ struct GcHeapFixture {
         }
         CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region, region->GetOwnerGeneration()));
         CHECK(ForwardingTable::PublishFromPageView(region, region->GetLiveInfo(), region->GetSnapshotEpoch(),
-            region->GetRegionAllocPtr(), region->metadata.markStartAllocPtr,
+            region->GetRegionAllocPtr(), region->BirthSequence(),
             static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
             0, region->GetRegionLifeId()));
     }

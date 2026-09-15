@@ -61,6 +61,8 @@ std::function<void(GCWorkers::Generation, TracingCollector::RootSet&)> TracingCo
 std::function<void(GCWorkers::Generation, NativeSlot*)> TracingCollector::testColoredRootResult;
 std::function<void()> TracingCollector::testCyclePrepared;
 std::function<void()> TracingCollector::testYoungMarkStarted;
+std::function<void()> TracingCollector::testOldMarkStarted;
+std::function<void(GCCycleGeneration, MarkStartPoint, const MarkDomain*)> TracingCollector::testMarkStartState;
 std::function<void()> TracingCollector::testYoungMarkCompleted;
 std::function<void(const ExportOwnershipTestObservation&)> TracingCollector::testExportOwnershipResult;
 #endif

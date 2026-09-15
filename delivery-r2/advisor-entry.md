@@ -1,0 +1,3 @@
+LANE=sym_cangjie_runtime_606_implement_r5674249495
+ROLE=implement
+R2 固定方案核对：GenerationCycle::StartYoungMark(WCollector&) / StartOldMark(WCollector&) 收拢各代 color→retire→seq→phase→domain（young 末尾 remset flip），调用层 DoYoungGarbageCollection 先 young 再 old，对应 Z VM_ZMarkStartYoungAndOld:601-602。GenerationCycle 用 collector.GetAllocator() 公共依赖和 WCollector friend 访问现有 FlushAllocationRegions/minorCandidateRegions，返回 young stats 给现有日志；不新造另一套 generation 状态。原只增 seq 的 helper 改名 AdvanceSequence，既有手工周期夹具使用该名并显式保留其 remset flip，避免把夹具误当真实启动。这是在既有组合式 GenerationCycle 中收拢 ZGenerationYoung/Old::mark_start，不扩大根/字段范围。如不同意该分解请指出具体边界。

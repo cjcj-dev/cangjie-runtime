@@ -1,0 +1,12 @@
+# kkk2_build_two lane=sym_cangjie_runtime_606_implement_r5674249495-final2-cut-final head=9de9226b8d58ed655534b195df2f6938be789062 dirty_files=1493 source_sha256=c0583be241b4704e…
+== default configure_rc=0 build_rc=0 wall=51s
+-- SO (default):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+26f9aa3a993a35226c33e74b515f07034d234610e2842bf4ec3602599a005e77  build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+== testable configure_rc=0 build_rc=0 wall=51s
+-- SO (testable):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+369a2f786e9daab3ecccea573932aa13b6b1b554f76a0be661dcb0ecedd605f9  build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+-- logs: /root/sym_cangjie_runtime_606_implement_r5674249495-final2-cut-final/{default,testable}-{configure,build}.log

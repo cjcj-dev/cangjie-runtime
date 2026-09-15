@@ -49,6 +49,9 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+void (*RegionManager::testPinnedPageAcquired)(RegionInfo*) = nullptr;
+#endif
 // ThreadLocalAllocBuffer::initial_desired_size (cpp:265): a new thread
 // starts with the published allocation fraction instead of a fixed extent.
 void RegionManager::InitializeTLAB(AllocBuffer& buffer)
@@ -63,8 +66,6 @@ void RegionManager::InitializeTLAB(AllocBuffer& buffer)
 // regions in young mark-start (zGeneration.cpp:862).
 void RegionManager::ResetTLABUsage()
 {
-    // ZGenerationYoung::mark_start, zGeneration.cpp:865.
-    RetireSharedPages(kPageAgeRangeYoung);
     std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
     if (used != 0) {
@@ -265,6 +266,7 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
 void RegionManager::RetireSharedPages(PageAgeRange ages)
 {
     for (PageAge age : ages) {
+        objectAllocators[untype(age)]->pinnedPage.store(nullptr, std::memory_order_release);
         for (size_t cpu = 0; cpu < SharedPageCPUCount(); ++cpu) {
             objectAllocators[untype(age)]->smallPages[cpu].page.store(nullptr, std::memory_order_release);
         }
@@ -354,38 +356,6 @@ void RegionManager::RequestForRegion(size_t size)
     DLOG(ALLOC, "wait %zu ns to alloc %zu(B)", sleepTime, size);
     std::this_thread::sleep_for(std::chrono::nanoseconds{ sleepTime });
     prevRegionAllocTime = TimeUtil::NanoSeconds();
-}
-uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
-{
-    std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
-    // Pinned slots are reclaimed through the old mark view (CollectFreePinnedSlots).
-    // ZGeneration::generation owns phase; another generation's handshake does not.
-    const auto oldCycle = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
-    const GCPhase oldPhase = oldCycle.phase;
-    // For preventing missing mark, do not allocate object from slot list when gc phase is post trace.
-    if (oldPhase == GCPhase::GC_PHASE_POST_TRACE) {
-        return 0;
-    }
-    uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
-    if (allocPtr != 0) {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
-        region->ResetCensusBoundary();
-    }
-    // For making bitmap comform with live object count, do not mark object repeated.
-    bool barrierClosedMarking = oldPhase == GCPhase::GC_PHASE_ENUM ||
-        oldPhase == GCPhase::GC_PHASE_TRACE ||
-        oldPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
-    bool censusSafeMarking = oldPhase == GCPhase::GC_PHASE_PREFORWARD ||
-        oldPhase == GCPhase::GC_PHASE_FORWARD ||
-        (oldPhase == GCPhase::GC_PHASE_IDLE && !oldCycle.active);
-    if (allocPtr == 0 || (!barrierClosedMarking && !censusSafeMarking)) {
-        return allocPtr;
-    }
-
-    // Mark new allocated pinned object.
-    BaseObject* object = from_alloc_addr(allocPtr);
-    (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(object);
-    return allocPtr;
 }
 
 } // namespace MapleRuntime

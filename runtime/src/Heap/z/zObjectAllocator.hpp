@@ -18,9 +18,16 @@ namespace MapleRuntime {
         explicit PerAgeObjectAllocator(PageAge pageAge);
         const PageAge age;
         std::unique_ptr<SharedSmallPage[]> smallPages;
+        std::atomic<RegionInfo*> pinnedPage{nullptr};
     };
 
 
+
+inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
+{
+    RegionInfo* page = objectAllocators[untype(PageAge::old)]->pinnedPage.load(std::memory_order_acquire);
+    return page == nullptr ? 0 : page->Alloc(size);
+}
 
 inline uintptr_t RegionManager::AllocPinned(size_t size)
     {
@@ -52,10 +59,20 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
              region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(),
              region->GetRegionType());
 
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (testPinnedPageAcquired != nullptr) {
+            testPinnedPageAcquired(region);
+        }
+#endif
         LockRegionListInSaferegion(regionListMutex);
         // another mutator may have installed a pinned region while the mutex was released.
         addr = AllocPinnedLocked(size);
         if (addr == 0) {
+            // ZPage::reset_seqnum (zPage.cpp:90) precedes publication without
+            // an intervening mark-start pause. Our acquisition may handshake;
+            // refresh this still-empty page under the same mutex that spans
+            // old retirement and seqnum advancement (P14 pause-model adapter).
+            region->ResetPageSequence();
             // If allocate pinned obj during tracing, set region to traced new region.
             GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
@@ -68,6 +85,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
             }
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
             recentPinnedRegionList.PrependRegionLocked(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
+            objectAllocators[untype(PageAge::old)]->pinnedPage.store(region, std::memory_order_release);
             addr = region->Alloc(size);
             region = nullptr;
         }

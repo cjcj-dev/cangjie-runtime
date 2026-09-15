@@ -60,28 +60,9 @@ inline void RegionManager::PrepareFromRegionList()
         // the finalizer both reach a live region only through TakeReclaimableGarbageRegion,
         // and a held region never reaches garbageRegionList in the first place.
 
-        // markwater2: ZGC select_relocation_set skips !is_relocatable (allocating)
-        // pages before install. Do this before PrepareForwardable so no ghost/route
-        // is published for a watermark-gap region (915e6348 ForwardRegion Exempt
-        // left from-copies). zGeneration.cpp:211-213, zPage.inline.hpp:180-185.
-        (void)ExemptMarkStartAllocatingFromCSet();
-
-        // zGeneration.cpp:205-215: selection visits only this generation's pages.
-        // The shared candidate list can contain young pages during an old cycle;
-        // return them to the existing allocation list without installing forwarding.
-        if constexpr (G == Generation::Old) {
-            RegionInfo* region = fromRegionList.GetHeadRegion();
-            while (region != nullptr) {
-                RegionInfo* next = region->GetNextRegion();
-                if (region->IsYoungRegion()) {
-                    fromRegionList.DeleteRegion(region);
-                    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
-                    RecentFullAccounting::Enqueue(1, region->GetUnitCount());
-                }
-                region = next;
-            }
-        }
-
+        // ZGeneration::select_relocation_set (zGeneration.cpp:205-225) has
+        // already selected this generation. The arena's owner CHECK validates
+        // that producer contract; do not silently repair its input here.
         CHECK_DETAIL(ForwardingTable::BeginForwardingArena(G, fromRegionList),
                      "forwarding arena budget allocation failed");
         fromRegionList.VisitAllRegions([](RegionInfo* region) {

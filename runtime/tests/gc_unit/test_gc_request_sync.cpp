@@ -8,6 +8,7 @@
 
 #if defined(MRT_GC_UNIT_TESTS)
 
+#include "gc_cycle_sequence_fixture.hpp"
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -191,7 +192,7 @@ public:
             alignas(8) uint64_t storage[16] {};
             RememberedSet remembered;
             remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-            youngCycle.StartYoungMark(remembered);
+            GenerationSequenceFixture::AdvanceYoung(youngCycle, remembered);
         }
         size_t runNumber = 0;
         {

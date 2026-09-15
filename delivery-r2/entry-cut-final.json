@@ -1,0 +1,79 @@
+{
+ "repo": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_606_implement_r5674249495",
+ "base": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+ "head": "9de9226b8d58ed655534b195df2f6938be789062",
+ "mode": "product",
+ "ok": true,
+ "verdicts": [
+  {
+   "cut": "delivery-r2/final2/cut-combined.diff",
+   "file": "runtime/src/Heap/z/zGeneration.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/z/zGeneration.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zGeneration.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [
+    "DoYoungGarbageCollection（所在函数）"
+   ],
+   "ok": true
+  },
+  {
+   "cut": "delivery-r2/final2/cut-combined.diff",
+   "file": "runtime/src/Heap/z/zMark.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/z/zMark.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zMark.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "1 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [],
+   "ok": true
+  },
+  {
+   "cut": "*",
+   "file": "*",
+   "checks": [
+    {
+     "name": "至少一处断线落在真实相位入口函数",
+     "ok": true,
+     "detail": "RunGarbageCollection, RequestGC, DoGarbageCollection, PushYoungObject, FindUselessExternObjects, Preforward, PostTrace, PublishMarkCoverage, ReclaimRetired, RehomeCompactedInPlaceRegion, TryAllocateForRelocation, SetRelocationRegion, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, PostResolveCycleTask, VerifyFaceEnabled, VerifyPhaseEnter, GCPhasePreForward, TransitionToGCPhaseExclusive, ForwardObjectImpl, ForwardObjectExclusive, RelocateObjectInner, TryMutatorRelocate, WaitForPageForwarding, RunCycle, Uncommit, VisitHeapRootSlots, WriteReference, RecordCrossGenEdge, ZeroAndFill, runtime/src/Heap/z/zStat.cpp:Sort, PublishForwardingCarrier, PrepareForwardableRegion, DoYoungGarbageCollection, DoTracing, ProcessOldNonStrongReferences, PostWriteReference, WaitForAck, ProcessDriverRequest, RequestGCAndWait, DrainStackWatermark, VisitRawObjects, NoteLargeArrayInitRootVisit"
+    }
+   ],
+   "ok": true
+  }
+ ]
+}

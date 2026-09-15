@@ -1,0 +1,58 @@
+{
+  "page-producer-consumers": {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "ResetPageSequence|BirthSequence|OtherSequence|IsAllocating\\(|IsRelocatable\\(|IsFromPageAllocating",
+      "HEAD",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "output": "delivery/page-producer-consumers.txt"
+  },
+  "mark-producer-consumers": {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "MarkObjectIfActive|MarkDomain::MarkObject|MarkEntryObject|MarkNewObject|SetResurrected|Resurrected\\(\\)",
+      "HEAD",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "output": "delivery/mark-producer-consumers.txt"
+  },
+  "legacy-callers": {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "MarkYoungObjectIfActive\\(|MarkOldObjectIfActive\\(|PushYoungObject\\(|PushFilteredYoung\\(",
+      "HEAD",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "output": "delivery/legacy-callers.txt"
+  },
+  "deleted-product-symbols": {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "RegionIsAllocatingPage|HasMarkStartAllocGap|AllocatedAfterMarkStart|InitializeAllocationWatermark|markStartAllocPtr|AllocPinnedFromFreeList|ExemptMarkStartAllocatingFromCSet",
+      "HEAD",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 1,
+    "output": "delivery/deleted-product-symbols.txt"
+  }
+}

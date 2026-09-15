@@ -1,0 +1,70 @@
+diff --git a/runtime/src/Heap/z/zObjectAllocator.cpp b/runtime/src/Heap/z/zObjectAllocator.cpp
+index e2bf238d0..5f0e1df08 100644
+--- a/runtime/src/Heap/z/zObjectAllocator.cpp
++++ b/runtime/src/Heap/z/zObjectAllocator.cpp
+@@ -446,3 +446,39 @@ RegionManager::RegionManager()
+         tlabRequestedFraction.Sample(0.1);
+     }
+ }
++
++namespace MapleRuntime {
++uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
++{
++    std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
++    // Pinned slots are reclaimed through the old mark view (CollectFreePinnedSlots).
++    // ZGeneration::generation owns phase; another generation's handshake does not.
++    const auto oldCycle = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
++    const GCPhase oldPhase = oldCycle.phase;
++    // For preventing missing mark, do not allocate object from slot list when gc phase is post trace.
++    if (oldPhase == GCPhase::GC_PHASE_POST_TRACE) {
++        return 0;
++    }
++    uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
++    if (allocPtr != 0) {
++        RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
++        region->ResetCensusBoundary();
++    }
++    // For making bitmap comform with live object count, do not mark object repeated.
++    bool barrierClosedMarking = oldPhase == GCPhase::GC_PHASE_ENUM ||
++        oldPhase == GCPhase::GC_PHASE_TRACE ||
++        oldPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
++    bool censusSafeMarking = oldPhase == GCPhase::GC_PHASE_PREFORWARD ||
++        oldPhase == GCPhase::GC_PHASE_FORWARD ||
++        (oldPhase == GCPhase::GC_PHASE_IDLE && !oldCycle.active);
++    if (allocPtr == 0 || (!barrierClosedMarking && !censusSafeMarking)) {
++        return allocPtr;
++    }
++
++    // Mark new allocated pinned object.
++    BaseObject* object = from_alloc_addr(allocPtr);
++    (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(object);
++    return allocPtr;
++}
++
++}
+diff --git a/runtime/src/Heap/z/zPageAllocator.hpp b/runtime/src/Heap/z/zPageAllocator.hpp
+index 0d9079181..ff174500d 100644
+--- a/runtime/src/Heap/z/zPageAllocator.hpp
++++ b/runtime/src/Heap/z/zPageAllocator.hpp
+@@ -670,6 +670,7 @@ public:
+     size_t CollectLargeGarbage();
+ 
+     size_t CollectPinnedGarbage();
++    uintptr_t AllocPinnedFromFreeList(size_t size);
+     size_t CollectFreePinnedSlots(RegionInfo* region);
+ 
+     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
+diff --git a/runtime/src/Heap/z/zPageAllocator.inline.hpp b/runtime/src/Heap/z/zPageAllocator.inline.hpp
+index 594cb7bd0..cc1cb5057 100644
+--- a/runtime/src/Heap/z/zPageAllocator.inline.hpp
++++ b/runtime/src/Heap/z/zPageAllocator.inline.hpp
+@@ -341,6 +341,9 @@ inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
+         if (headRegion != nullptr) {
+             addr = headRegion->Alloc(size);
+         }
++        if (addr == 0) {
++            addr = AllocPinnedFromFreeList(size);
++        }
+         return addr;
+     }
+ 

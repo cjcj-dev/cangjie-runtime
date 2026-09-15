@@ -1044,7 +1044,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 const bool hasObjectLiveness = region->IsLargeRegion() ||
                     region->GetMarkBitmap(promotionView) != nullptr || region->GetResurrectBitmap() != nullptr;
-                if (region->HasMarkStartAllocGap() || !region->IsLiveCountAuthoritative() ||
+                if (region->IsAllocating() || !region->IsLiveCountAuthoritative() ||
                     !hasObjectLiveness) {
                     continue;
                 }
@@ -2072,7 +2072,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // ZGC zRelocate.cpp:862-896: establish the to-page age before publishing
     // any in-place forwarding entry. The descriptor stays in the page table,
     // so promotion publishes its old identity here. PublishFromPageMetadata
-    // already saved the source generation, livemap and allocation watermark in
+    // already saved the source generation, livemap and birth sequence in
     // the forwarding carrier; ForEachLiveObjectStart consumes that snapshot,
     // not the new destination LiveInfo allocated by PromoteYoungRegion.
     if (fromYoung) {
@@ -2083,6 +2083,8 @@ void RegionManager::CompactRegion(RegionInfo* region)
             region->SetYoungAge(untype(toAge));
         }
     }
+    // ZPage::reset(to_age): only the actual in-place destination is born anew.
+    region->ResetPageSequence();
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
         if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {

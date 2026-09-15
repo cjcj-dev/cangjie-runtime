@@ -48,10 +48,19 @@ bool RegionBitmap::MarkBits(size_t start, size_t byteCnt, size_t regionSize, boo
         // ZGC zBitMap.inline.hpp:60-83 / zLiveMap: only the object-start pair.
         // find_base_bit finds last set bit then aligns to the pair (zLiveMap.inline.hpp:219-221).
         const uint64_t startPair = maskInfo.liveStartBitMask | maskInfo.strongStartBitMask;
-        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(startPair);
-        const bool already = (old & maskInfo.strongStartBitMask) != 0;
-        incLive = !already && (old & maskInfo.liveStartBitMask) == 0;
-        return already;
+        auto& word = markWords[maskInfo.headWordIdx];
+        uint64_t old = word.load();
+        for (;;) {
+            const uint64_t marked = old | startPair;
+            if (marked == old) {
+                incLive = false;
+                return false;
+            }
+            if (word.compare_exchange_strong(old, marked)) {
+                incLive = (old & maskInfo.liveStartBitMask) == 0;
+                return true;
+            }
+        }
     }
 }
 
@@ -59,11 +68,11 @@ namespace MapleRuntime {
 bool RegionBitmap::MarkBits(size_t start, size_t byteCnt, size_t regionSize)
     {
         bool incLive = false;
-        const bool already = MarkBits(start, byteCnt, regionSize, incLive);
+        const bool newlyMarked = MarkBits(start, byteCnt, regionSize, incLive);
         if (incLive) {
             AddLiveCounts(1, byteCnt);
         }
-        return already;
+        return newlyMarked;
     }
 }
 
@@ -76,9 +85,8 @@ bool RegionBitmap::MarkFinalizableBits(size_t start, size_t byteCnt, size_t regi
         GetBitMaskInfo(start, maskInfo);
         EnsureSegmentLive(2 * (start / kMarkedBytesPerBit));
         const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.liveStartBitMask);
-        const bool already = (old & maskInfo.liveStartBitMask) != 0;
-        incLive = !already;
-        return already;
+        incLive = (old & maskInfo.liveStartBitMask) == 0;
+        return incLive;
     }
 }
 

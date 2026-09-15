@@ -26,6 +26,9 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, RuntimeWorkers& pool, uint32_t workers = 1)
     {
+        if (resources.collectorProxy.currentCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.collectorProxy.currentCollector);
+        }
         resources.collectorProxy.currentCollector = &collector;
         resources.runtimeWorkers = &pool;
         resources.gcThreadCount = resources.concurrentGcThreadCount = workers;
@@ -45,6 +48,10 @@ struct RelocationReceiptTestAccess {
     }
     static void NativeRootTrace(WCollector& collector)
     {
+        // This fixture enters tracing directly after in-place promotion. Match
+        // the old mark-start sequence advance before consuming the new page
+        // (ZGC zGeneration.cpp:1212-1237).
+        GcUnit::GcHeapFixture::AdvanceGeneration(Generation::Old);
         collector.StartOldMarkWork();
         collector.TraceHeap();
     }

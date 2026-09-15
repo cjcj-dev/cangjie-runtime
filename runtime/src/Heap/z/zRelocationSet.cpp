@@ -58,6 +58,9 @@ void WCollector::PostTrace()
 #if defined(MRT_TESTABLE_INTERNALS)
     ObserveExportOwnershipForTest(true);
 #endif
+    // ZGeneration::select_relocation_set (zGeneration.cpp:205-225): selection
+    // consumes the completed mark, and only this generation's relocatable pages.
+    space.AssembleGarbageCandidates();
     // reclaim large objects immediately after tracing is done.
     CollectLargeGarbage();
     CollectPinnedGarbage();

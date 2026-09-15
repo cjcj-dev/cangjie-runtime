@@ -149,7 +149,7 @@ public:
     // from-page view into the already-installed ZForwarding; every consumer
     // resolves the view back through the table rather than RegionInfo storage.
     static bool PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
-                                    MAddress topAtStart, MAddress markStartAllocPtr,
+                                    MAddress topAtStart, uint64_t birthSequence,
                                     uint8_t owner,
                                     uint8_t largeMarked, RegionLifeId lifeId);
     static const ZForwarding::FromPageView* GetFromPageView(RegionInfo* region);

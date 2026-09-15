@@ -92,7 +92,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
     FinalizerProcessor fp;
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_FALSE(fx.region0->ResurrectObject(fx.obj0, offset));
+    GC_EXPECT_TRUE(fx.region0->ResurrectObject(fx.obj0, offset));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
                    ReferenceStatus::DISCOVERED);
 
@@ -119,7 +119,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     fp.RegisterFinalizer(fx.obj0);
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_FALSE(fx.region0->ResurrectObject(fx.obj0, offset));
+    GC_EXPECT_TRUE(fx.region0->ResurrectObject(fx.obj0, offset));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
                    ReferenceStatus::DISCOVERED);
 

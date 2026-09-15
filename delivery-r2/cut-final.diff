@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zLiveMap.inline.hpp
++++ b/runtime/src/Heap/z/zLiveMap.inline.hpp
+@@ -86,7 +86,7 @@
+         EnsureSegmentLive(2 * (start / kMarkedBytesPerBit));
+         const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.liveStartBitMask);
+         incLive = (old & maskInfo.liveStartBitMask) == 0;
+-        return incLive;
++        return !incLive;
+     }
+ }
+ 

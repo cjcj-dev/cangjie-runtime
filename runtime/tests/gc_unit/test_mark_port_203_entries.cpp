@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
+#include "gc_cycle_sequence_fixture.hpp"
 #include <dlfcn.h>
 #include <memory>
 #include "gc_heap_fixture.hpp"
@@ -149,6 +150,9 @@ namespace MapleRuntime {
 struct MarkPort203TestAccess {
     static void Bind(CollectorResources& resources, TracingCollector* collector, RuntimeWorkers* pool, int32_t count = 1)
     {
+        if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);
+        }
         resources.collectorProxy.currentCollector = collector;
         resources.runtimeWorkers = pool;
         resources.gcThreadCount = count;
@@ -159,6 +163,9 @@ struct MarkPort203TestAccess {
         // The major driver normally initializes old marking in its young prelude.
         // This focused old-body fixture supplies the same product initialization.
         if (major) {
+            auto& old = collector.GetGenerationCycle(GCCycleGeneration::OLD);
+            if (!old.Snapshot().active) old.Begin(0);
+            GenerationSequenceFixture::Advance(old);
             collector.StartOldMarkWork();
         }
         collector.DoGarbageCollection(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
@@ -391,7 +398,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     const bool arrayMarked = result.arrayMarked;
     const auto objects = result.objects;
     const auto bytes = result.bytes;
-    const size_t expectedChildren = markOnly ? 0 : childrenCount;
+    // ZMark::follow_work (zMark.cpp:412-415): a duplicate mark returns before
+    // follow. The LIFO mark-only entry wins when it was published last.
+    const size_t expectedChildren = (markOnly || duplicateRootOrder < 0) ? 0 : childrenCount;
     const size_t expectedObjects = expectedChildren + 1 + (finalizable ? 1 : 0);
     const size_t expectedBytes = arrayBytes + expectedChildren * children[0]->GetSize() +
         (finalizable ? finalizerRoot->GetSize() : 0);

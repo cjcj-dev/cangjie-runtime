@@ -90,6 +90,7 @@ struct LargeArrayFixture {
         region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + obj0->GetSize());
         region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + obj1->GetSize());
         GC_EXPECT_TRUE(region1->GetRegionAllocPtr() <= region1->GetRegionEnd());
+        GcHeapFixture::AdvanceGeneration(Generation::Old);
     }
     ~LargeArrayFixture()
     {
@@ -138,7 +139,7 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
         GC_EXPECT_TRUE(target == bytes);
         if (!targetRegion->IsMarkedObject(view, target)) {
             ++pushed;
-            GC_EXPECT_FALSE(targetRegion->MarkObject(view, target, target->GetSize()));
+            GC_EXPECT_TRUE(targetRegion->MarkObject(view, target, target->GetSize()));
         }
     };
 

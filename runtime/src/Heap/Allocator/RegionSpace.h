@@ -195,7 +195,7 @@ public:
         // do not include Collector.h here (Allocator include path / cycle). Gate at call sites if revived.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         (void)G;
-        return regionInfo->MarkObjectByOwner(obj);
+        return !regionInfo->MarkObjectByOwner(obj);
     }
 
     template<Generation G>

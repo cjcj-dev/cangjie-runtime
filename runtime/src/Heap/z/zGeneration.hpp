@@ -16,11 +16,14 @@
 #include "Heap/Collector/GcRequest.h"
 namespace MapleRuntime {
 class RememberedSet;
+class MarkDomain;
+enum class zaddress : Uptr;
 struct TenuringInputs;
 // Per-generation execution state. The snapshot lock publishes cycle identity
 // and phase together; the phase atomic serves existing barrier readers.
 // ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
 enum class GCCycleGeneration : uint8_t { YOUNG, OLD };
+enum class MarkStartPoint : uint8_t { Begin, BeforeRetire, BeforeSequence, BeforeDomain, BeforeRemembered, Complete };
 struct GCCycleSnapshot {
     GCCycleGeneration generation;
     uint64_t sequence;
@@ -29,10 +32,18 @@ struct GCCycleSnapshot {
     GCPhase phase;
     bool active;
 };
+class WCollector;
+struct YoungCollectionStats;
 class GenerationCycle {
 public:
     explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
     GCCycleSnapshot Snapshot() const;
+    void BindMarkDomain(MarkDomain* domain) { markDomain = domain; }
+    bool IsPhaseMark() const;
+    template<bool resurrect, bool gcThread, bool follow, bool finalizable>
+    void MarkObject(zaddress address);
+    template<bool resurrect, bool gcThread, bool follow, bool finalizable>
+    void MarkObjectIfActive(zaddress address);
     void InitializeWorkers(uint32_t capacity);
     void StopWorkers();
     GCWorkers* Workers() const { return workers.get(); }
@@ -50,12 +61,17 @@ public:
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
     void Begin(uint64_t index);
-    void StartYoungMark(RememberedSet& rememberedSet);
+    YoungCollectionStats StartYoungMark(WCollector& collector);
+    void StartOldMark(WCollector& collector);
     void PublishPhase(GCPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
     void End();
 private:
+#if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
+    friend struct GenerationSequenceFixture;
+#endif
+    MarkDomain* markDomain = nullptr;
     const GCCycleGeneration generation;
     std::unique_ptr<GCWorkers> workers;
     GCStats stats;

@@ -1,0 +1,573 @@
+[
+  {
+    "feature": "ColorAddressMarkYoungGood",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "ColorAddressMarkYoungGood",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zAddress.inline.hpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zBarrier.inline.hpp:1\n",
+      "stderr": "",
+      "count": 2
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "ColorAddressMarkYoungGood",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zAddress.inline.hpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zBarrier.inline.hpp:1\n",
+      "stderr": "",
+      "count": 2
+    },
+    "preserved": true
+  },
+  {
+    "feature": "MarkYoungGoodBarrierOnOopField",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "MarkYoungGoodBarrierOnOopField",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zBarrier.hpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zBarrier.inline.hpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zMark.cpp:1\n",
+      "stderr": "",
+      "count": 3
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "MarkYoungGoodBarrierOnOopField",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zBarrier.hpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zBarrier.inline.hpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zMark.cpp:1\n",
+      "stderr": "",
+      "count": 3
+    },
+    "preserved": true
+  },
+  {
+    "feature": "MarkYoungRootObject",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "MarkYoungRootObject",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/Collector/CollectorProxy.h:2\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/WCollector/WCollector.h:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zBarrier.inline.hpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zCollectedHeap.hpp:2\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zGeneration.cpp:1\n",
+      "stderr": "",
+      "count": 7
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "MarkYoungRootObject",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/Collector/CollectorProxy.h:2\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/WCollector/WCollector.h:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zBarrier.inline.hpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zCollectedHeap.hpp:2\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zGeneration.cpp:1\n",
+      "stderr": "",
+      "count": 7
+    },
+    "preserved": true
+  },
+  {
+    "feature": "MarkYoungRootsTask",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "MarkYoungRootsTask",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zGeneration.cpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zMark.cpp:4\n",
+      "stderr": "",
+      "count": 5
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "MarkYoungRootsTask",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zGeneration.cpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zMark.cpp:4\n",
+      "stderr": "",
+      "count": 5
+    },
+    "preserved": true
+  },
+  {
+    "feature": "PublishThreadRoot",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "PublishThreadRoot",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/WCollector/WCollector.h:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zMark.cpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Mutator/Mutator.cpp:1\n",
+      "stderr": "",
+      "count": 3
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "PublishThreadRoot",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/WCollector/WCollector.h:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zMark.cpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Mutator/Mutator.cpp:1\n",
+      "stderr": "",
+      "count": 3
+    },
+    "preserved": true
+  },
+  {
+    "feature": "PushHeaderlessRecord",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "PushHeaderlessRecord",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Mutator/Mutator.cpp:3\n",
+      "stderr": "",
+      "count": 3
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "PushHeaderlessRecord",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Mutator/Mutator.cpp:3\n",
+      "stderr": "",
+      "count": 3
+    },
+    "preserved": true
+  },
+  {
+    "feature": "PushHeapRoot",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "PushHeapRoot",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Mutator/Mutator.cpp:5\n",
+      "stderr": "",
+      "count": 5
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "PushHeapRoot",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Mutator/Mutator.cpp:5\n",
+      "stderr": "",
+      "count": 5
+    },
+    "preserved": true
+  },
+  {
+    "feature": "RemapYoungRoots",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "RemapYoungRoots",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/Collector/zRelocate.cpp:4\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/WCollector/WCollector.h:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zMark.hpp:3\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zRelocate.cpp:9\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zStat.cpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zStat.hpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/ObjectModel/RefField.h:1\n",
+      "stderr": "",
+      "count": 20
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "RemapYoungRoots",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/Collector/zRelocate.cpp:4\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/WCollector/WCollector.h:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zMark.hpp:3\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zRelocate.cpp:9\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zStat.cpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zStat.hpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/ObjectModel/RefField.h:1\n",
+      "stderr": "",
+      "count": 20
+    },
+    "preserved": true
+  },
+  {
+    "feature": "ResolveCurrentValueRoot",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "ResolveCurrentValueRoot",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zGeneration.cpp:4\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zMark.hpp:3\n",
+      "stderr": "",
+      "count": 7
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "ResolveCurrentValueRoot",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zGeneration.cpp:4\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zMark.hpp:3\n",
+      "stderr": "",
+      "count": 7
+    },
+    "preserved": true
+  },
+  {
+    "feature": "VisitAllColoredRoots",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "VisitAllColoredRoots",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zMark.hpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zRelocate.cpp:3\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zRootsIterator.cpp:1\n",
+      "stderr": "",
+      "count": 5
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "VisitAllColoredRoots",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zMark.hpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zRelocate.cpp:3\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zRootsIterator.cpp:1\n",
+      "stderr": "",
+      "count": 5
+    },
+    "preserved": true
+  },
+  {
+    "feature": "VisitRawObjects",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "VisitRawObjects",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Mutator/Mutator.cpp:7\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Mutator/Mutator.h:3\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/windows_x86_64_exports.def:1\n",
+      "stderr": "",
+      "count": 11
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "VisitRawObjects",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Mutator/Mutator.cpp:7\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Mutator/Mutator.h:3\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/windows_x86_64_exports.def:1\n",
+      "stderr": "",
+      "count": 11
+    },
+    "preserved": true
+  },
+  {
+    "feature": "ZIterator::",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "ZIterator::",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zHeapIterator.cpp:2\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zIterator.cpp:7\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zIterator.hpp:7\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zIterator.inline.hpp:10\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zMark.cpp:3\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zRelocate.cpp:3\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zVerify.cpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/ObjectModel/MArray.cpp:4\n",
+      "stderr": "",
+      "count": 37
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "ZIterator::",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zHeapIterator.cpp:2\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zIterator.cpp:7\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zIterator.hpp:7\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zIterator.inline.hpp:10\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zMark.cpp:2\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zRelocate.cpp:3\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zVerify.cpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/ObjectModel/MArray.cpp:4\n",
+      "stderr": "",
+      "count": 36
+    },
+    "preserved": false,
+    "disposition": "P1 prescribed deletion: duplicate young marked-object follow; zMark.cpp:1015; active basic_oop_iterate_safe stays 13/13"
+  },
+  {
+    "feature": "basic_oop_iterate_safe",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "basic_oop_iterate_safe",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zIterator.cpp:2\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zIterator.hpp:4\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zIterator.inline.hpp:3\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zRelocate.cpp:2\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/ObjectModel/MArray.cpp:2\n",
+      "stderr": "",
+      "count": 13
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "basic_oop_iterate_safe",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zIterator.cpp:2\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zIterator.hpp:4\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zIterator.inline.hpp:3\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zRelocate.cpp:2\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/ObjectModel/MArray.cpp:2\n",
+      "stderr": "",
+      "count": 13
+    },
+    "preserved": true
+  },
+  {
+    "feature": "in_place_relocation_claim_page",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "in_place_relocation_claim_page",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zForwarding.cpp:3\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zForwarding.hpp:2\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zPage.hpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zRelocate.cpp:1\n",
+      "stderr": "",
+      "count": 7
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "in_place_relocation_claim_page",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zForwarding.cpp:3\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zForwarding.hpp:2\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zPage.hpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zRelocate.cpp:1\n",
+      "stderr": "",
+      "count": 7
+    },
+    "preserved": true
+  },
+  {
+    "feature": "insert_receipt",
+    "base": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "insert_receipt",
+        "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "fb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/Allocator/zForwardingTable.cpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zForwarding.hpp:1\nfb7d5282867aaa3b9d8b5df2f6691227ff3424ce:runtime/src/Heap/z/zForwarding.inline.hpp:1\n",
+      "stderr": "",
+      "count": 3
+    },
+    "head": {
+      "command": [
+        "git",
+        "grep",
+        "-c",
+        "-F",
+        "-e",
+        "insert_receipt",
+        "9de9226b8d58ed655534b195df2f6938be789062",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/Allocator/zForwardingTable.cpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zForwarding.hpp:1\n9de9226b8d58ed655534b195df2f6938be789062:runtime/src/Heap/z/zForwarding.inline.hpp:1\n",
+      "stderr": "",
+      "count": 3
+    },
+    "preserved": true
+  }
+]

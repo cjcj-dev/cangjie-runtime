@@ -87,7 +87,11 @@ public:
 
     // ZPage::generation()->seqnum(), shared by all pages in that generation.
     uint64_t GetSnapshotEpoch() const;
-    void InitializeAllocationWatermark();
+    void ResetPageSequence();
+    uint64_t BirthSequence() const { return __atomic_load_n(&metadata.birthSequence, __ATOMIC_ACQUIRE); }
+    uint64_t OtherSequence() const { return __atomic_load_n(&metadata.otherSequence, __ATOMIC_ACQUIRE); }
+    bool IsAllocating() const;
+    bool IsRelocatable() const;
 
     uint8_t GetRegionLifeSeq() const
     {
@@ -168,9 +172,9 @@ public:
     template<Generation G>
     bool IsSurvivedObject(MarkView<G> view, LiveInfo* liveInfo, size_t offset) const;
 
-    bool FromPageAllocatedAfterMarkStart(size_t offset) const;
+    bool IsFromPageAllocating() const;
 
-    bool HasFromPageMarkStartAllocGap() const;
+
 
     template<Generation G>
     bool IsFromPageSurvivedObject(MarkView<G> view, size_t offset) const;
@@ -274,8 +278,12 @@ public:
     void VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const;
 
 
+    bool MarkObject(zaddress address, bool finalizable, bool& incLive);
+    bool IsObjectMarked(zaddress address, bool finalizable);
+
     // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
-    // MarkBits returns true if already marked; false on first paint. AddLive only then.
+    // Page mark primitives return true on a new mark (ZPage::mark_object).
+    // The bitmap RMW still reports already-marked internally.
     template<Generation G>
     bool MarkLargeObject(MarkView<G> view, const BaseObject* obj, size_t size, bool accountLive, bool& firstLive);
 
@@ -801,15 +809,15 @@ public:
 
     MAddress GetRegionAllocPtr() const;
 
-    MAddress GetMarkStartAllocPtr() const { return metadata.markStartAllocPtr; }
+
 
     // offset ≥ mark-start allocPtr (exclusive end at ClearLiveInfo). Objects
     // bumped after that point are ZGC allocate-black / is_allocating.
     // water == start means the region was empty at mark-start, so every
     // object now in it was born after that snapshot.
-    bool AllocatedAfterMarkStart(size_t offset) const;
 
-    bool HasMarkStartAllocGap() const;
+
+
 
     int32_t IncRawPointerObjectCount();
 
@@ -977,10 +985,9 @@ private:
         // resolveto: Compact packs densely; GetRoute prefix-sum dests are holes.
         // Table maps from-offset → actual dest for COMPACTED regions only.
 
-        // ZGC zPage allocate-black: objects at offset >= this allocPtr, snapshotted
-        // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
-        // is_allocating). 0 = no mark-start yet.
-        uintptr_t markStartAllocPtr;
+        // ZPage::_seqnum / _seqnum_other (zPage.cpp:90-93).
+        uint64_t birthSequence = 0;
+        uint64_t otherSequence = 0;
         alignas(8) char routeInfoPad[24]{};
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;

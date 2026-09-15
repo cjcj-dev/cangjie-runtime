@@ -29,7 +29,7 @@ struct SlotListTestAccess {
 // getsizetrace: SlotList::PopFront used to call GetSize on `head` with no gate.
 // ObjectSlot::next overlays Future payload+8 (store-good colour). A coloured
 // next makes head non-canonical; GetSize then #GPs (si_code=128, rbx=0xa8).
-// AllocPinnedFromFreeList (RegionManager.cpp:3611) is the soak caller.
+// Product allocation no longer consumes these resource-cleanup lists.
 // ZGC (zPage.cpp:103-121): recycle by resetting metadata, not by treating a
 // coloured oop as a free-list successor. Drop the chain; do not uncolor-and-hand-out.
 GC_TEST(ObjectGate, SlotListPopFrontRejectsColouredHead)

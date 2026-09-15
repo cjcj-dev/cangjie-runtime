@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zObjectAllocator.cpp
++++ b/runtime/src/Heap/z/zObjectAllocator.cpp
+@@ -263,7 +263,7 @@
+ void RegionManager::RetireSharedPages(PageAgeRange ages)
+ {
+     for (PageAge age : ages) {
+-        objectAllocators[untype(age)]->pinnedPage.store(nullptr, std::memory_order_release);
++        // Regression: retain expired pinned shortcut.
+         for (size_t cpu = 0; cpu < SharedPageCPUCount(); ++cpu) {
+             objectAllocators[untype(age)]->smallPages[cpu].page.store(nullptr, std::memory_order_release);
+         }

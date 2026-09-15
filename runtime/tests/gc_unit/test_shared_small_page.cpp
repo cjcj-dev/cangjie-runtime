@@ -132,12 +132,18 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     CPUAffinity affinity;
     SharedPageFixture fixture;
     auto& manager = fixture.manager;
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
     RegionInfo* pages[kPageAgeCount]{};
     for (PageAge age : kPageAgeRangeAll) {
         const uintptr_t address = manager.AllocSharedObject(16, age, true);
         GC_EXPECT_TRUE(address != 0);
         RegionInfo* page = RegionInfo::GetRegionInfoAt(address);
         pages[untype(age)] = page;
+        GC_EXPECT_EQ(page->BirthSequence(), page->GetSnapshotEpoch());
+        GC_EXPECT_TRUE(page->IsAllocating());
+        const auto other = age == PageAge::old ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+        GC_EXPECT_EQ(page->OtherSequence(), Heap::GetHeap().GetCollector().GetCycleSnapshot(other).sequence);
         GC_EXPECT_EQ(page->IsYoungRegion(), age != PageAge::old);
         GC_EXPECT_EQ(page->GetYoungAge(), age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(age)));
         GC_EXPECT_TRUE(!page->IsThreadLocalRegion());
@@ -153,14 +159,28 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     GC_EXPECT_TRUE(refilled != 0);
     GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(refilled) != eden);
     manager.RetireSharedPages(kPageAgeRangeYoung);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
     const uintptr_t retired = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(retired != 0);
+    auto* retiredPage = RegionInfo::GetRegionInfoAt(retired);
+    std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=young birth=%llu owner=%llu\n",
+        static_cast<unsigned long long>(retiredPage->BirthSequence()),
+        static_cast<unsigned long long>(retiredPage->GetSnapshotEpoch()));
+    GC_EXPECT_TRUE(retiredPage->IsAllocating());
     GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(retired) != RegionInfo::GetRegionInfoAt(refilled));
     RegionInfo* old = pages[untype(PageAge::old)];
     GC_EXPECT_EQ(manager.AllocSharedObject(16, PageAge::old, true), old->GetRegionStart() + 32);
+    GC_EXPECT_TRUE(old->IsAllocating());
     manager.RetireSharedPages(kPageAgeRangeOld);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
     const uintptr_t newOld = manager.AllocSharedObject(16, PageAge::old, true);
     GC_EXPECT_TRUE(newOld != 0);
+    auto* newOldPage = RegionInfo::GetRegionInfoAt(newOld);
+    std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=old birth=%llu owner=%llu\n",
+        static_cast<unsigned long long>(newOldPage->BirthSequence()),
+        static_cast<unsigned long long>(newOldPage->GetSnapshotEpoch()));
+    GC_EXPECT_TRUE(newOldPage->IsAllocating());
+    GC_EXPECT_TRUE(old->IsRelocatable());
     GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(newOld) != old);
 }
 

@@ -1,0 +1,6 @@
+LANE=sym_cangjie_runtime_606_implement_r5674249495
+ROLE=implement
+问题：是否允许在保留原 managed runner 全部 ASSERT 和如实 N=3 失败记录的同时，新增只验证 P1 每代 mark-start 的真实托管 GC runner，避免原 runner 手工 finalizer 队列夹具先触发其所属 P3/#603 CHECK？
+本轮产品68a7800813ff42fe508de624d4686ef75068af78，default/filler均530/529/1，testable720/719/1，仅既有ValueRoot非heap；新增9项已恢复。producer刀也确实使 SingleWorkerKeepsYoungReferentStrong/Striped 在 TARGET_YOUNG_STRONG_CLOSURE root=0处红；consumer刀 duplicate reached=2处红。
+原托管 runner 已补旧API/宿主runtime/独立SATB链接，并真实执行 N=3：kkk2:/root/sym_cangjie_runtime_606_implement_r5674249495-green5/managed-retry-{0,1,2}.log。旧夹具 GenerationCycleRootTestAccess::Install 把对象塞入 finalizables，但刻意不调度、未更新 hasFinalizableJob，运行在 FinalizerProcessor.cpp 的 CHECK(hasFinalizableJob == !finalizables.empty()) 退出，CYCLE_RC=134。原 SATB 独立main没有处理 --gtest_filter/other-vm子进程参数（标准runner已改），SATB_RC=139，首项 ERROR invalid other-vm child selection。两者都不是本包产品行为证据，不删不弱化它们。
+另 P1 新观察装置用跨DSO内联 WCollector::YoungMarkDomain/MajorMarkDomain getter 读取的域不可靠（NWorkers与刚执行的PrepareWork传参不一致）；拟让现有 testMarkStartState callback额外传本代实际 markDomain 指针，直接观察产品调用结果，不改变任何产品执行或判据。独立P1 runner只以真实MObject分配/export根/RequestGC触发，读取这些产品状态，支持green/old-order-cut/young-order-cut/restored同ELF N=3。是否按此完成P1闭环，并将原runner两处装置缺陷按单独issue交主控？

@@ -6,19 +6,42 @@
 
 #pragma once
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Mutator/ThreadLocal.h"
+
 
 namespace MapleRuntime {
-bool TracingCollector::MarkObject(BaseObject* obj) const
-    {
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
-        bool marked = regionInfo->MarkObjectByOwner(obj);
-        if (!marked) {
-            size_t objSize = obj->GetSize();
-            if (!fixReferences && regionInfo->IsFromRegion()) {
-                DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
-            }
-        }
-        return marked;
+// ZMark::mark_object (zMark.inline.hpp:48-87). Input is already current.
+template<bool resurrect, bool gcThread, bool follow, bool finalizable>
+inline void MarkDomain::MarkObject(zaddress address)
+{
+    (void)to_object(address); // ZMark entry validates the current oop before the page query.
+    RegionInfo* page = RegionInfo::GetRegionInfoAt(raw(address));
+    if (page->IsAllocating()) {
+        return;
     }
+
+    const bool markBeforePush = gcThread;
+    bool incLive = false;
+    if (markBeforePush) {
+        if (!page->MarkObject(address, finalizable, incLive)) {
+            return;
+        }
+    } else {
+        if (page->IsObjectMarked(address, finalizable)) {
+            return;
+        }
+    }
+
+    if (resurrect) {
+        terminate.SetResurrected(true);
+    }
+    MarkThreadLocalStacks& stacks = Stacks();
+    const size_t stripe = stripes.StripeForAddress(raw(address));
+    const zoffset offset = static_cast<zoffset>(raw(address) - MarkStackEntry::HeapBase());
+    const MarkStackEntry entry(offset, !markBeforePush, incLive, follow, finalizable);
+    CHECK(page->IsYoungRegion() == (generation == MarkingStacks::MarkingGeneration::YOUNG));
+    const bool publish = !gcThread;
+    stacks.Push(stripes, stripe, entry, publish);
+}
 }

@@ -34,6 +34,9 @@ class ZForwarding;
 // field. This keeps region cleanup bounded by the reclaimed region rather than by
 // the number of remembered fields in the heap.
 class RememberedSet final {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct GenerationCycleRootTestAccess;
+#endif
 public:
     RememberedSet();
     ~RememberedSet() = default;

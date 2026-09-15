@@ -136,6 +136,7 @@ public:
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 
 class WCollector : public CopyCollector {
+    friend class GenerationCycle;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MutatorPublishTestAccess;
     friend struct PartialArrayTestAccess;
@@ -178,7 +179,6 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const override;
-    bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry, MarkLiveCache* cache) const override;
     bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo) override;
 
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;

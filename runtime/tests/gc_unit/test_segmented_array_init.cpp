@@ -36,9 +36,11 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/WCollector/WCollector.h"
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
@@ -797,6 +799,9 @@ void* RunMarkAllocationCase(void* rawExisting)
     auto& heap = Heap::GetHeap();
     auto& collector = heap.GetCollector();
     Mutator* mutator = Mutator::GetMutator();
+    MArray* beforeSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
+    const U64 beforeSmallRoot = heap.RegisterExportRoot(beforeSmall);
+    RegionInfo* beforeSmallPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(beforeSmall));
     MArray* target = existing ? MCC_NewArray8(GetByteArrayTypeInfos().array, 16) : nullptr;
     const U64 targetRoot = target != nullptr ? heap.RegisterExportRoot(target) : 0;
     MarkAllocationWindow::entered = false;
@@ -818,6 +823,13 @@ void* RunMarkAllocationCase(void* rawExisting)
         return reinterpret_cast<void*>(2);
     }
     mutator->SetManagedContext(true);
+    MArray* afterSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
+    RegionInfo* afterSmallPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(afterSmall));
+    const bool retiredTLAB = afterSmallPage != beforeSmallPage && afterSmallPage->IsAllocating();
+    std::fprintf(stderr, "P1_TLAB_RETIRE_ASSERT_EXECUTED different=%d birth=%llu owner=%llu\n",
+                 afterSmallPage != beforeSmallPage,
+                 static_cast<unsigned long long>(afterSmallPage->BirthSequence()),
+                 static_cast<unsigned long long>(afterSmallPage->GetSnapshotEpoch()));
     MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
     if (!existing) target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     const U64 holderRoot = heap.RegisterExportRoot(holder);
@@ -825,10 +837,22 @@ void* RunMarkAllocationCase(void* rawExisting)
     Heap::GetBarrier().WriteReference(holder, field, target);
     RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
     RegionInfo* targetPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
-    const bool implicit = page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
+    const bool implicit = page->IsAllocating();
     const bool live = productLive(page, page->GetMarkView<Generation::Young>(), holder);
     const bool targetLive = productLive(targetPage, targetPage->GetMarkView<Generation::Young>(), target);
-    const bool excluded = page->HasMarkStartAllocGap() && !page->IsKnownYoungEmpty(page->GetMarkView<Generation::Young>());
+    const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty(page->GetMarkView<Generation::Young>());
+    auto& productCollector = static_cast<WCollector&>(collector);
+    MarkDomain* domain = productCollector.YoungMarkDomain();
+    const size_t pendingBefore = domain->Stripes().Population() + domain->Stacks().Population();
+    holder->OnFinalizerCreated();
+    const size_t pendingAfter = domain->Stripes().Population() + domain->Stacks().Population();
+    const bool noExplicitMark = !page->IsCurrentFacePublished();
+    const bool noPublication = pendingAfter == pendingBefore;
+    std::fprintf(stderr, "P1_NEW_REGISTRATION_ASSERT_EXECUTED birth=%llu owner=%llu no_bitmap=%d "
+                 "pending_before=%zu pending_after=%zu\n",
+                 static_cast<unsigned long long>(page->BirthSequence()),
+                 static_cast<unsigned long long>(page->GetSnapshotEpoch()), noExplicitMark,
+                 pendingBefore, pendingAfter);
     const auto during = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const auto phase = during.phase;
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
@@ -845,6 +869,7 @@ void* RunMarkAllocationCase(void* rawExisting)
         std::fprintf(stderr, "MARK_ALLOC_MARK_END_ASSERT_EXECUTED sequence=%llu phase=%u live=%d\n",
                      static_cast<unsigned long long>(markEnd.sequence), unsigned(markEnd.phase), markEndTargetLive);
     };
+    heap.RemoveExportObject(beforeSmallRoot);
     if (existing) heap.RemoveExportObject(targetRoot);
     mutator->SetManagedContext(false);
     MarkAllocationWindow::released.store(true, std::memory_order_release);
@@ -867,7 +892,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool completedValue = completedTarget != nullptr &&
         static_cast<MArray*>(completedTarget)->GetLength() == 16;
     std::fprintf(stderr, "MARK_ALLOC_COMPLETED_VALUE_ASSERT_EXECUTED length_valid=%d\n", completedValue);
-    const bool resampled = !page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
+    const bool resampled = !page->IsAllocating();
     const auto after = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const bool nextCycle = after.sequence > during.sequence;
     std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=%llu after=%llu resampled=%d\n",
@@ -875,7 +900,7 @@ void* RunMarkAllocationCase(void* rawExisting)
                  static_cast<unsigned long long>(after.sequence), resampled);
     heap.RemoveExportObject(holderRoot);
     mutator->SetManagedContext(true);
-    const uintptr_t status = (implicit ? 0 : 1) | (live ? 0 : 2) |
+    const uintptr_t status = (retiredTLAB ? 0 : 1024) | ((noExplicitMark && noPublication) ? 0 : 512) | (implicit ? 0 : 1) | (live ? 0 : 2) |
         (targetLive ? 0 : 4) | (excluded ? 0 : 8) | (nextCycle ? 0 : 16) |
         (resampled ? 0 : 32) |
         ((markEndObservations == 1 && markEndTargetLive) ? 0 : 128) |
@@ -886,6 +911,162 @@ void* RunMarkAllocationCase(void* rawExisting)
     return reinterpret_cast<void*>(status);
 }
 #endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void ObservePinnedAllocationWindow()
+{
+    if (MarkAllocationWindow::entered.exchange(true)) return;
+    MarkAllocationWindow::timedOut = !MarkAllocationWindow::Wait(MarkAllocationWindow::released);
+    MarkAllocationWindow::completed.store(true, std::memory_order_release);
+}
+
+uint64_t pinnedAcquiredBirth = 0;
+bool pinnedAcquiredWindow = false;
+
+void PausePinnedPageBeforeInstall(RegionInfo* page)
+{
+    pinnedAcquiredBirth = page->BirthSequence();
+    auto* mutator = Mutator::GetMutator();
+    mutator->SetManagedContext(false);
+    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_USER, true);
+    {
+        ScopedEnterSaferegion safe(false);
+        pinnedAcquiredWindow = MarkAllocationWindow::Wait(MarkAllocationWindow::entered);
+    }
+    mutator->SetManagedContext(true);
+}
+
+void* RunPinnedPublicationCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    auto& collector = heap.GetCollector();
+    auto* mutator = Mutator::GetMutator();
+    // Retire any existing shortcut through the real collector before acquiring
+    // the new page. The hook only schedules a second real collection.
+    mutator->SetManagedContext(false);
+    collector.RequestGC(GC_REASON_USER, false);
+    mutator->SetManagedContext(true);
+    MarkAllocationWindow::entered = false;
+    MarkAllocationWindow::released = false;
+    MarkAllocationWindow::completed = false;
+    MarkAllocationWindow::timedOut = false;
+    pinnedAcquiredWindow = false;
+    TracingCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
+    RegionManager::testPinnedPageAcquired = PausePinnedPageBeforeInstall;
+    TypeInfo* type = GetReferenceArrayTypeInfos().component;
+    const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
+    MObject* fresh = MObject::NewPinnedObject(type, size);
+    RegionManager::testPinnedPageAcquired = nullptr;
+    auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
+    MObject* next = MObject::NewPinnedObject(type, size);
+    const bool reused = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(next)) == page;
+    const bool current = page->IsAllocating();
+    const bool advanced = page->GetSnapshotEpoch() > pinnedAcquiredBirth;
+    const bool noMark = !page->IsCurrentFacePublished();
+    std::fprintf(stderr, "P1_PINNED_INSTALL_ASSERT_EXECUTED acquired=%llu birth=%llu owner=%llu "
+        "advanced=%d current=%d reused=%d no_bitmap=%d window=%d\n",
+        static_cast<unsigned long long>(pinnedAcquiredBirth),
+        static_cast<unsigned long long>(page->BirthSequence()),
+        static_cast<unsigned long long>(page->GetSnapshotEpoch()), advanced, current, reused, noMark,
+        pinnedAcquiredWindow);
+    const U64 root = heap.RegisterExportRoot(fresh);
+    MarkAllocationWindow::released = true;
+    mutator->SetManagedContext(false);
+    {
+        ScopedEnterSaferegion safe(false);
+        MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
+    }
+    collector.RequestGC(GC_REASON_USER, false);
+    TracingCollector::testOldMarkStarted = nullptr;
+    const bool retained = heap.GetExportObject(root) == fresh;
+    heap.RemoveExportObject(root);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>((advanced && current && reused && noMark && pinnedAcquiredWindow &&
+        retained && !MarkAllocationWindow::timedOut) ? 0 : 1);
+}
+
+void* RunPinnedMarkStartCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    auto& collector = heap.GetCollector();
+    auto* mutator = Mutator::GetMutator();
+    TypeInfo* type = GetReferenceArrayTypeInfos().component;
+    const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
+    MObject* first = MObject::NewPinnedObject(type, size);
+    MObject* second = MObject::NewPinnedObject(type, size);
+    RegionInfo* before = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(first));
+    const bool reused = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(second)) == before;
+    const U64 root = heap.RegisterExportRoot(first);
+    MarkAllocationWindow::entered = false;
+    MarkAllocationWindow::released = false;
+    MarkAllocationWindow::completed = false;
+    MarkAllocationWindow::timedOut = false;
+    TracingCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
+    mutator->SetManagedContext(false);
+    collector.RequestGC(GC_REASON_USER, true);
+    bool entered;
+    {
+        ScopedEnterSaferegion safe(false);
+        entered = MarkAllocationWindow::Wait(MarkAllocationWindow::entered);
+    }
+    if (!entered) {
+        MarkAllocationWindow::released = true;
+        TracingCollector::testOldMarkStarted = nullptr;
+        mutator->SetManagedContext(true);
+        return reinterpret_cast<void*>(2);
+    }
+    mutator->SetManagedContext(true);
+    MObject* fresh = MObject::NewPinnedObject(type, size);
+    RegionInfo* after = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
+    const bool current = after->IsAllocating();
+    const bool different = after != before;
+    const bool noMark = !after->IsCurrentFacePublished();
+    const bool window = collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_TRACE;
+    std::fprintf(stderr, "P1_PINNED_WINDOW_ASSERT_EXECUTED reuse=%d different=%d current=%d no_bitmap=%d trace=%d birth=%llu owner=%llu\n",
+        reused, different, current, noMark, window,
+        static_cast<unsigned long long>(after->BirthSequence()),
+        static_cast<unsigned long long>(after->GetSnapshotEpoch()));
+    MarkAllocationWindow::released = true;
+    mutator->SetManagedContext(false);
+    {
+        ScopedEnterSaferegion safe(false);
+        MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
+    }
+    collector.RequestGC(GC_REASON_USER, false);
+    TracingCollector::testOldMarkStarted = nullptr;
+    const bool retained = heap.GetExportObject(root) == first;
+    heap.RemoveExportObject(root);
+    mutator->SetManagedContext(true);
+    return reinterpret_cast<void*>((reused && different && current && noMark && window && retained &&
+        !MarkAllocationWindow::timedOut) ? 0 : 1);
+}
+#endif
+
+void* RunPinnedBirthCase(void*)
+{
+    auto& heap = Heap::GetHeap();
+    auto* mutator = Mutator::GetMutator();
+    TypeInfo* type = GetReferenceArrayTypeInfos().component;
+    const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
+    MObject* dead = MObject::NewPinnedObject(type, size);
+    MObject* survivor = MObject::NewPinnedObject(type, size);
+    RegionInfo* oldPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(dead));
+    const bool shared = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(survivor)) == oldPage;
+    const U64 root = heap.RegisterExportRoot(survivor);
+    mutator->SetManagedContext(false);
+    heap.GetCollector().RequestGC(GC_REASON_USER, false);
+    mutator->SetManagedContext(true);
+    MObject* fresh = MObject::NewPinnedObject(type, size);
+    RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
+    const bool fromNewPage = page != oldPage;
+    const bool noExplicitMark = !page->IsCurrentFacePublished();
+    const bool allocating = page->IsAllocating();
+    const bool retained = heap.GetExportObject(root) == survivor;
+    std::fprintf(stderr, "P1_PINNED_ASSERT_EXECUTED shared=%d new_page=%d allocating=%d no_bitmap=%d retained=%d\n",
+                 shared, fromNewPage, allocating, noExplicitMark, retained);
+    heap.RemoveExportObject(root);
+    return reinterpret_cast<void*>((shared && fromNewPage && allocating && noExplicitMark && retained) ? 0 : 1);
+}
 
 void* RunVisibleArrayGraph(void*)
 {
@@ -1037,6 +1218,11 @@ GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
 }
 #endif
 
+GC_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunPinnedBirthCase, 0), 0);
+}
+
 GC_OTHER_VM_TEST(LargePageGeneration, ManagedAllocationPublishesYoungEden)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePageIdentityCase, 0), 0);
@@ -1166,5 +1352,17 @@ GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 2), 0);
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(P1Mark, PinnedPagePublicationAcrossMarkStart)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunPinnedPublicationCase, 0), 0);
+}
+
+GC_OTHER_VM_TEST(P1Mark, PinnedMarkStartRetiresAllocationPage)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunPinnedMarkStartCase, 0), 0);
+}
+#endif
 
 #endif // MRT_GC_UNIT_TESTS

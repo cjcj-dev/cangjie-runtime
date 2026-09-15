@@ -40,6 +40,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -75,7 +76,7 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     // When liveCache is set, mark bits stay atomic and live bytes are coalesced
     // per worker (ZGC zMarkCache.hpp).
     bool firstLive = false;
-    bool marked = region->MarkObjectByOwnerWithLiveClaim(obj, objectSize, liveCache == nullptr, firstLive);
+    bool marked = !region->MarkObjectByOwnerWithLiveClaim(obj, objectSize, liveCache == nullptr, firstLive);
     if (firstLive && liveCache != nullptr) {
         liveCache->IncLive(region, objectSize);
     }
@@ -86,18 +87,10 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     return marked;
 }
 
-bool WCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry, MarkLiveCache* cache) const
-{
-    if (entry.mark() && !entry.finalizable()) {
-        return MarkObjectImpl(obj, false, cache);
-    }
-    return TracingCollector::MarkEntryObject(obj, entry, cache);
-}
-
 bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* region)
 {
     // livesame: ResurrectObject counts on 0→1 inside.
-    bool resurrected = region->ResurrectObject(obj, offset);
+    bool resurrected = !region->ResurrectObject(obj, offset);
     if (!resurrected) {
         DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
              obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
@@ -847,9 +840,9 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
 
         bool firstLive = false;
         const bool already = finalizable
-            ? region->ResurrectObjectWithLiveClaim(object,
+            ? !region->ResurrectObjectWithLiveClaim(object,
                 region->GetAddressOffset(reinterpret_cast<MAddress>(object)), false, firstLive)
-            : region->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, firstLive);
+            : !region->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, firstLive);
         if (!already) {
             workStack.push_back(MarkStackEntry::Claimed(object, firstLive, true, finalizable));
         }
@@ -1037,28 +1030,6 @@ private:
         }
     }
 
-    void PushResidualYoungChild(MarkContext& ctx, RefField<>& field, BaseObject* holder, const char* origin)
-    {
-        WCollector* collector = shared.collector;
-        BaseObject* target = collector->ResolveMinorReference(field);
-        if (target == nullptr || !Heap::IsHeapAddress(target)) {
-            return;
-        }
-        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        if (targetRegion != nullptr && !targetRegion->IsYoungRegion()) {
-            if (collector->GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
-                collector->MarkOldObjectIfActive(target, true);
-            }
-            return;
-        }
-        if (targetRegion == nullptr ||
-            targetRegion->IsMarkedObject(targetRegion->GetMarkView<Generation::Young>(), target)) {
-            return;
-        }
-
-        PushObject(ctx, target);
-    }
-
     void PushFilteredYoung(MarkContext& ctx, BaseObject* object, const char* origin, bool finalizable = false)
     {
         if (!Heap::IsHeapAddress(object)) {
@@ -1114,18 +1085,7 @@ private:
 
         if (isYoung) {
             bool wasMarked = collector->MarkEntryObject(object, entry, &ctx.Cache());
-            if (wasMarked) {
-                if (!entry.follow()) {
-                    return;
-                }
-
-                if (object->HasRefField()) {
-                    auto fields = [this, &ctx, object](RefField<>& field) {
-                        PushResidualYoungChild(ctx, field, object, "ghostroute.striped.bitmap");
-                    };
-                    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
-                    ZIterator::oop_iterate(object, &closure);
-                }
+            if (entry.mark() && wasMarked) {
                 return;
             }
             if (entry.mark()) {
@@ -1160,6 +1120,7 @@ void WCollector::StartYoungMarkWork()
     youngMarkDomain->BindWorkers(&workers);
     youngMarkDomain->BindAbort(&collectorResources.GetYoungDriverPort().Abort());
     youngMarkDomain->PrepareWork(workers.ActiveWorkers());
+    youngCycle.BindMarkDomain(youngMarkDomain.get());
     MarkingStacks::VerifyEmpty(youngMarkDomain->Stripes().Population());
 }
 
@@ -1178,26 +1139,6 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
     MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*youngMarkDomain);
     publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
                      MarkStackEntry::MarkAndFollow(object), true);
-}
-
-// ZMark::mark_object<DontResurrect, GCThread, Follow, Strong>,
-// zMark.inline.hpp:49-94. Claim before publishing; retain the live-count duty.
-void MarkDomain::MarkRootObject(BaseObject* object)
-{
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-    // ZMark::mark_object skips the allocating page: these objects are already
-    // implicitly live. Cangjie represents that page boundary by its watermark.
-    if (region->AllocatedAfterMarkStart(region->GetAddressOffset(reinterpret_cast<MAddress>(object)))) {
-        return;
-    }
-    bool firstLive = false;
-    if (region->MarkObjectWithLiveClaim(region->GetMarkView<MapleRuntime::Generation::Young>(),
-                                       object, object->GetSize(), false, firstLive)) {
-        return;
-    }
-    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*this);
-    publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-                     MarkStackEntry::Claimed(object, firstLive, true, false), false);
 }
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
@@ -1365,13 +1306,10 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
 }
 void WCollector::MarkNewObject(BaseObject* obj)
 {
-    // Match the page owner used by MarkObjectImpl, independently of the
-    // last young/old operation acknowledged by this mutator.
-    const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
-    if (UNLIKELY(phase == GCPhase::GC_PHASE_ENUM) || UNLIKELY(phase == GCPhase::GC_PHASE_TRACE) ||
-        UNLIKELY(phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
-        MarkObject(obj);
-    }
+    // Registration follows object initialization (BaseObject::RegisterFinalizer).
+    // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
+    auto& cycle = ObjectGeneration(obj) == Generation::Young ? youngCycle : oldCycle;
+    cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
 }
 
 void WCollector::ProcessFinalizers()
@@ -1613,6 +1551,7 @@ void TracingCollector::StartOldMarkWork()
     majorMarkDomain->BindWorkers(&workers);
     majorMarkDomain->BindAbort(&collectorResources.GetMajorDriverPort().Abort());
     majorMarkDomain->PrepareWork(workers.ActiveWorkers());
+    oldCycle.BindMarkDomain(majorMarkDomain.get());
 }
 
 void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
@@ -1777,15 +1716,11 @@ bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& en
                                        MarkLiveCache* cache) const
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    CHECK_DETAIL(region->IsRelocatable(), "mark consumer requires a relocatable page");
     bool firstLive = entry.incLive();
     bool already = false;
     if (entry.mark()) {
-        if (entry.finalizable()) {
-            already = region->ResurrectObjectWithLiveClaim(
-                obj, region->GetAddressOffset(reinterpret_cast<MAddress>(obj)), false, firstLive);
-        } else {
-            already = region->MarkObjectByOwnerWithLiveClaim(obj, obj->GetSize(), false, firstLive);
-        }
+        already = !region->MarkObject(from_object(obj), entry.finalizable(), firstLive);
     }
     if (!already && firstLive) {
         if (cache != nullptr) {
@@ -1945,6 +1880,7 @@ void MarkDomain::PrepareWork(size_t workers)
     EnsureWorkers(workers);
     terminate.Reset(workers);
     proactiveFlushes = 0;
+    terminate.SetResurrected(false);
 }
 
 void MarkDomain::ResizeWorkers(size_t workers)
@@ -1994,12 +1930,17 @@ bool MarkDomain::TryProactiveFlush(size_t workerId)
 
 bool MarkDomain::TryTerminateFlush()
 {
-    // Called by the coordinator after every worker has flushed at its task exit.
-    return MutatorManager::Instance().HandshakeFlushMarkProducers(this) || !stripes.IsEmpty();
+    // ZMark::try_terminate_flush (zMark.cpp:597-605).
+    terminate.SetResurrected(false);
+    return MutatorManager::Instance().HandshakeFlushMarkProducers(this) || !stripes.IsEmpty() ||
+        terminate.Resurrected();
 }
 
 bool MarkDomain::TryEnd()
 {
+    if (terminate.Resurrected()) {
+        return false;
+    }
     (void)FlushStacks();
     return stripes.IsEmpty();
 }
@@ -2177,3 +2118,19 @@ void TracingCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack
 }
 
 #include "Heap/z/zMark.inline.hpp"
+
+namespace MapleRuntime {
+bool TracingCollector::MarkObject(BaseObject* obj) const
+    {
+        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
+        bool marked = !regionInfo->MarkObjectByOwner(obj);
+        if (!marked) {
+            size_t objSize = obj->GetSize();
+            if (!fixReferences && regionInfo->IsFromRegion()) {
+                DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
+            }
+        }
+        return marked;
+    }
+}

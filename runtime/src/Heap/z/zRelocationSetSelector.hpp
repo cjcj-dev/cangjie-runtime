@@ -122,7 +122,7 @@ struct RelocRegionDesc {
     RelocRegionKind kind = RelocRegionKind::Small;
     uint32_t id = 0;
     // ZGC zGeneration.cpp:211-213: !is_relocatable pages are never registered.
-    // is_allocating ≡ HasMarkStartAllocGap (zPage.inline.hpp:180-185).
+    // is_allocating is the page birth-sequence predicate (zPage.inline.hpp:180-185).
     bool allocating = false;
 };
 

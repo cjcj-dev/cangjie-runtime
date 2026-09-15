@@ -1,0 +1,39 @@
+HEAD:runtime/src/Heap/z/zMark.cpp:1614:    CHECK_DETAIL(region->IsRelocatable(), "mark consumer requires a relocatable page");
+HEAD:runtime/src/Heap/z/zMark.inline.hpp:20:    if (page->IsAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.cpp:319:void RegionInfo::ResetPageSequence()
+HEAD:runtime/src/Heap/z/zPage.hpp:90:    void ResetPageSequence();
+HEAD:runtime/src/Heap/z/zPage.hpp:91:    uint64_t BirthSequence() const { return __atomic_load_n(&metadata.birthSequence, __ATOMIC_ACQUIRE); }
+HEAD:runtime/src/Heap/z/zPage.hpp:92:    uint64_t OtherSequence() const { return __atomic_load_n(&metadata.otherSequence, __ATOMIC_ACQUIRE); }
+HEAD:runtime/src/Heap/z/zPage.hpp:93:    bool IsAllocating() const;
+HEAD:runtime/src/Heap/z/zPage.hpp:94:    bool IsRelocatable() const;
+HEAD:runtime/src/Heap/z/zPage.hpp:175:    bool IsFromPageAllocating() const;
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:164:inline bool RegionInfo::IsFromPageAllocating() const
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:178:            return from->largeMarked != 0 || IsFromPageAllocating();
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:180:        return IsSurvivedObject(view, from->liveInfo, offset) || IsFromPageAllocating();
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:188:                return IsSurvivedObject(view, GetLiveInfo(), offset) || IsAllocating();
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:191:            return IsSurvivedObject(view, GetLiveInfo(), offset) || IsAllocating();
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:221:            if (IsFromPageAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:234:        if (IsFromPageAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:253:        if (IsFromPageAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:321:                         this, live, epoch, GetRegionAllocPtr(), BirthSequence(),
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:709:        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && IsAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:735:        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && IsAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:760:        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && IsAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1176:                         this, GetLiveInfo(), view.GetEpoch(), GetRegionAllocPtr(), BirthSequence(),
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1442:        ResetPageSequence();
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1467:inline bool RegionInfo::IsAllocating() const
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1469:    return BirthSequence() == GetSnapshotEpoch();
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1472:inline bool RegionInfo::IsRelocatable() const
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1474:    return BirthSequence() < GetSnapshotEpoch();
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1640:        if (IsAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1719:        if (IsAllocating()) {
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:1866:        ResetPageSequence();
+HEAD:runtime/src/Heap/z/zRelocate.cpp:1047:                if (region->IsAllocating() || !region->IsLiveCountAuthoritative() ||
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2087:    region->ResetPageSequence();
+HEAD:runtime/src/Heap/z/zRelocationSetSelector.cpp:309:        if (!fromRegion->IsRelocatable()) {
+HEAD:runtime/src/Heap/z/zRelocationSetSelector.cpp:320:            !fromRegion->IsAllocating() && !fromRegion->IsYoungRegion()) {
+HEAD:runtime/src/Heap/z/zRelocationSetSelector.cpp:390:                        static_cast<unsigned>(del->IsAllocating()),
+HEAD:runtime/src/Heap/z/zRelocationSetSelector.cpp:427:        d.allocating = fromRegion->IsAllocating();
+HEAD:runtime/src/Heap/z/zRemembered.cpp:67:    if (region->IsAllocating()) {
+HEAD:runtime/src/Heap/z/zRemembered.cpp:85:    if (region->IsAllocating()) {
+HEAD:runtime/src/Heap/z/zVerify.cpp:166:        CHECK_DETAIL(holder->IsAllocating(),

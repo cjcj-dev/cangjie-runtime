@@ -1,0 +1,22 @@
+diff --git a/runtime/src/Heap/z/zMark.cpp b/runtime/src/Heap/z/zMark.cpp
+index 48c652a95..d38925af4 100644
+--- a/runtime/src/Heap/z/zMark.cpp
++++ b/runtime/src/Heap/z/zMark.cpp
+@@ -739,7 +739,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
+                 region->GetAddressOffset(reinterpret_cast<MAddress>(object)), false, firstLive)
+             : !region->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, firstLive);
+         if (!already) {
+-            workStack.push_back(MarkStackEntry::Claimed(object, firstLive, true, finalizable));
++            // Control arm: omit root-to-worker publication.
+         }
+     }
+ }
+@@ -979,7 +979,7 @@ private:
+         const bool isYoung = region->IsYoungRegion();
+ 
+         if (isYoung) {
+-            bool wasMarked = collector->MarkEntryObject(object, entry, &ctx.Cache());
++            bool wasMarked = (collector->MarkEntryObject(object, entry, &ctx.Cache()), false);
+             if (entry.mark() && wasMarked) {
+                 return;
+             }

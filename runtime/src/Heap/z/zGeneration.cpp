@@ -36,6 +36,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -47,16 +48,124 @@
 namespace MapleRuntime {
 void ResetSkippedStackMapCounts();
 void ReportSkippedStackMapCounts();
-// ZGenerationYoung::mark_start (zGeneration.cpp:871-880). Called under the
-// young mark-start safepoint; sequence readers cannot observe half this event.
-void GenerationCycle::StartYoungMark(RememberedSet& rememberedSet)
+// ZGenerationYoung::mark_start (zGeneration.cpp:855-880). The collector
+// supplies the existing allocator/mark domain; this cycle owns phase and seq.
+YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
 {
     CHECK(generation == GCCycleGeneration::YOUNG);
-    std::lock_guard<std::mutex> lock(mutex);
-    CHECK(active);
-    CHECK(sequence != UINT64_MAX);
-    ++sequence;
-    rememberedSet.FlipForMinor();
+    CHECK(Snapshot().active);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, markDomain);
+    }
+#endif
+    collector.flip_young_mark_start();
+    ZVerify::OnColorFlip();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, markDomain);
+    }
+#endif
+
+    auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
+    auto& manager = space.GetRegionManager();
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
+        manager.ResetTLABUsage();
+        manager.RetireSharedPages(kPageAgeRangeYoung);
+        collector.FlushAllocationRegions();
+    }
+    // Cangjie keeps allocation lists and candidate statistics in RegionManager.
+    // Preparing those lists retires the young shared/pinned allocation pages.
+    collector.minorCandidateRegions.clear();
+    YoungCollectionStats stats;
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
+        stats = manager.PrepareYoungGarbageCandidates(
+            [&collector](RegionInfo* region) { collector.minorCandidateRegions.insert(region); });
+    }
+    // Flush pre-flip producers before invalidating their generation sequence.
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, markDomain);
+    }
+#endif
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        CHECK(sequence != UINT64_MAX);
+        ++sequence;
+    }
+    PublishPhase(GC_PHASE_ENUM);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, markDomain);
+    }
+#endif
+    collector.StartYoungMarkWork();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRemembered, markDomain);
+    }
+#endif
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
+        Heap::GetHeap().GetRememberedSet().FlipForMinor();
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete, markDomain);
+    }
+#endif
+    return stats;
+}
+
+// ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
+void GenerationCycle::StartOldMark(WCollector& collector)
+{
+    CHECK(generation == GCCycleGeneration::OLD);
+    CHECK(Snapshot().active);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, markDomain);
+    }
+#endif
+    collector.flip_old_mark_start();
+    ZVerify::OnColorFlip();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, markDomain);
+    }
+#endif
+    auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
+    // ZGC holds the VM mark-start pause across retirement and seqnum advance
+    // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
+    // explicitly because our handshake pause permits safe native threads.
+    std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
+    space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, markDomain);
+    }
+#endif
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        CHECK(sequence != UINT64_MAX);
+        ++sequence;
+    }
+    pinnedLock.unlock();
+    PublishPhase(GC_PHASE_ENUM);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, markDomain);
+    }
+#endif
+    collector.StartOldMarkWork();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (TracingCollector::testMarkStartState) {
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete, markDomain);
+    }
+#endif
 }
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
@@ -90,8 +199,10 @@ void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase val
 // ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
 void WCollector::MarkYoungRootObject(BaseObject* object) const
 {
-    CHECK_DETAIL(youngMarkDomain != nullptr, "young root mark requires its mark domain");
-    youngMarkDomain->MarkRootObject(object);
+    // #596's barrier already established current and selected young. Keep the
+    // generation mark-phase assertion at ZGeneration::mark_object's entry.
+    auto& cycle = const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG));
+    cycle.MarkObject<false, true, true, false>(from_object(object));
 }
 
 void WCollector::FlushAllocationRegions()
@@ -110,56 +221,16 @@ void WCollector::DoYoungGarbageCollection()
     // A major starts old exactly once in this young pause. An independent
     // minor leaves the old cycle identity and mark color untouched.
     collectorResources.NoteYoungMarkStart(youngCycle.YoungType());
-    flip_young_mark_start();
-    ZVerify::OnColorFlip();
-    StartYoungMarkWork();
-
-    {
-        // minortime: ① FlushAllocationRegions
-        MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
-        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ResetTLABUsage();
-        FlushAllocationRegions();
-    }
-
+    // VM_ZMarkStartYoungAndOld starts the complete young event before old
+    // (zGeneration.cpp:601-602); a minor only enters the young event.
+    YoungCollectionStats stats = youngCycle.StartYoungMark(*this);
     if (youngCycle.IsMajorRoots()) {
         oldCycle.Begin(oldCycle.Snapshot().requestIndex);
-        StartOldMarkWork();
-        flip_old_mark_start();
-        ZVerify::OnColorFlip();
-        // Reset the old mark face before young roots can publish old work.
-        // ZGenerationOld::mark_start -> ZMark::start (zGeneration.cpp:1212-1237).
-        reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
-        oldCycle.PublishPhase(GCPhase::GC_PHASE_ENUM);
+        oldCycle.StartOldMark(*this);
     }
-
-
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
-    minorCandidateRegions.clear();
-    YoungCollectionStats stats;
-    {
-        // minortime: ② PrepareYoungGarbageCandidates
-        MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
-        stats = manager.PrepareYoungGarbageCandidates(
-            [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
-    }
-    // Complete the mark-start sequence/flip event after flushing pre-flip
-    // producers and before publishing the young mark phase (zGeneration.cpp:871-880).
     MinorSlotSet rememberedSlots;
-    {
-        // Remembered-set face flip; sparse consumption after world release.
-        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
-        RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-        (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
-        // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
-        // world-release with mark_follow (zRemembered.cpp:561-576).
-        youngCycle.StartYoungMark(rememberedSet);
-
-    }
-
-    // Publish the reset young mark face before phase-change store-buffer
-    // scanning can enqueue targets (zGeneration.cpp:855-881).
-    youngCycle.PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (testYoungMarkStarted) {
         testYoungMarkStarted();
@@ -933,6 +1004,7 @@ namespace MapleRuntime {
 #include "Heap/Collector/GcStats.h"
 #include "Common/BaseObject.h"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Common/StateWord.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
@@ -962,12 +1034,6 @@ void GenerationCycle::Begin(uint64_t index)
 {
     std::lock_guard<std::mutex> lock(mutex);
     CHECK(!active);
-    // Young sequence belongs to mark_start together with the remset flip
-    // (zGeneration.cpp:871-880), not to the earlier request preparation.
-    if (generation == GCCycleGeneration::OLD) {
-        CHECK(sequence != UINT64_MAX);
-        ++sequence;
-    }
     requestIndex = index;
     active = true;
 }
@@ -1143,6 +1209,11 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     ScopedEntryTrace trace("CJRT_GC_TRACE");
     MRT_PHASE_TIMER(ZStatPhases::PDoTracing);
     VLOG(REPORT, "roots size: %zu", workStack.size());
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testOldMarkStarted) {
+        testOldMarkStarted();
+    }
+#endif
 
     {
         MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
@@ -1183,3 +1254,27 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
 }
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// Instantiate the product template for the policy matrix. Tests import these
+// exact bodies from the DSO, as the existing page-mark tests do.
+#include "Heap/z/zGeneration.inline.hpp"
+namespace MapleRuntime {
+template void GenerationCycle::MarkObjectIfActive<false, false, false, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, false, false, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, false, true, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, false, true, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, true, false, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, true, false, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, true, true, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, true, true, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, false, false, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, false, false, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, false, true, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, false, true, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, true, false, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, true, false, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, true, true, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, true, true, true>(zaddress);
+}
+#endif

@@ -55,20 +55,6 @@ namespace WCollectorInternal {
 // 4fcf746a used IsMarkedObject<Old> only — post-flip to-space and young
 // holders have no Old face, so F3 / Resolve / Scrub planted null into live
 // Array slots (nwreclaim: pc_off=0x29589 mov 0x8(%rcx) rcx=0).
-bool RegionIsAllocatingPage(const RegionInfo* region)
-{
-    if (region == nullptr) {
-        return false;
-    }
-    const RegionInfo::RegionType type = region->GetRegionType();
-    return region->IsToRegion() || region->IsThreadLocalRegion() ||
-        type == RegionInfo::RegionType::RECENT_FULL_REGION ||
-        type == RegionInfo::RegionType::RECENT_LARGE_REGION ||
-        type == RegionInfo::RegionType::TL_RAW_POINTER_REGION ||
-        type == RegionInfo::RegionType::TL_LARGE_RAW_POINTER_REGION ||
-        region->IsPinnedRegion() || region->HasMarkStartAllocGap();
-}
-
 bool HolderObjectIsLive(BaseObject* holder)
 {
     if (holder == nullptr || !Heap::IsHeapAddress(holder) || !holder->IsValidObject()) {
@@ -78,7 +64,7 @@ bool HolderObjectIsLive(BaseObject* holder)
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
-    if (RegionIsAllocatingPage(region)) {
+    if (region->IsAllocating()) {
         return true;
     }
     if (region->IsYoungRegion()) {
@@ -96,7 +82,7 @@ bool SlotHeldByLiveObject(const void* slot)
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
-    if (RegionIsAllocatingPage(region)) {
+    if (region->IsAllocating()) {
         return true;
     }
     BaseObject* holder = reinterpret_cast<BaseObject*>(

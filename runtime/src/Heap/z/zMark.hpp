@@ -37,6 +37,7 @@ void VerifyAllEmpty(MarkDomain& domain);
 
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zAddress.hpp"
 
 
 #include "Heap/z/zMarkTerminate.hpp"
@@ -67,10 +68,11 @@ public:
 class MarkDomain {
 public:
     explicit MarkDomain(size_t capacity, MarkingStacks::MarkingGeneration generation);
+    template<bool resurrect, bool gcThread, bool follow, bool finalizable>
+    void MarkObject(zaddress address);
     void PrepareWork(size_t nworkers);
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
-    void MarkRootObject(BaseObject* object);
     void BindWorkers(GCWorkers* workers) { gcWorkers = workers; }
     void BindAbort(ZAbort* token) { abortToken = token; }
     bool PollStop();
@@ -306,6 +308,8 @@ public:
     void ObservePublishedRoots(GCWorkers::Generation generation);
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
+    static std::function<void()> testOldMarkStarted;
+    static std::function<void(GCCycleGeneration, MarkStartPoint, const MarkDomain*)> testMarkStartState;
     static std::function<void()> testYoungMarkCompleted;
     static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
 #endif
@@ -384,7 +388,7 @@ public:
 
     // Consume one object entry. Partial arrays must be decoded before this
     // entry point; mark=false carries an already-owned accounting obligation.
-    virtual bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
+    bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
                                  MarkLiveCache* cache) const;
 
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
@@ -405,7 +409,7 @@ public:
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
     {
         // livesame: ResurrectObject counts on 0→1 inside.
-        bool resurrected = regionInfo->ResurrectObject(obj, offset);
+        bool resurrected = !regionInfo->ResurrectObject(obj, offset);
         if (!resurrected) {
             size_t objSize = obj->GetSize();
             if (!fixReferences && regionInfo->IsFromRegion()) {
