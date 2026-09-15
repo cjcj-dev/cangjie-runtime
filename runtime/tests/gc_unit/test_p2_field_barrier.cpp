@@ -364,6 +364,14 @@ extern "C" int p2FinalizerRegistrationExercise()
             if (object == pinned) pinnedDiscovered = IsFinalizable(object);
             if (object == delayedOld) delayedDiscovered = IsFinalizable(object);
         });
+        // Record the product discovery result before a severed producer lets
+        // normal follow/reclamation obscure these already reached assertions.
+        // The healthy arm continues through the unchanged enqueue assertions.
+        if (failures.load() != 0) {
+            std::printf("P2_REGISTRATION_RESULT failures=%u target_stage=next_old_mark\n", failures.load());
+            std::fflush(stdout);
+            std::_Exit(failures.load());
+        }
     };
     collector.RequestGC(GC_REASON_USER, false);
     TracingCollector::testYoungMarkCompleted = nullptr;
