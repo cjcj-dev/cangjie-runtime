@@ -50,6 +50,25 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
     GC_EXPECT_TRUE(processor.Empty());
 }
 
+// Native finalizer registrations have no Java discovered field. Re-visiting
+// the same referent must retain one original discovery lifecycle.
+GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
+{
+    GcHeapFixture fx;
+    ReferenceProcessor processor;
+    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    GC_EXPECT_TRUE(fx.region0->ResurrectObject(fx.obj0, offset));
+    (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
+    (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
+    const size_t discovered = processor.Discovered(ReferenceType::FINAL);
+    processor.ProcessReferences([](BaseObject*) { return false; });
+    size_t queued = 0;
+    processor.EnqueueReferences([&](BaseObject*) { ++queued; return true; });
+    std::fprintf(stderr, "P2_DISCOVERY_RESULT discovered=%zu queued=%zu\n", discovered, queued);
+    GC_EXPECT_EQ(discovered, size_t(1));
+    GC_EXPECT_EQ(queued, size_t(1));
+}
+
 GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
 {
     GcHeapFixture fx;

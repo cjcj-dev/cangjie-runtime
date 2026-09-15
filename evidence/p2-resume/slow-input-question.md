@@ -1,0 +1,6 @@
+LANE=sym_cangjie_runtime_607_implement_r5684610492
+ROLE=implement
+阶段实测更新：build5产品双构型rc0/0，managed-final3完整请求返回rc3，仅三个测试前提/覆盖断言红。真实注册→mark期Finalizable old→old位/颜色/follow全部PASS；discovered delta2、enqueue delta1、Strong升级排除最终pending全部PASS。原remset两周期、young→old minor不写位/major写位均PASS。
+目前old→young slow信号构造需裁定：串行major_partial_roots在old StartMark翻色后先跑young remset，ColorRemsetGood把目标槽同时设mark_good（ZGC :432-438）。因此old字段随后合法fast返回young地址而不heal；Finalizable同样is_marked_any_old=true，源码同ZGC :396/:626。现测试原期望每次null/markbad不成立，不能强制所有慢路或改变产品色/mark状态取绿。实际Finalizable young slot unchanged PASS，bad路径未到达，保留缺口。
+请明确允许的确定性slow输入构造：是否可在真实mark阶段以受控测试输入槽保存历史颜色/current目标，直接测试SO的字段入口作为低层slow轴，并将真实完整GC链单独按fast/remset/Finalizable生产验收？这会是输入夹具而非真实store历史，按现合同不能冒充完整producer。若要求全部由真实store历史构造，请主控给串行driver下可达的分路场景/现有暂停点，不授权本棒修改相位/force-slow/删CHECK。
+另完整路径strong old→young覆盖缺项含两次young后promotion，正在用新分配young图进入单次partial-roots隔离该合法晋升分支；不改age阈值。

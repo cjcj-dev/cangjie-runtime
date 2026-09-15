@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zBarrier.cpp
++++ b/runtime/src/Heap/z/zBarrier.cpp
+@@ -283,7 +283,7 @@
+     if (RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+         young.MarkObject<false, true, true, false>(address);
+     } else if (young.IsMajorRoots()) {
+-        theCollector.GetGenerationCycle(GCCycleGeneration::OLD).MarkObject<false, true, true, false>(address);
++        // P2 regression: omit the major-roots old mark publication.
+     }
+     return address;
+ }

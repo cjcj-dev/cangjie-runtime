@@ -18,6 +18,16 @@ mkdir -p "$OUT"
   -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
   "$SRC/test_p2_field_barrier.cpp" -L"$LIB" -Wl,-rpath,"$LIB" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck -ldl -o "$OUT/libp2_field_barrier.so"
+if [[ "${P2_PLAIN_MAIN:-0}" == 1 ]]; then
+cat > "$OUT/p2_field_barrier.cj" <<'CJ'
+foreign { func p2FieldBarrierExercise(): Int32 }
+main(): Int64 {
+    return Int64(unsafe { p2FieldBarrierExercise() })
+}
+CJ
+else
+# Keep the original managed/spawn coverage for the compiler literal-producer
+# handoff. The plain-main arm only isolates the independent field mechanisms.
 cat > "$OUT/p2_field_barrier.cj" <<'CJ'
 foreign { func p2FieldBarrierExercise(): Int32 }
 main(): Int64 {
@@ -25,6 +35,10 @@ main(): Int64 {
     return Int64(result.get())
 }
 CJ
+fi
+ENTRY="${P2_TEST_ENTRY:-p2FieldBarrierExercise}"
+[[ "$ENTRY" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] || exit 2
+sed -i "s/p2FieldBarrierExercise/$ENTRY/g" "$OUT/p2_field_barrier.cj"
 LD_LIBRARY_PATH="$HOST:$SDK/tools/lib:$SDK/third_party/llvm/lib" \
   "${P2_CJC:-$SDK/bin/cjc}" "$OUT/p2_field_barrier.cj" -O0 --static-std -L "$LIB" -L "$OUT" \
   -lp2_field_barrier -o "$OUT/p2_field_barrier"
