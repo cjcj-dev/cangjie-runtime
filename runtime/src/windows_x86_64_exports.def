@@ -1349,7 +1349,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
     _ZN12MapleRuntime13RegionManager22CollectFreePinnedSlotsEPNS_10RegionInfoE @1435
     _ZN12MapleRuntime13RegionManager22RemoveRawPointerObjectEPNS_10BaseObjectE @1436
-    _ZN12MapleRuntime13RegionManager23AllocPinnedFromFreeListEy @1437
     _ZN12MapleRuntime13RegionManager23RemoveThreadLocalRegionEPNS_10RegionInfoE @1438
     _ZN12MapleRuntime13RegionManager23SetLargeObjectThresholdEv @1439
     _ZN12MapleRuntime13RegionManager19RelocateClaimedPageEPNS_10RegionInfoE @1440

@@ -34,7 +34,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
     GcHeapFixture fx;
     ReferenceProcessor processor;
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_FALSE(fx.region0->ResurrectObject(fx.obj0, offset));
+    GC_EXPECT_TRUE(fx.region0->ResurrectObject(fx.obj0, offset));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
                    ReferenceStatus::DISCOVERED);
 
@@ -54,8 +54,8 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
 {
     GcHeapFixture fx;
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_FALSE(fx.region0->ResurrectObject(fx.obj0, offset));
-    GC_EXPECT_FALSE(fx.region0->MarkObject(
+    GC_EXPECT_TRUE(fx.region0->ResurrectObject(fx.obj0, offset));
+    GC_EXPECT_TRUE(fx.region0->MarkObject(
         fx.region0->GetMarkView<Generation::Old>(), fx.obj0, fx.obj0->GetSize()));
 
     ReferenceProcessor processor;
@@ -168,7 +168,7 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
         BaseObject* object = fx.PlaceObject(fx.heapStart + 64 + index * 64);
         objects.push_back(object);
         const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(object));
-        GC_EXPECT_FALSE(fx.region0->ResurrectObject(object, offset));
+        GC_EXPECT_TRUE(fx.region0->ResurrectObject(object, offset));
     }
     fx.region0->SetRegionAllocPtr(
         reinterpret_cast<MAddress>(objects.back()) + 64);

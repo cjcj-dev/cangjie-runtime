@@ -243,13 +243,13 @@ GC_TEST(ZLiveMapPort, YoungSequenceInvalidatesCountsWithoutPageClear)
     auto* region = fx.region0;
     region->SetYoungRegionFlag(1);
     auto first = region->GetMarkView<Generation::Young>();
-    GC_EXPECT_FALSE(region->MarkObject(first, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_TRUE(region->MarkObject(first, fx.obj0, fx.obj0->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto next = region->GetMarkView<Generation::Young>();
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(0));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
-    GC_EXPECT_FALSE(region->MarkObject(next, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_TRUE(region->MarkObject(next, fx.obj0, fx.obj0->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(fx.obj0->GetSize()));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
 }

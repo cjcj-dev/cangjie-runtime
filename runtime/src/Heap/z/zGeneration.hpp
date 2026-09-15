@@ -16,6 +16,8 @@
 #include "Heap/Collector/GcRequest.h"
 namespace MapleRuntime {
 class RememberedSet;
+class MarkDomain;
+enum class zaddress : Uptr;
 struct TenuringInputs;
 // Per-generation execution state. The snapshot lock publishes cycle identity
 // and phase together; the phase atomic serves existing barrier readers.
@@ -33,6 +35,12 @@ class GenerationCycle {
 public:
     explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
     GCCycleSnapshot Snapshot() const;
+    void BindMarkDomain(MarkDomain* domain) { markDomain = domain; }
+    bool IsPhaseMark() const;
+    template<bool resurrect, bool gcThread, bool follow, bool finalizable>
+    void MarkObject(zaddress address);
+    template<bool resurrect, bool gcThread, bool follow, bool finalizable>
+    void MarkObjectIfActive(zaddress address);
     void InitializeWorkers(uint32_t capacity);
     void StopWorkers();
     GCWorkers* Workers() const { return workers.get(); }
@@ -51,11 +59,13 @@ public:
     }
     void Begin(uint64_t index);
     void StartYoungMark(RememberedSet& rememberedSet);
+    void StartOldMark();
     void PublishPhase(GCPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
     void End();
 private:
+    MarkDomain* markDomain = nullptr;
     const GCCycleGeneration generation;
     std::unique_ptr<GCWorkers> workers;
     GCStats stats;

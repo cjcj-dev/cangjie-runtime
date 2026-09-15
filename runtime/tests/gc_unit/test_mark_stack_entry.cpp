@@ -24,9 +24,10 @@ static_assert(!std::is_convertible<MarkStackEntry, BaseObject*>::value,
 
 GC_TEST(MarkStackEntry, ObjectPoliciesAreIndependent)
 {
-    BaseObject* const object = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x12345678));
+    BaseObject* const object = reinterpret_cast<BaseObject*>(MarkStackEntry::HeapBase() + static_cast<uintptr_t>(0x12345678));
 
     const MarkStackEntry both = MarkStackEntry::MarkAndFollow(object);
+    GC_EXPECT_EQ(both.objectOffset(), 0x12345678u);
     GC_EXPECT_FALSE(both.partialArray());
     GC_EXPECT_TRUE(both.mark());
     GC_EXPECT_TRUE(both.incLive());
@@ -61,8 +62,8 @@ GC_TEST(MarkStackEntry, PartialArrayIsASeparateKind)
 
 GC_TEST(MarkStackEntry, StackSplitPreservesPolicy)
 {
-    BaseObject* const first = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x1000));
-    BaseObject* const second = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x2000));
+    BaseObject* const first = reinterpret_cast<BaseObject*>(MarkStackEntry::HeapBase() + static_cast<uintptr_t>(0x1000));
+    BaseObject* const second = reinterpret_cast<BaseObject*>(MarkStackEntry::HeapBase() + static_cast<uintptr_t>(0x2000));
     MarkStack<MarkStackEntry> stack;
     stack.push_back(MarkStackEntry::MarkOnly(first));
     // Fill a second buffer so split(1) transfers one complete ownership node.

@@ -214,7 +214,7 @@ GC_TEST(LiveMap, LiveInfo0SnapshotSurvivesClear)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
-    GC_EXPECT_FALSE(ProductMarkSource<Generation::Old>(region, fx.obj0));
+    GC_EXPECT_TRUE(ProductMarkSource<Generation::Old>(region, fx.obj0));
     LiveInfo* source = region->GetLiveInfo();
     PublishLiveMapSource<Generation::Old>(region);
     region->metadata.liveInfo = nullptr;
@@ -240,7 +240,7 @@ GC_TEST(LiveMap, BindLiveInfo0AfterLateMark)
     PublishLiveMapSource<Generation::Old>(region);
     GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == nullptr);
     region->InitializeLiveInfo();
-    GC_EXPECT_FALSE(ProductMarkSource<Generation::Old>(region, fx.obj0));
+    GC_EXPECT_TRUE(ProductMarkSource<Generation::Old>(region, fx.obj0));
     ProductBindSource(region);
     ExpectSourceObject(region, fx.obj0, "late-product-mark-bound");
     GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == region->GetLiveInfo());
@@ -252,7 +252,7 @@ GC_TEST(LiveMap, OldForwardingCarrierPublishesOwnerAndRetires)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
-    GC_EXPECT_FALSE(ProductMarkSource<Generation::Old>(region, fx.obj0));
+    GC_EXPECT_TRUE(ProductMarkSource<Generation::Old>(region, fx.obj0));
     PublishLiveMapSource<Generation::Old>(region);
     GC_EXPECT_TRUE(region->HasFromPageMetadata());
     GC_EXPECT_EQ(region->GetRouteMarkGeneration(), Generation::Old);
@@ -284,7 +284,7 @@ GC_TEST(LiveMap, FromPageOwnerAndLivemapStayIdenticalAcrossPromotion)
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
     region->SetYoungRegionFlag(1);
-    GC_EXPECT_FALSE(ProductMarkSource<Generation::Young>(region, fx.obj0));
+    GC_EXPECT_TRUE(ProductMarkSource<Generation::Young>(region, fx.obj0));
     LiveInfo* source = region->GetLiveInfo();
     PublishLiveMapSource<Generation::Young>(region);
     auto original = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
@@ -313,7 +313,7 @@ GC_TEST(LiveMap, PromotionCarrierLivesUntilForwardingRelease)
         region->SetYoungRegionFlag(1);
         if (large) region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
         BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
-        GC_EXPECT_FALSE(ProductMarkSource<Generation::Young>(region, object));
+        GC_EXPECT_TRUE(ProductMarkSource<Generation::Young>(region, object));
         LiveInfo* source = region->GetLiveInfo();
         PublishLiveMapSource<Generation::Young>(region);
         auto original = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
@@ -395,7 +395,7 @@ GC_TEST(LiveMap, OwnerDispatchMarksYoungFace)
     (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
 
-    GC_EXPECT_FALSE(region->MarkObjectByOwner(fx.obj0, fx.obj0->GetSize()));
+    GC_EXPECT_TRUE(region->MarkObjectByOwner(fx.obj0, fx.obj0->GetSize()));
     GC_EXPECT_TRUE(region->IsMarkedObject(region->GetMarkView<Generation::Young>(), offset));
     GC_EXPECT_TRUE(region->IsMarkedObject(region->GetMarkView<Generation::Old>(), offset));
     GC_EXPECT_TRUE(region->MarkFaceMatchesOwner<Generation::Young>());
@@ -450,14 +450,14 @@ GC_TEST(LiveMap, LargeFirstPaintHasSingleWinner)
     std::thread t0([&]() {
         while (!go.load(std::memory_order_acquire)) {
         }
-        if (!ProductMarkObjectFn<Generation::Old>()(region, view, holder, holder->GetSize(), true)) {
+        if (ProductMarkObjectFn<Generation::Old>()(region, view, holder, holder->GetSize(), true)) {
             first.fetch_add(1, std::memory_order_relaxed);
         }
     });
     std::thread t1([&]() {
         while (!go.load(std::memory_order_acquire)) {
         }
-        if (!ProductMarkObjectFn<Generation::Old>()(region, view, holder, holder->GetSize(), true)) {
+        if (ProductMarkObjectFn<Generation::Old>()(region, view, holder, holder->GetSize(), true)) {
             first.fetch_add(1, std::memory_order_relaxed);
         }
     });
@@ -484,37 +484,31 @@ GC_TEST(LiveMap, GenerationSequenceSharedByPages)
     GC_EXPECT_EQ(fx.region1->GetSnapshotEpoch(), oldSequence + 1);
 }
 
-// markwater: ClearLiveInfo snapshots allocPtr. Objects at offset ≥ water
-// are allocate-black (ZGC zPage is_allocating). A stale view must not
-// inherit that verdict (oracleblack2 b-face).
-GC_TEST(LiveMap, MarkStartAllocWaterIsImplicitLive)
+// ZPage::reset_seqnum / is_allocating (zPage.cpp:90; zPage.inline.hpp:180).
+GC_TEST(LiveMap, PageBirthSequenceIsImplicitLive)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
-    MAddress start = region->GetRegionStart();
-    region->SetRegionAllocPtr(start + 128);
-    GC_EXPECT_EQ(region->GetMarkStartAllocPtr(), 0u);
-
-    MarkView<Generation::Old> stale = region->GetMarkView<Generation::Old>();
-    GcHeapFixture::AdvanceGeneration(Generation::Old);
-    region->ClearLiveInfo(region->GetMarkView<Generation::Old>());
-    GC_EXPECT_EQ(region->GetMarkStartAllocPtr(), start + 128);
-
-    region->SetRegionAllocPtr(start + 256);
-    MarkView<Generation::Old> current = region->GetMarkView<Generation::Old>();
-    GC_EXPECT_TRUE(region->HasMarkStartAllocGap());
+    GC_EXPECT_TRUE(region->IsRelocatable());
+    region->ResetPageSequence();
+    const uint64_t birth = region->BirthSequence();
+    GC_EXPECT_EQ(birth, region->GetSnapshotEpoch());
+    GC_EXPECT_TRUE(region->IsAllocating());
+    GC_EXPECT_FALSE(region->IsRelocatable());
+    auto current = region->GetMarkView<Generation::Old>();
     GC_EXPECT_FALSE(region->IsKnownEmpty(current));
-    GC_EXPECT_FALSE(region->AllocatedAfterMarkStart(64));
-    GC_EXPECT_TRUE(region->AllocatedAfterMarkStart(128));
-    GC_EXPECT_TRUE(region->AllocatedAfterMarkStart(192));
-    GC_EXPECT_FALSE(region->IsMarkedObject(current, static_cast<size_t>(64)));
-    GC_EXPECT_TRUE(region->IsMarkedObject(current, static_cast<size_t>(128)));
-    GC_EXPECT_TRUE(region->IsSurvivedObject(current, static_cast<size_t>(192)));
-    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(128));
-    // Stale view (previous generation sequence) must not treat post-water as marked.
-    GC_EXPECT_FALSE(region->IsMarkedObject(stale, static_cast<size_t>(128)));
-    GC_EXPECT_FALSE(region->IsSurvivedObject(stale, static_cast<size_t>(192)));
+    GC_EXPECT_TRUE(region->IsMarkedObject(current, static_cast<size_t>(64)));
+    GC_EXPECT_TRUE(region->IsSurvivedObject(current, static_cast<size_t>(128)));
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GC_EXPECT_EQ(region->BirthSequence(), birth);
+    GC_EXPECT_TRUE(region->IsAllocating());
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    GC_EXPECT_TRUE(region->IsRelocatable());
+    GC_EXPECT_FALSE(region->IsAllocating());
+    GC_EXPECT_EQ(region->BirthSequence(), birth);
+    GC_EXPECT_FALSE(region->IsMarkedObject(region->GetMarkView<Generation::Old>(), static_cast<size_t>(64)));
 }
+
 
 // Main-line ZLiveMap paired-bit and product-consumer coverage retained by content synthesis.
 GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
@@ -617,7 +611,7 @@ GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
             // does not call RegionBitmap::MarkBits directly: the product
             // RegionInfo::MarkObject implementation owns the pair RMW and its
             // live-byte receipt.
-            const bool localAlready = markObject(region, view, holder, holder->GetSize(), true);
+            const bool localAlready = !markObject(region, view, holder, holder->GetSize(), true);
             const bool localIncLive = !localAlready;
             already[worker].store(localAlready, std::memory_order_relaxed);
             incLive[worker].store(localIncLive, std::memory_order_relaxed);
@@ -698,7 +692,7 @@ GC_TEST(ZLiveMapPort, CloneForPromotionKeepsOriginalPageLivemap)
         GC_EXPECT_TRUE(originalLive != nullptr);
         const auto mark = ProductMarkObjectFn<Generation::Young>();
         GC_EXPECT_TRUE(mark != nullptr);
-        GC_EXPECT_FALSE(mark(region, region->GetMarkView<Generation::Young>(),
+        GC_EXPECT_TRUE(mark(region, region->GetMarkView<Generation::Young>(),
                              object, object->GetSize(), true));
         auto originalPage = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
         GC_EXPECT_FALSE(region->IsYoungRegion());
@@ -734,7 +728,7 @@ GC_TEST(ZLiveMapPort, PromotionIteratorRequiresCurrentYoungSequence)
             BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
             const auto mark = ProductMarkObjectFn<Generation::Young>();
             GC_EXPECT_TRUE(mark != nullptr);
-            GC_EXPECT_FALSE(mark(region, region->GetMarkView<Generation::Young>(),
+            GC_EXPECT_TRUE(mark(region, region->GetMarkView<Generation::Young>(),
                                  object, object->GetSize(), true));
             LiveInfo* originalLive = region->GetLiveInfo();
             RegionBitmap* bitmap = originalLive->GetMarkFace().bitmap;
@@ -779,8 +773,8 @@ GC_TEST(ZLiveMapPort, LiveIteratorVisitsOnlyObjectStarts)
     auto mark = ProductMarkObjectFn<Generation::Old>();
     GC_EXPECT_TRUE(mark != nullptr);
     auto view = region->GetMarkView<Generation::Old>();
-    GC_EXPECT_FALSE(mark(region, view, fx.obj0, fx.obj0->GetSize(), true));
-    GC_EXPECT_FALSE(mark(region, view, second, second->GetSize(), true));
+    GC_EXPECT_TRUE(mark(region, view, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_TRUE(mark(region, view, second, second->GetSize(), true));
     std::vector<BaseObject*> visited;
     GC_EXPECT_TRUE(region->VisitLiveObjectsUntilFalse([&](BaseObject* obj) {
         visited.push_back(obj);

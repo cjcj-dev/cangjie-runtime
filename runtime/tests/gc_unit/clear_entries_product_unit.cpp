@@ -2642,7 +2642,7 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     const bool nearStoreGood = collector.is_store_good(*nearField);
     const bool farStoreGood = collector.is_store_good(*farField);
     const bool youngUnchanged = raw(youngField->GetFieldValue()) == youngBefore;
-    const bool holderNonAllocating = !holderRegion->HasMarkStartAllocGap();
+    const bool holderNonAllocating = !holderRegion->IsAllocating();
     const bool matrixResult = farOffset > 64 && holderNonAllocating && nearResolved && farResolved &&
         nearStoreGood && farStoreGood && youngUnchanged;
     std::fprintf(stderr,
@@ -2741,7 +2741,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     }
 
     const RemapYoungRootsTestReceipt receipt = ReadRemapYoungRootsTestReceipt();
-    const bool holderNonAllocating = !holderRegion->HasMarkStartAllocGap();
+    const bool holderNonAllocating = !holderRegion->IsAllocating();
     const bool targetResult = receipt.visits == 1 && receipt.heals == 1 &&
         receipt.resolvedAddress == reinterpret_cast<uintptr_t>(forwarding.to) &&
         receipt.storeGoodAfter && receipt.before != receipt.after && farOffset > 64 && holderNonAllocating;

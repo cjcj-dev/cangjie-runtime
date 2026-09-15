@@ -1044,7 +1044,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 const bool hasObjectLiveness = region->IsLargeRegion() ||
                     region->GetMarkBitmap(promotionView) != nullptr || region->GetResurrectBitmap() != nullptr;
-                if (region->HasMarkStartAllocGap() || !region->IsLiveCountAuthoritative() ||
+                if (region->IsAllocating() || !region->IsLiveCountAuthoritative() ||
                     !hasObjectLiveness) {
                     continue;
                 }
@@ -2018,6 +2018,7 @@ bool RegionManager::RelocateClaimedPage(RegionInfo* region)
     MAddress regionLimit = region->GetRegionAllocPtr();
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     bool allocFailed = false;
+    region->ResetPageSequence();
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t) {
         if (allocFailed) {
             return;

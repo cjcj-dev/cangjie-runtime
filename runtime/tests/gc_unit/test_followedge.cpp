@@ -138,7 +138,7 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
         GC_EXPECT_TRUE(target == bytes);
         if (!targetRegion->IsMarkedObject(view, target)) {
             ++pushed;
-            GC_EXPECT_FALSE(targetRegion->MarkObject(view, target, target->GetSize()));
+            GC_EXPECT_TRUE(targetRegion->MarkObject(view, target, target->GetSize()));
         }
     };
 

@@ -59,6 +59,16 @@ void GenerationCycle::StartYoungMark(RememberedSet& rememberedSet)
     rememberedSet.FlipForMinor();
 }
 
+// ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
+void GenerationCycle::StartOldMark()
+{
+    CHECK(generation == GCCycleGeneration::OLD);
+    std::lock_guard<std::mutex> lock(mutex);
+    CHECK(active);
+    CHECK(sequence != UINT64_MAX);
+    ++sequence;
+}
+
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
 // young sequence once for the whole old relocation, not once per forwarding.
 void GenerationCycle::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
@@ -105,7 +115,6 @@ void WCollector::DoYoungGarbageCollection()
     collectorResources.NoteYoungMarkStart(youngCycle.YoungType());
     flip_young_mark_start();
     ZVerify::OnColorFlip();
-    StartYoungMarkWork();
 
     {
         // minortime: ① FlushAllocationRegions
@@ -116,13 +125,15 @@ void WCollector::DoYoungGarbageCollection()
 
     if (youngCycle.IsMajorRoots()) {
         oldCycle.Begin(oldCycle.Snapshot().requestIndex);
-        StartOldMarkWork();
+        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
+        reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
+        oldCycle.StartOldMark();
         flip_old_mark_start();
         ZVerify::OnColorFlip();
-        // Reset the old mark face before young roots can publish old work.
+        // Publish the generation phase before starting the mark domain.
         // ZGenerationOld::mark_start -> ZMark::start (zGeneration.cpp:1212-1237).
-        reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
         oldCycle.PublishPhase(GCPhase::GC_PHASE_ENUM);
+        StartOldMarkWork();
     }
 
 
@@ -153,6 +164,7 @@ void WCollector::DoYoungGarbageCollection()
     // Publish the reset young mark face before phase-change store-buffer
     // scanning can enqueue targets (zGeneration.cpp:855-881).
     youngCycle.PublishPhase(GC_PHASE_ENUM);
+    StartYoungMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (testYoungMarkStarted) {
         testYoungMarkStarted();
@@ -950,12 +962,6 @@ void GenerationCycle::Begin(uint64_t index)
 {
     std::lock_guard<std::mutex> lock(mutex);
     CHECK(!active);
-    // Young sequence belongs to mark_start together with the remset flip
-    // (zGeneration.cpp:871-880), not to the earlier request preparation.
-    if (generation == GCCycleGeneration::OLD) {
-        CHECK(sequence != UINT64_MAX);
-        ++sequence;
-    }
     requestIndex = index;
     active = true;
 }

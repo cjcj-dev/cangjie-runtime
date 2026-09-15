@@ -64,7 +64,6 @@ inline void RegionManager::PrepareFromRegionList()
         // pages before install. Do this before PrepareForwardable so no ghost/route
         // is published for a watermark-gap region (915e6348 ForwardRegion Exempt
         // left from-copies). zGeneration.cpp:211-213, zPage.inline.hpp:180-185.
-        (void)ExemptMarkStartAllocatingFromCSet();
 
         // zGeneration.cpp:205-215: selection visits only this generation's pages.
         // The shared candidate list can contain young pages during an old cycle;

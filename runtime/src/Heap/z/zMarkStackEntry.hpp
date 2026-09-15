@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "Base/Log.h"
+#include "Heap/z/zAddress.hpp"
 
 namespace MapleRuntime {
 class BaseObject;
@@ -18,7 +19,7 @@ class BaseObject;
 // One-word, typed mark-stack entry. The layout and independent policy flags
 // follow OpenJDK ZMarkStackEntry (zMarkStackEntry.hpp:56-121):
 //
-// Object: bits 63..5 address, 4 mark, 3 inc-live, 2 follow,
+// Object: bits 63..5 heap offset, 4 mark, 3 inc-live, 2 follow,
 //         1 partial-array (zero), 0 finalizable.
 // Partial array: bits 63..32 heap-relative 4K offset, 31..2 length,
 //                1 partial-array (one), 0 finalizable.
@@ -59,8 +60,14 @@ public:
         : MarkStackEntry(object, true, true, true, false)
     {}
 
+    static uintptr_t HeapBase();
+
     MarkStackEntry(BaseObject* object, bool mark, bool incLive, bool follow, bool finalizable)
-        : entry((CheckedObjectAddress(object) << OBJECT_ADDRESS_SHIFT) |
+        : MarkStackEntry(static_cast<zoffset>(CheckedObjectAddress(object)), mark, incLive, follow, finalizable)
+    {}
+
+    MarkStackEntry(zoffset offset, bool mark, bool incLive, bool follow, bool finalizable)
+        : entry((static_cast<uint64_t>(offset) << OBJECT_ADDRESS_SHIFT) |
                 (static_cast<uint64_t>(mark) << MARK_SHIFT) |
                 (static_cast<uint64_t>(incLive) << INC_LIVE_SHIFT) |
                 (static_cast<uint64_t>(follow) << FOLLOW_SHIFT) |
@@ -111,7 +118,13 @@ public:
     BaseObject* object() const
     {
         CHECK_DETAIL(!partialArray(), "partial-array mark entry used as an object");
-        return reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(entry >> OBJECT_ADDRESS_SHIFT));
+        return reinterpret_cast<BaseObject*>(HeapBase() + objectOffset());
+    }
+
+    uintptr_t objectOffset() const
+    {
+        CHECK_DETAIL(!partialArray(), "partial-array mark entry used as an object offset");
+        return static_cast<uintptr_t>(entry >> OBJECT_ADDRESS_SHIFT);
     }
 
     size_t partialArrayOffset() const
@@ -128,13 +141,14 @@ public:
 
     static bool IsObjectAddressEncodable(const BaseObject* object)
     {
-        return reinterpret_cast<uintptr_t>(object) <= MAX_OBJECT_ADDRESS;
+        return reinterpret_cast<uintptr_t>(object) >= HeapBase() &&
+            reinterpret_cast<uintptr_t>(object) - HeapBase() <= MAX_OBJECT_ADDRESS;
     }
 
 private:
     static uint64_t CheckedObjectAddress(const BaseObject* object)
     {
-        const uintptr_t address = reinterpret_cast<uintptr_t>(object);
+        const uintptr_t address = reinterpret_cast<uintptr_t>(object) - HeapBase();
         CHECK_DETAIL(static_cast<uint64_t>(address) <= MAX_OBJECT_ADDRESS,
                      "object address does not fit mark entry: %p", static_cast<const void*>(object));
         return static_cast<uint64_t>(address);

@@ -191,13 +191,14 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
     cycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
-    // Capture a watermark after this holder was allocated.
+    // A page from a previous owner cycle is relocatable.
     fixture.region0->ClearLiveInfo(fixture.region0->GetMarkView<Generation::Old>());
     ExpectSceneAbort("Raw null requires allocating holder", [&] {
         ZVerify::Oop(fixture.obj0, field, false);
     });
-    // An object at the captured watermark is allocated after mark start.
-    const MAddress next = fixture.region0->GetMarkStartAllocPtr();
+    // Reset establishes a new allocating page, independent of object offsets.
+    fixture.region0->ResetPageSequence();
+    const MAddress next = fixture.region0->GetRegionAllocPtr();
     BaseObject* fresh = fixture.PlaceObject(next);
     fixture.region0->SetRegionAllocPtr(next + 64);
     RefField<>& freshField = HeapSlotAt<>(next + TYPEINFO_PTR_SIZE);

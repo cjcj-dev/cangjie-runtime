@@ -62,8 +62,6 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
 
 void RegionManager::AssembleSmallGarbageCandidates()
 {
-    // ZGenerationOld::mark_start, zGeneration.cpp:1222.
-    RetireSharedPages(kPageAgeRangeOld);
     fromRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FROM_REGION);
     // twoflags: regions stamped post-mark-start of the previous major stay off from-space
     // until PrepareTrace clears the stamp (after this Assemble).
@@ -293,61 +291,10 @@ bool ClaimFromRegion(RegionList& fromList, RegionInfo* del, RegionInfo::RegionTy
 
 } // namespace
 
-// ZGC zGeneration.cpp:211-213: !is_relocatable (is_allocating) pages are not
-// registered with the selector. HasMarkStartAllocGap ≡ zPage.inline.hpp:180-185.
-// Called at CSet select (ExemptFromRegions) and again before PrepareForwardable
-// so a watermark-gap region never publishes a route (915e6348 ghost).
-size_t RegionManager::ExemptMarkStartAllocatingFromCSet()
-{
-    static std::atomic<size_t> g_armed{ 0 };
-    static std::atomic<size_t> g_turned{ 0 };
-    static std::atomic<bool> atexitOn{ false };
-    if (!atexitOn.exchange(true, std::memory_order_relaxed)) {
-        std::atexit([]() {
-            std::fprintf(stderr, "[GCV2][markwater] atexit armed=%zu turned=%zu\n",
-                         g_armed.load(std::memory_order_relaxed),
-                         g_turned.load(std::memory_order_relaxed));
-            std::fflush(stderr);
-        });
-    }
-    std::vector<RegionInfo*> snapshot;
-    fromRegionList.VisitAllRegions([&snapshot](RegionInfo* r) { snapshot.push_back(r); });
-    size_t armed = 0;
-    size_t turned = 0;
-    for (RegionInfo* fromRegion : snapshot) {
-        if (fromRegion == nullptr || !fromRegion->HasMarkStartAllocGap()) {
-            continue;
-        }
-        ++armed;
-        if (!ClaimFromRegion(fromRegionList, fromRegion, RegionInfo::RegionType::UNMOVABLE_FROM_REGION, "markwater")) {
-            continue;
-        }
-        DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) markwater skip CSet: %zu units, %zu live bytes",
-             fromRegion, fromRegion->GetRegionStart(), fromRegion->GetRegionAllocatedSize(),
-             fromRegion->GetRegionEnd(), fromRegion->GetUnitCount(), fromRegion->GetLiveByteCount());
-        ExemptFromRegion(fromRegion);
-        ++turned;
-    }
-    if (armed != 0) {
-        g_armed.fetch_add(armed, std::memory_order_relaxed);
-    }
-    if (turned != 0) {
-        g_turned.fetch_add(turned, std::memory_order_relaxed);
-    }
-    if (armed != 0 || turned != 0) {
-        LOG(RTLOG_ERROR,
-            "[GCV2][markwater] cset-skip armed=%zu turned=%zu tot_armed=%zu tot_turned=%zu",
-            armed, turned, g_armed.load(std::memory_order_relaxed),
-            g_turned.load(std::memory_order_relaxed));
-    }
-    return turned;
-}
-
 // Cost-model CSet (ZRelocationSetSelector.cpp:114-196) after mark, before flip.
 // Semi-sort by per-page live fraction, then select the last profitable prefix.
 size_t RegionManager::ExemptFromRegions()
 {
-    (void)ExemptMarkStartAllocatingFromCSet();
     size_t forwardBytes = 0;
     size_t floatingGarbage = 0;
     size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
@@ -358,11 +305,19 @@ size_t RegionManager::ExemptFromRegions()
     descs.reserve(snapshot.size());
     descRegions.reserve(snapshot.size());
     for (RegionInfo* fromRegion : snapshot) {
+        // ZGeneration::select_relocation_set (zGeneration.cpp:211-213).
+        if (!fromRegion->IsRelocatable()) {
+            if (ClaimFromRegion(fromRegionList, fromRegion, RegionInfo::RegionType::UNMOVABLE_FROM_REGION,
+                                "allocating")) {
+                ExemptFromRegion(fromRegion);
+            }
+            continue;
+        }
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
-            !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
+            !fromRegion->IsAllocating() && !fromRegion->IsYoungRegion()) {
             RegionInfo* del = fromRegion;
             const unsigned rs = static_cast<unsigned>(del->RelocateObserve());
             const unsigned ke = del->IsKnownEmpty(del->GetMarkView<Generation::Old>()) ? 1u : 0u;
@@ -432,7 +387,7 @@ size_t RegionManager::ExemptFromRegions()
                         "route=%u ke=%u ghost=%u alloc=%u reason=%u free=%u",
                         n, del, start, liveBytes, residual, residualFwd, marked, rs, ke,
                         static_cast<unsigned>(del->IsGhostFromRegion()),
-                        static_cast<unsigned>(del->HasMarkStartAllocGap()),
+                        static_cast<unsigned>(del->IsAllocating()),
                         static_cast<unsigned>(Heap::GetHeap().GetCollector().GetGCStats().reason),
                         static_cast<unsigned>(freeEmpty));
                 }
@@ -469,7 +424,7 @@ size_t RegionManager::ExemptFromRegions()
         d.capacity = fromRegion->GetRegionSize();
         d.kind = fromRegion->IsLargeRegion() ? RelocRegionKind::Large : RelocRegionKind::Small;
         d.id = static_cast<uint32_t>(descs.size());
-        d.allocating = fromRegion->HasMarkStartAllocGap();
+        d.allocating = fromRegion->IsAllocating();
         descs.push_back(d);
         descRegions.push_back(fromRegion);
     }

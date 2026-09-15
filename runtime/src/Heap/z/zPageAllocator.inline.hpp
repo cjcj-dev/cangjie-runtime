@@ -341,9 +341,6 @@ inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
         if (headRegion != nullptr) {
             addr = headRegion->Alloc(size);
         }
-        if (addr == 0) {
-            addr = AllocPinnedFromFreeList(size);
-        }
         return addr;
     }
 

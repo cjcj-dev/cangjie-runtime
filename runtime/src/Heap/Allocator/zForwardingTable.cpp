@@ -215,7 +215,7 @@ void ForwardingTable::VisitAll(Generation generation, const std::function<void(Z
 }
 
 bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
-                                          MAddress topAtStart, MAddress markStartAllocPtr,
+                                          MAddress topAtStart, uint64_t birthSequence,
                                           uint8_t owner,
                                           uint8_t largeMarked, RegionLifeId lifeId)
 {
@@ -227,7 +227,7 @@ bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo
     if (carrier == nullptr || carrier->page() != region) {
         return false;
     }
-    carrier->publish_from_page_view(liveInfo, epoch, topAtStart, markStartAllocPtr,
+    carrier->publish_from_page_view(liveInfo, epoch, topAtStart, birthSequence,
                                     owner, largeMarked, lifeId);
     ZForwarding* previous = region->metadata.fwdOwner.load(std::memory_order_acquire);
     if (previous != carrier) {

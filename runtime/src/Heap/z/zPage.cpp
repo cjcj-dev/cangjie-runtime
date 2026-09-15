@@ -315,15 +315,14 @@ template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Ol
 #include "Heap/z/zLiveMap.hpp"
 
 namespace MapleRuntime {
-// ZPage::is_allocating (zPage.inline.hpp:180): a page born during mark
-// is implicitly live. Initialize before the first bump and page publication.
-void RegionInfo::InitializeAllocationWatermark()
+// ZPage::reset_seqnum (zPage.cpp:90-93), after owner selection and before publication.
+void RegionInfo::ResetPageSequence()
 {
-    const auto generation = IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
-    const GCPhase phase = Heap::GetHeap().GetGCPhase(generation);
-    metadata.markStartAllocPtr =
-        (phase == GC_PHASE_ENUM || phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER)
-        ? GetRegionStart() : 0;
+    const auto owner = IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    const auto other = IsYoungRegion() ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG;
+    auto& collector = Heap::GetHeap().GetCollector();
+    __atomic_store_n(&metadata.birthSequence, collector.GetCycleSnapshot(owner).sequence, __ATOMIC_RELEASE);
+    __atomic_store_n(&metadata.otherSequence, collector.GetCycleSnapshot(other).sequence, __ATOMIC_RELEASE);
 }
 
 uint64_t RegionInfo::GetSnapshotEpoch() const

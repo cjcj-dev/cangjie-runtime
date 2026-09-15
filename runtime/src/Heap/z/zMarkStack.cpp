@@ -289,3 +289,12 @@ size_t MarkStripeSet::NStripes() const { return nstripesMask.load(std::memory_or
 #include "Heap/z/zMarkContext.inline.hpp"
 
 #include "Heap/z/zMarkStack.inline.hpp"
+
+// ZOffset::address / ZAddress::offset: the Cangjie heap uses one payload view.
+#include "Heap/z/zHeap.hpp"
+namespace MapleRuntime {
+uintptr_t MarkStackEntry::HeapBase()
+{
+    return Heap::GetHeapStartAddress();
+}
+}

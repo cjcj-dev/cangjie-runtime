@@ -825,10 +825,10 @@ void* RunMarkAllocationCase(void* rawExisting)
     Heap::GetBarrier().WriteReference(holder, field, target);
     RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
     RegionInfo* targetPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
-    const bool implicit = page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
+    const bool implicit = page->IsAllocating();
     const bool live = productLive(page, page->GetMarkView<Generation::Young>(), holder);
     const bool targetLive = productLive(targetPage, targetPage->GetMarkView<Generation::Young>(), target);
-    const bool excluded = page->HasMarkStartAllocGap() && !page->IsKnownYoungEmpty(page->GetMarkView<Generation::Young>());
+    const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty(page->GetMarkView<Generation::Young>());
     const auto during = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const auto phase = during.phase;
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
@@ -867,7 +867,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool completedValue = completedTarget != nullptr &&
         static_cast<MArray*>(completedTarget)->GetLength() == 16;
     std::fprintf(stderr, "MARK_ALLOC_COMPLETED_VALUE_ASSERT_EXECUTED length_valid=%d\n", completedValue);
-    const bool resampled = !page->AllocatedAfterMarkStart(reinterpret_cast<uintptr_t>(holder) - page->GetRegionStart());
+    const bool resampled = !page->IsAllocating();
     const auto after = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const bool nextCycle = after.sequence > during.sequence;
     std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=%llu after=%llu resampled=%d\n",

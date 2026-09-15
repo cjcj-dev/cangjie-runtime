@@ -162,10 +162,8 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
         CHECK_DETAIL(collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).phase == GC_PHASE_MARK_COMPLETE,
                      "Raw null requires young mark complete at %p", &field);
         RegionInfo* holder = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(base));
-        // ZGC retires allocation pages at mark start; Cangjie can keep allocating
-        // in a region and represents allocate-black with the holder watermark.
-        CHECK_DETAIL(holder->AllocatedAfterMarkStart(
-                         reinterpret_cast<MAddress>(base) - holder->GetRegionStart()),
+        // ZPage::is_allocating (zPage.inline.hpp:180-182).
+        CHECK_DETAIL(holder->IsAllocating(),
                      "Raw null requires allocating holder at %p", &field);
     }
     if (!ColourPredicates::has_address(raw(value))) { return; }

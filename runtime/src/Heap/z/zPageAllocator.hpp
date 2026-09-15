@@ -606,7 +606,6 @@ public:
     RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false,
                            bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old);
 
-    uintptr_t AllocPinnedFromFreeList(size_t size);
 
     uintptr_t AllocPinned(size_t size);
 
@@ -677,9 +676,6 @@ public:
     // can be reclaimed.
     size_t ExemptFromRegions();
     // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
-    // HasMarkStartAllocGap pages never enter the route plan. Stay on unmovableFrom;
-    // next cycle ClearLiveInfo re-snapshots the watermark.
-    size_t ExemptMarkStartAllocatingFromCSet();
     void ReassembleFromSpace();
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,

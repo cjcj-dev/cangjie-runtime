@@ -1,0 +1,27 @@
+runtime/src/Heap/Collector/CollectorProxy.h:59:    void MarkYoungObjectIfActive(BaseObject* object) const override
+runtime/src/Heap/Collector/CollectorProxy.h:61:        currentCollector->MarkYoungObjectIfActive(object);
+runtime/src/Heap/Collector/CollectorProxy.h:64:    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
+runtime/src/Heap/Collector/CollectorProxy.h:66:        currentCollector->MarkOldObjectIfActive(object, gcThread);
+runtime/src/Heap/WCollector/WCollector.h:176:    void MarkYoungObjectIfActive(BaseObject* object) const override;
+runtime/src/Heap/WCollector/WCollector.h:881:    void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown") const;
+runtime/src/Heap/WCollector/WCollector.h:882:    void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin, bool finalizable) const;
+runtime/src/Heap/z/zStoreBarrierBuffer.cpp:96:                collector.MarkYoungObjectIfActive(object);
+runtime/src/Heap/z/zCollectedHeap.cpp:42:        MarkYoungObjectIfActive(object);
+runtime/src/Heap/z/zCollectedHeap.cpp:44:        MarkOldObjectIfActive(object);
+runtime/src/Heap/z/zGeneration.cpp:264:                PushYoungObject(target, destination, "y2y_slot");
+runtime/src/Heap/z/zGeneration.cpp:293:            PushYoungObject(object, workStack, "minor_root");
+runtime/src/Heap/z/zCollectedHeap.hpp:88:    virtual void MarkYoungObjectIfActive(BaseObject*) const
+runtime/src/Heap/z/zCollectedHeap.hpp:92:    virtual void MarkOldObjectIfActive(BaseObject*, bool = false) const
+runtime/src/Heap/z/zMark.hpp:378:    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override;
+runtime/src/Heap/z/zRemembered.cpp:181:        PushYoungObject(target, workStack, "remset");
+runtime/src/Heap/z/zBarrier.cpp:328:                theCollector.MarkYoungObjectIfActive(target);
+runtime/src/Heap/z/zMark.cpp:678:void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
+runtime/src/Heap/z/zMark.cpp:680:    PushYoungObject(object, workStack, origin, false);
+runtime/src/Heap/z/zMark.cpp:683:void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin,
+runtime/src/Heap/z/zMark.cpp:728:            MarkOldObjectIfActive(object, true);
+runtime/src/Heap/z/zMark.cpp:928:    void PushFilteredYoung(MarkContext& ctx, BaseObject* object, const char* origin, bool finalizable = false)
+runtime/src/Heap/z/zMark.cpp:935:            shared.collector->PushYoungObject(object, failClosed, origin);
+runtime/src/Heap/z/zMark.cpp:941:                shared.collector->MarkOldObjectIfActive(object, true);
+runtime/src/Heap/z/zMark.cpp:964:                PushFilteredYoung(ctx, target, "closure_edge", entry.finalizable());
+runtime/src/Heap/z/zMark.cpp:1022:void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
+runtime/src/Heap/z/zMark.cpp:1452:void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
