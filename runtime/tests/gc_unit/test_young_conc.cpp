@@ -118,12 +118,12 @@ struct RelocationReceiptTestAccess {
 
     static void FlipYoungMarkForNativeBarrier(WCollector& collector)
     {
-        collector.flip_young_mark_start();
+        ZGlobalsPointers::flip_young_mark_start();
     }
 
     static void StartYoungRelocate(WCollector& collector)
     {
-        collector.flip_young_relocate_start();
+        ZGlobalsPointers::flip_young_relocate_start();
     }
 
     static void RunCollectionDispatch(WCollector& collector)

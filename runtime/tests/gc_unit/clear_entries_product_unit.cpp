@@ -299,31 +299,31 @@ struct LoadHealDeliveryTestAccess {
         size_t consumed;
     };
 
-    static void PublishColours(WCollector& collector) { collector.set_good_masks(); }
+    static void PublishColours(WCollector& collector) { ZGlobalsPointers::initialize(); }
 
     static uintptr_t DoubleBadColour(const WCollector& collector)
     {
-        return ZPointerRemappedMask & ~collector.ZPointerRemappedYoungMask &
-            ~collector.ZPointerRemappedOldMask;
+        return ZPointerRemappedMask & ~ZPointerRemappedYoungMask &
+            ~ZPointerRemappedOldMask;
     }
 
     static void RemapYoungRoots(WCollector& collector) { collector.RemapYoungRoots(); }
 
     static void FlipYoungRelocateStart(WCollector& collector)
     {
-        collector.flip_young_relocate_start();
+        ZGlobalsPointers::flip_young_relocate_start();
     }
 
     static void FlipOldRelocateStart(WCollector& collector)
     {
-        collector.flip_old_relocate_start();
+        ZGlobalsPointers::flip_old_relocate_start();
     }
 
     static RemsetConsumeResult ConsumeRemembered(WCollector& collector,
                                                   const std::unordered_set<MAddress>& previous,
                                                   BaseObject* currentMinorRoot)
     {
-        collector.flip_young_mark_start();
+        ZGlobalsPointers::flip_young_mark_start();
         WCollector::WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
         WCollector::MinorSlotSet weakSlots;
@@ -393,9 +393,9 @@ public:
     {
         RefField<> field(StoreGoodPointer(from));
         auto& collector = static_cast<WCollector&>(theCollector);
-        collector.flip_old_relocate_start();
+        ZGlobalsPointers::flip_old_relocate_start();
         BaseObject* result = ReadReference(nullptr, field);
-        collector.flip_old_relocate_start();
+        ZGlobalsPointers::flip_old_relocate_start();
         return result;
     }
 };

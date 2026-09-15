@@ -43,7 +43,7 @@ public:
     bool IsUnmovableFromObject(BaseObject*) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
     {
-        const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
+        const uintptr_t remap = ZPointerRemapped;
         return RefField<>(GcUnit::ColouredPointer(obj, remap));
     }
 };
@@ -88,7 +88,7 @@ GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    const uintptr_t remap = ColourPredicates::current_remapped(::g_cjLoadBadMask);
+    const uintptr_t remap = ZPointerRemapped;
     const auto good = GcUnit::ColouredPointer(fx.obj0, remap);
     field.StoreColoured(good);
     GC_EXPECT_TRUE(barrier.ReadReference(fx.obj1, field) == fx.obj0);

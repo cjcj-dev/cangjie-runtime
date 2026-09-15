@@ -36,9 +36,9 @@ struct RelocationReceiptTestAccess {
             collector.GetGenerationCycle(gen).InitializeWorkers(workers);
             collector.GetGenerationCycle(gen).Begin(workers);
         }
-        collector.set_good_masks();
+        ZGlobalsPointers::initialize();
     }
-    static void FlipNativeRootYoung(WCollector& collector) { collector.flip_young_relocate_start(); }
+    static void FlipNativeRootYoung(WCollector& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
     static void NativeRootMajorPrelude(WCollector& collector)
     {
         collector.GetGenerationCycle(GCCycleGeneration::OLD).End();
@@ -370,7 +370,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
                  unsigned(marked), before, first, raw(root.GetFieldValue()));
     GC_EXPECT_TRUE(marked);
     GC_EXPECT_EQ(first, before + 1);
-    GC_EXPECT_TRUE(ColourPredicates::is_marked_young(raw(root.GetFieldValue()), ::g_cjMarkBadMask));
+    GC_EXPECT_TRUE(ZPointer::is_marked_young(to_zpointer(raw(root.GetFieldValue()))));
     // The same physical, now young-good slot must not publish another follow.
     heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
     GC_EXPECT_EQ(RelocationReceiptTestAccess::PendingYoungRootWork(collector), first);

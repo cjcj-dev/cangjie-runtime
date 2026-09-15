@@ -55,7 +55,7 @@ public:
     bool IsUnmovableFromObject(BaseObject*) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* object) const override
     {
-        const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
+        const uintptr_t remap = ZPointerRemapped;
         return RefField<>(GcUnit::ColouredPointer(object, remap));
     }
     ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }

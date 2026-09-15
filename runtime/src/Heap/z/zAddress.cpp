@@ -5,6 +5,7 @@
 #include "Heap/z/zAddress.hpp"
 #include "Base/Macros.h"
 #include "CangjieRuntime.h"
+#include "Heap/z/zGlobals.hpp"
 
 extern "C" {
 MRT_EXPORT unsigned long g_cjLoadGoodMask;
@@ -59,9 +60,10 @@ void ZGlobalsPointers::pd_set_good_masks()
 }
 size_t ZGlobalsPointers::min_address_offset_request()
 {
-    const size_t heapBytes = CangjieRuntime::GetHeapParam().heapSize * size_t(1024);
+    const size_t heapBytes = Runtime::CurrentRef() == nullptr ? 0
+        : CangjieRuntime::GetHeapParam().heapSize * size_t(1024);
     size_t request = 1;
-    while (request < heapBytes && request < (uintptr_t(1) << 44)) { request <<= 1; }
+    while (request < heapBytes * ZVirtualToPhysicalRatio && request < (uintptr_t(1) << 44)) { request <<= 1; }
     return request;
 }
 void ZGlobalsPointers::initialize()

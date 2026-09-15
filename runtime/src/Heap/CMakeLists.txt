@@ -6,6 +6,7 @@
 
 set(SRC_LIST
     "z/zHeap.cpp"
+    "z/zInitialize.cpp"
     "z/zWorkers.cpp"
     "z/zRuntimeWorkers.cpp"
 )

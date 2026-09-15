@@ -46,7 +46,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
                      raw(slot.GetFieldValue()), raw(originalWord));
         GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(originalWord));
         GC_EXPECT_TRUE(&slot == originalSlot);
-        GC_EXPECT_FALSE(ColourPredicates::is_marked_young(raw(slot.GetFieldValue()), ::g_cjMarkBadMask));
+        GC_EXPECT_FALSE(ZPointer::is_marked_young(to_zpointer(raw(slot.GetFieldValue()))));
     });
     GC_EXPECT_EQ(seen, size_t(1));
     GC_EXPECT_TRUE(local.empty());

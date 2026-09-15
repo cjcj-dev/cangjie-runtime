@@ -48,8 +48,7 @@ inline zpointer ColouredPointer(BaseObject* object, uintptr_t remap)
 
 inline zpointer StoreGoodPointer(BaseObject* object)
 {
-    return to_zpointer(MakeStoreGoodSlotWord(reinterpret_cast<uintptr_t>(object),
-                                             static_cast<uintptr_t>(::g_cjStoreGoodMask)));
+    return to_zpointer(raw(ZAddress::color(static_cast<zaddress>(reinterpret_cast<uintptr_t>(object)), static_cast<uintptr_t>(::g_cjStoreGoodMask))));
 }
 
 // Access the product generation state for the same setup used by ZLiveMapTest.

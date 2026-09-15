@@ -77,7 +77,7 @@ struct RemsetRearmTestAccess {
     {
         // WCollector::DoYoungGarbageCollection publishes the new young mark and
         // remembered colours before RememberedSet::DrainForMinor (Generation.cpp:533,649-651).
-        collector.flip_young_mark_start();
+        ZGlobalsPointers::flip_young_mark_start();
     }
 
     static bool FixInteriorSlot(WCollector& collector, RefField<>& field, BaseObject* knownBase)
@@ -121,8 +121,7 @@ GC_TEST(RelocateInterior, MinorFixPublishesCurrentStoreGoodColour)
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     BaseObject* interior = reinterpret_cast<BaseObject*>(
         reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    const uintptr_t desired = MakeStoreGoodSlotWord(
-        reinterpret_cast<uintptr_t>(interior), static_cast<uintptr_t>(::g_cjStoreGoodMask));
+    const uintptr_t desired = raw(ZAddress::color(static_cast<zaddress>(reinterpret_cast<uintptr_t>(interior)), static_cast<uintptr_t>(::g_cjStoreGoodMask)));
     // Change only the remembered epoch.  The word remains load/mark-good, so
     // ResolveMinorReference returns the payload without rewriting the slot;
     // the interior StoreGood publication below is therefore the sole repair.

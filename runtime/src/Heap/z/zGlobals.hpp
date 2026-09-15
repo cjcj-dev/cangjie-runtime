@@ -42,7 +42,23 @@ constexpr size_t MIN_LENGTH = MIN_SIZE / sizeof(MAddress);
 }
 
 namespace MapleRuntime {
-namespace {
-constexpr size_t MARK_STRIPE_SHIFT = 20;
-}
+constexpr size_t ZGranuleSizeShift = 21;
+constexpr size_t ZGranuleSize = size_t(1) << ZGranuleSizeShift;
+constexpr size_t ZVirtualToPhysicalRatio = 16;
+constexpr size_t ZMaxVirtualReservations = 100;
+constexpr int ZPageSizeSmallShift = ZGranuleSizeShift;
+constexpr size_t ZPageSizeSmall = size_t(1) << ZPageSizeSmallShift;
+constexpr size_t ZObjectSizeLimitSmall = ZPageSizeSmall / 8;
+constexpr int ZObjectAlignmentLargeShift = ZGranuleSizeShift;
+constexpr int ZObjectAlignmentLarge = 1 << ZObjectAlignmentLargeShift;
+constexpr size_t ZCacheLineSize = 64;
+constexpr size_t ZMarkStripeShift = ZGranuleSizeShift;
+constexpr size_t MARK_STRIPE_SHIFT = ZMarkStripeShift;
+constexpr size_t ZMarkStripesMax = 16;
+constexpr size_t ZMarkCacheSize = 1024;
+constexpr size_t ZMarkPartialArrayMinSizeShift = 12;
+constexpr size_t ZMarkPartialArrayMinSize = size_t(1) << ZMarkPartialArrayMinSizeShift;
+constexpr size_t ZMarkPartialArrayMinLength = ZMarkPartialArrayMinSize / sizeof(MAddress);
+constexpr size_t ZMarkProactiveFlushMax = 10;
+constexpr uint64_t ZMarkCompleteTimeout = 200;
 }
