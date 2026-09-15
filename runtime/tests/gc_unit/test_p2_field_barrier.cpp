@@ -46,6 +46,11 @@ TypeInfo* Type(unsigned char* storage, bool refs, unsigned fields)
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(TypeInfo));
     return type;
 }
+bool IsFinalizable(BaseObject* object)
+{
+    auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    return page->is_live_bit_set(from_object(object)) && !page->is_strong_bit_set(from_object(object));
+}
 RefField<>& Slot(BaseObject* object, unsigned index = 0)
 {
     return HeapSlotAt<>(reinterpret_cast<MAddress>(object) + sizeof(uintptr_t) * (index + 1));
@@ -133,8 +138,8 @@ extern "C" int p2FieldBarrierExercise()
                 ++finalOldOld;
                 Expect(to_object(result) == finalOld, "finalizable_old_returns_current");
                 auto* page = RegionInfo::GetRegionInfoAt(raw(result));
-                Expect(page->IsResurrectedObject(finalOld), "finalizable_old_is_finalizable");
-                Expect(!page->IsMarkedObject(page->GetMarkView<Generation::Old>(), finalOld), "finalizable_old_not_strong");
+                Expect(IsFinalizable(finalOld), "finalizable_old_is_finalizable");
+                Expect(!page->is_strong_bit_set(from_object(finalOld)), "finalizable_old_not_strong");
                 Expect(ZPointer::is_marked_finalizable(field.GetFieldValue()), "finalizable_old_slot_color");
             }
             if (&field == &Slot(finalOld)) {
@@ -149,7 +154,7 @@ extern "C" int p2FieldBarrierExercise()
             if (currentChild != nullptr) {
                 auto* page = RegionInfo::GetRegionInfoAt(raw(result));
                 if (page->IsYoungRegion()) {
-                    Expect(page->IsMarkedObject(page->GetMarkView<Generation::Young>(), currentChild), "remset_child_marked");
+                    Expect(page->is_strong_bit_set(from_object(currentChild)), "remset_child_marked");
                 } else {
                     Expect(ZPointer::is_marked_young(field.GetFieldValue()), "remset_old_target_young_good");
                 }
@@ -161,7 +166,7 @@ extern "C" int p2FieldBarrierExercise()
             ++oldOld;
             Expect(to_object(result) == oldChild, "old_old_returns_current");
             auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(oldChild));
-            Expect(page->IsMarkedObject(page->GetMarkView<Generation::Old>(), oldChild), "old_old_marked");
+            Expect(page->is_strong_bit_set(from_object(oldChild)), "old_old_marked");
         }
         if (&field == &Slot(holder) && kind == Barrier::FieldMarkKind::Old) {
             if (ZPointer::is_mark_good(observed)) {
@@ -179,8 +184,7 @@ extern "C" int p2FieldBarrierExercise()
             if (major) ++youngOldMajor; else ++youngOldMinor;
             Expect(to_object(result) == oldViaYoung, "young_old_returns_current");
             auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(oldViaYoung));
-            auto* bitmap = page->GetMarkBitmap(page->GetMarkView<Generation::Old>());
-            const bool marked = bitmap != nullptr && bitmap->IsMarked(page->GetAddressOffset(reinterpret_cast<MAddress>(oldViaYoung)));
+            const bool marked = page->is_strong_bit_set(from_object(oldViaYoung));
             Expect(marked == major, major ? "young_old_major_marks" : "young_old_minor_does_not_mark");
             Expect(ZPointer::is_store_good(field.GetFieldValue()), "young_old_heals_store_good");
         }
@@ -197,11 +201,11 @@ extern "C" int p2FieldBarrierExercise()
         auto* childPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(child));
         auto* sentinelPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(sentinel));
         auto* controlPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(rootedControl));
-        Expect(childPage->IsMarkedObject(childPage->GetMarkView<Generation::Young>(), child),
+        Expect(childPage->is_strong_bit_set(from_object(child)),
                "remset_retains_child_first_cycle");
-        Expect(sentinelPage->IsMarkedObject(sentinelPage->GetMarkView<Generation::Young>(), sentinel),
+        Expect(sentinelPage->is_strong_bit_set(from_object(sentinel)),
                "remset_retains_sentinel_first_cycle");
-        Expect(controlPage->IsMarkedObject(controlPage->GetMarkView<Generation::Young>(), rootedControl),
+        Expect(controlPage->is_strong_bit_set(from_object(rootedControl)),
                "independent_young_root_control");
     };
     collector.RequestGC(GC_REASON_YOUNG, false);
@@ -226,9 +230,9 @@ extern "C" int p2FieldBarrierExercise()
         ++completed;
         auto* childPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(childBeforeNext));
         auto* sentinelPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(sentinelBeforeNext));
-        Expect(childPage->IsMarkedObject(childPage->GetMarkView<Generation::Young>(), childBeforeNext),
+        Expect(childPage->is_strong_bit_set(from_object(childBeforeNext)),
                "remset_retains_child_next_cycle");
-        Expect(sentinelPage->IsMarkedObject(sentinelPage->GetMarkView<Generation::Young>(), sentinelBeforeNext),
+        Expect(sentinelPage->is_strong_bit_set(from_object(sentinelBeforeNext)),
                "remset_retains_sentinel_next_cycle");
     };
     collector.RequestGC(GC_REASON_YOUNG, false);
@@ -254,8 +258,8 @@ extern "C" int p2FieldBarrierExercise()
         Expect(references.Discovered(ReferenceType::FINAL) - discoveredBefore == 2, "finalizable_discovered_once_each");
         Expect(references.Enqueued(ReferenceType::FINAL) - enqueuedBefore == 1, "finalizable_only_unupgraded_enqueued");
         auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(upgraded));
-        Expect(page->IsMarkedObject(page->GetMarkView<Generation::Old>(), upgraded), "finalizable_upgraded_to_strong");
-        Expect(!page->IsResurrectedObject(upgraded), "finalizable_upgraded_not_pending");
+        Expect(page->is_strong_bit_set(from_object(upgraded)), "finalizable_upgraded_to_strong");
+        Expect(!IsFinalizable(upgraded), "finalizable_upgraded_not_pending");
         heap.RemoveExportObject(upgradeRoot);
     }
     Expect(remsetChild != 0, "real_remset_consumer_reached");
@@ -324,7 +328,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     dumpRegistrations("after-register");
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
-    Expect(oldPage->IsMarkedObject(oldPage->GetMarkView<Generation::Old>(), delayedOld), "late_old_retained_by_original_strong_root");
+    Expect(oldPage->is_strong_bit_set(from_object(delayedOld)), "late_old_retained_by_original_strong_root");
     Expect(references.Discovered(ReferenceType::FINAL) == discovered, "late_registrations_not_rediscovered_after_mark");
     Expect(references.Enqueued(ReferenceType::FINAL) == enqueued, "late_registrations_not_enqueued_in_first_cycle");
     dumpRegistrations("first-complete");
@@ -341,10 +345,10 @@ extern "C" int p2FinalizerRegistrationExercise()
             if (!page->IsYoungRegion()) return;
             if (object->GetTypeInfo() == smallType) {
                 youngSmall = true;
-                Expect(page->IsMarkedObject(page->GetMarkView<Generation::Young>(), object), "late_small_next_young_marked");
+                Expect(page->is_strong_bit_set(from_object(object)), "late_small_next_young_marked");
             } else if (object->GetTypeInfo() == largeType) {
                 youngLarge = true;
-                Expect(page->IsMarkedObject(page->GetMarkView<Generation::Young>(), object), "late_large_next_young_marked");
+                Expect(page->is_strong_bit_set(from_object(object)), "late_large_next_young_marked");
             }
         });
     };
@@ -356,9 +360,9 @@ extern "C" int p2FinalizerRegistrationExercise()
             auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
             if (page->IsYoungRegion()) return;
             ++oldCandidates;
-            Expect(page->IsResurrectedObject(object), "late_old_candidate_discovered_during_mark");
-            if (object == pinned) pinnedDiscovered = page->IsResurrectedObject(object);
-            if (object == delayedOld) delayedDiscovered = page->IsResurrectedObject(object);
+            Expect(IsFinalizable(object), "late_old_candidate_discovered_during_mark");
+            if (object == pinned) pinnedDiscovered = IsFinalizable(object);
+            if (object == delayedOld) delayedDiscovered = IsFinalizable(object);
         });
     };
     collector.RequestGC(GC_REASON_USER, false);
@@ -408,11 +412,11 @@ extern "C" int p2FinalizerClosureExercise()
     ConcurrentGCBreakpoints::AcquireControl();
     Expect(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"), "finalizable_product_mark_end_breakpoint");
     auto isFinal = [](BaseObject* object) {
-        return RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsResurrectedObject(object);
+        return IsFinalizable(object);
     };
     auto isStrong = [](BaseObject* object) {
         auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        return page->IsMarkedObject(page->GetMarkView<Generation::Old>(), object);
+        return page->is_strong_bit_set(from_object(object));
     };
     Expect(isFinal(holder), "finalizable_registered_holder_live");
     Expect(isFinal(child), "finalizable_field_child_live");
@@ -497,11 +501,11 @@ extern "C" int p2ArrayFieldExercise()
     Expect(!RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(current))->IsYoungRegion(), "array_real_old_owner");
     Expect(fields.load() == fieldCount, structArray ? "struct_array_visits_all_members" : "array_full_and_range_visit_all_fields");
     Expect(rangeTarget.load(), structArray ? "struct_array_last_member_reached" : "array_range_target_reached");
-    Expect(finalizable ? firstPage->IsResurrectedObject(first) :
-        firstPage->IsMarkedObject(firstPage->GetMarkView<Generation::Old>(), first), "array_first_child_retained_in_domain");
-    Expect(finalizable ? lastPage->IsResurrectedObject(last) :
-        lastPage->IsMarkedObject(lastPage->GetMarkView<Generation::Old>(), last), "array_last_child_retained_in_domain");
-    Expect(controlPage->IsMarkedObject(controlPage->GetMarkView<Generation::Old>(), control), "array_independent_strong_control");
+    Expect(finalizable ? IsFinalizable(first) :
+        firstPage->is_strong_bit_set(from_object(first)), "array_first_child_retained_in_domain");
+    Expect(finalizable ? IsFinalizable(last) :
+        lastPage->is_strong_bit_set(from_object(last)), "array_last_child_retained_in_domain");
+    Expect(controlPage->is_strong_bit_set(from_object(control)), "array_independent_strong_control");
     Barrier::testFieldMarkResult = nullptr;
     std::printf("P2_ARRAY_RESULT failures=%u finalizable=%d fields=%zu expected=%zu range_target=%d\n",
                 failures.load(), finalizable, fields.load(), fieldCount, rangeTarget.load());
@@ -609,8 +613,7 @@ extern "C" int p2SlowFieldInputExercise()
         Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
         auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(young));
         auto bit = [&] {
-            auto* bitmap = page->GetMarkBitmap(page->GetMarkView<Generation::Young>());
-            return bitmap != nullptr && bitmap->IsMarked(page->GetAddressOffset(reinterpret_cast<MAddress>(young)));
+            return page->livemap()->get(page->generation_id(), page->bit_index(from_object(young)) + 1);
         };
         const bool before = bit();
         P2FieldInputTask task(collector, [&] {
@@ -645,9 +648,9 @@ extern "C" int p2SlowFieldInputExercise()
     Expect(started == 1, "slow_input_real_major_roots_phase_reached");
     auto* strongPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(oldSentinel));
     auto* finalPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(finalSentinel));
-    Expect(strongFollow != 0 && strongPage->IsMarkedObject(strongPage->GetMarkView<Generation::Old>(), oldSentinel),
+    Expect(strongFollow != 0 && strongPage->is_strong_bit_set(from_object(oldSentinel)),
            "slow_old_strong_control_followed_by_product");
-    Expect(finalFollow != 0 && finalPage->IsResurrectedObject(finalSentinel),
+    Expect(finalFollow != 0 && IsFinalizable(finalSentinel),
            "slow_old_final_control_followed_by_product");
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",

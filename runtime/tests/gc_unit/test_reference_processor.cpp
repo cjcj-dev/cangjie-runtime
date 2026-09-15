@@ -55,8 +55,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
 {
     GcHeapFixture fx;
     ReferenceProcessor processor;
-    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_TRUE(fx.region0->ResurrectObject(fx.obj0, offset));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
     (void)processor.DiscoverReference(fx.obj0, ReferenceType::FINAL);
     const size_t discovered = processor.Discovered(ReferenceType::FINAL);

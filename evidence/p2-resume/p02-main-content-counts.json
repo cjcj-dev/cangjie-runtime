@@ -1,0 +1,119 @@
+[
+  {
+    "symbol": "ZGlobalsPointers::flip_old_mark_start",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zAddress.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zGeneration.cpp:1\n",
+      "total": 2
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zAddress.cpp:1\nHEAD:runtime/src/Heap/z/zGeneration.cpp:1\n",
+      "total": 2
+    }
+  },
+  {
+    "symbol": "ZPlatformAddressOffsetBits",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zAddress.cpp:3\ncjcjdev/main:runtime/src/Heap/z/zAddress.hpp:1\n",
+      "total": 4
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zAddress.cpp:3\nHEAD:runtime/src/Heap/z/zAddress.hpp:1\n",
+      "total": 4
+    }
+  },
+  {
+    "symbol": "ZPointer::load_shift_lookup",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zAddress.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zAddress.inline.hpp:8\n",
+      "total": 9
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zAddress.cpp:1\nHEAD:runtime/src/Heap/z/zAddress.inline.hpp:8\n",
+      "total": 9
+    }
+  },
+  {
+    "symbol": "ClassifySlotWord",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Common/BaseObject.cpp:1\ncjcjdev/main:runtime/src/Common/ColourEncoding.h:1\ncjcjdev/main:runtime/src/Heap/z/zVerify.cpp:1\n",
+      "total": 3
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Common/BaseObject.cpp:1\nHEAD:runtime/src/Common/ColourEncoding.h:1\nHEAD:runtime/src/Heap/z/zVerify.cpp:1\n",
+      "total": 3
+    }
+  },
+  {
+    "symbol": "CopyReferenceSlots",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zBarrier.cpp:9\n",
+      "total": 9
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zBarrier.cpp:9\n",
+      "total": 9
+    }
+  },
+  {
+    "symbol": "kMaxUncommitChunk",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zUncommitter.cpp:3\ncjcjdev/main:runtime/src/Heap/z/zUncommitter.hpp:1\n",
+      "total": 4
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zUncommitter.cpp:3\nHEAD:runtime/src/Heap/z/zUncommitter.hpp:1\n",
+      "total": 4
+    }
+  },
+  {
+    "symbol": "ZLiveMap::reset",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zLiveMap.cpp:2\ncjcjdev/main:runtime/src/Heap/z/zLiveMap.inline.hpp:1\n",
+      "total": 3
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zLiveMap.cpp:2\nHEAD:runtime/src/Heap/z/zLiveMap.inline.hpp:1\n",
+      "total": 3
+    }
+  },
+  {
+    "symbol": "is_object_strongly_live",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/Allocator/RegionSpace.h:4\ncjcjdev/main:runtime/src/Heap/Collector/Generation.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zBarrier.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zMark.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zPage.hpp:1\ncjcjdev/main:runtime/src/Heap/z/zPage.inline.hpp:3\ncjcjdev/main:runtime/src/Heap/z/zReferenceProcessor.cpp:2\ncjcjdev/main:runtime/src/Heap/z/zRelocationSetSelector.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zRemembered.cpp:1\n",
+      "total": 15
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/Allocator/RegionSpace.h:4\nHEAD:runtime/src/Heap/Collector/Generation.cpp:1\nHEAD:runtime/src/Heap/z/zBarrier.cpp:1\nHEAD:runtime/src/Heap/z/zMark.cpp:1\nHEAD:runtime/src/Heap/z/zPage.hpp:1\nHEAD:runtime/src/Heap/z/zPage.inline.hpp:3\nHEAD:runtime/src/Heap/z/zReferenceProcessor.cpp:2\nHEAD:runtime/src/Heap/z/zRelocationSetSelector.cpp:1\nHEAD:runtime/src/Heap/z/zRemembered.cpp:1\n",
+      "total": 15
+    }
+  },
+  {
+    "symbol": "MarkStackEntry(untype",
+    "cjcjdev/main": {
+      "rc": 0,
+      "stdout": "cjcjdev/main:runtime/src/Heap/z/zGeneration.cpp:2\ncjcjdev/main:runtime/src/Heap/z/zMark.cpp:14\ncjcjdev/main:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:1\n",
+      "total": 17
+    },
+    "HEAD": {
+      "rc": 0,
+      "stdout": "HEAD:runtime/src/Heap/z/zGeneration.cpp:1\nHEAD:runtime/src/Heap/z/zMark.cpp:11\nHEAD:runtime/src/Heap/z/zThreadLocalAllocBuffer.hpp:1\n",
+      "total": 13
+    }
+  }
+]
