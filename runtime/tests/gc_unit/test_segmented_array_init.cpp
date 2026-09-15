@@ -900,7 +900,7 @@ void* RunVisibleArrayGraph(void*)
     size_t objects = 0;
     const MAddress first = reinterpret_cast<MAddress>(array->ConvertToCArray());
     {
-        ScopedEnterSaferegion saferegion(true);
+        ScopedEnterSaferegion saferegion(false);
         ScopedStopTheWorld stw("segmented-array range graph", false);
         HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; },
             [&](BaseObject* base, const void* slot, uintptr_t) {
@@ -938,6 +938,9 @@ struct InvisibleGraphProbe {
         if (segment != 0 || checks != 0) { return; }
         ++checks;
         BaseObject* root = Mutator::GetMutator()->LoadInvisibleRoot();
+        // This fixture runs on a registered runtime thread. The initializer's
+        // onlyForMutator guard intentionally does not pause GC threads.
+        ScopedEnterSaferegion saferegion(false);
         ScopedStopTheWorld stw("segmented-array invisible graph root", false);
         HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == root; });
     }
