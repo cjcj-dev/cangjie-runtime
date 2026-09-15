@@ -27,22 +27,37 @@ public:
 
     void Init();
 
-    size_t GetThreshold() const { return heapThreshold; }
+    size_t GetThreshold() const { return heapThreshold.load(std::memory_order_acquire); }
 
     void Dump() const;
 
-    static uint64_t GetPrevGCStartTime() { return prevGcStartTime; }
+    static uint64_t GetPrevGCStartTime() { return prevGcStartTime.load(std::memory_order_acquire); }
 
-    static void SetPrevGCStartTime(uint64_t timestamp) { prevGcStartTime = timestamp; }
+    static void SetPrevGCStartTime(uint64_t timestamp)
+    {
+        prevGcStartTime.store(timestamp, std::memory_order_release);
+    }
 
-    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime; }
+    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime.load(std::memory_order_acquire); }
 
-    static void SetPrevGCFinishTime(uint64_t timestamp) { prevGcFinishTime = timestamp; }
+    static void SetPrevGCFinishTime(uint64_t timestamp)
+    {
+        prevGcFinishTime.store(timestamp, std::memory_order_release);
+    }
 
-    static uint64_t prevGcStartTime;
-    static uint64_t prevGcFinishTime;
+    void RecordMajorGCFinish(uint64_t timestamp)
+    {
+        RecordMajorGCFinish(timestamp, 0, 0, 0);
+    }
 
-    GCReason reason;
+    void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter,
+                             size_t collectedBytes);
+
+
+    static std::atomic<uint64_t> prevGcStartTime;
+    static std::atomic<uint64_t> prevGcFinishTime;
+
+    GCReason reason = GC_REASON_USER;
     bool isConcurrentMark;
     bool async;
 
@@ -64,13 +79,24 @@ public:
     size_t collectedBytes;
     size_t collectedObjects;
 
+    // Young collection-set bytes and marked bytes that survive the minor.
+    size_t youngCandidateBytes;
+    size_t youngPromotedBytes;
+    uint32_t tenuringThreshold;
+    size_t liveByAge[16];
+
     double garbageRatio;
     double collectionRate; // bytes per nano-second
 
-    size_t heapThreshold;
+    std::atomic<size_t> heapThreshold{ 0 };
+
+
+private:
+    // A minor may extend the HEU finish-time throttle once after a major. A
+    // second consecutive minor must leave the clock alone so a major cannot be
+    // starved by a stream of young collections.
 };
-extern size_t g_gcCount;
-extern uint64_t g_gcTotalTimeUs;
-extern size_t g_gcCollectedTotalBytes;
+extern std::atomic<uint64_t> g_gcTotalTimeUs;
+extern std::atomic<size_t> g_gcCollectedTotalBytes;
 } // namespace MapleRuntime
 #endif // MRT_STATS_H

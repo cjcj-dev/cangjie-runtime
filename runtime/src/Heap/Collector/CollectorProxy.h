@@ -9,8 +9,8 @@
 #define MRT_COLLECTOR_PROXY_H
 
 #include "Base/Macros.h"
-#include "Collector.h"
-#include "CollectorResources.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "WCollector/WCollector.h"
 
 namespace MapleRuntime {
@@ -19,6 +19,9 @@ namespace MapleRuntime {
 // one of these collectors.
 // CollectorProxy should inherit collector interfaces, but no datas
 class CollectorProxy : public Collector {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct MarkPublicationFixture;
+#endif
 public:
     explicit CollectorProxy(Allocator& allocator, CollectorResources& resources) : wCollector(allocator, resources)
     {
@@ -30,9 +33,52 @@ public:
     void Init() override;
     void Fini() override;
 
-    GCPhase GetGCPhase() const override { return currentCollector->GetGCPhase(); }
+    GCPhase GetGCPhase(GCCycleGeneration generation) const override
+    {
+        return currentCollector != nullptr ? currentCollector->GetGCPhase(generation) : GCPhase::GC_PHASE_UNDEF;
+    }
 
-    void SetGCPhase(const GCPhase phase) override { currentCollector->SetGCPhase(phase); }
+    GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) override
+    {
+        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
+                                           : wCollector.GetGenerationCycle(generation);
+    }
+
+    const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const override
+    {
+        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
+                                           : wCollector.GetGenerationCycle(generation);
+    }
+
+    GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
+    {
+        return currentCollector != nullptr ? currentCollector->GetCycleSnapshot(generation)
+                                           : wCollector.GetCycleSnapshot(generation);
+    }
+
+    void MarkYoungObjectIfActive(BaseObject* object) const override
+    {
+        currentCollector->MarkYoungObjectIfActive(object);
+    }
+    void MarkYoungRootObject(BaseObject* object) const override
+    {
+        currentCollector->MarkYoungRootObject(object);
+    }
+
+    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
+    {
+        currentCollector->MarkOldObjectIfActive(object, gcThread);
+    }
+
+    void PublishGenerationPhase(GCCycleGeneration generation, GCPhase phase) override
+    {
+        (currentCollector != nullptr ? *currentCollector : wCollector).PublishGenerationPhase(generation, phase);
+    }
+
+    void SetGCPhase(GCCycleGeneration generation, const GCPhase phase) override
+    {
+        currentCollector->SetGCPhase(generation, phase);
+    }
 
     // dispatch garbage collection to the right collector
     MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
@@ -41,10 +87,33 @@ public:
 
     TracingCollector& GetCurrentCollector() const { return *currentCollector; }
 
-    BaseObject* FindToVersion(BaseObject* obj) const override { return currentCollector->FindToVersion(obj); }
+    FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
+    {
+        return currentCollector->FindToVersion(obj, generation);
+    }
+    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+                                  Generation generation) const override
+    {
+        return currentCollector->ResolveStoreValue(ref, provenance, generation);
+    }
 
     bool IsOldPointer(RefField<>& ref) const override { return currentCollector->IsOldPointer(ref); }
     bool IsCurrentPointer(RefField<>& ref) const override { return currentCollector->IsCurrentPointer(ref); }
+    bool is_young_load_good(RefField<>& ref) const override { return currentCollector->is_young_load_good(ref); }
+    bool is_old_load_good(RefField<>& ref) const override { return currentCollector->is_old_load_good(ref); }
+    ZGenerationId remap_generation(RefField<>& ref) const override
+    {
+        return currentCollector->remap_generation(ref);
+    }
+    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
+    {
+        return currentCollector->relocate_or_remap_object(obj, generation);
+    }
+    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
+                                         const ForwardingProvenance& provenance) const override
+    {
+        return currentCollector->relocate_or_remap_object(obj, generation, provenance);
+    }
     bool IsFromObject(BaseObject* obj) const override { return currentCollector->IsFromObject(obj); }
     bool IsGhostFromObject(BaseObject* obj) const override { return currentCollector->IsGhostFromObject(obj); }
     bool IsUnmovableFromObject(BaseObject* obj) const override { return currentCollector->IsUnmovableFromObject(obj); }
@@ -52,11 +121,20 @@ public:
     void AddRawPointerObject(BaseObject* obj) override { return currentCollector->AddRawPointerObject(obj); }
     void RemoveRawPointerObject(BaseObject* obj) override { return currentCollector->RemoveRawPointerObject(obj); }
 
-    BaseObject* ForwardObject(BaseObject* obj) override { return currentCollector->ForwardObject(obj); }
+    BaseObject* ForwardObject(BaseObject* obj, Generation generation) override
+    {
+        return currentCollector->ForwardObject(obj, generation);
+    }
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& toVersion) const override
     {
         return currentCollector->TryUpdateRefField(obj, field, toVersion);
+    }
+
+    bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& toVersion,
+                                         const ForwardingProvenance& provenance) const override
+    {
+        return currentCollector->TryUpdateRefFieldWithProvenance(obj, field, toVersion, provenance);
     }
 
     bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& toVersion) const override
@@ -73,6 +151,18 @@ public:
     {
         return currentCollector->GetAndTryTagRefField(obj);
     }
+
+
+    RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* obj,
+                                                  const ForwardingProvenance& provenance) const override
+    {
+        return currentCollector->GetAndTryTagRefFieldWithProvenance(obj, provenance);
+    }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RelocationReceiptTestAccess;
+    friend struct MarkPort203TestAccess;
+#endif
 
 private:
     // supported collector set

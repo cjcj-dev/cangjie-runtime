@@ -14,55 +14,29 @@
 #include <mutex>
 
 #include "Base/Panic.h"
+#include "Common/OopStorage.h"
 #include "Common/PageAllocator.h"
 #include "Common/TypeDef.h"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zReferenceProcessor.hpp"
 
 namespace MapleRuntime {
 
 class FinalizerProcessor {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct GenerationCycleRootTestAccess;
+#endif
 public:
     FinalizerProcessor();
     ~FinalizerProcessor() = default;
 
-    // mainly for resurrection.
-    U32 VisitFinalizers(const RootVisitor& visitor)
-    {
-        U32 count = 0;
-        std::lock_guard<std::mutex> l(listLock);
-        for (BaseObject*& obj : finalizers) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
-            ++count;
-        }
-        return count;
-    }
-
-    // for : *finalizers* are not proper gc roots.
-    void VisitGCRoots(const RootVisitor& visitor)
-    {
-        std::lock_guard<std::mutex> l(listLock);
-        for (BaseObject*& obj : finalizables) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
-        }
-        for (BaseObject*& obj : workingFinalizables) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
-        }
-    }
-
-    // mainly for fixing old pointers
-    void VisitRawPointers(const RootVisitor& visitor)
-    {
-        std::lock_guard<std::mutex> l(listLock);
-        for (BaseObject*& obj : finalizables) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
-        }
-        for (BaseObject*& obj : workingFinalizables) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
-        }
-        for (BaseObject*& obj : finalizers) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
-        }
-    }
+    // zRootsIterator: strong queued/running roots and weak registrations
+    // share one physical enumeration, with distinct closures.
+    OopStorage& StrongRootStorage() { return strongStorage; }
+    OopStorage& WeakRootStorage() { return weakStorage; }
+    U32 VisitFinalizers(const NativeSlotVisitor& visitor) { return VisitRootLists({}, visitor); }
+    void VisitGCRoots(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, {}); }
+    void VisitNativePointers(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, visitor); }
 
     // notify for finalizer processing loop, invoked after GC
     void Notify();
@@ -76,15 +50,30 @@ public:
     void Fini();
     void WaitStop();
 
-    void EnqueueFinalizables(const std::function<bool(BaseObject*)>& finalizable, U32 countLimit = UINT_MAX);
+    NativeSlot* AllocateFinalizerHandle(BaseObject* obj);
     void RegisterFinalizer(BaseObject* obj);
-    void RegisterFinalizers(ManagedList<BaseObject*>& objs);
-    bool IsRunning() const { return running; }
+    void RegisterFinalizers(NativeRootHandles& objs);
+    bool IsRunning() const { return running.load(std::memory_order_acquire); }
     uint32_t GetTid() const { return tid; }
+    ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }
+    void ProcessReferences(const ReferenceProcessor::IsStronglyLive& isStronglyLive);
+    void EnqueueReferences();
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    using BeforeFinalizableIdleCheck = std::function<void()>;
+    void SetBeforeFinalizableIdleCheckForTest(BeforeFinalizableIdleCheck hook);
+    void EnqueueFinalizableForTest(BaseObject* obj);
+    void FinishFinalizableBatchForTest();
+    bool HasFinalizableJobForTest();
+#endif
 
     Mutator* GetMutator() const { return fpMutator; }
 
-    void NotifyToReclaimGarbage() { shouldReclaimHeapGarbage.store(true); }
+    void NotifyToReclaimGarbage()
+    {
+        shouldReclaimHeapGarbage.store(true, std::memory_order_release);
+        Notify();
+    }
     void NotifyToFeedAllocBuffers()
     {
         shouldFeedHungryBuffers.store(true, std::memory_order_release);
@@ -92,9 +81,20 @@ public:
     }
 
 private:
+    U32 VisitRootLists(const NativeSlotVisitor& strong, const NativeSlotVisitor& weak)
+    {
+        if (strong) { strongStorage.OopsDo(strong); }
+        U32 count = weak ? static_cast<U32>(weakStorage.OopsDo(weak)) : 0;
+        return count;
+    }
+
     void InitFinalizerCJThread();
     void NotifyStarted();
+    void Wait();
     void Wait(U32 timeoutMilliSeconds);
+    bool EnqueueFinalizableReference(BaseObject* obj);
+    bool HasFinalizableJob();
+    void FinishFinalizableBatch();
     void ProcessFinalizables();
     void ProcessFinalizableList();
     void ReclaimHeapGarbage();
@@ -107,20 +107,24 @@ private:
     std::condition_variable startedCondition; // notify finalizerProcessor thread is started
     volatile bool started;
 
-    volatile bool running; // Initially false and set true after finalizerProcessor thread start, set false when stop
-
+    std::atomic<bool> running{ false };
     U32 iterationWaitTime;
 
     // finalization
+    OopStorage strongStorage;
+    OopStorage weakStorage;
     std::mutex listLock;                 // lock for finalizers & finalizables & workingFinalizables
-    ManagedList<BaseObject*> finalizers; // created finalizer record, accessed by mutator & GC
+    NativeRootHandles finalizers; // created finalizer record, accessed by mutator & GC
 
     // a dead finalizer is moved into finalizable by GC, then run finalize method by FP thread
-    ManagedList<BaseObject*> finalizables;
+    NativeRootHandles finalizables;
 
-    ManagedList<BaseObject*> workingFinalizables; // FP working list, swap from finalizables
+    NativeRootHandles workingFinalizables; // FP working list, swap from finalizables
+    ReferenceProcessor referenceProcessor;
 
-    std::atomic<bool> hasFinalizableJob;
+    // Protected by listLock.  Queue non-emptiness and the cached predicate are
+    // one synchronization decision, so a worker cannot clear a later enqueue.
+    bool hasFinalizableJob = false;
     std::atomic<bool> shouldReclaimHeapGarbage;
     std::atomic<bool> shouldFeedHungryBuffers;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

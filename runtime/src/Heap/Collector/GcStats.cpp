@@ -7,16 +7,17 @@
 
 #include "GcStats.h"
 
+#include "Base/GcLog.h"
 #include "Base/LogFile.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zDirector.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
-size_t g_gcCount = 0;
-uint64_t g_gcTotalTimeUs = 0;
-size_t g_gcCollectedTotalBytes = 0;
+std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };
+std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
 
-uint64_t GCStats::prevGcStartTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
-uint64_t GCStats::prevGcFinishTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
+std::atomic<uint64_t> GCStats::prevGcStartTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
+std::atomic<uint64_t> GCStats::prevGcFinishTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
 
 void GCStats::Init()
 {
@@ -26,6 +27,12 @@ void GCStats::Init()
     gcEndTime = TimeUtil::NanoSeconds();
     collectedObjects = 0;
     collectedBytes = 0;
+    youngCandidateBytes = 0;
+    youngPromotedBytes = 0;
+    tenuringThreshold = 0;
+    for (size_t i = 0; i < 16; ++i) {
+        liveByAge[i] = 0;
+    }
 
     fromSpaceSize = 0;
     smallGarbageSize = 0;
@@ -42,11 +49,22 @@ void GCStats::Init()
     garbageRatio = 0.0;
     collectionRate = 0.0;
 
-    // 20 MB:set 20 MB as intial value
-    heapThreshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
-    // 0.2:set 20% heap size as intial value
-    heapThreshold = std::min(static_cast<size_t>(Heap::GetHeap().GetMaxCapacity() * 0.2), heapThreshold);
+    size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
+    size_t threshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
+    threshold = std::min(static_cast<size_t>(maxCapacity * 0.2), threshold);
+    heapThreshold.store(threshold, std::memory_order_relaxed);
+    VLOG(REPORT, "[GCV2][jvm-ihop] enabled=0 initial-threshold=%zu max-capacity=%zu adaptive-update=1",
+         heapThreshold.load(std::memory_order_relaxed), maxCapacity);
 }
+
+
+
+void GCStats::RecordMajorGCFinish(uint64_t timestamp, uint64_t, size_t, size_t)
+{
+    SetPrevGCFinishTime(timestamp);
+}
+
+
 
 void GCStats::Dump() const
 {

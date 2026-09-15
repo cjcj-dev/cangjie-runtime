@@ -10,7 +10,7 @@
 
 #include "Allocator/RegionSpace.h"
 #include "Common/StateWord.h"
-#include "TracingCollector.h"
+#include "Heap/z/zMark.hpp"
 
 namespace MapleRuntime {
 class CopyCollector : public TracingCollector {
@@ -23,14 +23,14 @@ public:
 
     MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
     void CopyObject(const BaseObject& fromObj, BaseObject& toObj, size_t size) const;
-    void PostGarbageCollection(uint64_t gcIndex) override;
+    void PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex) override;
+    virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
 
 protected:
-    virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
-    virtual void ForwardFromSpace();
+    virtual void ForwardFromSpace(GCCycleGeneration generation);
     virtual void RefineFromSpace();
 
-    virtual void DoGarbageCollection() = 0;
+    virtual void DoGarbageCollection(GCCycleGeneration generation) = 0;
 
 private:
 };
