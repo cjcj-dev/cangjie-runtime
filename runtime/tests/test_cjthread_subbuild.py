@@ -83,7 +83,7 @@ def main():
                 (source / 'CMakeLists.txt', source / 'build/build_cjthread.sh', cj_cmake)}
     record = {'command': command, 'cwd': str(cwd), 'source_identity': identity,
               'uptime_before': subprocess.check_output(['uptime'], text=True).strip(),
-              'jobs': env.get('CANGJIE_BUILD_JOBS', 'getconf _NPROCESSORS_ONLN'),
+              'build_script': str(source / 'build/build_cjthread.sh'),
               'staging': str(staging), 'checks': {}}
     try:
         if injection:
