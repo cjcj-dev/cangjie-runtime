@@ -8,14 +8,22 @@
 #include "Heap/z/zUtils.hpp"
 
 #include <pthread.h>
+#if defined(__linux__) || defined(hongmeng)
+#include <sys/prctl.h>
+#endif
 
 namespace MapleRuntime {
 // zUtils.cpp:27-35. I17 (PLAN §5): GC threads are bare pthreads without a
-// HotSpot Thread object, so the name is read back from the kernel.
+// HotSpot Thread object, so the name set at creation (prctl PR_SET_NAME,
+// zWorkers.cpp) is read back from the kernel.
 const char* ZUtils::thread_name()
 {
     static thread_local char name[32];
-#if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
+#if defined(__linux__) || defined(hongmeng)
+    if (prctl(PR_GET_NAME, name) == 0 && name[0] != '\0') {
+        return name;
+    }
+#elif defined(__APPLE__)
     if (pthread_getname_np(pthread_self(), name, sizeof(name)) == 0 && name[0] != '\0') {
         return name;
     }

@@ -25,7 +25,14 @@ thread_local uint32_t       ZCPU::_cpu      = 0;
 // zCPU.cpp:38-52 (PaddedArray::create_unfreeable == cache-line padded unfreeable block)
 void ZCPU::initialize()
 {
-    assert(_affinity == nullptr && "Already initialized");
+    // zCPU.cpp:39 asserts "Already initialized": HotSpot creates one VM per
+    // process. The gc_unit harness pre-initializes at main() and some tests
+    // then bring the whole runtime up in the same process (InitCJRuntime →
+    // HeapImpl::Init → ZInitialize::initialize), the way ZGlobalsPointers::
+    // initialize is re-run today; the second call keeps the first table.
+    if (_affinity != nullptr) {
+        return;
+    }
     const uint32_t ncpus = count();
 
     _affinity = reinterpret_cast<PaddedZCPUAffinity*>(
