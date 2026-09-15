@@ -317,12 +317,18 @@ void WCollector::RemapYoungRoots()
 #endif
     };
     VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
+        // Cangjie stack maps may name stack objects/headerless records. Expand
+        // their plain fields before remapping, as verification and mark do.
+        // ZGC zStackWatermark.cpp:164-214 processes each oop frame slot.
+        RootVisitor heapRoots = [&](ObjectRef& root) {
+            mutator.VisitHeapRootSlots(root, visitor);
+        };
         DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
         size_t frames = 0;
-        if (!mutator.DrainStackWatermark(visitor, visitor, __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE),
+        if (!mutator.DrainStackWatermark(heapRoots, heapRoots, __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE),
                                          StackWatermark::WM_OWNER_GC, &derived, frames, true,
                                          StackWatermark::ProcessingPhase::REMAP)) {
-            mutator.VisitHeapReferences(visitor, derived);
+            mutator.VisitHeapReferences(heapRoots, derived);
         }
     });
 }
