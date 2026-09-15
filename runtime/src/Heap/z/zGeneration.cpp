@@ -55,14 +55,14 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, markDomain);
     }
 #endif
     collector.flip_young_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, markDomain);
     }
 #endif
 
@@ -71,6 +71,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
         manager.ResetTLABUsage();
+        manager.RetireSharedPages(kPageAgeRangeYoung);
         collector.FlushAllocationRegions();
     }
     // Cangjie keeps allocation lists and candidate statistics in RegionManager.
@@ -86,7 +87,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, markDomain);
     }
 #endif
     {
@@ -97,13 +98,13 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, markDomain);
     }
 #endif
     collector.StartYoungMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRemembered);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRemembered, markDomain);
     }
 #endif
     {
@@ -112,7 +113,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete, markDomain);
     }
 #endif
     return stats;
@@ -125,21 +126,21 @@ void GenerationCycle::StartOldMark(WCollector& collector)
     CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, markDomain);
     }
 #endif
     collector.flip_old_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, markDomain);
     }
 #endif
     auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
     space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, markDomain);
     }
 #endif
     {
@@ -150,13 +151,13 @@ void GenerationCycle::StartOldMark(WCollector& collector)
     PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, markDomain);
     }
 #endif
     collector.StartOldMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete, markDomain);
     }
 #endif
 }

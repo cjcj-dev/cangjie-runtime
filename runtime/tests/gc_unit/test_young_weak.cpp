@@ -456,6 +456,10 @@ void RunYoungWeakVariant(size_t helpers)
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
+    // The producer-to-consumer bearing point must deliver the field closure.
+    // Check that target before the individual root receipts can end the case.
+    std::fprintf(stderr, "P1_FIELD_FOLLOW_ASSERT referent=%d child=%d\n", referentMarked, childMarked);
+    GC_EXPECT_TRUE(referentMarked && childMarked);
     GC_EXPECT_TRUE(strongMarked);
     GC_EXPECT_TRUE(weakMarked);
     GC_EXPECT_TRUE(referentMarked);

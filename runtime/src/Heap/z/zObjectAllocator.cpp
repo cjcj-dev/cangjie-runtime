@@ -63,8 +63,6 @@ void RegionManager::InitializeTLAB(AllocBuffer& buffer)
 // regions in young mark-start (zGeneration.cpp:862).
 void RegionManager::ResetTLABUsage()
 {
-    // ZGenerationYoung::mark_start, zGeneration.cpp:865.
-    RetireSharedPages(kPageAgeRangeYoung);
     std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
     if (used != 0) {

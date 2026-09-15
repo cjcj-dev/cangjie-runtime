@@ -124,7 +124,7 @@ void* Exercise(void*)
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu parallel=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent, parallel);
 #if defined(MRT_TESTABLE_INTERNALS)
-    auto& tracing = resources.collectorProxy.GetCurrentCollector();
+    auto& tracing = static_cast<CollectorProxy&>(collector).GetCurrentCollector();
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;
@@ -139,7 +139,7 @@ void* Exercise(void*)
     bool youngStartComplete = false;
     // Observe results of the real request below. No callback supplies a phase,
     // a sequence, a bitmap, or work to the collector.
-    tracing.testMarkStartState = [&](GCCycleGeneration generation, MarkStartPoint point) {
+    tracing.testMarkStartState = [&](GCCycleGeneration generation, MarkStartPoint point, const MarkDomain* domain) {
         const size_t index = generation == GCCycleGeneration::YOUNG ? 0 : 1;
         const auto state = collector.GetCycleSnapshot(generation);
         const uintptr_t mask = index == 0 ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
@@ -148,6 +148,8 @@ void* Exercise(void*)
         std::printf("P1_START_STATE generation=%zu point=%u seq=%llu phase=%u color=%zx face=%u\n",
                     index, static_cast<unsigned>(point), static_cast<unsigned long long>(state.sequence),
                     static_cast<unsigned>(state.phase), color, face);
+        std::printf("P1_DOMAIN_STATE domain=%p workers=%zu active=%u\n", domain,
+                    domain == nullptr ? size_t(0) : domain->NWorkers(), resources.GetWorkers(generation).ActiveWorkers());
         if (point == MarkStartPoint::Begin) {
             startSequence[index] = state.sequence;
             startColor[index] = color;
@@ -176,14 +178,12 @@ void* Exercise(void*)
                    "p1_sequence_and_phase_before_domain");
             if (index == 0) Expect(face == startFace[index], "p1_remset_not_flipped_before_domain");
         } else if (point == MarkStartPoint::BeforeRemembered) {
-            auto* domain = static_cast<WCollector&>(tracing).YoungMarkDomain();
             Expect(domain != nullptr && domain->NWorkers() == resources.GetWorkers(generation).ActiveWorkers(),
                    "p1_young_domain_ready_before_remset");
             Expect(face == startFace[index], "p1_remset_not_flipped_at_domain_start");
         } else if (point == MarkStartPoint::Complete) {
             Expect(state.sequence == startSequence[index] + 1 && state.phase == GC_PHASE_ENUM,
                    "p1_complete_sequence_and_phase");
-            auto* domain = index == 0 ? static_cast<WCollector&>(tracing).YoungMarkDomain() : tracing.MajorMarkDomain();
             Expect(domain != nullptr && domain->NWorkers() == resources.GetWorkers(generation).ActiveWorkers(),
                    "p1_complete_domain_ready");
             Expect(face == (startFace[index] ^ (index == 0 ? 1U : 0U)), "p1_complete_remset_face");

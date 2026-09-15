@@ -305,7 +305,7 @@ public:
     static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
-    static std::function<void(GCCycleGeneration, MarkStartPoint)> testMarkStartState;
+    static std::function<void(GCCycleGeneration, MarkStartPoint, const MarkDomain*)> testMarkStartState;
     static std::function<void()> testYoungMarkCompleted;
     static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
 #endif
