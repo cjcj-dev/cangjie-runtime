@@ -7,11 +7,16 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/WCollector/WCollector.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
+#include "ObjectModel/MArray.inline.h"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 
+namespace MapleRuntime { extern "C" ArrayRef MCC_NewObjArray(const TypeInfo*, MIndex); }
 using namespace MapleRuntime;
 namespace {
 std::atomic<unsigned> failures{0};
@@ -241,7 +246,7 @@ extern "C" int p2FieldBarrierExercise()
     Barrier::testFieldMarkResult = nullptr;
     if (finalizableCase && !minorOnly) {
         Expect(finalOldOld != 0, "real_finalizable_old_control_reached");
-        Expect(finalOldYoung != 0, "real_finalizable_young_slow_reached");
+        Expect(finalOldYoung + finalYoungFast != 0, "real_finalizable_young_field_reached");
         Expect(finalFollow != 0, "real_finalizable_follow_reached");
         Expect(references.Discovered(ReferenceType::FINAL) - discoveredBefore == 2, "finalizable_discovered_once_each");
         Expect(references.Enqueued(ReferenceType::FINAL) - enqueuedBefore == 1, "finalizable_only_unupgraded_enqueued");
@@ -256,7 +261,7 @@ extern "C" int p2FieldBarrierExercise()
     if (!minorOnly) {
         Expect(youngOldMajor != 0, "real_young_old_major_reached");
         Expect(oldOld != 0, "real_old_old_control_reached");
-        Expect(oldYoung != 0, "real_old_young_slow_reached");
+        Expect(oldYoung + oldYoungFast != 0, "real_old_young_field_reached");
     }
     std::printf("P2_FAST old_young=%u finalizable_young=%u\n", oldYoungFast, finalYoungFast);
     std::printf("P2_RESULT failures=%u remset=%u follow=%u old_old=%u old_young=%u\n",
@@ -424,5 +429,221 @@ extern "C" int p2FinalizerClosureExercise()
     Expect(references.Enqueued(ReferenceType::FINAL) - enqueued == 1, "finalizable_processing_excludes_strong_upgrade");
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::printf("P2_CLOSURE_RESULT failures=%u target_stage=complete\n", failures.load());
+    return failures.load();
+}
+
+extern "C" int p2ArrayFieldExercise()
+{
+    alignas(TypeInfo) static unsigned char types[3][sizeof(TypeInfo)]{};
+    auto* leafType = Type(types[0], false, 1);
+    auto* holderType = Type(types[1], true, 1);
+    holderType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
+    auto* arrayType = reinterpret_cast<TypeInfo*>(types[2]);
+    arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+    arrayType->SetComponentTypeInfo(leafType);
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<MAddress>(arrayType), sizeof(TypeInfo));
+    auto& heap = Heap::GetHeap();
+    auto& collector = heap.GetCollector();
+    auto& barrier = Heap::GetBarrier();
+    const bool finalizable = std::getenv("P2_ARRAY_FINALIZABLE") != nullptr;
+    auto* first = MObject::NewPinnedObject(leafType, 16);
+    auto* last = MObject::NewPinnedObject(leafType, 16);
+    auto* control = MObject::NewPinnedObject(leafType, 16);
+    auto* holder = MObject::NewPinnedObject(holderType, 16);
+    barrier.WriteReference(holder, Slot(holder), control);
+    if (finalizable) holder->OnFinalizerCreated();
+    collector.RequestGC(GC_REASON_YOUNG, false);
+    const size_t length = 2 * MarkPartialArray::MIN_LENGTH + 17;
+    MArray* array = MCC_NewObjArray(arrayType, length);
+    auto* elements = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+    for (size_t index = 0; index < length; ++index) {
+        barrier.WriteReference(array, elements[index], index % 2 == 0 ? first : last);
+    }
+    barrier.WriteReference(holder, Slot(holder), array);
+    NativeSlot arrayRoot(zpointer::null), controlRoot(zpointer::null);
+    barrier.WriteStaticRef(arrayRoot, array);
+    barrier.WriteStaticRef(controlRoot, control);
+    NativeSlot* roots[] = { &controlRoot, &arrayRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), finalizable ? 1 : 2);
+    std::atomic<size_t> fields{0};
+    std::atomic<bool> rangeTarget{false};
+    auto arrayAddress = [&] {
+        return raw(finalizable ? Slot(holder).GetTargetObject() : arrayRoot.GetTargetObject());
+    };
+    Barrier::testFieldMarkResult = [&](Barrier::FieldMarkKind kind, RefField<>& field, zpointer, zaddress) {
+        const auto expected = finalizable ? Barrier::FieldMarkKind::Finalizable : Barrier::FieldMarkKind::Old;
+        if (kind != expected) return;
+        auto* current = reinterpret_cast<MArray*>(arrayAddress());
+        const MAddress begin = reinterpret_cast<MAddress>(current->ConvertToCArray());
+        const MAddress address = reinterpret_cast<MAddress>(&field);
+        if (address >= begin && address < begin + length * sizeof(uintptr_t)) {
+            ++fields;
+            if (address == begin + (length - 1) * sizeof(uintptr_t)) rangeTarget = true;
+        }
+    };
+    ConcurrentGCBreakpoints::AcquireControl();
+    Expect(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"), "array_product_mark_end_breakpoint");
+    auto* current = reinterpret_cast<MArray*>(arrayAddress());
+    auto* firstPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(first));
+    auto* lastPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(last));
+    auto* controlPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(control));
+    Expect(!RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(current))->IsYoungRegion(), "array_real_old_owner");
+    Expect(fields.load() == length, "array_full_and_range_visit_all_fields");
+    Expect(rangeTarget.load(), "array_range_target_reached");
+    Expect(finalizable ? firstPage->IsResurrectedObject(first) :
+        firstPage->IsMarkedObject(firstPage->GetMarkView<Generation::Old>(), first), "array_first_child_retained_in_domain");
+    Expect(finalizable ? lastPage->IsResurrectedObject(last) :
+        lastPage->IsMarkedObject(lastPage->GetMarkView<Generation::Old>(), last), "array_last_child_retained_in_domain");
+    Expect(controlPage->IsMarkedObject(controlPage->GetMarkView<Generation::Old>(), control), "array_independent_strong_control");
+    Barrier::testFieldMarkResult = nullptr;
+    std::printf("P2_ARRAY_RESULT failures=%u finalizable=%d fields=%zu expected=%zu range_target=%d\n",
+                failures.load(), finalizable, fields.load(), length, rangeTarget.load());
+    std::fflush(stdout);
+    if (failures.load() != 0) std::_Exit(failures.load());
+    ConcurrentGCBreakpoints::RunToIdle();
+    ConcurrentGCBreakpoints::ReleaseControl();
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), finalizable ? 1 : 2);
+    return failures.load();
+}
+
+namespace {
+class P2FieldInputTask final : public GCWorkerTask {
+public:
+    P2FieldInputTask(WCollector& collector, std::function<void()> exercise)
+        : collector(collector), exercise(std::move(exercise)) {}
+    void Work(uint32_t) override
+    {
+        if (!claimed.exchange(true)) exercise();
+        // Same GC-worker tail protocol as MarkOldRootsTask. The field entry
+        // produced these entries; the test never supplies mark/current output.
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.MajorMarkDomain());
+        Expect(collector.MajorMarkDomain()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
+    }
+private:
+    WCollector& collector;
+    std::function<void()> exercise;
+    std::atomic<bool> claimed{false};
+};
+}
+
+// Advisor 175006Z: field API input layer. The existing young-mark-start
+// observation pauses after real old mark-start and before remset scanning.
+// Every word is from a real store; no masks, phases or mark results are seeded.
+extern "C" int p2SlowFieldInputExercise()
+{
+    alignas(TypeInfo) static unsigned char types[3][sizeof(TypeInfo)]{};
+    auto* holderType = Type(types[0], true, 2);
+    holderType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
+    auto* edgeType = Type(types[1], true, 1);
+    auto* leafType = Type(types[2], false, 1);
+    auto& heap = Heap::GetHeap();
+    auto& collector = static_cast<WCollector&>(heap.GetCollector());
+    auto& barrier = Heap::GetBarrier();
+    auto* strongHolder = MObject::NewPinnedObject(holderType, 24);
+    auto* finalHolder = MObject::NewPinnedObject(holderType, 24);
+    auto* oldChild = MObject::NewPinnedObject(edgeType, 16);
+    auto* oldSentinel = MObject::NewPinnedObject(leafType, 16);
+    auto* finalChild = MObject::NewPinnedObject(edgeType, 16);
+    auto* finalSentinel = MObject::NewPinnedObject(leafType, 16);
+    barrier.WriteReference(oldChild, Slot(oldChild), oldSentinel);
+    barrier.WriteReference(finalChild, Slot(finalChild), finalSentinel);
+    barrier.WriteReference(strongHolder, Slot(strongHolder), oldChild);
+    barrier.WriteReference(strongHolder, Slot(strongHolder, 1), oldChild);
+    barrier.WriteReference(finalHolder, Slot(finalHolder), finalChild);
+    barrier.WriteReference(finalHolder, Slot(finalHolder, 1), finalChild);
+    finalHolder->OnFinalizerCreated();
+    NativeSlot strongRoot(zpointer::null);
+    barrier.WriteStaticRef(strongRoot, strongHolder);
+    NativeSlot* roots[] = { &strongRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    collector.RequestGC(GC_REASON_YOUNG, false);
+    auto* young = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    auto* youngSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    barrier.WriteReference(young, Slot(young), youngSentinel);
+    barrier.WriteReference(strongHolder, Slot(strongHolder), young);
+    barrier.WriteReference(finalHolder, Slot(finalHolder), young);
+    const zpointer stored = Slot(strongHolder).GetFieldValue();
+    std::atomic<unsigned> strongSlow{0}, finalSlow{0}, strongFast{0}, finalFast{0};
+    std::atomic<unsigned> strongFollow{0}, finalFollow{0};
+    std::atomic<bool> inputTask{false};
+    Barrier::testFieldMarkResult = [&](Barrier::FieldMarkKind kind, RefField<>& field, zpointer observed, zaddress result) {
+        if (inputTask.load()) {
+            if (&field == &Slot(strongHolder)) {
+                ++strongSlow;
+                Expect(!ZPointer::is_mark_good(observed), "strong_young_slow_input_selected");
+                Expect(is_null(result), "strong_young_slow_no_object_result");
+                Expect(field.GetFieldValue() == observed, "strong_young_slow_does_not_heal");
+            } else if (&field == &Slot(finalHolder)) {
+                ++finalSlow;
+                Expect(!(ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed)), "final_young_slow_input_selected");
+                Expect(is_null(result), "final_young_slow_no_object_result");
+                Expect(field.GetFieldValue() == observed, "final_young_slow_does_not_heal");
+            } else if (&field == &Slot(strongHolder, 1)) {
+                Expect(to_object(result) == oldChild, "strong_old_slow_current_control");
+                if (ZPointer::is_mark_good(observed)) {
+                    ++strongFast;
+                    Expect(field.GetFieldValue() == observed, "strong_old_fast_unchanged");
+                }
+            } else if (&field == &Slot(finalHolder, 1)) {
+                Expect(to_object(result) == finalChild, "final_old_slow_current_control");
+                if (ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed)) {
+                    ++finalFast;
+                    Expect(field.GetFieldValue() == observed, "final_old_fast_unchanged");
+                }
+            }
+        }
+        if (&field == &Slot(oldChild) && kind == Barrier::FieldMarkKind::Old) ++strongFollow;
+        if (&field == &Slot(finalChild) && kind == Barrier::FieldMarkKind::Finalizable) ++finalFollow;
+    };
+    unsigned started = 0;
+    TracingCollector::testYoungMarkStarted = [&] {
+        if (!collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) return;
+        ++started;
+        Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
+        auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(young));
+        auto bit = [&] {
+            auto* bitmap = page->GetMarkBitmap(page->GetMarkView<Generation::Young>());
+            return bitmap != nullptr && bitmap->IsMarked(page->GetAddressOffset(reinterpret_cast<MAddress>(young)));
+        };
+        const bool before = bit();
+        P2FieldInputTask task(collector, [&] {
+            auto& youngStacks = collector.YoungMarkDomain()->Stacks();
+            const size_t youngBefore = youngStacks.Population();
+            const size_t oldBefore = collector.MajorMarkDomain()->Stacks().Population();
+            TracingCollector::WorkStack work;
+            inputTask = true;
+            collector.TraceRefField(strongHolder, Slot(strongHolder), work, false);
+            collector.TraceRefField(finalHolder, Slot(finalHolder), work, true);
+            collector.TraceRefField(strongHolder, Slot(strongHolder, 1), work, false);
+            collector.TraceRefField(finalHolder, Slot(finalHolder, 1), work, true);
+            collector.TraceRefField(strongHolder, Slot(strongHolder, 1), work, false);
+            collector.TraceRefField(finalHolder, Slot(finalHolder, 1), work, true);
+            inputTask = false;
+            Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
+            Expect(collector.MajorMarkDomain()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
+        });
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->Run(task);
+        Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");
+        Expect(strongSlow == 1 && finalSlow == 1, "slow_input_both_field_entries_reached");
+        Expect(strongFast == 1 && finalFast == 1, "slow_input_legal_fast_controls_reached");
+        if (failures.load() != 0) {
+            std::printf("P2_SLOW_RESULT failures=%u target_stage=field_result\n", failures.load());
+            std::fflush(stdout);
+            std::_Exit(failures.load());
+        }
+    };
+    collector.RequestGC(GC_REASON_HEU_SYNC, false);
+    TracingCollector::testYoungMarkStarted = nullptr;
+    Barrier::testFieldMarkResult = nullptr;
+    Expect(started == 1, "slow_input_real_major_roots_phase_reached");
+    auto* strongPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(oldSentinel));
+    auto* finalPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(finalSentinel));
+    Expect(strongFollow != 0 && strongPage->IsMarkedObject(strongPage->GetMarkView<Generation::Old>(), oldSentinel),
+           "slow_old_strong_control_followed_by_product");
+    Expect(finalFollow != 0 && finalPage->IsResurrectedObject(finalSentinel),
+           "slow_old_final_control_followed_by_product");
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
+                failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
     return failures.load();
 }

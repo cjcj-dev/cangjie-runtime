@@ -126,11 +126,14 @@ inline void Barrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& fi
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, holder, &field };
-    const zaddress result = finalizable
-        ? MarkBarrier(IsFinalizableGoodFastPath, &Barrier::MarkFinalizableFromOldSlowPath,
-                      ColorFinalizableGood, field, observed, provenance)
-        : MarkBarrier(IsMarkGoodFastPath, &Barrier::MarkFromOldSlowPath,
-                      ColorMarkGood, field, observed, provenance);
+    zaddress result;
+    if (finalizable) {
+        result = MarkBarrier(IsFinalizableGoodFastPath, &Barrier::MarkFinalizableFromOldSlowPath,
+                             ColorFinalizableGood, field, observed, provenance);
+    } else {
+        result = MarkBarrier(IsMarkGoodFastPath, &Barrier::MarkFromOldSlowPath,
+                             ColorMarkGood, field, observed, provenance);
+    }
 #if defined(MRT_TESTABLE_INTERNALS)
     if (testFieldMarkResult) testFieldMarkResult(finalizable ? FieldMarkKind::Finalizable : FieldMarkKind::Old,
                                                 field, observed, result);

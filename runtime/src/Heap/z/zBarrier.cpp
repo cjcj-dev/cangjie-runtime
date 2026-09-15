@@ -282,8 +282,11 @@ zaddress Barrier::MarkFromYoungSlowPath(zaddress address) const
     if (is_null(address)) return address;
     if (RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
         young.MarkObject<false, true, true, false>(address);
-    } else if (young.IsMajorRoots()) {
+        return address;
+    }
+    if (young.IsMajorRoots()) {
         theCollector.GetGenerationCycle(GCCycleGeneration::OLD).MarkObject<false, true, true, false>(address);
+        return address;
     }
     return address;
 }

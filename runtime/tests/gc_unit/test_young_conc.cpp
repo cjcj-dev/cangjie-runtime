@@ -782,7 +782,10 @@ GC_TEST(YoungConc, Y2yDirtyHolderPhaseSwitchHandsOffWholeBatch)
 // Load-good colour wrapping a FORWARDED from must remap before store-good
 // colour (zBarrier.inline.hpp:591-623). LookupTo of the coloured address is
 // then a miss on the current table.
-GC_TEST(YoungConc, TraceRefFieldRemapsPreviousRelocationEpoch)
+// The holder belongs to young and this input models a previous young
+// relocation. ZGC's load barrier remaps/heals here (:456-466); the old field
+// mark barrier is allowed to leave young references to their own consumer.
+GC_TEST(YoungConc, LoadBarrierRemapsPreviousRelocationEpoch)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
@@ -806,9 +809,9 @@ GC_TEST(YoungConc, TraceRefFieldRemapsPreviousRelocationEpoch)
     auto* field = &HeapSlotAt<>(to + TYPEINFO_PTR_SIZE);
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TracingCollector::WorkStack workStack;
     RelocationReceiptTestAccess::StartYoungRelocate(collector);
-    collector.TraceRefField(fx.obj1, *field, workStack);
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    GC_EXPECT_TRUE(barrier.ReadReference(fx.obj1, *field) == fx.obj1);
 
     BaseObject* healed = to_object(field->GetTargetObject());
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(healed), to);

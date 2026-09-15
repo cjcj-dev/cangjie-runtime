@@ -1,0 +1,58 @@
+[
+  {
+    "file": "runtime/tests/gc_unit/test_reference_processor.cpp",
+    "ec8acc48fffd6badb68c6736ee25907216359fc5": {
+      "rc": 0,
+      "tests": [
+        "ReferenceProcessor.UnsupportedKindsFailClosed",
+        "ReferenceProcessor.FinalDiscoveryProcessEnqueue",
+        "ReferenceProcessor.StrongUpgradeDropsFinalReference",
+        "ReferenceProcessor.StrongWeakReferentIsNotCleared",
+        "ReferenceProcessor.DeadWeakReferentIsCleanedByCas",
+        "ReferenceProcessor.ProcessConsumerReloadsWinningWeakCasValue",
+        "ReferenceProcessor.DuplicateWeakPendingAcceptedOnce",
+        "ReferenceProcessor.ConcurrentWorkersPublishOnePendingList"
+      ]
+    },
+    "HEAD": {
+      "rc": 0,
+      "tests": [
+        "ReferenceProcessor.UnsupportedKindsFailClosed",
+        "ReferenceProcessor.FinalDiscoveryProcessEnqueue",
+        "ReferenceProcessor.FinalDiscoveryIsClaimedOnce",
+        "ReferenceProcessor.StrongUpgradeDropsFinalReference",
+        "ReferenceProcessor.StrongWeakReferentIsNotCleared",
+        "ReferenceProcessor.DeadWeakReferentIsCleanedByCas",
+        "ReferenceProcessor.ProcessConsumerReloadsWinningWeakCasValue",
+        "ReferenceProcessor.DuplicateWeakPendingAcceptedOnce",
+        "ReferenceProcessor.ConcurrentWorkersPublishOnePendingList"
+      ]
+    },
+    "added": [
+      "ReferenceProcessor.FinalDiscoveryIsClaimedOnce"
+    ],
+    "removed": []
+  },
+  {
+    "file": "runtime/tests/gc_unit/test_p2_field_barrier.cpp",
+    "ec8acc48fffd6badb68c6736ee25907216359fc5": {
+      "rc": 0,
+      "tests": [
+        "p2FieldBarrierExercise"
+      ]
+    },
+    "HEAD": {
+      "rc": 0,
+      "tests": [
+        "p2FieldBarrierExercise",
+        "p2FinalizerRegistrationExercise",
+        "p2FinalizerClosureExercise"
+      ]
+    },
+    "added": [
+      "p2FinalizerClosureExercise",
+      "p2FinalizerRegistrationExercise"
+    ],
+    "removed": []
+  }
+]

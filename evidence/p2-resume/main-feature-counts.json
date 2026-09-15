@@ -1,0 +1,80 @@
+[
+  {
+    "pattern": "ZGlobalsPointers::flip_old_mark_start",
+    "cjcjdev/main": {
+      "rc": 0,
+      "output": "cjcjdev/main:runtime/src/Heap/z/zAddress.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zGeneration.cpp:1\n",
+      "total": 2
+    },
+    "HEAD": {
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/zAddress.cpp:1\nHEAD:runtime/src/Heap/z/zGeneration.cpp:1\n",
+      "total": 2
+    }
+  },
+  {
+    "pattern": "ZPlatformAddressOffsetBits",
+    "cjcjdev/main": {
+      "rc": 0,
+      "output": "cjcjdev/main:runtime/src/Heap/z/zAddress.cpp:3\ncjcjdev/main:runtime/src/Heap/z/zAddress.hpp:1\n",
+      "total": 4
+    },
+    "HEAD": {
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/zAddress.cpp:3\nHEAD:runtime/src/Heap/z/zAddress.hpp:1\n",
+      "total": 4
+    }
+  },
+  {
+    "pattern": "ZPointer::load_shift_lookup",
+    "cjcjdev/main": {
+      "rc": 0,
+      "output": "cjcjdev/main:runtime/src/Heap/z/zAddress.cpp:1\ncjcjdev/main:runtime/src/Heap/z/zAddress.inline.hpp:8\n",
+      "total": 9
+    },
+    "HEAD": {
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/zAddress.cpp:1\nHEAD:runtime/src/Heap/z/zAddress.inline.hpp:8\n",
+      "total": 9
+    }
+  },
+  {
+    "pattern": "ClassifySlotWord",
+    "cjcjdev/main": {
+      "rc": 0,
+      "output": "cjcjdev/main:runtime/src/Common/BaseObject.cpp:1\ncjcjdev/main:runtime/src/Common/ColourEncoding.h:1\ncjcjdev/main:runtime/src/Heap/z/zVerify.cpp:1\n",
+      "total": 3
+    },
+    "HEAD": {
+      "rc": 0,
+      "output": "HEAD:runtime/src/Common/BaseObject.cpp:1\nHEAD:runtime/src/Common/ColourEncoding.h:1\nHEAD:runtime/src/Heap/z/zVerify.cpp:1\n",
+      "total": 3
+    }
+  },
+  {
+    "pattern": "CopyReferenceSlots",
+    "cjcjdev/main": {
+      "rc": 0,
+      "output": "cjcjdev/main:runtime/src/Heap/z/zBarrier.cpp:9\n",
+      "total": 9
+    },
+    "HEAD": {
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/zBarrier.cpp:9\n",
+      "total": 9
+    }
+  },
+  {
+    "pattern": "kMaxUncommitChunk",
+    "cjcjdev/main": {
+      "rc": 0,
+      "output": "cjcjdev/main:runtime/src/Heap/z/zUncommitter.cpp:3\ncjcjdev/main:runtime/src/Heap/z/zUncommitter.hpp:1\n",
+      "total": 4
+    },
+    "HEAD": {
+      "rc": 0,
+      "output": "HEAD:runtime/src/Heap/z/zUncommitter.cpp:3\nHEAD:runtime/src/Heap/z/zUncommitter.hpp:1\n",
+      "total": 4
+    }
+  }
+]

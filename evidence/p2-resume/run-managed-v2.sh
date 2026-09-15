@@ -11,7 +11,7 @@ export PATH="$SDK/bin:$SDK/third_party/llvm/bin:$PATH"
 mkdir -p "$P2_FIELD_OUT"
 uptime > "$P2_FIELD_OUT/before.txt"
 start=$SECONDS
-taskset -c 112-119 bash "$R/testable/runtime/tests/gc_unit/run_p2_field_barrier.sh" > "$P2_FIELD_OUT/run.log" 2>&1
+taskset -c "${P2_CORES:-48-55}" bash "$R/testable/runtime/tests/gc_unit/run_p2_field_barrier.sh" > "$P2_FIELD_OUT/run.log" 2>&1
 rc=$?
 echo "$rc" > "$P2_FIELD_OUT/run.rc"
 echo "wall=$((SECONDS-start))" > "$P2_FIELD_OUT/wall.txt"
