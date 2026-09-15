@@ -109,13 +109,15 @@ void CollectorResources::Fini()
 void CollectorResources::StopGCWork()
 {
     finalizerProcessor.Stop();
+    // zCollectedHeap.cpp:314-319 gc_threads_do order: director, major driver,
+    // minor driver, stat. StringDedup is not a ZGC thread and stops last.
     StopGCThreads();
-    StringDedup::Instance().Stop();
     if (statistics != nullptr) {
         statistics->stop();
         delete statistics;
         statistics = nullptr;
     }
+    StringDedup::Instance().Stop();
 }
 
 // zCollectedHeap.cpp:96-110 ZCollectedHeap::stop: every ConcurrentGCThread
@@ -130,8 +132,8 @@ void CollectorResources::StopGCThreads()
     // before any GC thread is asked to terminate.
     minorDriverPort.Abort().Request();
     majorDriverPort.Abort().Request();
-    for (ZThread* thread : { static_cast<ZThread*>(director), static_cast<ZThread*>(minorDriver),
-                             static_cast<ZThread*>(majorDriver) }) {
+    for (ZThread* thread : { static_cast<ZThread*>(director), static_cast<ZThread*>(majorDriver),
+                             static_cast<ZThread*>(minorDriver) }) {
         thread->stop();
     }
     delete director;

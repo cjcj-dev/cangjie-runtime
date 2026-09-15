@@ -13,6 +13,7 @@
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
+#include "root_publication_snapshot.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -38,6 +39,7 @@ struct GenerationCycleRootTestAccess {
 
 namespace {
 std::atomic<unsigned> gPosted{0};
+std::atomic<bool> gMajorRootObserved{false};
 void* gTask = nullptr;
 
 bool RecordPost(void* task)
@@ -93,7 +95,20 @@ void* RunMajorCycle(void*)
     auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
     GenerationCycleRootTestAccess::Seed(collector, object);
+    // Read the product's published old mark stacks at the top of DoTracing
+    // (after the old root task returned, before follow). The export root
+    // keeping the object alive is not in this window (it feeds the driver's
+    // foreign stack), so the cycle-owner family scan is what publishes it.
+    collector.testOldMarkStarted = [handle, &collector]() {
+        BaseObject* current = Heap::GetHeap().GetExportObject(handle);
+        const bool found = RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), current);
+        gMajorRootObserved.store(found, std::memory_order_relaxed);
+        std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
+                    static_cast<void*>(current), static_cast<unsigned>(found));
+        std::fflush(stdout);
+    };
     collector.RequestGC(GC_REASON_USER, false);
+    collector.testOldMarkStarted = nullptr;
     GenerationCycleRootTestAccess::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;
@@ -132,5 +147,6 @@ GC_TEST(OHOSCycle, MajorEntryPostsResolveTask)
     GC_EXPECT_EQ(GetTaskRet(handle, &result), E_OK);
     ReleaseHandle(handle);
     ExpectPostState("OHOSCycle.MajorEntryPostsResolveTask", 1U);
+    GC_EXPECT_TRUE(gMajorRootObserved.load(std::memory_order_relaxed));
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

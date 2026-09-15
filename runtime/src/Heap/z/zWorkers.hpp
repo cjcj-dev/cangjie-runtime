@@ -8,14 +8,11 @@
 #define MRT_GC_Z_ZWORKERS_HPP
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <mutex>
-#include <vector>
 
 #include "Base/LogFile.h"
-#include "Base/Macros.h"
 #include "Heap/z/workerThread.hpp"
 
 namespace MapleRuntime {
@@ -24,7 +21,7 @@ class ZRestartableTask;
 class ZStatWorkers;
 class ZTask;
 
-// zWorkers.hpp:38-77. The generation's view of its WorkerThreads: six fields,
+// zWorkers.hpp:38-67. The generation's view of its WorkerThreads: six fields,
 // no task state, no timing, no stop protocol. ZLock is std::mutex here (I14).
 class ZWorkers {
 private:

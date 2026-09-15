@@ -21,7 +21,71 @@
 #include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
+#include "root_publication_snapshot.hpp"
 
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace MapleRuntime {
+// Seed inputs of the real processor/collector; never call or reconstruct the
+// enum task in the test. The real major request owns execution and merging.
+// This fixture checks root scanning, not finalizer scheduling or invocation.
+struct GenerationCycleRootTestAccess {
+    static void Install(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
+    {
+        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
+        {
+            std::lock_guard<std::mutex> lock(processor.listLock);
+            NativeSlot queued(zpointer::null), working(zpointer::null);
+            Heap::GetBarrier().WriteStaticRef(queued, objects[0]);
+            Heap::GetBarrier().WriteStaticRef(working, objects[1]);
+            NativeSlot* queuedSlot = processor.strongStorage.Allocate();
+            queuedSlot->StoreColoured(queued.GetFieldValue(), std::memory_order_relaxed);
+            processor.finalizables.push_back(queuedSlot);
+            NativeSlot* workingSlot = processor.strongStorage.Allocate();
+            workingSlot->StoreColoured(working.GetFieldValue(), std::memory_order_relaxed);
+            processor.workingFinalizables.push_back(workingSlot);
+            // Deliberately do not schedule finalization: only the scanner's
+            // queued/working input branches are under test.
+        }
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            collector.resurrectedExportObjectes.insert(objects[2]);
+            collector.resurrectedExportObjectesForwardPhase.insert(objects[3]);
+        }
+        {
+            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+            collector.cycleRefWorkStack[objects[4]].push_back(objects[5]);
+        }
+    }
+    static void Remove(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
+    {
+        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
+        {
+            std::lock_guard<std::mutex> lock(processor.listLock);
+            auto remove = [&](NativeRootHandles& roots, BaseObject* object) {
+                for (auto it = roots.begin(); it != roots.end();) {
+                    if (to_object(it->GetTargetObject()) == object) {
+                        processor.strongStorage.Release(&*it);
+                        it = roots.erase(it);
+                    }
+                    else ++it;
+                }
+            };
+            remove(processor.finalizables, objects[0]);
+            remove(processor.workingFinalizables, objects[1]);
+        }
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            collector.resurrectedExportObjectes.erase(objects[2]);
+            collector.resurrectedExportObjectesForwardPhase.erase(objects[3]);
+        }
+        {
+            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+            collector.cycleRefWorkStack.erase(objects[4]);
+        }
+    }
+};
+}
+#endif
 
 using namespace MapleRuntime;
 namespace {
@@ -65,6 +129,7 @@ void* Exercise(void*)
     auto& tracing = static_cast<TracingCollector&>(collector);
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
+    unsigned rootResults = 0;
     unsigned combinedMarkStarts = 0;
     unsigned minorMarkStarts = 0;
     GCCycleSnapshot preludeOld {};
@@ -91,6 +156,20 @@ void* Exercise(void*)
             Expect(!old.active, "independent_minor_does_not_start_old");
         }
     };
+    // Allocate actual product objects, with an independent export-table root
+    // keeping each alive even when a common-root consumer is deliberately cut.
+    alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
+    auto* type = reinterpret_cast<TypeInfo*>(typeStorage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uint64_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
+    std::array<U64, 6> handles {};
+    std::array<BaseObject*, 6> witnesses {};
+    for (auto& handle : handles) {
+        auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
+        handle = Heap::GetHeap().RegisterExportRoot(object);
+    }
     tracing.testCyclePrepared = [&]() {
         // The real driver has selected and prepared its cycle. Add captures
         // its own state; the test does not provide a phase or generation.
@@ -116,9 +195,59 @@ void* Exercise(void*)
                    "old_body_keeps_prelude_identity");
             Expect((::g_cjMarkBadMask & ZPointerMarkedOldMask) == preludeOldColor,
                    "old_body_keeps_prelude_color");
+            for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
+            GenerationCycleRootTestAccess::Install(tracing, witnesses);
             Expect(storedColor == static_cast<uintptr_t>(::g_cjStoreGoodMask), "store_buffer_old_color");
         }
         buffer.Discard();
+    };
+    // Old root publication, read from the product's own published mark stacks
+    // at the top of DoTracing (zGeneration.cpp: after DoEnumeration returned,
+    // before TracingImpl pops anything). Export roots are not in this window:
+    // EnumAllExportRoots fills the driver-local foreign stack that only
+    // ProcessExportRoots consumes, so a witness is observed here only if its
+    // family scan published it.
+    tracing.testOldMarkStarted = [&]() {
+        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*tracing.MajorMarkDomain());
+        size_t expected = 0;
+        bool included = true;
+        Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
+            auto* object = to_object(slot.GetTargetObject());
+            if (object != nullptr && Heap::IsHeapAddress(object)) {
+                ++expected;
+                included = included && observed.count(object) != 0;
+            }
+        });
+        std::set<BaseObject*> concurrencyRoots;
+        RootVisitor concurrentVisitor = [&](ObjectRef& slot) {
+            auto* object = to_object(safe(slot.LoadPlain()));
+            if (object != nullptr && Heap::IsHeapAddress(object)) concurrencyRoots.insert(object);
+        };
+        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrentVisitor);
+        const bool concurrencyIncluded = std::all_of(concurrencyRoots.begin(), concurrencyRoots.end(),
+            [&](BaseObject* object) { return observed.count(object) != 0; });
+        std::printf("ROOT_CONCURRENCY expected=%zu included=%u\n", concurrencyRoots.size(), concurrencyIncluded);
+        Expect(!concurrencyRoots.empty(), "worker_concurrency_witness_exists");
+        Expect(concurrencyIncluded, "worker_root_result_contains_concurrency");
+        const char* names[] = { "worker_root_result_contains_queued_finalizer",
+            "worker_root_result_contains_working_finalizer", "worker_root_result_contains_resurrected",
+            "worker_root_result_contains_forward_resurrected", "worker_root_result_contains_cycle_owner",
+            "worker_root_result_contains_cycle_external" };
+        std::set<BaseObject*> unique(witnesses.begin(), witnesses.end());
+        Expect(unique.size() == witnesses.size() && unique.count(nullptr) == 0, "worker_family_witnesses_distinct");
+        for (size_t i = 0; i < witnesses.size(); ++i) {
+            std::printf("ROOT_FAMILY name=%s object=%p included=%u\n", names[i], witnesses[i],
+                        observed.count(witnesses[i]) != 0);
+            Expect(observed.count(witnesses[i]) != 0, names[i]);
+        }
+        GenerationCycleRootTestAccess::Remove(tracing, witnesses);
+        ++rootResults;
+        const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+        std::printf("ROOT_RESULT expected_static=%zu observed_objects=%zu old_active=%u old_phase=%u\n",
+                    expected, observed.size(), unsigned(old.active), unsigned(old.phase));
+        Expect(expected > 0, "worker_root_witness_exists");
+        Expect(included, "worker_root_result_contains_statics");
+        Expect(old.active && old.phase == GC_PHASE_TRACE, "worker_root_result_owner");
     };
 #endif
     auto y0 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
@@ -152,9 +281,12 @@ void* Exercise(void*)
         (unsigned)y2.phase, (unsigned)o2.phase);
 #if defined(MRT_TESTABLE_INTERNALS)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
+    Expect(rootResults > 0, "worker_root_result_observed");
     Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
     tracing.testYoungMarkStarted = nullptr;
     tracing.testCyclePrepared = nullptr;
+    tracing.testOldMarkStarted = nullptr;
+    for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);
 #endif
     return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));
 }

@@ -8,6 +8,7 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zForwardingTable.hpp"
+#include "root_publication_snapshot.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include <atomic>
 #include <condition_variable>
@@ -216,23 +217,37 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
     collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
     ForwardingTable::ResetRelocationSet(Generation::Young);
-    // The root task visits the slot through the colored closure; the product
-    // effect observed here is the old mark bit of the current object.
+    // Observe the product's published old mark stacks after the root task
+    // returned and before follow starts (testOldMarkStarted fires at the top
+    // of DoTracing, after DoEnumeration). The slot visit is recorded too, so
+    // "not enumerated" is distinguishable from "never scanned".
+    bool enumerated = false;
     bool visited = false;
+    bool observed = false;
     collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* visitedSlot) {
         visited |= generation == GCCycleGeneration::OLD && visitedSlot == &slot;
     };
+    collector.testOldMarkStarted = [&]() {
+        observed = true;
+        enumerated |= RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), to);
+    };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
+    collector.testOldMarkStarted = nullptr;
     collector.testColoredRootResult = nullptr;
     const bool oldMarkedCurrent = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), to) &&
         !region->IsMarkedObject(region->GetMarkView<Generation::Old>(), from);
-    std::fprintf(stderr, "native_root_after_reset executed=1 visited=%u slot=%#zx expected=%p\n",
-                 unsigned(visited), raw(slot.GetFieldValue()), to);
+    std::fprintf(stderr, "native_root_after_reset executed=1 observed=%u visited=%u enumerated=%u slot=%#zx expected=%p\n",
+                 unsigned(observed), unsigned(visited), unsigned(enumerated), raw(slot.GetFieldValue()), to);
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
-    // ZMark::mark_object skips an already marked object (zMark.inline.hpp:63-75);
-    // after either preceding collection the slot is visited and its current
-    // object carries the old mark.
+    // Pre-conditions of the target assertion, checked first so a red below
+    // cannot be a scan that never ran or an observer that never fired.
+    GC_EXPECT_TRUE(observed);
     GC_EXPECT_TRUE(visited);
+    // ZMark::mark_object skips an already marked object (zMark.inline.hpp:60-72).
+    // Observe actual published stacks, not the retired RootSet input buffer.
+    // After young, this is the first old scan and must publish. After old,
+    // the already marked current object must not be requeued.
+    GC_EXPECT_EQ(enumerated, minor);
     GC_EXPECT_TRUE(to_object(slot.GetTargetObject()) == to);
     GC_EXPECT_TRUE(oldMarkedCurrent);
 }
@@ -315,10 +330,17 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
     resources.GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
+    bool published = false;
+    collector.testOldMarkStarted = [&]() {
+        published |= RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), fixture.obj0);
+    };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
+    collector.testOldMarkStarted = nullptr;
     const bool marked = fixture.region0->IsMarkedObject(fixture.region0->GetMarkView<Generation::Old>(), fixture.obj0);
-    std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p marked=%u\n",
-                 fixture.obj0, unsigned(marked));
+    std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p published=%u marked=%u\n",
+                 fixture.obj0, unsigned(published), unsigned(marked));
+    // Both observations are read before either target assertion can fail.
+    GC_EXPECT_TRUE(published);
     GC_EXPECT_TRUE(marked);
 }
 #endif
