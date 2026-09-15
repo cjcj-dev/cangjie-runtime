@@ -67,8 +67,10 @@ GC_TEST(MappedCache, SmallPagesUseLowestAddress)
         return ZVirtualMemory(mapping.offset() + index * small, count * small);
     };
     auto index = [&](const ZVirtualMemory& v) { return (v.start() - mapping.offset()) / small; };
-    cache.insert(vmem(10, 8));
-    cache.insert(vmem(0, 2));
+    // The best-fit size class for one small page is the 2-page run at index
+    // 12; the lowest address is inside the 10-page run at index 0.
+    cache.insert(vmem(0, 10));
+    cache.insert(vmem(12, 2));
     const ZVirtualMemory first = cache.remove_contiguous(small);
     const ZVirtualMemory second = cache.remove_contiguous(small);
     GC_EXPECT_FALSE(first.is_null());
@@ -78,7 +80,10 @@ GC_TEST(MappedCache, SmallPagesUseLowestAddress)
     // A larger request prefers the approximate best-fit size class.
     const ZVirtualMemory rest = cache.remove_contiguous(8 * small);
     GC_EXPECT_FALSE(rest.is_null());
-    GC_EXPECT_EQ(index(rest), 10U);
+    GC_EXPECT_EQ(index(rest), 2U);
+    const ZVirtualMemory tail = cache.remove_contiguous(2 * small);
+    GC_EXPECT_FALSE(tail.is_null());
+    GC_EXPECT_EQ(index(tail), 12U);
     GC_EXPECT_TRUE(cache.remove_contiguous(small).is_null());
 }
 
