@@ -323,6 +323,14 @@ struct LoadHealDeliveryTestAccess {
                                                   const std::unordered_set<MAddress>& previous,
                                                   BaseObject* currentMinorRoot)
     {
+        // This synthetic relocation fixture must bind the same collector
+        // used by the global product barrier and provide its mark domain.
+        // Full GC/phase production is separately covered by the managed P2 test.
+        auto& resources = Heap::GetHeap().GetCollectorResources();
+        RelocationReceiptTestAccess::BindCollector(resources, &collector);
+        collector.youngCycle.InitializeWorkers(1);
+        collector.StartYoungMarkWork();
+        collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         ZGlobalsPointers::flip_young_mark_start();
         WCollector::WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
@@ -336,10 +344,13 @@ struct LoadHealDeliveryTestAccess {
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots,
                                       currentMinorRoots, false, &consumed, &stats);
-        const size_t work = workStack.size();
-        while (!workStack.empty()) {
-            workStack.pop_back();
+        auto& domain = *collector.YoungMarkDomain();
+        auto& stacks = domain.Stacks();
+        const size_t work = stacks.Population();
+        for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
+            if (auto* stack = stacks.StealLocal(stripe)) MarkStripeStack::Destroy(stack);
         }
+        RelocationReceiptTestAccess::BindCollector(resources, nullptr);
         return RemsetConsumeResult { work, consumed.size() };
     }
 };
