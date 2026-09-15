@@ -835,6 +835,9 @@ bool MutatorManager::TlsObservedSafe(ThreadLocalData* tls)
 
 void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
 {
+    if (tls == ThreadLocal::GetThreadLocalData()) {
+        ThreadLocal::InitializeCleaner();
+    }
     // GC workers rendezvous at task boundaries, not through mutator handshakes.
     if (tls == nullptr || tls->threadType == ThreadType::GC_THREAD) {
         return;

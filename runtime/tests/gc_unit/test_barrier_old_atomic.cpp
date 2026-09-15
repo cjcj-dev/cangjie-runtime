@@ -151,9 +151,9 @@ public:
     explicit MutatorScope(Mutator& mutator) : saved(ThreadLocal::GetMutator())
     {
         mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-        ThreadLocal::GetThreadLocalData()->mutator = &mutator;
+        ThreadLocal::SetMutator(&mutator);
     }
-    ~MutatorScope() { ThreadLocal::GetThreadLocalData()->mutator = saved; }
+    ~MutatorScope() { ThreadLocal::SetMutator(saved); }
 
 private:
     Mutator* saved;

@@ -150,8 +150,8 @@ private:
 class InstalledMutatorScope final {
 public:
     explicit InstalledMutatorScope(Mutator& mutator) : saved(ThreadLocal::GetMutator())
-    { ThreadLocal::GetThreadLocalData()->mutator = &mutator; }
-    ~InstalledMutatorScope() { ThreadLocal::GetThreadLocalData()->mutator = saved; }
+    { ThreadLocal::SetMutator(&mutator); }
+    ~InstalledMutatorScope() { ThreadLocal::SetMutator(saved); }
 private:
     Mutator* saved;
 };
