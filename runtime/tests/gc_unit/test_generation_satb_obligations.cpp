@@ -7,13 +7,13 @@
 // Companion of run_generation_cycle_context.sh. Its fixtures reach product
 // internals through MRT_TESTABLE_INTERNALS friend access (MarkPublicationFixture
 // in WCollector.h/CollectorProxy.h/zMark.hpp/zDriver.hpp), so it only exists in
-// the testable configuration; the runner builds it with GC_CYCLE_TESTABLE=1 and
-// reports SATB_RC=NOT_RUN otherwise. The process entry is gc_unit_main.cpp, the
-// same one as cj_gc_unit, so --gtest_filter=/--gtest_list_tests and the
-// GC_OTHER_VM_TEST child re-exec (gc_unittest.hpp RunInOtherVm) are handled
-// identically here.
+// the testable configuration; the runner builds it only against a testable
+// product SO and reports SATB_RC=NOT_RUN otherwise. The process entry is
+// gc_unit_main.cpp, the same one as cj_gc_unit, so --gtest_filter= /
+// --gtest_list_tests and the GC_OTHER_VM_TEST child re-exec (gc_unittest.hpp
+// RunInOtherVm) are handled identically here, one process per test.
 #if !defined(MRT_TESTABLE_INTERNALS)
-#error "test_generation_satb_obligations.cpp requires MRT_TESTABLE_INTERNALS; build it with GC_CYCLE_TESTABLE=1"
+#error "test_generation_satb_obligations.cpp requires MRT_TESTABLE_INTERNALS; build it against a testable product SO"
 #endif
 
 #include "Common/Runtime.h"
