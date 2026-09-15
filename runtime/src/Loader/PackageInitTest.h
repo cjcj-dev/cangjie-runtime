@@ -20,6 +20,10 @@ bool MRT_PackageInitArmCompletePause(const void* package, const void* unit, uint
 // the current logical CJThread, outside the state graph and loader locks.
 bool MRT_PackageInitCompletePauseReached(void) PACKAGE_INIT_TEST_NOEXCEPT;
 void MRT_PackageInitReleaseCompletePause(void) PACKAGE_INIT_TEST_NOEXCEPT;
+// Read the existing logical wait graph for this exact unit. No counters or
+// scheduling changes; a waiter whose terminal recheck completed is absent.
+bool MRT_PackageInitHasWaitingCaller(const void* package, const void* unit, uint32_t phase)
+    PACKAGE_INIT_TEST_NOEXCEPT;
 #undef PACKAGE_INIT_TEST_NOEXCEPT
 #ifdef __cplusplus
 }

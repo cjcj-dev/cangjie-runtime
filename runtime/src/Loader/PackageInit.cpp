@@ -360,4 +360,19 @@ extern "C" void MRT_PackageInitReleaseCompletePause() noexcept
     const int rc = WaitqueueWakeAll(&gate.waiters, nullptr, nullptr);
     CHECK_DETAIL(rc == 0 || rc == ERRNO_QUEUE_IS_EMPTY, "cache Complete test wake failed: %d", rc);
 }
+extern "C" bool MRT_PackageInitHasWaitingCaller(const void* package, const void* unit, uint32_t phase) noexcept
+{
+    using namespace MapleRuntime;
+    if (Runtime::CurrentRef() == nullptr) { return false; }
+    ScopedEnterSaferegion safe(false);
+    auto& graph = Coordinator();
+    std::lock_guard<std::mutex> lock(graph.mutex);
+    for (const auto& edge : graph.waitingOn) {
+        const auto& state = *edge.second;
+        if (state.package == package && state.unit == unit && state.phase == phase &&
+            state.status.load(std::memory_order_acquire) == InitStatus::Initializing) { return true; }
+    }
+    return false;
+}
+
 #endif

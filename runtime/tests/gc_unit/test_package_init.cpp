@@ -656,10 +656,16 @@ GC_OTHER_VM_TEST(PackageInit, CompletePauseUsesLogicalWaitAndExactIdentity)
     Target("product-complete-reached-pause", MRT_PackageInitCompletePauseReached());
     Start(Waiter, &c);
     Target("pause-waiter-started", Await(c.waiterStarted));
+    const auto waiterDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!MRT_PackageInitHasWaitingCaller(P(), U(), 0) && !c.waiterDone.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < waiterDeadline) { std::this_thread::yield(); }
+    Target("second-caller-in-product-wait-graph", MRT_PackageInitHasWaitingCaller(P(), U(), 0) &&
+           !MRT_PackageInitHasWaitingCaller(P(), V(), 0) && !MRT_PackageInitHasWaitingCaller(P(), U(), 1));
     Start(Witness, &c);
     Target("complete-pause-cooperates-with-gc", Await(c.witnessDone));
     MRT_PackageInitReleaseCompletePause();
     Target("complete-pause-release", Await(c.waiterDone) && c.waiterResult == Code(Result::Ready));
+    Target("product-wait-graph-cleared", !MRT_PackageInitHasWaitingCaller(P(), U(), 0));
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
