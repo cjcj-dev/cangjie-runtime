@@ -5,6 +5,8 @@
 #if defined(MRT_GC_UNIT_TESTS)
 
 #include <atomic>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <thread>
 #include <cstdint>
@@ -12,6 +14,7 @@
 #include <dlfcn.h>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 #if defined(__linux__)
 #include <sched.h>
 #include <sys/wait.h>
@@ -25,9 +28,13 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zIterator.hpp"
+#include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
 #include "Heap/z/zMarkStack.hpp"
@@ -184,16 +191,25 @@ struct SegmentedArrayContext {
                 }
             }
 
-            // Iterator consumers must treat the published-but-incomplete array
-            // as opaque. Count actual product visitor calls rather than the
-            // test receipt emitted beside the skip: removing either product
-            // return below must expose a non-zero visit count.
-            rootBefore->ForEachRefField([&ctx](RefField<>&) { ++ctx.fullIteratorVisits; });
-            const MAddress firstField = reinterpret_cast<MAddress>(rootBefore->ConvertToCArray());
-            rootBefore->ForEachRefFieldInRange(
-                [&ctx](RefField<>&) { ++ctx.rangeIteratorVisits; },
-                firstField, firstField + sizeof(RefField<>));
-            if (ctx.fullIteratorVisits != 0 || ctx.rangeIteratorVisits != 0) {
+            // zIterator.inline.hpp:64-70: incomplete reference arrays may
+            // only enter safe iteration. These are product instantiations,
+            // not a second implementation compiled into this test executable.
+            RefFieldVisitor first = [&ctx](RefField<>&) { ++ctx.safeIteratorVisits[0]; };
+            RefFieldVisitor second = [&ctx](RefField<>&) { ++ctx.safeIteratorVisits[1]; };
+            ZBasicOopIterateClosure<RefFieldVisitor> firstClosure(first);
+            ZBasicOopIterateClosure<RefFieldVisitor> secondClosure(second);
+            ZIterator::oop_iterate_safe(rootBefore, &firstClosure);
+            ZIterator::oop_iterate_safe(rootBefore, rootBefore->GetTypeInfo(), &secondClosure);
+            ZIterator::basic_oop_iterate_safe(rootBefore,
+                RefFieldVisitor([&ctx](RefField<>&) { ++ctx.safeIteratorVisits[2]; }));
+            ZIterator::basic_oop_iterate_safe(rootBefore, rootBefore->GetTypeInfo(),
+                RefFieldVisitor([&ctx](RefField<>&) { ++ctx.safeIteratorVisits[3]; }));
+            const bool opaque = std::all_of(ctx.safeIteratorVisits.begin(), ctx.safeIteratorVisits.end(),
+                                            [](size_t count) { return count == 0; });
+            std::fprintf(stderr, "[SEGMENTED_ITERATOR_ASSERT] safe=%zu safe_klass=%zu basic=%zu basic_klass=%zu pass=%d\n",
+                         ctx.safeIteratorVisits[0], ctx.safeIteratorVisits[1], ctx.safeIteratorVisits[2],
+                         ctx.safeIteratorVisits[3], opaque);
+            if (!opaque) {
                 ++ctx.failures;
             }
         }
@@ -267,6 +283,60 @@ struct SegmentedArrayContext {
         if (array->IsInvisibleObject()) {
             ++current->failures;
         }
+        if (array->GetComponentTypeInfo()->IsRef()) {
+            // Positive control through the same product entry after publication
+            // completes. Consume the product's continuations, checking every
+            // slot address exactly once, without interpreting reference values.
+            std::vector<unsigned char> visits(array->GetLength(), 0);
+            std::vector<MarkStackEntry> pending;
+            const MAddress start = reinterpret_cast<MAddress>(array->ConvertToCArray());
+            size_t invalid = 0;
+            auto visit = [&](MAddress field) {
+                if (field < start || (field - start) % sizeof(RefField<>) != 0 ||
+                    (field - start) / sizeof(RefField<>) >= visits.size()) {
+                    ++invalid;
+                } else {
+                    ++visits[(field - start) / sizeof(RefField<>)];
+                }
+            };
+            auto publish = [&](const MarkStackEntry& entry) { pending.push_back(entry); };
+            MarkPartialArray::FollowObjectReferences(array, false, visit, publish);
+            const size_t partials = pending.size();
+            while (!pending.empty()) {
+                const MarkStackEntry entry = pending.back();
+                pending.pop_back();
+                MarkPartialArray::FollowPartialReferences(entry, visit, publish);
+            }
+            for (unsigned char count : visits) {
+                invalid += count != 1;
+            }
+            size_t full = 0;
+            size_t basic = 0;
+            size_t range = 0;
+            RefFieldVisitor fullVisitor = [&](RefField<>&) { ++full; };
+            RefFieldVisitor rangeVisitor = [&](RefField<>&) { ++range; };
+            ZBasicOopIterateClosure<RefFieldVisitor> fullClosure(fullVisitor);
+            ZBasicOopIterateClosure<RefFieldVisitor> rangeClosure(rangeVisitor);
+            ZIterator::oop_iterate(array, &fullClosure);
+            ZIterator::basic_oop_iterate(array, RefFieldVisitor([&](RefField<>&) { ++basic; }));
+            ZIterator::oop_iterate_elements_range(array, &rangeClosure, 0, 1);
+            std::array<size_t, 4> safe {};
+            RefFieldVisitor first = [&](RefField<>&) { ++safe[0]; };
+            RefFieldVisitor second = [&](RefField<>&) { ++safe[1]; };
+            ZBasicOopIterateClosure<RefFieldVisitor> firstClosure(first);
+            ZBasicOopIterateClosure<RefFieldVisitor> secondClosure(second);
+            ZIterator::oop_iterate_safe(array, &firstClosure);
+            ZIterator::oop_iterate_safe(array, array->GetTypeInfo(), &secondClosure);
+            ZIterator::basic_oop_iterate_safe(array, RefFieldVisitor([&](RefField<>&) { ++safe[2]; }));
+            ZIterator::basic_oop_iterate_safe(array, array->GetTypeInfo(),
+                                             RefFieldVisitor([&](RefField<>&) { ++safe[3]; }));
+            const bool complete = invalid == 0 && full == visits.size() && basic == visits.size() && range == 1 &&
+                std::all_of(safe.begin(), safe.end(), [&](size_t count) { return count == visits.size(); });
+            std::fprintf(stderr, "[SEGMENTED_VISIBLE_ASSERT] fields=%zu full=%zu basic=%zu range=%zu partial=%zu "
+                         "safe=%zu safe_klass=%zu safe_basic=%zu safe_basic_klass=%zu invalid=%zu pass=%d\n",
+                         visits.size(), full, basic, range, partials, safe[0], safe[1], safe[2], safe[3], invalid, complete);
+            current->failures += !complete;
+        }
     }
 
     static void OnRootVisit(LargeArrayRootVisitSite site, BaseObject* object)
@@ -302,8 +372,7 @@ struct SegmentedArrayContext {
     size_t firstSegmentYieldCount = 0;
     size_t withdrawCount = 0;
     size_t failures = 0;
-    size_t fullIteratorVisits = 0;
-    size_t rangeIteratorVisits = 0;
+    std::array<size_t, 4> safeIteratorVisits {};
     uint64_t youngSequenceBefore = 0;
     uint64_t youngSequenceAfter = 0;
     uint64_t oldSequenceBefore = 0;
@@ -510,13 +579,13 @@ void* RunSegmentedCase(void* rawMode)
     std::fprintf(stderr,
                  "[SEGMENTED_ARRAY_CASE] mode=%u status=%zu failures=%zu dirty=%d dirty_addr=%#lx "
                  "array=%p publish=%zu yield=%zu first=%zu withdraw=%zu requested_gc=%d context=%s "
-                 "iterator_full=%zu iterator_range=%zu "
+                 "iterator_safe=%zu iterator_safe_klass=%zu "
                  "young_before=%llu young_after=%llu old_before=%llu old_after=%llu moved=%d root_sites=%#x phase_n=%zu watermark_done=%d null=%d\n",
                  static_cast<unsigned>(gc), status, ctx.failures, ctx.checkedDirtyBoundary,
                  static_cast<unsigned long>(ctx.dirtyAddress), static_cast<void*>(array), ctx.publishCount,
                  ctx.yieldCount, ctx.firstSegmentYieldCount, ctx.withdrawCount, ctx.requestedGc,
                  requireWatermarkDone ? "native-watermark" : "native",
-                 ctx.fullIteratorVisits, ctx.rangeIteratorVisits,
+                 ctx.safeIteratorVisits[0], ctx.safeIteratorVisits[1],
                  static_cast<unsigned long long>(ctx.youngSequenceBefore),
                  static_cast<unsigned long long>(ctx.youngSequenceAfter),
                  static_cast<unsigned long long>(ctx.oldSequenceBefore),
@@ -818,7 +887,85 @@ void* RunMarkAllocationCase(void* rawExisting)
 }
 #endif
 
-int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
+void* RunVisibleArrayGraph(void*)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    NativeSlot root(zpointer::null);
+    Heap::GetBarrier().WriteStaticRef(root, array);
+    NativeSlot* roots[] = { &root };
+    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    std::vector<size_t> visits(array->GetLength(), 0);
+    size_t invalid = 0;
+    size_t objects = 0;
+    const MAddress first = reinterpret_cast<MAddress>(array->ConvertToCArray());
+    {
+        ScopedEnterSaferegion saferegion(false);
+        ScopedStopTheWorld stw("segmented-array range graph", false);
+        HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == array; },
+            [&](BaseObject* base, const void* slot, uintptr_t) {
+                if (base != array) { return; }
+                const MAddress field = reinterpret_cast<MAddress>(slot);
+                if (field < first || (field - first) % sizeof(RefField<>) != 0 ||
+                    (field - first) / sizeof(RefField<>) >= visits.size()) {
+                    ++invalid;
+                } else {
+                    ++visits[(field - first) / sizeof(RefField<>)];
+                }
+            });
+    }
+    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    for (size_t count : visits) { invalid += count != 1; }
+    const bool complete = objects == 1 && invalid == 0;
+    std::fprintf(stderr, "SEGMENTED_GRAPH_RANGE_ASSERT objects=%zu fields=%zu invalid=%zu pass=%d\n",
+                 objects, visits.size(), invalid, complete);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>(complete ? 0 : 1);
+}
+
+struct InvisibleGraphProbe {
+    static size_t checks;
+    static size_t objects;
+    static void Publish(MArray* array)
+    {
+        // Construct legal null payloads so a deliberately wrong graph-root
+        // inclusion reaches this test's target result without an earlier
+        // field-value check. This fixture tests root selection, not clearing.
+        std::memset(array->ConvertToCArray(), 0, array->GetContentSize());
+    }
+    static void Yield(size_t segment)
+    {
+        if (segment != 0 || checks != 0) { return; }
+        ++checks;
+        BaseObject* root = Mutator::GetMutator()->LoadInvisibleRoot();
+        // This fixture runs on a registered runtime thread. The initializer's
+        // onlyForMutator guard intentionally does not pause GC threads.
+        ScopedEnterSaferegion saferegion(false);
+        ScopedStopTheWorld stw("segmented-array invisible graph root", false);
+        HeapIterator(false).Iterate([&](BaseObject* object) { objects += object == root; });
+    }
+};
+size_t InvisibleGraphProbe::checks = 0;
+size_t InvisibleGraphProbe::objects = 0;
+
+void* RunInvisibleArrayGraph(void*)
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    LargeArrayInitTestHooks hooks;
+    hooks.onPublish = InvisibleGraphProbe::Publish;
+    hooks.onYield = InvisibleGraphProbe::Yield;
+    CJ_MRT_SetLargeArrayInitTestHooks(&hooks);
+    (void)MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    CJ_MRT_SetLargeArrayInitTestHooks(nullptr);
+    const bool excluded = InvisibleGraphProbe::checks == 1 && InvisibleGraphProbe::objects == 0;
+    std::fprintf(stderr, "SEGMENTED_GRAPH_INVISIBLE_ASSERT checks=%zu objects=%zu pass=%d\n",
+                 InvisibleGraphProbe::checks, InvisibleGraphProbe::objects, excluded);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return reinterpret_cast<void*>(excluded ? 0 : 1);
+}
+
+int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
+                   bool runtimeThread = false)
 {
 #if defined(__linux__)
     const pid_t child = fork();
@@ -829,6 +976,18 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
         param.coParam.processorNum = processorCount;
         if (InitCJRuntime(&param) != E_OK) {
             _exit(100);
+        }
+        if (runtimeThread) {
+            // Use the real native runtime-thread registration for graph tests.
+            // RunCJTask stores a native FutureImpl in LWTData::obj; that is not
+            // a managed heap-object root and is a separate scheduler/root issue.
+            auto& manager = MutatorManager::Instance();
+            manager.CreateRuntimeMutator(ThreadType::GC_THREAD);
+            void* result = task(reinterpret_cast<void*>(argument));
+            manager.DestroyRuntimeMutator(ThreadType::GC_THREAD);
+            const uintptr_t status = reinterpret_cast<uintptr_t>(result);
+            if (FiniCJRuntime() != E_OK) { _exit(103); }
+            _exit(status > 99 ? 99 : static_cast<int>(status));
         }
         CJThreadHandle handle = RunCJTask(task, reinterpret_cast<void*>(argument));
         if (handle == nullptr) {
@@ -854,6 +1013,7 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
     (void)task;
     (void)argument;
     (void)processorCount;
+    (void)runtimeThread;
     return 0;
 #endif
 }
@@ -890,6 +1050,16 @@ GC_OTHER_VM_TEST(LargePageGeneration, NativeAllocationPublishesYoungEden)
 GC_OTHER_VM_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::NONE)), 0);
+}
+
+GC_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunVisibleArrayGraph, 0, 1, true), 0);
+}
+
+GC_OTHER_VM_TEST(SegmentedArrayInit, InvisibleRootIsExcludedFromHeapGraph)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunInvisibleArrayGraph, 0, 1, true), 0);
 }
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedFirstInactiveExtentUsesSegmentedInitializer)

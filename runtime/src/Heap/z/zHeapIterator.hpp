@@ -11,6 +11,7 @@
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
+class MArray;
 // zHeapIterator.cpp:195-229,517-545. One root-seeded graph for verification and inspection.
 class HeapIterator {
 public:
@@ -21,11 +22,19 @@ public:
     void Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor = {});
     static void Fields(BaseObject* object, bool visitReferents, const FieldVisitor& visitor);
 private:
+    struct ObjArrayTask {
+        MArray* object;
+        MIndex index;
+    };
     void Push(BaseObject* object, const ObjectVisitor& objectVisitor);
+    void Follow(BaseObject* object, const FieldVisitor& visitor);
+    void FollowArray(MArray* object);
+    void FollowArrayChunk(const ObjArrayTask& array, const FieldVisitor& visitor);
     const bool visitWeaks;
     const bool forVerify;
     std::unordered_set<BaseObject*> visited;
     std::vector<BaseObject*> stack;
+    std::vector<ObjArrayTask> arrayStack;
 };
 } // namespace MapleRuntime
 #endif

@@ -13,6 +13,7 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zHeapIterator.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "TypeInfoManager.h"
 #include <unordered_set>
@@ -21,6 +22,21 @@
 
 namespace MapleRuntime {
 namespace {
+// VM adapter: the first WeakRef payload slot is outside Cangjie's ordinary
+// strong-field bitmap. HotSpot's reference Klass dispatch owns that layout.
+// This is raw iteration, as at zVerify.cpp:632 and 737, not a safe split.
+template <typename Function>
+void IterateVerifyFields(BaseObject* object, Function function)
+{
+    const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
+    if (object->IsWeakRef()) { function(HeapSlotAt<>(referent)); }
+    object->ForEachRefField([&](RefField<>& field) {
+        if (!object->IsWeakRef() || reinterpret_cast<MAddress>(&field) != referent) {
+            function(field);
+        }
+    });
+}
+
 #if defined(MRT_DEBUG) && MRT_DEBUG == 1
 constexpr bool trueInDebug = true;
 #else
@@ -210,9 +226,16 @@ void ZVerify::Objects(bool verifyWeaks)
             if (brokenObject == nullptr) { brokenObject = object; }
             return;
         }
-        HeapIterator::Fields(object, verifyWeaks, [&](BaseObject* base, RefField<>& field) {
-            Oop(base, field, verifyWeaks);
-        });
+        const MAddress referent = reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE;
+        if (object->IsWeakRef() && verifyWeaks) { Oop(object, HeapSlotAt<>(referent), verifyWeaks); }
+        RefFieldVisitor fields = [&](RefField<>& field) {
+            if (!object->IsWeakRef() || reinterpret_cast<MAddress>(&field) != referent) {
+                Oop(object, field, verifyWeaks);
+            }
+        };
+        ZBasicOopIterateClosure<RefFieldVisitor> closure(fields);
+        // zVerify.cpp:426-429: live-object verification uses the safe entry.
+        ZIterator::oop_iterate_safe(object, &closure);
     }, [&](BaseObject* base, const void* slot, uintptr_t value) {
         visitedBase = base;
         visitedSlot = slot;
@@ -253,7 +276,7 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
                  "Inactive remembered set is not empty for %p", page);
     page->VisitLiveObjectsUntilFalse([&](BaseObject* object) {
         const MAddress from = reinterpret_cast<MAddress>(object);
-        HeapIterator::Fields(object, true, [&](BaseObject*, RefField<>& field) {
+        IterateVerifyFields(object, [&](RefField<>& field) {
             const MAddress slot = reinterpret_cast<MAddress>(&field);
             if (IntentionallyUnremembered(field.GetFieldValue()) || bufferedStores.count(slot) != 0 ||
                 forwarding->find(from) != 0) { return; }
@@ -276,7 +299,7 @@ void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
         Object(object, nullptr);
         // Destination age is represented by the destination page in this port.
         if (RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) { continue; }
-        HeapIterator::Fields(object, true, [&](BaseObject*, RefField<>& field) {
+        IterateVerifyFields(object, [&](RefField<>& field) {
             const MAddress slot = reinterpret_cast<MAddress>(&field);
             const zpointer value = field.GetFieldValue(std::memory_order_acquire);
             std::atomic_thread_fence(std::memory_order_acquire);
