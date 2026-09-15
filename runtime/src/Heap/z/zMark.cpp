@@ -521,6 +521,25 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
     gMinorRootOrigin = "unknown";
 }
 
+// ZReferenceProcessor::should_discover/discover (zReferenceProcessor.cpp:174-201,
+// 239-250). Native registration owns the original referent slot, rather than a
+// Java FinalReference object. The load barrier heals remapping before discovery.
+void TracingCollector::DiscoverFinalizableRoot(NativeSlot& slot) const
+{
+    CHECK(oldCycle.IsPhaseMark());
+    auto& barrier = Heap::GetBarrier();
+    BaseObject* object = barrier.ReadStaticRef(slot);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
+    object = ValidateCurrentValue(object, provenance);
+    if (object == nullptr) return;
+    auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (page->IsYoungRegion() || page->IsObjectMarked(from_object(object), false)) return;
+    auto& processor = collectorResources.GetFinalizerProcessor().GetReferenceProcessor();
+    const auto status = processor.DiscoverReference(object, ReferenceType::FINAL);
+    CHECK(status == ReferenceStatus::DISCOVERED || status == ReferenceStatus::ALREADY_DISCOVERED);
+    barrier.MarkFinalizableBarrierOnRoot(slot);
+}
+
 namespace {
 // ZMarkOopClosure (zMark.cpp:666-670). P08 owns the missing dedicated old
 // mark barrier; this adapter consumes the existing old publication producer.
@@ -541,10 +560,13 @@ private:
 class MarkOldRootsTask final : public GCWorkerTask {
 public:
     MarkOldRootsTask(const TracingCollector& collector, MarkDomain& domain,
-                     std::function<void()> uncolored, unsigned workers)
-        : rootsColored(collector, workers), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
+                     NativeSlotVisitor finalizable, std::function<void()> uncolored, unsigned workers)
+        : rootsColored(collector, workers),
+          finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers),
+          finalizable(std::move(finalizable)), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
     void Work(uint32_t) override
     {
+        finalizerRoots.OopsDo(finalizable);
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -563,6 +585,8 @@ public:
     }
 private:
     RootsIteratorStrongColored rootsColored;
+    OopStorage::ParState<true> finalizerRoots;
+    NativeSlotVisitor finalizable;
     RootsIteratorStrongUncolored rootsUncolored;
     MarkOopClosure coloredClosure;
     MarkDomain& domain;
@@ -573,7 +597,8 @@ private:
 void TracingCollector::EnumAllCommonRoots(GCWorkers& workers)
 {
     CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before roots");
-    MarkOldRootsTask task(*this, *majorMarkDomain, [&] {
+    MarkOldRootsTask task(*this, *majorMarkDomain,
+                         [this](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
             MarkOldObjectIfActive(Heap::GetBarrier().ReadPlainRoot(root));
         }, {});

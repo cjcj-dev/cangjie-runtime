@@ -47,6 +47,7 @@ public:
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
     BaseObject* ReadStaticRef(NativeSlot& field) const;
     void MarkYoungGoodBarrierOnOopField(NativeSlot& field) const;
+    void MarkFinalizableBarrierOnRoot(NativeSlot& field) const;
     void MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable) const;
     void MarkBarrierOnYoungOopField(RefField<>& field) const;
     zaddress RemsetBarrierOnOopField(RefField<>& field) const;
@@ -138,6 +139,7 @@ private:
                            RefField<>& field, zpointer observed, const ForwardingProvenance& provenance) const;
     static bool IsFinalizableGoodFastPath(zpointer value);
     static zpointer ColorFinalizableGood(zaddress address, zpointer previous);
+    zaddress MarkFinalizableSlowPath(zaddress address) const;
     zaddress MarkFinalizableFromOldSlowPath(zaddress address) const;
     static bool IsMarkGoodFastPath(zpointer value);
     static bool IsStoreGoodOrNullAnyFastPath(zpointer value);
