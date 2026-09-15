@@ -9,6 +9,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#if defined(__aarch64__) && !defined(_WIN32)
+extern "C" void MRT_CopyDisjointWords(const uintptr_t* from, uintptr_t* to, size_t count);
+#endif
+
 namespace MapleRuntime {
 // The word-copy subset of utilities/copy.hpp. Cangjie uses uintptr_t words.
 class Copy {
@@ -75,11 +79,15 @@ private:
         assert(reinterpret_cast<uintptr_t>(to) % alignment == 0 && "destination must be aligned");
     }
 
-    // cpu/x86/copy_x86.hpp:75-77
+#if defined(__aarch64__) && !defined(_WIN32)
+#include "Base/Copy_aarch64.inline.h"
+#else
+    // cpu/x86/copy_x86.hpp:75-77; windows_aarch64/copy_windows_aarch64.hpp:71-73
     static void pd_disjoint_words_atomic(const uintptr_t* from, uintptr_t* to, size_t count)
     {
         shared_disjoint_words_atomic(from, to, count);
     }
+#endif
 };
 } // namespace MapleRuntime
 #endif // MRT_BASE_COPY_H

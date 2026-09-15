@@ -36,13 +36,29 @@ record = {"command": command, "compile_rc": result.returncode, "wall": time.mono
 if result.returncode == 0:
     ir = (args.out / "copy.ll").read_text()
     record["ir_sha256"] = hashlib.sha256(ir.encode()).hexdigest()
+    definitions = dict(re.findall(r"^define[^\n]*@([^ (]+)\([^\n]*\)[^\n]*\{\n(.*?)^}", ir, re.M | re.S))
+
+    def reachable(name, seen):
+        if name in seen or name not in definitions:
+            return ""
+        seen.add(name)
+        body = definitions[name]
+        # Follow actual emitted calls when the compiler chooses not to inline
+        # Copy. This neither forces inlining nor treats a declaration as proof.
+        for callee in re.findall(r"(?:call|invoke) [^\n]*?@([^ (]+)\(", body):
+            if callee in definitions:
+                body += "\n" + reachable(callee, seen)
+        return body
+
     for name in ("zutils_atomic_dynamic", "zutils_atomic_small", "zutils_atomic_large", "zutils_disjoint_control"):
         match = re.search(r"^define[^\n]*@" + name + r"\([^\n]*\)[^\n]*\{\n(.*?)^}", ir, re.M | re.S)
         # Existence and the actual invariant are separate records.
         record["checks"][name + ".present"] = match is not None
         if match is None:
             continue
-        body = match.group(1)
+        visited = set()
+        body = reachable(name, visited)
+        record[name + ".reachable"] = sorted(visited)
         (args.out / (name + ".ll")).write_text(body)
         if name == "zutils_disjoint_control":
             ok = "llvm.memcpy" in body and not re.search(r"\b(load|store) atomic\b", body)
