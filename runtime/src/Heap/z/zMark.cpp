@@ -1069,24 +1069,11 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
                      MarkStackEntry::MarkAndFollow(object), true);
 }
 
-// ZMark::mark_object<DontResurrect, GCThread, Follow, Strong>,
-// zMark.inline.hpp:49-94. Claim before publishing; retain the live-count duty.
+// #596's MarkYoungGoodBarrier has already resolved and qualified this value.
+// ZMark::mark_object<DontResurrect, GCThread, Follow, Strong>, zMark.inline.hpp:48-87.
 void MarkDomain::MarkRootObject(BaseObject* object)
 {
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-    // ZMark::mark_object skips the allocating page: these objects are already
-    // implicitly live. Cangjie represents that page boundary by its watermark.
-    if (region->AllocatedAfterMarkStart(region->GetAddressOffset(reinterpret_cast<MAddress>(object)))) {
-        return;
-    }
-    bool firstLive = false;
-    if (region->MarkObjectWithLiveClaim(region->GetMarkView<MapleRuntime::Generation::Young>(),
-                                       object, object->GetSize(), false, firstLive)) {
-        return;
-    }
-    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*this);
-    publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-                     MarkStackEntry::Claimed(object, firstLive, true, false), false);
+    MarkObject<false, true, true, false>(from_object(object));
 }
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
