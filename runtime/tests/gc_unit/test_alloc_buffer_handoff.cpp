@@ -59,7 +59,7 @@ size_t CountEntry(const std::vector<MarkStackEntry>& stack, BaseObject* obj)
 {
     size_t seen = 0;
     for (const MarkStackEntry& entry : stack) {
-        if (entry.object() == obj) {
+        if (to_object(ZOffset::address(to_zoffset(entry.object_address()))) == obj) {
             ++seen;
         }
     }
@@ -95,10 +95,10 @@ GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
     MarkDomain domain(64, MarkingStacks::MarkingGeneration::YOUNG);
     domain.PrepareWork(1);
     auto& producer = domain.Stacks();
-    producer.Push(domain.Stripes(), 0, MarkStackEntry::MarkAndFollow(fx.obj0), true);
+    producer.Push(domain.Stripes(), 0, MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, true, false), true);
     GC_EXPECT_TRUE(domain.Stripes().IsEmpty());
     GC_EXPECT_TRUE(domain.FlushStacks());
-    producer.Push(domain.Stripes(), 0, MarkStackEntry::MarkAndFollow(fx.obj1), true);
+    producer.Push(domain.Stripes(), 0, MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, true, false), true);
     GC_EXPECT_TRUE(domain.FlushStacks());
     std::vector<MarkStackEntry> delivered;
     MarkThreadLocalStacks consumer(64);
@@ -126,7 +126,8 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact
         ThreadLocal::SetAllocBuffer(id == 0 ? &first : &second);
         owners[id] = &ThreadLocal::GetGCData();
         auto& stacks = domain.Stacks();
-        stacks.Push(domain.Stripes(), id, MarkStackEntry::MarkAndFollow(id == 0 ? fx.obj0 : fx.obj1), true);
+        stacks.Push(domain.Stripes(), id,
+                    MarkStackEntry(untype(ZAddress::offset(from_object(id == 0 ? fx.obj0 : fx.obj1))), true, true, true, false), true);
         ready.fetch_add(1);
         while (ready.load() != 2) { std::this_thread::yield(); }
         ThreadLocal::SetAllocBuffer(id == 0 ? &second : &first);

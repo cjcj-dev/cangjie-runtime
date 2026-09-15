@@ -561,11 +561,13 @@ protected:
 
     void FindUselessExternObjects();
 
+    // Export-root producer consumed by the old roots task (zMark.cpp
+    // mark_old_roots -> MarkOldObjectIfActive).
+    void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
+
 private:
     size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
-    void EnumAllSurrectedExportRoots(RootSet& rootSet);
-    void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
 
     void VisitStaticRoots(const NativeSlotVisitor& visitor) const;
     void VisitFinalizerRoots(const NativeSlotVisitor& visitor) const;

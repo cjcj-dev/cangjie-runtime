@@ -24,7 +24,7 @@ MarkStripeStack* StackWithOne(uintptr_t value)
 {
     MarkStripeStack* stack = MarkStripeStack::Create(true);
     GC_EXPECT_TRUE(stack != nullptr);
-    stack->Push(MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(value)));
+    stack->Push(MarkStackEntry(uintptr_t(value), true, true, true, false));
     return stack;
 }
 } // namespace
@@ -139,7 +139,7 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
         const uintptr_t value = ENTRY_BASE + i * ENTRY_STEP;
         // Put all initial work on one shared stripe so non-owner workers must
         // take the global steal path; flush converts private tails to nodes.
-        seed.Push(stripes, 0, MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(value)), true);
+        seed.Push(stripes, 0, MarkStackEntry(uintptr_t(value), true, true, true, false), true);
     }
     GC_EXPECT_TRUE(seed.Flush(stripes, true));
 
@@ -178,7 +178,7 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
                    !invalidEntry.load(std::memory_order_relaxed) &&
                    std::chrono::steady_clock::now() < deadline) {
                 if (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
-                    const uintptr_t value = reinterpret_cast<uintptr_t>(entry.object());
+                    const uintptr_t value = entry.object_address();
                     const size_t index = (value - ENTRY_BASE) / ENTRY_STEP;
                     // Report failures after joining; an assertion exception in
                     // a worker would bypass the losslessness diagnostic.
@@ -237,7 +237,7 @@ GC_TEST(MarkStripe, GlobalStealReportsEmptyAfterDrain)
     stripe.PublishStack(StackWithOne(ENTRY_BASE), true);
     MarkStripeStack* const stack = stripe.StealStack(smr, 0);
     GC_EXPECT_TRUE(stack != nullptr);
-    const uintptr_t value = reinterpret_cast<uintptr_t>(stack->Pop().object());
+    const uintptr_t value = stack->Pop().object_address();
     MarkStripeStack::Destroy(stack);
     GC_EXPECT_EQ(value, ENTRY_BASE);
     GC_EXPECT_TRUE(stripe.StealStack(smr, 0) == nullptr);

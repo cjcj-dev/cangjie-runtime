@@ -208,7 +208,7 @@ void* Exercise(void*)
         for (auto* node = result.head(); node != nullptr; node = node->next) {
             auto copy = *node;
             while (!copy.empty()) {
-                observed.insert(copy.back().object());
+                observed.insert(to_object(ZOffset::address(to_zoffset(copy.back().object_address()))));
                 copy.pop_back();
             }
         }

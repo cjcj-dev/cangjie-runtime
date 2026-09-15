@@ -135,19 +135,11 @@ public:
     // Partial-array mark entries encode a 4K-shifted heap-relative offset
     // (zMark.cpp:177-186).  The codec owns the relative-alignment predicate;
     // heap creation still rejects an invalid production origin.
-    static void CheckHeapStartAlignment(MAddress startAddr);
 
     static MAddress GetHeapStartAddress() { return heapStartAddr; }
 
-#ifdef MRT_TESTABLE_INTERNALS
-    // Test-only injection seam for the arbitrary-base codec arm. Production
-    // writes remain confined to OnHeapCreated below.
-    static void SetHeapStartForTesting(MAddress startAddr);
-#endif
-
     static void OnHeapCreated(MAddress startAddr)
     {
-        CheckHeapStartAlignment(startAddr);
         heapStartAddr = startAddr;
         heapCurrentEnd = 0;
         heapReservations.clear();
@@ -182,5 +174,4 @@ private:
     static std::vector<HeapSlotAddressRange> heapReservations;
 };
 } // namespace MapleRuntime
-#include "Heap/Heap.h"
 #endif // MRT_HEAP_MANAGER_H

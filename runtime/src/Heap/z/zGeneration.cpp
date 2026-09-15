@@ -941,13 +941,6 @@ void TracingCollector::CurrentizeValueRootMap(
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
 
 
-void TracingCollector::EnumAllSurrectedExportRoots(RootSet& rootSet)
-{
-    VisitSurrectedExportRoots([&](BaseObject* object) {
-        rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, true, false));
-    });
-}
-
 void TracingCollector::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor)
 {
     {

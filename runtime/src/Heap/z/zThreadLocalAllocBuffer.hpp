@@ -77,8 +77,21 @@ public:
             pending.swap(y2yDirtyHolders);
         }
         for (BaseObject* obj : pending) {
-            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, true, false));
+            PushDirtyHolder(workStack, obj);
         }
+    }
+
+    // Mutator-side publication of a dirty holder (ZMark::mark_object with
+    // gc_thread = false, zMark.inline.hpp:82): mark + inc_live + follow.
+    static void PushDirtyHolder(MarkStack<MarkStackEntry>& workStack, BaseObject* obj)
+    {
+        workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, true, false));
+    }
+
+    template<class Container>
+    static void PushDirtyHolder(Container& container, BaseObject* obj)
+    {
+        container.push_back(obj);
     }
 
     size_t Y2yDirtyHolderCount() const

@@ -4,185 +4,390 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// Eth: RegionBitmap geometry (JDK test_zBitMap shape, no GPL).
-// Anchors: LiveInfo.h RegionBitmap; RegionInfo.h nullroute bitCover=
-//   wordCnt * kMarkedBytesPerBit * kBitsPerWord (8 * 64 = 512 bytes/word).
-// iorfix excluded bitCover OOB family from the route bug; this suite watches geometry.
+// Port of OpenJDK test/hotspot/gtest/gc/z/test_zLiveMap.cpp onto ZLiveMap
+// (zLiveMap.hpp:35-101), plus the page-level consumers of the livemap
+// (zPage.inline.hpp:223-331) exercised through the product SO:
+// WCollector::MarkObject -> RegionInfo::mark_object / inc_live,
+// RegionInfo::CloneForPromotion, ZLiveMap::reset / reset_segment.
 
+#include <atomic>
 #include <cstdint>
-#include <cstring>
+#include <thread>
+#include <vector>
 
+// gc_heap_fixture.hpp first: its access-unlocking window must see zPage.hpp.
 #include "gc_heap_fixture.hpp"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zLiveMap.inline.hpp"
 #include "gc_unittest.hpp"
+
+namespace MapleRuntime {
+
+// Named friend of ZLiveMap (zLiveMap.hpp:36), as in the HotSpot gtest.
+class ZLiveMapTest {
+public:
+    static BitMap::idx_t index_to_segment(const ZLiveMap& livemap, BitMap::idx_t index)
+    {
+        return livemap.index_to_segment(index);
+    }
+
+    static uint32_t segment_size(const ZLiveMap& livemap) { return livemap._segment_size; }
+
+    static void strongly_live_for_large_zpage()
+    {
+        // Large ZPages only have room for one object.
+        ZLiveMap livemap(1);
+
+        bool inc_live;
+        BitMap::idx_t object_index = BitMap::idx_t(0);
+
+        // Mark the object strong.
+        livemap.set(ZGenerationId::old, object_index, false /* finalizable */, inc_live);
+
+        // Check that both bits are in the same segment.
+        GC_EXPECT_EQ(livemap.index_to_segment(0), livemap.index_to_segment(1));
+
+        // Check that the object was marked.
+        GC_EXPECT_TRUE(livemap.get(ZGenerationId::old, 0));
+
+        // Check that the object was strongly marked.
+        GC_EXPECT_TRUE(livemap.get(ZGenerationId::old, 1));
+
+        GC_EXPECT_TRUE(inc_live);
+    }
+};
+
+} // namespace MapleRuntime
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-// Shared half of test_zBitMap.cpp::test_set_pair_unset.  A Cangjie mark bit
-// covers eight bytes, so a strongly marked 16-byte object is the same two-bit
-// transition. MarkBits returns newly marked, matching
-// ZBitMap::par_set_bit_pair; live bytes are the inc_live witness.
-GC_TEST(ZBitMapPort, StrongPairUnset)
-{
-    constexpr size_t kBitsPerWord = sizeof(uintptr_t) * 8;
-    // RegionBitmap requires at least one complete 64-bit mark word.  Keep a
-    // valid backing bitmap while `bitSize` preserves ZGC's logical test range.
-    constexpr size_t kBackingRegionSize = 4096;
-    const size_t bitSizes[] = { 2, 62, 64, 66, 126, 128 };
-    for (size_t bitSize : bitSizes) {
-        for (size_t i = 0; i < bitSize - 1; ++i) {
-            if ((i + 1) % kBitsPerWord == 0) {
-                continue;
-            }
-            RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kBackingRegionSize);
-            const size_t offset = i * kMarkedBytesPerBit;
-            GC_EXPECT_TRUE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
-            GC_EXPECT_TRUE(bitmap->IsMarked(offset));
-            GC_EXPECT_FALSE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
-            GC_EXPECT_EQ(bitmap->GetLiveBytes(), 2 * kMarkedBytesPerBit);
-            GC_EXPECT_EQ(bitmap->RecomputeLiveBytes(), 2 * kMarkedBytesPerBit);
-            GcHeapFixture::FreePlantedBitmap(bitmap);
+namespace {
+
+// ZLiveMapTest::SetUp gives the two generations distinct non-zero seqnums
+// (old = 1, young = 2); the fixture advances the product generation cycles
+// until the same holds.
+struct LiveMapGenerations {
+    GcHeapFixture fx;
+    LiveMapGenerations()
+    {
+        while (ZLiveMap::generation_seqnum(ZGenerationId::young) == ZLiveMap::generation_seqnum(ZGenerationId::old)) {
+            GcHeapFixture::AdvanceGeneration(Generation::Young);
         }
+    }
+};
+
+} // namespace
+
+GC_TEST(ZLiveMapTest, strongly_live_for_large_zpage)
+{
+    LiveMapGenerations gens;
+    ZLiveMapTest::strongly_live_for_large_zpage();
+}
+
+// zLiveMap.inline.hpp:93-98 get() and zBitMap.inline.hpp:55-59: a finalizable
+// mark sets only the live bit of the pair; a later strong mark completes the
+// pair without a second live claim.
+GC_TEST(ZLiveMapTest, finalizable_then_strong_pair)
+{
+    LiveMapGenerations gens;
+    ZLiveMap livemap(512);
+    bool inc_live = false;
+    const BitMap::idx_t index = 2 * 17;
+
+    GC_EXPECT_TRUE(livemap.set(ZGenerationId::old, index, true /* finalizable */, inc_live));
+    GC_EXPECT_TRUE(inc_live);
+    GC_EXPECT_TRUE(livemap.get(ZGenerationId::old, index));      // live
+    GC_EXPECT_FALSE(livemap.get(ZGenerationId::old, index + 1)); // not strong
+
+    inc_live = true;
+    GC_EXPECT_TRUE(livemap.set(ZGenerationId::old, index, false /* strong */, inc_live));
+    GC_EXPECT_FALSE(inc_live);
+    GC_EXPECT_TRUE(livemap.get(ZGenerationId::old, index));
+    GC_EXPECT_TRUE(livemap.get(ZGenerationId::old, index + 1));
+
+    // Neighbouring pairs stay clear.
+    GC_EXPECT_FALSE(livemap.get(ZGenerationId::old, index - 2));
+    GC_EXPECT_FALSE(livemap.get(ZGenerationId::old, index + 2));
+}
+
+// zLiveMap.inline.hpp:41-43: is_marked compares the livemap seqnum with the
+// generation seqnum read at call time. Advancing the generation retires every
+// bit without touching the map; the next set() resets it (zLiveMap.cpp:53-107).
+GC_TEST(ZLiveMapTest, is_marked_reads_generation_seqnum_live)
+{
+    LiveMapGenerations gens;
+    ZLiveMap livemap(512);
+    bool inc_live = false;
+    GC_EXPECT_FALSE(livemap.is_marked(ZGenerationId::young));
+    GC_EXPECT_TRUE(livemap.set(ZGenerationId::young, 4, false, inc_live));
+    livemap.inc_live(1, 16);
+    GC_EXPECT_TRUE(livemap.is_marked(ZGenerationId::young));
+    GC_EXPECT_TRUE(livemap.get(ZGenerationId::young, 4));
+    GC_EXPECT_EQ(livemap.live_objects(), 1u);
+    GC_EXPECT_EQ(livemap.live_bytes(), 16u);
+    // Not marked for the other generation: its seqnum is a different number.
+    GC_EXPECT_FALSE(livemap.is_marked(ZGenerationId::old));
+    GC_EXPECT_FALSE(livemap.get(ZGenerationId::old, 4));
+
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GC_EXPECT_FALSE(livemap.is_marked(ZGenerationId::young));
+    GC_EXPECT_FALSE(livemap.get(ZGenerationId::young, 4));
+
+    // First mark of the new cycle resets counters and segments.
+    GC_EXPECT_TRUE(livemap.set(ZGenerationId::young, 8, false, inc_live));
+    GC_EXPECT_TRUE(inc_live);
+    GC_EXPECT_TRUE(livemap.is_marked(ZGenerationId::young));
+    GC_EXPECT_EQ(livemap.live_objects(), 0u);
+    GC_EXPECT_EQ(livemap.live_bytes(), 0u);
+    GC_EXPECT_FALSE(livemap.get(ZGenerationId::young, 4));
+    GC_EXPECT_TRUE(livemap.get(ZGenerationId::young, 8));
+}
+
+// zLiveMap.inline.hpp:141-158 iterate visits only the live bit of each pair in
+// live segments; zLiveMap.inline.hpp:181-222 find_base_bit returns the pair
+// start at or below an index, searching earlier segments.
+GC_TEST(ZLiveMapTest, iterate_and_find_base_bit)
+{
+    LiveMapGenerations gens;
+    ZLiveMap livemap(4096);
+    const uint32_t segment = ZLiveMapTest::segment_size(livemap);
+    GC_EXPECT_TRUE(segment >= 2);
+    bool inc_live = false;
+    const BitMap::idx_t indices[] = { 0, 6, segment + 2, 3 * segment + 10 };
+    for (BitMap::idx_t index : indices) {
+        GC_EXPECT_TRUE(livemap.set(ZGenerationId::old, index, index == 6 /* finalizable */, inc_live));
+    }
+    std::vector<BitMap::idx_t> visited;
+    livemap.iterate(ZGenerationId::old, [&](BitMap::idx_t index) -> bool {
+        visited.push_back(index);
+        return true;
+    });
+    GC_EXPECT_EQ(visited.size(), 4u);
+    GC_EXPECT_EQ(visited[0], 0u);
+    GC_EXPECT_EQ(visited[1], 6u);
+    GC_EXPECT_EQ(visited[2], segment + 2);
+    GC_EXPECT_EQ(visited[3], 3 * segment + 10);
+
+    GC_EXPECT_EQ(livemap.find_base_bit(7), 6u);           // strong bit of the pair at 6 aligns down
+    GC_EXPECT_EQ(livemap.find_base_bit(segment - 1), 6u); // same segment, earlier pair
+    GC_EXPECT_EQ(livemap.find_base_bit(2 * segment + 5), segment + 2); // earlier segment
+    GC_EXPECT_EQ(livemap.find_base_bit(4 * segment + 1), 3 * segment + 10);
+    GC_EXPECT_EQ(livemap.find_base_bit(0), 0u);
+
+    // Not marked in the other generation: iterate visits nothing.
+    size_t visits = 0;
+    livemap.iterate(ZGenerationId::young, [&](BitMap::idx_t) -> bool { ++visits; return true; });
+    GC_EXPECT_EQ(visits, 0u);
+}
+
+// zLiveMap.cpp:53-107: the first marker of a cycle resets the map while its
+// peers busy-wait; the seqnum is published only after counters, segment bits
+// and the lazily initialized bitmap are reset. Stale bits from the previous
+// cycle must never survive into the new one, and no new mark may be lost.
+GC_TEST(ZLiveMapTest, concurrent_first_mark_resets_once)
+{
+    LiveMapGenerations gens;
+    ZLiveMap livemap(4096);
+    constexpr size_t kThreads = 8;
+    constexpr size_t kPerThread = 64;
+    constexpr size_t kRounds = 40;
+    for (size_t round = 0; round < kRounds; ++round) {
+        // Previous cycle: every pair used below plus a stale neighbour is set.
+        bool inc_live = false;
+        for (size_t t = 0; t < kThreads; ++t) {
+            for (size_t i = 0; i < kPerThread; ++i) {
+                (void)livemap.set(ZGenerationId::old, 2 * (t * kPerThread + i), false, inc_live);
+            }
+        }
+        (void)livemap.set(ZGenerationId::old, 2 * (kThreads * kPerThread + 3), false, inc_live);
+        livemap.inc_live(kThreads * kPerThread + 1, 8 * (kThreads * kPerThread + 1));
+        GC_EXPECT_TRUE(livemap.is_marked(ZGenerationId::old));
+
+        GcHeapFixture::AdvanceGeneration(Generation::Old);
+        GC_EXPECT_FALSE(livemap.is_marked(ZGenerationId::old));
+
+        std::atomic<bool> go{ false };
+        std::atomic<size_t> claims{ 0 };
+        std::vector<std::thread> threads;
+        for (size_t t = 0; t < kThreads; ++t) {
+            threads.emplace_back([&, t]() {
+                while (!go.load(std::memory_order_acquire)) {}
+                for (size_t i = 0; i < kPerThread; ++i) {
+                    bool first = false;
+                    const bool marked = livemap.set(ZGenerationId::old, 2 * (t * kPerThread + i), false, first);
+                    if (marked && first) {
+                        claims.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            });
+        }
+        go.store(true, std::memory_order_release);
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        GC_EXPECT_TRUE(livemap.is_marked(ZGenerationId::old));
+        // Every new mark is visible and was a first live claim exactly once.
+        GC_EXPECT_EQ(claims.load(), kThreads * kPerThread);
+        for (size_t t = 0; t < kThreads; ++t) {
+            for (size_t i = 0; i < kPerThread; ++i) {
+                GC_EXPECT_TRUE(livemap.get(ZGenerationId::old, 2 * (t * kPerThread + i)));
+                GC_EXPECT_TRUE(livemap.get(ZGenerationId::old, 2 * (t * kPerThread + i) + 1));
+            }
+        }
+        // The stale neighbour and the counters were reset by the cycle change.
+        GC_EXPECT_FALSE(livemap.get(ZGenerationId::old, 2 * (kThreads * kPerThread + 3)));
+        GC_EXPECT_EQ(livemap.live_objects(), 0u);
+        GC_EXPECT_EQ(livemap.live_bytes(), 0u);
     }
 }
 
-// Shared half of test_zBitMap.cpp::test_set_pair_set.  Once every bit is set,
-// setting any pair must return false (already marked), leave both bits set, and not account
-// live bytes a second time.
-GC_TEST(ZBitMapPort, StrongPairSet)
-{
-    constexpr size_t kBitsPerWord = sizeof(uintptr_t) * 8;
-    // See StrongPairUnset: backing geometry is not part of the pair invariant.
-    constexpr size_t kBackingRegionSize = 4096;
-    const size_t bitSizes[] = { 2, 62, 64, 66, 126, 128 };
-    for (size_t bitSize : bitSizes) {
-        const size_t logicalSize = bitSize * kMarkedBytesPerBit;
-        RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kBackingRegionSize);
-        // test_zBitMap.cpp::test_set_pair_set premarks every pair. MarkBits
-        // marks one object start; byteCnt accounts its size, not a bit range.
-        for (size_t i = 0; i < bitSize; ++i) {
-            GC_EXPECT_TRUE(bitmap->MarkBits(i * kMarkedBytesPerBit,
-                                            kMarkedBytesPerBit, kBackingRegionSize));
-        }
-        GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
+// ---- page consumers (zPage.inline.hpp:223-331) through the product SO ----
 
-        for (size_t i = 0; i < bitSize - 1; ++i) {
-            if ((i + 1) % kBitsPerWord == 0) {
-                continue;
-            }
-            const size_t offset = i * kMarkedBytesPerBit;
-            GC_EXPECT_FALSE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
-            GC_EXPECT_TRUE(bitmap->IsMarked(offset));
-            GC_EXPECT_TRUE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
-            GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
-        }
-        GcHeapFixture::FreePlantedBitmap(bitmap);
-    }
-}
-
-// bitCover for a unit-sized region: every address offset in [0, regionSize) must be
-// representable when markBitmap is fully allocated for that regionSize.
-GC_TEST(RegionBitmap, BitCoverMatchesRegionSize)
+// WCollector::MarkObject (product SO) -> RegionInfo::mark_object + inc_live.
+// The page's live bytes are what ZRelocationSetSelector consumes
+// (zRelocationSetSelector.cpp: liveBytes = is_marked() ? live_bytes() : 0).
+GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
 {
     GcHeapFixture fx;
-    size_t regionSize = fx.region0->GetRegionSize();
-    GC_EXPECT_TRUE(regionSize > 0);
+    RegionInfo* region = fx.region0;
+    GC_EXPECT_TRUE(region->IsRelocatable());
+    GC_EXPECT_FALSE(region->is_marked());
+    GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
 
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
-    size_t wordCnt = bm->wordCnt.load();
-    size_t bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
-    // Geometry: mark words cover the whole region (iorfix OOB family).
-    GC_EXPECT_TRUE(bitCover >= regionSize);
-    // Last byte of region is in-range for IsMarked/MarkBits.
-    size_t lastOff = regionSize - 8;
-    GC_EXPECT_FALSE(bm->IsMarked(lastOff));
-    GC_EXPECT_TRUE(bm->MarkBits(lastOff, 8, regionSize));
-    GC_EXPECT_TRUE(bm->IsMarked(lastOff));
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    GC_EXPECT_FALSE(collector.MarkObject(fx.obj0)); // false = newly marked
+    GC_EXPECT_TRUE(region->is_marked());
+    GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
+    GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
+    GC_EXPECT_TRUE(region->is_object_marked(from_object(fx.obj0), false));
+    GC_EXPECT_EQ(region->live_objects(), 1u);
+    GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
+    GC_EXPECT_FALSE(region->IsKnownEmpty());
 
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
+    GC_EXPECT_TRUE(collector.MarkObject(fx.obj0)); // already marked: no second claim
+    GC_EXPECT_EQ(region->live_objects(), 1u);
+    GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
+
+    // An unmarked page has no live bytes to offer the selector.
+    GC_EXPECT_FALSE(fx.region1->is_marked());
+    GC_EXPECT_FALSE(fx.region1->is_object_live(from_object(fx.obj1)));
 }
 
-// GetRegionBitmapSize is a pure function of regionSize (allocation footprint).
-GC_TEST(RegionBitmap, GetRegionBitmapSizeMonotonic)
-{
-    size_t s1 = RegionBitmap::GetRegionBitmapSize(4096);
-    size_t s2 = RegionBitmap::GetRegionBitmapSize(8192);
-    size_t s3 = RegionBitmap::GetRegionBitmapSize(65536);
-    GC_EXPECT_TRUE(s1 > sizeof(RegionBitmap));
-    GC_EXPECT_TRUE(s2 > s1);
-    GC_EXPECT_TRUE(s3 > s2);
-}
-
-// MarkBits idempotent + disjoint offsets (zBitMap set-pair spirit without GPL).
-GC_TEST(RegionBitmap, MarkBitsIdempotentAndDisjoint)
+// WCollector::ResurrectObject (product SO) -> mark_object(finalizable = true):
+// the object is live but not strongly live (zPage.inline.hpp:254-260).
+GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 {
     GcHeapFixture fx;
-    size_t regionSize = fx.region0->GetRegionSize();
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
+    RegionInfo* region = fx.region0;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    GC_EXPECT_FALSE(collector.ResurrectObject(fx.obj0, offset, region));
+    GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
+    GC_EXPECT_FALSE(region->is_object_strongly_live(from_object(fx.obj0)));
+    GC_EXPECT_TRUE(region->is_object_marked(from_object(fx.obj0), true));
+    GC_EXPECT_FALSE(region->is_object_marked(from_object(fx.obj0), false));
+    GC_EXPECT_TRUE(RegionSpace::IsResurrectedObject(fx.obj0));
+    GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
-    GC_EXPECT_TRUE(bm->MarkBits(0, 8, regionSize));
-    GC_EXPECT_FALSE(bm->MarkBits(0, 8, regionSize));
-    GC_EXPECT_TRUE(bm->MarkBits(64, 8, regionSize));
-    GC_EXPECT_TRUE(bm->IsMarked(0));
-    GC_EXPECT_TRUE(bm->IsMarked(64));
-    GC_EXPECT_FALSE(bm->IsMarked(128));
-
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
+    // The strong mark completes the pair without another live claim.
+    GC_EXPECT_FALSE(collector.MarkObject(fx.obj0));
+    GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
+    GC_EXPECT_FALSE(RegionSpace::IsResurrectedObject(fx.obj0));
+    GC_EXPECT_EQ(region->live_objects(), 1u);
+    GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 }
 
-// o2mark: neighbor bit in the same head word must not make MarkBits return "already"
-// without setting the object start bit (IsMarkedObject CHECK family).
-GC_TEST(RegionBitmap, MarkBitsAlreadyIsStartBitOnly)
+// ZPage::object_iterate (zPage.inline.hpp:319-331) visits object starts only.
+GC_TEST(ZLiveMapPage, object_iterate_visits_object_starts)
 {
-    constexpr size_t kBig = 65536;
-    size_t bytes = RegionBitmap::GetRegionBitmapSize(kBig);
-    void* mem = std::calloc(1, bytes);
-    GC_EXPECT_TRUE(mem != nullptr);
-    auto* bm = new (mem) RegionBitmap(kBig);
-
-    // Neighbor object at offset 8 (bit 1).
-    GC_EXPECT_TRUE(bm->MarkBits(8, 8, kBig));
-    GC_EXPECT_TRUE(bm->IsMarked(8));
-    GC_EXPECT_FALSE(bm->IsMarked(0));
-
-    // Large mark at offset 0 spans bit 0 and bit 1. Old already-test used any head-mask
-    // bit ⇒ returned true without setting bit 0. Start-bit already ⇒ must write bit 0.
-    bool newlyMarked = bm->MarkBits(0, 16, kBig);
-    GC_EXPECT_TRUE(newlyMarked);
-    GC_EXPECT_TRUE(bm->IsMarked(0));
-    GC_EXPECT_TRUE(bm->IsMarked(8));
-
-    // True already: start bit set ⇒ second MarkBits is idempotent.
-    GC_EXPECT_FALSE(bm->MarkBits(0, 16, kBig));
-    GC_EXPECT_TRUE(bm->IsMarked(0));
-
-    bm->~RegionBitmap();
-    std::free(bm);
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    BaseObject* second = fx.PlaceObject(region->GetRegionStart() + 256);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
+    std::vector<BaseObject*> visited;
+    region->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
+    GC_EXPECT_EQ(visited.size(), 2u);
+    GC_EXPECT_TRUE(visited[0] == fx.obj0);
+    GC_EXPECT_TRUE(visited[1] == second);
+    GC_EXPECT_EQ(region->live_objects(), 2u);
+    GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize() + second->GetSize());
 }
 
-// Offset near region end (65504/65520 family when region is 64KiB): still in bitCover.
-GC_TEST(RegionBitmap, NearEndOffsetsInCover)
+// ZPage::find_base (zPage.inline.hpp:371-392): an interior field address
+// resolves to the nearest marked object start at or below it.
+GC_TEST(ZLiveMapPage, find_base_resolves_interior_field)
 {
-    // Synthetic 64KiB region bitmap (product large-region shape) without needing 64 units.
-    constexpr size_t kBig = 65536;
-    size_t bytes = RegionBitmap::GetRegionBitmapSize(kBig);
-    void* mem = std::calloc(1, bytes);
-    GC_EXPECT_TRUE(mem != nullptr);
-    auto* bm = new (mem) RegionBitmap(kBig);
-    size_t wordCnt = bm->wordCnt.load();
-    size_t bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
-    GC_EXPECT_TRUE(bitCover >= kBig);
-    for (size_t off : {size_t(65504), size_t(65520), size_t(65528)}) {
-        if (off + 8 <= kBig) {
-            GC_EXPECT_FALSE(bm->IsMarked(off));
-            (void)bm->MarkBits(off, 8, kBig);
-            GC_EXPECT_TRUE(bm->IsMarked(off));
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    BaseObject* second = fx.PlaceObject(region->GetRegionStart() + 256);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    // Nothing marked yet: no base (zaddress_unsafe::null).
+    GC_EXPECT_EQ(region->find_base_unsafe(reinterpret_cast<MAddress>(second) + 8), 0u);
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
+    GC_EXPECT_EQ(region->find_base(reinterpret_cast<MAddress>(second) + 8), reinterpret_cast<MAddress>(second));
+    GC_EXPECT_EQ(region->find_base(reinterpret_cast<MAddress>(second)), reinterpret_cast<MAddress>(second));
+    GC_EXPECT_EQ(region->find_base(reinterpret_cast<MAddress>(fx.obj0) + 24), reinterpret_cast<MAddress>(fx.obj0));
+    // Below the first marked object there is no base.
+    GC_EXPECT_EQ(region->find_base(region->GetRegionStart() + 8), 0u);
+}
+
+// ZPage::clone_for_promotion / ZPage::object_iterate: the promoted slot gets a
+// fresh livemap while the original young page keeps its own map.
+GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
+{
+    for (bool large : { false, true }) {
+        GcHeapFixture fx;
+        RegionInfo* region = fx.region0;
+        region->SetYoungRegionFlag(1);
+        region->SetYoungAge(1);
+        if (large) {
+            region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+            // Large pages hold one object: rebuild the livemap for object_max_count() == 1.
+            delete region->livemap();
+            region->metadata.livemap = nullptr;
+            region->InitializeLiveMap();
         }
+        BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
+        ZLiveMap* original = region->livemap();
+        GC_EXPECT_TRUE(original != nullptr);
+        GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, object));
+        GC_EXPECT_TRUE(region->is_object_live(from_object(object)));
+        auto originalPage = region->CloneForPromotion();
+        GC_EXPECT_FALSE(region->IsYoungRegion());
+        GC_EXPECT_EQ(originalPage->Age(), 1u);
+        GC_EXPECT_TRUE(region->livemap() != original);
+        GC_EXPECT_TRUE(region->livemap() != nullptr);
+        GC_EXPECT_FALSE(region->livemap()->is_marked(ZGenerationId::old));
+        std::vector<BaseObject*> visited;
+        originalPage->ObjectIterate([&](BaseObject* obj) { visited.push_back(obj); });
+        GC_EXPECT_EQ(visited.size(), 1u);
+        GC_EXPECT_TRUE(visited[0] == object);
+        // Advancing the young generation retires the original page's marks.
+        GcHeapFixture::AdvanceGeneration(Generation::Young);
+        visited.clear();
+        originalPage->ObjectIterate([&](BaseObject* obj) { visited.push_back(obj); });
+        GC_EXPECT_EQ(visited.size(), 0u);
     }
-    bm->~RegionBitmap();
-    std::free(bm);
+}
+
+// ZPage::is_object_live on an allocating page is implicitly true
+// (zPage.inline.hpp:254-256); after the generation advances the page is
+// relocatable and only marked objects are live.
+GC_TEST(ZLiveMapPage, allocating_page_is_implicitly_live)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->ResetPageSequence();
+    GC_EXPECT_TRUE(region->IsAllocating());
+    GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
+    GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
+    GC_EXPECT_FALSE(region->IsKnownEmpty());
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    GC_EXPECT_TRUE(region->IsRelocatable());
+    GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
+    GC_EXPECT_FALSE(region->is_marked());
 }

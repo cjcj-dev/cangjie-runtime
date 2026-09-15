@@ -35,8 +35,6 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
         fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
         fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + fx.obj0->GetSize());
     }
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     const size_t size = fx.obj0->GetSize();
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
@@ -47,13 +45,10 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
     const bool already = CachedMark()(&collector, fx.obj0, false, &cache);
     const bool secondAlready = repeat ? CachedMark()(&collector, fx.obj0, false, &cache) : true;
     cache.Flush();
-    const uint64_t bytes = fx.region0->GetLiveByteCount();
-    const uint32_t objects = fx.region0->GetLiveObjectCount();
-    // Capture product results before releasing the fixture's bitmap, and do
-    // not place a transition assertion ahead of the accounting invariant.
-    const bool strong = fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Old>(), fx.obj0);
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
+    const uint64_t bytes = fx.region0->live_bytes();
+    const uint32_t objects = fx.region0->live_objects();
+    // Do not place a transition assertion ahead of the accounting invariant.
+    const bool strong = fx.region0->is_object_strongly_live(from_object(fx.obj0));
     std::fprintf(stderr, "M2_LIVE_RESULT finalizable=%d repeat=%d bytes=%zu expected=%zu strong=%d\n",
                  finalizable, repeat, static_cast<size_t>(bytes), size, strong);
     GC_EXPECT_EQ(bytes, static_cast<uint64_t>(size));
@@ -97,10 +92,6 @@ GC_TEST(MarkPort203Entries, LargeFinalizableUpgradeDoesNotAccountTwice)
 GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 {
     GcHeapFixture fx;
-    LiveInfo* live0 = fx.PlantLiveInfo(fx.region0);
-    LiveInfo* live1 = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap(live0, fx.region0->GetRegionSize());
-    (void)fx.PlantMarkBitmap(live1, fx.region1->GetRegionSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     // Choose a legal power-of-two shift from actual fixture addresses rather
     // than assuming that mmap placed both pages below one bucket boundary.
@@ -116,17 +107,13 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
         MarkLiveCache cache(stripes);
         (void)CachedMark()(&collector, fx.obj0, false, &cache);
         (void)CachedMark()(&collector, fx.obj1, false, &cache);
-        evictedObjects = fx.region0->GetLiveObjectCount();
-        evictedBytes = fx.region0->GetLiveByteCount();
+        evictedObjects = fx.region0->live_objects();
+        evictedBytes = fx.region0->live_bytes();
     }
-    const auto exitObjects = fx.region1->GetLiveObjectCount();
-    const auto exitBytes = fx.region1->GetLiveByteCount();
+    const auto exitObjects = fx.region1->live_objects();
+    const auto exitBytes = fx.region1->live_bytes();
     const size_t size0 = fx.obj0->GetSize();
     const size_t size1 = fx.obj1->GetSize();
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.region1->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live0);
-    fx.FreePlanted(live1);
     std::fprintf(stderr, "M2_CACHE_RESULT collision_objects=%u collision_bytes=%zu exit_objects=%u exit_bytes=%zu\n",
                  evictedObjects, static_cast<size_t>(evictedBytes), exitObjects, static_cast<size_t>(exitBytes));
     GC_EXPECT_EQ(evictedObjects, 1u);
@@ -211,9 +198,11 @@ void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
 
 
     auto isMarked = [&](BaseObject* object) {
-        return result.region->IsYoungRegion()
-            ? result.region->IsMarkedObject(result.region->GetMarkView<Generation::Young>(), object)
-            : result.region->IsMarkedObject(result.region->GetMarkView<Generation::Old>(), object);
+        return result.region->is_object_strongly_live(from_object(object));
+    };
+    auto isResurrected = [&](BaseObject* object) {
+        return result.region->is_object_live(from_object(object)) &&
+            !result.region->is_object_strongly_live(from_object(object));
     };
     size_t marked = 0;
     for (auto* child : *result.children) {
@@ -222,15 +211,15 @@ void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
     result.markedChildren = marked;
     result.arrayStrong = isMarked(result.array);
     result.arrayMarked = result.arrayStrong ||
-        (result.finalizable && result.region->IsResurrectedObject(result.array));
+        (result.finalizable && isResurrected(result.array));
     if (result.finalizable) {
         result.markedChildren = 0;
         for (auto* child : *result.children) {
-            result.markedChildren += (isMarked(child) || result.region->IsResurrectedObject(child)) ? 1 : 0;
+            result.markedChildren += (isMarked(child) || isResurrected(child)) ? 1 : 0;
         }
     }
-    result.objects = result.region->GetLiveObjectCount();
-    result.bytes = result.region->GetLiveByteCount();
+    result.objects = result.region->live_objects();
+    result.bytes = result.region->live_bytes();
     result.publishedObjects = reachable == nullptr ? 0 : reachable->size();
 }
 
@@ -258,9 +247,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     fx.region1 = RegionInfo::InitRegion(1, 4, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     fx.region1->SetYoungRegionFlag(major ? 0 : 1);
     fx.region1->SetYoungAge(1);
-    // Let the product allocate and own this page's livemap. Promotion transfers
-    // that ownership (ZPage::clone_for_promotion, zPage.cpp:64); a bitmap
-    // planted outside LiveInfoArena cannot participate in a real collection.
+    // The product allocates and owns this page's livemap (InitRegion ->
+    // InitializeLiveMap); promotion transfers that ownership
+    // (ZPage::clone_for_promotion, zPage.cpp:64).
 
     alignas(TypeInfo) unsigned char arrayTypeStorage[sizeof(TypeInfo)]{};
     auto* arrayType = reinterpret_cast<TypeInfo*>(arrayTypeStorage);

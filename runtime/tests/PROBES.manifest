@@ -32,7 +32,6 @@ test_zAddress.cpp                manual     harness for run_colour_predicates_un
 run_colour_encoding_unit.sh               manual     host C++14 runner for low-48 admission, checked geometry, and slot-word encoding classification
 colour_encoding_unit.cpp                  manual     pure ColourEncoding contract table; no product component is recompiled into the test ELF
 
-run_object_size_guard_probe.sh            manual     built runtime SO + cpuset + fault injection
 run_mutator_lock_liveness_probe.sh        manual     source-text structural check; awk-parses source order
 run_epoch_handshake_protocol_probe.sh     manual     g++ only + cpuset; old/new PROTOCOL_FIXED arms
 run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpuset
@@ -45,7 +44,6 @@ test_runtime_output_product.py            manual     real runtime configure/buil
 test_resolve_runtime_output.sh             manual     shell fixture; configuration manifest selection, product hashes, and mismatched-identity negative arm
 run_string_dedup_product.sh               manual     rebuilt std.core module + product SO + runtime SO; full/range, detach, unequal, and 32-way concurrent request arms
 
-object_size_guard_harness.cpp             manual     harness for run_object_size_guard_probe.sh
 mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh
 epoch_handshake_protocol_harness.cpp      manual     harness for run_epoch_handshake_protocol_probe.sh
 threadlocal_init_race_harness.cpp         manual     harness for run_threadlocal_init_race_probe.sh

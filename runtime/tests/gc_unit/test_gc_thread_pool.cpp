@@ -83,16 +83,13 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
         fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     RegionInfo* region = fx.region0;
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
-    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0)),
-                           fx.obj0->GetSize(), region->GetRegionSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
     // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
     RegionList selected("runtime-workers-selected");
     selected.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
-    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->PrepareForwardableRegion<Generation::Old>();
     region->MarkForwardingDone();
 }
 
@@ -105,17 +102,15 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     // when relocation-set reset was aligned with ZGC).
     RegionInfo* region = fx.region0;
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     from = reinterpret_cast<MAddress>(fx.obj0);
     to = reinterpret_cast<MAddress>(fx.obj1);
-    (void)bitmap->MarkBits(region->GetAddressOffset(from), fx.obj0->GetSize(), region->GetRegionSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
     // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
     RegionList selected("runtime-workers-selected");
     selected.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
-    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->PrepareForwardableRegion<Generation::Old>();
     ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;

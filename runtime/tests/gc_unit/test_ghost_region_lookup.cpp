@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // gc_heap_fixture.hpp must come before product headers that transitively
-// include LiveInfo.h: the fixture's access-unlocking window only applies to
+// include zPage.hpp: the fixture's access-unlocking window only applies to
 // headers it pulls in itself.
 #include "gc_heap_fixture.hpp"
 

@@ -44,8 +44,6 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     MarkPublicationFixture mark;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     mark.collector.MarkObjectIfActive(fx.obj0);
     mark.collector.MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
@@ -64,8 +62,6 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });
     GC_EXPECT_EQ(oldObjects.size(), 1u);
     GC_EXPECT_TRUE(oldObjects.front() == fx.obj0);
-    fx.region1->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
 }
 
 // Admission-side state invariant from ZGeneration::mark_object_if_active.
@@ -102,10 +98,9 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
     mark.CompleteOldMarkForAdmissionTest();
     resources.BlockResurrection();
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
-    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    fx.region0->ResurrectObject(fx.obj0, offset);
+    (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
-    fx.region0->MarkObject(fx.region0->GetMarkView<Generation::Old>(), fx.obj0, fx.obj0->GetSize());
+    (void)GcHeapFixture::MarkStrong(fx.region0, fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
 }
 
