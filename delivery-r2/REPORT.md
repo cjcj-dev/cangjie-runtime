@@ -89,6 +89,11 @@ Testable standalone：728项，727通过，1失败，rc=1。三种常态单元�
 
 ## 产品接线证明
 
+实际断线补丁：local:/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_606_implement_r5674249495/delivery-r2/final2/cut-combined.diff。
+构建日志：kkk2:/root/sym_cangjie_runtime_606_implement_r5674249495-final2-cut-combined/testable-build.log。
+断线复跑：kkk2:/root/sym_cangjie_runtime_606_implement_r5674249495-final2/comparison/cut-combined/YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong.log、kkk2:/root/sym_cangjie_runtime_606_implement_r5674249495-final2/comparison/cut-combined/P1Mark.DuplicateAnyThreadStopsAtConsumer.log。
+恢复复跑：kkk2:/root/sym_cangjie_runtime_606_implement_r5674249495-final2/comparison/restored/YoungWeakClosure.SingleWorkerKeepsYoungReferentStrong.log、kkk2:/root/sym_cangjie_runtime_606_implement_r5674249495-final2/comparison/restored/P1Mark.DuplicateAnyThreadStopsAtConsumer.log。
+
 |测试/入口|实际产品承重点|产品结果进入断言|断线结果|
 |---|---|---|---|
 |P1BitMap.StrongClaimResult/FinalizableClaimResult|zLiveMap.inline.hpp:41/80（由产品zLiveMap.cpp定义）|首次/重复返回值；独立内容/live控制|分别只破对应返回合同，控制仍通过|
@@ -158,7 +163,7 @@ CLAIM: 同一托管输入在P1阶段之后进入old字段trace并触发已登记
 
 保留run_generation_cycle_context.sh及全部原ASSERT；N=3均CYCLE_RC=134 / SATB_RC=139，runner整体rc=1，日志 `kkk2:/root/sym_cangjie_runtime_606_implement_r5674249495-final2/managed-0.log`、managed-1.log、managed-2.log。finalizer夹具直接塞队列但不更新调度谓词，命中hasFinalizableJob与queue一致性CHECK；SATB自有main不支持标准other-vm子进程filter参数。两者按#629记录为装置缺陷，不计产品红臂。已修的仅旧API、真实collector accessor、compiler宿主runtime选择与测试helper链接，未给其产品CHECK开口。
 
-## 夹具例外与测试增删
+## 夹具例外
 
 合成页测试不能调用完整StartYoungMark来退休真实全局分配列表：它们替换FDM/heap span，或只构造mock Collector。所有手推seq只存在测试 `gc_cycle_sequence_fixture.cpp`，一个独立测试TU通过唯一宏friend访问；产品没有AdvanceSequence入口。不能将这些用例外推为真实GC相位接线。
 
@@ -171,6 +176,8 @@ CLAIM: 同一托管输入在P1阶段之后进入old字段trace并触发已登记
 |test_remset.cpp|按代序号与两面remset纯合同|fixture提供独立remset，不能用全堆remset替代它|
 
 当前三条R1原语测试的bitmap初始化是输入构造，不是手工喂mark结果；实际MarkBits来自产品。真正phase顺序闭环由独立P1托管runner承担。T1全部真实A→B根/字段组合、T3所有CAS胜负及T4所有资源类型仍不能靠合成夹具宣称全面闭环；未迁面依任务归P2/P3，不新增豁免。
+
+## 测试增删
 
 测试名称集合差相对新基线见 `test-name-delta-final.json`：新增9项、删除1项；删除LiveMap.MarkStartAllocWaterIsImplicitLive由PageBirthSequenceIsImplicitLive替代，所属P1删除水位机制。R1的旧false=first期望按ZGC改成true=first，位图内容/live/重复断言保留；字段follow目标断言放到root收据前，原收据断言仍在。新增专用managed源/runner不在GC_TEST宏集合中，另行实际运行并留四臂证据。
 
