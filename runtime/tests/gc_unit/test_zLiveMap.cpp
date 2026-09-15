@@ -340,17 +340,12 @@ GC_TEST(ZLiveMapPage, find_base_resolves_interior_field)
 GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
 {
     for (bool large : { false, true }) {
-        GcHeapFixture fx;
+        const auto role = large ? RegionInfo::UnitRole::LARGE_SIZED_UNITS
+                                : RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+        GcHeapFixture fx(false, role);
         RegionInfo* region = fx.region0;
         region->SetYoungRegionFlag(1);
         region->SetYoungAge(1);
-        if (large) {
-            region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
-            // Large pages hold one object: rebuild the livemap for object_max_count() == 1.
-            delete region->livemap();
-            region->metadata.livemap = nullptr;
-            region->InitializeLiveMap();
-        }
         BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
         ZLiveMap* original = region->livemap();
         GC_EXPECT_TRUE(original != nullptr);
@@ -390,4 +385,48 @@ GC_TEST(ZLiveMapPage, allocating_page_is_implicitly_live)
     GC_EXPECT_TRUE(region->IsRelocatable());
     GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(region->is_marked());
+}
+
+// ZPage.cpp:33-42 constructs the live map after setting the page type. Exercise
+// the same InitRegion entry used by MaterializePageMemory, including reuse.
+GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    const uint32_t smallSegment = ZLiveMapTest::segment_size(*region->livemap());
+    GC_EXPECT_TRUE(smallSegment > 2u);
+    for (auto role : {RegionInfo::UnitRole::LARGE_SIZED_UNITS,
+                      RegionInfo::UnitRole::SMALL_SIZED_UNITS,
+                      RegionInfo::UnitRole::LARGE_SIZED_UNITS}) {
+        RegionInfo::RetirePage(region, [] {});
+        region = RegionInfo::InitRegion(0, 1, role);
+        fx.region0 = region;
+        const uint32_t actual = ZLiveMapTest::segment_size(*region->livemap());
+        const uint32_t expected = role == RegionInfo::UnitRole::LARGE_SIZED_UNITS ? 2u : smallSegment;
+        std::fprintf(stderr, "P02_PAGE_GEOMETRY role=%u segment=%u expected=%u\n",
+                     static_cast<unsigned>(role), actual, expected);
+        GC_EXPECT_EQ(actual, expected);
+    }
+}
+
+// ZGeneration.cpp:137 starts at one; ZLiveMap's zero denotes never marked.
+// Read the actual product collector before GcHeapFixture can advance a cycle.
+GC_TEST(ZLiveMapTest, initial_generation_does_not_match_unmarked_map)
+{
+    ZLiveMap map(1);
+    for (auto id : {ZGenerationId::young, ZGenerationId::old}) {
+        const uint64_t sequence = ZLiveMap::generation_seqnum(id);
+        const bool marked = map.is_marked(id);
+        std::fprintf(stderr, "P02_INITIAL_LIVEMAP generation=%u sequence=%llu marked=%d\n",
+                     static_cast<unsigned>(id), static_cast<unsigned long long>(sequence), marked);
+        // The target is the live-map reader's result, not just the input sequence.
+        GC_EXPECT_FALSE(marked);
+        GC_EXPECT_TRUE(sequence != 0);
+    }
+    // No AdvanceGeneration: this is the first mark in the old generation.
+    bool incLive = false;
+    GC_EXPECT_TRUE(map.set(ZGenerationId::old, 0, true, incLive));
+    GC_EXPECT_TRUE(map.get(ZGenerationId::old, 0));
+    GC_EXPECT_FALSE(map.get(ZGenerationId::old, 1));
+    GC_EXPECT_TRUE(incLive);
 }
