@@ -15,6 +15,8 @@ ulimit -c 0
 uptime > "$OUT/uptime-before.txt"
 df -h /root > "$OUT/disk-before.txt"
 start=$SECONDS
+flags=()
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == 1 ]]; then flags=(-DMRT_TESTABLE_INTERNALS=1 -DMRT_GC_UNIT_TESTS=1); fi
 if [[ -z "${PACKAGE_INIT_ELF:-}" ]]; then
     objects=()
     pids=()
@@ -31,7 +33,7 @@ if [[ -z "${PACKAGE_INIT_ELF:-}" ]]; then
             -I"$SRC" -I"$ROOT/runtime/src/Loader/BinaryFile" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" -I"$ROOT/runtime/include" \
             -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
             -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" -I"$HEADERS" \
-            -c "$SRC/$source" -o "$object" > "$OUT/$source.build.log" 2>&1 &
+            "${flags[@]}" -c "$SRC/$source" -o "$object" > "$OUT/$source.build.log" 2>&1 &
         pids+=("$!")
     done
     build_rc=0
@@ -61,5 +63,5 @@ rc=$?
 echo "$rc" > "$OUT/run.rc"
 uptime > "$OUT/uptime-after.txt"
 echo "run wall=$((SECONDS-start)) rc=$rc cores=${PACKAGE_INIT_CORES:-0-15} elf=$ELF"
-grep -E 'PACKAGE_INIT_TARGET|FAILED|tests ran|INCOMPLETE' "$OUT/run.log" | tail -65
+grep -E 'PACKAGE_INIT_TARGET|FAIL|tests:|INCOMPLETE' "$OUT/run.log" | tail -65
 exit "$rc"

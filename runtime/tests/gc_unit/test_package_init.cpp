@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <csignal>
 #include <cstring>
 #include <dlfcn.h>
 #include <string>
@@ -23,6 +24,7 @@
 #include "Loader/BinaryFile/CjFile/CjFile.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"
 #include "Loader/PackageInit.h"
+#include "Loader/PackageInitTest.h"
 #include "LoaderManager.h"
 #include "schedule.h"
 #include "waitqueue.h"
@@ -36,7 +38,8 @@ extern "C" bool MRT_EndForeignCJThread();
 namespace {
 using Result = PackageInitResult;
 constexpr uint32_t Code(Result value) { return static_cast<uint32_t>(value); }
-void PackageA() {}
+void (*packageBody)() = nullptr;
+void PackageA() { if (packageBody != nullptr) { packageBody(); } }
 void PackageB() {}
 void UnitA() {}
 void UnitB() {}
@@ -126,9 +129,11 @@ struct Completion {
     std::atomic<bool> witnessDone { false }, finish { false };
     uint32_t waiterResult = 99;
     int payload = 0;
+    int observedPayload = 0;
     bool fail = false;
     bool abandon = false;
     bool aggregate = false;
+    void* ownerToken = nullptr;
     Completion() { Target("fixture-waitqueue", WaitqueueNew(&release) == 0); }
 };
 bool Released(void* p) { return static_cast<Completion*>(p)->finish.load(std::memory_order_acquire); }
@@ -137,6 +142,7 @@ void Owner(void* p)
     auto& c = *static_cast<Completion*>(p);
     void* token = nullptr;
     Target("owner-execute", Begin(P(), U(), 0, &token) == Code(Result::Execute) && token != nullptr);
+    c.ownerToken = token;
     c.ownerStarted.store(true, std::memory_order_release);
     WaitqueuePark(&c.release, LLONG_MAX, Released, &c, false);
     c.payload = 73;
@@ -168,7 +174,7 @@ void Waiter(void* p)
     c.waiterStarted.store(true, std::memory_order_release);
     c.waiterResult = Begin(P(), c.aggregate ? reinterpret_cast<const void*>(&Aggregate) : U(), 0, &token);
     Target("waiter-token-empty", token == nullptr);
-    if (!c.fail && !c.abandon) { Target("all-body-writes-visible", c.payload == 73); }
+    if (!c.fail && !c.abandon) { c.observedPayload = c.payload; }
     c.waiterDone.store(true, std::memory_order_release);
 }
 void Witness(void* p)
@@ -217,6 +223,7 @@ void CompletionCase(bool fail, bool abandon)
     WaitqueueWakeAll(&c.release, nullptr, nullptr);
     Target("completion-notified", Await(c.waiterDone));
     Target("terminal-result", c.waiterResult == Code(fail || abandon ? Result::Failed : Result::Ready));
+    if (!fail && !abandon) { Target("all-body-writes-visible", c.observedPayload == 73); }
     c.witnessDone.store(false, std::memory_order_release);
     Start(Repeat, &c);
     Target("repeat-completed", Await(c.witnessDone));
@@ -455,6 +462,7 @@ GC_OTHER_VM_TEST(PackageInit, ForeignCJThreadWaitsForCompletion)
     WaitqueueWakeAll(&c.release, nullptr, nullptr);
     Target("foreign-waiter-completed", Await(c.waiterDone));
     foreign.join();
+    Target("all-body-writes-visible", c.observedPayload == 73);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
@@ -550,6 +558,160 @@ GC_OTHER_VM_TEST(PackageInit, NativeDlcloseAllowsDependency)
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&context.c.release);
 }
+#ifdef MRT_TESTABLE_INTERNALS
+namespace {
+Completion* libInitControl;
+void LibInitBody()
+{
+    Mutator::GetMutator()->SetManagedContext(false);
+    void* owner = nullptr;
+    Target("libinit-body-execute", Begin(P(), U(), 0, &owner) == Code(Result::Execute));
+    libInitControl->ownerStarted.store(true, std::memory_order_release);
+    WaitqueuePark(&libInitControl->release, LLONG_MAX, Released, libInitControl, false);
+    void* dependency = nullptr;
+    Target("libinit-dependency-execute", Begin(P(), V(), 0, &dependency) == Code(Result::Execute));
+    MCC_PackageInitComplete(dependency);
+    MCC_PackageInitComplete(owner);
+}
+}
+GC_OTHER_VM_TEST(PackageInit, LibInitBodyDoesNotHoldGlobalReader)
+{
+    Init();
+    Completion control;
+    libInitControl = &control;
+    packageBody = LibInitBody;
+    char executable[4096] {};
+    const auto length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+    Target("library-fixture-executable", length > 0);
+    std::string path(executable, static_cast<size_t>(length));
+    path = path.substr(0, path.find_last_of('/') + 1) + "libcj_package_init_fixture.so";
+    void* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("unrelated-library-open", library != nullptr);
+    auto getMetadata = reinterpret_cast<void* (*)()>(dlsym(library, "PackageInitImageMetadata"));
+    Target("unrelated-library-metadata", getMetadata != nullptr);
+    auto* unrelated = new CJFile(CString("unrelated-package-init-library"), reinterpret_cast<Uptr>(getMetadata()));
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    loader->AddLoadedFiles(unrelated);
+    loader->RegisterLoadFile(unrelated->GetFileMetaAddr());
+    Start([](void* argument) {
+        auto& c = *static_cast<Completion*>(argument);
+        Target("libinit-return", LoaderManager::GetInstance()->LibInit("package-init-main"));
+        c.waiterDone.store(true, std::memory_order_release);
+    }, &control);
+    Target("libinit-body-started", Await(control.ownerStarted));
+    // A separate short native reader establishes the real loader drain point.
+    // The existing testable observation does not alter the product protocol.
+    auto reader = std::make_unique<ElfUnloadQuiescence::ReadScope>();
+    std::atomic<bool> removed { false };
+    std::thread unload([&]() {
+        loader->RemoveLoadedFiles(unrelated);
+        removed.store(true, std::memory_order_release);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ElfUnloadQuiescence::IsUnloadPendingForTesting() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    Target("unrelated-unload-reached-drain", ElfUnloadQuiescence::IsUnloadPendingForTesting());
+    control.finish.store(true, std::memory_order_release);
+    WaitqueueWakeAll(&control.release, nullptr, nullptr);
+    reader.reset();
+    Target("libinit-and-unrelated-unload-progress", Await(control.waiterDone));
+    Target("unrelated-unload-completed", Await(removed));
+    unload.join();
+    Target("unrelated-library-close", dlclose(library) == 0);
+    packageBody = nullptr;
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+    WaitqueueDelete(&control.release);
+}
+#endif
+#ifdef MRT_TESTABLE_INTERNALS
+GC_OTHER_VM_TEST(PackageInit, CompletePauseUsesLogicalWaitAndExactIdentity)
+{
+    Init();
+    Target("complete-pause-arm", MRT_PackageInitArmCompletePause(P(), U(), 0));
+    std::atomic<bool> unrelatedDone { false };
+    Start([](void* argument) {
+        void* token = nullptr;
+        Target("pause-control-execute", Begin(P(), V(), 0, &token) == Code(Result::Execute));
+        MCC_PackageInitComplete(token);
+        static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
+    }, &unrelatedDone);
+    Target("pause-control-unaffected", Await(unrelatedDone) && !MRT_PackageInitCompletePauseReached());
+    Completion c;
+    c.finish.store(true, std::memory_order_release);
+    Start(Owner, &c);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!MRT_PackageInitCompletePauseReached() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    Target("product-complete-reached-pause", MRT_PackageInitCompletePauseReached());
+    Start(Waiter, &c);
+    Target("pause-waiter-started", Await(c.waiterStarted));
+    Start(Witness, &c);
+    Target("complete-pause-cooperates-with-gc", Await(c.witnessDone));
+    MRT_PackageInitReleaseCompletePause();
+    Target("complete-pause-release", Await(c.waiterDone) && c.waiterResult == Code(Result::Ready));
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+    WaitqueueDelete(&c.release);
+}
+#endif
+
+namespace {
+void CheckTokenMisuse(bool nonOwner)
+{
+    int output[2];
+    GC_EXPECT_EQ(pipe(output), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(output[0]);
+        (void)dup2(output[1], STDERR_FILENO);
+        (void)dup2(output[1], STDOUT_FILENO);
+        close(output[1]);
+        Init();
+        Completion c;
+        if (nonOwner) {
+            Start(Owner, &c);
+            Target("misuse-owner-started", Await(c.ownerStarted));
+            Start([](void* p) {
+                auto& c = *static_cast<Completion*>(p);
+                std::fprintf(stderr, "PACKAGE_INIT_MISUSE_TARGET non-owner\n");
+                MCC_PackageInitComplete(c.ownerToken);
+                std::_Exit(77);
+            }, &c);
+        } else {
+            Start([](void*) {
+                void* token = nullptr;
+                Target("misuse-first-execute", Begin(P(), U(), 0, &token) == Code(Result::Execute));
+                MCC_PackageInitComplete(token);
+                std::fprintf(stderr, "PACKAGE_INIT_MISUSE_TARGET duplicate\n");
+                MCC_PackageInitFail(token, 1);
+                std::_Exit(77);
+            });
+        }
+        std::atomic<bool> never { false };
+        (void)Await(never);
+        std::_Exit(78);
+    }
+    close(output[1]);
+    std::string transcript;
+    char bytes[1024];
+    ssize_t count;
+    while ((count = read(output[0], bytes, sizeof(bytes))) > 0) { transcript.append(bytes, static_cast<size_t>(count)); }
+    close(output[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    const char* guard = nonOwner ? "package initializer token belongs to another logical CJThread" :
+        "package initializer token is not active";
+    const bool target = transcript.find("PACKAGE_INIT_MISUSE_TARGET") != std::string::npos &&
+        transcript.find(guard) != std::string::npos;
+    std::fprintf(stderr, "PACKAGE_INIT_TOKEN_GUARD nonOwner=%d status=%d target=%d\n", nonOwner, status, target);
+    GC_EXPECT_TRUE(target);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+}
+}
+GC_TEST(PackageInit, DuplicateTokenRejected) { CheckTokenMisuse(false); }
+GC_TEST(PackageInit, NonOwnerTokenRejected) { CheckTokenMisuse(true); }
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {
     void* token = reinterpret_cast<void*>(1);
