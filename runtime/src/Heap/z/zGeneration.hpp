@@ -23,6 +23,9 @@ struct TenuringInputs;
 // and phase together; the phase atomic serves existing barrier readers.
 // ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
 enum class GCCycleGeneration : uint8_t { YOUNG, OLD };
+#if defined(MRT_TESTABLE_INTERNALS)
+enum class MarkStartPoint : uint8_t { Begin, BeforeRetire, BeforeSequence, BeforeDomain, BeforeRemembered, Complete };
+#endif
 struct GCCycleSnapshot {
     GCCycleGeneration generation;
     uint64_t sequence;
@@ -31,6 +34,8 @@ struct GCCycleSnapshot {
     GCPhase phase;
     bool active;
 };
+class WCollector;
+struct YoungCollectionStats;
 class GenerationCycle {
 public:
     explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
@@ -58,13 +63,16 @@ public:
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
     void Begin(uint64_t index);
-    void StartYoungMark(RememberedSet& rememberedSet);
-    void StartOldMark();
+    YoungCollectionStats StartYoungMark(WCollector& collector);
+    void StartOldMark(WCollector& collector);
     void PublishPhase(GCPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
     void End();
 private:
+#if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
+    friend struct GenerationSequenceFixture;
+#endif
     MarkDomain* markDomain = nullptr;
     const GCCycleGeneration generation;
     std::unique_ptr<GCWorkers> workers;

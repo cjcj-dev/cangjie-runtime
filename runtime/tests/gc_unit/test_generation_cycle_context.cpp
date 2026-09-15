@@ -17,6 +17,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 
@@ -26,6 +27,10 @@ namespace MapleRuntime {
 // enum task in the test. The real major request owns execution and merging.
 // This fixture checks root scanning, not finalizer scheduling or invocation.
 struct GenerationCycleRootTestAccess {
+    static unsigned RemsetFace()
+    {
+        return Heap::GetHeap().GetRememberedSet().activeBuffer.load(std::memory_order_acquire);
+    }
     static void Install(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
     {
         auto& processor = Heap::GetHeap().GetFinalizerProcessor();
@@ -127,6 +132,63 @@ void* Exercise(void*)
     unsigned minorMarkStarts = 0;
     GCCycleSnapshot preludeOld {};
     uintptr_t preludeOldColor = 0;
+    std::array<uint64_t, 2> startSequence {};
+    std::array<uintptr_t, 2> startColor {};
+    std::array<unsigned, 2> startFace {};
+    std::array<unsigned, 2> startEvents {};
+    bool youngStartComplete = false;
+    // Observe results of the real request below. No callback supplies a phase,
+    // a sequence, a bitmap, or work to the collector.
+    tracing.testMarkStartState = [&](GCCycleGeneration generation, MarkStartPoint point) {
+        const size_t index = generation == GCCycleGeneration::YOUNG ? 0 : 1;
+        const auto state = collector.GetCycleSnapshot(generation);
+        const uintptr_t mask = index == 0 ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
+        const uintptr_t color = ::g_cjMarkBadMask & mask;
+        const unsigned face = GenerationCycleRootTestAccess::RemsetFace();
+        std::printf("P1_START_STATE generation=%zu point=%u seq=%llu phase=%u color=%zx face=%u\n",
+                    index, static_cast<unsigned>(point), static_cast<unsigned long long>(state.sequence),
+                    static_cast<unsigned>(state.phase), color, face);
+        if (point == MarkStartPoint::Begin) {
+            startSequence[index] = state.sequence;
+            startColor[index] = color;
+            startFace[index] = face;
+            ++startEvents[index];
+            if (index == 0) youngStartComplete = false;
+            else Expect(youngStartComplete, "p1_young_completes_before_old_starts");
+        } else if (point == MarkStartPoint::BeforeRetire) {
+            Expect(color != startColor[index], index == 0 ? "p1_young_color_before_retire" : "p1_old_color_before_retire");
+            Expect(state.sequence == startSequence[index], "p1_retire_before_sequence");
+        } else if (point == MarkStartPoint::BeforeSequence) {
+            Expect(state.sequence == startSequence[index], "p1_sequence_not_advanced_during_retire");
+            if (index == 0) {
+                bool retired = true;
+                size_t buffers = 0;
+                Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
+                    ++buffers;
+                    retired = retired && buffer.GetRegion() == nullptr && buffer.GetPreparedRegion() == nullptr;
+                });
+                std::printf("P1_TLAB_RETIRE buffers=%zu retired=%u\n", buffers, retired);
+                Expect(retired, "p1_young_tlab_retired_before_sequence");
+            }
+        } else if (point == MarkStartPoint::BeforeDomain) {
+            Expect(state.sequence == startSequence[index] + 1 && state.phase == GC_PHASE_ENUM,
+                   "p1_sequence_and_phase_before_domain");
+            if (index == 0) Expect(face == startFace[index], "p1_remset_not_flipped_before_domain");
+        } else if (point == MarkStartPoint::BeforeRemembered) {
+            auto* domain = static_cast<WCollector&>(tracing).YoungMarkDomain();
+            Expect(domain != nullptr && domain->NWorkers() == resources.GetWorkers(generation).ActiveWorkers(),
+                   "p1_young_domain_ready_before_remset");
+            Expect(face == startFace[index], "p1_remset_not_flipped_at_domain_start");
+        } else if (point == MarkStartPoint::Complete) {
+            Expect(state.sequence == startSequence[index] + 1 && state.phase == GC_PHASE_ENUM,
+                   "p1_complete_sequence_and_phase");
+            auto* domain = index == 0 ? static_cast<WCollector&>(tracing).YoungMarkDomain() : tracing.MajorMarkDomain();
+            Expect(domain != nullptr && domain->NWorkers() == resources.GetWorkers(generation).ActiveWorkers(),
+                   "p1_complete_domain_ready");
+            Expect(face == (startFace[index] ^ (index == 0 ? 1U : 0U)), "p1_complete_remset_face");
+            if (index == 0) youngStartComplete = true;
+        }
+    };
     // Port the VM_ZMarkStartYoungAndOld/VM_ZMarkStartYoung phase invariants
     // (zGeneration.cpp:583-659) through the real driver request below.
     tracing.testYoungMarkStarted = [&]() {
@@ -277,6 +339,8 @@ void* Exercise(void*)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
     Expect(rootResults > 0, "worker_root_result_observed");
     Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
+    Expect(startEvents[0] == 2 && startEvents[1] == 1, "p1_real_start_entries_observed");
+    tracing.testMarkStartState = nullptr;
     tracing.testYoungMarkStarted = nullptr;
     tracing.testCyclePrepared = nullptr;
     tracing.testRootsResult = nullptr;

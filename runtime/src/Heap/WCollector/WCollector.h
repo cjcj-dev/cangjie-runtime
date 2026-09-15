@@ -136,6 +136,7 @@ public:
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 
 class WCollector : public CopyCollector {
+    friend class GenerationCycle;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MutatorPublishTestAccess;
     friend struct PartialArrayTestAccess;

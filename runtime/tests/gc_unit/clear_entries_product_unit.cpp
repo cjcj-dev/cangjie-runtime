@@ -1,3 +1,4 @@
+#include "gc_cycle_sequence_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -98,9 +99,9 @@ struct RelocationReceiptTestAccess {
                 alignas(8) uint64_t storage[16] {};
                 RememberedSet empty;
                 empty.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-                cycle.StartYoungMark(empty);
+                GenerationSequenceFixture::AdvanceYoung(cycle, empty);
             } else {
-                cycle.StartOldMark();
+                GenerationSequenceFixture::Advance(cycle);
             }
         }
     }
@@ -2877,7 +2878,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     // Supply the product mark-start sequence event before publishing old roots.
     auto& oldCycle = collector.GetGenerationCycle(GCCycleGeneration::OLD);
     if (!oldCycle.Snapshot().active) oldCycle.Begin(0);
-    oldCycle.StartOldMark();
+    GenerationSequenceFixture::Advance(oldCycle);
     collector.StartOldMarkWork();
     {
         DriverLocker driver(resources);

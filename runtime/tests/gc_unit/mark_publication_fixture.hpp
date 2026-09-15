@@ -1,3 +1,4 @@
+#include "gc_cycle_sequence_fixture.hpp"
 // Product mark-domain fixture: observes the real M3 stripe carrier.
 #ifndef MRT_MARK_PUBLICATION_FIXTURE_HPP
 #define MRT_MARK_PUBLICATION_FIXTURE_HPP
@@ -29,12 +30,12 @@ struct MarkPublicationFixture {
         alignas(8) uint64_t storage[16] {};
         RememberedSet remembered;
         remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-        collector.youngCycle.StartYoungMark(remembered);
+        GenerationSequenceFixture::AdvanceYoung(collector.youngCycle, remembered);
         collector.StartYoungMarkWork();
         collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         collector.oldCycle.SelectReason(GC_REASON_USER);
         collector.oldCycle.Begin(2);
-        collector.oldCycle.StartOldMark();
+        GenerationSequenceFixture::Advance(collector.oldCycle);
         collector.StartOldMarkWork();
         collector.oldCycle.PublishPhase(GC_PHASE_TRACE);
     }

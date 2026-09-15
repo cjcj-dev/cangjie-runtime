@@ -1,3 +1,4 @@
+#include "gc_cycle_sequence_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -164,7 +165,7 @@ struct MarkPort203TestAccess {
         if (major) {
             auto& old = collector.GetGenerationCycle(GCCycleGeneration::OLD);
             if (!old.Snapshot().active) old.Begin(0);
-            old.StartOldMark();
+            GenerationSequenceFixture::Advance(old);
             collector.StartOldMarkWork();
         }
         collector.DoGarbageCollection(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);

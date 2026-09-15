@@ -1,3 +1,4 @@
+#include "gc_cycle_sequence_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -1075,7 +1076,7 @@ GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
         young.Begin(cycle + 1);
         GC_EXPECT_EQ(young.Sequence(), sequence);
         GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face);
-        young.StartYoungMark(rs);
+        GenerationSequenceFixture::AdvanceYoung(young, rs);
         GC_EXPECT_EQ(young.Sequence(), sequence + 1);
         GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face ^ 1U);
         GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(young.Sequence()));
@@ -1099,7 +1100,7 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
     if (young.Snapshot().active) young.End();
     auto markStart = [&] {
         young.Begin(young.Sequence() + 1);
-        young.StartYoungMark(rs);
+        GenerationSequenceFixture::AdvanceYoung(young, rs);
         young.End();
     };
     const MAddress from = heap.heapStart + 256;
