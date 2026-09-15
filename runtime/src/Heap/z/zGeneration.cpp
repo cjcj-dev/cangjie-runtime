@@ -754,14 +754,8 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
         MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
         FindUselessExternObjects();
     }
-    {
-        // This explicit finalizable closure may mark after ordinary mark work
-        // is closed, like ZGenerationOld::process_non_strong_references.
-        MRT_PHASE_TIMER(ZStatPhases::PConcurrentResurrection);
-        DoResurrection(workStack);
-    }
-    // Process the discovered references after the finalizable closure, before
-    // relocation-set processing (zGeneration.cpp:1330-1335).
+    // Finalizable graphs were followed during mark discovery. This phase
+    // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
     ProcessFinalizers();
     StringDedup::Instance().Clean([this](BaseObject* object) {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
@@ -824,25 +818,6 @@ bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
     return flushed;
 }
 
-void TracingCollector::DoResurrection(WorkStack& workStack)
-{
-    workStack.clear();
-    NativeSlotVisitor func = [&workStack, this](NativeSlot& ref) {
-        BaseObject* finalizerObj = Heap::GetBarrier().ReadStaticRef(ref);
-        if (!IsMarkedObject<Generation::Old>(finalizerObj)) {
-            DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
-            CHECK(DiscoverReference(finalizerObj, ReferenceType::FINAL) == ReferenceStatus::DISCOVERED);
-            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(finalizerObj))), true, true, true, true));
-        }
-    };
-    (void)collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
-
-    if (!workStack.empty()) {
-        const size_t resurrectdObjects = RunMajorStripeMark(workStack);
-        markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
-        VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
-    }
-}
 
 
 } // namespace MapleRuntime
@@ -937,7 +912,7 @@ void TracingCollector::CurrentizeValueRootMap(
     roots.swap(current);
 }
 
-// Registered finalizers are discovered by DoResurrection and fixed by
+// Registered finalizers are discovered during old root marking and fixed by
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
 
 

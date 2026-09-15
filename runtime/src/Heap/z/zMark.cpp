@@ -188,128 +188,11 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
     rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(root))), true, true, true, false));
 }
 
-// note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
-void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack, bool finalizable) const
+// ZMarkOopClosure::do_oop, zMark.cpp:198-205. The field barrier owns
+// remapping and generation routing; the original colored slot is authoritative.
+void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack&, bool finalizable) const
 {
-    RefField<> oldField(field);
-    // markstale: the mark-good fast path returns without healing, which is only safe if mark-good
-    // implies "target is current".  It does not here.  mark-good is a superset of load-good, the
-    // remap space is four values and a flip is an xor, so a colour published at N is published
-    // again at N+2 -- a stale pointer whose colour has come back around passes this test and the
-    // one walk that would have repaired the slot skips it.  Both crash families reduce to that:
-    // the read barrier hands the value out (fixed by kStaleGuard in Barrier::ReadReference), and
-    // the mark never repairs the slot, so after the route retires FindToVersion can no longer
-    // answer and the slot is unrepairable for good.
-    //
-    // ZGC's mark has the same fast path (ZBarrier::barrier returns early on fast_path(o)), and it
-    // is safe there because staleness is bounded: ZGenerationOld runs Phase 8
-    // concurrent_remap_young_roots before old relocate start specifically so that no pointer
-    // accumulates two remap-bit errors (zGeneration.cpp:1503-1508).  We have no such phase, so the
-    // bound has to be enforced where the assumption is used.
-    //
-    // Cost: one relaxed header load on the mark's fast path, only for heap targets.
-    static constexpr bool kMarkStaleGuard = true;
-    bool staleTarget = false;
-    if (kMarkStaleGuard) {
-        BaseObject* t = to_object(oldField.GetTargetObject());
-        if (t != nullptr && Heap::IsHeapAddress(t)) {
-            const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(t), __ATOMIC_RELAXED);
-            const unsigned sc = static_cast<unsigned>((hdr >> 48) & 0x3u);
-            if (sc == 3u || (hdr & 0xffffffffffffull) == 0) {
-                staleTarget = true;
-                static std::atomic<uint64_t> markStaleHits{ 0 };
-                const uint64_t n = markStaleHits.fetch_add(1, std::memory_order_relaxed) + 1;
-                if ((n & (n - 1)) == 0) {
-                    LOG(RTLOG_ERROR, "[MARKSTALE] n=%lu target=%p sc=%u", n, static_cast<void*>(t), sc);
-                }
-            }
-        }
-    }
-    if (ZPointer::is_mark_good(oldField.GetFieldValue()) && !staleTarget) {
-        BaseObject* targetObj = to_object(oldField.GetTargetObject());
-        // zbisect: plain non-heap (0x55–0x65) was admitted here → IsMarkedObject → GetUnitIdxAt OOB.
-        // Skip field on reject — same as pre-zcolor7 slow path for plain non-heap.
-        if (!Heap::IsHeapAddress(targetObj)) {
-            // gatedrop: reject arm only (default off). leave untraced.
-
-            return;
-        }
-        // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
-        // obj is null when the field arrived as a partial-array chunk, which
-        // carries no holder (ZGC's entry does not either). Only this message
-        // loses detail; the check itself is unchanged.
-        CHECK_DETAIL(targetObj->IsValidObject(),
-                     "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
-                     obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),
-                     obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
-        if (!IsMarkedObject<Generation::Old>(targetObj)) {
-
-            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(targetObj))), true, true, true, finalizable));
-        }
-        return;
-    }
-
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    BaseObject* latest = make_load_good(oldField, provenance);
-
-    // target object could be null or non-heap for some static variable.
-    if (!Heap::IsHeapAddress(latest)) {
-        return;
-    }
-    // ZBarrier::mark_barrier_on_oop_field remaps via the forwarding table before
-    // it colours (zBarrier.inline.hpp:591-623). make_load_good correctly returns
-    // a load-good address without a table walk; a colour wrap can still name a
-    // previous-cycle from. Consult current then retired tables only — TRACE is
-    // not relocate phase, so do not TryMutatorRelocate / forward_object here.
-    {
-        const MAddress fromAddr = reinterpret_cast<MAddress>(latest);
-        MAddress stored = ZPointer::is_load_good(oldField.GetFieldValue()) ? 0 : ForwardingTable::FindTo(
-            raw(oldField.GetTargetObject()), static_cast<Generation>(remap_generation(oldField)));
-        if (stored != 0) {
-            BaseObject* to = reinterpret_cast<BaseObject*>(stored);
-            if ((to != nullptr)) {
-                latest = to;
-            }
-        } else if (latest->IsForwarded()) {
-            RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(fromAddr);
-            BaseObject* published = GetForwardPointer(latest, ghost);
-            if (published != nullptr) {
-                latest = published;
-            }
-        }
-        if (!Heap::IsHeapAddress(latest)) {
-            return;
-        }
-        // Both tables miss: do not treat the from address as remapped.
-        // ColourResolvedRefField → CheckStoreGoodTarget fail-closes.
-    }
-    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
-                 latest, obj, obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),
-                 obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
-    RefField<> newField = ColourResolvedRefField(latest, provenance);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
-    } else if ([&]() {
-                   const bool ok = HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
-                                            HealSite::WCollectorTraceRefField);
-                   if (ok) {
-                       Collector::HealFpMark(reinterpret_cast<uintptr_t>(&field));
-                       static std::atomic<uint64_t> healed{ 0 };
-                       const uint64_t h = healed.fetch_add(1, std::memory_order_relaxed) + 1;
-                       if ((h & (h - 1)) == 0) {
-                           LOG(RTLOG_ERROR, "[TRACECOV] healed=%lu", h);
-                       }
-                   }
-                   return ok;
-               }()) {
-        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
-             raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
-    }
-
-    if (!IsMarkedObject<Generation::Old>(latest)) {
-
-        workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(latest))), true, true, true, finalizable));
-    }
+    Heap::GetBarrier().MarkBarrierOnOldOopField(obj, field, finalizable);
 }
 
 // Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196): the heap
@@ -632,6 +515,25 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
     gMinorRootOrigin = "unknown";
 }
 
+// ZReferenceProcessor::should_discover/discover (zReferenceProcessor.cpp:174-201,
+// 239-250). Native registration owns the original referent slot, rather than a
+// Java FinalReference object. The load barrier heals remapping before discovery.
+void TracingCollector::DiscoverFinalizableRoot(NativeSlot& slot) const
+{
+    CHECK(oldCycle.IsPhaseMark());
+    auto& barrier = Heap::GetBarrier();
+    BaseObject* object = barrier.ReadStaticRef(slot);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
+    object = ValidateCurrentValue(object, provenance);
+    if (object == nullptr) return;
+    auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
+    auto& processor = collectorResources.GetFinalizerProcessor().GetReferenceProcessor();
+    const auto status = processor.DiscoverReference(object, ReferenceType::FINAL);
+    CHECK(status == ReferenceStatus::DISCOVERED || status == ReferenceStatus::ALREADY_DISCOVERED);
+    barrier.MarkFinalizableBarrierOnRoot(slot);
+}
+
 namespace {
 // ZMarkOopClosure (zMark.cpp:666-670). P08 owns the missing dedicated old
 // mark barrier; this adapter consumes the existing old publication producer.
@@ -652,11 +554,13 @@ private:
 class MarkOldRootsTask final : public ZTask {
 public:
     MarkOldRootsTask(const TracingCollector& collector, MarkDomain& domain,
-                     std::function<void()> uncolored, unsigned workers)
-        : ZTask("ZMarkOldRootsTask"), rootsColored(collector, workers), coloredClosure(collector), domain(domain),
-          uncolored(std::move(uncolored)) {}
+                     NativeSlotVisitor finalizable, std::function<void()> uncolored, unsigned workers)
+        : ZTask("ZMarkOldRootsTask"), rootsColored(collector, workers),
+          finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers),
+          finalizable(std::move(finalizable)), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
     void work() override
     {
+        finalizerRoots.OopsDo(finalizable);
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -675,6 +579,8 @@ public:
     }
 private:
     RootsIteratorStrongColored rootsColored;
+    OopStorage::ParState<true> finalizerRoots;
+    NativeSlotVisitor finalizable;
     RootsIteratorStrongUncolored rootsUncolored;
     MarkOopClosure coloredClosure;
     MarkDomain& domain;
@@ -685,7 +591,8 @@ private:
 void TracingCollector::EnumAllCommonRoots(GCWorkers& workers)
 {
     CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before roots");
-    MarkOldRootsTask task(*this, *majorMarkDomain, [&] {
+    MarkOldRootsTask task(*this, *majorMarkDomain,
+                         [this](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
             MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
         }, {});
@@ -992,11 +899,6 @@ public:
 
 private:
 
-    void PushObject(MarkContext& ctx, BaseObject* object, bool finalizable = false)
-    {
-        PublishEntry(ctx, MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, true, finalizable));
-    }
-
     void PublishEntry(MarkContext& ctx, const MarkStackEntry& entry)
     {
         MAddress address = 0;
@@ -1014,31 +916,6 @@ private:
         }
     }
 
-    void PushFilteredYoung(MarkContext& ctx, BaseObject* object, const char* origin, bool finalizable = false)
-    {
-        if (!Heap::IsHeapAddress(object)) {
-            return;
-        }
-        if (!object->IsValidObject()) {
-            TracingCollector::WorkStack failClosed;
-            shared.collector->PushYoungObject(object, failClosed, origin);
-            return;
-        }
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (!region->IsYoungRegion()) {
-            if (shared.collector->GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
-                shared.collector->MarkOldObjectIfActive(object, true);
-            }
-            return;
-        }
-        if (region->is_object_strongly_live(from_object(object))) {
-            return;
-        }
-
-
-        PushObject(ctx, object, finalizable);
-    }
-
     void ProcessObject(MarkContext& ctx, size_t workerId, const MarkStackEntry& entry, size_t& nMarked)
     {
         YoungStripedWorkerOutput& output = *shared.outputs[workerId];
@@ -1048,10 +925,7 @@ private:
                 output.slots.push_back(slot);
             }
             auto& field = HeapSlotAt<>(slot);
-            BaseObject* target = shared.collector->ResolveMinorReference(field);
-            if (!ScrubMinorFreeTarget(field, target, false)) {
-                PushFilteredYoung(ctx, target, "closure_edge", entry.finalizable());
-            }
+            Heap::GetBarrier().MarkBarrierOnYoungOopField(field);
         };
         auto publish = [this, &ctx](const MarkStackEntry& work) { PublishEntry(ctx, work); };
         if (entry.partial_array()) {
