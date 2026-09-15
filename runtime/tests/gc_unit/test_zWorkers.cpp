@@ -344,12 +344,16 @@ GC_TEST(ZWorkers, RunAccumulatesParallelTimeInStatWorkers)
     coordinator.join();
     std::fprintf(stderr, "WORKER_STATS_TARGET entered=%u inFlightDuration=%.9f inFlightTime=%.9f\n",
                  unsigned(allEntered), inFlight._accumulated_duration, inFlight._accumulated_time);
+    const auto first = fx.stats.stats();
+    std::fprintf(stderr, "WORKER_WEIGHTED_TIME_TARGET duration=%.9f time=%.9f workers=3\n",
+                 first._accumulated_duration, first._accumulated_time);
+    // The weighted-time invariant is the causal target, so a missing start
+    // cannot be hidden by an earlier in-flight/setup assertion.
+    GC_EXPECT_TRUE(std::fabs(first._accumulated_time - 3.0 * first._accumulated_duration) < 0.000001);
+    GC_EXPECT_TRUE(first._accumulated_duration >= 0.010);
     GC_EXPECT_TRUE(inFlight._accumulated_duration > 0.0);
     GC_EXPECT_TRUE(std::fabs(inFlight._accumulated_time - 3.0 * inFlight._accumulated_duration) < 0.000001);
     GC_EXPECT_TRUE(allEntered);
-    const auto first = fx.stats.stats();
-    GC_EXPECT_TRUE(first._accumulated_duration >= 0.010);
-    GC_EXPECT_TRUE(std::fabs(first._accumulated_time - 3.0 * first._accumulated_duration) < 0.000001);
     fx.workers.set_active_workers(1);
     fx.workers.run(&task);
     const auto second = fx.stats.stats();
