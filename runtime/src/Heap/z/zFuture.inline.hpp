@@ -9,36 +9,6 @@
 #include "Heap/z/zFuture.hpp"
 
 namespace MapleRuntime {
-inline void Semaphore::signal(unsigned count)
-{
-    {
-        std::lock_guard<std::mutex> lock(_mutex);
-        _count += count;
-    }
-    if (count == 1) {
-        _cv.notify_one();
-    } else {
-        _cv.notify_all();
-    }
-}
-
-inline void Semaphore::wait()
-{
-    std::unique_lock<std::mutex> lock(_mutex);
-    _cv.wait(lock, [this] { return _count > 0; });
-    --_count;
-}
-
-inline bool Semaphore::trywait()
-{
-    std::lock_guard<std::mutex> lock(_mutex);
-    if (_count == 0) {
-        return false;
-    }
-    --_count;
-    return true;
-}
-
 template <typename T>
 inline ZFuture<T>::ZFuture()
     : _value() {}

@@ -1855,7 +1855,7 @@ MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr,
         }
         if (terminate.TryTerminate(stripes, context.NStripes())) {
             context.Cache().Flush();
-            smr.Reclaim(workerId);
+            smr.reclaim();
             return Result::Completed;
         }
     }
@@ -1869,8 +1869,9 @@ MarkDomain::MarkDomain(size_t capacity, MarkingStacks::MarkingGeneration generat
 
 void MarkDomain::EnsureWorkers(size_t workers)
 {
-    if (smr == nullptr || smr->WorkerCount() < workers) {
-        smr = std::make_unique<MarkingSMR>(workers);
+    CHECK_DETAIL(workers <= ConcGCThreads, "mark workers exceed per-worker storage capacity");
+    if (smr == nullptr) {
+        smr = std::make_unique<MarkingSMR>();
     }
 }
 

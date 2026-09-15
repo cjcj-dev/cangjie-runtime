@@ -158,7 +158,7 @@ public:
     }
 
     // Every claim is one fetch-and-add on its claim word (zIndexDistributor.
-    // inline.hpp:171-173). Repeated do_indices on an exhausted tree makes each
+    // inline.hpp:174-176). Repeated do_indices on an exhausted tree makes each
     // caller take exactly one terminating claim at level 0 per call, so the
     // level-0 word ends at 16 (the useful claims) + workers * calls. A claim
     // that is not atomic loses increments under this contention.
@@ -198,7 +198,8 @@ public:
         GC_EXPECT_EQ(level0, 16 + workers * calls);
     }
 
-    // The claim primitive itself (zIndexDistributor.inline.hpp:171-173): one
+    // Mechanism-only control, not the index-uniqueness invariant.
+    // The claim primitive itself (zIndexDistributor.inline.hpp:174-176): one
     // fetch-and-add per call, so contending callers never lose an increment.
     static void test_claim_tree_claim_is_atomic()
     {

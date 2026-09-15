@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
+#include "gc_worker_fixture.hpp"
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -50,7 +51,8 @@ GC_TEST(MarkPort203Storage, FullFirstPublishesThenUsesRegularSegment)
 {
     MarkStripeSet stripes(1);
     MarkThreadLocalStacks local(1);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     for (size_t i = 0; i < 129; ++i) {
         local.Push(stripes, 0, Entry(i), false);
     }
@@ -70,7 +72,8 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
 {
     for (bool publish : {true, false}) {
         MarkStripeSet stripes(4);
-        MarkingSMR smr(1);
+        MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
         MarkThreadLocalStacks producer(4);
         MarkThreadLocalStacks consumer(4);
         constexpr size_t count = 128 + 512 + 7;
@@ -103,7 +106,8 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
 GC_TEST(MarkPort203Storage, TransferredSegmentOutlivesItsSource)
 {
     MarkStripeSet stripes(1);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkThreadLocalStacks destination(1);
     {
         MarkThreadLocalStacks source(1);

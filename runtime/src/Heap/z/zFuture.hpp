@@ -6,26 +6,9 @@
 
 // gc/z/zFuture.hpp:24-43
 #pragma once
-#include <condition_variable>
-#include <mutex>
+#include "Base/Semaphore.h"
 
 namespace MapleRuntime {
-// runtime/semaphore.hpp Semaphore: a counting semaphore over the platform
-// mutex/condvar (I14, PLAN §5: same-layer primitives).
-class Semaphore {
-private:
-    std::mutex _mutex;
-    std::condition_variable _cv;
-    unsigned _count;
-
-public:
-    explicit Semaphore(unsigned value = 0) : _count(value) {}
-
-    void signal(unsigned count = 1);
-    void wait();
-    bool trywait();
-};
-
 template <typename T>
 class ZFuture {
 private:
