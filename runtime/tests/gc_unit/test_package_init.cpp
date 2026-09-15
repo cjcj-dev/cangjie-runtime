@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
+#define MRT_USE_CJTHREAD_RENAME 1
 #include "gc_unittest.hpp"
 #if defined(__linux__)
 #include <atomic>
@@ -79,29 +80,29 @@ void Init()
 }
 
 struct Task {
-    // The scheduler's root visitor consumes LWTData. All three managed slots
-    // are null; the callback/context follow them as native data.
-    LWTData roots {};
     void (*body)(void*);
     void* context;
 };
 void* Run(void* argument, unsigned int)
 {
-    auto* task = static_cast<Task*>(argument);
+    // LWTData::fn is explicitly native and excluded by MRT_VisitorCaller;
+    // the three managed slots remain null. Stay within COARGS_SIZE_MAX.
+    auto* task = static_cast<Task*>(static_cast<LWTData*>(argument)->fn);
+    const Task work = *task;
+    delete task;
     Mutator::GetMutator()->SetManagedContext(false);
-    task->body(task->context);
+    work.body(work.context);
     return nullptr; // Real scheduler SCHD_DESTROY_MUTATOR performs owner cleanup.
 }
 void Start(void (*body)(void*), void* context = nullptr)
 {
-    Task task {};
-    task.body = body;
-    task.context = context;
+    LWTData roots {};
+    roots.fn = new Task { body, context };
     CJThreadAttr attr;
     CJThreadAttrInit(&attr);
     CJThreadAttrCjFromCSet(&attr, true);
     auto scheduler = Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
-    Target("scheduler-admission", CJThreadNew(scheduler, &attr, Run, &task, sizeof(task)) != nullptr);
+    Target("scheduler-admission", CJThreadNew(scheduler, &attr, Run, &roots, sizeof(roots)) != nullptr);
 }
 uint32_t Begin(const void* package, const void* unit, uint32_t phase, void** token)
 {

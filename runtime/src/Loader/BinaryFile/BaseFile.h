@@ -52,12 +52,15 @@ public:
     const CString& GetBaseName() const;
     void SetFileCompatibility(bool isComp) { isCompatible = isComp; }
     bool IsCompatible() const { return isCompatible; }
+    bool IsRegistered() const { return registered; }
+    void SetRegistered(bool value) { registered = value; }
     PackageInitTable& GetPackageInitTable() { return packageInitTable; }
 private:
     PackageInitTable packageInitTable;
     CString realPath; // file real path
     CString baseName;
     bool isCompatible { false };
+    bool registered { false }; // Protected by the loader catalog lock.
 };
 } // namespace MapleRuntime
 #endif

@@ -268,6 +268,7 @@ fi
 INC_FLAGS=(
   -I"$SRC"
   -I"$ROOT/runtime/src"
+  -I"$ROOT/runtime/src/Loader/BinaryFile"
   -I"$ROOT/runtime/src/Heap"
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include"
   -I"$ROOT/runtime/include"

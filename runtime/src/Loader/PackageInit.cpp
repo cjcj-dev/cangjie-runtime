@@ -120,6 +120,7 @@ BaseFile* ResolvePackageFile(const void* package, const void* unit)
     size_t exactCount = 0;
     size_t imageCount = 0;
     LoaderManager::GetInstance()->GetLoader()->VisitBaseFile([&](BaseFile* file) {
+        if (!file->IsRegistered()) { return false; }
         const Uptr metadata = file->GetFileMetaAddr();
         if (!ElfUnloadQuiescence::IsAddressInImage(entry, metadata) ||
             !ElfUnloadQuiescence::IsAddressInImage(unitEntry, metadata)) { return false; }
@@ -284,7 +285,7 @@ extern "C" uint32_t MCC_PackageInitBegin(const void* packageEntry, const void* u
     if (ownerToken == nullptr) { return static_cast<uint32_t>(PackageInitResult::Unavailable); }
     *ownerToken = nullptr;
     if (packageEntry == nullptr || unitEntry == nullptr || phase > 1 ||
-        CJThreadGetHandle() == nullptr || Mutator::GetMutator() == nullptr) {
+        Runtime::CurrentRef() == nullptr || CJThreadGetHandle() == nullptr || Mutator::GetMutator() == nullptr) {
         return static_cast<uint32_t>(PackageInitResult::Unavailable);
     }
     ScopedEnterSaferegion safe(false);
@@ -301,7 +302,7 @@ extern "C" uint32_t MCC_PackageInitBegin(const void* packageEntry, const void* u
                                                                  ownerToken, std::move(pending)));
 }
 
-extern "C" void MCC_PackageInitComplete(void* ownerToken)
+extern "C" void MCC_PackageInitComplete(void* ownerToken) noexcept
 {
     PackageInitTable::Complete(ownerToken);
 }
@@ -312,7 +313,7 @@ extern "C" void MCC_PackageInitFail(void* ownerToken, uint32_t failureCode) noex
 }
 
 extern "C" [[noreturn]] void MCC_PackageInitAbort(const void* packageEntry, const void* unitEntry,
-                                                uint32_t phase, uint32_t beginResult)
+                                                uint32_t phase, uint32_t beginResult) noexcept
 {
     // This path is called before any dependent String cache can be used.
     // Keep diagnostics native; do not construct a managed exception or String.

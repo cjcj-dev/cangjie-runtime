@@ -41,10 +41,10 @@ private:
 
 extern "C" {
 uint32_t MCC_PackageInitBegin(const void* packageEntry, const void* unitEntry, uint32_t phase, void** ownerToken);
-void MCC_PackageInitComplete(void* ownerToken);
+void MCC_PackageInitComplete(void* ownerToken) noexcept;
 void MCC_PackageInitFail(void* ownerToken, uint32_t failureCode) noexcept;
 [[noreturn]] void MCC_PackageInitAbort(const void* packageEntry, const void* unitEntry,
-                                     uint32_t phase, uint32_t beginResult);
+                                     uint32_t phase, uint32_t beginResult) noexcept;
 }
 } // namespace MapleRuntime
 #endif

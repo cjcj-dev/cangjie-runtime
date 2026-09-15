@@ -3131,3 +3131,7 @@ EXPORTS
     MCC_PackageInitComplete @3492
     MCC_PackageInitFail @3493
     MCC_PackageInitAbort @3494
+    CJ_MCC_PackageInitBegin @3495
+    CJ_MCC_PackageInitComplete @3496
+    CJ_MCC_PackageInitFail @3497
+    CJ_MCC_PackageInitAbort @3498

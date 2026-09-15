@@ -45,6 +45,7 @@ void CJFileLoader::RegisterLoadFile(Uptr fileMetaAddr)
     RegisterTypeExt(file);
     RegisterTypeInfoCreatedByFE(file);
     RegisterOuterTypeExtensions(file);
+    file->SetRegistered(true);
 }
 
 BaseFile* CJFileLoader::GetBaseFileByMetaAddr(Uptr fileMetaAddr)
@@ -413,6 +414,7 @@ void CJFileLoader::UnlinkLoadedFile(BaseFile* baseFile)
     }), staticGIs.end());
     RemovePackageInfo(baseFile);
 
+    baseFile->SetRegistered(false);
     baseFile->UnregisterFile();
 }
 

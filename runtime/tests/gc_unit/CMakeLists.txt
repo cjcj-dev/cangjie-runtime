@@ -91,6 +91,7 @@ add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
 target_include_directories(cj_gc_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Loader/BinaryFile
     ${CMAKE_SOURCE_DIR}/src/Heap
     ${CMAKE_SOURCE_DIR}/include
 )
