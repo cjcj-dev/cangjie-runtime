@@ -9,6 +9,12 @@ SRC="$ROOT/runtime/tests/gc_unit"
 mkdir -p "$GC_UNIT_OUT"
 OUT="$GC_UNIT_OUT"
 LIB="$GCV2_RUNTIME_LIB_DIR"
+# A missing fault product must not silently fall back to the ELF's green RPATH.
+if [[ ! -r "$LIB/libcangjie-runtime.so" || ! -r "$LIB/libboundscheck.so" ]]; then
+    echo "PACKAGE_INIT_PRODUCT_INPUT_MISSING runtime=$LIB/libcangjie-runtime.so bounds=$LIB/libboundscheck.so" >&2
+    echo 74 > "$OUT/run.rc"
+    exit 74
+fi
 HEADERS="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$LIB/../..")}/include"
 ELF="${PACKAGE_INIT_ELF:-$OUT/package_init_unit}"
 ulimit -c 0
