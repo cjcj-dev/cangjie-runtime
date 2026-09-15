@@ -24,6 +24,12 @@
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
+    static void PreparePlainRoots(WCollector& collector)
+    {
+        // Match the eager product ordering before the direct TraceHeap fixture.
+        // Full driver-entry coverage lives in RawRemapYoungProduct.
+        collector.RemapYoungRoots();
+    }
     static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, RuntimeWorkers& pool, uint32_t workers = 1)
     {
         if (resources.collectorProxy.currentCollector != nullptr) {
@@ -178,6 +184,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
     GC_EXPECT_TRUE(to != nullptr && to != from);
+    if (threadKind != 0) RelocationReceiptTestAccess::PreparePlainRoots(collector);
     if (minor) RelocationReceiptTestAccess::NativeRootMajorPrelude(collector);
     else RelocationReceiptTestAccess::NativeRootTrace(collector);
     const bool currentMarked = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), to);
