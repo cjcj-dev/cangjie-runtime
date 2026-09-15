@@ -131,6 +131,20 @@ def main():
         if args.prebuilt:
             after = {str(p.relative_to(staging)): sha(p) for p in staging.rglob('*') if p.is_file()}
             checks['prebuilt_preserved'] = before == after
+    if args.fail_child:
+        # The injected source was restored in finally. Re-enter the identical
+        # CMake command/cwd/build tree to prove actual production recovers too.
+        record['failure_artifacts'] = {str(p): sha(p) for p in staging.rglob('*') if p.is_file()}
+        start = time.monotonic()
+        with (work / 'restored-configure.log').open('w') as output:
+            restored_rc = subprocess.run(command, cwd=cwd, env=env, stdout=output,
+                                         stderr=subprocess.STDOUT).returncode
+        record.update(restored_configure_rc=restored_rc, restored_wall=time.monotonic() - start)
+        restored_lines = (work / 'restored-configure.log').read_text().splitlines()
+        checks['restored_configure_success'] = restored_rc == 0 and 'build cjthread done!!!' in restored_lines
+        checks['restored_production'] = all((staging / name).is_file() for name in
+            ['include/schedule.h', 'include/cjthread_context.h',
+             'lib/libcangjie-thread.a', 'lib/libcangjie-aio.a'])
     record['artifacts'] = {str(p): sha(p) for p in staging.rglob('*') if p.is_file()}
     record['uptime_after'] = subprocess.check_output(['uptime'], text=True).strip()
     (work / 'result.json').write_text(json.dumps(record, indent=2) + '\n')
