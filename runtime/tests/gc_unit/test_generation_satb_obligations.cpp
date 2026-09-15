@@ -97,7 +97,7 @@ GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
 // Migrated weak-get cases from gc.TestReferenceRefersToDuringConcMark and
 // ZBarrier::blocking_keep_alive_on_weak_slow_path. These are admission tests;
 // the fixture does not execute the old mark-end pause or the rendezvous.
-GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
+GC_OTHER_VM_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
@@ -107,6 +107,16 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
         ~RestoreBlock() { resources.UnblockResurrection(); }
     } restore { resources };
     RefField<> field(StoreGoodPointer(fx.obj0));
+    // ZGC zAddress.cpp:143-147 / zBarrier.inline.hpp:522-526: a field
+    // produced before mark-start must lose mark-good eligibility at the flip.
+    const bool wasGood = ZPointer::is_mark_good(field.GetFieldValue());
+    ZGlobalsPointers::flip_old_mark_start();
+    const bool nowGood = ZPointer::is_mark_good(field.GetFieldValue());
+    std::fprintf(stderr, "SATB_INPUT old wasGood=%u nowGood=%u observed=%llx mask=%llx\n",
+                 unsigned(wasGood), unsigned(nowGood),
+                 static_cast<unsigned long long>(raw(field.GetFieldValue())),
+                 static_cast<unsigned long long>(g_cjMarkGoodMask));
+    GC_EXPECT_TRUE(wasGood && !nowGood);
     mark.CompleteOldMarkForAdmissionTest();
     resources.BlockResurrection();
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
@@ -114,9 +124,10 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
     (void)GcHeapFixture::MarkStrong(fx.region0, fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
+    std::puts("SATB_TARGET old dead/finalizable rejected; strong retained");
 }
 
-GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
+GC_OTHER_VM_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
@@ -128,21 +139,39 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
     fx.region0->SetYoungRegionFlag(1);
     resources.BlockResurrection();
     RefField<> field(StoreGoodPointer(fx.obj0));
+    const bool wasGood = ZPointer::is_mark_good(field.GetFieldValue());
+    ZGlobalsPointers::flip_young_mark_start();
+    const bool nowGood = ZPointer::is_mark_good(field.GetFieldValue());
+    std::fprintf(stderr, "SATB_INPUT young wasGood=%u nowGood=%u observed=%llx mask=%llx\n",
+                 unsigned(wasGood), unsigned(nowGood),
+                 static_cast<unsigned long long>(raw(field.GetFieldValue())),
+                 static_cast<unsigned long long>(g_cjMarkGoodMask));
+    GC_EXPECT_TRUE(wasGood && !nowGood);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
     std::vector<BaseObject*> published;
     mark.Drain([&](BaseObject* object, bool) { published.push_back(object); });
+    std::fprintf(stderr, "SATB_TARGET young published=%zu\n", published.size());
     GC_EXPECT_EQ(published.size(), 1u);
     GC_EXPECT_TRUE(published.front() == fx.obj0);
 }
 
-GC_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
+GC_OTHER_VM_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
     RefField<> field(StoreGoodPointer(fx.obj0));
+    const bool wasGood = ZPointer::is_mark_good(field.GetFieldValue());
+    ZGlobalsPointers::flip_old_mark_start();
+    const bool nowGood = ZPointer::is_mark_good(field.GetFieldValue());
+    std::fprintf(stderr, "SATB_INPUT old wasGood=%u nowGood=%u observed=%llx mask=%llx\n",
+                 unsigned(wasGood), unsigned(nowGood),
+                 static_cast<unsigned long long>(raw(field.GetFieldValue())),
+                 static_cast<unsigned long long>(g_cjMarkGoodMask));
+    GC_EXPECT_TRUE(wasGood && !nowGood);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
     std::vector<BaseObject*> published;
     mark.DrainOld([&](BaseObject* object, bool) { published.push_back(object); });
+    std::fprintf(stderr, "SATB_TARGET old published=%zu\n", published.size());
     GC_EXPECT_EQ(published.size(), 1u);
     GC_EXPECT_TRUE(published.front() == fx.obj0);
 }
