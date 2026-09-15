@@ -13,6 +13,7 @@
 #include <cstring>
 #include <new>
 
+#include "Base/Copy.h"
 #include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -59,18 +60,15 @@ inline void ZUtils::object_copy_conjoint(zaddress from, zaddress to, size_t size
     }
 }
 
-// zUtils.inline.hpp:75-80 (Copy::disjoint_words_atomic: word-at-a-time stores)
+// zUtils.inline.hpp:75-80
 inline void ZUtils::object_copy_disjoint_atomic(zaddress from, zaddress to, size_t offset, size_t size)
 {
     const uintptr_t from_addr = untype(from) + offset;
     const uintptr_t to_addr = untype(to) + offset;
 
     assert((size & (sizeof(uintptr_t) - 1)) == 0);
-    const uintptr_t* src = reinterpret_cast<const uintptr_t*>(from_addr);
-    uintptr_t* dst = reinterpret_cast<uintptr_t*>(to_addr);
-    for (size_t count = size / sizeof(uintptr_t); count > 0; --count) {
-        *dst++ = *src++;
-    }
+    Copy::disjoint_words_atomic(reinterpret_cast<const uintptr_t*>(from_addr),
+                                reinterpret_cast<uintptr_t*>(to_addr), size / sizeof(uintptr_t));
 }
 
 // zUtils.inline.hpp:82-85
