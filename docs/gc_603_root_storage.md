@@ -47,3 +47,9 @@ ZGC 根目录：`/root/cj_build/reference/jdk/src/hotspot/share/`。
 - generation-cycle 的 queued/working 输入改为 strongStorage 槽；两处已删除 API 按 advisor 更新，全部语义断言保留。default SATB companion 的旧装置问题归 #629。
 
 完整证据和机器交付在本棒报告与 `evidence/603/`，它们不替代独立 Review。
+
+- 新增 `NativeRootCurrent.StrongFinalizerRootPublishesAndMarks`：既有 EnqueueFinalizableForTest 种实际 strongStorage 输入，真实 TraceHeap 完整执行后读取 published roots 与 old mark bitmap。没有新增产品导出、friend 或测试 helper；依据 `/root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_603_implement_r5674457578-20260915T044224Z.md` 补齐 strong 消费面。
+
+## 完整托管 cycle 的观测限制
+
+同一个 managed wrapper ELF：候选/恢复到达全部 ROOT_FAMILY 断言后出现 `LOADFC current raw value required`（#607 已登记同位点）；基线被更早的 finalizable queue/predicate 检查遮挡。因此这些运行不构成完整托管 cycle 验收通过，也不能据此声称 LOADFC 非本包新增。该对照资格限制与装置问题（#629）在交付报告单列，未提前退出程序或更改断言来取得通过。

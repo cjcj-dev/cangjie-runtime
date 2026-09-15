@@ -374,3 +374,42 @@ GC_OTHER_VM_TEST(ThreadRootCurrent, C2ObjectRefHistoricalColor) { CheckNativeRoo
 GC_OTHER_VM_TEST(ThreadRootCurrent, C3InvisibleHistoricalColor) { CheckNativeRoot(false, false, 3); }
 GC_OTHER_VM_TEST(ThreadRootCurrent, C4HeaderlessHistoricalColor) { CheckNativeRoot(false, false, 4); }
 #endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fixture;
+    auto& heap = Heap::GetHeap();
+    auto& resources = heap.GetCollectorResources();
+    WCollector collector(heap.GetAllocator(), resources);
+    RuntimeWorkers pool(1);
+    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, pool);
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    fixture.region0->SetYoungRegionFlag(0);
+    const auto view = fixture.region0->GetMarkView<Generation::Old>();
+    GC_EXPECT_FALSE(fixture.region0->IsMarkedObject(view, fixture.obj0));
+    // Seed the real scheduling input through its existing fixture operation.
+    // The root task and marker below are the product TraceHeap implementation.
+    resources.GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
+    bool published = false;
+    collector.testRootsResult = [&](GCWorkers::Generation, TracingCollector::RootSet& result) {
+        for (auto* node = result.head(); node != nullptr; node = node->next) {
+            auto copy = *node;
+            while (!copy.empty()) {
+                published |= copy.back().object() == fixture.obj0;
+                copy.pop_back();
+            }
+        }
+    };
+    RelocationReceiptTestAccess::NativeRootTrace(collector);
+    collector.testRootsResult = nullptr;
+    const bool marked = fixture.region0->IsMarkedObject(fixture.region0->GetMarkView<Generation::Old>(), fixture.obj0);
+    std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p published=%u marked=%u\n",
+                 fixture.obj0, unsigned(published), unsigned(marked));
+    // Both observations are read before either target assertion can fail.
+    GC_EXPECT_TRUE(published && marked);
+}
+#endif
