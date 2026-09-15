@@ -101,6 +101,9 @@ public:
 
     ~Mutator()
     {
+        // Wait for target inventory users while the lock and roots are still
+        // alive, before any Mutator member destruction can begin.
+        gcData.Detach();
         tid = 0;
         stackBoundAddr = nullptr;
 

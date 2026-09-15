@@ -109,6 +109,7 @@ CleanThreadLocalData::~CleanThreadLocalData()
         MutatorManager::Instance().UnregisterMarkFlushThread(local);
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }
+    nativeData.Detach();
     // gcData may borrow a parked/migrating Mutator. The cleaner owns only
     // nativeData, whose member destructor runs after this body.
     local->gcData = nullptr;
