@@ -10,11 +10,13 @@
 #include <thread>
 #include <vector>
 
+// gc_heap_fixture.hpp opens the product privates for the harness; it has to
+// come before every product header this file names.
+#include "gc_heap_fixture.hpp"
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zValue.inline.hpp"
-#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
