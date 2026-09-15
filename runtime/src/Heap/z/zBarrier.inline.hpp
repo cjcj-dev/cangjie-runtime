@@ -10,9 +10,52 @@
 
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPage.hpp"
 #include "securec.h"
 
 namespace MapleRuntime {
+// ZBarrier::barrier, zBarrier.inline.hpp:319-344. Retain the observed colored
+// word until after marking: the color operation needs its old-generation bits.
+template<typename SlowPath>
+inline zaddress Barrier::MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
+                                 NativeSlot& field, zpointer observed) const
+{
+    // Cangjie NativeSlot tables also contain plain, read-only ELF literals.
+    // They have no ZGC heap-root counterpart and must retain their plain word.
+    BaseObject* payload = to_object(RefField<>(observed).GetTargetObject());
+    if (payload != nullptr && !Heap::IsHeapAddress(payload)) {
+        return from_object(payload);
+    }
+    if (fast(observed)) {
+        return RefField<>(observed).GetTargetObject();
+    }
+    RefField<> value(observed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
+    const zaddress loadGood = from_object(theCollector.make_load_good(value, provenance));
+    const zaddress good = (this->*slow)(loadGood);
+    const zpointer colored = color(good, observed);
+    ZgcSelfHeal(field, observed, colored, fast, HealSite::BarrierReadReference);
+    return good;
+}
+
+// ZBarrier::mark_if_young, zBarrier.inline.hpp:763-767. Native literal roots
+// are the Cangjie non-heap case and have no generation owner.
+inline void Barrier::MarkIfYoung(zaddress address) const
+{
+    BaseObject* object = to_object(address);
+    if (Heap::IsHeapAddress(object) &&
+        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
+        MarkYoung(address);
+    }
+}
+
+// ZBarrier::mark_young<DontResurrect, GCThread, Follow>, :754-759.
+inline void Barrier::MarkYoung(zaddress address) const
+{
+    theCollector.MarkYoungRootObject(to_object(address));
+}
+
 // ZBarrier::is_mark_young_good_fast_path, zBarrier.inline.hpp:392-394.
 inline bool Barrier::IsMarkYoungGoodFastPath(zpointer value)
 {
@@ -20,15 +63,15 @@ inline bool Barrier::IsMarkYoungGoodFastPath(zpointer value)
            ColourPredicates::is_marked_young(raw(value), ::g_cjMarkBadMask);
 }
 
-inline zpointer Barrier::ColorMarkYoungGood(BaseObject* object, zpointer previous)
+inline zpointer Barrier::ColorMarkYoungGood(zaddress address, zpointer previous)
 {
-    return ColorAddressMarkYoungGood(from_object(object), previous);
+    return ColorAddressMarkYoungGood(address, previous);
 }
 
-inline BaseObject* Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const
+inline void Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    return MarkBarrier(IsMarkYoungGoodFastPath, &Barrier::MarkYoungSlowPath,
+    MarkBarrier(IsMarkYoungGoodFastPath, &Barrier::MarkYoungSlowPath,
                        ColorMarkYoungGood, field, observed);
 }
 

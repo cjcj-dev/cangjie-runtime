@@ -37,7 +37,7 @@ public:
 
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
     BaseObject* ReadStaticRef(NativeSlot& field) const;
-    BaseObject* MarkYoungGoodBarrierOnOopField(NativeSlot& field) const;
+    void MarkYoungGoodBarrierOnOopField(NativeSlot& field) const;
     BaseObject* ReadPlainRoot(RootSlot& field) const;
     BaseObject* ReadPhantomRef(BaseObject* obj, RefField<false>& field) const;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const;
@@ -118,15 +118,15 @@ protected:
                             zpointer prev = zpointer::null) const;
 private:
     using MarkFastPath = bool (*)(zpointer);
-    using MarkColor = zpointer (*)(BaseObject*, zpointer);
-    using MarkSlowPath = BaseObject* (Barrier::*)(BaseObject*) const;
-    BaseObject* MarkBarrier(MarkFastPath fast, MarkSlowPath slow, MarkColor color,
+    using MarkColor = zpointer (*)(zaddress, zpointer);
+    template<typename SlowPath>
+    zaddress MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
                            NativeSlot& field, zpointer observed) const;
     static bool IsMarkYoungGoodFastPath(zpointer value);
-    static zpointer ColorMarkYoungGood(BaseObject* object, zpointer previous);
-    BaseObject* MarkYoungSlowPath(BaseObject* object) const;
-    void MarkIfYoung(BaseObject* object) const;
-    void MarkYoung(BaseObject* object) const;
+    static zpointer ColorMarkYoungGood(zaddress address, zpointer previous);
+    zaddress MarkYoungSlowPath(zaddress address) const;
+    void MarkIfYoung(zaddress address) const;
+    void MarkYoung(zaddress address) const;
     template<bool atomic>
     void NativeStoreBarrier(RefField<atomic>& field, bool heal) const;
     template<bool atomic>

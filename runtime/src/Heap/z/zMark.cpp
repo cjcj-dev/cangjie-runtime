@@ -1109,6 +1109,11 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
 void MarkDomain::MarkRootObject(BaseObject* object)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    // ZMark::mark_object skips the allocating page: these objects are already
+    // implicitly live. Cangjie represents that page boundary by its watermark.
+    if (region->AllocatedAfterMarkStart(region->GetAddressOffset(reinterpret_cast<MAddress>(object)))) {
+        return;
+    }
     bool firstLive = false;
     if (region->MarkObjectWithLiveClaim(region->GetMarkView<MapleRuntime::Generation::Young>(),
                                        object, object->GetSize(), false, firstLive)) {

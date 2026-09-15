@@ -275,53 +275,14 @@ BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
 }
 
-// ZBarrier::barrier, zBarrier.inline.hpp:319-344. Retain the observed colored
-// word until after marking: the color operation needs its old-generation bits.
-BaseObject* Barrier::MarkBarrier(MarkFastPath fast, MarkSlowPath slow, MarkColor color,
-                                 NativeSlot& field, zpointer observed) const
-{
-    // Cangjie NativeSlot tables also contain plain, read-only ELF literals.
-    // They have no ZGC heap-root counterpart and must retain their plain word.
-    BaseObject* payload = to_object(RefField<>(observed).GetTargetObject());
-    if (payload != nullptr && !Heap::IsHeapAddress(payload)) {
-        return payload;
-    }
-    if (fast(observed)) {
-        return to_object(RefField<>(observed).GetTargetObject());
-    }
-    RefField<> value(observed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &field };
-    BaseObject* loadGood = theCollector.make_load_good(value, provenance);
-    BaseObject* good = (this->*slow)(loadGood);
-    const zpointer colored = color(good, observed);
-    ZgcSelfHeal(field, observed, colored, fast, HealSite::BarrierReadReference);
-    return good;
-}
-
 // ZBarrier::mark_young_slow_path, zBarrier.cpp:206-215.
-BaseObject* Barrier::MarkYoungSlowPath(BaseObject* object) const
+zaddress Barrier::MarkYoungSlowPath(zaddress address) const
 {
-    if (object == nullptr) {
-        return nullptr;
+    if (is_null(address)) {
+        return address;
     }
-    MarkIfYoung(object);
-    return object;
-}
-
-// ZBarrier::mark_if_young, zBarrier.inline.hpp:763-767. Native literal roots
-// are the Cangjie non-heap case and have no generation owner.
-void Barrier::MarkIfYoung(BaseObject* object) const
-{
-    if (Heap::IsHeapAddress(object) &&
-        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
-        MarkYoung(object);
-    }
-}
-
-// ZBarrier::mark_young<DontResurrect, GCThread, Follow>, :754-759.
-void Barrier::MarkYoung(BaseObject* object) const
-{
-    theCollector.MarkYoungRootObject(object);
+    MarkIfYoung(address);
+    return address;
 }
 
 // Thread-owned uncolored roots are made load-good by the shared root handshake
