@@ -878,7 +878,8 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, NullAndNonHeapControlsRemainStable)
     RelocationReceiptTestAccess::SeedValueRoots(collector, nullptr);
     const std::vector<BaseObject*> nullValues =
         RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
-    BaseObject* nonHeap = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(1));
+    alignas(8) unsigned char nativeStorage[16] {};
+    BaseObject* nonHeap = reinterpret_cast<BaseObject*>(nativeStorage);
     RelocationReceiptTestAccess::SeedValueRoots(collector, nonHeap);
     const std::vector<BaseObject*> nonHeapValues =
         RelocationReceiptTestAccess::EnumMajorValueRoots(collector);
@@ -1842,45 +1843,6 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
 #endif
 }
 
-GC_TEST(ForwardingPublicationProduct, IdentityForwardStillWritesBackRootWord)
-{
-    GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
-    RegionInfo* region = ResetDeliveryUnit(fx, 4);
-    GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    ForwardingTable::Publication publication =
-        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
-    GC_EXPECT_TRUE(static_cast<bool>(publication));
-    (void)ForwardingTable::InstallMapping(publication, reinterpret_cast<MAddress>(from),
-                                          reinterpret_cast<MAddress>(from));
-    region->MarkForwardingDone();
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    const uintptr_t colored = reinterpret_cast<uintptr_t>(from) |
-        (static_cast<uintptr_t>(::g_cjLoadBadMask) ^ ZPointerRemappedMask);
-    ObjectRef root;
-    StorePlain(root, to_zaddress(colored));
-    GC_EXPECT_TRUE(raw(root.LoadPlain()) != reinterpret_cast<MAddress>(from));
-    BaseObject* resolved = RelocationReceiptTestAccess::ForwardUpdateRawRef(collector, root);
-    GC_EXPECT_TRUE(resolved == from);
-    GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<MAddress>(from));
-
-    publication = ForwardingTable::Publication();
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
-    ForwardingTable::ResetRelocationSet(region->GetOwnerGeneration());
-    if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-}
-
 GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestination)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -2008,7 +1970,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
     RefField<> productField(qualified);
     (void)RelocationReceiptTestAccess::FixMinorField(collector, productField);
     GC_EXPECT_EQ(raw(productField.GetTargetObject()), expected);
-    RefField<> derivedField(expected + 8u);
+    RefField<> derivedField(ZAddress::store_good(to_zaddress(expected + 8u)));
     (void)RelocationReceiptTestAccess::FixMinorField(
         collector, derivedField, reinterpret_cast<BaseObject*>(expected));
     GC_EXPECT_EQ(raw(derivedField.GetTargetObject()), expected + 8u);

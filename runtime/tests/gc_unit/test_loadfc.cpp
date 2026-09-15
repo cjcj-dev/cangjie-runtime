@@ -150,7 +150,7 @@ GC_TEST(LoadFc, AtomicReadHealthyTargetReturnsNormally)
 {
     LoadFcFixture fx;
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
-    RefField<true> field(to_zpointer(reinterpret_cast<MAddress>(fx.heap.obj0)));
+    RefField<true> field(StoreGoodPointer(fx.heap.obj0));
 
     ObjectPtr got = CJ_MCC_AtomicReadReference(fx.heap.obj1, &field, std::memory_order_seq_cst);
 
@@ -162,7 +162,7 @@ GC_TEST(LoadFc, SwapOldValueHealthyTargetReturnsNormally)
 {
     LoadFcFixture fx;
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
-    RefField<true> field(to_zpointer(reinterpret_cast<MAddress>(fx.heap.obj0)));
+    RefField<true> field(StoreGoodPointer(fx.heap.obj0));
     BaseObject* newRef = fx.heap.obj1;
 
     ObjectPtr got = CJ_MCC_AtomicSwapReference(newRef, fx.heap.obj1, &field, std::memory_order_seq_cst);

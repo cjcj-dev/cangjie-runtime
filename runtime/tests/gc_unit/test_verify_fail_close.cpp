@@ -67,7 +67,7 @@ void ExpectSceneAbort(const char* expectedDiagnostic, Fn&& fn)
 GC_OTHER_VM_TEST(ZVerify, RejectsColoredAddressWithoutUncoloring)
 {
     GcVerifyFixture fixture;
-    const uintptr_t colored = reinterpret_cast<uintptr_t>(fixture.obj0) | ZPointerRemapped00;
+    const uintptr_t colored = raw(ZAddress::store_good(from_object(fixture.obj0)));
     ExpectSceneAbort("Bad object", [&] {
         ZVerify::Object(reinterpret_cast<BaseObject*>(colored), &colored);
     });

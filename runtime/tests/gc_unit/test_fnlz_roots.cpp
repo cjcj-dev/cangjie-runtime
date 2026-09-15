@@ -24,20 +24,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
     auto& local = mutator.GetLocalFinalizers();
     NativeSlot* const originalSlot = &local.front();
     const zpointer originalWord = originalSlot->GetFieldValue();
-    struct RestoreMasks {
-        unsigned long mark = ::g_cjMarkBadMask;
-        unsigned long store = ::g_cjStoreGoodMask;
-        unsigned long bad = ::g_cjStoreBadMask;
-        ~RestoreMasks()
-        {
-            ::g_cjMarkBadMask = mark;
-            ::g_cjStoreGoodMask = store;
-            ::g_cjStoreBadMask = bad;
-        }
-    } masks;
-    ::g_cjMarkBadMask ^= ZPointerMarkedYoungMask;
-    ::g_cjStoreGoodMask ^= ZPointerMarkedYoungMask;
-    ::g_cjStoreBadMask ^= ZPointerMarkedYoungMask;
+    ZGlobalsPointers::flip_young_mark_start();
     processor.RegisterFinalizers(local);
     size_t seen = 0;
     processor.VisitFinalizers([&](NativeSlot& slot) {

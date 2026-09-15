@@ -63,7 +63,10 @@ struct LargeArrayFixture {
         const size_t units = arrayUnits + 1;
         const size_t metadata = RegionManager::GetMetadataSize(units);
         mappedSize = metadata + units * RegionInfo::UNIT_SIZE;
-        mapping = mmap(nullptr, mappedSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        const MemMap::Option options = { "cangjie_heap", nullptr,
+            MemMap::DEFAULT_MEM_FLAGS, MemMap::DEFAULT_MEM_PROT, false };
+        reservation = MemMap::MapMemory(mappedSize, mappedSize, options);
+        mapping = reservation == nullptr ? MAP_FAILED : reservation->GetBaseAddr();
         GC_EXPECT_TRUE(mapping != MAP_FAILED);
         const MAddress start = reinterpret_cast<MAddress>(mapping) + metadata;
         Heap::OnHeapCreated(start);
@@ -96,9 +99,10 @@ struct LargeArrayFixture {
     {
         LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region0);
         LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region1);
-        munmap(mapping, mappedSize);
+        MemMap::DestroyMemMap(reservation);
     }
     alignas(TypeInfo) unsigned char holderStorage[sizeof(TypeInfo)] {};
+    MemMap* reservation = nullptr;
     void* mapping = nullptr;
     size_t mappedSize = 0;
     RegionInfo* region0 = nullptr;
@@ -127,7 +131,7 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
     // Plant holder.bytes. The holder GCTib has bit 0 set, so the exact major
     // non-array walk (WCollector::TraceObjectRefFields) must yield this slot.
     MAddress slotAddress = reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE;
-    *reinterpret_cast<MAddress*>(slotAddress) = reinterpret_cast<MAddress>(bytes);
+    *reinterpret_cast<MAddress*>(slotAddress) = raw(ZAddress::store_good(from_object(bytes)));
 
     const auto view = targetRegion->GetMarkView<Generation::Old>();
     size_t holderSlotVisits = 0;
