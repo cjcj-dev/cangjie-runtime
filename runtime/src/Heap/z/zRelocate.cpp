@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zVerify.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
 
@@ -865,7 +866,7 @@ void WCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorl
     // eatarm brackets the host so an IOR can be attributed to the object being fixed;
     // nullgate names the edge inside. Both are gated and neither subsumes the other.
 
-    object->ForEachRefField([this, object, stw](RefField<>& field) {
+    ZIterator::basic_oop_iterate_safe(object, [this, object, stw](RefField<>& field) {
         (void)FixMinorEvacuatedSlot(field, nullptr, stw);
     });
 
@@ -1120,7 +1121,8 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
     }
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     Collector& collector = Heap::GetHeap().GetCollector();
-    object->ForEachRefField([&](RefField<>& field) {
+    // zRelocate.cpp:798: this relocation-work consumer uses the unsafe entry.
+    ZIterator::basic_oop_iterate(object, [&](RefField<>& field) {
         const zpointer observed = field.GetFieldValue();
         RefField<> value(observed);
         BaseObject* target = to_object(value.GetTargetObject());
@@ -1159,10 +1161,7 @@ void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
         {
             for (size_t index = next.fetch_add(1); index < pages.size(); index = next.fetch_add(1)) {
                 pages[index]->ObjectIterate([&](BaseObject* object) {
-                    if (!object->HasRefField()) {
-                        return;
-                    }
-                    object->ForEachRefField([&](RefField<>& field) {
+                    RefFieldVisitor remapAndRemember = [&](RefField<>& field) {
                         const zpointer observed = field.GetFieldValue();
                         BaseObject* target = RemapPromotedField(Heap::GetHeap().GetCollector(), field, observed);
                         if (target != nullptr && Heap::IsHeapAddress(target) &&
@@ -1170,7 +1169,10 @@ void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
                             // RegionManager owns access to the remset producer.
                             remember(field);
                         }
-                    });
+                    };
+                    // zRelocate.cpp:1275: flip promotion passes the known
+                    // klass through the safe entry before field dispatch.
+                    ZIterator::basic_oop_iterate_safe(object, object->GetTypeInfo(), remapAndRemember);
                 });
             }
         }

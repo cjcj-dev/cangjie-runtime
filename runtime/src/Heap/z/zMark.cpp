@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zHeapIterator.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/WCollector/WCollector.h"
 
@@ -437,8 +438,9 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, boo
         return;
     }
 
-    MAddress contentAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
-    obj->GetGCTib().ForEachBitmapWord(contentAddr, visitor);
+    // zMark.cpp:371-388: non-array following uses the unsafe oop iterator.
+    ZBasicOopIterateClosure<decltype(visitor)> closure(visitor);
+    ZIterator::oop_iterate(obj, &closure);
 }
 
 BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
@@ -1013,9 +1015,11 @@ private:
                 }
 
                 if (object->HasRefField()) {
-                    object->ForEachRefField([this, &ctx, object](RefField<>& field) {
+                    auto fields = [this, &ctx, object](RefField<>& field) {
                         PushResidualYoungChild(ctx, field, object, "ghostroute.striped.bitmap");
-                    });
+                    };
+                    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
+                    ZIterator::oop_iterate(object, &closure);
                 }
                 return;
             }
@@ -2011,11 +2015,15 @@ void FollowObjectReferences(BaseObject* object, bool finalizable,
         MArray* array = reinterpret_cast<MArray*>(object);
         TypeInfo* component = array->GetComponentTypeInfo();
         if (component->IsObjectType() || component->IsArrayType() || component->IsInterface()) {
+            // zMark.cpp:346-368: array following does not contain a safe
+            // iterator split. Invisible roots carry DontFollow upstream.
             FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
             return;
         }
     }
-    object->ForEachRefField([&](RefField<>& field) { visit(reinterpret_cast<MAddress>(&field)); });
+    auto fields = [&](RefField<>& field) { visit(reinterpret_cast<MAddress>(&field)); };
+    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
+    ZIterator::oop_iterate(object, &closure);
 }
 
 void FollowPartialReferences(const MarkStackEntry& entry,

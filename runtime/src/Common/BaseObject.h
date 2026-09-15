@@ -32,6 +32,7 @@ public:
     inline GCTib GetGCTib() const { return GetTypeInfo()->GetGCTib(); }
 
     void ForEachRefField(const HeapSlotVisitor& visitor);
+    void ForEachRefField(const HeapSlotVisitor& visitor, TypeInfo* klass);
 
     void ForEachRefInStruct(const HeapSlotVisitor& visitor, MAddress aggStart, MAddress aggEnd);
     // size in bytes
