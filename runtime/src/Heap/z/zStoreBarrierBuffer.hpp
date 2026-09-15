@@ -50,6 +50,7 @@ using StoreBarrierFlushObserver = void (*)(StoreBarrierFlushEvent, const StoreBa
 class StoreBarrierBuffer {
 public:
     StoreBarrierBuffer();
+    void Initialize(uintptr_t color) { lastProcessedColor = color; }
 
     bool IsEmpty() const;
     size_t Pending() const { return kStoreBarrierBufferLength - current; }

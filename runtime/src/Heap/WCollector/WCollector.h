@@ -173,6 +173,8 @@ public:
     void PublishThreadRoot(BaseObject* object, bool young, bool follow);
     bool FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* domain);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
+    bool FlushGCDataMarkProducers(ThreadGCData& data, MarkDomain* domain);
+    bool FlushGCDataMarkProducers(ThreadGCData& data);
     MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
     void MarkYoungRootObject(BaseObject* object) const override;

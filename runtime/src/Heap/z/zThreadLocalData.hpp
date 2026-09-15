@@ -7,9 +7,13 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zMarkStack.hpp"
 namespace MapleRuntime {
+class Mutator;
+class MarkDomain;
+struct ThreadLocalData;
 // ZThreadLocalData, zThreadLocalData.hpp:35-57. Mark stacks belong to
 // the thread data itself; the store buffer has its own allocation/lifetime.
 struct ThreadGCData {
@@ -23,7 +27,22 @@ struct ThreadGCData {
     zaddress_unsafe* invisibleRoot = nullptr;
 
     ThreadGCData() : storeBarrierBuffer(new StoreBarrierBuffer()) {}
-    ~ThreadGCData() { delete storeBarrierBuffer; }
+    ~ThreadGCData();
+
+    struct Masks {
+        uintptr_t loadGood;
+        uintptr_t loadBad;
+        uintptr_t markBad;
+        uintptr_t storeGood;
+        uintptr_t storeBad;
+    };
+    static void PublishMasks(const Masks& masks);
+    static Masks PublishedMasks();
+    void InstallMasks(const Masks& masks);
+    void Attach(Mutator* owner, ThreadLocalData* nativeOwner, zaddress_unsafe* root);
+    void Detach();
+    bool FlushMarkStacks(MarkDomain& domain);
+    static void VisitOwners(const std::function<void(ThreadGCData&, Mutator*, ThreadLocalData*)>& visitor);
     ThreadGCData(const ThreadGCData&) = delete;
     ThreadGCData& operator=(const ThreadGCData&) = delete;
 

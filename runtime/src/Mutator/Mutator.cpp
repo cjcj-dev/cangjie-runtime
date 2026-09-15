@@ -196,6 +196,14 @@ void Mutator::ResetMutator()
     if (!localFinalizers.empty()) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
     }
+    // Exit publishes the logical owner's private work before scheduler
+    // unbinding can expose another owner through this OS TLS binding.
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& remembered = Heap::GetHeap().GetRememberedSet();
+    if (remembered.IsInitialized()) {
+        gcData.storeBarrierBuffer->Flush(remembered);
+    }
+    (void)collector.FlushGCDataMarkProducers(gcData);
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
     // BeginCatch would have performed, or the guard stays expanded with nothing left to

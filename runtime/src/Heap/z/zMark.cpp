@@ -1360,6 +1360,17 @@ void WCollector::PublishThreadRoot(BaseObject* object, bool young, bool follow)
         MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, follow, false), true);
 }
 
+bool WCollector::FlushGCDataMarkProducers(ThreadGCData& data, MarkDomain* domain)
+{
+    return domain != nullptr && data.FlushMarkStacks(*domain);
+}
+
+bool WCollector::FlushGCDataMarkProducers(ThreadGCData& data)
+{
+    const bool young = FlushGCDataMarkProducers(data, youngMarkDomain.get());
+    return FlushGCDataMarkProducers(data, majorMarkDomain.get()) || young;
+}
+
 bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls)
 {
     bool published = FlushThreadMarkProducers(tls, youngMarkDomain.get());
@@ -1954,11 +1965,10 @@ void VerifyAllEmpty(MarkDomain& domain)
 {
     if (!ZVerifyMarking) { return; }
     const size_t index = domain.Generation() == MarkingGeneration::YOUNG ? 0 : 1;
-    MutatorManager::Instance().VisitMarkingThreads([&](const ThreadLocalData* tls) {
-        if (tls == nullptr || tls->gcData == nullptr) { return; }
-        const auto& stacks = tls->gcData->markStacks[index];
+    MutatorManager::Instance().VisitMarkingThreads([&](const ThreadGCData* data) {
+        const auto& stacks = data->markStacks[index];
         CHECK_DETAIL(stacks.IsEmpty(),
-                     "Thread marking stack is not empty: thread=%p generation=%zu", tls, index);
+                     "Thread marking stack is not empty: owner=%p generation=%zu", data, index);
     });
     CHECK_DETAIL(domain.Stripes().IsEmpty(), "Shared marking stripes are not empty");
 }

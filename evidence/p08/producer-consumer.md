@@ -19,3 +19,12 @@ Mechanical source inventory: `baseline-consumers.json`, each query includes rc a
 ## Pending rulings
 - Literal phase-zero invariant conflicts with ZGC keep_alive_young (zBarrier.cpp:61) and buffer is_old_mark (zStoreBarrierBuffer.cpp:190,217); advisor asked.
 - LLVM frozen coordinates, capacity receipt, and #607 shared-function meeting coordinate requested.
+
+## 202355Z accepted target-owner seam (implementation in progress)
+
+ZGC head ordering: zStackWatermark.cpp:177–206. Current roots must use saved target color before masks/buffer advance; the earlier proposed pre-root update is rejected.
+
+- Mutator::Init (Mutator.h:85) creates/registers its GC data; BindMutator / ThreadLocalData::SetMutator (MutatorManager.cpp:105, ThreadLocal.cpp:24) only rebind the borrowed OS pointer. GC/native worker entry and cleaner own a separate native data object.
+- Mutator lifecycle exit (MutatorManager.cpp:151) publishes target buffer/stacks before unbinding; cleaner destroys only native-owned data. Inventory moves from OS bindings to live data identities, protecting parked/unbound owners.
+- Explicit-target data flush/verify in zMark.cpp:1363 and MutatorManager.cpp:728 differs from current-executor production in zMark.cpp:1356. Remote scanners must not rebind themselves to the target.
+- ZGlobalsPointers::set_good_masks (zAddress.cpp:59) supplies one published attach snapshot. Mutator::DrainStackWatermark successful claims (Mutator.cpp:956,979), born-clean/epoch0/REMAP fallback and PreparedToRun/Park recovery must all reach the same phase-front contract before compiled accesses.
