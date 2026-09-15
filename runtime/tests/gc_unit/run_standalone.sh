@@ -292,6 +292,7 @@ MAIN_COMPILE_FLAGS=(
   "${INC_FLAGS[@]}"
 )
 MAIN_SOURCES=(
+  "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/gc_unit_stubs.cpp"
   "$SRC/test_colour_address.cpp"
@@ -383,6 +384,7 @@ PUBLICATION_COMPILE_FLAGS=(
   "${INC_FLAGS[@]}"
 )
 PUBLICATION_SOURCES=(
+  "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/clear_entries_product_unit.cpp"
 )
