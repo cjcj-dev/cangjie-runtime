@@ -430,3 +430,65 @@ GC_TEST(ZLiveMapTest, initial_generation_does_not_match_unmarked_map)
     GC_EXPECT_FALSE(map.get(ZGenerationId::old, 1));
     GC_EXPECT_TRUE(incLive);
 }
+
+namespace {
+
+// Keep the two retired tests' invariant while using the current public product
+// entry. ZGC zBitMap.inline.hpp:61-81 elects one successful strong marker;
+// zMark.cpp:405-425 accounts the first live result once.
+void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
+{
+    GcHeapFixture fx(false, large ? RegionInfo::UnitRole::LARGE_SIZED_UNITS
+                                  : RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* region = fx.region0;
+    BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    if (initiallyFinalizable) {
+        GC_EXPECT_FALSE(collector.ResurrectObject(object, region->GetAddressOffset(
+            reinterpret_cast<MAddress>(object)), region));
+    }
+    std::atomic<unsigned> ready{0};
+    bool already[2] = {true, true};
+    auto mark = [&](unsigned worker) {
+        ready.fetch_add(1, std::memory_order_release);
+        while (ready.load(std::memory_order_acquire) != 2) {
+            std::this_thread::yield();
+        }
+        already[worker] = collector.MarkObject(object);
+    };
+    std::thread first(mark, 0);
+    std::thread second(mark, 1);
+    first.join();
+    second.join();
+    const unsigned claims = unsigned(!already[0]) + unsigned(!already[1]);
+    const uint32_t liveObjects = region->live_objects();
+    const size_t liveBytes = region->live_bytes();
+    const bool live = region->is_object_live(from_object(object));
+    const bool strong = region->is_object_strongly_live(from_object(object));
+    std::fprintf(stderr, "P02_SAME_OBJECT large=%d upgrade=%d claims=%u objects=%u bytes=%zu live=%d strong=%d\n",
+                 large, initiallyFinalizable, claims, liveObjects, liveBytes, live, strong);
+    GC_EXPECT_EQ(claims, 1u);
+    GC_EXPECT_EQ(liveObjects, 1u);
+    GC_EXPECT_EQ(liveBytes, object->GetSize());
+    GC_EXPECT_TRUE(live);
+    GC_EXPECT_TRUE(strong);
+}
+
+} // namespace
+
+GC_TEST(LiveMap, LargeFirstPaintHasSingleWinner)
+{
+    ConcurrentSameObjectMark(true, false);
+}
+
+GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
+{
+    ConcurrentSameObjectMark(false, false);
+}
+
+GC_TEST(ZLiveMapPage, concurrent_strong_upgrade_counts_live_once)
+{
+    ConcurrentSameObjectMark(false, true);
+    ConcurrentSameObjectMark(true, true);
+}

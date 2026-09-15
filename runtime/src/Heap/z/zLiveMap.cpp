@@ -32,12 +32,15 @@ uint64_t ZLiveMap::generation_seqnum(ZGenerationId id)
 // pages are unit multiples rather than power-of-two page sizes, so the
 // segment width is rounded up to the next power of two to keep the shift
 // (index_to_segment) exact; the 64 segments then cover at least
-// object_max_count pairs.
+// object_max_count pairs. Unlike ZGC's 2MB small pages, a Cangjie small page
+// can be 4KB. Independent segments must still own whole bitmap words:
+// reset_segment clears without an atomic RMW (ZGC zLiveMap.cpp:129-136).
+// The single-object large page has no competing segment and keeps two bits.
 uint32_t ZLiveMap::segment_size(uint32_t object_max_count)
 {
     const uint32_t objects_per_segment =
         object_max_count == 1 ? 1u : (object_max_count + NumSegments - 1) / NumSegments;
-    uint32_t size = BitsPerObject;
+    uint32_t size = object_max_count == 1 ? BitsPerObject : BitMap::BitsPerWord;
     while (size < objects_per_segment * BitsPerObject) {
         size <<= 1;
     }
