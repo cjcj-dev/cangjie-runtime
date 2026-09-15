@@ -63,6 +63,8 @@ extern "C" int p2FieldBarrierExercise()
     auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     barrier.WriteReference(child, Slot(child), sentinel);
     barrier.WriteReference(holder, Slot(holder), child);
+    auto* rootedControl = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    const U64 controlRoot = heap.RegisterExportRoot(rootedControl);
     Expect(!RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder))->IsYoungRegion(), "real_holder_is_old");
     Expect(RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(child))->IsYoungRegion(), "real_child_is_young");
     unsigned remsetChild = 0, oldOld = 0, oldYoung = 0, youngFollow = 0;
@@ -102,7 +104,30 @@ extern "C" int p2FieldBarrierExercise()
         }
     };
     const bool minorOnly = std::getenv("P2_MINOR_ONLY") != nullptr;
+    // Read the actual bitmap before relocation can make an unmarked target
+    // unavailable. These are the target invariants, not existence guards.
+    TracingCollector::testYoungMarkCompleted = [&] {
+        auto* childPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(child));
+        auto* sentinelPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(sentinel));
+        auto* controlPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(rootedControl));
+        Expect(childPage->IsMarkedObject(childPage->GetMarkView<Generation::Young>(), child),
+               "remset_retains_child_first_cycle");
+        Expect(sentinelPage->IsMarkedObject(sentinelPage->GetMarkView<Generation::Young>(), sentinel),
+               "remset_retains_sentinel_first_cycle");
+        Expect(controlPage->IsMarkedObject(controlPage->GetMarkView<Generation::Young>(), rootedControl),
+               "independent_young_root_control");
+    };
     collector.RequestGC(GC_REASON_YOUNG, false);
+    TracingCollector::testYoungMarkCompleted = nullptr;
+    if (failures.load() != 0) {
+        // The target state has been observed. Do not dereference an object
+        // that the faulty product has just classified as unreachable.
+        Barrier::testFieldMarkResult = nullptr;
+        heap.RemoveExportObject(root);
+        heap.RemoveExportObject(controlRoot);
+        std::printf("P2_RESULT failures=%u target_stage=first_cycle\n", failures.load());
+        return failures.load();
+    }
     // A second cycle removes the store-buffer current-value marking side path:
     // the unchanged edge must now survive through the remembered slot itself.
     BaseObject* childBeforeNext = barrier.ReadReference(holder, Slot(holder));
@@ -132,5 +157,6 @@ extern "C" int p2FieldBarrierExercise()
     std::printf("P2_RESULT failures=%u remset=%u follow=%u old_old=%u old_young=%u\n",
                 failures.load(), remsetChild, youngFollow, oldOld, oldYoung);
     heap.RemoveExportObject(root);
+    heap.RemoveExportObject(controlRoot);
     return failures.load();
 }
