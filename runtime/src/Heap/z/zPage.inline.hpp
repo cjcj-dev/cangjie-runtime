@@ -847,15 +847,22 @@ inline void RegionInfo::SetInGhostRegion(uint8_t flag)
         }
     }
 
+// ZPage::clone_for_promotion + ZPage::reset(age) (zPage.cpp:64-72, 103-113)
+// on the reused slot: the young livemap is parked for the carrier's readers
+// and the slot continues with a fresh map; readers see one or the other,
+// never a missing map.
 inline void RegionInfo::PromoteYoungRegion()
     {
         CHECK_DETAIL(IsYoungRegion(), "cannot promote an old region %p", this);
-        __atomic_store_n(&metadata.livemap, static_cast<ZLiveMap*>(nullptr), std::memory_order_release);
+        CHECK_DETAIL(metadata.retiredLivemap == nullptr, "region %p promoted twice in one life", this);
+        ZLiveMap* fresh = new ZLiveMap(object_max_count());
         SetYoungRegionFlag(0);
         SetYoungAge(0);
         ResetPageSequence();
-        InitializeLiveMap();
+        metadata.retiredLivemap = livemap();
+        __atomic_store_n(&metadata.livemap, fresh, std::memory_order_release);
     }
+
 inline void RegionInfo::SetYoungAge(uint8_t age)
     {
         CHECK(age <= MAX_YOUNG_AGE);
@@ -1107,9 +1114,11 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
         // ZPageAllocator::safe_destroy_page: the previous page life's livemap
-        // goes with it (~ZPage / ~CHeapBitMap).
+        // (and a promotion's parked young map) goes with it (~ZPage / ~CHeapBitMap).
         delete livemap();
         __atomic_store_n(&metadata.livemap, static_cast<ZLiveMap*>(nullptr), std::memory_order_release);
+        delete metadata.retiredLivemap;
+        metadata.retiredLivemap = nullptr;
         SetYoungRegionFlag(0);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;

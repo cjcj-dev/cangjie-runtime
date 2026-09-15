@@ -184,15 +184,16 @@ std::unique_ptr<RegionInfo::PromotionPage> RegionInfo::CloneForPromotion()
     const ZForwarding::FromPageView* from = GetFromPageView();
     ZLiveMap* original = from == nullptr ? livemap() : from->livemap;
     const MAddress originalTop = from == nullptr ? GetRegionAllocPtr() : from->topAtStart;
-    // The original young livemap leaves the reusable slot with the promotion
-    // page (ZGC keeps the whole original ZPage in the relocation set).
-    if (original == livemap()) {
-        __atomic_store_n(&metadata.livemap, static_cast<ZLiveMap*>(nullptr), std::memory_order_release);
-    }
-    auto page = std::make_unique<PromotionPage>(std::unique_ptr<ZLiveMap>(original), GetRegionStart(), originalTop,
-                                                GetYoungAge(), IsLargeRegion());
+    // The published from-page livemap is this page's own map (PublishFromPageMetadata
+    // passes livemap()); the promotion page takes it over while the slot gets a
+    // fresh one (ZGC keeps the whole original ZPage in the relocation set).
+    CHECK_DETAIL(original == livemap(), "promotion source livemap does not belong to region %p", this);
+    const uint8_t age = GetYoungAge();
     PromoteYoungRegion();
-    return page;
+    CHECK(metadata.retiredLivemap == original);
+    metadata.retiredLivemap = nullptr;
+    return std::make_unique<PromotionPage>(std::unique_ptr<ZLiveMap>(original), GetRegionStart(), originalTop, age,
+                                           IsLargeRegion());
 }
 
 // ZPage::object_iterate (zPage.inline.hpp:320) on the original young page:

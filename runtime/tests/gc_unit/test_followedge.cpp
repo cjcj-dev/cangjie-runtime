@@ -100,6 +100,8 @@ struct LargeArrayFixture {
         // ~ZPage: the page livemaps go with the unmapped synthetic heap.
         delete region0->livemap();
         delete region1->livemap();
+        delete region0->metadata.retiredLivemap;
+        delete region1->metadata.retiredLivemap;
         MemMap::DestroyMemMap(reservation);
     }
     alignas(TypeInfo) unsigned char holderStorage[sizeof(TypeInfo)] {};

@@ -179,6 +179,8 @@ struct GcHeapFixture {
             if (region != nullptr) {
                 delete region->livemap();
                 region->metadata.livemap = nullptr;
+                delete region->metadata.retiredLivemap;
+                region->metadata.retiredLivemap = nullptr;
             }
         }
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures

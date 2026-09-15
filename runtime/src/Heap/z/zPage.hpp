@@ -670,7 +670,8 @@ public:
 
     // Promotion replaces current page metadata instead of retargeting the same
     // liveness object. The old Young livemap remains available only through the
-    // from-page carrier; the new Old current metadata starts with a fresh livemap.
+    // from-page carrier (parked in retiredLivemap); the new Old current metadata
+    // starts with a fresh livemap.
     void PromoteYoungRegion();
 
     // The original young ZPage left by ZPage::clone_for_promotion. The
@@ -826,6 +827,11 @@ private:
 
         // ZPage::_livemap (zPage.hpp:52); see RegionInfo::livemap().
         ZLiveMap* livemap = nullptr;
+        // The young livemap a promotion replaced. ZGC keeps the original ZPage
+        // in the relocation set (zPage.cpp:64-72); the reused slot parks that
+        // map here until the descriptor is retired, so a from-page reader
+        // holding it through the forwarding carrier never sees it freed.
+        ZLiveMap* retiredLivemap = nullptr;
         RegionInfo* ownerRegion = nullptr; // if unit is SUBORDINATE_UNIT
 
         RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
