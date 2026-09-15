@@ -4,85 +4,108 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// gc/z/zMarkingSMR.cpp:29-112
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zArray.inline.hpp"
+#include "Heap/z/zValue.inline.hpp"
+#include "Heap/z/workerThread.hpp"
 #include "Base/Log.h"
-#include <algorithm>
+
 namespace MapleRuntime {
-MarkingSMR::MarkingSMR(size_t workerCount)
-    : workerCount(workerCount), workers(new (std::nothrow) WorkerState[workerCount])
-{
-    CHECK_DETAIL(workerCount != 0, "marking SMR needs at least one worker");
-    CHECK_DETAIL(workers != nullptr, "failed to allocate marking SMR states workers=%zu", workerCount);
-}
+MarkingSMR::MarkingSMR()
+    : _worker_states() {}
 
 MarkingSMR::~MarkingSMR()
 {
-    Free();
+    free();
 }
 
-std::atomic<MarkStripeStackListNode*>& MarkingSMR::Hazard(size_t workerId)
+void MarkingSMR::reclaim(WorkerState* const local_state)
 {
-    CHECK_DETAIL(workerId < workerCount, "invalid SMR worker id=%zu count=%zu", workerId, workerCount);
-    return workers[workerId].hazard;
-}
+    ZArray<MarkStripeStackListNode*>* const freeing = &local_state->_freeing;
+    ZPerWorkerIterator<WorkerState> iter(&_worker_states);
+    ZArray<MarkStripeStackListNode*>* const scanned_hazards = &local_state->_scanned_hazards;
 
-void MarkingSMR::Retire(size_t workerId, MarkStripeStackListNode* node)
-{
-    CHECK_DETAIL(workerId < workerCount, "invalid SMR retire worker id=%zu count=%zu", workerId, workerCount);
-    WorkerState& local = workers[workerId];
-    local.freeing.push_back(node);
-    if (local.freeing.size() >= workerCount * 8) {
-        Reclaim(workerId);
-    }
-}
+    for (WorkerState* remote_state; iter.next(&remote_state);) {
+        MarkStripeStackListNode* const hazard = remote_state->_hazard_ptr.load(std::memory_order_acquire);
 
-void MarkingSMR::Reclaim(size_t workerId)
-{
-    CHECK_DETAIL(workerId < workerCount, "invalid SMR reclaim worker id=%zu count=%zu", workerId, workerCount);
-    WorkerState& local = workers[workerId];
-    for (size_t i = 0; i < workerCount; ++i) {
-        MarkStripeStackListNode* const hazard = workers[i].hazard.load(std::memory_order_acquire);
         if (hazard != nullptr) {
-            local.scannedHazards.push_back(hazard);
+            scanned_hazards->append(hazard);
         }
     }
 
-    size_t kept = 0;
-    for (MarkStripeStackListNode* node : local.freeing) {
-        if (std::find(local.scannedHazards.begin(), local.scannedHazards.end(), node) !=
-            local.scannedHazards.end()) {
-            local.freeing[kept++] = node;
+    int kept = 0;
+    for (int i = 0; i < freeing->length(); ++i) {
+        MarkStripeStackListNode* node = freeing->at(i);
+        freeing->at_put(i, nullptr);
+
+        if (scanned_hazards->contains(node)) {
+            // Keep
+            freeing->at_put(kept++, node);
         } else {
+            // Delete
             delete node;
         }
     }
-    local.scannedHazards.clear();
-    local.freeing.resize(kept);
+
+    scanned_hazards->clear();
+    freeing->trunc_to(kept);
 }
 
-void MarkingSMR::Free()
+void MarkingSMR::free_node(MarkStripeStackListNode* node)
 {
-    if (workers == nullptr) {
+    // We use hazard pointers as an safe memory reclamation (SMR) technique,
+    // for marking stacks. Each stripe has a lock-free stack of mark stacks.
+    // When a GC thread (1) pops a mark stack from this lock-free stack,
+    // there is a small window of time when the head has been read and we
+    // are about to read its next pointer. It is then of great importance
+    // that the node is not concurrently freed by another concurrent GC
+    // thread (2), popping the same entry. Using hazard pointers involves
+    // publishing what head was observed by GC thread (1), so that GC thread
+    // (2) knows not to free the node when popping it in this race
+    // (zMarkingSMR.cpp:35-57).
+
+    CHECK_DETAIL(WorkerThread::worker_id() < ZPerWorkerStorage::count(), "must be a worker");
+
+    WorkerState* const local_state = _worker_states.addr();
+    ZArray<MarkStripeStackListNode*>* const freeing = &local_state->_freeing;
+    freeing->append(node);
+
+    if (freeing->length() < (int)ZPerWorkerStorage::count() * 8) {
         return;
     }
-    // Called only after all mark workers have joined. At that point no hazard
-    // can be legitimately held and all delayed nodes can be freed directly.
-    for (size_t i = 0; i < workerCount; ++i) {
-        CHECK_DETAIL(workers[i].hazard.load(std::memory_order_relaxed) == nullptr,
-                     "marking SMR worker %zu still holds a hazard during Free", i);
-        for (MarkStripeStackListNode* node : workers[i].freeing) {
+
+    reclaim(local_state);
+}
+
+void MarkingSMR::reclaim()
+{
+    CHECK_DETAIL(WorkerThread::worker_id() < ZPerWorkerStorage::count(), "must be a worker");
+    reclaim(_worker_states.addr());
+}
+
+void MarkingSMR::free()
+{
+    // Here it is free by definition to free mark stacks.
+    ZPerWorkerIterator<WorkerState> iter(&_worker_states);
+    for (WorkerState* worker_state; iter.next(&worker_state);) {
+        ZArray<MarkStripeStackListNode*>* const freeing = &worker_state->_freeing;
+        for (MarkStripeStackListNode* node : *freeing) {
             delete node;
         }
-        workers[i].freeing.clear();
-        workers[i].scannedHazards.clear();
+        freeing->clear();
     }
 }
 
-size_t MarkingSMR::PendingCount(size_t workerId) const
+std::atomic<MarkStripeStackListNode*>* MarkingSMR::hazard_ptr()
 {
-    CHECK_DETAIL(workerId < workerCount, "invalid SMR pending worker id=%zu count=%zu", workerId, workerCount);
-    return workers[workerId].freeing.size();
+    CHECK_DETAIL(WorkerThread::worker_id() < ZPerWorkerStorage::count(), "must be a worker");
+    return &_worker_states.addr()->_hazard_ptr;
 }
 
-
+size_t MarkingSMR::pending_count() const
+{
+    CHECK_DETAIL(WorkerThread::worker_id() < ZPerWorkerStorage::count(), "must be a worker");
+    return static_cast<size_t>(_worker_states.addr()->_freeing.length());
+}
 } // namespace MapleRuntime

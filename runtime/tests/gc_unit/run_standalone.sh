@@ -292,12 +292,18 @@ MAIN_COMPILE_FLAGS=(
   "${INC_FLAGS[@]}"
 )
 MAIN_SOURCES=(
+  "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/gc_unit_stubs.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"
   "$SRC/test_zList.cpp"
+  "$SRC/test_region_list.cpp"
+  "$SRC/test_zArray.cpp"
+  "$SRC/test_zIndexDistributor.cpp"
+  "$SRC/test_zValue.cpp"
+  "$SRC/test_zUtils.cpp"
   "$SRC/test_zstat.cpp"
   "$SRC/test_zserviceability.cpp"
   "$SRC/test_trustp1_phase1.cpp"
@@ -378,6 +384,7 @@ PUBLICATION_COMPILE_FLAGS=(
   "${INC_FLAGS[@]}"
 )
 PUBLICATION_SOURCES=(
+  "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/clear_entries_product_unit.cpp"
 )

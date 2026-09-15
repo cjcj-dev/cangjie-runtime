@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
+#include "gc_worker_fixture.hpp"
 #include <csignal>
 #include <cstdlib>
 #include <limits>
@@ -26,11 +27,12 @@ GC_TEST(MarkingStacks, PopulationCountsEntriesAndPublishedChunks)
     GC_EXPECT_EQ(local.Population(), 0u);
     GC_EXPECT_EQ(stripes.Population(), 1u);
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), 2u);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkStripeStack* published = stripes.At(2).StealStack(smr, 0);
     GC_EXPECT_TRUE(published != nullptr);
     MarkStripeStack::Destroy(published);
-    smr.Reclaim(0);
+    smr.reclaim();
     GC_EXPECT_EQ(stripes.Population(), 0u);
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), std::numeric_limits<size_t>::max());
 }
@@ -60,11 +62,12 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     GC_EXPECT_TRUE(WIFSIGNALED(status));
     GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkStripeStack* stack = stripes.At(1).StealStack(smr, 0);
     GC_EXPECT_TRUE(stack != nullptr);
     MarkStripeStack::Destroy(stack);
-    smr.Reclaim(0);
+    smr.reclaim();
     MarkingStacks::VerifyEmpty(stripes.Population());
     GC_EXPECT_EQ(stripes.Population(), 0u);
 }
