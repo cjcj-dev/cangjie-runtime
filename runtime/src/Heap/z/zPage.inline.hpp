@@ -1149,10 +1149,13 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         // TakeRegion reuses garbage without DispelGhostFromRegion.
         SetInGhostRegion(0);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
+        // ZPage::ZPage (zPage.cpp:33-42): _type is initialized before
+        // _livemap(object_max_count()), which reads it. The role is the page
+        // type here, so it is written before the livemap is sized from it.
+        SetUnitRole(uClass);
         if (uClass != UnitRole::FREE_UNITS) {
             InitializeLiveMap();
         }
-        SetUnitRole(uClass);
     }
 
 inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass, PageAge age)
