@@ -732,7 +732,7 @@ struct LargeYoungClosureResult {
         if (objects == nullptr || target == nullptr) return;
         RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
         ++observations;
-        live |= page->IsMarkedObject(page->GetMarkView<Generation::Young>(), target);
+        live |= page->is_object_strongly_live(from_object(target));
         for (BaseObject* object : *objects) followed |= object == target;
     }
 };
@@ -795,12 +795,11 @@ struct MarkAllocationWindow {
 void* RunMarkAllocationCase(void* rawExisting)
 {
     const bool existing = reinterpret_cast<uintptr_t>(rawExisting) != 0;
-    using ProductLive = bool (*)(RegionInfo*, MarkView<Generation::Young>, const BaseObject*);
-    void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    if (product == nullptr) return reinterpret_cast<void*>(3);
-    auto productLive = reinterpret_cast<ProductLive>(dlsym(product,
-        "_ZN12MapleRuntime10RegionInfo14IsMarkedObjectILNS_10GenerationE0EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectE"));
-    if (productLive == nullptr) return reinterpret_cast<void*>(3);
+    // ZPage::is_object_strongly_live (zPage.inline.hpp:258-260): the page
+    // predicate over the product-owned livemap.
+    auto productLive = [](RegionInfo* page, const BaseObject* object) {
+        return page->is_object_strongly_live(from_object(object));
+    };
     auto& heap = Heap::GetHeap();
     auto& collector = heap.GetCollector();
     Mutator* mutator = Mutator::GetMutator();
@@ -843,15 +842,15 @@ void* RunMarkAllocationCase(void* rawExisting)
     RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
     RegionInfo* targetPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
     const bool implicit = page->IsAllocating();
-    const bool live = productLive(page, page->GetMarkView<Generation::Young>(), holder);
-    const bool targetLive = productLive(targetPage, targetPage->GetMarkView<Generation::Young>(), target);
-    const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty(page->GetMarkView<Generation::Young>());
+    const bool live = productLive(page, holder);
+    const bool targetLive = productLive(targetPage, target);
+    const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty();
     auto& productCollector = static_cast<WCollector&>(collector);
     MarkDomain* domain = productCollector.YoungMarkDomain();
     const size_t pendingBefore = domain->Stripes().Population() + domain->Stacks().Population();
     holder->OnFinalizerCreated();
     const size_t pendingAfter = domain->Stripes().Population() + domain->Stacks().Population();
-    const bool noExplicitMark = !page->IsCurrentFacePublished();
+    const bool noExplicitMark = !page->is_marked();
     const bool noPublication = pendingAfter == pendingBefore;
     std::fprintf(stderr, "P1_NEW_REGISTRATION_ASSERT_EXECUTED birth=%llu owner=%llu no_bitmap=%d "
                  "pending_before=%zu pending_after=%zu\n",
@@ -869,7 +868,7 @@ void* RunMarkAllocationCase(void* rawExisting)
         const auto markEnd = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
         if (markEnd.sequence != during.sequence) return;
         RegionInfo* endPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
-        markEndTargetLive = productLive(endPage, endPage->GetMarkView<Generation::Young>(), target);
+        markEndTargetLive = productLive(endPage, target);
         ++markEndObservations;
         std::fprintf(stderr, "MARK_ALLOC_MARK_END_ASSERT_EXECUTED sequence=%llu phase=%u live=%d\n",
                      static_cast<unsigned long long>(markEnd.sequence), unsigned(markEnd.phase), markEndTargetLive);
@@ -967,7 +966,7 @@ void* RunPinnedPublicationCase(void*)
     const bool reused = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(next)) == page;
     const bool current = page->IsAllocating();
     const bool advanced = page->GetSnapshotEpoch() > pinnedAcquiredBirth;
-    const bool noMark = !page->IsCurrentFacePublished();
+    const bool noMark = !page->is_marked();
     std::fprintf(stderr, "P1_PINNED_INSTALL_ASSERT_EXECUTED acquired=%llu birth=%llu owner=%llu "
         "advanced=%d current=%d reused=%d no_bitmap=%d window=%d\n",
         static_cast<unsigned long long>(pinnedAcquiredBirth),
@@ -1025,7 +1024,7 @@ void* RunPinnedMarkStartCase(void*)
     RegionInfo* after = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
     const bool current = after->IsAllocating();
     const bool different = after != before;
-    const bool noMark = !after->IsCurrentFacePublished();
+    const bool noMark = !after->is_marked();
     const bool window = collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_TRACE;
     std::fprintf(stderr, "P1_PINNED_WINDOW_ASSERT_EXECUTED reuse=%d different=%d current=%d no_bitmap=%d trace=%d birth=%llu owner=%llu\n",
         reused, different, current, noMark, window,
@@ -1064,7 +1063,7 @@ void* RunPinnedBirthCase(void*)
     MObject* fresh = MObject::NewPinnedObject(type, size);
     RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
     const bool fromNewPage = page != oldPage;
-    const bool noExplicitMark = !page->IsCurrentFacePublished();
+    const bool noExplicitMark = !page->is_marked();
     const bool allocating = page->IsAllocating();
     const bool retained = heap.GetExportObject(root) == survivor;
     std::fprintf(stderr, "P1_PINNED_ASSERT_EXECUTED shared=%d new_page=%d allocating=%d no_bitmap=%d retained=%d\n",

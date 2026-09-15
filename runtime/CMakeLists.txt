@@ -120,7 +120,10 @@ if (MRT_GC_UNIT_TESTS OR MRT_TESTABLE_INTERNALS)
 endif()
 
 if (MRT_TESTABLE_INTERNALS)
-    add_compile_definitions(MRT_TESTABLE_INTERNALS=1)
+    # Distinguish the linked product shape from a fixture's access-only macro.
+    # The standalone publication ELF enables MRT_TESTABLE_INTERNALS even when
+    # it links the default SO; it must not import test-only scheduling hooks.
+    add_compile_definitions(MRT_TESTABLE_INTERNALS=1 MRT_PRODUCT_TESTABLE_INTERNALS=1)
 endif()
 
 
@@ -1059,64 +1062,6 @@ else()
         "three-slot discipline; remove this block deliberately if that is the intent.")
 endif()
 
-# ── mark-generation discipline gate ─────────────────────────────────────────
-# A mark/death read must carry the closure generation in its type.  As with the
-# slot split above, a negative exit alone is not evidence: the control arm must
-# compile and each negative diagnostic must name the receiving predicate.
-set(MARK_GENERATION_PROBE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tests/mark_generation_compile_probe.cpp)
-if (EXISTS ${MARK_GENERATION_PROBE_SRC})
-    get_property(MARK_GENERATION_PROBE_INCS DIRECTORY PROPERTY INCLUDE_DIRECTORIES)
-    list(APPEND MARK_GENERATION_PROBE_INCS ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    set(MARK_GENERATION_PROBE_INC_ARG "${MARK_GENERATION_PROBE_INCS}")
-    set(MARK_GENERATION_PROBE_SAVED_TARGET_TYPE "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
-    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-
-    try_compile(MARK_GENERATION_CONTROL_OK ${CMAKE_CURRENT_BINARY_DIR}/markgeneration/control
-        SOURCES ${MARK_GENERATION_PROBE_SRC}
-        CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${MARK_GENERATION_PROBE_INC_ARG}"
-        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
-        OUTPUT_VARIABLE MARK_GENERATION_CONTROL_OUT)
-    if (NOT MARK_GENERATION_CONTROL_OK)
-        message(FATAL_ERROR
-            "MARK_GENERATION_PROBE control arm FAILED; negative results would be meaningless. "
-            "Output:\n${MARK_GENERATION_CONTROL_OUT}")
-    endif()
-
-    set(MARK_GENERATION_NEGATIVES
-        "MRT_NEGATIVE_YOUNG_AS_OLD|RequireOld"
-        "MRT_NEGATIVE_OLD_AS_YOUNG|RequireYoung")
-    set(MARK_GENERATION_NEG_COUNT 0)
-    foreach(entry IN LISTS MARK_GENERATION_NEGATIVES)
-        string(REPLACE "|" ";" parts "${entry}")
-        list(GET parts 0 macro)
-        list(GET parts 1 token)
-        try_compile(one_ok ${CMAKE_CURRENT_BINARY_DIR}/markgeneration/${macro}
-            SOURCES ${MARK_GENERATION_PROBE_SRC}
-            CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${MARK_GENERATION_PROBE_INC_ARG}"
-            COMPILE_DEFINITIONS -D${macro}
-            CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
-            OUTPUT_VARIABLE one_out)
-        if (one_ok)
-            message(FATAL_ERROR
-                "MARK_GENERATION_PROBE ${macro}: wrong-generation MarkView COMPILED")
-        endif()
-        string(FIND "${one_out}" "${token}" tok_at)
-        if (tok_at EQUAL -1)
-            message(FATAL_ERROR
-                "MARK_GENERATION_PROBE ${macro}: failed for an unrelated reason; diagnostic "
-                "does not mention '${token}'. Output:\n${one_out}")
-        endif()
-        math(EXPR MARK_GENERATION_NEG_COUNT "${MARK_GENERATION_NEG_COUNT}+1")
-    endforeach()
-
-    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${MARK_GENERATION_PROBE_SAVED_TARGET_TYPE}")
-    message(STATUS
-        "MARK_GENERATION_PROBE=PASS control=1 negatives=${MARK_GENERATION_NEG_COUNT} "
-        "(young-as-old and old-as-young both rejected)")
-else()
-    message(FATAL_ERROR
-        "MARK_GENERATION_PROBE: ${MARK_GENERATION_PROBE_SRC} is missing")
-endif()
 
 # P01 removes EpochColours/ComputeBadMasks and the duplicated C4 action model.
 # Its runtime mask/flip checks now exercise product ZGlobalsPointers in

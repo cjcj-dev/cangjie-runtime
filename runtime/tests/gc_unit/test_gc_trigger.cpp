@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zDirector.hpp"
-#include "Heap/Collector/TruncatedSeq.h"
+#include "Base/TruncatedSeq.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

@@ -95,8 +95,11 @@ struct LargeArrayFixture {
     }
     ~LargeArrayFixture()
     {
-        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region0);
-        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region1);
+        // ~ZPage: release P02 livemaps before the P04 heap mapping.
+        delete region0->livemap();
+        delete region1->livemap();
+        delete region0->metadata.retiredLivemap;
+        delete region1->metadata.retiredLivemap;
         reservation.reset();
     }
     alignas(TypeInfo) unsigned char holderStorage[sizeof(TypeInfo)] {};
@@ -131,7 +134,6 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
     MAddress slotAddress = reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE;
     *reinterpret_cast<MAddress*>(slotAddress) = raw(ZAddress::store_good(from_object(bytes)));
 
-    const auto view = targetRegion->GetMarkView<Generation::Old>();
     size_t holderSlotVisits = 0;
     size_t targetContentVisits = 0;
     size_t pushed = 0;
@@ -139,9 +141,9 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
         ++holderSlotVisits;
         BaseObject* target = to_object(field.GetTargetObject());
         GC_EXPECT_TRUE(target == bytes);
-        if (!targetRegion->IsMarkedObject(view, target)) {
+        if (!targetRegion->is_object_strongly_live(from_object(target))) {
             ++pushed;
-            GC_EXPECT_TRUE(targetRegion->MarkObject(view, target, target->GetSize()));
+            GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(targetRegion, target));
         }
     };
 
@@ -154,6 +156,6 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
 
     GC_EXPECT_EQ(holderSlotVisits, 1u);
     GC_EXPECT_EQ(pushed, 1u);
-    GC_EXPECT_TRUE(targetRegion->IsMarkedObject(view, bytes));
+    GC_EXPECT_TRUE(targetRegion->is_object_strongly_live(from_object(bytes)));
     GC_EXPECT_EQ(targetContentVisits, 0u);
 }

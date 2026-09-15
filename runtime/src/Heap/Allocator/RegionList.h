@@ -4,6 +4,11 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// Old-region residue (no ZGC counterpart). RegionList is the page-list form of
+// the unit-array descriptor allocator (RegionInfo/RegionManager); ZGC keeps
+// ZList<ZPage> (zList.hpp) inside ZPageAllocator/ZPageCache. It is deleted with
+// the old region mechanism (P03 independent ZPage descriptor, P05 page
+// allocator); the ZGC-shaped generic list lives in Heap/z/zList.hpp.
 
 #ifndef MRT_REGION_LIST_H
 #define MRT_REGION_LIST_H

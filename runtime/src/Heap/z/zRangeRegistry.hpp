@@ -8,7 +8,7 @@
 
 #pragma once
 #include <cstddef>
-#include <mutex>
+#include "Heap/z/zLock.hpp"
 
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zArray.hpp"
@@ -41,7 +41,7 @@ public:
   };
 
 private:
-  mutable std::mutex _lock;
+  mutable ZLock      _lock;
   ZList<Node>        _list;
   Callbacks          _callbacks;
   Range              _limits;

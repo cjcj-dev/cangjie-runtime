@@ -16,6 +16,7 @@
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zValue.inline.hpp"
 #include "Heap/z/zAddressSpaceLimit.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zNUMA.inline.hpp"

@@ -34,6 +34,12 @@ extern uintptr_t g_cjMarkBadMask;
 extern uintptr_t g_cjStoreGoodMask;
 extern uintptr_t g_cjStoreBadMask;
 extern size_t g_cjLoadShift;
+extern uintptr_t g_cjHeapStart;
+extern uintptr_t g_cjHeapEnd;
+constexpr unsigned kCjHeapRangeCap = 8;
+extern uintptr_t g_cjHeapRangeCount;
+extern uintptr_t g_cjHeapRangeStart[kCjHeapRangeCap];
+extern uintptr_t g_cjHeapRangeEnd[kCjHeapRangeCap];
 }
 #define ZPointerLoadGoodMask g_cjLoadGoodMask
 #define ZPointerLoadBadMask g_cjLoadBadMask

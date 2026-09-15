@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
+#include "gc_worker_fixture.hpp"
 #include <csignal>
 #include <cstdlib>
 #include <limits>
@@ -18,19 +19,20 @@ GC_TEST(MarkingStacks, PopulationCountsEntriesAndPublishedChunks)
 {
     MarkStripeSet stripes(4);
     MarkThreadLocalStacks local(4);
-    local.Push(stripes, 2, MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(0x1000)), true);
-    local.Push(stripes, 2, MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(0x2000)), true);
+    local.Push(stripes, 2, MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
+    local.Push(stripes, 2, MarkStackEntry(uintptr_t(0x2000), true, true, true, false), true);
     GC_EXPECT_EQ(local.Population(), 2u);
     GC_EXPECT_EQ(stripes.Population(), 0u);
     GC_EXPECT_TRUE(local.Flush(stripes, true));
     GC_EXPECT_EQ(local.Population(), 0u);
     GC_EXPECT_EQ(stripes.Population(), 1u);
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), 2u);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkStripeStack* published = stripes.At(2).StealStack(smr, 0);
     GC_EXPECT_TRUE(published != nullptr);
     MarkStripeStack::Destroy(published);
-    smr.Reclaim(0);
+    smr.reclaim();
     GC_EXPECT_EQ(stripes.Population(), 0u);
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), std::numeric_limits<size_t>::max());
 }
@@ -46,7 +48,7 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
     }
     MarkStripeSet stripes(4);
     MarkThreadLocalStacks local(4);
-    local.Push(stripes, 1, MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(0x1000)), true);
+    local.Push(stripes, 1, MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
     GC_EXPECT_TRUE(local.Flush(stripes, true));
     GC_EXPECT_EQ(stripes.Population(), 1u);
     const pid_t child = fork();
@@ -60,11 +62,12 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     GC_EXPECT_TRUE(WIFSIGNALED(status));
     GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkStripeStack* stack = stripes.At(1).StealStack(smr, 0);
     GC_EXPECT_TRUE(stack != nullptr);
     MarkStripeStack::Destroy(stack);
-    smr.Reclaim(0);
+    smr.reclaim();
     MarkingStacks::VerifyEmpty(stripes.Population());
     GC_EXPECT_EQ(stripes.Population(), 0u);
 }

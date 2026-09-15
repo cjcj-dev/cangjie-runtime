@@ -8,24 +8,33 @@
 #define MRT_OBJECT_ALLOCATOR_H
 
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zDeferredConstructed.inline.hpp"
+#include "Heap/z/zValue.inline.hpp"
 
 namespace MapleRuntime {
-    struct RegionManager::SharedSmallPage {
-        std::atomic<RegionInfo*> page{nullptr};
-        char padding[64 - sizeof(std::atomic<RegionInfo*>)];
-    };
-    struct RegionManager::PerAgeObjectAllocator {
-        explicit PerAgeObjectAllocator(PageAge pageAge);
-        const PageAge age;
-        std::unique_ptr<SharedSmallPage[]> smallPages;
-        std::atomic<RegionInfo*> pinnedPage{nullptr};
-    };
+// zObjectAllocator.cpp:48-54 (per-CPU shared small pages are always in use;
+// ZHeuristics::use_per_cpu_shared_small_pages belongs to the allocator package).
+inline RegionInfo** RegionManager::PerAgeObjectAllocator::shared_small_page_addr()
+{
+    return sharedSmallPage.addr();
+}
+
+inline RegionInfo* const* RegionManager::PerAgeObjectAllocator::shared_small_page_addr() const
+{
+    return sharedSmallPage.addr();
+}
+
+// zObjectAllocator.cpp:219-221
+inline RegionManager::PerAgeObjectAllocator* RegionManager::allocator(PageAge age)
+{
+    return objectAllocators[untype(age)].get();
+}
 
 
 
 inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
 {
-    RegionInfo* page = objectAllocators[untype(PageAge::old)]->pinnedPage.load(std::memory_order_acquire);
+    RegionInfo* page = allocator(PageAge::old)->pinnedPage.load(std::memory_order_acquire);
     return page == nullptr ? 0 : page->Alloc(size);
 }
 
@@ -85,7 +94,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
             }
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
             recentPinnedRegionList.PrependRegionLocked(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
-            objectAllocators[untype(PageAge::old)]->pinnedPage.store(region, std::memory_order_release);
+            allocator(PageAge::old)->pinnedPage.store(region, std::memory_order_release);
             addr = region->Alloc(size);
             region = nullptr;
         }

@@ -152,7 +152,6 @@ public:
     template<Generation G>
     void PrepareFromSpace() { regionManager.PrepareFromRegionList<G>(); }
 
-    void ClearAllLiveInfo() { regionManager.ClearAllLiveInfo(); }
 
     template<Generation G>
     void ForwardFromSpace(GCWorkers& workers)
@@ -190,22 +189,28 @@ public:
     void FeedHungryBuffers() override;
 
 
+    // ZPage::mark_object + inc_live (zMark.cpp:405-425) for a caller without a
+    // ZMarkCache: the first live claim is accounted on the page directly.
     template<Generation G>
     static bool MarkObject(const BaseObject* obj)
     {
-        // getsize7: no live callers (grep). Unsized GetSize hazard documented in GETSIZE_CALLSITES;
-        // do not include Collector.h here (Allocator include path / cycle). Gate at call sites if revived.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         (void)G;
-        return !regionInfo->MarkObjectByOwner(obj);
+        bool incLive = false;
+        const bool newlyMarked = regionInfo->mark_object(from_object(obj), false, incLive);
+        if (incLive) {
+            regionInfo->inc_live(1, obj->GetSize());
+        }
+        return !newlyMarked;
     }
 
+    // ZPage::is_object_strongly_live (zPage.inline.hpp:258-260).
     template<Generation G>
     static bool IsMarkedObject(const BaseObject* obj)
     {
+        (void)G;
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        MarkView<G> view = regionInfo->GetMarkView<G>();
-        return regionInfo->IsMarkedObject(view, obj);
+        return regionInfo->is_object_strongly_live(from_object(obj));
     }
 
     template<Generation G>
@@ -216,17 +221,20 @@ public:
             regionInfo->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
             return false;
         }
-        MarkView<G> view = regionInfo->GetMarkView<G>();
+        (void)G;
         // ZGC SATB entries are not suppressed by an independent enqueue
         // bitmap.  The mark pair is the sole epoch authority; until the strong
         // bit is visible, every observation remains eligible for publication.
-        return !regionInfo->IsMarkedObject(view, obj);
+        return !regionInfo->is_object_strongly_live(from_object(obj));
     }
 
+    // Finalizable-only marked: the live bit without the strong bit
+    // (zPage.inline.hpp:254-260 pair semantics).
     static bool IsResurrectedObject(const BaseObject* obj)
     {
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        return regionInfo->IsResurrectedObject(obj);
+        const zaddress addr = from_object(obj);
+        return regionInfo->is_object_live(addr) && !regionInfo->is_object_strongly_live(addr);
     }
 
     void AddRawPointerObject(BaseObject* obj) { regionManager.AddRawPointerObject(obj); }

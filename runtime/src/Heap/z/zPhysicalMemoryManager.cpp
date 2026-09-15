@@ -21,6 +21,9 @@
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zArray.inline.hpp"
+#include "Heap/z/zUtils.inline.hpp"
+#include "Heap/z/zValue.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zGranuleMap.inline.hpp"
 #include "Heap/z/zLargePages.inline.hpp"
@@ -263,7 +266,7 @@ void ZPhysicalMemoryManager::map(const ZVirtualMemory& vmem, uint32_t numa_id) c
   // Setup NUMA preferred for large pages (os::numa_make_local): explicit
   // large pages with more than one NUMA node. A03n (static ZNUMA) owns the
   // numa_id → node conversion; the sealed topology supplies it until then.
-  if (NumaTopology::SealProcessTopology().Count() > 1 && ZLargePages::is_explicit()) {
+  if (ZPerNUMAStorage::count() > 1 && ZLargePages::is_explicit()) {
     constexpr int kMpolBind = 2;
     constexpr int kMpolMfMove = 1;
     constexpr unsigned long kMaxNumaNodes = sizeof(unsigned long) * 8;
@@ -287,12 +290,12 @@ void ZPhysicalMemoryManager::copy_physical_segments(const ZVirtualMemory& to, co
   const zbacking_index* const src = _physical_mappings.addr(from.start());
   const int granule_count = from.granule_count();
 
-  memcpy(dest, src, sizeof(zbacking_index) * static_cast<size_t>(granule_count));
+  ZUtils::copy_disjoint(dest, src, granule_count);
 }
 
 static void sort_zbacking_index_array(zbacking_index* array, int count) {
-  std::sort(array, array + count, [](zbacking_index e1, zbacking_index e2) {
-    return e1 < e2;
+  ZUtils::sort(array, count, [](const zbacking_index* e1, const zbacking_index* e2) {
+    return *e1 < *e2 ? -1 : 1;
   });
 }
 
@@ -304,68 +307,68 @@ void ZPhysicalMemoryManager::sort_segments_physical(const ZVirtualMemory& vmem) 
   sort_zbacking_index_array(pmem, granule_count);
 }
 
-void ZPhysicalMemoryManager::copy_to_stash(zbacking_index* stash, size_t stash_length, const ZVirtualMemory& vmem) const {
-  zbacking_index* const dest = stash;
+void ZPhysicalMemoryManager::copy_to_stash(ZArraySlice<zbacking_index> stash, const ZVirtualMemory& vmem) const {
+  zbacking_index* const dest = stash.adr_at(0);
   const zbacking_index* const src = _physical_mappings.addr(vmem.start());
   const int granule_count = vmem.granule_count();
 
   // Check bounds
-  CHECK(static_cast<size_t>(granule_count) <= stash_length);
+  assert(granule_count <= stash.length());
 
   // Copy to stash
-  memcpy(dest, src, sizeof(zbacking_index) * static_cast<size_t>(granule_count));
+  ZUtils::copy_disjoint(dest, src, granule_count);
 }
 
-void ZPhysicalMemoryManager::copy_from_stash(const zbacking_index* stash, size_t stash_length, const ZVirtualMemory& vmem) {
+void ZPhysicalMemoryManager::copy_from_stash(const ZArraySlice<const zbacking_index> stash, const ZVirtualMemory& vmem) {
   zbacking_index* const dest = _physical_mappings.addr(vmem.start());
-  const zbacking_index* const src = stash;
+  const zbacking_index* const src = stash.adr_at(0);
   const int granule_count = vmem.granule_count();
 
   // Check bounds
-  CHECK(static_cast<size_t>(granule_count) <= stash_length);
+  assert(granule_count <= stash.length());
 
   // Copy from stash
-  memcpy(dest, src, sizeof(zbacking_index) * static_cast<size_t>(granule_count));
+  ZUtils::copy_disjoint(dest, src, granule_count);
 }
 
 void ZPhysicalMemoryManager::stash_segments(const ZVirtualMemory& vmem, ZArray<zbacking_index>* stash_out) const {
-  assert(stash_out->empty());
+  assert(stash_out->is_empty());
 
-  stash_out->resize(static_cast<size_t>(vmem.granule_count()));
-  copy_to_stash(stash_out->data(), stash_out->size(), vmem);
-  sort_zbacking_index_array(stash_out->data(), static_cast<int>(stash_out->size()));
+  stash_out->at_grow(vmem.granule_count() - 1);
+  copy_to_stash(*stash_out, vmem);
+  sort_zbacking_index_array(stash_out->adr_at(0), stash_out->length());
 }
 
 void ZPhysicalMemoryManager::restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash) {
-  assert(static_cast<size_t>(vmem.granule_count()) == stash.size());
+  assert(vmem.granule_count() == stash.length());
 
-  copy_from_stash(stash.data(), stash.size(), vmem);
+  copy_from_stash(stash, vmem);
 }
 
-void ZPhysicalMemoryManager::stash_segments(const ZArray<ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const {
-  assert(stash_out->empty());
+void ZPhysicalMemoryManager::stash_segments(const ZArraySlice<const ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const {
+  assert(stash_out->is_empty());
 
-  size_t stash_index = 0;
+  int stash_index = 0;
   for (const ZVirtualMemory& vmem : vmems) {
-    const size_t granule_count = static_cast<size_t>(vmem.granule_count());
-    stash_out->resize(stash_index + granule_count);
-    copy_to_stash(stash_out->data() + stash_index, stash_out->size() - stash_index, vmem);
+    const int granule_count = vmem.granule_count();
+    stash_out->at_grow(stash_index + vmem.granule_count() - 1);
+    copy_to_stash(stash_out->slice_back(stash_index), vmem);
     stash_index += granule_count;
   }
 
-  sort_zbacking_index_array(stash_out->data(), static_cast<int>(stash_out->size()));
+  sort_zbacking_index_array(stash_out->adr_at(0), stash_out->length());
+
 }
 
-void ZPhysicalMemoryManager::restore_segments(const ZArray<ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash) {
-  size_t stash_index = 0;
+void ZPhysicalMemoryManager::restore_segments(const ZArraySlice<const ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash) {
+  int stash_index = 0;
 
   for (const ZVirtualMemory& vmem : vmems) {
-    copy_from_stash(stash.data() + stash_index, stash.size() - stash_index, vmem);
-    stash_index += static_cast<size_t>(vmem.granule_count());
+    copy_from_stash(stash.slice_back(stash_index), vmem);
+    stash_index += vmem.granule_count();
   }
 
-  assert(stash_index == stash.size());
-  (void)stash_index;
+  assert(stash_index == stash.length());
 }
 
 } // namespace MapleRuntime

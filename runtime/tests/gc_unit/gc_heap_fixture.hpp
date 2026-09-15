@@ -10,6 +10,7 @@
 #ifndef MRT_GC_HEAP_FIXTURE_HPP
 #define MRT_GC_HEAP_FIXTURE_HPP
 
+#include "gc_worker_fixture.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
 #include <memory>
 #include <cstdlib>
@@ -19,7 +20,6 @@
 
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
-// Test-only: plant liveInfo/liveInfo0 without product structure change (no 乙).
 // RegionInfo::metadata and RegionSpace reserved span are private; unit tests
 // need them to Init FDM without Heap::Init / InitCJRuntime.
 #define private public
@@ -27,8 +27,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #undef private
 #include "zunittest.hpp"
-#include "Heap/Collector/LiveInfoArena.h"
-#include "Heap/z/zLiveMap.hpp"
+#include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
@@ -114,7 +113,7 @@ struct GcHeapFixture {
 
     static constexpr size_t kUnits = 6;
 
-    GcHeapFixture()
+    explicit GcHeapFixture(RegionInfo::UnitRole role = RegionInfo::UnitRole::SMALL_SIZED_UNITS)
     {
         // ZInitialize initializes statistics before any allocation can sample.
         EnsureZAddressDomain();
@@ -135,7 +134,7 @@ struct GcHeapFixture {
             }
         }
         RegionInfo::Initialize(kUnits, heapStart);
-        region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        region0 = RegionInfo::InitRegion(0, 1, role);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
         AdvanceGeneration(Generation::Old);
@@ -172,8 +171,15 @@ struct GcHeapFixture {
             ForwardingTable::ResetRelocationSet(Generation::Young);
             ForwardingTable::ResetRelocationSet(Generation::Old);
         }
-        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region0);
-        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region1);
+        // ~ZPage: the page livemaps go with the synthetic heap.
+        for (RegionInfo* region : {region0, region1}) {
+            if (region != nullptr) {
+                delete region->livemap();
+                region->metadata.livemap = nullptr;
+                delete region->metadata.retiredLivemap;
+                region->metadata.retiredLivemap = nullptr;
+            }
+        }
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
         // are mapped per test, so leaving their flags set before munmap makes
         // later tests observe young regions that no longer exist.
@@ -229,67 +235,33 @@ struct GcHeapFixture {
             while (selected.TakeHeadRegion() != nullptr) {}
         }
         CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region, region->GetOwnerGeneration()));
-        CHECK(ForwardingTable::PublishFromPageView(region, region->GetLiveInfo(), region->GetSnapshotEpoch(),
+        CHECK(ForwardingTable::PublishFromPageView(region, region->livemap(), region->GetSnapshotEpoch(),
             region->GetRegionAllocPtr(), region->BirthSequence(),
             static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
             0, region->GetRegionLifeId()));
     }
 
-    static RegionBitmap* AllocPlantedBitmap(size_t regionSize)
+    // ZPage::mark_object followed by the caller's inc_live (zMark.cpp:405-425):
+    // the fixture's stand-in for one marking step on an object of this page.
+    static bool MarkStrong(RegionInfo* region, BaseObject* object)
     {
-        size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);
-        void* mem = std::calloc(1, bytes);
-        if (mem == nullptr) {
-            std::abort();
+        bool incLive = false;
+        const bool marked = region->mark_object(from_object(object), false, incLive);
+        if (incLive) {
+            region->inc_live(1, object->GetSize());
         }
-        return new (mem) RegionBitmap(regionSize);
+        return marked;
     }
 
-    static void FreePlantedBitmap(RegionBitmap*& bitmap)
+    // mark_object(addr, finalizable = true): only the live bit of the pair.
+    static bool MarkFinalizable(RegionInfo* region, BaseObject* object)
     {
-        if (bitmap == nullptr) {
-            return;
+        bool incLive = false;
+        const bool marked = region->mark_object(from_object(object), true, incLive);
+        if (incLive) {
+            region->inc_live(1, object->GetSize());
         }
-        bitmap->~RegionBitmap();
-        std::free(bitmap);
-        bitmap = nullptr;
-    }
-
-    // Hand-plant the product's one page livemap. The template on
-    // PlantMarkBitmap remains only to keep typed test call sites concise; G no
-    // longer selects storage.
-    LiveInfo* PlantLiveInfo(RegionInfo* region)
-    {
-        // Match page ownership: promotion may transfer this livemap.
-        auto* live = LiveInfoArena::GetLiveInfoArena().AllocateLiveInfo(region);
-        live->bindedRegion = region;
-        live->GetMarkFace().epoch.store(region->GetSnapshotEpoch(), std::memory_order_relaxed);
-        live->GetMarkFace().bitmap = nullptr;
-        live->resurrectBitmap = nullptr;
-        live->enqueueBitmap = AllocPlantedBitmap(region->GetRegionSize());
-        region->metadata.liveInfo = live;
-        return live;
-    }
-
-    template<Generation G = Generation::Old>
-    RegionBitmap* PlantMarkBitmap(LiveInfo* live, size_t regionSize)
-    {
-        (void)G;
-        if (live->GetMarkFace().bitmap != nullptr) {
-            return live->GetMarkFace().bitmap;
-        }
-        auto* bm = AllocPlantedBitmap(regionSize);
-        live->GetMarkFace().bitmap = bm;
-        return bm;
-    }
-
-    void FreePlanted(LiveInfo* live)
-    {
-        if (live == nullptr) {
-            return;
-        }
-        // Remove the same owner registration before destroying its bitmaps.
-        auto owned = LiveInfoArena::GetLiveInfoArena().TakePageLiveInfo(live->bindedRegion, live);
+        return marked;
     }
 
     std::unique_ptr<ZTestHeapMapping> heapMapping;

@@ -4,90 +4,134 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// Placeholder for ZGC zValue.hpp:35-156 (P06 replaces this file with the
-// ZValueStorage/ZValue family). Only ZPerNUMA<T> and its iterator are
-// provided here because the memory managers keep one registry per NUMA
-// partition (zVirtualMemoryManager.hpp:79, zPhysicalMemoryManager.hpp:45).
-// The partition count comes from the sealed process topology until A03n
-// lands the static ZNUMA class (ZNUMA::count(), zNUMA.inline.hpp:33-40).
-
+// gc/z/zValue.hpp:24-158
 #pragma once
-#include <cassert>
+#include <cstddef>
 #include <cstdint>
-#include <new>
-
-#include "Heap/z/zNUMA.inline.hpp"
 
 namespace MapleRuntime {
+//
+// Storage
+//
 
-template <typename T>
-class ZPerNUMA {
+template <typename S>
+class ZValueStorage {
 private:
-  const uint32_t _count;
-  T* const       _values;
-
-  ZPerNUMA(const ZPerNUMA&) = delete;
-  ZPerNUMA& operator=(const ZPerNUMA&) = delete;
-
-  static uint32_t numa_count() {
-    return static_cast<uint32_t>(NumaTopology::SealProcessTopology().Count());
-  }
+    static uintptr_t _top;
+    static uintptr_t _end;
 
 public:
-  ZPerNUMA()
-    : _count(numa_count()),
-      _values(static_cast<T*>(::operator new(sizeof(T) * _count))) {
-    for (uint32_t id = 0; id < _count; id++) {
-      ::new (_values + id) T();
-    }
-  }
+    static const size_t Offset = 4 * 1024;
 
-  ~ZPerNUMA() {
-    for (uint32_t id = 0; id < _count; id++) {
-      _values[id].~T();
-    }
-    ::operator delete(_values);
-  }
-
-  uint32_t count() const {
-    return _count;
-  }
-
-  const T& get(uint32_t id) const {
-    assert(id < _count);
-    return _values[id];
-  }
-
-  T& get(uint32_t id) {
-    assert(id < _count);
-    return _values[id];
-  }
-
-  T* addr(uint32_t id) {
-    assert(id < _count);
-    return _values + id;
-  }
+    static uintptr_t alloc(size_t size);
 };
 
-template <typename T>
-class ZPerNUMAIterator {
+class ZContendedStorage : public ZValueStorage<ZContendedStorage> {
+public:
+    static size_t alignment();
+    static uint32_t count();
+    static uint32_t id();
+};
+
+class ZPerCPUStorage : public ZValueStorage<ZPerCPUStorage> {
+public:
+    static size_t alignment();
+    static uint32_t count();
+    static uint32_t id();
+};
+
+class ZPerNUMAStorage : public ZValueStorage<ZPerNUMAStorage> {
+public:
+    static size_t alignment();
+    static uint32_t count();
+    static uint32_t id();
+};
+
+class ZPerWorkerStorage : public ZValueStorage<ZPerWorkerStorage> {
+public:
+    static size_t alignment();
+    static uint32_t count();
+    static uint32_t id();
+};
+
+//
+// Value
+//
+
+struct ZValueIdTagType {};
+
+template <typename S, typename T>
+class ZValue {
 private:
-  ZPerNUMA<T>* const _value;
-  uint32_t           _value_id;
+    const uintptr_t _addr;
+
+    uintptr_t value_addr(uint32_t value_id) const;
 
 public:
-  ZPerNUMAIterator(ZPerNUMA<T>* value)
-    : _value(value),
-      _value_id(0) {}
+    ZValue();
+    ZValue(const T& value);
+    template <typename... Args>
+    ZValue(ZValueIdTagType, Args&&... args);
 
-  bool next(T** value, uint32_t* value_id) {
-    if (_value_id < _value->count()) {
-      *value = _value->addr(_value_id);
-      *value_id = _value_id++;
-      return true;
-    }
-    return false;
-  }
+    const T* addr(uint32_t value_id = S::id()) const;
+    T* addr(uint32_t value_id = S::id());
+
+    const T& get(uint32_t value_id = S::id()) const;
+    T& get(uint32_t value_id = S::id());
+
+    void set(const T& value, uint32_t value_id = S::id());
+    void set_all(const T& value);
+
+    uint32_t count() const;
 };
 
+template <typename T> using ZContended = ZValue<ZContendedStorage, T>;
+template <typename T> using ZPerCPU = ZValue<ZPerCPUStorage, T>;
+template <typename T> using ZPerNUMA = ZValue<ZPerNUMAStorage, T>;
+template <typename T> using ZPerWorker = ZValue<ZPerWorkerStorage, T>;
+
+//
+// Iterator
+//
+
+template<typename S, typename T>
+class ZValueConstIterator;
+
+template <typename S, typename T>
+class ZValueIterator {
+    friend class ZValueConstIterator<S, T>;
+
+private:
+    ZValue<S, T>* const _value;
+    uint32_t            _value_id;
+
+public:
+    ZValueIterator(ZValue<S, T>* value);
+    ZValueIterator(const ZValueIterator&) = default;
+
+    bool next(T** value);
+    bool next(T** value, uint32_t* value_id);
+};
+
+template <typename T> using ZPerCPUIterator = ZValueIterator<ZPerCPUStorage, T>;
+template <typename T> using ZPerNUMAIterator = ZValueIterator<ZPerNUMAStorage, T>;
+template <typename T> using ZPerWorkerIterator = ZValueIterator<ZPerWorkerStorage, T>;
+
+template <typename S, typename T>
+class ZValueConstIterator {
+private:
+    const ZValue<S, T>* const _value;
+    uint32_t                  _value_id;
+
+public:
+    ZValueConstIterator(const ZValue<S, T>* value);
+    ZValueConstIterator(const ZValueIterator<S, T>& other);
+    ZValueConstIterator(const ZValueConstIterator&) = default;
+
+    bool next(const T** value);
+};
+
+template <typename T> using ZPerCPUConstIterator = ZValueConstIterator<ZPerCPUStorage, T>;
+template <typename T> using ZPerNUMAConstIterator = ZValueConstIterator<ZPerNUMAStorage, T>;
+template <typename T> using ZPerWorkerConstIterator = ZValueConstIterator<ZPerWorkerStorage, T>;
 } // namespace MapleRuntime

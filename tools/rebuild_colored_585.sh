@@ -27,8 +27,25 @@ tar -xzf "$old/stdlib-source.tar.gz" -C stdlib --strip-components=1
 for script in build-closure.sh build-shared.sh install-closure.py; do
   sed "s|$old|$root|g" "$old/$script" > "$script"
 done
+# build-shared.sh has no `set -e`: its own exit status is that of the final `echo`, so
+# a failed shared build returns 0 here. Its receipt evidence/std-shared.rc is the build's
+# real exit code; stop on it before install-closure.py, which would otherwise be the first
+# thing to notice a missing SO.
+step_rc() { # step_rc <what> <receipt> <log>
+  local rc
+  rc=$(cat "$2" 2>/dev/null || true)
+  if [[ ! $rc =~ ^[0-9]+$ ]]; then
+    echo "$1: receipt $2 missing or not an integer ('$rc'); see $3" >&2
+    return 70
+  fi
+  if [[ $rc != 0 ]]; then
+    echo "$1 failed rc=$rc; see $3" >&2
+    return "$rc"
+  fi
+}
 bash build-closure.sh
 bash build-shared.sh
+step_rc "std shared build" evidence/std-shared.rc evidence/std-shared.log
 python3 install-closure.py
 cp -a --reflink=auto target gate-sdk
 cp -a std-install/. gate-sdk/

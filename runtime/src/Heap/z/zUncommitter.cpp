@@ -21,6 +21,17 @@
 #include "Base/TimeUtils.h"
 
 namespace MapleRuntime {
+// The runtime is compiled as gnu++14 (runtime/config.cmake:368). There an
+// in-class static constexpr declaration is not a definition, and std::min(const
+// T&, const T&) in ChunkLimit odr-uses kMaxUncommitChunk, so the Debug (-O0)
+// link reports an undefined reference; -O2 only hides it by constant folding.
+// The reference JDK builds HotSpot as -std=c++17 (make/autoconf/flags-cflags.m4:615),
+// where such members are implicitly inline and zMappedCache.hpp:87-90 needs no
+// out-of-class line. Same idiom as zVirtualMemoryManager.cpp:40 here and
+// HotSpot memory/metaspace/blockTree.cpp:37. kDefaultDelayNs is only read by
+// value in this TU (no odr-use measured), so it gets no definition.
+constexpr size_t Uncommitter::kMaxUncommitChunk;
+
 uint64_t Uncommitter::ParseDelayNs(const char* env)
 {
     if (env == nullptr) {

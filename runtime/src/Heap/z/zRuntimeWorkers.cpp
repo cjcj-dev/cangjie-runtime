@@ -93,12 +93,15 @@ void RuntimeWorkers::WorkerLoop(uint32_t id)
             return;
         }
         observedBatch = batch;
-        GCWorkerTask* task = currentTask;
+        WorkerTask* task = currentTask;
+        // workerThread.cpp:68-73: thread-local worker id and the task's gc id.
+        WorkerThread::set_worker_id(id);
+        GCIdMark gcId(task->gc_id());
         lock.unlock();
 #if defined(CANGJIE_TSAN_SUPPORT)
         Sanitizer::TsanAttachNativeThread();
 #endif
-        task->Work(id);
+        task->work(id);
         // ZMarkTask::work: publish both generations before reporting completion.
         ThreadLocal::FlushCurrentThreadMarkStacks();
         lock.lock();
@@ -108,12 +111,12 @@ void RuntimeWorkers::WorkerLoop(uint32_t id)
     }
 }
 
-void RuntimeWorkers::Run(GCWorkerTask& task)
+void RuntimeWorkers::Run(ZTask& task)
 {
     ThreadLocal::FlushCurrentThreadMarkStacks();
     std::lock_guard<std::mutex> coordinator(coordinatorMutex);
     std::unique_lock<std::mutex> lock(mutex);
-    currentTask = &task;
+    currentTask = task.worker_task();
     remainingWorkers = ActiveWorkers();
     ++batch;
     dispatched.notify_all();

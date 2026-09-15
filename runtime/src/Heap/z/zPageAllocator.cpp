@@ -76,7 +76,7 @@ void FreeRegionManager::Initialize(UnitCount regionCnt, ZVirtualMemoryManager& v
     physicalMemory = &physicalMemoryManager;
     // ZPageAllocator::ZPageAllocator (zPageAllocator.cpp:1230-1236): one
     // ZPartition per NUMA id, each with max_capacity's share.
-    const uint32_t numaCount = static_cast<uint32_t>(NumaTopology::SealProcessTopology().Count());
+    const uint32_t numaCount = ZPerNUMAStorage::count();
     for (uint32_t numaId = 0; numaId < numaCount; ++numaId) {
         partitions.emplace_back(new Partition(numaId));
         Partition& partition = *partitions.back();
@@ -156,7 +156,7 @@ void FreeRegionManager::sort_segments_physical(const ZVirtualMemory& vmem)
     physicalMemory->sort_segments_physical(vmem);
 }
 
-void FreeRegionManager::stash_segments(const ZArray<ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const
+void FreeRegionManager::stash_segments(const ZArraySlice<const ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const
 {
     physicalMemory->stash_segments(vmems, stash_out);
 }
@@ -166,7 +166,7 @@ void FreeRegionManager::restore_segments(const ZVirtualMemory& vmem, const ZArra
     physicalMemory->restore_segments(vmem, stash);
 }
 
-void FreeRegionManager::restore_segments(const ZArray<ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash)
+void FreeRegionManager::restore_segments(const ZArraySlice<const ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash)
 {
     physicalMemory->restore_segments(vmems, stash);
 }
@@ -266,7 +266,13 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
         // Try to allocate one contiguous vmem
         const ZVirtualMemory vmem = partition.cache.remove_contiguous(size);
         if (!vmem.is_null()) {
-            memory = PageMemory{UnitIndexOf(vmem), num, static_cast<uint32_t>(selected), true};
+            memory.index = UnitIndexOf(vmem);
+            memory.units = num;
+            memory.partition = static_cast<uint32_t>(selected);
+            memory.committed = true;
+            memory.partialMappings.clear();
+            memory.virtualClaimed = true;
+            memory.harvestedUnits = 0;
             partition.used += size;
             nextPartition = (selected + 1) % partitions.size();
             return true;
@@ -393,7 +399,7 @@ RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, RegionI
             // cache, free the virtual and physical memory of the failed part.
             memory.partialMappings.clear();
             if (committedVmem.size() > 0) {
-                memory.partialMappings.push_back(committedVmem);
+                memory.partialMappings.append(committedVmem);
             }
             const ZVirtualMemory failedVmem = vmem.last_part(totalCommitted);
             std::lock_guard<std::mutex> lock(cacheMutex);
@@ -565,7 +571,7 @@ ZVirtualMemory RegionManager::ReservedAddressSpan(const ZVirtualMemoryManager& v
     // zPageTable.cpp:37-42: address tables cover the whole heap address
     // domain [0, ZAddressOffsetMax). The reverse metadata array is indexed
     // per unit, so it starts at the lowest reserved offset instead of 0.
-    const uint32_t partitions = static_cast<uint32_t>(NumaTopology::SealProcessTopology().Count());
+    const uint32_t partitions = ZPerNUMAStorage::count();
     zoffset lowest = zoffset::invalid;
     for (uint32_t partitionId = 0; partitionId < partitions; ++partitionId) {
         const zoffset candidate = virtualMemory.lowest_available_address(partitionId);
@@ -673,14 +679,15 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
         } while (anotherWave);
     }
 
+    // zFuture.inline.hpp:47-53: a Java thread waits with a safepoint check;
+    // here the mutator enters its saferegion before ZFuture::get (I3/I4).
     ScopedEnterSaferegion enterSaferegion(false);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    const bool satisfied = request.Wait(allocationStallBeforeWaitTestHook
-        ? [this] { allocationStallBeforeWaitTestHook(*this); }
-        : std::function<void()> {});
-#else
-    const bool satisfied = request.Wait();
+    if (allocationStallBeforeWaitTestHook) {
+        allocationStallBeforeWaitTestHook(*this);
+    }
 #endif
+    const bool satisfied = request.Wait();
     // Pair with the posting owner before the caller destroys its request.
     // zPageAllocator.cpp:1454-1464.
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
@@ -803,13 +810,8 @@ void RegionManager::PromoteAllRegions()
 {
     VisitPageOwners([&](RegionInfo* region) {
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
-            size_t liveBytes = region->GetLiveByteCount();
-            if (liveBytes > 0) {
-            } else if (region->GetRawPointerObjectCount() == 0) {
-            }
             if (region->IsYoungRegion()) {
-                MarkView<Generation::Young> youngView = region->GetMarkView<Generation::Young>();
-                (void)region->PromoteYoungRegion(youngView);
+                region->PromoteYoungRegion();
             } else {
                 // Preserve the pre-genface cleanup for already-old regions.
                 region->SetYoungAge(0);
@@ -901,12 +903,9 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
         return 0;
     }
     // traverse pinned region to reclaim free pinned objects.
-    size_t start = region->GetRegionStart();
     size_t garbageSize = 0;
-    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-    region->VisitAllObjects([this, region, view, start, &garbageSize](BaseObject* object) {
-        size_t offset = reinterpret_cast<MAddress>(object) - start;
-        if (!region->IsSurvivedObject(view, offset)) {
+    region->VisitAllObjects([this, region, &garbageSize](BaseObject* object) {
+        if (!region->is_object_live(from_object(object))) {
             size_t objSize = object->GetSize();
             DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, object->GetTypeInfo(), objSize);
             garbageSize += objSize;
@@ -934,8 +933,7 @@ size_t RegionManager::CollectPinnedGarbage()
             region = region->GetNextRegion();
             continue;
         }
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        if (region->IsKnownEmpty(view)) {
+        if (region->IsKnownEmpty()) {
             RegionInfo* del = region;
             region = region->GetNextRegion();
             oldPinnedRegionList.DeleteRegion(del);
@@ -960,24 +958,8 @@ size_t RegionManager::CollectLargeGarbage()
     size_t garbageSize = 0;
     RegionInfo* region = oldLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
-        // holdercapture: sample the face here, BEFORE the predicate below decides.
-        //
-        // Sampling early is necessary but NOT sufficient, and the earlier version of this
-        // comment claimed otherwise. Through one view the two predicates are ordered, not
-        // equal: for a large region IsMarkedObject(view,0) is GetMarkedRegionFlag(view)==1
-        // while IsSurvivedObject(view,0) is that OR isResurrected, so marked implies
-        // survived. Every region this loop releases failed !IsSurvivedObject(view,0) and
-        // therefore reads marked==0 through that same view - one line earlier just as
-        // surely as at the top of ReleaseRegion. Moving the sample moves the zero; it does
-        // not remove it.
-        //
-        // The mark bit read through the view below is a control, not the finding: it must
-        // be 0 on every released region, and if it ever is not, the reading of this
-        // predicate is wrong and the rest of the measurement is void.
-
-        // for large region, the offset of obj is 0
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        if (!region->IsSurvivedObject(view, 0)) {
+        // for large region, the object is the page start (zPage.inline.hpp:254-256).
+        if (!region->is_object_live(to_zaddress(region->GetRegionStart()))) {
             DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
                  region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
@@ -1049,7 +1031,7 @@ void RegionManager::DumpRegionStats(const char* msg) const
         ++keptRegions;
         keptUnits += region->GetUnitCount();
         keptSize += region->GetRegionSize();
-        keptLive += region->GetLiveByteCount();
+        keptLive += region->is_marked() ? region->live_bytes() : 0;
     };
     fromRegionList.VisitAllRegions(censusKept);
     unmovableFromRegionList.VisitAllRegions(censusKept);

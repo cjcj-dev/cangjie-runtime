@@ -2,223 +2,183 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-// Semantic port of OpenJDK test_zList.cpp onto the product intrusive
-// RegionList/RegionInfo links.
+// Port of OpenJDK test/hotspot/gtest/gc/z/test_zList.cpp onto ZList<T>.
 
-#include "gc_heap_fixture.hpp"
-#include "Heap/Allocator/RegionList.h"
+#include "Heap/z/zList.inline.hpp"
 #include "gc_unittest.hpp"
-
-#if defined(__linux__)
-#include <csignal>
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
 
-struct SixRegions {
-    explicit SixRegions(GcHeapFixture& fixture)
-        : entries{ fixture.region0, fixture.region1, nullptr, nullptr, nullptr, nullptr }
-    {
-        for (size_t i = 2; i < 6; ++i) {
-            entries[i] = RegionInfo::InitRegion(i, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-        }
-    }
+class ZTestEntry {
+    friend class MapleRuntime::ZList<ZTestEntry>;
 
-    int id(RegionInfo* region) const
-    {
-        for (int i = 0; i < 6; ++i) {
-            if (entries[i] == region) {
-                return i;
-            }
-        }
-        return -1;
-    }
+private:
+    const int             _id;
+    ZListNode<ZTestEntry> _node;
 
-    void insert_sorted(RegionList& list)
-    {
-        for (int i = 5; i >= 0; --i) {
-            list.PrependRegion(entries[i], RegionInfo::RegionType::FROM_REGION);
-        }
-    }
+public:
+    ZTestEntry(int id)
+        : _id(id),
+          _node() {}
 
-    RegionInfo* entries[6];
+    int id() const
+    {
+        return _id;
+    }
 };
 
-void AssertSorted(RegionList& list, const SixRegions& regions)
-{
-    int count = regions.id(list.GetHeadRegion());
-    list.VisitAllRegions([&](RegionInfo* entry) {
-        GC_EXPECT_EQ(regions.id(entry), count);
-        GC_EXPECT_TRUE(entry->GetRegionListOwner() == &list);
-        ++count;
-    });
+class ZListTest {
+public:
+    static void assert_sorted(ZList<ZTestEntry>* list)
+    {
+        // Iterate forward
+        {
+            int count = list->first()->id();
+            ZListIterator<ZTestEntry> iter(list);
+            for (ZTestEntry* entry; iter.next(&entry);) {
+                GC_EXPECT_EQ(entry->id(), count);
+                count++;
+            }
+        }
 
-    count = regions.id(list.GetTailRegion());
-    for (RegionInfo* entry = list.GetTailRegion(); entry != nullptr; entry = entry->GetPrevRegion()) {
-        GC_EXPECT_EQ(regions.id(entry), count);
-        --count;
+        // Iterate backward
+        {
+            int count = list->last()->id();
+            ZListReverseIterator<ZTestEntry> iter(list);
+            for (ZTestEntry* entry; iter.next(&entry);) {
+                GC_EXPECT_EQ(entry->id(), count);
+                count--;
+            }
+        }
     }
-}
+};
 
 } // namespace
 
-#if defined(__linux__)
-template <typename Fn>
-void ExpectListAbort(Fn&& fn)
+GC_TEST(ZListTest, test_insert)
 {
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        fn();
-        _exit(0);
-    }
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-}
-#endif
+    ZList<ZTestEntry> list;
+    ZTestEntry e0(0);
+    ZTestEntry e1(1);
+    ZTestEntry e2(2);
+    ZTestEntry e3(3);
+    ZTestEntry e4(4);
+    ZTestEntry e5(5);
 
-GC_TEST(ZListPort, InsertAndRemoveFirst)
-{
-    GcHeapFixture fixture;
-    SixRegions regions(fixture);
-    RegionList list("zlist-port-insert");
-    regions.insert_sorted(list);
+    list.insert_first(&e2);
+    list.insert_before(&e2, &e1);
+    list.insert_after(&e2, &e3);
+    list.insert_last(&e4);
+    list.insert_first(&e0);
+    list.insert_last(&e5);
 
-    GC_EXPECT_EQ(list.GetRegionCount(), static_cast<size_t>(6));
-    AssertSorted(list, regions);
-    for (int i = 0; i < 6; ++i) {
-        RegionInfo* entry = list.TakeHeadRegion();
-        GC_EXPECT_EQ(regions.id(entry), i);
-        GC_EXPECT_TRUE(entry->GetRegionListOwner() == nullptr);
+    GC_EXPECT_EQ(list.size(), 6u);
+    ZListTest::assert_sorted(&list);
+
+    for (int i = 0; i < 6; i++) {
+        ZTestEntry* e = list.remove_first();
+        GC_EXPECT_EQ(e->id(), i);
     }
-    GC_EXPECT_EQ(list.GetRegionCount(), static_cast<size_t>(0));
+
+    GC_EXPECT_EQ(list.size(), 0u);
 }
 
-GC_TEST(ZListPort, RemoveFirstAndLast)
+GC_TEST(ZListTest, test_remove)
 {
-    GcHeapFixture fixture;
-    SixRegions regions(fixture);
-
+    // Remove first
     {
-        RegionList list("zlist-port-remove-first");
-        regions.insert_sorted(list);
-        GC_EXPECT_EQ(list.GetRegionCount(), static_cast<size_t>(6));
-        for (int i = 0; i < 6; ++i) {
-            RegionInfo* entry = list.TakeHeadRegion();
-            GC_EXPECT_EQ(regions.id(entry), i);
-            GC_EXPECT_TRUE(entry->GetRegionListOwner() == nullptr);
+        ZList<ZTestEntry> list;
+        ZTestEntry e0(0);
+        ZTestEntry e1(1);
+        ZTestEntry e2(2);
+        ZTestEntry e3(3);
+        ZTestEntry e4(4);
+        ZTestEntry e5(5);
+
+        list.insert_last(&e0);
+        list.insert_last(&e1);
+        list.insert_last(&e2);
+        list.insert_last(&e3);
+        list.insert_last(&e4);
+        list.insert_last(&e5);
+
+        GC_EXPECT_EQ(list.size(), 6u);
+
+        for (int i = 0; i < 6; i++) {
+            ZTestEntry* e = list.remove_first();
+            GC_EXPECT_EQ(e->id(), i);
         }
-        GC_EXPECT_EQ(list.GetRegionCount(), static_cast<size_t>(0));
+
+        GC_EXPECT_EQ(list.size(), 0u);
     }
 
+    // Remove last
     {
-        RegionList list("zlist-port-remove-last");
-        regions.insert_sorted(list);
-        GC_EXPECT_EQ(list.GetRegionCount(), static_cast<size_t>(6));
-        for (int i = 5; i >= 0; --i) {
-            RegionInfo* entry = list.GetTailRegion();
-            list.DeleteRegion(entry);
-            GC_EXPECT_EQ(regions.id(entry), i);
-            GC_EXPECT_TRUE(entry->GetRegionListOwner() == nullptr);
+        ZList<ZTestEntry> list;
+        ZTestEntry e0(0);
+        ZTestEntry e1(1);
+        ZTestEntry e2(2);
+        ZTestEntry e3(3);
+        ZTestEntry e4(4);
+        ZTestEntry e5(5);
+
+        list.insert_last(&e0);
+        list.insert_last(&e1);
+        list.insert_last(&e2);
+        list.insert_last(&e3);
+        list.insert_last(&e4);
+        list.insert_last(&e5);
+
+        GC_EXPECT_EQ(list.size(), 6u);
+
+        for (int i = 5; i >= 0; i--) {
+            ZTestEntry* e = list.remove_last();
+            GC_EXPECT_EQ(e->id(), i);
         }
-        GC_EXPECT_EQ(list.GetRegionCount(), static_cast<size_t>(0));
+
+        GC_EXPECT_EQ(list.size(), 0u);
     }
 }
 
-GC_TEST(ZListAuthority, DoublePrependIsRejected)
+// The size/iteration contract behind the spec's cut ③ (ZList::remove must
+// unlink): after removing the middle element the list has one element less
+// and neither forward nor reverse iteration visits the removed entry. The
+// entries are heap objects that this test never frees, so a failing
+// expectation reports on its own line instead of tripping ~ZListNode.
+GC_TEST(ZListTest, test_remove_middle_unlinks)
 {
-#if defined(__linux__)
-    GcHeapFixture fixture;
-    ExpectListAbort([&]() {
-        RegionList list("zlist-double-prepend");
-        list.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-        list.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-    });
-#endif
-}
+    ZList<ZTestEntry>* list = new ZList<ZTestEntry>();
+    ZTestEntry* e0 = new ZTestEntry(0);
+    ZTestEntry* e1 = new ZTestEntry(1);
+    ZTestEntry* e2 = new ZTestEntry(2);
 
-GC_TEST(ZListAuthority, WrongListRemoveIsRejected)
-{
-#if defined(__linux__)
-    GcHeapFixture fixture;
-    ExpectListAbort([&]() {
-        RegionList owner("zlist-owner");
-        RegionList other("zlist-other");
-        owner.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-        other.PrependRegion(fixture.region1, RegionInfo::RegionType::FROM_REGION);
-        other.DeleteRegion(fixture.region0);
-    });
-#endif
-}
+    list->insert_last(e0);
+    list->insert_last(e1);
+    list->insert_last(e2);
+    GC_EXPECT_EQ(list->size(), 3u);
 
-GC_TEST(ZListAuthority, RemoveThenInsertTransfersAuthority)
-{
-    GcHeapFixture fixture;
-    RegionList first("zlist-first");
-    RegionList second("zlist-second");
-    first.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-    GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == &first);
-    first.DeleteRegion(fixture.region0);
-    GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
-    GC_EXPECT_TRUE(fixture.region0->GetPrevRegion() == nullptr);
-    GC_EXPECT_TRUE(fixture.region0->GetNextRegion() == nullptr);
-    second.PrependRegion(fixture.region0, RegionInfo::RegionType::GARBAGE_REGION);
-    GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == &second);
-    GC_EXPECT_EQ(second.GetRegionCount(), static_cast<size_t>(1));
-}
+    list->remove(e1);
+    GC_EXPECT_EQ(list->size(), 2u);
 
-GC_TEST(ZListAuthority, GhostSnapshotResetDoesNotOwnRegion)
-{
-    GcHeapFixture fixture;
-    RegionList authority("zlist-authority");
-    RegionList ghost("zlist-ghost");
-    authority.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-    authority.CopyListTo(ghost);
-    GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == &authority);
-    fixture.region0->metadata.nextRegionIdx0 = static_cast<uint32_t>(fixture.region1->GetUnitIdx());
-    GC_EXPECT_TRUE(fixture.region0->GetNextGhostRegion() == fixture.region1);
-    authority.DeleteRegion(fixture.region0);
-    GC_EXPECT_TRUE(ghost.GetHeadRegion() == fixture.region0);
-    GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
-    // zHeap.cpp:275-280: remove the old page before descriptor reuse.
-    RegionInfo::RetirePage(fixture.region0, [&]() {
-        fixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    });
-    GC_EXPECT_TRUE(fixture.region0->GetNextGhostRegion() == nullptr);
-    GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
-}
+    int visited = 0;
+    ZListIterator<ZTestEntry> iter(list);
+    for (ZTestEntry* entry; iter.next(&entry);) {
+        GC_EXPECT_NE(entry->id(), 1);
+        visited++;
+    }
+    GC_EXPECT_EQ(visited, 2);
 
-GC_TEST(ZListAuthority, OwnerMustBeReleasedBeforeRegionLifeReset)
-{
-#if defined(__linux__)
-    GcHeapFixture fixture;
-    const RegionLifeId oldLife = fixture.region0->GetRegionLifeId();
-    ExpectListAbort([&]() {
-        // Product heap backing is shared across fork. Give the abort arm its
-        // own page so its deliberately retained owner cannot alter the parent.
-        GcHeapFixture childFixture;
-        RegionList owner("zlist-life-owner");
-        owner.PrependRegion(childFixture.region0, RegionInfo::RegionType::FROM_REGION);
-        RegionInfo::RetirePage(childFixture.region0, [&]() {
-            childFixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-        });
-    });
+    visited = 0;
+    ZListReverseIterator<ZTestEntry> reverse(list);
+    for (ZTestEntry* entry; reverse.next(&entry);) {
+        GC_EXPECT_NE(entry->id(), 1);
+        visited++;
+    }
+    GC_EXPECT_EQ(visited, 2);
 
-    RegionList owner("zlist-life-release");
-    owner.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-    owner.DeleteRegion(fixture.region0);
-    // zHeap.cpp:275-280: remove the old page before descriptor reuse.
-    RegionInfo::RetirePage(fixture.region0, [&]() {
-        fixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    });
-    GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
-    GC_EXPECT_EQ(fixture.region0->GetRegionLifeId(), oldLife + 1);
-#endif
+    GC_EXPECT_TRUE(list->next(e0) == e2);
+    GC_EXPECT_TRUE(list->prev(e2) == e0);
 }

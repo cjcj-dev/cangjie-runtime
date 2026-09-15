@@ -57,7 +57,7 @@ void RegionManager::ReassembleFromSpace()
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    region->AddLiveCounts(1, obj->GetSize());
+    region->inc_live(1, obj->GetSize());
 }
 
 namespace {
@@ -218,12 +218,6 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         // young (RegionSpace.cpp takes the youngRegion = true default), and the destination
         // recorded at RegionManager.cpp:1957 is exactly such a region — so before this gate a
         // minor collected a live route's destination while honouring nothing.
-        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-        const uint64_t clearStart = TimeUtil::NanoSeconds();
-        region->ClearLiveInfo(view);
-        stats.clearLiveNs += TimeUtil::NanoSeconds() - clearStart;
-        ++stats.clearLiveRegions;
-        stats.clearLiveUnits += region->GetUnitCount();
         const uint64_t visitorStart = TimeUtil::NanoSeconds();
         visitor(region);
         stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
@@ -251,12 +245,6 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         }
         ++stats.recentFullYoung;
         // routedest: same exclusion as the unmovable young loop above.
-        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-        const uint64_t clearStart = TimeUtil::NanoSeconds();
-        region->ClearLiveInfo(view);
-        stats.clearLiveNs += TimeUtil::NanoSeconds() - clearStart;
-        ++stats.clearLiveRegions;
-        stats.clearLiveUnits += region->GetUnitCount();
         const uint64_t visitorStart = TimeUtil::NanoSeconds();
         visitor(region);
         stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
@@ -275,19 +263,6 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         region = next;
     }
     stats.recentFullNs = TimeUtil::NanoSeconds() - subStart;
-    // ZPage::is_allocating (zPage.inline.hpp:180-185) expires at the next
-    // owning-generation sequence. LARGE pages stay on their existing lists;
-    // their allocation watermark must nevertheless advance at young mark-start.
-    auto snapshotYoungLarge = [](RegionList& list) {
-        list.VisitAllRegions([](RegionInfo* page) {
-            if (page->IsYoungRegion()) {
-                page->ClearLiveInfo(page->GetMarkView<Generation::Young>());
-            }
-        });
-    };
-    snapshotYoungLarge(recentLargeRegionList);
-    snapshotYoungLarge(oldLargeRegionList);
-    snapshotYoungLarge(largeTraceRegions);
     return stats;
 }
 
@@ -340,14 +315,16 @@ size_t RegionManager::ExemptFromRegions()
             }
             continue;
         }
-        size_t liveBytes = fromRegion->GetLiveByteCount();
+        // ZGeneration::select_relocation_set (zGeneration.cpp:216-221): a page
+        // not marked this cycle registers as empty.
+        size_t liveBytes = fromRegion->is_marked() ? fromRegion->live_bytes() : 0;
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->IsAllocating() && !fromRegion->IsYoungRegion()) {
             RegionInfo* del = fromRegion;
             const unsigned rs = static_cast<unsigned>(del->RelocateObserve());
-            const unsigned ke = del->IsKnownEmpty(del->GetMarkView<Generation::Old>()) ? 1u : 0u;
+            const unsigned ke = del->IsKnownEmpty() ? 1u : 0u;
             size_t residual = 0;
             size_t residualFwd = 0;
             size_t marked = 0;
@@ -368,7 +345,7 @@ size_t RegionManager::ExemptFromRegions()
                     if (o->IsForwarded()) {
                         ++residualFwd;
                     }
-                    if (del->IsMarkedObject(del->GetMarkView<Generation::Old>(), o)) {
+                    if (del->is_object_strongly_live(from_object(o))) {
                         ++marked;
                     }
                     pos += sz;
@@ -438,12 +415,12 @@ size_t RegionManager::ExemptFromRegions()
             RegionInfo* del = fromRegion;
             DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
-                del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
+                del->GetUnitCount(), liveBytes, rawPtrCnt);
             if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION, "cset-rawpin")) {
                 continue;
             }
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
-            floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
+            floatingGarbage += (del->GetRegionSize() - liveBytes);
             continue;
         }
         RelocRegionDesc d;
@@ -470,12 +447,12 @@ size_t RegionManager::ExemptFromRegions()
         RegionInfo* del = descRegions[i];
         DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by relocsel: %zu units, %zu live bytes", del,
             del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
-            del->GetUnitCount(), del->GetLiveByteCount());
+            del->GetUnitCount(), descs[i].liveBytes);
         if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::UNMOVABLE_FROM_REGION, "cset-relocsel")) {
             continue;
         }
         ExemptFromRegion(del);
-        floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
+        floatingGarbage += (del->GetRegionSize() - descs[i].liveBytes);
     }
 
     size_t newFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;

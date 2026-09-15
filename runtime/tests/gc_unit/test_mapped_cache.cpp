@@ -111,7 +111,7 @@ GC_TEST(MappedCache, EqualCapacityContiguousAndFragmented)
     for (const auto& range : harvested) { fragmented.cache.insert(range); }
     ZArray<ZVirtualMemory> all;
     GC_EXPECT_EQ(fragmented.cache.remove_discontiguous(fragmented.bytes(6), &all), fragmented.bytes(6));
-    GC_EXPECT_EQ(all.size(), 3U);
+    GC_EXPECT_EQ(all.length(), 3U);
 }
 
 GC_TEST(MappedCache, UncommitUsesHighestAddress)
@@ -122,9 +122,9 @@ GC_TEST(MappedCache, UncommitUsesHighestAddress)
     f.cache.insert(f.vmem(8, 4));
     ZArray<ZVirtualMemory> extents;
     GC_EXPECT_EQ(f.cache.remove_for_uncommit(f.bytes(2), &extents), f.bytes(2));
-    GC_EXPECT_EQ(extents.size(), 1U);
-    GC_EXPECT_EQ(f.index(extents[0]), 10U);
-    GC_EXPECT_EQ(f.count(extents[0]), 2U);
+    GC_EXPECT_EQ(extents.length(), 1U);
+    GC_EXPECT_EQ(f.index(extents.at(0)), 10U);
+    GC_EXPECT_EQ(f.count(extents.at(0)), 2U);
     // What is left: [0,4) and [8,10).
     const ZVirtualMemory low = f.cache.remove_contiguous(f.bytes(4));
     GC_EXPECT_EQ(f.index(low), 0U);
@@ -209,7 +209,7 @@ GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
     {
         // Exactly two backing indices per partition: the final alloc below
         // only succeeds if free() handed the stashed indices back.
-        const size_t partitions = NumaTopology::SealProcessTopology().Count();
+        const size_t partitions = ZPerNUMAStorage::count();
         ZPhysicalMemoryManager physical(2 * partitions * unit);
         GC_EXPECT_TRUE(physical.is_initialized());
         const ZVirtualMemory a(base, unit);
@@ -225,11 +225,13 @@ GC_TEST(ZPhysicalMemoryManager, BackingIndicesSurviveVirtualShuffle)
         physical.unmap(a);
         physical.unmap(b);
         // Stash in the order b, a: the stash must still come out sorted by index.
-        ZArray<ZVirtualMemory> vmems{ b, a };
+        ZArray<ZVirtualMemory> vmems;
+        vmems.append(b);
+        vmems.append(a);
         ZArray<zbacking_index> stash;
         physical.stash_segments(vmems, &stash);
-        GC_EXPECT_EQ(stash.size(), 2U);
-        GC_EXPECT_TRUE(stash[0] < stash[1]);
+        GC_EXPECT_EQ(stash.length(), 2U);
+        GC_EXPECT_TRUE(stash.at(0) < stash.at(1));
         const ZVirtualMemory c(base + 2 * unit, 2 * unit);
         physical.restore_segments(c, stash);
         physical.map(c, 0);

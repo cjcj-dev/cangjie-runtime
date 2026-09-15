@@ -16,59 +16,72 @@
 #include "Heap/z/zMarkStackEntry.hpp"
 #include "gc_unittest.hpp"
 
+namespace MapleRuntime {
+class BaseObject;
+}
 using namespace MapleRuntime;
 
 static_assert(sizeof(MarkStackEntry) == sizeof(uint64_t), "entry cost must stay one word");
 static_assert(!std::is_convertible<MarkStackEntry, BaseObject*>::value,
               "a typed continuation must not silently become an object pointer");
+static_assert(!std::is_convertible<BaseObject*, MarkStackEntry>::value,
+              "zMarkStackEntry.hpp:95-107: an entry is built from a heap offset and explicit flags");
 
+// zMarkStackEntry.hpp:95-140: the two constructors and the eight decoders.
 GC_TEST(MarkStackEntry, ObjectPoliciesAreIndependent)
 {
-    BaseObject* const object = reinterpret_cast<BaseObject*>(MarkStackEntry::HeapBase() + static_cast<uintptr_t>(0x12345678));
+    const uintptr_t objectAddress = 0x12345678u;
 
-    const MarkStackEntry both = MarkStackEntry::MarkAndFollow(object);
-    GC_EXPECT_EQ(both.objectOffset(), 0x12345678u);
-    GC_EXPECT_FALSE(both.partialArray());
+    const MarkStackEntry both(objectAddress, true, true, true, false);
+    GC_EXPECT_EQ(both.object_address(), objectAddress);
+    GC_EXPECT_FALSE(both.partial_array());
     GC_EXPECT_TRUE(both.mark());
-    GC_EXPECT_TRUE(both.incLive());
+    GC_EXPECT_TRUE(both.inc_live());
     GC_EXPECT_TRUE(both.follow());
     GC_EXPECT_FALSE(both.finalizable());
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(both.object()), reinterpret_cast<uintptr_t>(object));
 
-    const MarkStackEntry markOnly = MarkStackEntry::MarkOnly(object, true);
+    const MarkStackEntry markOnly(objectAddress, true, true, false, true);
     GC_EXPECT_TRUE(markOnly.mark());
-    GC_EXPECT_TRUE(markOnly.incLive());
+    GC_EXPECT_TRUE(markOnly.inc_live());
     GC_EXPECT_FALSE(markOnly.follow());
     GC_EXPECT_TRUE(markOnly.finalizable());
 
-    const MarkStackEntry followOnly = MarkStackEntry::FollowOnly(object);
+    const MarkStackEntry followOnly(objectAddress, false, false, true, false);
     GC_EXPECT_FALSE(followOnly.mark());
-    GC_EXPECT_FALSE(followOnly.incLive());
+    GC_EXPECT_FALSE(followOnly.inc_live());
     GC_EXPECT_TRUE(followOnly.follow());
     GC_EXPECT_FALSE(followOnly.finalizable());
+    GC_EXPECT_EQ(followOnly.object_address(), objectAddress);
+
+    // 59-bit address field round trip (zMarkStackEntry.hpp:81).
+    const uintptr_t wide = (uintptr_t(1) << 59) - 8;
+    const MarkStackEntry wideEntry(wide, true, false, true, false);
+    GC_EXPECT_EQ(wideEntry.object_address(), wide);
+    GC_EXPECT_TRUE(wideEntry.mark());
+    GC_EXPECT_FALSE(wideEntry.inc_live());
 }
 
 GC_TEST(MarkStackEntry, PartialArrayIsASeparateKind)
 {
     constexpr size_t offset = 0x12345;
     constexpr size_t length = 0x23456;
-    const MarkStackEntry entry = MarkStackEntry::PartialArray(offset, length, true);
+    const MarkStackEntry entry(offset, length, true);
 
-    GC_EXPECT_TRUE(entry.partialArray());
+    GC_EXPECT_TRUE(entry.partial_array());
     GC_EXPECT_TRUE(entry.finalizable());
-    GC_EXPECT_EQ(entry.partialArrayOffset(), offset);
-    GC_EXPECT_EQ(entry.partialArrayLength(), length);
+    GC_EXPECT_EQ(entry.partial_array_offset(), offset);
+    GC_EXPECT_EQ(entry.partial_array_length(), length);
 }
 
 GC_TEST(MarkStackEntry, StackSplitPreservesPolicy)
 {
-    BaseObject* const first = reinterpret_cast<BaseObject*>(MarkStackEntry::HeapBase() + static_cast<uintptr_t>(0x1000));
-    BaseObject* const second = reinterpret_cast<BaseObject*>(MarkStackEntry::HeapBase() + static_cast<uintptr_t>(0x2000));
+    const uintptr_t first = 0x1000;
+    const uintptr_t second = 0x2000;
     MarkStack<MarkStackEntry> stack;
-    stack.push_back(MarkStackEntry::MarkOnly(first));
+    stack.push_back(MarkStackEntry(first, true, true, false, false));
     // Fill a second buffer so split(1) transfers one complete ownership node.
     for (size_t i = 0; i < 64; ++i) {
-        stack.push_back(MarkStackEntry::FollowOnly(second));
+        stack.push_back(MarkStackEntry(second, false, false, true, false));
     }
 
     MarkStack<MarkStackEntry> split(stack.split(1));
@@ -76,7 +89,7 @@ GC_TEST(MarkStackEntry, StackSplitPreservesPolicy)
     const MarkStackEntry transferred = split.back();
     GC_EXPECT_TRUE(transferred.follow());
     GC_EXPECT_FALSE(transferred.mark());
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(transferred.object()), reinterpret_cast<uintptr_t>(second));
+    GC_EXPECT_EQ(transferred.object_address(), second);
 
     // Production marking tasks drain their owned stack before destruction.
     // Keep that ownership protocol here; MarkStack::clear() is not a substitute
@@ -112,7 +125,7 @@ void ExpectClearCompletes(size_t entries, size_t buffers)
     if (child == 0) {
         MarkStack<MarkStackEntry> stack;
         for (size_t i = 0; i < entries; ++i) {
-            stack.push_back(MarkStackEntry::PartialArray(i, 1));
+            stack.push_back(MarkStackEntry(size_t(i), size_t(1), false));
         }
         if (stack.size() != buffers) {
             std::fprintf(stderr, "MARK_STACK_CLEAR_SETUP_FAILED entries=%zu buffers=%zu\n", entries, stack.size());
@@ -132,7 +145,7 @@ void ExpectClearCompletes(size_t entries, size_t buffers)
 #else
     MarkStack<MarkStackEntry> stack;
     for (size_t i = 0; i < entries; ++i) {
-        stack.push_back(MarkStackEntry::PartialArray(i, 1));
+        stack.push_back(MarkStackEntry(size_t(i), size_t(1), false));
     }
     GC_EXPECT_EQ(stack.size(), buffers);
     stack.clear();
@@ -168,7 +181,7 @@ GC_TEST(MarkStackClear, DestructorAfterMultipleBuffers)
         {
             MarkStack<MarkStackEntry> stack;
             for (size_t i = 0; i < 129; ++i) {
-                stack.push_back(MarkStackEntry::PartialArray(i, 1));
+                stack.push_back(MarkStackEntry(size_t(i), size_t(1), false));
             }
             if (stack.size() != 3) {
                 _exit(2);
@@ -186,7 +199,7 @@ GC_TEST(MarkStackClear, DestructorAfterMultipleBuffers)
     {
         MarkStack<MarkStackEntry> stack;
         for (size_t i = 0; i < 129; ++i) {
-            stack.push_back(MarkStackEntry::PartialArray(i, 1));
+            stack.push_back(MarkStackEntry(size_t(i), size_t(1), false));
         }
         GC_EXPECT_EQ(stack.size(), 3U);
     }

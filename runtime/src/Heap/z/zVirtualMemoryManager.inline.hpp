@@ -8,6 +8,7 @@
 
 #pragma once
 #include "Heap/z/zVirtualMemoryManager.hpp"
+#include "Heap/z/zValue.inline.hpp"
 
 #include <cstdlib>
 

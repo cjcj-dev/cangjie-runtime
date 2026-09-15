@@ -4,8 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ZGC zPhysicalMemoryManager.hpp:38-77. ZArraySlice<const ZVirtualMemory>
-// is the ZArray placeholder (P06) here.
+// ZGC zPhysicalMemoryManager.hpp:38-77.
 
 #pragma once
 #include "Heap/z/zAddress.hpp"
@@ -30,8 +29,8 @@ private:
   ZPerNUMA<ZBackingIndexRegistry> _partition_registries;
   ZGranuleMap<zbacking_index>     _physical_mappings;
 
-  void copy_to_stash(zbacking_index* stash, size_t stash_length, const ZVirtualMemory& vmem) const;
-  void copy_from_stash(const zbacking_index* stash, size_t stash_length, const ZVirtualMemory& vmem);
+  void copy_to_stash(ZArraySlice<zbacking_index> stash, const ZVirtualMemory& vmem) const;
+  void copy_from_stash(const ZArraySlice<const zbacking_index> stash, const ZVirtualMemory& vmem);
 
 public:
   ZPhysicalMemoryManager(size_t max_capacity);
@@ -57,8 +56,8 @@ public:
   void stash_segments(const ZVirtualMemory& vmem, ZArray<zbacking_index>* stash_out) const;
   void restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash);
 
-  void stash_segments(const ZArray<ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const;
-  void restore_segments(const ZArray<ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash);
+  void stash_segments(const ZArraySlice<const ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const;
+  void restore_segments(const ZArraySlice<const ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash);
 };
 
 } // namespace MapleRuntime

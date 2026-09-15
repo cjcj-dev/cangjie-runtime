@@ -7,6 +7,8 @@
 // ZGC zRangeRegistry.inline.hpp:34-468.
 
 #pragma once
+#include "Heap/z/zArray.inline.hpp"
+#include "Heap/z/zLock.inline.hpp"
 #include "Heap/z/zRangeRegistry.hpp"
 
 #include <cassert>
@@ -191,7 +193,7 @@ size_t ZRangeRegistry<Range>::remove_from_low_many_at_most_inner(size_t size, ZA
     }
 
     to_remove -= range.size();
-    out->push_back(range);
+    out->append(range);
   }
 
   return size;
@@ -227,7 +229,7 @@ void ZRangeRegistry<Range>::register_callbacks(const Callbacks& callbacks) {
 
 template <typename Range>
 void ZRangeRegistry<Range>::register_range(const Range& range) {
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
   register_inner(range);
 }
 
@@ -236,7 +238,7 @@ bool ZRangeRegistry<Range>::unregister_first(Range* out) {
   // Unregistering a range doesn't call a "prepare_to_hand_out" callback
   // because the range is unregistered and not handed out to be used.
 
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
 
   if (_list.is_empty()) {
     return false;
@@ -300,7 +302,7 @@ bool ZRangeRegistry<Range>::check_limits(const Range& range) const {
 
 template <typename Range>
 typename ZRangeRegistry<Range>::offset ZRangeRegistry<Range>::peek_low_address() const {
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
 
   const Node* const node = _list.first();
   if (node != nullptr) {
@@ -313,7 +315,7 @@ typename ZRangeRegistry<Range>::offset ZRangeRegistry<Range>::peek_low_address()
 
 template <typename Range>
 typename ZRangeRegistry<Range>::offset_end ZRangeRegistry<Range>::peak_high_address_end() const {
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
 
   const Node* const node = _list.last();
   if (node != nullptr) {
@@ -326,13 +328,13 @@ typename ZRangeRegistry<Range>::offset_end ZRangeRegistry<Range>::peak_high_addr
 
 template <typename Range>
 void ZRangeRegistry<Range>::insert(const Range& range) {
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
   insert_inner(range);
 }
 
 template <typename Range>
 void ZRangeRegistry<Range>::insert_and_remove_from_low_many(const Range& range, ZArray<Range>* out) {
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
 
   const size_t size = range.size();
 
@@ -349,7 +351,7 @@ void ZRangeRegistry<Range>::insert_and_remove_from_low_many(const Range& range, 
 
 template <typename Range>
 Range ZRangeRegistry<Range>::insert_and_remove_from_low_exact_or_many(size_t size, ZArray<Range>* in_out) {
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
 
   size_t inserted = 0;
 
@@ -378,27 +380,27 @@ Range ZRangeRegistry<Range>::insert_and_remove_from_low_exact_or_many(size_t siz
 
 template <typename Range>
 Range ZRangeRegistry<Range>::remove_from_low(size_t size) {
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
   Range range = remove_from_low_inner(size);
   return range;
 }
 
 template <typename Range>
 Range ZRangeRegistry<Range>::remove_from_low_at_most(size_t size) {
-  std::lock_guard<std::mutex> lock(_lock);
+  ZLocker<ZLock> lock(&_lock);
   Range range = remove_from_low_at_most_inner(size);
   return range;
 }
 
 template <typename Range>
 size_t ZRangeRegistry<Range>::remove_from_low_many_at_most(size_t size, ZArray<Range>* out) {
-  std::lock_guard<std::mutex> lock(_lock);
+  ZLocker<ZLock> lock(&_lock);
   return remove_from_low_many_at_most_inner(size, out);
 }
 
 template <typename Range>
 Range ZRangeRegistry<Range>::remove_from_high(size_t size) {
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
 
   ZListReverseIterator<Node> iter(&_list);
   for (Node* node; iter.next(&node);) {
@@ -431,7 +433,7 @@ template <typename Range>
 void ZRangeRegistry<Range>::transfer_from_low(ZRangeRegistry* other, size_t size) {
   assert(other->_list.is_empty());
 
-  std::lock_guard<std::mutex> locker(_lock);
+  ZLocker<ZLock> locker(&_lock);
   size_t to_move = size;
 
   ZListIterator<Node> iter(&_list);

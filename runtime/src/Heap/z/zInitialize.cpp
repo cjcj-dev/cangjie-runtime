@@ -2,13 +2,14 @@
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zCPU.hpp"
 #include "Heap/z/zLargePages.hpp"
 namespace MapleRuntime {
-// ZGC zInitialize.cpp:61-66: establish the address contract before heap
-// reservation, then the large page state the backing file depends on.
+// ZGC zInitialize.cpp:61-66: address contract, CPU storage, large-page state.
 void ZInitialize::initialize()
 {
     ZGlobalsPointers::initialize();
+    ZCPU::initialize();
     ZLargePages::initialize();
 }
 }

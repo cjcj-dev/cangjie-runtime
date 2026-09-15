@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 #pragma once
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zHash.inline.hpp"
 
 namespace MapleRuntime {
 
@@ -120,7 +121,7 @@ namespace MapleRuntime {
 inline ForwardingEntry ZForwarding::first(uintptr_t fromIndex, ForwardingCursor* cursor) const
     {
         const size_t mask = _entries.length() - 1;
-        *cursor = static_cast<size_t>(ZHashUint32(static_cast<uint32_t>(fromIndex))) & mask;
+        *cursor = static_cast<size_t>(ZHash::uint32_to_uint32(static_cast<uint32_t>(fromIndex))) & mask;
         return at(cursor);
     }
 }

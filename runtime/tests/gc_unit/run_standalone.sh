@@ -269,7 +269,7 @@ fi
 # Keep this hand-driven entry point structurally identical to the CMake
 # cj_gc_unit target: product inline/template helpers stay hidden and static
 # archives cannot re-export weak copies of the product symbols exercised via
-# dlsym in test_live_map.cpp. Compile each translation unit independently so
+# dlsym in clear_entries_product_unit.cpp. Compile each translation unit independently so
 # kkk2 can use its cores; link in the original source order.
 MAIN_COMPILE_FLAGS=(
   -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti
@@ -279,17 +279,22 @@ MAIN_COMPILE_FLAGS=(
   "${INC_FLAGS[@]}"
 )
 MAIN_SOURCES=(
+  "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/gc_unit_stubs.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
+  "$SRC/test_zBitMap.cpp"
   "$SRC/test_zList.cpp"
+  "$SRC/test_region_list.cpp"
+  "$SRC/test_zArray.cpp"
+  "$SRC/test_zIndexDistributor.cpp"
+  "$SRC/test_zValue.cpp"
+  "$SRC/test_zUtils.cpp"
   "$SRC/test_zstat.cpp"
   "$SRC/test_zserviceability.cpp"
   "$SRC/test_trustp1_phase1.cpp"
 
-  "$SRC/test_live_map.cpp"
-  "$SRC/test_live_map_segments.cpp"
   "$SRC/test_object_gate.cpp"
   "$SRC/test_remset.cpp"
   "$SRC/test_defect_regressions.cpp"
@@ -367,6 +372,7 @@ PUBLICATION_COMPILE_FLAGS=(
   "${INC_FLAGS[@]}"
 )
 PUBLICATION_SOURCES=(
+  "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
   "$SRC/clear_entries_product_unit.cpp"
 )
@@ -449,18 +455,18 @@ sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \
 # archive-exclusion flag therefore fails closed instead of silently restoring
 # the old self-satisfying weak copies.
 STANDALONE_SYMBOLS=(
-  _ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE0EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb
-  _ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE1EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb
-  _ZN12MapleRuntime10RegionInfo13ClearLiveInfoILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE
+  _ZN12MapleRuntime8ZLiveMap5resetENS_13ZGenerationIdE
+  _ZN12MapleRuntime8ZLiveMap13reset_segmentEm
+  _ZN12MapleRuntime10RegionInfo17CloneForPromotionEv
   _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE
   _ZNK12MapleRuntime9Collector18MarkObjectIfActiveEPNS_10BaseObjectE
 )
 STANDALONE_FULL_SYMBOLS=(
   CJ_MCC_PostWriteRefField
 )
-# RegionInfo::MarkObject templates are instantiated by other TUs in this ELF.
-# The concurrent item binds the 4-arg Old instantiation via dlsym only; Tcut×P0
-# is the structural proof that item does not use the local copy.
+# ZLiveMap::reset/reset_segment and RegionInfo::CloneForPromotion are out-of-line
+# product functions (zLiveMap.cpp / zPage.cpp); the livemap tests must bind them
+# from the SO, never from a local copy in this ELF.
 STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"
 STANDALONE_SYMBOL_FULL="$OUT/cj_gc_unit.full-defined.txt"
 nm -D --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_DYN"

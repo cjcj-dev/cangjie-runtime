@@ -6,6 +6,7 @@
 
 // ZGC zMappedCache.cpp:36-762.
 
+#include "Heap/z/zArray.inline.hpp"
 #include "Heap/z/zMappedCache.hpp"
 
 #include <algorithm>
@@ -548,7 +549,7 @@ size_t ZMappedCache::remove_discontiguous_with_strategy(size_t size, ZArray<ZVir
 
   const auto consume_vmem_fn = [&](ZVirtualMemory vmem) {
     const size_t vmem_size = vmem.size();
-    out->push_back(vmem);
+    out->append(vmem);
 
     assert(vmem_size <= remaining);
 

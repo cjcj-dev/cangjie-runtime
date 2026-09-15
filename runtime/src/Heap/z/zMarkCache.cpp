@@ -6,7 +6,7 @@
 
 #include "Heap/z/zMarkCache.hpp"
 #include "Heap/z/zPage.hpp"
-#include "Heap/z/zUtils.inline.hpp"
+#include "Base/Globals.h"
 namespace MapleRuntime {
 MarkLiveCache::MarkLiveCache(size_t stripeCount) : shift(MARK_STRIPE_SHIFT + Log2Exact(stripeCount)) {}
 

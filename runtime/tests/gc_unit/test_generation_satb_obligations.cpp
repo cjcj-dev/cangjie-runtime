@@ -3,6 +3,18 @@
 // with Runtime Library Exception.
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 // Per-generation publication and independent product mark consumption.
+//
+// Companion of run_generation_cycle_context.sh. Its fixtures reach product
+// internals through MRT_TESTABLE_INTERNALS friend access (MarkPublicationFixture
+// in WCollector.h/CollectorProxy.h/zMark.hpp/zDriver.hpp), so it only exists in
+// the testable configuration; the runner builds it only against a testable
+// product SO and reports SATB_RC=NOT_RUN otherwise. The process entry is
+// gc_unit_main.cpp, the same one as cj_gc_unit, so --gtest_filter= /
+// --gtest_list_tests and the GC_OTHER_VM_TEST child re-exec (gc_unittest.hpp
+// RunInOtherVm) are handled identically here, one process per test.
+#if !defined(MRT_TESTABLE_INTERNALS)
+#error "test_generation_satb_obligations.cpp requires MRT_TESTABLE_INTERNALS; build it against a testable product SO"
+#endif
 
 #include "Common/Runtime.h"
 #include "gc_heap_fixture.hpp"
@@ -44,8 +56,6 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     MarkPublicationFixture mark;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     mark.collector.MarkObjectIfActive(fx.obj0);
     mark.collector.MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
@@ -64,8 +74,6 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });
     GC_EXPECT_EQ(oldObjects.size(), 1u);
     GC_EXPECT_TRUE(oldObjects.front() == fx.obj0);
-    fx.region1->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
 }
 
 // Admission-side state invariant from ZGeneration::mark_object_if_active.
@@ -102,10 +110,9 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
     mark.CompleteOldMarkForAdmissionTest();
     resources.BlockResurrection();
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
-    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    fx.region0->ResurrectObject(fx.obj0, offset);
+    (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
-    fx.region0->MarkObject(fx.region0->GetMarkView<Generation::Old>(), fx.obj0, fx.obj0->GetSize());
+    (void)GcHeapFixture::MarkStrong(fx.region0, fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
 }
 
@@ -138,10 +145,4 @@ GC_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
     mark.DrainOld([&](BaseObject* object, bool) { published.push_back(object); });
     GC_EXPECT_EQ(published.size(), 1u);
     GC_EXPECT_TRUE(published.front() == fx.obj0);
-}
-
-int main(int argc, char** argv)
-{
-    if (argc == 2) setenv("GC_UNIT_FILTER", argv[1], 1);
-    return RunAll();
 }

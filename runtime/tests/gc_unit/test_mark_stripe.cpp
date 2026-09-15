@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "gc_worker_fixture.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -24,7 +26,7 @@ MarkStripeStack* StackWithOne(uintptr_t value)
 {
     MarkStripeStack* stack = MarkStripeStack::Create(true);
     GC_EXPECT_TRUE(stack != nullptr);
-    stack->Push(MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(value)));
+    stack->Push(MarkStackEntry(uintptr_t(value), true, true, true, false));
     return stack;
 }
 } // namespace
@@ -90,7 +92,8 @@ GC_TEST(MarkStripe, NoSmrPositiveControlCorruptsHead)
 
 GC_TEST(MarkStripe, SmrHazardPreventsAbaReuse)
 {
-    MarkingSMR smr(2);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkStripeStack* firstStack = StackWithOne(ENTRY_BASE);
     MarkStripeStack* tailStack = StackWithOne(ENTRY_BASE + ENTRY_STEP);
     MarkStripeStack* newStack = StackWithOne(ENTRY_BASE + 2 * ENTRY_STEP);
@@ -101,24 +104,26 @@ GC_TEST(MarkStripe, SmrHazardPreventsAbaReuse)
     std::atomic<MarkStripeStackListNode*> head{ first };
 
     MarkStripeStackListNode* observed = head.load(std::memory_order_relaxed);
-    smr.Hazard(0).store(observed, std::memory_order_relaxed);
+    auto* hazard = smr.hazard_ptr();
+    hazard->store(observed, std::memory_order_relaxed);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(head.load(std::memory_order_acquire)),
                  reinterpret_cast<uintptr_t>(observed));
 
     MarkStripeStackListNode* expected = first;
     GC_EXPECT_TRUE(head.compare_exchange_strong(expected, tail, std::memory_order_relaxed));
-    smr.Retire(1, first);
-    smr.Reclaim(1);
-    GC_EXPECT_EQ(smr.PendingCount(1), static_cast<size_t>(1));
+    MapleRuntime::GcUnit::WorkerFixture reclaimWorker(1);
+    smr.free_node(first);
+    smr.reclaim();
+    GC_EXPECT_EQ(smr.pending_count(), static_cast<size_t>(1));
 
     replacement->SetNext(tail);
     head.store(replacement, std::memory_order_release);
     GC_EXPECT_NE(reinterpret_cast<uintptr_t>(head.load(std::memory_order_acquire)),
                  reinterpret_cast<uintptr_t>(observed));
-    smr.Hazard(0).store(nullptr, std::memory_order_release);
-    smr.Reclaim(1);
-    GC_EXPECT_EQ(smr.PendingCount(1), static_cast<size_t>(0));
+    hazard->store(nullptr, std::memory_order_release);
+    smr.reclaim();
+    GC_EXPECT_EQ(smr.pending_count(), static_cast<size_t>(0));
 
     delete replacement;
     delete tail;
@@ -133,13 +138,14 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
     constexpr size_t stripeCount = 8;
     constexpr size_t entries = 16384;
     MarkStripeSet stripes(stripeCount);
-    MarkingSMR smr(workers);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkThreadLocalStacks seed(stripeCount);
     for (size_t i = 0; i < entries; ++i) {
         const uintptr_t value = ENTRY_BASE + i * ENTRY_STEP;
         // Put all initial work on one shared stripe so non-owner workers must
         // take the global steal path; flush converts private tails to nodes.
-        seed.Push(stripes, 0, MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(value)), true);
+        seed.Push(stripes, 0, MarkStackEntry(uintptr_t(value), true, true, true, false), true);
     }
     GC_EXPECT_TRUE(seed.Flush(stripes, true));
 
@@ -157,6 +163,7 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
 
     for (size_t workerId = 0; workerId < workers; ++workerId) {
         threads.emplace_back([&, workerId]() {
+            MapleRuntime::GcUnit::WorkerFixture workerThread(workerId);
             MarkThreadLocalStacks stacks(stripes.Count());
             MarkContext context(workers, workerId, stripes, stacks);
             // Reserve one shared chunk per non-owner before anyone drains.
@@ -178,7 +185,7 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
                    !invalidEntry.load(std::memory_order_relaxed) &&
                    std::chrono::steady_clock::now() < deadline) {
                 if (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
-                    const uintptr_t value = reinterpret_cast<uintptr_t>(entry.object());
+                    const uintptr_t value = entry.object_address();
                     const size_t index = (value - ENTRY_BASE) / ENTRY_STEP;
                     // Report failures after joining; an assertion exception in
                     // a worker would bypass the losslessness diagnostic.
@@ -230,15 +237,60 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
 GC_TEST(MarkStripe, GlobalStealReportsEmptyAfterDrain)
 {
     MarkStripe stripe;
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkStripeStack* const empty = stripe.StealStack(smr, 0);
     GC_EXPECT_TRUE(empty == nullptr);
     // Positive control: the same consumer must return the published payload.
     stripe.PublishStack(StackWithOne(ENTRY_BASE), true);
     MarkStripeStack* const stack = stripe.StealStack(smr, 0);
     GC_EXPECT_TRUE(stack != nullptr);
-    const uintptr_t value = reinterpret_cast<uintptr_t>(stack->Pop().object());
+    const uintptr_t value = stack->Pop().object_address();
     MarkStripeStack::Destroy(stack);
     GC_EXPECT_EQ(value, ENTRY_BASE);
     GC_EXPECT_TRUE(stripe.StealStack(smr, 0) == nullptr);
+}
+
+// Product entry: GCWorkers dispatches a ZTask, which pops published stacks.
+// Read the retirement result in the same worker slot before coordinator free.
+GC_TEST(MarkingSMR, WorkerPopRetiresInCurrentSlot)
+{
+    MapleRuntime::GcUnit::WorkerFixture environment;
+    MarkingSMR smr;
+    constexpr uint32_t count = 4;
+    MarkStripeSet stripes(count);
+    for (uint32_t id = 0; id < count; ++id) {
+        stripes.At(id).PublishStack(StackWithOne(ENTRY_BASE + id * ENTRY_STEP), true);
+    }
+    struct PopTask : ZTask {
+        MarkingSMR& smr;
+        MarkStripeSet& stripes;
+        size_t pending[count] = {};
+        uintptr_t popped[count] = {};
+        std::atomic<MarkStripeStackListNode*>* hazards[count] = {};
+        PopTask(MarkingSMR& smr, MarkStripeSet& stripes)
+            : ZTask("SMR product retirement"), smr(smr), stripes(stripes) {}
+        void work() override
+        {
+            const uint32_t id = WorkerThread::worker_id();
+            MarkStripeStack* stack = stripes.At(id).StealStack(smr, id);
+            if (stack != nullptr) {
+                popped[id] = reinterpret_cast<uintptr_t>(stack);
+                MarkStripeStack::Destroy(stack);
+            }
+            hazards[id] = smr.hazard_ptr();
+            pending[id] = smr.pending_count();
+        }
+    } task(smr, stripes);
+    GCWorkers workers(GCWorkers::Generation::OLD, count);
+    workers.Run(task);
+    for (uint32_t id = 0; id < count; ++id) {
+        GC_EXPECT_NE(task.popped[id], uintptr_t{0});
+    }
+    for (uint32_t id = 0; id < count; ++id) {
+        std::printf("SMR_TARGET worker=%u pending=%zu\n", id, task.pending[id]);
+        GC_EXPECT_EQ(task.pending[id], size_t{1});
+        if (id != 0) { GC_EXPECT_TRUE(task.hazards[id] != task.hazards[id - 1]); }
+    }
+    smr.free();
 }

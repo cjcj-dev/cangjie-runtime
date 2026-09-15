@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
+#include "gc_worker_fixture.hpp"
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -14,13 +15,13 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 MarkStackEntry Entry(size_t i)
 {
-    return MarkStackEntry::PartialArray(i + 1, i + 3, (i & 1) != 0);
+    return MarkStackEntry(size_t(i + 1), size_t(i + 3), (i & 1) != 0);
 }
 void ExpectEntry(const MarkStackEntry& entry, size_t i)
 {
-    GC_EXPECT_TRUE(entry.partialArray());
-    GC_EXPECT_EQ(entry.partialArrayOffset(), i + 1);
-    GC_EXPECT_EQ(entry.partialArrayLength(), i + 3);
+    GC_EXPECT_TRUE(entry.partial_array());
+    GC_EXPECT_EQ(entry.partial_array_offset(), i + 1);
+    GC_EXPECT_EQ(entry.partial_array_length(), i + 3);
     GC_EXPECT_EQ(entry.finalizable(), (i & 1) != 0);
 }
 using StackOwner = std::unique_ptr<MarkStripeStack, decltype(&MarkStripeStack::Destroy)>;
@@ -50,7 +51,8 @@ GC_TEST(MarkPort203Storage, FullFirstPublishesThenUsesRegularSegment)
 {
     MarkStripeSet stripes(1);
     MarkThreadLocalStacks local(1);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     for (size_t i = 0; i < 129; ++i) {
         local.Push(stripes, 0, Entry(i), false);
     }
@@ -70,7 +72,8 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
 {
     for (bool publish : {true, false}) {
         MarkStripeSet stripes(4);
-        MarkingSMR smr(1);
+        MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
         MarkThreadLocalStacks producer(4);
         MarkThreadLocalStacks consumer(4);
         constexpr size_t count = 128 + 512 + 7;
@@ -86,7 +89,7 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
             size_t popped = 0;
             MarkStackEntry entry;
             while (consumer.Pop(smr, 0, stripes, s, entry)) {
-                const size_t i = entry.partialArrayOffset() - 1 - s * count;
+                const size_t i = entry.partial_array_offset() - 1 - s * count;
                 GC_EXPECT_TRUE(i < count);
                 GC_EXPECT_FALSE(seen[i]);
                 seen[i] = true;
@@ -103,7 +106,8 @@ GC_TEST(MarkPort203Storage, BothPublicationListsDrainMultipleStripesAndSegments)
 GC_TEST(MarkPort203Storage, TransferredSegmentOutlivesItsSource)
 {
     MarkStripeSet stripes(1);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkThreadLocalStacks destination(1);
     {
         MarkThreadLocalStacks source(1);
