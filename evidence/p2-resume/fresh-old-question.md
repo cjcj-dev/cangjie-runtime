@@ -1,0 +1,5 @@
+LANE=sym_cangjie_runtime_607_implement_r5684610492
+ROLE=implement
+新鲜old槽输入记录：build5（本棒借入mark期finalizable接缝后，双构型rc0/0），managed-final2真实OnFinalizerCreated/NewPinnedObject + WriteReference(finalHolder,zeroSlot,youngChild)。首两young只通过另一个有历史非空prev的Strong holder记槽保住child；Finalizable holder原槽未进入remset，最终old final字段先到current资格CHECK，target为已forwarded from，rc134，未算精确红。
+证据 kkk2:/root/sym_cangjie_runtime_607_implement_r5684610492-build5/managed-final2/run.log 尾部；candidate runtime/src/Heap/z/zBarrier.cpp:151-164 StoreBarrier使用is_store_good_or_null、raw null直接fast返回；:837 RecordCrossGenEdge只有slow调用。P01 heap null初始化/old新分配remember责任与P08的store漏斗所有权需要归属，不允许本棒恢复runtime非heap早退。
+本棒正在保持原真实old→old预填/young周期后覆盖的buffered producer合同，两类holder用同一场景，以继续独立Finalizable字段验证；原新鲜old槽输入/ELF/SO保留。请主控确认该新输入是否在P08已有修复范围，或应独立新issue并交编排，不在本棒静默扩大store初始化机制。

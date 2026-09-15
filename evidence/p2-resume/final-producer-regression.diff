@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zMark.cpp
++++ b/runtime/src/Heap/z/zMark.cpp
+@@ -566,7 +566,7 @@
+           finalizable(std::move(finalizable)), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
+     void Work(uint32_t) override
+     {
+-        finalizerRoots.OopsDo(finalizable);
++        // P2 regression: omit registered finalizable discovery.
+         rootsColored.Apply([&](NativeSlot& slot) {
+             coloredClosure.DoOop(slot);
+ #if defined(MRT_TESTABLE_INTERNALS)

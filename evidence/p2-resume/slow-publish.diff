@@ -1,0 +1,10 @@
+--- a/runtime/src/Heap/z/zBarrier.cpp
++++ b/runtime/src/Heap/z/zBarrier.cpp
+@@ -301,6 +301,7 @@
+         old.MarkObject<false, true, true, false>(address);
+         return address;
+     }
++    theCollector.GetGenerationCycle(GCCycleGeneration::YOUNG).MarkObject<false, true, true, false>(address);
+     return zaddress::null;
+ }
+ 

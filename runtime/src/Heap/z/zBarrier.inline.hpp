@@ -19,14 +19,14 @@ namespace MapleRuntime {
 // word until after marking: the color operation needs its old-generation bits.
 template<typename SlowPath>
 inline zaddress Barrier::MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
-                                 NativeSlot& field, zpointer observed) const
+                                 RefField<>& field, zpointer observed, const ForwardingProvenance& provenance) const
 {
     if (fast(observed)) {
         return RefField<>(observed).GetTargetObject();
     }
     RefField<> value(observed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
-    const zaddress loadGood = from_object(theCollector.make_load_good(value, provenance));
+    const zaddress loadGood = from_object(theCollector.ValidateCurrentValue(
+        theCollector.make_load_good(value, provenance), provenance));
     const zaddress good = (this->*slow)(loadGood);
     const zpointer colored = color(good, observed);
     ZgcSelfHeal(field, observed, colored, fast, HealSite::BarrierReadReference);
@@ -65,8 +65,106 @@ inline zpointer Barrier::ColorMarkYoungGood(zaddress address, zpointer previous)
 inline void Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     MarkBarrier(IsMarkYoungGoodFastPath, &Barrier::MarkYoungSlowPath,
-                       ColorMarkYoungGood, field, observed);
+                ColorMarkYoungGood, field, observed, provenance);
+}
+
+// ZBarrier fast/color functions, zBarrier.inline.hpp:379-448.
+inline bool Barrier::IsMarkGoodFastPath(zpointer value)
+{
+    return ZPointer::is_mark_good(value);
+}
+
+inline bool Barrier::IsStoreGoodOrNullAnyFastPath(zpointer value)
+{
+    return is_null_any(value) || !ZPointer::is_store_bad(value);
+}
+
+inline zpointer Barrier::ColorMarkGood(zaddress address, zpointer previous)
+{
+    return ZAddress::mark_good(address, previous);
+}
+
+// ZBarrier::is_finalizable_good_fast_path / color_finalizable_good, :396/:418.
+inline bool Barrier::IsFinalizableGoodFastPath(zpointer value)
+{
+    return ZPointer::is_load_good(value) && ZPointer::is_marked_any_old(value);
+}
+
+inline zpointer Barrier::ColorFinalizableGood(zaddress address, zpointer previous)
+{
+    return ZPointer::is_marked_old(previous) ? ZAddress::mark_old_good(address, previous)
+                                           : ZAddress::finalizable_good(address, previous);
+}
+
+inline zpointer Barrier::ColorStoreGood(zaddress address, zpointer)
+{
+    return ZAddress::store_good(address);
+}
+
+inline zpointer Barrier::ColorRemsetGood(zaddress address, zpointer previous)
+{
+    if (is_null(address) || RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+        return ColorMarkGood(address, previous);
+    }
+    return ColorMarkYoungGood(address, previous);
+}
+
+// Native finalizer registrations represent the referent slot of a Java
+// FinalReference. Root/seed routing is separate from from-old field routing.
+inline void Barrier::MarkFinalizableBarrierOnRoot(NativeSlot& field) const
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
+    MarkBarrier(IsFinalizableGoodFastPath, &Barrier::MarkFinalizableSlowPath,
+                ColorFinalizableGood, field, observed, provenance);
+}
+
+// ZBarrier::mark_barrier_on_old_oop_field, zBarrier.inline.hpp:626-660.
+inline void Barrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable) const
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, holder, &field };
+    zaddress result;
+    if (finalizable) {
+        result = MarkBarrier(IsFinalizableGoodFastPath, &Barrier::MarkFinalizableFromOldSlowPath,
+                             ColorFinalizableGood, field, observed, provenance);
+    } else {
+        result = MarkBarrier(IsMarkGoodFastPath, &Barrier::MarkFromOldSlowPath,
+                             ColorMarkGood, field, observed, provenance);
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testFieldMarkResult) testFieldMarkResult(finalizable ? FieldMarkKind::Finalizable : FieldMarkKind::Old,
+                                                field, observed, result);
+#endif
+    (void)result;
+}
+
+// ZBarrier::mark_barrier_on_young_oop_field, zBarrier.inline.hpp:662-666.
+inline void Barrier::MarkBarrierOnYoungOopField(RefField<>& field) const
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &field };
+    const zaddress result = MarkBarrier(IsStoreGoodOrNullAnyFastPath, &Barrier::MarkFromYoungSlowPath,
+                                       ColorStoreGood, field, observed, provenance);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Young, field, observed, result);
+#endif
+    (void)result;
+}
+
+// ZBarrier::remset_barrier_on_oop_field, zBarrier.inline.hpp:681-684.
+inline zaddress Barrier::RemsetBarrierOnOopField(RefField<>& field) const
+{
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
+    const zaddress result = MarkBarrier(IsMarkYoungGoodFastPath, &Barrier::MarkYoungSlowPath,
+                                       ColorRemsetGood, field, observed, provenance);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testFieldMarkResult) testFieldMarkResult(FieldMarkKind::Remset, field, observed, result);
+#endif
+    return result;
 }
 
 template<>

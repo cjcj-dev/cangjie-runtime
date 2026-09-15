@@ -75,8 +75,16 @@ struct RemsetRearmTestAccess {
 
     static void BeginMinor(WCollector& collector)
     {
-        // WCollector::DoYoungGarbageCollection publishes the new young mark and
-        // remembered colours before RememberedSet::DrainForMinor (Generation.cpp:533,649-651).
+        // This remains a synthetic remset component fixture, not a mark-start
+        // acceptance test. Bind its actual collector/domain/phase before the
+        // linked product barrier can call ZGeneration::mark_object (:118-122).
+        if (collector.youngCycle.Workers() == nullptr) {
+            GcHeapFixture::AdoptGenerationIdentity(collector, Heap::GetHeap().GetCollector());
+            collector.youngCycle.InitializeWorkers(1);
+            collector.StartYoungMarkWork();
+            collector.youngCycle.Begin(0);
+        }
+        collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         ZGlobalsPointers::flip_young_mark_start();
     }
 
@@ -100,9 +108,14 @@ struct RemsetRearmTestAccess {
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots, currentMinorRoots,
                                       /*fullYoungScan=*/false, &consumed, &stats);
-        const size_t work = workStack.size();
-        while (!workStack.empty()) {
-            workStack.pop_back();
+        // Mark work now belongs to the generation domain, not the obsolete
+        // caller staging vector. Only dispose fixture-owned pending work here;
+        // real follow/termination is covered by p2FieldBarrierExercise.
+        auto& domain = *collector.YoungMarkDomain();
+        auto& stacks = domain.Stacks();
+        const size_t work = stacks.Population();
+        for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
+            if (auto* stack = stacks.StealLocal(stripe)) MarkStripeStack::Destroy(stack);
         }
         return ConsumeResult { work, consumed.size(), stats };
     }
@@ -363,6 +376,7 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     Barrier barrier(collector, rs);
+    InstalledBarrierScope installedBarrier(barrier);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);

@@ -18,6 +18,7 @@
 
 #include "Base/Globals.h"
 #include "Heap/z/zDriver.hpp"
+#include "Heap/z/zBarrier.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
@@ -40,6 +41,26 @@ struct PartialArrayTestAccess {
                      TracingCollector::WorkStack& workStack)
     {
         collector.PushPartialArray(addr, length, workStack);
+    }
+
+    static void StartFieldMark(WCollector& collector)
+    {
+        GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, Heap::GetHeap().GetCollector());
+        collector.oldCycle.InitializeWorkers(1);
+        collector.oldCycle.Begin(0);
+        collector.StartOldMarkWork();
+        collector.oldCycle.PublishPhase(GC_PHASE_TRACE);
+    }
+
+    static void ReadPublished(WCollector& collector, TracingCollector::WorkStack& result)
+    {
+        auto& domain = *collector.MajorMarkDomain();
+        for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
+            if (auto* stack = domain.Stacks().StealLocal(stripe)) {
+                while (!stack->IsEmpty()) result.push_back(stack->Pop());
+                MarkStripeStack::Destroy(stack);
+            }
+        }
     }
 
     static void StoreTarget(const WCollector& collector, RefField<>& field, BaseObject* target)
@@ -196,7 +217,16 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     workStack.pop_back();
     GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(partial));
 
+    // #607 fields publish into the generation mark domain, as ZMark's
+    // barrier does; the old caller-owned staging stack is not that consumer.
+    PartialArrayTestAccess::StartFieldMark(collector);
+    ZGlobalsPointers::flip_old_mark_start();
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Barrier* previous = Heap::barrierPtr;
+    Heap::barrierPtr = &barrier;
     collector.FollowPartialArray(partial, workStack);
+    Heap::barrierPtr = previous;
+    PartialArrayTestAccess::ReadPublished(collector, workStack);
     GC_EXPECT_FALSE(workStack.empty());
     const MarkStackEntry reached = workStack.back();
     workStack.pop_back();

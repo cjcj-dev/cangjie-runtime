@@ -28,6 +28,7 @@ enum class ReferenceType : uint8_t {
 
 enum class ReferenceStatus : uint8_t {
     DISCOVERED,
+    ALREADY_DISCOVERED,
     INACTIVE,
     UNSUPPORTED,
 };

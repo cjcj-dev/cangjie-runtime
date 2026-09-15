@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zRemembered.cpp
++++ b/runtime/src/Heap/z/zRemembered.cpp
+@@ -181,7 +181,7 @@
+         if (target == nullptr || !Heap::IsHeapAddress(target)) continue;
+         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+         if (!region->IsYoungRegion()) continue;
+-        remset.Record(slot);
++        // P2 regression: omit remembering the surviving young field.
+         if (consumedOut != nullptr) consumedOut->insert(slot);
+         if (statsOut != nullptr) ++statsOut->consumed;
+ #if defined(MRT_TESTABLE_INTERNALS)

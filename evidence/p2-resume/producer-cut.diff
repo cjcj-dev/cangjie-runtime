@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zStoreBarrierBuffer.cpp
++++ b/runtime/src/Heap/z/zStoreBarrierBuffer.cpp
+@@ -96,7 +96,7 @@
+                 collector.MarkYoungObjectIfActive(object);
+             }
+         }
+-        rs.Record(remapped.p, true);
++        // P2 cut: sever buffered remembered-slot publication.
+ #if defined(MRT_GC_UNIT_TESTS)
+         NotifyFlushObserver(StoreBarrierFlushEvent::SLOT_REMEMBERED, entry);
+ #endif

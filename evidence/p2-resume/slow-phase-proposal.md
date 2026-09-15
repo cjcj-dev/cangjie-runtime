@@ -1,0 +1,6 @@
+LANE=sym_cangjie_runtime_607_implement_r5684610492
+ROLE=implement
+对175006Z问题补一个不造历史色/current/bitmap的具体场景：真实NewPinnedObject+WriteReference预填旧槽→真实young翻色→真实store old→young→真实HEU_SYNC触发major_partial_roots。zGeneration.cpp:242-251现有testYoungMarkStarted回调在old.StartOldMark完成后、young根/remset扫描前，此刻原slot自然old-mark-bad且目标尚未本轮relocate，是由实际store历史产生的有效输入。
+可在此已存在暂停点调度产品old GCWorkers::Run一个最小输入任务，只调用产品TraceRefField/TraceObjectRefFields入口，Strong/Finalizable标志作为待测field契约输入；原slot/observed及current解析全由SO执行，随后让正常young remset和old主流程继续，额外发布工作的flush需留给真实任务协议并证据化。它能避免手工回写颜色/phase/mark状态；但该测试任务不是原roots任务，按原合同不能把它冒充整链入口。
+请明确是否接受“真实已获证store/mark-start状态 + 字段API专用合法GC worker任务”作为slow轴资格，完整producer→follow仍由remset四臂(0/2/2/0)及Finalizable四臂(0/5/3/0)覆盖；如不接受需另给真实caller可达场景。未获裁定前不添加该测试任务、不降慢路覆盖断言。
+当前已有结果：Finalizable生产/field降Strong两刀目标精确红、独立Strong follow控制PASS，去重三臂0/1/0且两个控制PASS；扫描后small/LARGE/pinned和旧对象静态根延迟注册真实断点测试rc0，young/old分别接管。原String/spawn与语言finalizer_trigger均留红等待cjcj#48已放行compiler/std。
