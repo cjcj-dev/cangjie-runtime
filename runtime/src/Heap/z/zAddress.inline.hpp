@@ -38,17 +38,6 @@ constexpr BadMasks kInitialBadMasks = ComputeBadMasks(kInitialEpochColours);
 static_assert((kInitialBadMasks.storeGood ^ STORE_METADATA_MASK) == kInitialBadMasks.storeBad,
               "initial StoreGood ^ STORE_METADATA_MASK != StoreBad");
 
-// Self-heal CAS bound for load barriers (ATOMIC_READ_PROTOCOL Q2). ZGC terminates
-// self-heal via colour monotonicity; our Forward-phase writers can re-tag the same
-// slot, so an unbounded heal loop is a livelock. After K failures the reader returns
-// the resolved payload without writing the slot (wait-free escape).
-constexpr int kSelfHealAttempts = 2;
-// Colour-aware identity CAS (CompareAndSwapReferenceImpl family). A concurrent reader
-// may self-heal the slot on every load so the raw expected bits keep moving while the
-// decoded identity stays oldRef; without a bound that is the 47-minute natural_wave spin
-// fixed on main by c3179214. Exhaustion returns false (callers already handle CAS fail).
-constexpr int kCasAttempts = 8;
-
 // ── raw bit views (for CAS expected/new, masks, logging) ──────────────────
 // 凭什么: enum class stores the same bits; raw is identity, not a state change.
 constexpr Uptr raw(zpointer p) { return static_cast<Uptr>(p); }

@@ -34,9 +34,6 @@ extern unsigned long g_cjLoadBadMask;
 // same set_good_masks round as g_cjLoadBadMask (OpenJDK zAddress.cpp:81-85).
 extern unsigned long g_cjLoadGoodMask;
 
-// ⭐ 构建溯源符号的**声明**；⭐ 定义在 `ColourMask.cpp`（⛔ 头里放定义会多重定义）
-extern "C" const char g_cjRuntimeProvenance[];
-
 // Mark barriers use the same dynamic-mask ABI as load barriers. The mark mask additionally rejects
 // references carrying the previous young or old mark epoch (OpenJDK zAddress.hpp:209-217).
 extern unsigned long g_cjMarkBadMask;
