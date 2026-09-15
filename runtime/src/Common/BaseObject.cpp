@@ -68,27 +68,27 @@ void BaseObject::DumpObject(int logtype, bool isSimple) const
 }
 #endif
 
-static void ForEachRefFieldInNonArrayObject(ObjectPtr obj, const RefFieldVisitor& visitor)
+static void ForEachRefFieldInNonArrayObject(ObjectPtr obj, TypeInfo* klass, const RefFieldVisitor& visitor)
 {
-    GCTib gcTib = obj->GetGCTib();
+    GCTib gcTib = klass->GetGCTib();
     // gcTib record payload data, skip the TypeInfo
     MAddress objAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     gcTib.ForEachBitmapWord(objAddr, visitor);
 }
 
 // Call func on each element in an object array.
-static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
+static void ForEachElementInArray(ObjectPtr obj, TypeInfo* klass, const RefFieldVisitor& visitor)
 {
     // take array length and content.
     MArray* mArray = reinterpret_cast<MArray*>(obj);
     MIndex arrayLengthVal = mArray->GetLength();
-    TypeInfo* componentTypeInfo = mArray->GetComponentTypeInfo();
+    TypeInfo* componentTypeInfo = klass->GetComponentTypeInfo();
     if (componentTypeInfo->IsStructType()) {
         GCTib gcTib = componentTypeInfo->GetGCTib();
         MAddress contentAddr = reinterpret_cast<Uptr>(mArray) + MArray::GetContentOffset();
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             gcTib.ForEachBitmapWord(contentAddr, visitor);
-            contentAddr += mArray->GetElementSize();
+            contentAddr += componentTypeInfo->GetComponentSize();
         }
     } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                componentTypeInfo->IsInterface()) {
@@ -104,18 +104,18 @@ static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
 
 void BaseObject::ForEachRefField(const RefFieldVisitor& visitor)
 {
-    TypeInfo* typeInfo = GetTypeInfo();
+    ForEachRefField(visitor, GetTypeInfo());
+}
+
+void BaseObject::ForEachRefField(const RefFieldVisitor& visitor, TypeInfo* typeInfo)
+{
+    // VM layout dispatch only. GC's safe/unsafe split is in ZIterator,
+    // as in zIterator.inline.hpp:64-77 and oopDesc::oop_iterate.
     if (typeInfo->HasRefField()) {
         if (UNLIKELY(typeInfo->IsRawArray())) {
-            if (IsInvisibleObject()) {
-#if defined(MRT_GC_UNIT_TESTS)
-                NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP, this);
-#endif
-                return;
-            }
-            ForEachElementInArray(this, visitor);
+            ForEachElementInArray(this, typeInfo, visitor);
         } else {
-            ForEachRefFieldInNonArrayObject(this, visitor);
+            ForEachRefFieldInNonArrayObject(this, typeInfo, visitor);
         }
     }
 };

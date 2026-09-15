@@ -2,10 +2,12 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "Heap/z/zHeapIterator.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
+#include <algorithm>
 
 namespace MapleRuntime {
 void HeapIterator::Push(BaseObject* object, const ObjectVisitor& objectVisitor)
@@ -24,12 +26,47 @@ void HeapIterator::Fields(BaseObject* object, bool visitReferents, const FieldVi
     // be visited, rather than following only the referent's outgoing fields.
     const uintptr_t referent = reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE;
     if (object->IsWeakRef() && visitReferents) { visitor(object, HeapSlotAt<>(referent)); }
-    object->ForEachRefField([&](RefField<>& field) {
+    // zHeapIterator.cpp:433: graph verification uses the unsafe iterator.
+    auto fields = [&](RefField<>& field) {
         if (object->IsWeakRef() && reinterpret_cast<uintptr_t>(&field) == referent) {
             return;
         }
         visitor(object, field);
-    });
+    };
+    ZBasicOopIterateClosure<decltype(fields)> closure(fields);
+    ZIterator::oop_iterate(object, &closure);
+}
+
+void HeapIterator::Follow(BaseObject* object, const FieldVisitor& visitor)
+{
+    // zHeapIterator.cpp:463-469: array work has its own range consumer.
+    if (object->GetTypeInfo()->IsRawArray() && object->GetComponentTypeInfo()->IsRef()) {
+        FollowArray(static_cast<MArray*>(object));
+    } else {
+        Fields(object, visitWeaks, visitor);
+    }
+}
+
+void HeapIterator::FollowArray(MArray* object)
+{
+    // zHeapIterator.cpp:436-443. TypeInfo is not a managed Klass object;
+    // the VM adapter has no metadata oop edge to enqueue here.
+    arrayStack.push_back({object, 0});
+}
+
+void HeapIterator::FollowArrayChunk(const ObjArrayTask& array, const FieldVisitor& visitor)
+{
+    // zHeapIterator.cpp:445-459 / gc_globals.hpp:253.
+    constexpr MIndex strideLimit = 2048;
+    const MIndex length = array.object->GetLength();
+    const MIndex start = array.index;
+    const MIndex end = start + std::min(length - start, strideLimit);
+    if (end < length) {
+        arrayStack.push_back({array.object, end});
+    }
+    RefFieldVisitor fields = [&](RefField<>& field) { visitor(array.object, field); };
+    ZBasicOopIterateClosure<RefFieldVisitor> closure(fields);
+    ZIterator::oop_iterate_elements_range(array.object, &closure, start, end);
 }
 
 void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor)
@@ -38,6 +75,7 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
     DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
     visited.clear();
     stack.clear();
+    arrayStack.clear();
     auto& collector = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
     NativeSlotVisitor colored = [&](NativeSlot& root) {
         if (fieldVisitor) { fieldVisitor(nullptr, &root, raw(root.GetFieldValue())); }
@@ -55,20 +93,31 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
         // checks. VisitMutatorRoots enumerates the complete stack and non-frame roots.
         mutator.VisitMutatorRoots([&](ObjectRef& root) {
             mutator.VisitHeapRootSlots(root, plain);
+        }, [](ObjectRef&) {
+            // zHeapIterator.cpp:386 uses thread oops, not ZThreadLocalData's
+            // separate invisible root (zObjArrayAllocator.cpp:107-112).
         });
     });
-    while (!stack.empty()) {
-        BaseObject* object = stack.back();
-        stack.pop_back();
-        DCHECK(object->IsValidObject());
-        // Inspection callbacks run after root enumeration, avoiding lock
-        // ordering between root registries and the inspecting consumer.
-        if (!forVerify) { objectVisitor(object); }
-        Fields(object, visitWeaks, [&](BaseObject* base, RefField<>& field) {
-            if (fieldVisitor) { fieldVisitor(base, &field, raw(field.GetFieldValue())); }
-            Push(Heap::GetBarrier().ReadReference(base, field), objectVisitor);
-        });
-    }
+    FieldVisitor followField = [&](BaseObject* base, RefField<>& field) {
+        if (fieldVisitor) { fieldVisitor(base, &field, raw(field.GetFieldValue())); }
+        Push(Heap::GetBarrier().ReadReference(base, field), objectVisitor);
+    };
+    // zHeapIterator.cpp:480-493: drain object work, then one array chunk,
+    // returning to newly discovered objects before consuming another chunk.
+    do {
+        while (!stack.empty()) {
+            BaseObject* object = stack.back();
+            stack.pop_back();
+            DCHECK(object->IsValidObject());
+            if (!forVerify) { objectVisitor(object); }
+            Follow(object, followField);
+        }
+        if (!arrayStack.empty()) {
+            const ObjArrayTask array = arrayStack.back();
+            arrayStack.pop_back();
+            FollowArrayChunk(array, followField);
+        }
+    } while (!stack.empty() || !arrayStack.empty());
 }
 } // namespace MapleRuntime
 

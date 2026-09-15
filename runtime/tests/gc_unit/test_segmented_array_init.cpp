@@ -5,6 +5,8 @@
 #if defined(MRT_GC_UNIT_TESTS)
 
 #include <atomic>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <thread>
 #include <cstdint>
@@ -27,6 +29,7 @@
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
 #include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zIterator.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
@@ -186,26 +189,24 @@ struct SegmentedArrayContext {
                 }
             }
 
-            // Iterator consumers must treat the published-but-incomplete array
-            // as opaque. Count actual product visitor calls rather than the
-            // test receipt emitted beside the skip: removing either product
-            // return below must expose a non-zero visit count.
-            rootBefore->ForEachRefField([&ctx](RefField<>&) { ++ctx.fullIteratorVisits; });
-            const MAddress firstField = reinterpret_cast<MAddress>(rootBefore->ConvertToCArray());
-            rootBefore->ForEachRefFieldInRange(
-                [&ctx](RefField<>&) { ++ctx.rangeIteratorVisits; },
-                firstField, firstField + sizeof(RefField<>));
-            // Iterator test, not GC root visitation. Check the partial-array
-            // entry independently: the shared receipt cannot identify which
-            // iterator actually protected the incomplete payload.
-            MarkPartialArray::FollowObjectReferences(rootBefore, false,
-                [&ctx](MAddress) { ++ctx.markIteratorVisits; },
-                [&ctx](const MarkStackEntry&) { ++ctx.markIteratorPartials; });
-            const bool opaque = ctx.fullIteratorVisits == 0 && ctx.rangeIteratorVisits == 0 &&
-                ctx.markIteratorVisits == 0 && ctx.markIteratorPartials == 0;
-            std::fprintf(stderr, "[SEGMENTED_ITERATOR_ASSERT] full=%zu range=%zu mark=%zu partial=%zu pass=%d\n",
-                         ctx.fullIteratorVisits, ctx.rangeIteratorVisits, ctx.markIteratorVisits,
-                         ctx.markIteratorPartials, opaque);
+            // zIterator.inline.hpp:64-70: incomplete reference arrays may
+            // only enter safe iteration. These are product instantiations,
+            // not a second implementation compiled into this test executable.
+            RefFieldVisitor first = [&ctx](RefField<>&) { ++ctx.safeIteratorVisits[0]; };
+            RefFieldVisitor second = [&ctx](RefField<>&) { ++ctx.safeIteratorVisits[1]; };
+            ZBasicOopIterateClosure<RefFieldVisitor> firstClosure(first);
+            ZBasicOopIterateClosure<RefFieldVisitor> secondClosure(second);
+            ZIterator::oop_iterate_safe(rootBefore, &firstClosure);
+            ZIterator::oop_iterate_safe(rootBefore, rootBefore->GetTypeInfo(), &secondClosure);
+            ZIterator::basic_oop_iterate_safe(rootBefore,
+                RefFieldVisitor([&ctx](RefField<>&) { ++ctx.safeIteratorVisits[2]; }));
+            ZIterator::basic_oop_iterate_safe(rootBefore, rootBefore->GetTypeInfo(),
+                RefFieldVisitor([&ctx](RefField<>&) { ++ctx.safeIteratorVisits[3]; }));
+            const bool opaque = std::all_of(ctx.safeIteratorVisits.begin(), ctx.safeIteratorVisits.end(),
+                                            [](size_t count) { return count == 0; });
+            std::fprintf(stderr, "[SEGMENTED_ITERATOR_ASSERT] safe=%zu safe_klass=%zu basic=%zu basic_klass=%zu pass=%d\n",
+                         ctx.safeIteratorVisits[0], ctx.safeIteratorVisits[1], ctx.safeIteratorVisits[2],
+                         ctx.safeIteratorVisits[3], opaque);
             if (!opaque) {
                 ++ctx.failures;
             }
@@ -308,13 +309,30 @@ struct SegmentedArrayContext {
                 invalid += count != 1;
             }
             size_t full = 0;
+            size_t basic = 0;
             size_t range = 0;
-            array->ForEachRefField([&](RefField<>&) { ++full; });
-            array->ForEachRefFieldInRange([&](RefField<>&) { ++range; },
-                                         start, start + sizeof(RefField<>));
-            const bool complete = invalid == 0 && full == visits.size() && range == 1;
-            std::fprintf(stderr, "[SEGMENTED_VISIBLE_ASSERT] fields=%zu full=%zu range=%zu partial=%zu invalid=%zu pass=%d\n",
-                         visits.size(), full, range, partials, invalid, complete);
+            RefFieldVisitor fullVisitor = [&](RefField<>&) { ++full; };
+            RefFieldVisitor rangeVisitor = [&](RefField<>&) { ++range; };
+            ZBasicOopIterateClosure<RefFieldVisitor> fullClosure(fullVisitor);
+            ZBasicOopIterateClosure<RefFieldVisitor> rangeClosure(rangeVisitor);
+            ZIterator::oop_iterate(array, &fullClosure);
+            ZIterator::basic_oop_iterate(array, RefFieldVisitor([&](RefField<>&) { ++basic; }));
+            ZIterator::oop_iterate_elements_range(array, &rangeClosure, 0, 1);
+            std::array<size_t, 4> safe {};
+            RefFieldVisitor first = [&](RefField<>&) { ++safe[0]; };
+            RefFieldVisitor second = [&](RefField<>&) { ++safe[1]; };
+            ZBasicOopIterateClosure<RefFieldVisitor> firstClosure(first);
+            ZBasicOopIterateClosure<RefFieldVisitor> secondClosure(second);
+            ZIterator::oop_iterate_safe(array, &firstClosure);
+            ZIterator::oop_iterate_safe(array, array->GetTypeInfo(), &secondClosure);
+            ZIterator::basic_oop_iterate_safe(array, RefFieldVisitor([&](RefField<>&) { ++safe[2]; }));
+            ZIterator::basic_oop_iterate_safe(array, array->GetTypeInfo(),
+                                             RefFieldVisitor([&](RefField<>&) { ++safe[3]; }));
+            const bool complete = invalid == 0 && full == visits.size() && basic == visits.size() && range == 1 &&
+                std::all_of(safe.begin(), safe.end(), [&](size_t count) { return count == visits.size(); });
+            std::fprintf(stderr, "[SEGMENTED_VISIBLE_ASSERT] fields=%zu full=%zu basic=%zu range=%zu partial=%zu "
+                         "safe=%zu safe_klass=%zu safe_basic=%zu safe_basic_klass=%zu invalid=%zu pass=%d\n",
+                         visits.size(), full, basic, range, partials, safe[0], safe[1], safe[2], safe[3], invalid, complete);
             current->failures += !complete;
         }
     }
@@ -352,10 +370,7 @@ struct SegmentedArrayContext {
     size_t firstSegmentYieldCount = 0;
     size_t withdrawCount = 0;
     size_t failures = 0;
-    size_t fullIteratorVisits = 0;
-    size_t rangeIteratorVisits = 0;
-    size_t markIteratorVisits = 0;
-    size_t markIteratorPartials = 0;
+    std::array<size_t, 4> safeIteratorVisits {};
     uint64_t youngSequenceBefore = 0;
     uint64_t youngSequenceAfter = 0;
     uint64_t oldSequenceBefore = 0;
@@ -562,13 +577,13 @@ void* RunSegmentedCase(void* rawMode)
     std::fprintf(stderr,
                  "[SEGMENTED_ARRAY_CASE] mode=%u status=%zu failures=%zu dirty=%d dirty_addr=%#lx "
                  "array=%p publish=%zu yield=%zu first=%zu withdraw=%zu requested_gc=%d context=%s "
-                 "iterator_full=%zu iterator_range=%zu "
+                 "iterator_safe=%zu iterator_safe_klass=%zu "
                  "young_before=%llu young_after=%llu old_before=%llu old_after=%llu moved=%d root_sites=%#x phase_n=%zu watermark_done=%d null=%d\n",
                  static_cast<unsigned>(gc), status, ctx.failures, ctx.checkedDirtyBoundary,
                  static_cast<unsigned long>(ctx.dirtyAddress), static_cast<void*>(array), ctx.publishCount,
                  ctx.yieldCount, ctx.firstSegmentYieldCount, ctx.withdrawCount, ctx.requestedGc,
                  requireWatermarkDone ? "native-watermark" : "native",
-                 ctx.fullIteratorVisits, ctx.rangeIteratorVisits,
+                 ctx.safeIteratorVisits[0], ctx.safeIteratorVisits[1],
                  static_cast<unsigned long long>(ctx.youngSequenceBefore),
                  static_cast<unsigned long long>(ctx.youngSequenceAfter),
                  static_cast<unsigned long long>(ctx.oldSequenceBefore),

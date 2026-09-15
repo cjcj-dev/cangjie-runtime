@@ -10,11 +10,12 @@
 #include <algorithm>
 #if defined(MRT_GC_UNIT_TESTS)
 #include <atomic>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zIterator.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
 #include "Heap/z/zHeap.hpp"
@@ -99,6 +100,7 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
     const bool managedTest = managedTestGc != ManagedSegmentedGc::NONE &&
         arrayClass.GetComponentTypeInfo()->IsRef();
     bool managedTestRequested = false;
+    std::array<size_t, 4> managedIteratorVisits {};
     if (managedTest) {
         bool expectedInactive = false;
         CHECK_DETAIL(g_managedSegmentedActive.compare_exchange_strong(
@@ -165,24 +167,23 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                     managedTestRequested = true;
                     CHECK_DETAIL(mutator->IsManagedContext(),
                                  "language-level segmented-array test must retain managed context");
-                    // Iterator test, not GC root visitation. Like the native
-                    // fixture, call the real iterators on the published root;
-                    // callbacks count addresses without reading payload values.
+                    // Iterator test, not GC root visitation. Only safe entries
+                    // may consume an incomplete array (zIterator.inline.hpp:64).
+                    // Range/mark are tested after initialization, not here.
                     MArray* observed = static_cast<MArray*>(mutator->LoadInvisibleRoot());
-                    size_t fullVisits = 0;
-                    size_t rangeVisits = 0;
-                    size_t markVisits = 0;
-                    size_t partials = 0;
-                    observed->ForEachRefField([&](RefField<>&) { ++fullVisits; });
-                    const MAddress first = reinterpret_cast<MAddress>(observed->ConvertToCArray());
-                    observed->ForEachRefFieldInRange([&](RefField<>&) { ++rangeVisits; },
-                                                     first, first + sizeof(RefField<>));
-                    MarkPartialArray::FollowObjectReferences(observed, false,
-                        [&](MAddress) { ++markVisits; }, [&](const MarkStackEntry&) { ++partials; });
-                    std::fprintf(stderr, "[SEGMENTED_MANAGED_ITERATORS] full=%zu range=%zu mark=%zu partial=%zu\n",
-                                 fullVisits, rangeVisits, markVisits, partials);
-                    CHECK_DETAIL(fullVisits == 0 && rangeVisits == 0 && markVisits == 0 && partials == 0,
-                                 "invisible segmented-array iterator exposed payload");
+                    RefFieldVisitor first = [&](RefField<>&) { ++managedIteratorVisits[0]; };
+                    RefFieldVisitor second = [&](RefField<>&) { ++managedIteratorVisits[1]; };
+                    ZBasicOopIterateClosure<RefFieldVisitor> firstClosure(first);
+                    ZBasicOopIterateClosure<RefFieldVisitor> secondClosure(second);
+                    ZIterator::oop_iterate_safe(observed, &firstClosure);
+                    ZIterator::oop_iterate_safe(observed, observed->GetTypeInfo(), &secondClosure);
+                    ZIterator::basic_oop_iterate_safe(observed,
+                        RefFieldVisitor([&](RefField<>&) { ++managedIteratorVisits[2]; }));
+                    ZIterator::basic_oop_iterate_safe(observed, observed->GetTypeInfo(),
+                        RefFieldVisitor([&](RefField<>&) { ++managedIteratorVisits[3]; }));
+                    std::fprintf(stderr, "[SEGMENTED_MANAGED_ITERATORS] safe=%zu safe_klass=%zu basic=%zu basic_klass=%zu\n",
+                                 managedIteratorVisits[0], managedIteratorVisits[1],
+                                 managedIteratorVisits[2], managedIteratorVisits[3]);
                     const GCCycleGeneration generation = managedTestGc == ManagedSegmentedGc::YOUNG
                         ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
                     const uint64_t sequenceBefore = collector.GetCycleSnapshot(generation).sequence;
@@ -235,6 +236,12 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
         CHECK_DETAIL((sites & forbidden) == 0,
                      "language-level segmented-array GC entered native root consumer: forbidden=%#x actual=%#x",
                      forbidden, sites);
+        // Keep receipt and payload invariants separate. A missing safe split
+        // first identifies the exact missing consumer bit; a branch which
+        // emits the receipt but still enumerates fields fails this invariant.
+        CHECK_DETAIL(std::all_of(managedIteratorVisits.begin(), managedIteratorVisits.end(),
+                                 [](size_t count) { return count == 0; }),
+                     "invisible segmented-array safe iterator exposed payload");
         std::fprintf(stderr, "[SEGMENTED_MANAGED_OK] mode=%s root_sites=%#x\n",
                      managedTestGc == ManagedSegmentedGc::YOUNG ? "young" : "full", sites);
         g_managedSegmentedActive.store(false, std::memory_order_release);
@@ -248,13 +255,8 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
 
 void MArray::ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const
 {
-    if (IsInvisibleObject()) {
-#if defined(MRT_GC_UNIT_TESTS)
-        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP,
-                                    const_cast<MArray*>(this));
-#endif
-        return;
-    }
+    // VM layout adapter. ZIterator's range entry requires visible ref arrays;
+    // this byte-range form also supports Cangjie's inline struct-array copies.
     TypeInfo* componentTi = GetComponentTypeInfo();
     MIndex size = fieldEnd - fieldStart;
     if (componentTi->IsStructType()) {
