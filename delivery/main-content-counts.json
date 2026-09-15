@@ -1,0 +1,63 @@
+[
+  {
+    "symbol": "FollowObjectReferences",
+    "cjcjdev/main": {
+      "rc": 0,
+      "lines": [
+        "cjcjdev/main:runtime/src/Heap/Collector/MarkPartialArray.h:1",
+        "cjcjdev/main:runtime/src/Heap/z/zMark.cpp:2"
+      ],
+      "count": 3
+    },
+    "HEAD": {
+      "rc": 0,
+      "lines": [
+        "HEAD:runtime/src/Heap/Collector/MarkPartialArray.h:1",
+        "HEAD:runtime/src/Heap/z/zMark.cpp:2"
+      ],
+      "count": 3
+    }
+  },
+  {
+    "symbol": "is_invisible_object_array",
+    "cjcjdev/main": {
+      "rc": 0,
+      "lines": [
+        "cjcjdev/main:runtime/src/Heap/z/zIterator.hpp:2",
+        "cjcjdev/main:runtime/src/Heap/z/zIterator.inline.hpp:6"
+      ],
+      "count": 8
+    },
+    "HEAD": {
+      "rc": 0,
+      "lines": [
+        "HEAD:runtime/src/Heap/z/zIterator.hpp:2",
+        "HEAD:runtime/src/Heap/z/zIterator.inline.hpp:6"
+      ],
+      "count": 8
+    }
+  },
+  {
+    "symbol": "oop_iterate_elements_range",
+    "cjcjdev/main": {
+      "rc": 0,
+      "lines": [
+        "cjcjdev/main:runtime/src/Heap/z/zHeapIterator.cpp:1",
+        "cjcjdev/main:runtime/src/Heap/z/zIterator.cpp:1",
+        "cjcjdev/main:runtime/src/Heap/z/zIterator.hpp:2",
+        "cjcjdev/main:runtime/src/Heap/z/zIterator.inline.hpp:1"
+      ],
+      "count": 5
+    },
+    "HEAD": {
+      "rc": 0,
+      "lines": [
+        "HEAD:runtime/src/Heap/z/zHeapIterator.cpp:1",
+        "HEAD:runtime/src/Heap/z/zIterator.cpp:1",
+        "HEAD:runtime/src/Heap/z/zIterator.hpp:2",
+        "HEAD:runtime/src/Heap/z/zIterator.inline.hpp:1"
+      ],
+      "count": 5
+    }
+  }
+]
