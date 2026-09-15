@@ -20,6 +20,16 @@
 #include "Base/TimeUtils.h"
 
 namespace MapleRuntime {
+// The runtime is compiled as gnu++14 (runtime/config.cmake:368). There an
+// in-class constexpr declaration is not a definition, and std::min(const T&,
+// const T&) in ChunkLimit odr-uses kMaxUncommitChunk, so the Debug (-O0) link
+// reports an undefined reference; -O2 only hides it by constant folding.
+// HotSpot keeps such constants in-class too (zMappedCache.hpp:87-90) and reads
+// them through the by-value MIN2/MAX2 templates (globalDefinitions.hpp:1137-1138,
+// zMappedCache.cpp:251), which is why ZGC never needs these lines.
+constexpr uint64_t Uncommitter::kDefaultDelayNs;
+constexpr size_t Uncommitter::kMaxUncommitChunk;
+
 uint64_t Uncommitter::ParseDelayNs(const char* env)
 {
     if (env == nullptr) {
