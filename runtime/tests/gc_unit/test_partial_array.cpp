@@ -22,6 +22,7 @@
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
+#include "zunittest.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -107,31 +108,20 @@ std::set<size_t> ExpectSame(Slot* addr, size_t length)
 // the slot buffer lives in the heap address domain like every page.
 struct SlotBuf {
     size_t bytes = 0;
-    MemMap* owner = nullptr;
+    std::unique_ptr<ZTestHeapMapping> owner;
     Slot* slots = nullptr;
 
     explicit SlotBuf(size_t n)
     {
         bytes = AlignUp((n + 8) * sizeof(Slot) + MarkPartialArray::MIN_SIZE, MarkPartialArray::MIN_SIZE);
-        const MemMap::Option options = { "cangjie_heap", nullptr,
-            MemMap::DEFAULT_MEM_FLAGS, MemMap::DEFAULT_MEM_PROT, false };
-        owner = MemMap::MapMemory(bytes, bytes, options);
-        if (owner == nullptr) {
-            std::abort();
-        }
-        auto raw = reinterpret_cast<uintptr_t>(owner->GetBaseAddr());
+        owner.reset(new ZTestHeapMapping(bytes));
+        auto raw = reinterpret_cast<uintptr_t>(owner->base());
         slots = reinterpret_cast<Slot*>(AlignUp(raw, MarkPartialArray::MIN_SIZE));
         for (size_t i = 0; i < n; ++i) {
             slots[i] = i + 1;
         }
     }
 
-    ~SlotBuf()
-    {
-        if (owner != nullptr) {
-            MemMap::DestroyMemMap(owner);
-        }
-    }
 };
 
 
