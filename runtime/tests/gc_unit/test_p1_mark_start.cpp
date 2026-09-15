@@ -112,6 +112,9 @@ extern "C" int p1MarkStartExercise()
             Expect(face == (before.face ^ (index == 0 ? 1U : 0U)), "only_young_start_flips_remset");
             ++before.completes;
             if (index == 0) youngComplete = true;
+            std::printf("P1_MARK_START_PHASE_RESULT gen=%zu failures=%u starts=%zu completes=%zu\n",
+                        index, failures, before.starts, before.completes);
+            std::fflush(stdout);
         }
     };
     const auto youngBefore = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
