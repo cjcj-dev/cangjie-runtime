@@ -259,34 +259,12 @@ private:
         function(index);
     }
 
-    // utilities/powerOfTwo.hpp log2i_exact
-    static int log2i_exact(int value)
-    {
-        assert(value > 0 && IsPowerOfTwo(value) && "value must be a power of 2");
-        int result = 0;
-        while ((1 << result) != value) {
-            ++result;
-        }
-        return result;
-    }
-
-    // utilities/powerOfTwo.hpp round_up_power_of_2
-    static size_t round_up_power_of_2(size_t value)
-    {
-        assert(value != 0);
-        size_t result = 1;
-        while (result < value) {
-            result <<= 1;
-        }
-        return result;
-    }
-
     static int last_level_segment_size_shift(int count)
     {
         const int last_level_size = count / levels_size(ClaimLevels - 1);
         assert(levels_size(ClaimLevels - 1) * last_level_size == count && "Not exactly divisible");
 
-        return log2i_exact(last_level_size);
+        return Log2Exact(last_level_size);
     }
 
 public:
@@ -321,7 +299,7 @@ public:
     {
         // Must be at least claim_level_size(ClaimLevels) and a power of two
         const size_t min_count = claim_level_size(ClaimLevels);
-        return round_up_power_of_2(max_count > min_count ? max_count : min_count);
+        return RoundUpPowerOfTwo(max_count > min_count ? max_count : min_count);
     }
 };
 

@@ -63,6 +63,32 @@ inline int Log2Exact(T value)
     return result;
 }
 
+// utilities/powerOfTwo.hpp round_up_power_of_2: the closest power of two
+// greater than or equal to value. precondition: value > 0.
+template<typename T>
+inline T RoundUpPowerOfTwo(T value)
+{
+    static_assert(std::is_integral<T>::value, "T must be integral");
+    DCHECK(value > 0);
+    if (IsPowerOfTwo(value)) {
+        return value;
+    }
+    T result = 1;
+    while (result < value) {
+        result <<= 1;
+    }
+    return result;
+}
+
+// utilities/powerOfTwo.hpp next_power_of_2: the next power of two greater
+// than value. precondition: value >= 0.
+template<typename T>
+inline T NextPowerOfTwo(T value)
+{
+    static_assert(std::is_integral<T>::value, "T must be integral");
+    return RoundUpPowerOfTwo(static_cast<T>(value + 1));
+}
+
 template<typename T>
 T RoundDown(T x, typename Identity<T>::type n)
 {

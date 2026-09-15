@@ -203,6 +203,73 @@ GC_TEST(ZArrayTest, slice)
     SortTest(ar);
 }
 
+// utilities/growableArray.hpp:399-407 insert_before(idx == length()) is an
+// append: the inserted element is the new last element (a shifted copy of
+// the old last element is not).
+GC_TEST(ZArray, insert_before_at_end_appends)
+{
+    ZArray<int> a;
+    a.insert_before(a.length(), 7);
+    GC_EXPECT_EQ(a.length(), 1);
+    GC_EXPECT_EQ(a.last(), 7);
+
+    for (int i = 0; i < 3; i++) {
+        a.append(i);
+    }
+    // Target: the element inserted at length() is last().
+    a.insert_before(a.length(), 42);
+    GC_EXPECT_EQ(a.length(), 5);
+    GC_EXPECT_EQ(a.last(), 42);
+    GC_EXPECT_EQ(a.at(3), 2);
+
+    // Middle insert keeps order.
+    a.insert_before(1, 99);
+    GC_EXPECT_EQ(a.length(), 6);
+    GC_EXPECT_EQ(a.at(0), 7);
+    GC_EXPECT_EQ(a.at(1), 99);
+    GC_EXPECT_EQ(a.at(2), 0);
+    GC_EXPECT_EQ(a.last(), 42);
+}
+
+namespace {
+
+struct Lifetime {
+    static std::atomic<int> alive;
+    Lifetime() { alive.fetch_add(1); }
+    Lifetime(const Lifetime&) { alive.fetch_add(1); }
+    Lifetime& operator=(const Lifetime&) = default;
+    ~Lifetime() { alive.fetch_sub(1); }
+};
+std::atomic<int> Lifetime::alive{ 0 };
+
+} // namespace
+
+// utilities/growableArray.hpp:333-346,538-551,587-599 element model: every
+// allocated slot is constructed once and destroyed once; append/clear/grow
+// assign into constructed slots and never construct over a live element.
+GC_TEST(ZArray, elements_are_constructed_and_destroyed_exactly_once)
+{
+    GC_EXPECT_EQ(Lifetime::alive.load(), 0);
+    {
+        ZArray<Lifetime> a(2);
+        a.append(Lifetime());
+        a.append(Lifetime());
+        a.clear();
+        // Re-append after clear, then grow past the initial capacity.
+        for (int i = 0; i < 5; i++) {
+            a.append(Lifetime());
+        }
+        GC_EXPECT_EQ(a.length(), 5);
+        // Every live Lifetime is one of the constructed slots.
+        GC_EXPECT_EQ(Lifetime::alive.load(), a.capacity());
+        (void)a.pop();
+        a.trunc_to(2);
+        GC_EXPECT_EQ(Lifetime::alive.load(), a.capacity());
+    }
+    // Target: destruction balances construction.
+    GC_EXPECT_EQ(Lifetime::alive.load(), 0);
+}
+
 // zArray.inline.hpp:118-190 ZArrayParallelIterator: every index is claimed
 // exactly once across concurrent claimers.
 GC_TEST(ZArray, parallel_iterator_claims_each_index_once)
