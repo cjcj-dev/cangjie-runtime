@@ -44,6 +44,10 @@ struct RelocationReceiptTestAccess {
     }
     static void NativeRootTrace(WCollector& collector)
     {
+        // This fixture enters tracing directly after in-place promotion. Match
+        // the old mark-start sequence advance before consuming the new page
+        // (ZGC zGeneration.cpp:1212-1237).
+        GcUnit::GcHeapFixture::AdvanceGeneration(Generation::Old);
         collector.StartOldMarkWork();
         collector.TraceHeap();
     }
