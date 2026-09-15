@@ -783,6 +783,31 @@ GC_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity)
     Target("remaining-owner-completed", Await(done));
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
+namespace {
+std::atomic<bool> managedInitBodyRan { false };
+void ManagedInitBody()
+{
+    // This is the same entry-state invariant required by product PinArray.
+    Target("libinit-body-has-managed-access", !Mutator::GetMutator()->InSaferegion());
+    managedInitBodyRan.store(true, std::memory_order_release);
+}
+}
+GC_OTHER_VM_TEST(PackageInit, LibInitTransitionsNativeCallerToManagedBody)
+{
+    Init();
+    packageBody = ManagedInitBody;
+    std::atomic<bool> done { false };
+    Start([](void* argument) {
+        ScopedEnterSaferegion native(false);
+        Target("libinit-native-caller-control", Mutator::GetMutator()->InSaferegion());
+        Target("libinit-managed-entry-return", LoaderManager::GetInstance()->LibInit("package-init-main"));
+        Target("libinit-restores-native-state", Mutator::GetMutator()->InSaferegion());
+        static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
+    }, &done);
+    Target("libinit-body-actually-executed", Await(done) && managedInitBodyRan.load(std::memory_order_acquire));
+    packageBody = nullptr;
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {
     void* token = reinterpret_cast<void*>(1);

@@ -626,8 +626,8 @@ bool CJFileLoader::LibInit(const char* libName)
 {
     BaseFile* baseFile = nullptr;
     std::unique_ptr<ElfUnloadQuiescence::PendingTask> pending;
-    ScopedEnterSaferegion safe(false);
     {
+        ScopedEnterSaferegion safe(false);
         ElfUnloadQuiescence::SharedTaskAdmissionScope admission;
         ElfUnloadQuiescence::ReadScope reader;
         baseFile = GetBaseFile(libName);
@@ -782,6 +782,10 @@ void* CJFileLoader::GetLibraryHandleForTesting(const char* libName) const
 
 bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
 {
+    // The caller may arrive from a native saferegion. The actual initializer
+    // accesses the managed heap; SetManagedContext alone is not that transition.
+    // Retain the image with PendingTask, never with an OS-TLS reader here.
+    ScopedObjectAccess access;
     ScopedEntryTrace trace((CString("CJRT_INIT_LIBRARY_") + baseFile->GetBaseName()).Str());
     std::vector<Uptr> funcs;
     baseFile->GetGlobalInitFunc(funcs);
