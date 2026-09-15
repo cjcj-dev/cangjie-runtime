@@ -49,6 +49,15 @@ RestoreContextForEH:
     movq    %rsp, %rcx
     callq   MRT_RestoreContext
 
+    // See x86_64_linux/RestoreContextForEH.S: zero C return regs so N2CStub
+    // does not treat the landing-pad PC as the C return value.
+    // Win64: rax/rdx return; r11 is volatile scratch.
+    movq    %rax, %r11
+    xorq    %rax, %rax
+    xorq    %rdx, %rdx
+    xorps   %xmm0, %xmm0
+    xorps   %xmm1, %xmm1
+
     // Restore all callee saved register.
     movq    (%rsp), %rbx
     movq    8(%rsp), %rsi
@@ -71,5 +80,5 @@ RestoreContextForEH:
     movq    232(%rsp), %rsp
 
     // jump to landingpad.
-    jmpq   *%rax
+    jmpq   *%r11
     .seh_endproc

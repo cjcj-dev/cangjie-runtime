@@ -30,7 +30,8 @@ public:
     virtual void RecordTypeInfo(TypeInfo* ti) = 0;
     virtual PackageInfo* GetPackageInfo(const char* packageName) const = 0;
     virtual void RemovePackageInfo(const char* path) = 0;
-    virtual PackageInfo* GetPackageInfoByPath(const char* path) = 0;
+    virtual bool VisitPackageInfoByPath(
+        const char* path, const std::function<void(PackageInfo*)>& visitor) = 0;
     virtual bool FileHasLoaded(const char* path) = 0;
     virtual bool FileHasMultiPackage(const char* path) = 0;
     virtual void GetSubPackages(PackageInfo* packageInfo, std::vector<PackageInfo*> &subPackages) = 0;
@@ -52,6 +53,10 @@ public:
     virtual U32 GetNumOfInterface(TypeInfo* typeInfo) = 0;
     virtual TypeInfo* GetInterface(TypeInfo* typeInfo, U32 idx) = 0;
     virtual TypeExt* GetTypeExt(void* type) = 0;
+#ifdef MRT_TESTABLE_INTERNALS
+    virtual size_t GetPackageIndexSizeForTesting() const = 0;
+    virtual void* GetLibraryHandleForTesting(const char* libName) const = 0;
+#endif
     virtual void RegisterTypeExt(BaseFile* baseFile) = 0;
 #ifdef __OHOS__
     virtual void RegisterLoadFunc(void* loadFunc, void* loadLibraryFunc) = 0;

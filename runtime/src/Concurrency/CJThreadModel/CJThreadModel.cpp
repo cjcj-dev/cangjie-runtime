@@ -28,6 +28,9 @@ extern "C" void MRT_VisitorCaller(void* argPtr, void* handle)
     (*reinterpret_cast<RootVisitor*>(handle))(ref);
     ObjectRef& map = reinterpret_cast<ObjectRef&>(reinterpret_cast<LWTData*>(argPtr)->threadObject);
     (*reinterpret_cast<RootVisitor*>(handle))(map);
+    // Thread-owned closure roots share the stack-root handshake/repair protocol.
+    ObjectRef& execute = RootSlotAt(&reinterpret_cast<LWTData*>(argPtr)->execute);
+    (*reinterpret_cast<RootVisitor*>(handle))(execute);
 }
 
 // External interface for adapting to concurrent tasks

@@ -13,4 +13,4 @@ target_include_directories(log PUBLIC include)
 
 target_link_libraries(log PUBLIC mid)
 
-file(COPY include/log.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
+file(COPY include/log.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)

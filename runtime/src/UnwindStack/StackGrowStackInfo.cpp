@@ -9,13 +9,15 @@
 
 #include <stack>
 
-#include "Collector/TracingCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Common/StackType.h"
 #include "Interpreter/InterpreterSpecific.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 void StackGrowStackInfo::FillInStackTrace()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     Mutator* mutator = Mutator::GetMutator();
     if (mutator == nullptr) {
         return;
@@ -73,6 +75,7 @@ void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVi
                                          const StackPtrVisitor& fixPtrVisitor,
                                          const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     RegSlotsMap regSlotsMap;
     for (const auto& frame : stack) {
         ObjectRef* rbp = reinterpret_cast<ObjectRef*>(frame.GetMachineFrame().GetFA());
@@ -84,11 +87,18 @@ void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVi
                                     regSlotsMap, frame, mutator);
                 break;
             }
+            // Stub frames spill the callee-saved registers of their managed caller. Without recording
+            // those spill slots, a managed frame above the stub resolves its register roots to the
+            // innermost recorded slots, i.e. to register values that belong to the runtime code below.
+            case FrameType::C2R_STUB:
+            case FrameType::C2N_STUB:
+            case FrameType::EXSLUSIVE:
 #ifdef INTERPRETER_ENABLED
             case FrameType::INTERPRETER_C2I:
+#endif
                 RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
-#endif
+            case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
                 RegRoot::RecordRegs(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;

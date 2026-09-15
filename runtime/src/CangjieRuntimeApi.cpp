@@ -22,10 +22,11 @@
 #include "ExceptionManager.inline.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zDriver.hpp"
 #include "RuntimeConfig.h"
 #include "UnwindStack/MangleNameHelper.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "LoaderManager.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "Interpreter/RuntimeAPI.h"
@@ -43,6 +44,7 @@
 #include "CpuProfiler/CpuProfiler.h"
 #include "Heap/Collector/GcRequest.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Common/ColourEncoding.h"
 #include "HeapManager.h"
 #include "HeapManager.inline.h"
 
@@ -94,7 +96,10 @@ static bool CheckInitConfig(const struct RuntimeParam& param)
         LOG(RTLOG_ERROR, "RuntimeParam.coParam.coStackSize must be in range [64KB, 1GB].\n");
         return false;
     }
-    size_t paramHeapSize = param.heapParam.heapSize * MapleRuntime::KB;
+    size_t paramHeapSize = 0;
+    CHECK_DETAIL(MapleRuntime::CheckedMulSize(param.heapParam.heapSize, MapleRuntime::KB, paramHeapSize),
+                 "RuntimeParam.heapParam.heapSize overflows bytes: heapSizeKB=%zu",
+                 param.heapParam.heapSize);
     // Check heap configuration, min heapsize 4MB.
     if (paramHeapSize != 0 && (paramHeapSize < 4 * MapleRuntime::MB || paramHeapSize > g_sysmemSize)) {
         LOG(RTLOG_ERROR, "RuntimeParam.heapParam.heapSize must be in range [4MB, system memory size].\n");
@@ -251,7 +256,6 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
             .backupGCInterval = param->gcParam.backupGCInterval == 0 ? 240 * MapleRuntime::SECOND_TO_NANO_SECOND :
                 param->gcParam.backupGCInterval * MapleRuntime::SECOND_TO_NANO_SECOND,
             // Default GC threads factor is 2.
-            .gcThreads = param->gcParam.gcThreads == 0 ? 2 : param->gcParam.gcThreads,
         },
         .logParam = {
             .logLevel = param->logParam.logLevel,
@@ -397,6 +401,7 @@ enum FutureFlag : uint8_t {
 
 struct FutureImpl {
     const CJTaskFunc fn;
+    MapleRuntime::ElfUnloadQuiescence::PendingTask pendingTask;
     void* arg;
     void* res{ nullptr };
     FutureFlag flag{ FLAG_WAITING };
@@ -404,7 +409,10 @@ struct FutureImpl {
     std::condition_variable cv;
     bool autoRelease{ false };
 
-    explicit FutureImpl(void* arg, const CJTaskFunc fn = nullptr) : fn(fn), arg(arg) {}
+    explicit FutureImpl(void* arg, const CJTaskFunc fn = nullptr)
+        : fn(fn), pendingTask(reinterpret_cast<MapleRuntime::Uptr>(fn)), arg(arg)
+    {
+    }
 };
 
 static void* UserFuncExecutor(void* arg, [[maybe_unused]] unsigned int len)
@@ -417,6 +425,9 @@ static void* UserFuncExecutor(void* arg, [[maybe_unused]] unsigned int len)
     MapleRuntime::MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<MapleRuntime::ThreadLocalData*>(threadData));
     void* ptr = MapleRuntime::ExecuteCangjieStub(fi->arg, 0, 0, reinterpret_cast<void*>(fi->fn),
                                                  reinterpret_cast<void*>(threadData), 0);
+    {
+        MapleRuntime::ElfUnloadQuiescence::PendingTask::CompletionScope taskComplete(fi->pendingTask);
+    }
 #ifdef CANGJIE_TSAN_SUPPORT
     MapleRuntime::Sanitizer::TsanFinalize();
 #endif
@@ -511,6 +522,9 @@ CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJT
 #endif
         if (CJThreadAttrSpecificSet(&attr, num, data) != 0) {
             LOG(RTLOG_ERROR, "failed to set cjthread specific, please check your input num.\n");
+            std::lock_guard<std::mutex> lck(g_mtx);
+            futureSet.erase(reinterpret_cast<uintptr_t>(fi));
+            delete fi;
             return nullptr;
         }
     }
@@ -562,6 +576,9 @@ static void* UserFuncWrapper(void* arg)
     MapleRuntime::MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<MapleRuntime::ThreadLocalData*>(threadData));
     void* ptr = MapleRuntime::ExecuteCangjieStub(fi->arg, 0, 0, reinterpret_cast<void*>(fi->fn),
                                                  reinterpret_cast<void*>(threadData), 0);
+    {
+        MapleRuntime::ElfUnloadQuiescence::PendingTask::CompletionScope taskComplete(fi->pendingTask);
+    }
 
     MapleRuntime::ExceptionManager::CheckAndDumpException();
     MapleRuntime::Runtime::Current().GetMutatorManager().TransitMutatorToExit();
@@ -590,12 +607,14 @@ SemiCJThreadHandle CreateCJThread(const CJTaskFunc func, void *arg, struct CJThr
     CJThreadAttrInit(&attr);
     if (data != nullptr && CJThreadAttrSpecificSet(&attr, num, (CJThreadSpecificDataInner*)data) != 0) {
         LOG(RTLOG_ERROR, "failed to set CJThreadSpecificData, check in-arg num.\n");
+        delete fi;
         return nullptr;
     }
 
     CJThreadHandle handle = CJ_CJThreadCreate((const struct CJThreadAttr*)(&attr), UserFuncWrapper, fi);
     if (handle == nullptr) {
         LOG(RTLOG_ERROR, "failed to create cjthread.\n");
+        delete fi;
         return nullptr;
     }
     return handle;

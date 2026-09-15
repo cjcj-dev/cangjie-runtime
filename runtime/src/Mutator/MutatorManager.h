@@ -10,10 +10,15 @@
 
 #include <bitset>
 #include <list>
+#include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "Base/AtomicSpinLock.h"
+#include "Base/GcLog.h"
+#include "Heap/z/zStat.hpp"
 #include "Base/Globals.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
@@ -27,7 +32,11 @@
 
 namespace MapleRuntime {
 const uint64_t WAIT_LOCK_INTERVAL = 5000; // 5us
-const uint64_t WAIT_LOCK_TIMEOUT = 30;    // seconds
+const uint64_t WAIT_LOCK_TIMEOUT = 240;   // seconds (default; was 30). Aligned with the
+                                          // stop-the-world base timeout (STW_TIMEOUTS_BASE_MS)
+                                          // so the mutator-list write lock is not more aggressive
+                                          // than STW under heavy CPU contention. Override via env
+                                          // cjMutatorLockTimeout (seconds).
 const uint32_t MAX_TIMEOUT_TIMES = 1;
 const int STW_TIMEOUTS_THREADS_BASE_COUNT = 100;
 // STW wait base timeout in milliseconds, for every 100 threads, the time is increased by 240000ms.
@@ -44,6 +53,30 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData);
 #endif
 
 using MutatorVisitor = std::function<void(Mutator&)>;
+
+struct EpochHandshakeStats {
+    uint64_t epoch = 0;
+    size_t requested = 0;
+    size_t acked = 0;
+    size_t ackedTwice = 0;
+    size_t selfAck = 0;
+    size_t gcAssistedAck = 0;
+    size_t startingAck = 0;
+    size_t runningAck = 0;
+    size_t parkedAck = 0;
+    size_t exitingAck = 0;
+    size_t deferredCreates = 0;
+    size_t bornCleanJoins = 0;
+    size_t exitTransitions = 0;
+    size_t destroyDeferred = 0;
+    size_t stopTheWorldCalls = 0;
+    size_t stackScanned = 0;
+    size_t stackFallback = 0;
+    size_t stackFrames = 0;
+    // Residual mutex window only (ledger clear / stats gather). Handshake wait
+    // no longer holds mutator-management W-lock (dynjoin: exclude + born-clean).
+    uint64_t managementLockNanos = 0;
+};
 
 class MutatorManager {
 public:
@@ -66,7 +99,7 @@ public:
     static MutatorManager& Instance() noexcept;
 
     void Init();
-    void Fini() { SatbBuffer::Instance().Fini(); }
+    void Fini() {}
 
     // Get the mutator list instance
     size_t GetMutatorCount()
@@ -90,8 +123,32 @@ public:
 
     bool TryAcquireMutatorManagementRLock()
     {
-        return mutatorManagementRWLock.TryLockRead();
+        // Writer-preference: defer to a pending writer so a non-blocking reader does
+        // not help starve the GC's mutator-list write lock. The caller (DestroyMutator)
+        // already handles a false return by deferring the mutator to expiringMutators.
+        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            return false;
+        }
+        if (!mutatorManagementRWLock.TryLockRead()) {
+            return false;
+        }
+        // Close the race between the pending-writer check above and TryLockRead().
+        // A reader that overlapped a writer announcement must not join the reader
+        // set and extend the writer's wait indefinitely.
+        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            mutatorManagementRWLock.UnlockRead();
+            return false;
+        }
+        return true;
     }
+
+    // Announce/withdraw a pending writer so readers back off. Used by the spin-based
+    // write-lock acquisition (AcquireMutatorManagementWLock*) which does not go through
+    // MutatorManagementWLock(). A counter (not a flag) supports several writers spinning
+    // concurrently; readers wait while any writer is pending.
+    void AnnounceMgmtWriterPending() { mgmtWritersWaiting.fetch_add(1, std::memory_order_acq_rel); }
+
+    void WithdrawMgmtWriterPending() { mgmtWritersWaiting.fetch_sub(1, std::memory_order_acq_rel); }
 
     void AcquireMutatorManagementWLock();
 
@@ -108,6 +165,16 @@ public:
     // Visit all mutators, hold mutatorListLock firstly
     void VisitAllMutators(MutatorVisitor func);
     void VisitAllMutatorsExceptFinalizer(MutatorVisitor func);
+    bool HandshakeFlushMarkProducers(class MarkDomain* domain);
+    // Waiting driver/finalizer threads service the same M4 operation queue.
+    bool MarkFlushHandshakeActive() const { return Handshake::Current().has_operation(); }
+    bool AcknowledgeMarkFlushForCurrentThread();
+    void VisitMarkingThreads(const std::function<void(const ThreadLocalData*)>& visitor);
+    void VisitStoreBarrierBuffers(const std::function<void(MAddress)>& visitor);
+    bool StoreBarrierBufferContains(MAddress slot);
+    void RegisterMarkFlushThread(ThreadLocalData* tls);
+    void UnregisterMarkFlushThread(ThreadLocalData* tls);
+    bool TlsHasMarkFlushPending(ThreadLocalData* tls);
 
     // Some functions about stw
     void StopTheWorld(bool syncGCPhase, GCPhase phase);
@@ -116,18 +183,11 @@ public:
     void StopLightSync() noexcept;
     void WaitUntilAllMutatorStopped();
     void DumpMutators(uint32_t timeoutTimes);
-    void DemandSuspensionForSync()
-    {
-        VisitAllMutators([](Mutator& mutator) {
-            mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
-            mutator.SetSafepointActive(true);
-        });
-    }
+    void DemandSuspensionForSync();
 
     void CancelSuspensionAfterSync()
     {
         VisitAllMutators([](Mutator& mutator) {
-            mutator.SetSafepointActive(false);
             mutator.ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
         });
     }
@@ -139,7 +199,7 @@ public:
 
     void RemoveMutatorSuspensionTrigger(Mutator& mutator) const
     {
-        mutator.SetSafepointActive(false);
+        mutator.ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
     }
 
     void BindMutator(Mutator& mutator) const;
@@ -165,9 +225,33 @@ public:
     void SyncMutexUnlock() noexcept { syncMutex.unlock(); }
 
     void EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &undoneMutators);
-    void TransitionAllMutatorsToGCPhase(GCPhase phase);
+    void TransitionAllMutatorsToGCPhase(GCPhase phase, bool young = false);
 
-    void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
+    static bool EpochHandshakeEnabled();
+    static bool ConcurrentStackScanEnabled();
+    EpochHandshakeStats RunEpochHandshake(const char* source, bool young);
+    void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
+    void RecordEpochHandshakeStackScan(bool scanned, size_t frames);
+    void RecordEpochHandshakeCreateAttempt();
+    // dynjoin (乙): create during active epoch marks mutator born-clean for that
+    // epoch (completion=active, state=ACKNOWLEDGED) and excludes it from the wait
+    // set. OpenJDK handshake.cpp:293-295: new ThreadsList members have no op.
+    void ExcludeNewMutatorFromActiveEpoch(Mutator& mutator);
+    void RecordEpochHandshakeExitTransition();
+    bool EpochHandshakeActive() const
+    {
+        return epochHandshakeActive.load(std::memory_order_acquire) != 0;
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    uint64_t BeginEpochHandshakeLifecycleTest();
+    void EndEpochHandshakeLifecycleTest();
+    size_t RuntimeMutatorRegistrySizeForTest();
+    size_t EpochHandshakeDestroyDeferredForTest() const
+    {
+        return epochHandshakeDestroyDeferred.load(std::memory_order_relaxed);
+    }
+#endif
+
     void TransitionAllMutatorsToCpuProfile();
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
@@ -215,11 +299,37 @@ public:
     const SafepointPageManager* GetSafepointPageManager() const { return safepointPageManager; }
 #endif
 
-    void MutatorManagementRLock() { mutatorManagementRWLock.LockRead(); }
+    void MutatorManagementRLock()
+    {
+        // Writer-preference: block new readers while a writer is pending so the GC's
+        // mutator-list write lock cannot be starved by sustained reader churn (many
+        // cjthreads registering/unregistering under heavy parallel compilation). A
+        // reader waits here in the same state it would wait for an already-held write
+        // lock, so this adds no new stop-the-world deadlock.
+        for (;;) {
+            while (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+                (void)sched_yield();
+            }
+            mutatorManagementRWLock.LockRead();
+            // A writer may announce itself after the check above but before LockRead
+            // increments the reader count. Back out in that case. Once a writer is
+            // pending, only the finite set of readers which completed both checks
+            // before the announcement can remain, so the writer must make progress.
+            if (mgmtWritersWaiting.load(std::memory_order_acquire) == 0) {
+                return;
+            }
+            mutatorManagementRWLock.UnlockRead();
+        }
+    }
 
     void MutatorManagementRUnlock() { mutatorManagementRWLock.UnlockRead(); }
 
-    void MutatorManagementWLock() { mutatorManagementRWLock.LockWrite(); }
+    void MutatorManagementWLock()
+    {
+        AnnounceMgmtWriterPending();
+        mutatorManagementRWLock.LockWrite();
+        WithdrawMgmtWriterPending();
+    }
 
     void MutatorManagementWUnlock() { mutatorManagementRWLock.UnlockWrite(); }
 
@@ -231,13 +341,46 @@ public:
 
     CJThreadHandle GetMainThreadHandle() { return mainThreadHandle; }
 
-private:
+    struct MarkFlushThread {
+        ThreadLocalData* tls = nullptr;
+        std::atomic<int> refs = { 0 };
+        std::atomic<int> dying = { 0 };
+        std::atomic<int> bufferLive = { 1 };
+        HandshakeState* handshake = nullptr;
+        std::unique_ptr<HandshakeState> ownedHandshake;
+    };
+
+    HandshakeState* HandshakeStateForTls(ThreadLocalData* tls);
+    bool TlsObservedSafe(ThreadLocalData* tls);
+    void EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
+                                std::vector<MarkFlushThread*>& handle);
+    void EnqueueHandshakeOn(ThreadLocalData* target, HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
+                            std::vector<MarkFlushThread*>& handle);
+    void ReleaseHandshakeHandle(std::vector<MarkFlushThread*>& handle);
+
+    template<typename Fn>
+    void ForEachMarkFlushTls(Fn&& fn)
+    {
+        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+        for (auto& kv : markFlushThreads) {
+            if (kv.first != nullptr) {
+                fn(kv.first);
+            }
+        }
+    }
+
+    private:
     using ExpiredMutatorList = std::list<Mutator*, StdContainerAllocator<Mutator*, MUTATOR_LIST>>;
     ExpiredMutatorList expiringMutators;
     std::mutex expiringMutatorListLock;
 
     // guard mutator set for stop-the-world/light-sync
     RwLock mutatorManagementRWLock;
+
+    // Number of writers currently waiting for mutatorManagementRWLock. Read by the
+    // read-lock paths to implement writer-preference (see MutatorManagementRLock /
+    // TryAcquireMutatorManagementRLock), preventing GC write-lock starvation.
+    std::atomic<uint32_t> mgmtWritersWaiting{ 0 };
 
     // count of mutators need to be suspended for stw/lsync.
     // this field is also used as futex wait/wakeup word for stw/lsync.
@@ -254,6 +397,38 @@ private:
     std::atomic<bool> worldStopped = { false };
     std::list<Mutator*> undoneLightSyncMutators;
     GCPhase lightSyncGCPhase;
+
+    std::atomic<uint64_t> epochHandshakeSequence = { 0 };
+    std::atomic<uint64_t> epochHandshakeActive = { 0 };
+    // Generation of the current root operation, guarded by the ledger mutex.
+    GCCycleGeneration epochHandshakeGeneration = GCCycleGeneration::OLD;
+    std::atomic<size_t> epochHandshakeAcked = { 0 };
+    std::atomic<size_t> epochHandshakeAckedTwice = { 0 };
+    std::atomic<size_t> epochHandshakeSelfAck = { 0 };
+    std::atomic<size_t> epochHandshakeGcAssistedAck = { 0 };
+    std::atomic<size_t> epochHandshakeStartingAck = { 0 };
+    std::atomic<size_t> epochHandshakeRunningAck = { 0 };
+    std::atomic<size_t> epochHandshakeParkedAck = { 0 };
+    std::atomic<size_t> epochHandshakeExitingAck = { 0 };
+    std::atomic<size_t> epochHandshakeDeferredCreates = { 0 };
+    std::atomic<size_t> epochHandshakeBornCleanJoins = { 0 };
+    std::atomic<size_t> epochHandshakeExitTransitions = { 0 };
+    std::atomic<size_t> epochHandshakeDestroyDeferred = { 0 };
+    std::atomic<size_t> epochHandshakeStopTheWorldCalls = { 0 };
+    std::atomic<size_t> epochHandshakeStackScanned = { 0 };
+    std::atomic<size_t> epochHandshakeStackFallback = { 0 };
+    std::atomic<size_t> epochHandshakeStackFrames = { 0 };
+    std::mutex epochHandshakeLedgerMutex;
+    std::unordered_set<Mutator*> epochHandshakeAckedMutators;
+    // Participants of the active epoch; DestroyMutator must not free these while
+    // active != 0 (replaces the old full-handshake W-lock serialisation).
+    std::unordered_set<Mutator*> epochHandshakeParticipants;
+    // Runtime mutators are not necessarily owned by a scheduler CJThread, so
+    // keep them in the same participant inventory explicitly.
+    std::mutex runtimeMutatorRegistryMutex;
+    std::unordered_set<Mutator*> runtimeMutators;
+    std::mutex markFlushThreadMutex;
+    std::unordered_map<ThreadLocalData*, std::unique_ptr<MarkFlushThread>> markFlushThreads;
 
 #if defined(_WIN64) || defined (__APPLE__)
     std::condition_variable mutatorSuspensionCV;
@@ -276,20 +451,32 @@ public:
         GCPhase phase = GC_PHASE_IDLE) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
+        // Preserve the GCLOG phase-kind observation across rendezvous and held time.
+        ZStat::EnterStwScope();
         MutatorManager::Instance().StopTheWorld(syncGCPhase, phase);
+        stoppedTime = TimeUtil::NanoSeconds();
     }
 
     __attribute__((always_inline)) ~ScopedStopTheWorld()
     {
-        LOG(RTLOG_REPORT, "%s stw time %zu us", reason, GetElapsedTime() / 1000); // 1000:nsec per usec
+        const uint64_t endTime = TimeUtil::NanoSeconds();
+        LOG(RTLOG_REPORT, "%s stw time %zu us", reason, (endTime - startTime) / 1000); // 1000:nsec per usec
+        // The line above goes to REPORT, which Release gates behind MRT_REPORT=<path> -- so the one
+        // number a pause budget is made of was only visible in a mode that writes ~10MB per run and
+        // perturbs the thing being measured. Emit it on the same always-on MRT_GC_LOG channel as
+        // rec=cycle/rec=phase instead.
+        GcLog::Stw(reason, startTime, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StartTheWorld();
+        ZStat::ExitStwScope();
     }
 
     uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
 
+
 private:
     const char* reason = nullptr;
     uint64_t startTime = 0;
+    uint64_t stoppedTime = 0;
 };
 
 // Scoped light sync.
@@ -299,13 +486,22 @@ public:
         GCPhase phase = GC_PHASE_IDLE) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
+        // StartLightSync parks every mutator, so phases entered anywhere in this scope
+        // are observed as paused, just like phases in ScopedStopTheWorld.
+        ZStat::EnterStwScope();
         MutatorManager::Instance().StartLightSync(syncGCPhase, phase);
+        stoppedTime = TimeUtil::NanoSeconds();
     }
 
     __attribute__((always_inline)) ~ScopedLightSync()
     {
-        LOG(RTLOG_REPORT, "%s light sync time %zu us", reason, GetElapsedTime() / 1000); // 1000:nsec per usec
+        const uint64_t endTime = TimeUtil::NanoSeconds();
+        LOG(RTLOG_REPORT, "%s light sync time %zu us", reason, (endTime - startTime) / 1000); // 1000:nsec per usec
+        // A light sync parks every mutator just like StopTheWorld(). Keep its rendezvous and
+        // held intervals in the same structured pause ledger so pause sums cannot omit it.
+        GcLog::Stw(reason, startTime, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StopLightSync();
+        ZStat::ExitStwScope();
     }
 
     uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
@@ -313,6 +509,7 @@ public:
 private:
     const char* reason = nullptr;
     uint64_t startTime = 0;
+    uint64_t stoppedTime = 0;
 };
 
 // Scoped lock STW, this prevent other thread STW during the current scope.

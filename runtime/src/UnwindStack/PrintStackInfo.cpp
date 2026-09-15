@@ -7,10 +7,12 @@
 #include "PrintStackInfo.h"
 
 #include "Common/StackType.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 void PrintStackInfo::FillInStackTrace()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     UnwindContext uwContext;
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);
@@ -53,6 +55,7 @@ void PrintStackInfo::PrintStackTrace() const
 #if defined(__IOS__)
 CString PrintStackInfo::GetStackTraceString()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     UnwindContext uwContext;
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);

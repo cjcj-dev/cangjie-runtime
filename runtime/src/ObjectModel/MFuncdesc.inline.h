@@ -9,6 +9,7 @@
 #define MRT_MFUNC_DESC_INLINE_H
 
 #include "Common/StackType.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "MFuncdesc.h"
 
 namespace MapleRuntime {
@@ -40,12 +41,18 @@ inline int8_t MFuncDesc::GetStackTraceFormat() const
 
 inline FuncDescRef MFuncDesc::GetFuncDesc(FrameAddress* fa)
 {
-    return reinterpret_cast<FuncDescRef>(
+    ElfUnloadQuiescence::ReadScope reader;
+    FuncDescRef desc = reinterpret_cast<FuncDescRef>(
         *reinterpret_cast<U64*>(reinterpret_cast<uintptr_t>(fa) - STACK_OFFSET_IN_APPLE));
+    return ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(desc)) ? desc : nullptr;
 }
 
 inline FuncDescRef MFuncDesc::GetFuncDesc(Uptr startPC)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    if (!ElfUnloadQuiescence::IsLinkedAddress(startPC)) {
+        return nullptr;
+    }
     DataRefOffset32<MFuncDesc>* offset =
         reinterpret_cast<DataRefOffset32<MFuncDesc>*>(startPC - START_PC_OFFSET);
     return offset->GetDataRef();

@@ -12,7 +12,9 @@
 #include <climits>
 
 #include "Base/Macros.h"
+#include "Heap/z/zAddress.hpp"  // reference bit layout + g_cjLoadBadMask
 #include "Base/Types.h"
+#include "Heap/z/zAddress.inline.hpp"  // zoffset / zpointer / zaddress / zaddress_unsafe
 
 // commonly agreed type interfaces for a managed runtime:
 //    they're opaque across modules, but we still want it provides a degree
@@ -21,6 +23,8 @@ namespace MapleRuntime {
 // Those are mostly managed pointer types for GC
 using MAddress = Uptr; // Managed address
 constexpr Uptr NULL_ADDRESS = 0;
+
+
 
 // object model related types
 class BaseObject;
@@ -71,6 +75,9 @@ enum class AllocType {
     MOVEABLE_OBJECT = 0,
     PINNED_OBJECT,
     RAW_POINTER_OBJECT,
+    // Large reference arrays initialize their payload in safepoint-bounded
+    // segments. The allocator must not clear the reused extent first.
+    MOVEABLE_OBJECT_SEGMENTED_CLEAR,
 };
 
 #ifdef __cplusplus

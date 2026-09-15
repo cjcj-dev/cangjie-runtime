@@ -4,16 +4,37 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Common/ColourEncoding.h"
+#include "Base/Log.h"
 #include "BaseObject.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/MObject.inline.h"
+#include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
+// Keep the out-of-line slot store available to declaration-only consumers.
+// Do not depend on a barrier call retaining an incidental template instance:
+// OHOS and optimized builds can inline every such call.
+// ZGC: zBarrier.inline.hpp:448-450, 692-706 (store-good barrier path).
+template void HeapSlot<false>::StoreColoured(zpointer, std::memory_order);
+
+void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
+{
+    if (LIKELY(!Heap::IsHeapAddress(slot))) {
+        return;
+    }
+    const SlotWordVerdict verdict = ClassifySlotWord(newVal);
+    CHECK_DETAIL(verdict != SlotWordVerdict::kIllegal,
+                 "full-colour heap write rejected: slot=%p value=%#zx", slot, newVal);
+}
+
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -47,31 +68,31 @@ void BaseObject::DumpObject(int logtype, bool isSimple) const
 }
 #endif
 
-static void ForEachRefFieldInNonArrayObject(ObjectPtr obj, const RefFieldVisitor& visitor)
+static void ForEachRefFieldInNonArrayObject(ObjectPtr obj, TypeInfo* klass, const RefFieldVisitor& visitor)
 {
-    GCTib gcTib = obj->GetGCTib();
+    GCTib gcTib = klass->GetGCTib();
     // gcTib record payload data, skip the TypeInfo
     MAddress objAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     gcTib.ForEachBitmapWord(objAddr, visitor);
 }
 
 // Call func on each element in an object array.
-static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
+static void ForEachElementInArray(ObjectPtr obj, TypeInfo* klass, const RefFieldVisitor& visitor)
 {
     // take array length and content.
     MArray* mArray = reinterpret_cast<MArray*>(obj);
     MIndex arrayLengthVal = mArray->GetLength();
-    TypeInfo* componentTypeInfo = mArray->GetComponentTypeInfo();
+    TypeInfo* componentTypeInfo = klass->GetComponentTypeInfo();
     if (componentTypeInfo->IsStructType()) {
         GCTib gcTib = componentTypeInfo->GetGCTib();
         MAddress contentAddr = reinterpret_cast<Uptr>(mArray) + MArray::GetContentOffset();
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             gcTib.ForEachBitmapWord(contentAddr, visitor);
-            contentAddr += mArray->GetElementSize();
+            contentAddr += componentTypeInfo->GetComponentSize();
         }
     } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                componentTypeInfo->IsInterface()) {
-        RefField<>* arrayContent = reinterpret_cast<RefField<>*>(mArray->ConvertToCArray());
+        HeapSlot<>* arrayContent = &HeapSlotAt<>(mArray->ConvertToCArray());
         // for each object in array.
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             visitor(arrayContent[i]);
@@ -83,12 +104,18 @@ static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
 
 void BaseObject::ForEachRefField(const RefFieldVisitor& visitor)
 {
-    TypeInfo* typeInfo = GetTypeInfo();
+    ForEachRefField(visitor, GetTypeInfo());
+}
+
+void BaseObject::ForEachRefField(const RefFieldVisitor& visitor, TypeInfo* typeInfo)
+{
+    // VM layout dispatch only. GC's safe/unsafe split is in ZIterator,
+    // as in zIterator.inline.hpp:64-77 and oopDesc::oop_iterate.
     if (typeInfo->HasRefField()) {
         if (UNLIKELY(typeInfo->IsRawArray())) {
-            ForEachElementInArray(this, visitor);
+            ForEachElementInArray(this, typeInfo, visitor);
         } else {
-            ForEachRefFieldInNonArrayObject(this, visitor);
+            ForEachRefFieldInNonArrayObject(this, typeInfo, visitor);
         }
     }
 };
@@ -121,7 +148,7 @@ void BaseObject::ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddr
         MRT_ASSERT((alignedStart + contentSize) >= aggEnd, "aggregate element is not align\n");
         MAddress currentAddr = alignedStart;
         for (U64 i = startIndex; (i < arrayLen) && (currentAddr < aggEnd); ++i) {
-            gcTib.ForEachBitmapWord(currentAddr, visitor);
+            gcTib.ForEachBitmapWordInRange(currentAddr, visitor, aggStart, aggEnd);
             currentAddr += contentSize;
         }
     } else {
@@ -170,8 +197,9 @@ bool BaseObject::IsInTraceRegion() const
 
 bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> oldRef, const RefField<> newRef)
 {
-    if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
-        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", oldRef.GetFieldValue(), newRef.GetFieldValue());
+    if (HealSlot(field, oldRef.GetFieldValue(), newRef.GetFieldValue(),
+                 HealSite::BaseObjectCompareExchangeRefField, HealNull::Allow)) {
+        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
         return true;
     }
     return false;

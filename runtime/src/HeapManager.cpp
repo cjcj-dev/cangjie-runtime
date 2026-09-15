@@ -7,7 +7,7 @@
 
 #include "HeapManager.h"
 
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 HeapManager::HeapManager() {}

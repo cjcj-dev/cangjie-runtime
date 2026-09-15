@@ -14,4 +14,4 @@ target_link_libraries(timer PUBLIC schedule)
 target_include_directories(timer PUBLIC include)
 target_include_directories(timer PUBLIC include/inner)
 
-file(COPY include/timer.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
+file(COPY include/timer.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)

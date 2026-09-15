@@ -24,7 +24,7 @@ const char* CjSemanticVersion::GetRuntimeSDKVersion()
 #ifdef CJ_SDK_VERSION
     return CJ_SDK_VERSION;
 #else
-    return nullptr;
+#error "CJ_SDK_VERSION must be defined"
 #endif
 }
 

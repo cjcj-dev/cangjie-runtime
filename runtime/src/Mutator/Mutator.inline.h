@@ -13,8 +13,8 @@
 namespace MapleRuntime {
 inline void Mutator::DoEnterSaferegion()
 {
-    // set current mutator in saferegion.
     SetInSaferegion(SAFE_REGION_TRUE);
+    MarkFlushOnEnterSaferegion();
 }
 
 inline bool Mutator::EnterSaferegion(bool updateUnwindContext) noexcept
@@ -47,10 +47,10 @@ __attribute__((always_inline)) inline bool Mutator::TransitionGCPhase(bool bySel
         GCPhaseTransitionState state = transitionState.load();
         // If this mutator phase transition has finished, just return
         if (state == FINISH_TRANSITION) {
-            bool result = mutatorPhase.load() == Heap::GetHeap().GetGCPhase();
+            bool result = mutatorPhase.load() == Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
             if (!bySelf && !result) { // why check bySelf?
                 LOG(RTLOG_FATAL, "gc transition mutator %p (phase %u) to gc phase %u failed",
-                    this, mutatorPhase.load(), Heap::GetHeap().GetGCPhase());
+                    this, mutatorPhase.load(), Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
             }
             return result;
         }
@@ -65,50 +65,29 @@ __attribute__((always_inline)) inline bool Mutator::TransitionGCPhase(bool bySel
             }
         }
 
+        // L743: GC-side NO_TRANSITION must not silently succeed when phase diverges.
+        // Phase already matches ⇒ success (same as old true). Mismatch ⇒ false + log.
         if (!bySelf && state == NO_TRANSITION) {
-            return true;
+            bool phaseMatch = mutatorPhase.load() == Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+            if (!phaseMatch) {
+                LOG(RTLOG_ERROR,
+                    "gc transition mutator %p (phase %u) NO_TRANSITION while gc phase %u",
+                    this, mutatorPhase.load(), Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
+            }
+            return phaseMatch;
         }
 
         // Current thread set atomic variable to ensure atomicity of phase transition
         CHECK(state == NEED_TRANSITION);
         if (transitionState.compare_exchange_weak(state, IN_TRANSITION)) {
-            TransitionToGCPhaseExclusive(Heap::GetHeap().GetGCPhase());
+            TransitionToGCPhaseExclusive(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
             transitionState.store(FINISH_TRANSITION, std::memory_order_release);
             return true;
         }
     } while (true);
 }
 
-// Ensure that mutator is changed only once by mutator itself or Profile
-__attribute__((always_inline)) inline bool Mutator::TransitionToCpuProfile(bool bySelf)
-{
-    do {
-        CpuProfileState state = cpuProfileState.load();
-        // If this mutator profile has finished, just return
-        if (state == FINISH_CPUPROFILE) {
-            return true;
-        }
-        // If this mutator is executing profile by other thread, mutator should wait but profile just return
-        if (state == IN_CPUPROFILING) {
-            if (bySelf) {
-                WaitForCpuProfiling();
-                return true;
-            } else {
-                return false;
-            }
-        }
-        if (!bySelf && state == NO_CPUPROFILE) {
-            return true;
-        }
-        // Current thread set atomic variable to ensure atomicity of phase transition
-        CHECK(state == NEED_CPUPROFILE);
-        if (cpuProfileState.compare_exchange_weak(state, IN_CPUPROFILING)) {
-            TransitionToCpuProfileExclusive();
-            cpuProfileState.store(FINISH_CPUPROFILE, std::memory_order_release);
-            return true;
-        }
-    } while (true);
-}
+
 } // namespace MapleRuntime
 
 #endif // MRT_MUTATOR_INLINE_H

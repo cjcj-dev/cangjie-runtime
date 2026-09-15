@@ -22,5 +22,5 @@ file(GLOB ADDITIONAL_SRC_FILES
         )
 target_sources(schedule PRIVATE ${ADDITIONAL_SRC_FILES})
 
-file(COPY include/schedule.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
-file(COPY include/inner/gas/${CPU_FAMILY}/${CPU_CORE}/cjthread_context.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
+file(COPY include/schedule.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)
+file(COPY include/inner/gas/${CPU_FAMILY}/${CPU_CORE}/cjthread_context.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)

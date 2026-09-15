@@ -49,7 +49,7 @@ public:
     TypeTemplate* FindTypeTemplateFromLoadedFiles(const char* typeTemplateName);
     void RecordTypeInfo(TypeInfo* ti);
     PackageInfo* GetPackageInfoByName(const char* packageName);
-    PackageInfo* GetPackageInfoByPath(const char* path);
+    bool VisitPackageInfoByPath(const char* path, const std::function<void(PackageInfo*)>& visitor);
     void RemovePackageInfo(const char* path);
     bool FileHasLoaded(const char* path);
     bool FileHasMultiPackage(const char* path);

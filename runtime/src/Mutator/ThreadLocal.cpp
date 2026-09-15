@@ -8,9 +8,13 @@
 #include "ThreadLocal.h"
 
 #include "Common/Runtime.h"
+#include "Common/ThreadCache.h"
 #include "schedule.h"
 #include "Base/Globals.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
+#include "Mutator/Handshake.h"
+#include "Heap/WCollector/WCollector.h"
 
 namespace MapleRuntime {
 RwLock ThreadLocal::tlEnableLock;
@@ -23,11 +27,50 @@ void ThreadLocalData::SetMutator(Mutator* newMutator)
 #ifdef INTERPRETER_ENABLED
     interpreterCJThreadData = newMutator != nullptr ? newMutator->interpreterCJThreadData : nullptr;
 #endif
+    UpdatePollValues(this);
 }
 
 ThreadLocalData* ThreadLocal::GetThreadLocalData()
 {
     return reinterpret_cast<ThreadLocalData*>(threadLocalData);
+}
+
+ThreadGCData& ThreadLocal::GetGCData()
+{
+    ThreadLocalData* tls = GetThreadLocalData();
+    if (tls->gcData == nullptr) {
+        tls->gcData = new ThreadGCData();
+        InitializeCleaner();
+    }
+    return *tls->gcData;
+}
+
+MarkThreadLocalStacks& ThreadLocal::GetMarkStacks(MarkDomain& domain)
+{
+    const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
+    auto& stacks = GetGCData().markStacks[index];
+    if (stacks == nullptr) {
+        stacks = std::make_unique<MarkThreadLocalStacks>(64);
+    }
+    return *stacks;
+}
+
+bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain)
+{
+    if (tls == nullptr || tls->gcData == nullptr) {
+        return false;
+    }
+    const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
+    auto& stacks = tls->gcData->markStacks[index];
+    return stacks != nullptr && stacks->Flush(domain.Stripes(), true);
+}
+
+void ThreadLocal::FlushCurrentThreadMarkStacks()
+{
+    if (GetThreadLocalData()->gcData != nullptr) {
+        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        (void)collector.FlushThreadMarkProducers(GetThreadLocalData());
+    }
 }
 
 void ThreadLocal::InitializeCleaner()
@@ -39,27 +82,33 @@ CleanThreadLocalData::CleanThreadLocalData()
 {
     // Add a side effect to make sure the constructor wont be optimized out.
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    static volatile bool isInit = false;
-    if (!isInit) {
-        isInit = true;
-    }
 }
 
 CleanThreadLocalData::~CleanThreadLocalData()
 {
-    if (!ThreadLocal::TryGetRdLock()) {
-        return;
-    }
-
     ThreadLocalData* local = ThreadLocal::GetThreadLocalData();
-    if (Runtime::CurrentRef() == nullptr ||
-        local->isCJProcessor || local->foreignCJThread == nullptr) {
-        ThreadLocal::UnlockRdLock();
+    void* cache = local->threadCache;
+    local->threadCache = nullptr;
+
+    if (!ThreadLocal::TryGetRdLock()) {
+        // Runtime shutdown owns the write lock; process exit reclaims TLS.
         return;
     }
-
-    MRT_StopSubScheduler(local->schedule);
-    CJForeignThreadExit(reinterpret_cast<CJThreadHandle>(local->foreignCJThread));
+    if (Runtime::CurrentRef() != nullptr) {
+        if (!local->isCJProcessor && local->foreignCJThread != nullptr) {
+            MRT_StopSubScheduler(local->schedule);
+            CJForeignThreadExit(reinterpret_cast<CJThreadHandle>(local->foreignCJThread));
+        }
+        // Foreign exit is the last possible producer. Publish before removing
+        // the owner from the handshake inventory (ZMark::flush, zMark.cpp:998).
+        MutatorManager::Instance().UnregisterMarkFlushThread(local);
+        ThreadLocal::FlushCurrentThreadMarkStacks();
+    }
+    delete local->gcData;
+    local->gcData = nullptr;
+    if (cache != nullptr) {
+        delete reinterpret_cast<ThreadCache*>(cache);
+    }
     ThreadLocal::UnlockRdLock();
 }
 
@@ -87,10 +136,10 @@ extern "C" void MCC_CheckThreadLocalDataOffset()
 #ifdef INTERPRETER_ENABLED
     static_assert(offsetof(ThreadLocalData, interpreterCJThreadData) == sizeof(void*) * 7 + sizeof(uint64_t) * 2,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
-    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 11 + sizeof(uint64_t) * 2,
+    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 12 + sizeof(uint64_t) * 2,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #else
-    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 10 + sizeof(uint64_t) * 2,
+    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 11 + sizeof(uint64_t) * 2,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #endif
 #else
@@ -101,10 +150,10 @@ extern "C" void MCC_CheckThreadLocalDataOffset()
 #ifdef INTERPRETER_ENABLED
     static_assert(offsetof(ThreadLocalData, interpreterCJThreadData) == sizeof(void*) * 9,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
-    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 12,
+    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 13,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #else
-    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 11,
+    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 12,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #endif
 #endif

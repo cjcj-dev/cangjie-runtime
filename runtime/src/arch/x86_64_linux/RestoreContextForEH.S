@@ -43,6 +43,17 @@ RestoreContextForEH:
     movq    %rsp, %rdi
     callq   MRT_RestoreContext
 
+    // rax holds the landing pad. When an uncaught exception resumes at
+    // unwindPCForN2CStub, N2CStub saves rax/rdx as the C return value.
+    // Leaving the landing-pad PC in rax makes C see a code address (e.g.
+    // CJ_MCC_N2CStub+N) as retBuffer → SEGV_ACCERR on PROT_NONE ELF gap.
+    // Zero C return regs before the jump; catch pads do not depend on them.
+    movq    %rax, %r11
+    xorq    %rax, %rax
+    xorq    %rdx, %rdx
+    xorps   %xmm0, %xmm0
+    xorps   %xmm1, %xmm1
+
     // Restore all callee saved register.
     movq    (%rsp), %rbx
     movq    0x08(%rsp), %r12
@@ -53,6 +64,6 @@ RestoreContextForEH:
     movq    0x30(%rsp), %rsp
 
     // jump to landingpad.
-    jmpq   *%rax
+    jmpq   *%r11
     .cfi_endproc
     .size RestoreContextForEH, .-RestoreContextForEH

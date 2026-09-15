@@ -101,6 +101,12 @@ static size_t InitHeapSize(size_t defaultParam)
     size_t minSize = 4UL * KB;
 #endif
     size_t maxSize = g_sysmemSize / KB;
+    // cjHeapSwap=on lifts the cap to twice physical memory for swap-backed heaps
+    // (bootstrap builds compile the chir package with a heap larger than RAM).
+    const char* swapEnv = std::getenv("cjHeapSwap");
+    if (swapEnv != nullptr && strcmp(swapEnv, "on") == 0) {
+        maxSize = (g_sysmemSize * 2) / KB;
+    }
     if (size >= minSize && size <= maxSize) {
         return size;
     } else {
@@ -267,7 +273,10 @@ static uint32_t InitProcessorNum()
     unsigned int cpus = std::thread::hardware_concurrency();
     uint32_t defaultProcs = cpus != 0 ? static_cast<uint32_t>(cpus) : 8;
     auto env = CString(std::getenv("cjProcessorNum"));
-    if (env.Str() == nullptr) {
+    // ⛔ IsEmpty(), not Str() == nullptr: CString(nullptr) allocates an empty buffer, so
+    // Str() is never null (CString.cpp:27-35). The old guard never fired; the fall-through
+    // happened to give the same answer here because IsPosNumber("") is false.
+    if (env.IsEmpty()) {
         return defaultProcs;
     }
     CString s = env.RemoveBlankSpace();
@@ -347,7 +356,7 @@ void* WrapperTask(void* arg, unsigned int len)
     // mutator has been set to a valid pointer before.
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
-    BaseObject* future = Heap::GetBarrier().ReadStaticRef(*(reinterpret_cast<RefField<>*>(&lwtData->obj)));
+    BaseObject* future = Heap::GetBarrier().ReadPlainRoot(RootSlotAt(&lwtData->obj));
     TypeInfo* typeInfo = future->GetTypeInfo();
 #if defined(__aarch64__)
     ExecuteCangjieStub(future, typeInfo, 0, execute, reinterpret_cast<void*>(threadData), &g_ut);
@@ -370,8 +379,7 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     data.execute = execute;
     data.threadObject = nullptr;
     data.obj = nullptr;
-    RefField<>* runtimeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*runtimeRootField, reinterpret_cast<BaseObject*>(future));
+    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data.obj), from_native_ref(future));
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
@@ -393,6 +401,7 @@ bool MRT_NewForeignCJThread()
     if (ThreadLocal::IsCJProcessor() || ThreadLocal::GetMutator() != nullptr) {
         return false;
     }
+    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
     TRACE_START("CJRT_INVOKE_CJTASK");
     ScheduleHandle scheduler = nullptr;
     if (ThreadLocal::GetForeignCJThread() == nullptr) {
@@ -416,13 +425,26 @@ bool MRT_NewForeignCJThread()
     void* cjthread = ThreadLocal::GetForeignCJThread();
     ThreadLocal::SetCJThread(cjthread);
     Mutator* mutator = reinterpret_cast<Mutator*>(CJThreadGetMutator());
-    MutatorManager::Instance().BindMutator(*mutator);
+    // Register under management R-lock (CreateMutator / CreateRuntimeMutator). Do not hold the
+    // lock across LeaveSaferegion: managed-entry may block on STW/phase.
+    // Anchors: MutatorManager.cpp:115-128,181-198; UnwindCApi.cpp:136-141; gcr_stw ESCAPE 1.
+    auto& mutatorManager = MutatorManager::Instance();
+    mutatorManager.MutatorManagementRLock();
+    mutatorManager.BindMutator(*mutator);
     if (scheduler == nullptr) {
         scheduler = GetCJThreadScheduler();
         ThreadLocal::SetSchedule(scheduler);
         ThreadLocal::SetProtectAddr(nullptr);
     }
     mutator->InitForeignCJThread();
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
+    // dynjoin (乙): foreign attach during active epoch is born-clean exclude.
+    mutatorManager.ExcludeNewMutatorFromActiveEpoch(*mutator);
+    mutatorManager.MutatorManagementRUnlock();
+    // N2C stubs call MRT_LeaveSaferegion next (all N2CStub.S); mirror MRT_PreRunManagedCode.
+    if (UNLIKELY(mutatorManager.SyncTriggered())) {
+        mutator->SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
+    }
     // 1: state is SCHEDULE_RUNNING
     SetSchedulerState(1);
 #ifdef __OHOS__
@@ -462,8 +484,8 @@ static void* WrapperExclusiveClosure(void* arg, unsigned int len)
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
     lwtData->threadObject = nullptr;
-    BaseObject* executeClosure = Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<false>&>(lwtData->execute));
-    BaseObject* closureObj = Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<false>&>(lwtData->obj));
+    BaseObject* executeClosure = Heap::GetBarrier().ReadPlainRoot(RootSlotAt(&lwtData->execute));
+    BaseObject* closureObj = Heap::GetBarrier().ReadPlainRoot(RootSlotAt(&lwtData->obj));
 #if defined(__aarch64__)
     ExecuteExclusiveCangjieStub(closureObj, nullptr, executeClosure, reinterpret_cast<void*>(threadData), &g_ut);
 #elif defined(__x86_64__)
@@ -482,10 +504,8 @@ void* MCC_NewExclusiveCJThread(void* executeClosure, void* closurePtr, void* fut
     data.execute = nullptr;
     data.obj = nullptr;
     data.threadObject = futureTi;
-    RefField<>* executeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*executeRootField, reinterpret_cast<BaseObject*>(closurePtr));
-    RefField<>* objRootField = reinterpret_cast<RefField<>*>(&data.execute);
-    Heap::GetBarrier().WriteStaticRef(*objRootField, reinterpret_cast<BaseObject*>(executeClosure));
+    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data.obj), from_native_ref(closurePtr));
+    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data.execute), from_native_ref(executeClosure));
     return ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData));
 }
 
@@ -516,6 +536,7 @@ static void FiniAndFreeFinalizerScheduler(ScheduleHandle scheduler)
 
 void* NewFinalizerCJThread()
 {
+    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
     // prepare foreign scheduler
     ScheduleHandle scheduler = nullptr;
     auto runtime = reinterpret_cast<MapleRuntime::CangjieRuntime*>(&MapleRuntime::Runtime::Current());
@@ -558,6 +579,8 @@ void* NewFinalizerCJThread()
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
     ThreadLocal::SetMutator(mutator);
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
+    MutatorManager::Instance().ExcludeNewMutatorFromActiveEpoch(*mutator);
     MutatorManager::Instance().MutatorManagementRUnlock();
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
     // Managed-entry setup may block on sync/STW, so do not hold the mutator
@@ -573,11 +596,9 @@ void EndFinalizerCJThread()
     auto* schedule = reinterpret_cast<ScheduleHandle>(ThreadLocal::GetSchedule());
     Mutator* mutator = ThreadLocal::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "EndFinalizerCJThread with null mutator");
-    MutatorManager::Instance().MutatorManagementRLock();
-    (void)mutator->LeaveSaferegion();
-    mutator->ResetMutator();
-    MutatorManager::Instance().UnbindMutator(*mutator);
-    MutatorManager::Instance().MutatorManagementRUnlock();
+    // Same EXITING receipt path as ordinary CJThread teardown. If an epoch is
+    // active, scheduler destruction reaches DestroyMutator and defers storage.
+    MutatorManager::Instance().TransitMutatorToExit();
 
     // Free finalizer scheduler, cjthread and mutator
     FiniAndFreeFinalizerScheduler(schedule);
@@ -600,7 +621,7 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
     TypeInfo* futureTi = static_cast<TypeInfo*>(lwtData->threadObject);
     // threadObject is used to pass TypeInfo of future. After use, need set to nullptr.
     lwtData->threadObject = nullptr;
-    BaseObject* closureObj = Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<false>&>(lwtData->obj));
+    BaseObject* closureObj = Heap::GetBarrier().ReadPlainRoot(RootSlotAt(&lwtData->obj));
 #if defined(__aarch64__)
     ExecuteCangjieStub(closureObj, futureTi, 0, executeClosure, reinterpret_cast<void*>(threadData), &g_ut);
 #elif defined(__arm__)
@@ -621,8 +642,7 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
     data.execute = executeClosure;
     data.obj = nullptr;
     data.threadObject = futureTi; // used to pass TypeInfo of future
-    RefField<>* runtimeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*runtimeRootField, reinterpret_cast<BaseObject*>(closurePtr));
+    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data.obj), from_native_ref(closurePtr));
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
@@ -678,7 +698,6 @@ static RuntimeParam InitRuntimeParam()
                 // Default backup GC interval is 240s.
                 .backupGCInterval = InitTimeParameter("cjBackupGCInterval", 0, 240 * SECOND_TO_NANO_SECOND),
                 // Default GC thread factor is 2.
-                .gcThreads = 2,
             },
         .logParam = {
             .logLevel = LogFile::GetLogLevel(),

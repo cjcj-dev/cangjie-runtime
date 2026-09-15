@@ -6,8 +6,8 @@
 
 set(SRC_LIST
     "Mutator.cpp"
-    "SatbBuffer.cpp"
     "MutatorManager.cpp"
+    "Handshake.cpp"
     "ThreadLocal.cpp"
 )
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../Interpreter)

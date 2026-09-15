@@ -20,11 +20,11 @@ namespace MapleRuntime {
 class DerivedPtr {
 public:
     DerivedPtr() = default;
-    DerivedPtr(const DerivedPtrTable& derivePtr, const RegTable& reg, const SlotTable& slot, U32 startIdx)
-        : derivePtrTable(derivePtr), regTable(reg), slotTable(slot), derivedPtrIdx(startIdx) {}
+    DerivedPtr(const DerivedPtrTable& derivePtr, const RegTable& reg, const SlotTable& slot, U32 startIdx, U32 rows)
+        : derivePtrTable(derivePtr), regTable(reg), slotTable(slot), derivedPtrIdx(startIdx), derivedPtrRows(rows) {}
     ~DerivedPtr() = default;
     bool VisitDerivedPtr(const DerivedPtrVisitor& visitor, const DerivedPtrDebugVisitor debugVisitor,
-                         RegSlotsMap& regSlotsMap, Uptr basePtr, Uptr fp)
+                         RegSlotsMap& regSlotsMap, BasePtrType basePtr, Uptr fp)
     {
         if (LIKELY(derivedPtrIdx == 0)) {
             return false;
@@ -32,7 +32,7 @@ public:
         DerivedPtrPair idxPair = derivePtrTable.GetDerivePair(derivedPtrIdx - 1);
         U32 regIdx = idxPair.first;
         U32 slotIdx = idxPair.second;
-        if (basePtr != 0) {
+        if (!is_null(basePtr)) {
             if (regIdx != 0) {
                 VisitRegDerivedPtr(visitor, debugVisitor, regSlotsMap, basePtr, regIdx - 1);
             }
@@ -44,7 +44,7 @@ public:
         return true;
     }
     bool VisitDerivedPtrForStackGrow(const DerivedPtrVisitor& visitor, const DerivedPtrDebugVisitor debugVisitor,
-                                     RegSlotsMap& regSlotsMap, Uptr basePtr, Uptr fp)
+                                     RegSlotsMap& regSlotsMap, BasePtrType basePtr, Uptr fp)
     {
         if (LIKELY(derivedPtrIdx == 0)) {
             return false;
@@ -62,38 +62,62 @@ public:
         return true;
     }
 
+    StackMapRootCounts CountRootSlots() const
+    {
+        StackMapRootCounts counts;
+        if (derivedPtrIdx == 0) {
+            return counts;
+        }
+        U32 row = derivedPtrIdx - 1;
+        for (U32 i = 0; i < derivedPtrRows; ++i, ++row) {
+            DerivedPtrPair idxPair = derivePtrTable.GetDerivePair(row);
+            if (idxPair.first != 0) {
+                RegRoot regRoot(regTable.GetActiveRegBits(idxPair.first - 1));
+                counts.derivedRegs += regRoot.CountRootSlots();
+            }
+            if (idxPair.second != 0) {
+                SlotRoot slotRoot(slotTable.GetBaseOffset(idxPair.second - 1),
+                                  slotTable.GetSlotBitMap(idxPair.second - 1), slotTable.slotFormat);
+                counts.derivedSlots += slotRoot.CountRootSlots();
+            }
+        }
+        return counts;
+    }
+
 private:
     inline void VisitRegDerivedPtr(const DerivedPtrVisitor& visitor, const DerivedPtrDebugVisitor debugVisitor,
-                                   RegSlotsMap& regSlotsMap, Uptr basePtr, U32 regIdx) const
+                                   RegSlotsMap& regSlotsMap, BasePtrType basePtr, U32 regIdx) const
     {
         RegRoot regRoot(regTable.GetActiveRegBits(regIdx));
-        RootVisitor rootVisitor = [&visitor, basePtr](ObjectRef& derivedPtr) {
-            visitor(basePtr, reinterpret_cast<Uptr&>(derivedPtr));
+        RootVisitor rootVisitor = [&visitor, basePtr](RootSlot& derivedRoot) {
+            visitor(basePtr, DerivedSlotAt(
+                static_cast<void*>(&derivedRoot))); // Stack-map metadata classifies this root word as derived.
         };
         RegDebugVisitor regDebug = nullptr;
         (void)debugVisitor;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
         if (debugVisitor != nullptr) {
-            regDebug = [&debugVisitor, basePtr](RegisterNum, const BaseObject* derivedPtr) {
-                debugVisitor(basePtr, reinterpret_cast<Uptr>(derivedPtr));
+            regDebug = [&debugVisitor, basePtr](RegisterNum, zaddress_unsafe derivedPtr) {
+                debugVisitor(basePtr, derivedPtr);
             };
         }
 #endif
         regRoot.VisitGCRoots(rootVisitor, regDebug, regSlotsMap);
     }
     inline void VisitSlotDerivedPtr(const DerivedPtrVisitor& visitor, const DerivedPtrDebugVisitor debugVisitor,
-                                    Uptr basePtr, Uptr fp, U32 slotIdx) const
+                                    BasePtrType basePtr, Uptr fp, U32 slotIdx) const
     {
         SlotRoot slotRoot(slotTable.GetBaseOffset(slotIdx), slotTable.GetSlotBitMap(slotIdx), slotTable.slotFormat);
-        RootVisitor rootVisitor = [&visitor, basePtr](ObjectRef& derivedPtr) {
-            visitor(basePtr, reinterpret_cast<Uptr&>(derivedPtr.object));
+        RootVisitor rootVisitor = [&visitor, basePtr](RootSlot& derivedRoot) {
+            visitor(basePtr, DerivedSlotAt(
+                static_cast<void*>(&derivedRoot))); // Stack-map metadata classifies this root word as derived.
         };
         SlotDebugVisitor slotDebug = nullptr;
         (void)debugVisitor;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
         if (debugVisitor != nullptr) {
-            slotDebug = [&debugVisitor, basePtr](SlotBias, BaseObject* derivedPtr) {
-                debugVisitor(basePtr, reinterpret_cast<Uptr>(derivedPtr));
+            slotDebug = [&debugVisitor, basePtr](SlotBias, zaddress_unsafe derivedPtr) {
+                debugVisitor(basePtr, derivedPtr);
             };
         }
 #endif
@@ -103,6 +127,7 @@ private:
     RegTable regTable;
     SlotTable slotTable;
     U32 derivedPtrIdx = 0;
+    U32 derivedPtrRows = 0;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_DERIVED_PTR_ROOT_H

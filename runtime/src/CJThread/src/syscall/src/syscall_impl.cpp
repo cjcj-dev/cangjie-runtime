@@ -94,21 +94,27 @@ void SyscallExit(void)
     struct CJThread *cjthread;
     struct Processor *oldProcessor;
     struct Thread *thread;
+    int savedErrno;
     cjthread = CJThreadGet();
     if (cjthread == nullptr) {
         return;
     }
+    // SyscallExit0 / ProcessorSchedule can overwrite errno before the
+    // C wrappers return. Keep the libc result across the reschedule.
+    savedErrno = errno;
     thread = static_cast<struct Thread *>(cjthread->thread);
     oldProcessor = static_cast<struct Processor *>(thread->oldProcessor);
     // Quick route: The previously bound processor is still in syscall state.
     if (SyscallFastExit(oldProcessor)) {
         atomic_store(&cjthread->state, CJTHREAD_RUNNING);
+        errno = savedErrno;
         return;
     }
 #ifdef CANGJIE_ASAN_SUPPORT
     MapleRuntime::Sanitizer::AsanStartSwitchThreadContext(cjthread, ThreadGet()->cjthread0);
 #endif
     CJThreadMcall(reinterpret_cast<void *>(SyscallExit0), CJThreadAddr());
+    errno = savedErrno;
 }
 
 #ifdef __cplusplus

@@ -13,6 +13,7 @@
 #include "Interpreter/Options.h"
 #include "Loader/ILoader.h"
 #include "LoaderManager.h"
+#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 bool LoaderManager::isReleased;
@@ -70,9 +71,10 @@ PackageInfo* LoaderManager::GetPackageInfoByName(const char* packageName)
     return loader->GetPackageInfo(packageName);
 }
 
-PackageInfo* LoaderManager::GetPackageInfoByPath(const char* path)
+bool LoaderManager::VisitPackageInfoByPath(
+    const char* path, const std::function<void(PackageInfo*)>& visitor)
 {
-    return loader->GetPackageInfoByPath(path);
+    return loader->VisitPackageInfoByPath(path, visitor);
 }
 
 void LoaderManager::RemovePackageInfo(const char* path)
@@ -188,6 +190,7 @@ void LoaderManager::RegisterLoadFile(Uptr address) const
 
 void LoaderManager::UnregisterLoadFile(Uptr address) const
 {
+    TypeInfoManager::GetTypeInfoManager().InvalidateGenericTypeInfoFastMap();
     loader->UnregisterLoadFile(address);
 }
 
@@ -237,8 +240,15 @@ struct CJEnvMethods {
 
 bool IsCJRomSdkNamespace()
 {
-    Dl_namespace dlns;
-    dlns_get(nullptr, &dlns);
+    using DlnsGet = int (*)(const char*, Dl_namespace*);
+    auto dlnsGet = reinterpret_cast<DlnsGet>(dlsym(RTLD_DEFAULT, "dlns_get"));
+    if (dlnsGet == nullptr) {
+        return false;
+    }
+    Dl_namespace dlns {};
+    if (dlnsGet(nullptr, &dlns) != 0) {
+        return false;
+    }
     return strcmp(dlns.name, "cj_rom_sdk") == 0;
 }
 

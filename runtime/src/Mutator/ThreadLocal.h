@@ -8,16 +8,21 @@
 #ifndef MRT_THREAD_LOCAL_H
 #define MRT_THREAD_LOCAL_H
 
+#include <atomic>
 #include <cstdint>
 #include "Base/RwLock.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/z/zMarkStack.hpp"
 
+#include "Heap/z/zThreadLocalData.hpp"
 namespace MapleRuntime {
 class AllocBuffer;
 class Mutator;
+class MarkDomain;
 
-enum class ThreadType { CJ_PROCESSOR = 0, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD };
+enum class ThreadType { CJ_PROCESSOR = 0, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD, UNCOMMITTER_THREAD };
 
 // Backend and CJThread will use external tls var through offset calculation, so external tls
 // must in the first place, followed by the internal tls.
@@ -41,10 +46,17 @@ struct ThreadLocalData {
     ThreadType threadType;
     bool isCJProcessor;
     void* threadCache;
+    ThreadGCData* gcData;
 
 public:
     void SetMutator(Mutator* newMutator);
 };
+
+void MarkFlushOnEnterSaferegion();
+void MarkFlushBeginLeaveSaferegion();
+void MarkFlushEndLeaveSaferegion();
+bool MarkFlushPendingForCurrentThread();
+void RegisterCurrentMarkFlushThread();
 
 struct CleanThreadLocalData {
     CleanThreadLocalData() noexcept;
@@ -55,6 +67,10 @@ class ThreadLocal { // merge this to ThreadLocalData.
 public:
     static ThreadLocalData* GetThreadLocalData();
     static void InitializeCleaner();
+    static ThreadGCData& GetGCData();
+    static void FlushCurrentThreadMarkStacks();
+    static MarkThreadLocalStacks& GetMarkStacks(MarkDomain& domain);
+    static bool FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain);
 
     static void SetMutator(Mutator* newMutator) { GetThreadLocalData()->SetMutator(newMutator); }
 
@@ -131,4 +147,6 @@ private:
     static RwLock tlEnableLock;
 };
 } // namespace MapleRuntime
+
+#include "Handshake.h"
 #endif // MRT_THREAD_LOCAL_H

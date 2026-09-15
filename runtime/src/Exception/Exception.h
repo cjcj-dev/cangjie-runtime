@@ -116,6 +116,8 @@ public:
 
     void SetThrowingSOFFramePc(void* sof) { throwingSOFFramePc = sof; }
 
+    void* GetThrowingSOFFramePc() const { return throwingSOFFramePc; }
+
     bool IsThrowingSOFE() const { return throwingSOFFramePc; }
 
     void SetAdjustedStackSize(uint32_t size) { adjustedSize = size; }

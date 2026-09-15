@@ -11,6 +11,9 @@ namespace MapleRuntime {
 namespace Os {
 CString Path::GetBaseName(const char* path)
 {
+    if (path == nullptr) {
+        return nullptr;
+    }
     char fname[_MAX_FNAME];
     char ext[_MAX_EXT];
     if (_splitpath_s(path, nullptr, 0, nullptr, 0, fname, _MAX_FNAME, ext, _MAX_EXT)) {

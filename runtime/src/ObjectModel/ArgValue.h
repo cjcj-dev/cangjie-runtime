@@ -125,7 +125,7 @@ public:
     }
     U32 GetFregIdx()
     {
-        return gregIdx - kXregSize;
+        return fregIdx - kXregSize;
     }
     U32 GetStackSize()
     {

@@ -219,7 +219,7 @@ void SamplesRecord::AddEmptySample(SampleTask& task)
 
     SetPreviousState(info, FrameType::UNKNOWN);
 
-    IncreaseNodeHitCount(info, ROOT_NODE_ID);
+    IncreaseNodeHitCount(info, IDLE_NODE_ID);
 
     AddSampleNodeId(info, IDLE_NODE_ID);
 
@@ -347,9 +347,12 @@ void SamplesRecord::WriteFile()
 
 void SamplesRecord::RunTaskLoop()
 {
-    while (!taskQueue.empty()) {
-        auto task = taskQueue.front();
-        taskQueue.pop_front();
+    std::list<SampleTask> batch;
+    {
+        std::lock_guard<std::mutex> lock(sampleMonitor);
+        batch.swap(taskQueue);
+    }
+    for (auto& task : batch) {
         if (task.frameCnt == 0) {
             AddEmptySample(task);
         } else {
@@ -363,14 +366,15 @@ void SamplesRecord::DoSingleTask(uint64_t previousTimeStemp)
     if (IsTimeout(previousTimeStemp)) {
         return;
     }
-    if (taskQueue.empty()) {
-        return;
+    std::list<SampleTask> taken;
+    {
+        std::lock_guard<std::mutex> lock(sampleMonitor);
+        if (taskQueue.empty() || !taskQueue.front().finishParsed) {
+            return;
+        }
+        taken.splice(taken.end(), taskQueue, taskQueue.begin());
     }
-    auto task = taskQueue.front();
-    if (!task.finishParsed) {
-        return;
-    }
-    taskQueue.pop_front();
+    SampleTask& task = taken.front();
     if (task.frameCnt == 0) {
         AddEmptySample(task);
     } else {
@@ -380,6 +384,7 @@ void SamplesRecord::DoSingleTask(uint64_t previousTimeStemp)
 
 void SamplesRecord::ParseSampleData(uint64_t previousTimeStemp)
 {
+    std::lock_guard<std::mutex> lock(sampleMonitor);
     if (taskQueue.empty()) {
         return;
     }
@@ -391,7 +396,6 @@ void SamplesRecord::ParseSampleData(uint64_t previousTimeStemp)
         for (int i = task.checkPoint; i < frameCnt; ++i) {
             GetDemangleName(task.funcDescRefs[i]);
             GetUrl(task.funcDescRefs[i]);
-            // Avoid taking too long time to parse symbol.
             if (IsTimeout(previousTimeStemp)) {
                 task.checkPoint = i + 1;
                 return;
@@ -417,6 +421,7 @@ void SamplesRecord::Post(uint64_t mutatorId, std::vector<uint64_t>& FuncDescRefs
 {
     uint64_t timeStamp = SamplesRecord::GetMicrosecondsTimeStamp();
     SampleTask task(timeStamp, mutatorId, FuncDescRefs, FrameTypes, LineNumbers);
+    std::lock_guard<std::mutex> lock(sampleMonitor);
     taskQueue.push_back(task);
 }
 
@@ -456,7 +461,7 @@ CString SamplesRecord::ParseUrl(uint64_t funcIdentifier)
 #endif
     CString url =  path.IsEmpty() ? fileName : path + slash + fileName;
     identifierUrlMap.emplace(funcIdentifier, url);
-    return fileName;
+    return url;
 }
 
 CString SamplesRecord::GetDemangleName(uint64_t funcIdentifier)

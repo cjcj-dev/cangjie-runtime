@@ -57,8 +57,12 @@ struct SchdpollDesc *SchdpollAdd(FdHandle fd)
     }
 #elif defined (MRT_MACOS)
     NetpollFd npfd = schedule->netpoll.npfd;
-    if (NetpollAdd(npfd, fd, pd, EVFILT_READ) != 0 ||
-        NetpollAdd(npfd, fd, pd, EVFILT_WRITE) != 0) {
+    if (NetpollAdd(npfd, fd, pd, EVFILT_READ) != 0) {
+        free(pd);
+        return nullptr;
+    }
+    if (NetpollAdd(npfd, fd, pd, EVFILT_WRITE) != 0) {
+        (void)NetpollDel(npfd, fd, EVFILT_READ);
         free(pd);
         return nullptr;
     }

@@ -222,6 +222,7 @@
 #define CJThreadStackGuardGet                  CJ_CJThreadStackGuardGet
 #define CJThreadStackSizeGet                   CJ_CJThreadStackSizeGet
 #define CJThreadStackAddrGet                   CJ_CJThreadStackAddrGet
+#define CJThreadIsStackGuardAddress            CJ_CJThreadIsStackGuardAddress
 #define CJThreadStackBaseAddrGet               CJ_CJThreadStackBaseAddrGet
 #define CJThreadStackSizeGetByCJThrd           CJ_CJThreadStackSizeGetByCJThrd
 #define CJThreadStackAddrGetByCJThrd           CJ_CJThreadStackAddrGetByCJThrd

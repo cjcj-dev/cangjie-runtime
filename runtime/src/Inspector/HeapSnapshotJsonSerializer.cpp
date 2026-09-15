@@ -164,10 +164,8 @@ void CjHeapDataForIDE::SerializeAllStructClassLoad()
 
 void CjHeapDataForIDE::SerializeStackFrame(FrameInfo& frame, uint32_t frameIdx)
 {
+    (void)frameIdx;
     writer->WriteChar('[');
-    if (frameIdx > 0 && frame.GetFrameType() == FrameType::NATIVE) {
-        return;
-    }
     if (frame.GetFrameType() == FrameType::MANAGED) {
         StackMetadataHelper stackMetadataHelper(frame);
         methodName = frame.GetFuncName();
@@ -447,13 +445,13 @@ void CjHeapDataForIDE::SerializeObjectArray(BaseObject*& obj, const u1 tag)
     u4 num = 0;
     std::stack<u4> VAL;
     RefFieldVisitor visitor = [&VAL, &num, this](RefField<>& arrayContent) {
-        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(arrayContent.GetTargetObject())));
+        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(to_object(arrayContent.GetTargetObject()))));
         num++;
     };
     // take array length and content.
     MArray* mArray = reinterpret_cast<MArray*>(obj);
     MIndex arrayLengthVal = mArray->GetLength();
-    RefField<>* arrayContent = reinterpret_cast<RefField<>*>(mArray->ConvertToCArray());
+    HeapSlot<>* arrayContent = &HeapSlotAt<>(mArray->ConvertToCArray());
     // for each object in array.
     for (MIndex i = 0; i < arrayLengthVal; ++i) {
         visitor(arrayContent[i]);
@@ -503,7 +501,7 @@ void CjHeapDataForIDE::SerializeStructArray(BaseObject*& obj, const u1 tag)
     u4 num = 0;
     std::stack<u4> VAL;
     RefFieldVisitor visitor = [&VAL, &num, this](RefField<>& arrayContent) {
-        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(arrayContent.GetTargetObject())));
+        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(to_object(arrayContent.GetTargetObject()))));
         num++;
     };
     // take array length and content.
@@ -630,7 +628,7 @@ void CjHeapDataForIDE::SerializeInstance(BaseObject*& obj, const u1 tag)
     u4 num = 0;
     std::stack<u4> VAL;
     RefFieldVisitor visitor = [&VAL, &num, this](RefField<>& fieldAddr) {
-        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(fieldAddr.GetTargetObject())));
+        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(to_object(fieldAddr.GetTargetObject()))));
         num++;
     };
     TypeInfo* currentClass = obj->GetTypeInfo();

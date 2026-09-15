@@ -168,6 +168,17 @@ MRT_INLINE static void ProtectAddrSet(uintptr_t value)
 
 #endif
 
+// HotSpot Thread::current_or_null_safe: do not read TLS before it is initialized.
+MRT_INLINE static struct CJThread *CJThreadGetOrNullSafe(void)
+{
+#ifdef TLS_COMMON_DYNAMIC
+    if (g_getTlsFunc == NULL) {
+        return NULL;
+    }
+#endif
+    return CJThreadGet();
+}
+
 #ifdef __cplusplus
 #if __cplusplus
 }

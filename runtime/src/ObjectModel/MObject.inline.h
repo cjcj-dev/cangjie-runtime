@@ -11,8 +11,8 @@
 #include <type_traits>
 
 // cross module dependence
-#include "Heap/Barrier/Barrier.inline.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "HeapManager.inline.h"
 
 // module internal dependence

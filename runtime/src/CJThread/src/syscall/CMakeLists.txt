@@ -23,5 +23,5 @@ file(GLOB ADDITIONAL_SRC_FILES
 
 target_sources(syscall PRIVATE ${ADDITIONAL_SRC_FILES})
 
-file(COPY include/mrt_syscall_common.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
-file(COPY include/${OS}/mrt_syscall.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
+file(COPY include/mrt_syscall_common.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)
+file(COPY include/${OS}/mrt_syscall.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)

@@ -9,6 +9,7 @@
 #define MRT_STACKMAP_H
 #include <unordered_set>
 #include "StackMap/CompressedStackMap.h"
+#include "Loader/ElfUnloadQuiescence.h"
 namespace MapleRuntime {
 class StackMap {
 public:
@@ -64,13 +65,16 @@ public:
         return *this;
     }
 
-    // ATTENTION: VisitRegRoots VisitSlotRoots VisitDerivedPtr must be invoked in a fixed order
-    virtual bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap)
+    // HeapReferenceMap processes derived values before either ordinary-root pass.
+    virtual bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
+                              bool young = false)
     {
+        (void)young;
         return regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap);
     }
-    virtual void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc)
+    virtual void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc, bool young = false)
     {
+        (void)young;
         slotRoot.VisitGCRoots(visitor, debugFunc, stackBase);
     }
 
@@ -89,9 +93,11 @@ class HeapReferenceMap : public RootMap {
 public:
     HeapReferenceMap(Uptr base, PrologueRegisterClosure&& prologue) : RootMap(base, std::move(prologue)) {}
     HeapReferenceMap(bool valid, Uptr base, const StackMapEntry& entry, PrologueRegisterClosure&& prologue)
-        : RootMap(valid, base, entry, std::move(prologue)), derivedPtr(entry.BuildDerivedPtrRoot()) {}
+        : RootMap(valid, base, entry, std::move(prologue)), derivedPtr(entry.BuildDerivedPtrRoot()),
+          oopSlotRoot(entry.BuildOopSlotRoot()), oopRegRoot(entry.BuildOopRegRoot()) {}
     HeapReferenceMap(HeapReferenceMap&& other)
-        : RootMap(std::move(other)), derivedPtr(other.derivedPtr), rootsList(std::move(other.rootsList)) {}
+        : RootMap(std::move(other)), derivedPtr(other.derivedPtr),
+          oopSlotRoot(std::move(other.oopSlotRoot)), oopRegRoot(other.oopRegRoot) {}
     HeapReferenceMap& operator=(HeapReferenceMap&& other)
     {
         if (this == &other) {
@@ -99,34 +105,65 @@ public:
         }
         RootMap::operator=(std::move(other));
         this->derivedPtr = other.derivedPtr;
-        this->rootsList = std::move(other.rootsList);
+        this->oopSlotRoot = std::move(other.oopSlotRoot);
+        this->oopRegRoot = other.oopRegRoot;
         return *this;
     }
     ~HeapReferenceMap() override = default;
-    bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap) override
+    bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
+                       bool young = false) override
     {
-        return regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap, &rootsList);
+        (void)young;
+        bool ok = regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap);
+        oopRegRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap);
+        return ok;
     }
 
-    void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc) override
+    void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc, bool young = false) override
     {
-        slotRoot.VisitGCRoots(visitor, debugFunc, stackBase, &rootsList);
+        slotRoot.VisitGCRoots(visitor, debugFunc, stackBase);
+        (void)young;
+        oopSlotRoot.VisitGCRoots(visitor, debugFunc, stackBase);
     }
 
-    // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
+    // oopMap.cpp:413: process every derived value before updating any base.
     void VisitDerivedPtr(const DerivedPtrVisitor& derivedVisitor, const DerivedPtrDebugVisitor debugVisitor,
                          RegSlotsMap& regSlotsMap)
     {
+        std::list<BasePtrType> rootsList;
+        RootVisitor capture = [](ObjectRef&) {};
+        // oopMap.inline.hpp:57-112 keeps saved locations available to both
+        // derived and ordinary roots. Capture base values without consuming
+        // the frame's register locations; actual derived roots still consume
+        // the original map below.
+        RegSlotsMap captureSlotsMap = regSlotsMap;
+        regRoot.VisitGCRoots(capture, nullptr, captureSlotsMap, &rootsList);
+        oopRegRoot.VisitGCRoots(capture, nullptr, captureSlotsMap, &rootsList);
+        slotRoot.VisitGCRoots(capture, nullptr, stackBase, &rootsList);
+        oopSlotRoot.VisitGCRoots(capture, nullptr, stackBase, &rootsList);
+        DerivedPtr derived = derivedPtr;
         for (auto it = rootsList.begin(); it != rootsList.end(); ++it) {
-            if (!derivedPtr.VisitDerivedPtr(derivedVisitor, debugVisitor, regSlotsMap, *it, stackBase)) {
+            if (!derived.VisitDerivedPtr(derivedVisitor, debugVisitor, regSlotsMap, *it, stackBase)) {
                 break;
             }
         }
     }
 
+    StackMapRootCounts CountRootSlots() const
+    {
+        StackMapRootCounts counts;
+        counts.baseSlots = slotRoot.CountRootSlots();
+        counts.baseRegs = regRoot.CountRootSlots();
+        StackMapRootCounts derivedCounts = derivedPtr.CountRootSlots();
+        counts.derivedSlots = derivedCounts.derivedSlots;
+        counts.derivedRegs = derivedCounts.derivedRegs;
+        return counts;
+    }
+
 private:
     DerivedPtr derivedPtr;
-    std::list<Uptr> rootsList;
+    SlotRoot oopSlotRoot;
+    RegRoot oopRegRoot;
 };
 
 class MethodMap : public StackMap {
@@ -214,7 +251,7 @@ protected:
     SlotRoot stackPtrSlotRoot;
     RegRoot stackPtrRegRoot;
     DerivedPtr derivedPtr;
-    std::list<Uptr> rootsList;
+    std::list<BasePtrType> rootsList;
 };
 
 class StackMapBuilder {
@@ -226,8 +263,9 @@ public:
     ~StackMapBuilder() = default;
 
     template<class MapType>
-    MapType Build() const
+    MapType Build(bool countDerivedRows = false) const
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
         PrologueRegisterClosure closure;
         PrologueVisitor visitor = [&closure](PrologueRegisterClosure::Type type, uint32_t value) {
             switch (type) {
@@ -244,11 +282,22 @@ public:
 #else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, visitor);
 #endif
-        auto entry = head.GetStackMapEntry(startPC, framePC);
+        auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
         if (!entry.IsValid()) {
             return MapType(stackBase, std::move(closure));
         }
         return MapType(true, stackBase, entry, std::move(closure));
+    }
+
+    StackMapInvalidReason GetInvalidReason() const
+    {
+        ElfUnloadQuiescence::ReadScope metadataReader;
+#ifdef __APPLE__
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+#else
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+#endif
+        return head.GetInvalidReason(startPC, framePC);
     }
 
 protected:
@@ -260,8 +309,10 @@ protected:
 
 // specialization for MethodMap which avoids using malloc().
 template<>
-inline MethodMap StackMapBuilder::Build<MethodMap>() const
+inline MethodMap StackMapBuilder::Build<MethodMap>(bool countDerivedRows) const
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    (void)countDerivedRows;
 #ifdef __APPLE__
     auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
 #else

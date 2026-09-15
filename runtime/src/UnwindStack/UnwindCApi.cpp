@@ -138,6 +138,8 @@ extern "C" void MRT_PreRunManagedCode(Mutator* mutator, int layers, ThreadLocalD
         mutator->EnterSaferegion(false);
     }
     mutator->SetManagedContext(true);
+    mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_RUNNING);
+    UpdatePollValues(threadData);
     mutator->LeaveSaferegion();
 #ifdef _WIN64
     Runtime& runtime = Runtime::Current();
@@ -168,7 +170,7 @@ extern "C" void MRT_PreRunManagedCode(Mutator* mutator, int layers, ThreadLocalD
     }
 #endif
     uwContext.GoIntoManagedCode();
-    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
     mutator->InitStackInfo(threadData);
 }
 } // namespace MapleRuntime

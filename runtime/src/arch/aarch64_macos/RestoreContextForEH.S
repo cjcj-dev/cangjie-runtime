@@ -45,6 +45,9 @@ _RestoreContextForEH:
     mov     x0, sp
     bl      _MRT_RestoreContext
 
+    // See aarch64_linux/RestoreContextForEH.S: zero return regs for N2CStub.
+    mov     x9, x0
+
     // Restore all callee saved register.
     ldp     x19, x20, [sp]
     ldp     x21, x22, [sp, #16]
@@ -60,5 +63,12 @@ _RestoreContextForEH:
     mov     sp,  x1
 
     // jump to landingpad.
-    br      x0
+    mov     x0, xzr
+    mov     x1, xzr
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x8, xzr
+    fmov    d0, xzr
+    fmov    d1, xzr
+    br      x9
     .cfi_endproc

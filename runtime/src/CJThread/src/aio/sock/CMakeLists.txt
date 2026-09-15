@@ -14,4 +14,4 @@ target_include_directories(sock PUBLIC include/inner)
 
 target_link_libraries(sock PUBLIC schdfd)
 
-file(COPY include/sock.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
+file(COPY include/sock.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)

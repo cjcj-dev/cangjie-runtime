@@ -11,6 +11,11 @@
 namespace MapleRuntime {
 void* NativeAllocator::NativeAlloc(size_t bytes)
 {
+    // SizeManager::Index(0) underflows to SIZE_MAX (BUG-24). A 0-byte request
+    // has no size class; return null. NativeFree(nullptr, 0) is the pair.
+    if (bytes == 0) {
+        return nullptr;
+    }
     if (bytes > MAX_BYTES) {
         return PagePool::Instance().GetPage(bytes);
     }
@@ -18,12 +23,17 @@ void* NativeAllocator::NativeAlloc(size_t bytes)
     if (tlData->threadCache == nullptr) {
         tlData->threadCache = new (std::nothrow) ThreadCache();
         CHECK_DETAIL(tlData->threadCache != nullptr, "new alloc threadCache failed");
+        // Arm the TLS dtor so a raw pthread that only NativeAlloc's still flushes.
+        ThreadLocal::InitializeCleaner();
     }
     return reinterpret_cast<ThreadCache*>(tlData->threadCache)->Allocate(bytes);
 }
 
 void NativeAllocator::NativeFree(void* ptr, size_t bytes)
 {
+    if (ptr == nullptr || bytes == 0) {
+        return;
+    }
     if (bytes > MAX_BYTES) {
         PagePool::Instance().ReturnPage(reinterpret_cast<uint8_t*>(ptr), bytes);
         return;
@@ -32,6 +42,7 @@ void NativeAllocator::NativeFree(void* ptr, size_t bytes)
     if (tlData->threadCache == nullptr) {
         tlData->threadCache = new (std::nothrow) ThreadCache();
         CHECK_DETAIL(tlData->threadCache != nullptr, "new alloc threadCache failed");
+        ThreadLocal::InitializeCleaner();
     }
     reinterpret_cast<ThreadCache*>(tlData->threadCache)->Deallocate(ptr, bytes);
 }

@@ -8,10 +8,12 @@
 #include "PrintSignalStackInfo.h"
 
 #include "Common/StackType.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 void PrintSignalStackInfo::FillInStackTrace()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     UnwindContext uwContext;
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);

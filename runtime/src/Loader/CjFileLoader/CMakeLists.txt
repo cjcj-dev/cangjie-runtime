@@ -11,3 +11,6 @@ set(SRC_LIST
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../)
 add_library(CjFileLoader STATIC ${SRC_LIST})
+if (MRT_GC_UNIT_TESTS)
+    target_compile_definitions(CjFileLoader PRIVATE MRT_TESTABLE_INTERNALS=1)
+endif()

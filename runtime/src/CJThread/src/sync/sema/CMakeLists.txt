@@ -14,4 +14,4 @@ target_include_directories(sema PUBLIC include/inner)
 
 target_link_libraries(sema PUBLIC waitqueue external)
 
-file(COPY include/sema.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
+file(COPY include/sema.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)

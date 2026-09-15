@@ -11,8 +11,8 @@
 #include "Inspector/CjAllocData.h"
 // model interface
 #include "ExceptionManager.h"
-#include "Heap/Barrier/Barrier.inline.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "HeapManager.inline.h"
 // module internal interfaces
 #include "MArray.h"
@@ -27,7 +27,10 @@ inline void MArray::SetLength(MIndex number) { length = number; }
 
 inline U8* MArray::ConvertToCArray() const
 {
-    return reinterpret_cast<uint8_t*>(reinterpret_cast<Uptr>(this) + MArray::GetContentOffset());
+    // Colour bits live above bit 47 (RefField.h). C/libc must see a plain VA.
+    constexpr Uptr kRefAddressMask = (static_cast<Uptr>(1) << 48) - 1;
+    Uptr plain = reinterpret_cast<Uptr>(this) & kRefAddressMask;
+    return reinterpret_cast<uint8_t*>(plain + MArray::GetContentOffset());
 }
 
 inline MIndex MArray::GetMArraySize() const { return (MArray::GetContentOffset() + GetContentSize()); }
@@ -126,8 +129,22 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
         ExceptionManager::OutOfMemory();
         return nullptr;
     }
-    auto address = HeapManager::Allocate(arraySize, allocType);
+    const bool useSegmentedClear = arraySize > LARGE_ARRAY_INIT_SEGMENT_SIZE &&
+        allocType == AllocType::MOVEABLE_OBJECT &&
+        (arrayClass.GetComponentTypeInfo()->IsPrimitiveType() ||
+         (elemBytes == RefField<>::GetSize() && arrayClass.GetComponentTypeInfo()->IsRef()));
+    MAddress address;
+#if defined(MRT_GC_UNIT_TESTS)
+    address = CJ_MRT_TestAllocateArrayStorage(
+        arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
+#else
+    address = HeapManager::Allocate(
+        arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
+#endif
     if (LIKELY(address != NULL_ADDRESS)) {
+        if (UNLIKELY(useSegmentedClear)) {
+            return InitializeLargeArray(address, arraySize, nElems, arrayClass);
+        }
         MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
         newArray->SetLength(nElems);
 #if defined(__OHOS__) && (__OHOS__ == 1)

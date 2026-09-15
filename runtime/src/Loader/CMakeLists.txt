@@ -5,6 +5,7 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "ElfUnloadQuiescence.cpp"
     "ILoader.cpp"
 )
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -14,3 +15,6 @@ add_subdirectory(CjFileLoader)
 add_subdirectory(CjSemanticVersion)
 
 add_library(Loader STATIC ${SRC_LIST})
+if (MRT_GC_UNIT_TESTS)
+    target_compile_definitions(Loader PRIVATE MRT_TESTABLE_INTERNALS=1)
+endif()

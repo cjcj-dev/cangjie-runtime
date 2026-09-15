@@ -15,7 +15,10 @@ CString Path::GetBaseName(const char* path)
     if (path == nullptr) {
         return nullptr;
     }
-    return basename(const_cast<char*>(path));
+    // POSIX basename() may overwrite its argument (and some libcs return a
+    // pointer into that buffer). Copy first so callers' CString / literals stay intact.
+    CString copy(path);
+    return CString(basename(copy.GetStr()));
 }
 
 bool Path::GetRealPath(const char* path, char* resolvedPath) { return (realpath(path, resolvedPath) != nullptr); }

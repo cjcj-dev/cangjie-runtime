@@ -8,6 +8,7 @@
 #include "CompilerCalls.h"
 
 #include "Base/CString.h"
+#include "Heap/z/zStat.hpp"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
@@ -27,14 +28,30 @@
 #endif
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Barrier/Barrier.h"
-#include "Heap/Collector/CollectorResources.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/Collector/GcStats.h"
+#include "Heap/z/zHeap.hpp"
+#include "Loader/ElfUnloadQuiescence.h"
+#include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
 #include "ObjectModel/Field.inline.h"
+#include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #ifdef _WIN64
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
@@ -49,6 +66,37 @@
 #endif
 
 namespace MapleRuntime {
+
+
+// Compiler may pass coloured managed refs as C ABI pointers (addrspace(1) GEP without peel).
+// Runtime must strip bits 48+ before treating them as C++ addresses (same as PlainArrayRef /
+// acqstrip). RefField address field is bits 0..47; mask matches UncolorIfGCPtr / load-good AND.
+static MAddress PlainManagedAddr(MAddress maybeColoured)
+{
+    return RefField<>(maybeColoured).GetAddress();
+}
+
+static ObjectPtr PlainObjectPtr(ObjectPtr maybeColoured)
+{
+    return reinterpret_cast<ObjectPtr>(PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
+}
+
+// TypeInfo lives in private mmap / static modules (TypeInfoManager), not the GC heap.
+// Compiler may still pass TypeInfo* with GC colour bits set (isTagged/remap); strip before
+// treating as a C++ TypeInfo* (titaint / tistrip; same PlainManagedAddr as acqstrip/mmstrip).
+static TypeInfo* PlainTypeInfoPtr(TypeInfo* maybeColoured)
+{
+    return reinterpret_cast<TypeInfo*>(PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
+}
+
+extern "C" void MRT_DumpTiStripProbe(void) {}
+
+template<bool isAtomic>
+static RefField<isAtomic>* PlainRefFieldPtr(RefField<isAtomic>* maybeColoured)
+{
+    MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured));
+    return &HeapSlotAt<isAtomic>(address);
+}
 
 static bool IsGlobalStruct(const ObjectPtr basePtr, MAddress field)
 {
@@ -295,43 +343,71 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
 
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
 {
-    if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
+    // arrayinit2: compiler GEP of coloured base yields coloured field place; strip before use.
+    ObjectPtr plainObj = PlainObjectPtr(obj);
+    RefField<false>* plainField = PlainRefFieldPtr(field);
+    ObjectPtr plainRef = PlainObjectPtr(ref);
+    // Storage class is determined by the destination slot.  The compiler may
+    // pass a null/opaque holder for a GEP into a managed object; classifying by
+    // that holder would misroute a heap slot through RootSlot::StorePlain.
+    // IsGlobalStruct cannot overlap this branch for a valid compiler call:
+    // x86_64/Android use base==1 only for a global-var struct argument, while
+    // non-Android AArch64 tags that global field address itself.  Both storage
+    // forms are outside Heap.  Keeping the heap-slot decision authoritative
+    // also fails safe for a malformed contradictory pair.
+    if (Heap::IsHeapAddress(plainField)) {
+        Heap::GetBarrier().WriteReference(plainObj, *plainField, plainRef);
+        return;
+    }
+    if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
         VLOG(REPORT, "found and writing a global struct ref field");
-        Heap::GetBarrier().WriteStaticRef(*field, ref);
+        Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
         return;
     }
-    if (!Heap::IsHeapAddress(obj)) {
-        field->SetTargetObject(ref);
-        return;
-    }
-    Heap::GetBarrier().WriteReference(obj, *field, ref);
+    // Non-heap destination (static/global): same remset duty as WriteStaticRef.
+    // This remains the root path even when the optional holder is null.
+    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef);
+}
+
+extern "C" MRT_EXPORT void CJ_MCC_PostWriteRefField(const ObjectPtr ref, const ObjectPtr obj,
+                                                     RefField<false>* field, uintptr_t observedPrev)
+{
+    Heap::GetBarrier().PostWriteReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref),
+                                          to_zpointer(observedPrev));
 }
 
 extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                      GCTib gctib)
 {
-    CHECK_DETAIL((dst != 0u && src != 0u), "MCC_WriteStructField wrong parameter, dst: %p src: %p", dst, src);
-    if (IsGlobalStruct(obj, dst)) {
-        Heap::GetBarrier().WriteStaticStruct(dst, dstLen, src, srcLen, gctib);
+    ObjectPtr plainObj = PlainObjectPtr(obj);
+    MAddress plainDst = PlainManagedAddr(dst);
+    MAddress plainSrc = PlainManagedAddr(src);
+    CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStructField wrong parameter, dst: %p src: %p", plainDst,
+                 plainSrc);
+    if (IsGlobalStruct(plainObj, plainDst)) {
+        Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
         return;
     }
-    if (UNLIKELY(!Heap::IsHeapAddress(obj))) {
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
-                     "memcpy_s failed");
+    if (UNLIKELY(!Heap::IsHeapAddress(plainObj))) {
+        Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
         return;
     }
-    Heap::GetBarrier().WriteStruct(obj, dst, dstLen, src, srcLen);
+    Heap::GetBarrier().WriteStruct(plainObj, plainDst, dstLen, plainSrc, srcLen);
 }
 
-extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field)
+extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, NativeSlot* field)
 {
-    Heap::GetBarrier().WriteStaticRef(*field, ref);
+    MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(field));
+    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(address), PlainObjectPtr(ref));
 }
 
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
 {
-    CHECK_DETAIL((dst != 0u && src != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", dst, src);
-    Heap::GetBarrier().WriteStaticStruct(dst, dstLen, src, srcLen, gcTib);
+    MAddress plainDst = PlainManagedAddr(dst);
+    MAddress plainSrc = PlainManagedAddr(src);
+    CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", plainDst,
+                 plainSrc);
+    Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gcTib);
 }
 
 extern "C" TypeInfo* MCC_GetObjClass(const ObjectPtr obj)
@@ -363,7 +439,8 @@ extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, s
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    Heap::GetBarrier().CopyRefArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+    Heap::GetBarrier().CopyRefArray(PlainObjectPtr(dstObj), PlainManagedAddr(dstField), dstSize,
+                                    PlainObjectPtr(srcObj), PlainManagedAddr(srcField), srcSize);
 }
 
 extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField, size_t dstSize,
@@ -373,29 +450,33 @@ extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+    Heap::GetBarrier().CopyStructArray(PlainObjectPtr(dstObj), PlainManagedAddr(dstField), dstSize,
+                                       PlainObjectPtr(srcObj), PlainManagedAddr(srcField), srcSize);
 }
 extern "C" void MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                          MemoryOrder order)
 {
-    Heap::GetBarrier().AtomicWriteReference(obj, *field, ref, order);
+    Heap::GetBarrier().AtomicWriteReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref), order);
 }
 
 extern "C" ObjectPtr MCC_AtomicReadReference(const ObjectPtr obj, RefField<true>* field, MemoryOrder order)
 {
-    return Heap::GetBarrier().AtomicReadReference(obj, *field, order);
+    return Heap::GetBarrier().AtomicReadReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), order);
 }
 
 extern "C" ObjectPtr MCC_AtomicSwapReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                              MemoryOrder order)
 {
-    return Heap::GetBarrier().AtomicSwapReference(obj, *field, ref, order);
+    return Heap::GetBarrier().AtomicSwapReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref),
+                                                  order);
 }
 
 extern "C" bool MCC_AtomicCompareSwapReference(const ObjectPtr oldRef, const ObjectPtr newRef, const ObjectPtr obj,
                                                RefField<true>* field, MemoryOrder succOrder, MemoryOrder failOrder)
 {
-    return Heap::GetBarrier().CompareAndSwapReference(obj, *field, oldRef, newRef, succOrder, failOrder);
+    return Heap::GetBarrier().CompareAndSwapReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field),
+                                                      PlainObjectPtr(oldRef), PlainObjectPtr(newRef), succOrder,
+                                                      failOrder);
 }
 
 extern "C" void MCC_InvokeGCImpl(bool sync) { HeapManager::RequestGC(GC_REASON_USER, !sync); }
@@ -424,11 +505,11 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber() { return ScheduleCJThreadCount
 
 extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCount(); }
 
-extern "C" size_t MCC_GetGCCount() { return g_gcCount; }
+extern "C" size_t MCC_GetGCCount() { return ZStat::Collections().Stats().totalCollections; }
 
-extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs; }
+extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
 
-extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes; }
+extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes.load(std::memory_order_acquire); }
 
 extern "C" bool MCC_StartCpuProfiling()
 {
@@ -837,14 +918,24 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
     return snapshot;
 }
 
+// Strip ZGC colour / tag bits (bits 48+) so IsHeapAddress / Pin / C payload see a plain VA.
+// RefField address field is bits 0..47 (RefField.h); same mask as the compiler load-good AND.
+static ArrayRef PlainArrayRef(const ArrayRef array)
+{
+    return reinterpret_cast<ArrayRef>(RefField<>(reinterpret_cast<MAddress>(array)).GetAddress());
+}
+
 static ArrayRef PinArray(const ArrayRef array)
 {
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
     CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
-    // forbid gc thread to move this region.
-    Heap::GetHeap().GetCollector().AddRawPointerObject(array);
-    return static_cast<ArrayRef>(array);
+    // forbid gc thread to move this region. array must already be plain (see PlainArrayRef).
+    // The pin may resolve a movable from-copy to its to-version (oracleblack face c):
+    // the caller must hand out the RESOLVED payload, and MCC_ReleaseRawData will Dec the
+    // same region the pin Inc'd.
+    BaseObject* pinned = Heap::GetHeap().GetCollector().PinRawPointerObject(array);
+    return static_cast<ArrayRef>(pinned);
 }
 
 // Return the raw pointer of input array object, isCopy records whether memory copy occurs.
@@ -853,8 +944,10 @@ static ArrayRef PinArray(const ArrayRef array)
 // but can't return until GC finish current work.
 extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 {
-    if (!Heap::IsHeapAddress(array)) {
-        return array->ConvertToCArray();
+    // Coloured refs fail the heap-range check and skip pin; strip first (ffibound / acqstrip).
+    ArrayRef plain = PlainArrayRef(array);
+    if (!Heap::IsHeapAddress(plain)) {
+        return plain == nullptr ? nullptr : plain->ConvertToCArray();
     }
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
@@ -862,18 +955,18 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     static void* unreadablePage = MutatorManager::Instance().GetSafepointPageManager()->GetUnreadablePage();
 #endif
     MRT_ASSERT(unreadablePage != nullptr, "runtime is not initialized\n");
-    if (UNLIKELY(array == nullptr)) {
+    if (UNLIKELY(plain == nullptr)) {
         return nullptr;
     }
-    if (UNLIKELY(array->GetContentSize() == 0)) {
+    if (UNLIKELY(plain->GetContentSize() == 0)) {
         return unreadablePage;
     }
-    MRT_ASSERT(array->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
+    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
     if (isCopy != nullptr) {
         *isCopy = false;
     }
     (void)CJThreadPreemptOffCntAdd();
-    ArrayRef pArray = PinArray(array);
+    ArrayRef pArray = PinArray(plain);
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     auto* rawPtr = pArray->ConvertToCArray();
     std::vector<uint64_t> frame;
@@ -901,17 +994,18 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 // Release the raw pointer
 extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
 {
-    if (!Heap::IsHeapAddress(array)) {
+    ArrayRef plain = PlainArrayRef(array);
+    if (!Heap::IsHeapAddress(plain)) {
         return;
     }
-    MRT_ASSERT(array->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
+    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
 #else
     static void* unreadablePage = MutatorManager::Instance().GetSafepointPageManager()->GetUnreadablePage();
 #endif
     MRT_ASSERT(unreadablePage != nullptr, "runtime is not initialized\n");
-    if (UNLIKELY(array == nullptr || rawPtr == nullptr)) {
+    if (UNLIKELY(plain == nullptr || rawPtr == nullptr)) {
         return;
     }
     if (rawPtr == unreadablePage) {
@@ -919,7 +1013,7 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     }
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
     // sanitizer will convert alias/colorized pointer to real pointer for runtime
-    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(array, rawPtr, array->GetContentSize());
+    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(plain, rawPtr, plain->GetContentSize());
 #endif
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     std::vector<uint64_t> frame;
@@ -940,6 +1034,169 @@ enum LoadPackageStatus {
     LOAD_FILENAME_REPEATED = 3
 };
 
+namespace {
+struct PackageInfoSnapshot {
+    std::string packageName;
+    std::string version;
+    std::vector<TypeInfo*> typeInfos;
+    std::vector<MethodInfo*> globalMethods;
+    std::vector<StaticFieldInfo*> globalFields;
+    PackageInfo* related { nullptr };
+    std::vector<PackageInfo*> subPackages;
+};
+
+std::mutex& PackageInfoSnapshotMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>>& PackageInfoSnapshots()
+{
+    static std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>> snapshots;
+    return snapshots;
+}
+
+PackageInfoSnapshot* FindPackageInfoSnapshot(PackageInfo* packageInfo)
+{
+    std::lock_guard<std::mutex> lock(PackageInfoSnapshotMutex());
+    auto& snapshots = PackageInfoSnapshots();
+    auto it = snapshots.find(packageInfo);
+    return it == snapshots.end() ? nullptr : it->second.get();
+}
+
+bool CopyPackageInfoSnapshotSubPackages(PackageInfo* packageInfo, std::vector<PackageInfo*>& subPackages)
+{
+    std::lock_guard<std::mutex> lock(PackageInfoSnapshotMutex());
+    auto& snapshots = PackageInfoSnapshots();
+    auto it = snapshots.find(packageInfo);
+    if (it == snapshots.end()) {
+        return false;
+    }
+    subPackages = it->second->subPackages;
+    return true;
+}
+
+bool IsStrictPackageAncestor(const std::string& ancestor, const std::string& descendant)
+{
+    return descendant.size() > ancestor.size() && descendant.compare(0, ancestor.size(), ancestor) == 0 &&
+        descendant[ancestor.size()] == '.';
+}
+
+void AppendSnapshotDescendant(std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>>& snapshots,
+                              PackageInfoSnapshot& ancestor, PackageInfo* descendantHandle)
+{
+    auto descendant = snapshots.find(descendantHandle);
+    if (descendant == snapshots.end()) {
+        return;
+    }
+    const std::string& descendantName = descendant->second->packageName;
+    for (PackageInfo* currentHandle : ancestor.subPackages) {
+        auto current = snapshots.find(currentHandle);
+        if (current != snapshots.end() && current->second->packageName == descendantName) {
+            return;
+        }
+    }
+    ancestor.subPackages.push_back(descendantHandle);
+}
+
+void ReconcilePublishedSubPackages(
+    std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>>& snapshots,
+    const std::vector<PackageInfo*>& publishedHandles)
+{
+    // Package discovery and snapshot construction happen under the loader reader/catalog
+    // protocol before this function is entered.  Reconcile only immutable snapshot names
+    // while holding the snapshot mutex, so this publication never calls back into the loader.
+    for (PackageInfo* publishedHandle : publishedHandles) {
+        auto published = snapshots.find(publishedHandle);
+        if (published == snapshots.end()) {
+            continue;
+        }
+        PackageInfoSnapshot& publishedSnapshot = *published->second;
+        for (auto& entry : snapshots) {
+            PackageInfo* existingHandle = entry.first;
+            PackageInfoSnapshot& existingSnapshot = *entry.second;
+            if (existingHandle == publishedHandle) {
+                continue;
+            }
+            if (IsStrictPackageAncestor(existingSnapshot.packageName, publishedSnapshot.packageName)) {
+                AppendSnapshotDescendant(snapshots, existingSnapshot, publishedHandle);
+            }
+            if (IsStrictPackageAncestor(publishedSnapshot.packageName, existingSnapshot.packageName)) {
+                AppendSnapshotDescendant(snapshots, publishedSnapshot, existingHandle);
+            }
+        }
+    }
+}
+
+class PackageInfoSnapshotBuilder final {
+public:
+    PackageInfo* Build(PackageInfo* source)
+    {
+        PackageInfo* root = BuildOne(source);
+        if (root == nullptr) {
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> lock(PackageInfoSnapshotMutex());
+        auto& snapshots = PackageInfoSnapshots();
+        std::vector<PackageInfo*> publishedHandles;
+        publishedHandles.reserve(pending.size());
+        for (auto& entry : pending) {
+            PackageInfo* handle = reinterpret_cast<PackageInfo*>(entry.get());
+            publishedHandles.push_back(handle);
+            snapshots.emplace(handle, std::move(entry));
+        }
+        ReconcilePublishedSubPackages(snapshots, publishedHandles);
+        return root;
+    }
+
+private:
+    PackageInfo* BuildOne(PackageInfo* source)
+    {
+        if (source == nullptr) {
+            return nullptr;
+        }
+        auto found = handles.find(source);
+        if (found != handles.end()) {
+            return found->second;
+        }
+        auto snapshot = std::make_unique<PackageInfoSnapshot>();
+        PackageInfo* handle = reinterpret_cast<PackageInfo*>(snapshot.get());
+        handles.emplace(source, handle);
+        PackageInfoSnapshot* value = snapshot.get();
+        pending.push_back(std::move(snapshot));
+
+        const char* packageName = source->GetPackageName();
+        const char* version = source->GetVersion();
+        value->packageName = packageName == nullptr ? "" : packageName;
+        value->version = version == nullptr ? "" : version;
+        value->typeInfos.reserve(source->GetNumOfTypeInfos());
+        for (U32 i = 0; i < source->GetNumOfTypeInfos(); ++i) {
+            value->typeInfos.push_back(source->GetTypeInfo(i));
+        }
+        value->globalMethods.reserve(source->GetNumOfGlobalMethodInfos());
+        for (U32 i = 0; i < source->GetNumOfGlobalMethodInfos(); ++i) {
+            value->globalMethods.push_back(source->GetGlobalMethodInfo(i));
+        }
+        value->globalFields.reserve(source->GetNumOfGlobalFieldInfos());
+        for (U32 i = 0; i < source->GetNumOfGlobalFieldInfos(); ++i) {
+            value->globalFields.push_back(source->GetGlobalFieldInfo(i));
+        }
+        value->related = BuildOne(source->GetRelatedPackageInfo());
+        std::vector<PackageInfo*> subPackages;
+        LoaderManager::GetInstance()->GetSubPackages(source, subPackages);
+        value->subPackages.reserve(subPackages.size());
+        for (PackageInfo* subPackage : subPackages) {
+            value->subPackages.push_back(BuildOne(subPackage));
+        }
+        return handle;
+    }
+
+    std::unordered_map<PackageInfo*, PackageInfo*> handles;
+    std::vector<std::unique_ptr<PackageInfoSnapshot>> pending;
+};
+} // namespace
+
 extern "C" void* MCC_LoadPackage(const char* path)
 {
     if (path == nullptr || *path == '\0') {
@@ -952,7 +1209,7 @@ extern "C" void* MCC_LoadPackage(const char* path)
     if (LoadCJLibrary(path) != E_OK) {
         return reinterpret_cast<void*>(LOAD_FAIL);
     }
-    if (loaderMgr->GetPackageInfoByPath(path) == nullptr) {
+    if (!loaderMgr->VisitPackageInfoByPath(path, [](PackageInfo*) {})) {
         loaderMgr->RemovePackageInfo(path);
         return reinterpret_cast<void*>(LOAD_PACKAGE_REPEATED);
     }
@@ -963,7 +1220,14 @@ extern "C" void* MCC_LoadPackage(const char* path)
     if (InitCJLibrary(path) != E_OK) {
         return reinterpret_cast<void*>(LOAD_FAIL);
     }
-    return loaderMgr->GetPackageInfoByPath(path);
+    PackageInfo* snapshot = nullptr;
+    bool found = loaderMgr->VisitPackageInfoByPath(path, [&snapshot](PackageInfo* packageInfo) {
+#ifdef MRT_TESTABLE_INTERNALS
+        ElfUnloadQuiescence::PausePackageReaderForTesting();
+#endif
+        snapshot = PackageInfoSnapshotBuilder().Build(packageInfo);
+    });
+    return found && snapshot != nullptr ? static_cast<void*>(snapshot) : reinterpret_cast<void*>(LOAD_FAIL);
 }
 
 extern "C" PackageInfo* MCC_GetPackageByQualifiedName(const char* packageName)
@@ -976,13 +1240,19 @@ extern "C" PackageInfo* MCC_GetPackageByQualifiedName(const char* packageName)
 
 extern "C" const char* MCC_GetPackageVersion(PackageInfo* packageInfo)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return snapshot->version.c_str();
+    }
     return packageInfo->GetVersion();
 }
 
 extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arrayTi)
 {
     std::vector<PackageInfo*> subPackages = {};
-    LoaderManager::GetInstance()->GetSubPackages(packageInfo, subPackages);
+    if (!CopyPackageInfoSnapshotSubPackages(packageInfo, subPackages)) {
+        LoaderManager::GetInstance()->GetSubPackages(packageInfo, subPackages);
+    }
     size_t subPkgCnt = subPackages.size();
     // Array<CPointer<Unit>> layout likes { Rarray<CPointer<Unit>>, Int64, Int64 }
     TypeInfo* rawArrayTi = arrayTi->GetFieldType(0); // 0: first field type RawArray<CPointer<Unit>>.ti
@@ -1007,37 +1277,75 @@ extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arra
 }
 
 // for package
-extern "C" const char* MCC_GetPackageName(PackageInfo* packageInfo) { return packageInfo->GetPackageName(); }
+extern "C" const char* MCC_GetPackageName(PackageInfo* packageInfo)
+{
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return snapshot->packageName.c_str();
+    }
+    return packageInfo->GetPackageName();
+}
 
 extern "C" PackageInfo* MCC_GetRelatedPackageInfo(PackageInfo* packageInfo)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return snapshot->related;
+    }
     return packageInfo->GetRelatedPackageInfo(); // todo
 }
 
-extern "C" U32 MCC_GetNumOfTypeInfos(PackageInfo* packageInfo) { return packageInfo->GetNumOfTypeInfos(); }
+extern "C" U32 MCC_GetNumOfTypeInfos(PackageInfo* packageInfo)
+{
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return static_cast<U32>(snapshot->typeInfos.size());
+    }
+    return packageInfo->GetNumOfTypeInfos();
+}
 
 extern "C" TypeInfo* MCC_GetPackageTypeInfo(PackageInfo* packageInfo, U32 index)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return index < snapshot->typeInfos.size() ? snapshot->typeInfos[index] : nullptr;
+    }
     return packageInfo->GetTypeInfo(index);
 }
 
 extern "C" U32 MCC_GetPackageNumOfGlobalMethodInfos(PackageInfo* packageInfo)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return static_cast<U32>(snapshot->globalMethods.size());
+    }
     return packageInfo->GetNumOfGlobalMethodInfos();
 }
 
 extern "C" MethodInfo* MCC_GetPackageGlobalMethodInfo(PackageInfo* packageInfo, U32 index)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return index < snapshot->globalMethods.size() ? snapshot->globalMethods[index] : nullptr;
+    }
     return packageInfo->GetGlobalMethodInfo(index);
 }
 
 extern "C" U32 MCC_GetPackageNumOfGlobalFieldInfos(PackageInfo* packageInfo)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return static_cast<U32>(snapshot->globalFields.size());
+    }
     return packageInfo->GetNumOfGlobalFieldInfos();
 }
 
 extern "C" StaticFieldInfo* MCC_GetPackageGlobalFieldInfo(PackageInfo* packageInfo, U32 index)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return index < snapshot->globalFields.size() ? snapshot->globalFields[index] : nullptr;
+    }
     return packageInfo->GetGlobalFieldInfo(index);
 }
 
@@ -1595,7 +1903,7 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
-        return Heap::GetBarrier().ReadStaticRef(*field);
+        return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
     }
     return Heap::GetBarrier().ReadReference(obj, *field);
 }
@@ -1620,7 +1928,7 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
     }
     Heap::GetBarrier().ReadStruct(dstPtr, obj, srcField, size);
 }
-extern "C" ObjectPtr CJ_MCC_ReadStaticRef(RefField<false>* field)
+extern "C" ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field)
 {
     return Heap::GetBarrier().ReadStaticRef(*field);
 }
@@ -1633,11 +1941,33 @@ extern "C" void* MCC_GetTypeInfoAnnotations(TypeInfo* cls, TypeInfo* arrayTi) { 
 // for generic
 extern "C" TypeInfo* CJ_MCC_GetOrCreateTypeInfo(TypeTemplate* typeTemplate, U32 argSize, TypeInfo* typeArgs[])
 {
-    return TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(typeTemplate, argSize, typeArgs);
+    TypeInfo** plainArgs = typeArgs;
+    TypeInfo* stackPlain[16];
+    TypeInfo** heapPlain = nullptr;
+    if (typeArgs != nullptr && argSize > 0) {
+        if (argSize <= 16) {
+            plainArgs = stackPlain;
+        } else {
+            heapPlain = static_cast<TypeInfo**>(std::malloc(sizeof(TypeInfo*) * argSize));
+            CHECK_DETAIL(heapPlain != nullptr, "CJ_MCC_GetOrCreateTypeInfo plainArgs malloc failed");
+            plainArgs = heapPlain;
+        }
+        for (U32 i = 0; i < argSize; ++i) {
+            plainArgs[i] = PlainTypeInfoPtr(typeArgs[i]);
+        }
+    }
+    TypeInfo* result =
+        TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(typeTemplate, argSize, plainArgs);
+    if (heapPlain != nullptr) {
+        std::free(heapPlain);
+    }
+    return result;
 }
 
 extern "C" bool CJ_MCC_IsSubType(TypeInfo* typeInfo, TypeInfo* superTypeInfo)
 {
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    superTypeInfo = PlainTypeInfoPtr(superTypeInfo);
     if (typeInfo == nullptr || superTypeInfo == nullptr) {
         return false;
     }
@@ -1683,7 +2013,7 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
             if (Heap::IsHeapAddress(obj)) {
                 curObj = Heap::GetBarrier().ReadReference(obj, obj->GetRefField(offset));
             } else {
-                curObj = obj->GetRefField(offset).GetTargetObject();
+                curObj = to_object(obj->GetRefField(offset).GetTargetObject());
             }
             TypeInfo* curti = curObj->GetTypeInfo();
             if (!curti->IsSubType(fieldTargetTI)) {
@@ -1703,6 +2033,8 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
 
 extern "C" bool CJ_MCC_IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTypeInfo)
 {
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    targetTypeInfo = PlainTypeInfoPtr(targetTypeInfo);
     if (obj == nullptr || targetTypeInfo == nullptr) {
         return false;
     }
@@ -1714,11 +2046,17 @@ extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const O
     if (src == nullptr || size == 0) {
         return;
     }
-    Heap::GetBarrier().WriteGeneric(obj, fieldPtr, src, size);
+    Heap::GetBarrier().WriteGeneric(PlainObjectPtr(obj),
+                                    reinterpret_cast<void*>(PlainManagedAddr(reinterpret_cast<MAddress>(fieldPtr))),
+                                    PlainObjectPtr(src), size);
 }
 
 extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo)
 {
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    if (typeInfo == nullptr) {
+        return;
+    }
     size_t instanceSize = typeInfo->GetInstanceSize();
     if (instanceSize == 0) {
         return;
@@ -1735,22 +2073,74 @@ extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typ
     }
 }
 
+static size_t GenericPayloadLimit(ObjectPtr obj)
+{
+    TypeInfo* typeInfo = obj->GetTypeInfo();
+    if (typeInfo->IsArrayType()) {
+        const MArray* array = reinterpret_cast<const MArray*>(obj);
+        return array->GetMArraySize() - TYPEINFO_PTR_SIZE;
+    }
+    return typeInfo->GetInstanceSize();
+}
+
+// Fail-closed size check: CodeGen is the real bound (ZGC arraycopy_in_heap is
+// similarly type-system guaranteed). Size larger than the instance payload
+// aborts with both values; no silent truncate.
+static void CheckGenericPayloadSize(ObjectPtr obj, size_t size)
+{
+    const size_t limit = GenericPayloadLimit(obj);
+    if (UNLIKELY(size > limit)) {
+        const char* typeName = obj->GetTypeInfo()->GetName();
+        CHECK_DETAIL(false,
+                     "generic payload size %zu exceeds object payload %zu type=%s",
+                     size, limit, typeName != nullptr ? typeName : "(null)");
+    }
+}
+
 extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, size_t srcSize)
 {
     TypeInfo* typeInfo = dst->GetTypeInfo();
     if (srcSize == 0) {
         return;
     }
+    const size_t limit = GenericPayloadLimit(dst);
+    if (UNLIKELY(srcSize > limit)) {
+        const char* typeName = typeInfo->GetName();
+        CHECK_DETAIL(false,
+                     "generic payload size %zu exceeds object payload %zu type=%s",
+                     srcSize, limit, typeName != nullptr ? typeName : "(null)");
+    }
 
     if (!typeInfo->HasRefField()) {
         CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + TYPEINFO_PTR_SIZE),
-                              GENERIC_PAYLOAD_SIZE,
+                              limit,
                               reinterpret_cast<void*>(srcField),
                               srcSize) == EOK,
                      "MCC_WriteGenericPayload memcpy_s failed");
     } else {
         MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
         Heap::GetBarrier().WriteStruct(dst, dstAddr, srcSize, srcField, srcSize);
+    }
+}
+
+extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t size)
+{
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    if (Heap::IsHeapAddress(dstNative)) {
+        LOG(RTLOG_FATAL, "dstNative is in heap");
+    }
+#endif
+    if (obj == nullptr || size == 0) {
+        return;
+    }
+    CheckGenericPayloadSize(obj, size);
+    MAddress srcPayload = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+    TypeInfo* typeInfo = obj->GetTypeInfo();
+    if (!typeInfo->HasRefField()) {
+        CHECK_DETAIL(memcpy_s(dstNative, size, reinterpret_cast<void*>(srcPayload), size) == EOK,
+                     "CJ_MCC_ReadGenericPayload memcpy_s failed");
+    } else {
+        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(dstNative), obj, srcPayload, size);
     }
 }
 
@@ -1783,16 +2173,22 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
 
 extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf)
 {
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
     return ti->GetMTable(itf);
 }
 
 extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index)
 {
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
     return ti->GetMethodOuterTI(itf, index);
 }
 
 extern "C" void CJ_MCC_UpdateVMT(TypeInfo* ti, TypeInfo* itf, ExtensionData* extensionData)
 {
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
     if (UNLIKELY(!extensionData->IsFuncTableUpdated())) {
         return ti->TryUpdateExtensionData(itf, extensionData);
     }
@@ -1926,11 +2322,22 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_UINT_NATIVE:
         case TypeKind::TYPE_KIND_CSTRING:
         case TypeKind::TYPE_KIND_CPOINTER:
-        case TypeKind::TYPE_KIND_CFUNC:
-        case TypeKind::TYPE_KIND_VARRAY: {
+        case TypeKind::TYPE_KIND_CFUNC: {
             CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                    reinterpret_cast<void*>(srcField), srcSize) == EOK,
                          "MCC_ArrayCopyGeneric memmove_s failed");
+            break;
+        }
+        case TypeKind::TYPE_KIND_VARRAY: {
+            // VArray may embed managed refs (HasRefField recurses via component flag /
+            // TypeGCInfo). Unconditional memmove skips remset post-record (G-C1).
+            if (componentTypeInfo->HasRefField()) {
+                Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+            } else {
+                CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
+                                       reinterpret_cast<void*>(srcField), srcSize) == EOK,
+                             "MCC_ArrayCopyGeneric memmove_s failed");
+            }
             break;
         }
         case TypeKind::TYPE_KIND_TUPLE:
@@ -1949,7 +2356,11 @@ extern "C" void CJ_MCC_CopyStructField(BaseObject* dstBase, void* dstField, size
 
 extern "C" int32_t __ccc_personality_v0() { return 0; }
 // @deprecated
-extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBaseKey) {}
+extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBaseKey)
+{
+    (void)PlainTypeInfoPtr(cls);
+    (void)callBaseKey;
+}
 
 void CJ_MCC_CrossAccessBarrier(U64 cjExport)
 {

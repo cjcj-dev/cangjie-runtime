@@ -12,6 +12,7 @@
 #include "Base/Types.h"
 #include "Common/TypeDef.h"
 #include "MangleNameHelper.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "ObjectModel/MFuncdesc.h"
 
 namespace MapleRuntime {
@@ -118,6 +119,10 @@ private:
             MFuncDesc::GetFuncDesc(reinterpret_cast<Uptr>(frameInfo.GetFuncStartPC())));
 #endif
     }
+
+    // Keep the image mapped for the complete helper lifetime, not only while
+    // ResolveFuncDesc decodes the pointer.
+    ElfUnloadQuiescence::ReadScope metadataReader;
 
     // function pc address.
     const uint32_t* funcPC;

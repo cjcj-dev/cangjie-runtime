@@ -231,7 +231,10 @@ inline EnumInfo* TypeInfo::GetEnumInfo() const
 
 inline bool TypeInfo::HasRefField() const
 {
-    if (IsArrayType()) {
+    // RawArray and VArray both store a homogeneous component sequence.
+    // VArray is a value aggregate, but its component may still be a managed
+    // ref or a value type that embeds refs (WRITE_SIDE_CLOSURE_PLAN G-C1..C3).
+    if (IsArrayType() || IsVArray()) {
         TypeInfo* componentTi = GetComponentTypeInfo();
         if (componentTi->IsRef()) {
             return true;
@@ -246,8 +249,8 @@ inline bool TypeInfo::HasRefField() const
 inline bool TypeInfo::HasFinalizer() const { return static_cast<bool>(flag & FLAG_HAS_FINALIZER); }
 inline bool TypeInfo::IsInitialUUID() const { return uuid == 0; }
 inline bool TypeInfo::IsFutureClass() const { return static_cast<bool>(flag & FLAG_FUTURE_CLASS); }
-inline bool TypeInfo::IsMonitorClass() const { return static_cast<bool>(flag & FLAG_MUTEX_CLASS); }
-inline bool TypeInfo::IsMutexClass() const { return static_cast<bool>(flag & FLAG_MONITOR_CLASS); }
+inline bool TypeInfo::IsMonitorClass() const { return static_cast<bool>(flag & FLAG_MONITOR_CLASS); }
+inline bool TypeInfo::IsMutexClass() const { return static_cast<bool>(flag & FLAG_MUTEX_CLASS); }
 inline bool TypeInfo::IsWaitQueueClass() const { return static_cast<bool>(flag & FLAG_WAIT_QUEUE_CLASS); }
 inline bool TypeInfo::HasExtPart() const { return static_cast<bool>(flag & FLAG_HAS_EXT_PART); }
 inline bool TypeInfo::IsBoxClass() const
@@ -270,7 +273,11 @@ inline U32* TypeInfo::GetFieldOffsets() const
     return fieldOffsets;
 }
 
-inline U16 TypeInfo::GetValidInheritNum() const { return validInheritNum & ((1ULL << 15) - 1); }
+inline U16 TypeInfo::GetValidInheritNum() const
+{
+    U16 inherit = __atomic_load_n(&validInheritNum, __ATOMIC_ACQUIRE);
+    return inherit & ((1ULL << 15) - 1);
+}
 
 inline U32 TypeInfo::GetUUID()
 {

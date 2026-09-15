@@ -33,9 +33,11 @@ extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* classInfo, MSize size);
 extern "C" ObjRef MCC_OnFinalizerCreated(ObjRef ref);
 extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* classInfo, MSize size, bool isFinalizer);
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);
+extern "C" void CJ_MCC_PostWriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field,
+                                          uintptr_t observedPrev);
 extern "C" void MCC_WriteStructField(const ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                      GCTib gctib);
-extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field);
+extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, NativeSlot* field);
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib);
 extern "C" void MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                          MemoryOrder order);
@@ -153,7 +155,7 @@ extern "C" MRT_EXPORT ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefFiel
 extern "C" MRT_EXPORT ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field);
 extern "C" MRT_EXPORT void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress srcField, size_t size,
                                                   GCTib gctib);
-extern "C" MRT_EXPORT ObjectPtr CJ_MCC_ReadStaticRef(RefField<false>* field);
+extern "C" MRT_EXPORT ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field);
 extern "C" MRT_EXPORT void CJ_MCC_ReadStaticStruct(MAddress dstPtr, size_t dstSize, MAddress srcPtr, size_t srcSize,
                                                    GCTib gctib);
 extern "C" MRT_EXPORT TypeInfo* CJ_MCC_GetOrCreateTypeInfo(TypeTemplate* typeTemplate, U32 argSize,
@@ -163,6 +165,7 @@ extern "C" MRT_EXPORT bool CJ_MCC_IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInf
 extern "C" MRT_EXPORT void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size);
 extern "C" MRT_EXPORT void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo);
 extern "C" MRT_EXPORT void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, size_t srcSize);
+extern "C" MRT_EXPORT void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t size);
 extern "C" MRT_EXPORT void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size);
 extern "C" MRT_EXPORT FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf);
 extern "C" MRT_EXPORT TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index);

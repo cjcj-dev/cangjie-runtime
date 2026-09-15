@@ -13,7 +13,7 @@
 #include "Common/StackType.h"
 #include "Common/TypeDef.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Interpreter/RTInterface.h"
 #include "LoaderManager.h"
 #include "Mutator/Mutator.h"
@@ -214,12 +214,12 @@ void VisitDerivedPtrFromInterpreter(
 {
     const DerivedPtrVisitor* visitor = static_cast<const DerivedPtrVisitor*>(_visitor);
     BasePtrType* basePtrLocation = static_cast<BasePtrType*>(_basePtrHolder);
-    DerivedPtrType* derivedPtrLocation = static_cast<DerivedPtrType*>(_derivedPtrHolder);
+    DerivedSlot& derivedPtrLocation = DerivedSlotAt(_derivedPtrHolder);
 
     DLOG(INTERPRETER, "VisitDerivedPtrFromInterpreter: visitor=[%p], placeholder=[%p]", (void*)visitor,
-        (void*)derivedPtrLocation);
+        (void*)&derivedPtrLocation);
 
-    (*visitor)(*basePtrLocation, *derivedPtrLocation);
+    (*visitor)(*basePtrLocation, derivedPtrLocation);
 }
 
 struct DYN_TypeInfo* TypeInfoProvider(const char* sig)
@@ -390,13 +390,14 @@ int IsSubType(struct DYN_TypeInfo* typeInfo, struct DYN_TypeInfo* superTypeInfo)
 DYN_ObjRef ReadStaticField(DYN_FieldRef source)
 {
     DLOG(INTERPRETER, "ReadStaticField %p", source);
-    return CJ_MCC_ReadStaticRef(static_cast<RefField<false>*>(source));
+    BaseObject* res = Heap::GetBarrier().ReadStaticRef(NativeSlotAt(source));
+    return static_cast<DYN_ObjRef>(res);
 }
 
 void WriteStaticField(DYN_FieldRef destination, DYN_ObjRef new_value)
 {
     DLOG(INTERPRETER, "WriteStaticField %p %p", destination, new_value);
-    MCC_WriteStaticRef(static_cast<BaseObject*>(new_value), static_cast<RefField<false>*>(destination));
+    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(destination), static_cast<BaseObject*>(new_value));
 }
 
 DYN_ObjRef ReadInstanceField(DYN_ObjRef source, DYN_FieldRef field)
@@ -505,7 +506,11 @@ int IsActiveGCPhase(DYN_ThreadLocalData tld)
     if (mutator == nullptr) {
         return 0;
     }
-    return mutator->GetMutatorPhase() >= GCPhase::GC_PHASE_ENUM ? 1 : 0;
+    // This callback asks whether either generation needs GC barriers, not
+    // which operation this thread acknowledged most recently.
+    const Heap& heap = Heap::GetHeap();
+    return heap.GetGCPhase(GCCycleGeneration::YOUNG) >= GCPhase::GC_PHASE_ENUM ||
+        heap.GetGCPhase(GCCycleGeneration::OLD) >= GCPhase::GC_PHASE_ENUM ? 1 : 0;
 }
 
 DYN_ExceptionWrapper GetExceptionWrapper()
