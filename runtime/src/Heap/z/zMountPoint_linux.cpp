@@ -8,6 +8,7 @@
 // flag) arrives here as the cjAllocateHeapAt environment variable.
 
 #include "Heap/z/zMountPoint_linux.hpp"
+#include "Heap/z/zArray.inline.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -72,7 +73,7 @@ void ZMountPoint::get_mountpoints(const char* filesystem, ZArray<char*>* mountpo
   while (getline(&line, &length, fd) != -1) {
     char* const mountpoint = get_mountpoint(line, filesystem);
     if (mountpoint != nullptr) {
-      mountpoints->push_back(mountpoint);
+      mountpoints->append(mountpoint);
     }
   }
 
@@ -115,10 +116,10 @@ char* ZMountPoint::find_mountpoint(const char* filesystem, const char** preferre
 
   get_mountpoints(filesystem, &mountpoints);
 
-  if (mountpoints.size() == 0) {
+  if (mountpoints.length() == 0) {
     // No mount point found
     LOG(RTLOG_ERROR, "Failed to find an accessible %s filesystem", filesystem);
-  } else if (mountpoints.size() == 1) {
+  } else if (mountpoints.length() == 1) {
     // One mount point found
     path = strdup(mountpoints.at(0));
   } else {

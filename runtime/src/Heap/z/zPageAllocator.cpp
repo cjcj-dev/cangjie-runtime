@@ -31,6 +31,7 @@
 #include "Heap/Collector/CopyCollector.h"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
+#include "Heap/z/zNUMA.inline.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Common/BaseObject.h"
@@ -720,9 +721,15 @@ void RegionManager::ReturnPageMemory(const PageMemory& memory)
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(memory.index));
     if (region != nullptr) {
         CHECK(region->GetUnitIdx() == memory.index && region->GetUnitCount() == memory.units);
-        RegionInfo::RetirePage(region, [this, region, memory] {
+        // Only materialized page geometry is retired. Its allocation-time
+        // partial mappings have already been consumed; ZArray is non-copyable.
+        const size_t index = memory.index;
+        const size_t units = memory.units;
+        const uint32_t partition = memory.partition;
+        const bool committed = memory.committed;
+        RegionInfo::RetirePage(region, [this, region, index, units, partition, committed] {
             region->InitFreeUnits();
-            ReturnRetiredPageMemory(memory);
+            ReturnRetiredPageMemory(PageMemory{index, units, partition, committed});
         });
         return;
     }
