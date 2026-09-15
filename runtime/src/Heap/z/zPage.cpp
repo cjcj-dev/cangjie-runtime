@@ -62,9 +62,7 @@ uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;
 std::vector<RegionInfo::UnitSegment> RegionInfo::unitSegments;
 ZGranuleMap<RegionInfo*> RegionInfo::pageOwners;
-std::mutex RegionInfo::pageRetirementMutex;
-size_t RegionInfo::pageIterationCount = 0;
-std::vector<std::function<void()>> RegionInfo::deferredPageRetirements;
+ZSafeDelete<RegionInfo::PageRetirement> RegionInfo::safeDestroy;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 namespace {

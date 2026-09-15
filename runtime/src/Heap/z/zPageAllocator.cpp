@@ -535,14 +535,15 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
         } while (anotherWave);
     }
 
+    // zFuture.inline.hpp:47-53: a Java thread waits with a safepoint check;
+    // here the mutator enters its saferegion before ZFuture::get (I3/I4).
     ScopedEnterSaferegion enterSaferegion(false);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
-    const bool satisfied = request.Wait(allocationStallBeforeWaitTestHook
-        ? [this] { allocationStallBeforeWaitTestHook(*this); }
-        : std::function<void()> {});
-#else
-    const bool satisfied = request.Wait();
+    if (allocationStallBeforeWaitTestHook) {
+        allocationStallBeforeWaitTestHook(*this);
+    }
 #endif
+    const bool satisfied = request.Wait();
     // Pair with the posting owner before the caller destroys its request.
     // zPageAllocator.cpp:1454-1464.
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);

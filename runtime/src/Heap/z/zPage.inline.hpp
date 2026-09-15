@@ -8,6 +8,7 @@
 #define MRT_REGIONINFO_INLINE_H
 
 #include "Heap/z/zPage.hpp"
+#include "Heap/z/zSafeDelete.inline.hpp"
 
 namespace MapleRuntime {
 
@@ -802,22 +803,27 @@ inline ALWAYS_INLINE size_t RegionInfo::GetAddressOffset(MAddress address)
 
 inline void RegionInfo::RetirePage(RegionInfo* region, std::function<void()> retire)
     {
-        {
-            std::lock_guard<std::mutex> lock(pageRetirementMutex);
-            const uintptr_t start = region->GetRegionStart();
-            const size_t size = region->GetRegionSize();
-            zoffset offset;
-            CHECK(pageOwners.offset_for_address(start, &offset));
-            CHECK(pageOwners.get(offset) == region);
-            // zHeap.cpp:275-280 / zPageTable.cpp:59-65: remove the complete
-            // old page while its descriptor still describes every granule.
-            pageOwners.put(offset, size, nullptr);
-            if (pageIterationCount != 0) {
-                deferredPageRetirements.push_back(std::move(retire));
-                return;
-            }
-        }
-        retire();
+        const uintptr_t start = region->GetRegionStart();
+        const size_t size = region->GetRegionSize();
+        zoffset offset;
+        CHECK(pageOwners.offset_for_address(start, &offset));
+        CHECK(pageOwners.get(offset) == region);
+        // zHeap.cpp:275-280 / zPageTable.cpp:59-65: remove the complete
+        // old page while its descriptor still describes every granule.
+        pageOwners.put(offset, size, nullptr);
+        // zPageAllocator.cpp:2248-2250 safe_destroy_page: deferred while any
+        // page iterator is active, immediate otherwise.
+        safeDestroy.schedule_delete(new PageRetirement{ std::move(retire) });
+    }
+
+inline void RegionInfo::EnableSafeDestroy()
+    {
+        safeDestroy.enable_deferred_delete();
+    }
+
+inline void RegionInfo::DisableSafeDestroy()
+    {
+        safeDestroy.disable_deferred_delete();
     }
 
 inline size_t RegionInfo::IndexedUnitCount(const std::vector<MemoryRange>& ranges)
@@ -877,9 +883,9 @@ inline bool RegionInfo::ContainsUnitRange(uintptr_t start, size_t size)
 
 inline void RegionInfo::VisitPageOwners(const std::function<void(RegionInfo*)>& visitor)
     {
-        // zPageTable.cpp:101-113: protect the whole callback lifetime,
+        // zPageTable.cpp:83-98: the iterator's lifetime brackets safe destroy,
         // including nested iteration and exceptional callback exits.
-        PageIterationScope iteration;
+        SafeDestroyScope iteration;
         pageOwners.visit_unique(visitor);
     }
 

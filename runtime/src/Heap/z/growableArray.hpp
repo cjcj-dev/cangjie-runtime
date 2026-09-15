@@ -142,10 +142,12 @@ public:
 // doubling, elements are copied on growth.
 template <typename E>
 class GrowableArrayCHeap : public GrowableArrayView<E> {
+protected:
     using GrowableArrayView<E>::_data;
     using GrowableArrayView<E>::_len;
     using GrowableArrayView<E>::_capacity;
 
+private:
     static E* allocate(int capacity)
     {
         if (capacity == 0) {

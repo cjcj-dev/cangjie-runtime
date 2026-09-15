@@ -23,6 +23,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
+#include "Heap/z/zUtils.inline.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zBarrier.hpp"
@@ -617,7 +618,9 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector,
 
     if (publishMapping) {
         const auto publication = ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
-        collector.CopyObject(*from, *to, from->GetSize());
+        // zRelocate.cpp:369: relocation to a fresh page is a disjoint copy.
+        ZUtils::object_copy_disjoint(to_zaddress(reinterpret_cast<uintptr_t>(from)),
+                                     to_zaddress(reinterpret_cast<uintptr_t>(to)), from->GetSize());
         GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, reinterpret_cast<MAddress>(from),
                                                    reinterpret_cast<MAddress>(to)), reinterpret_cast<MAddress>(to));
     }

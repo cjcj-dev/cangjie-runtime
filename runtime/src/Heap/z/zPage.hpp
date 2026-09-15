@@ -40,6 +40,7 @@
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/z/zLiveMap.hpp"
+#include "Heap/z/zSafeDelete.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
@@ -400,40 +401,31 @@ public:
     static std::vector<UnitSegment> unitSegments;
     static ZGranuleMap<RegionInfo*> pageOwners;
 
-    // zSafeDelete.inline.hpp:46-59 / zArray.inline.hpp:210-246. The ABI
-    // stores descriptors in a fixed array, so defer descriptor reinitialization
-    // and cache hand-back instead of deleting a separately allocated ZPage.
-    static std::mutex pageRetirementMutex;
-    static size_t pageIterationCount;
-    static std::vector<std::function<void()>> deferredPageRetirements;
+    // zPageAllocator.hpp:166 ZSafeDelete<ZPage> _safe_destroy. The ABI keeps
+    // page descriptors in the unit array (I6, PLAN §5), so the object whose
+    // delete is deferred is a retirement record: its destructor reinitializes
+    // the descriptor and hands the memory back. P03's independent ZPage
+    // descriptor turns this into ZSafeDelete<ZPage> on the page allocator,
+    // next to the page table this static sits beside today.
+    struct PageRetirement {
+        std::function<void()> retire;
+        ~PageRetirement() { retire(); }
+    };
+    static ZSafeDelete<PageRetirement> safeDestroy;
 
-    class PageIterationScope {
+    // zPageAllocator.cpp:2287-2293
+    static void EnableSafeDestroy();
+    static void DisableSafeDestroy();
+
+    // zPageTable.cpp:83-98 ZGenerationPagesIterator: enable_safe_destroy in
+    // the constructor, disable_safe_destroy in the destructor.
+    class SafeDestroyScope {
     public:
-        PageIterationScope()
-        {
-            std::lock_guard<std::mutex> lock(pageRetirementMutex);
-            ++pageIterationCount;
-        }
+        SafeDestroyScope() { EnableSafeDestroy(); }
+        ~SafeDestroyScope() { DisableSafeDestroy(); }
 
-        ~PageIterationScope()
-        {
-            std::vector<std::function<void()>> retired;
-            {
-                std::lock_guard<std::mutex> lock(pageRetirementMutex);
-                CHECK(pageIterationCount != 0);
-                if (--pageIterationCount == 0) {
-                    retired.swap(deferredPageRetirements);
-                }
-            }
-            // Run existing allocator paths outside the activation lock, as
-            // ZActivatedArray::deactivate_and_apply does.
-            for (auto& retire : retired) {
-                retire();
-            }
-        }
-
-        PageIterationScope(const PageIterationScope&) = delete;
-        PageIterationScope& operator=(const PageIterationScope&) = delete;
+        SafeDestroyScope(const SafeDestroyScope&) = delete;
+        SafeDestroyScope& operator=(const SafeDestroyScope&) = delete;
     };
 
     static void RetirePage(RegionInfo* region, std::function<void()> retire);

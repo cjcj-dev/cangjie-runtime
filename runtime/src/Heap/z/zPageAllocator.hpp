@@ -9,7 +9,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <mutex>
 #include <vector>
@@ -54,31 +53,20 @@ public:
     PageMemory& Memory() { return memory; }
     const PageMemory& Memory() const { return memory; }
 
-    bool Wait(const std::function<void()>& beforeWait = {})
+    // zPageAllocator.cpp:525-531 ZPageAllocation::wait/satisfy over ZFuture<bool>.
+    bool Wait()
     {
-        std::unique_lock<std::mutex> lock(mutex);
-        if (!completed && beforeWait) {
-            beforeWait();
-        }
-        condition.wait(lock, [this] { return completed; });
-        return result;
+        return stallResult.get();
     }
 
     void Satisfy(bool value)
     {
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            if (completed) {
-                return;
-            }
-            result = value;
-            completed = true;
-        }
-        condition.notify_one();
+        stallResult.set(value);
     }
 
 private:
     friend class AllocationStallQueue;
+    friend class ZList<AllocationStallRequest>;
 
     const size_t size;
     uint64_t sequence{ 0 };
@@ -86,10 +74,10 @@ private:
     const bool physical;
     const bool clear;
     PageMemory memory;
-    std::mutex mutex;
-    std::condition_variable condition;
-    bool completed{ false };
-    bool result{ false };
+    // zPageAllocator.cpp:420-421 ZPageAllocation: ZFuture<bool> _stall_result
+    // and the ZListNode that links it on the allocator's stalled list.
+    ZFuture<bool> stallResult;
+    ZListNode<AllocationStallRequest> _node;
 };
 
 // Allocator-owned FIFO.  Enqueue returns true only for the transition from
@@ -104,7 +92,7 @@ public:
         const bool requestGc = !gcInProgress;
         gcInProgress = true;
         request.sequence = ++lastSequence;
-        requests.push_back(&request);
+        requests.insert_last(&request);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
         ++enqueued;
 #endif
@@ -115,7 +103,7 @@ public:
     bool IsStalling() const
     {
         std::lock_guard<std::mutex> lock(mutex);
-        return !requests.empty();
+        return !requests.is_empty();
     }
 
     uint64_t CaptureWaveBoundary() const
@@ -133,12 +121,12 @@ public:
     size_t SatisfyAvailableLocked(const std::function<bool(AllocationStallRequest&)>& claim)
     {
         size_t satisfied = 0;
-        while (!requests.empty()) {
-            AllocationStallRequest* request = requests.front();
+        while (!requests.is_empty()) {
+            AllocationStallRequest* request = requests.first();
             if (!claim(*request)) {
                 break;
             }
-            requests.pop_front();
+            requests.remove_first();
             request->Satisfy(true);
             ++satisfied;
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
@@ -152,16 +140,16 @@ public:
     bool CompleteWave(uint64_t boundary)
     {
         std::lock_guard<std::mutex> lock(mutex);
-        while (!requests.empty() && requests.front()->sequence <= boundary) {
-            AllocationStallRequest* request = requests.front();
-            requests.pop_front();
+        while (!requests.is_empty() && requests.first()->sequence <= boundary) {
+            AllocationStallRequest* request = requests.first();
+            requests.remove_first();
             request->Satisfy(false);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
             ++dequeued;
             ++failedCount;
 #endif
         }
-        if (requests.empty()) {
+        if (requests.is_empty()) {
             gcInProgress = false;
             return false;
         }
@@ -178,7 +166,8 @@ public:
 
 private:
     std::mutex& mutex;
-    std::deque<AllocationStallRequest*> requests;
+    // zPageAllocator.hpp:165 ZList<ZPageAllocation> _stalled.
+    ZList<AllocationStallRequest> requests;
     uint64_t lastSequence{ 0 };
     bool gcInProgress{ false };
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
@@ -359,6 +348,8 @@ private:
 #include "Common/RunType.h"
 
 #include "Heap/z/zDeferredConstructed.hpp"
+#include "Heap/z/zFuture.inline.hpp"
+#include "Heap/z/zList.inline.hpp"
 #include "Heap/z/zRangeRegistry.hpp"
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zValue.hpp"

@@ -10,12 +10,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <thread>
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zUtils.inline.hpp"
 #include "Heap/WCollector/WCollector.h"
 
 using namespace MapleRuntime;
@@ -62,65 +64,48 @@ GC_TEST(ExemptLife, InPlaceCopyMustNotPaintNormalBeforeUnlock)
 namespace {
 
 
+// zRelocate.cpp:634-639: the in-place path copies conjoint when the new
+// object overlaps the old one, disjoint otherwise. ZGC holds no object lock
+// across the copy (the forwarding insert resolves the race), so the copy
+// promises only that the destination holds the source bytes.
 void ExerciseOverlappingCopy(intptr_t destinationDelta)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
     const MAddress fromAddress = region->GetRegionStart() + 128;
     BaseObject* from = fx.PlaceObject(fromAddress);
-    region->SetRegionAllocPtr(fromAddress + 0x18);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TypeInfo* const typeInfoBeforeCopy = from->GetTypeInfo();
-    StateWord oldWord = from->GetStateWord();
-    GC_EXPECT_TRUE(from->TryLockObject(oldWord));
-    GC_EXPECT_TRUE(from->GetStateWord().IsLockedWord());
-    BaseObject* to = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(
-        static_cast<intptr_t>(fromAddress) + destinationDelta));
-    // This is the shipped CopyCollector::CopyObject entry, reached through
-    // WCollector; no test-side copy of the relocation implementation exists.
-    collector.CopyObject(*from, *to, 0x18);
-    if (destinationDelta == -0x10) {
-        // Observation only: CopyObject restores the source stateCode needed by
-        // UnlockObject, but does not promise to restore the overwritten typeInfo.
-        // Keep both values in the evidence log without asserting equivalence.
-        std::cout << "SDOVL_FROM_TYPEINFO before="
-                  << reinterpret_cast<uintptr_t>(typeInfoBeforeCopy) << " after="
-                  << reinterpret_cast<uintptr_t>(from->GetTypeInfo()) << std::endl;
+    constexpr size_t size = 0x18;
+    region->SetRegionAllocPtr(fromAddress + size);
+    unsigned char expected[size];
+    std::memcpy(expected, from, size);
+    const MAddress toAddress = static_cast<MAddress>(static_cast<intptr_t>(fromAddress) + destinationDelta);
+    if (toAddress + size > fromAddress) {
+        ZUtils::object_copy_conjoint(to_zaddress(fromAddress), to_zaddress(toAddress), size);
+    } else {
+        ZUtils::object_copy_disjoint(to_zaddress(fromAddress), to_zaddress(toAddress), size);
     }
-    from->UnlockObject(ObjectState::FORWARDED);
-    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(std::memcmp(reinterpret_cast<const void*>(toAddress), expected, size), 0);
 }
-
 
 } // namespace
 
 // The destination starts 0x10 bytes before the source and extends into its
-// header. Before the fix, CopyObject overwrote LOCKED and UnlockObject aborted.
-GC_OTHER_VM_TEST(ExemptLife, PartialOverlapCopyPreservesLockedSource)
+// header: the conjoint copy still lands the complete source image.
+GC_OTHER_VM_TEST(ExemptLife, PartialOverlapCopyLandsSourceImage)
 {
     ExerciseOverlappingCopy(-0x10);
 }
 
-// A 16-byte copy from `from` to `from - 8` overlaps by one aligned word, while
-// the two 8-byte headers do not overlap. ForwardObjectExclusive must therefore
-// normalize the copied destination header without clearing the source lock.
-
-
-GC_OTHER_VM_TEST(ExemptLife, NonOverlapCopyBeforeSourceRemainsGreen)
+// A copy to `from - 0x18` touches no source byte: the disjoint branch.
+GC_OTHER_VM_TEST(ExemptLife, NonOverlapCopyBeforeSourceLandsSourceImage)
 {
     ExerciseOverlappingCopy(-0x18);
 }
 
-GC_OTHER_VM_TEST(ExemptLife, NonOverlapCopyFarBeforeSourceRemainsGreen)
+GC_OTHER_VM_TEST(ExemptLife, NonOverlapCopyFarBeforeSourceLandsSourceImage)
 {
     ExerciseOverlappingCopy(-0x20);
 }
-
-
-
-
-
-
 
 GC_TEST(ExemptLife, PrepareInstallStripsForwardedResidual)
 {
