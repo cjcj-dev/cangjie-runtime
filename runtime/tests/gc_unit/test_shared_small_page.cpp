@@ -13,6 +13,7 @@
 #include <vector>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "zunittest.hpp"
 #include "Heap/z/zStat.hpp"
 #if defined(__linux__)
 #include <sched.h>
@@ -75,22 +76,19 @@ namespace {
 // A synthetic, single-caller heap, using the product page allocator and page
 // table. There are no registered mutators; retire_pages has a quiescent world.
 struct SharedPageFixture {
-    MemMap* map;
     RegionManager manager;
+    std::unique_ptr<ZTestRegionHeap> heap;
     SharedPageFixture()
     {
         // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
         constexpr size_t units = 64;
-        const size_t metadata = RegionManager::GetMetadataSize(units);
-        map = MemMap::MapMemory(metadata + units * RegionInfo::UNIT_SIZE, metadata);
-        GC_EXPECT_TRUE(map != nullptr);
         HeapParam params{};
         params.regionSize = RegionInfo::UNIT_SIZE / KB;
         params.exemptionThreshold = 0.8;
-        manager.Initialize(units, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, params, 0.5);
+        heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
     }
-    ~SharedPageFixture() { MemMap::DestroyMemMap(map); }
+    ~SharedPageFixture() { heap.reset(); }
 };
 
 class CPUAffinity {

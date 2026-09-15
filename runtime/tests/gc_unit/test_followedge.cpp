@@ -63,10 +63,8 @@ struct LargeArrayFixture {
         const size_t units = arrayUnits + 1;
         const size_t metadata = RegionManager::GetMetadataSize(units);
         mappedSize = metadata + units * RegionInfo::UNIT_SIZE;
-        const MemMap::Option options = { "cangjie_heap", nullptr,
-            MemMap::DEFAULT_MEM_FLAGS, MemMap::DEFAULT_MEM_PROT, false };
-        reservation = MemMap::MapMemory(mappedSize, mappedSize, options);
-        mapping = reservation == nullptr ? MAP_FAILED : reservation->GetBaseAddr();
+        reservation.reset(new ZTestHeapMapping(mappedSize));
+        mapping = reservation->base();
         GC_EXPECT_TRUE(mapping != MAP_FAILED);
         const MAddress start = reinterpret_cast<MAddress>(mapping) + metadata;
         Heap::OnHeapCreated(start);
@@ -99,10 +97,10 @@ struct LargeArrayFixture {
     {
         LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region0);
         LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(region1);
-        MemMap::DestroyMemMap(reservation);
+        reservation.reset();
     }
     alignas(TypeInfo) unsigned char holderStorage[sizeof(TypeInfo)] {};
-    MemMap* reservation = nullptr;
+    std::unique_ptr<ZTestHeapMapping> reservation;
     void* mapping = nullptr;
     size_t mappedSize = 0;
     RegionInfo* region0 = nullptr;

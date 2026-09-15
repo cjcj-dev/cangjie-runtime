@@ -46,8 +46,10 @@ set(GC_UNIT_SOURCES
     test_store_barrier_buffer.cpp
     test_barrier_old_atomic.cpp
     test_zPageAge.cpp
-    test_range_registry.cpp
+    test_zVirtualMemory.cpp
+    test_zVirtualMemoryManager.cpp
     test_mapped_cache.cpp
+    test_page_retirement.cpp
     test_stay_young.cpp
     test_gc_trigger.cpp
     test_gc_director.cpp
@@ -80,7 +82,6 @@ set(GC_UNIT_SOURCES
     test_verify_fail_close.cpp
     test_verify_phase.cpp
     test_verify_marking_stacks.cpp
-    test_mem_map.cpp
     test_colour_census.cpp
     test_payload_clamp.cpp
     test_cycle_ref_saferegion.cpp

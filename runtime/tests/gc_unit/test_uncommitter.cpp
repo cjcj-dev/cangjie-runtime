@@ -16,6 +16,7 @@
 #undef private
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/Allocator/RegionSpace.h"
+#include "zunittest.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/ThreadLocal.h"
@@ -177,31 +178,6 @@ GC_TEST(Uncommitter, CycleCancelStopsUncommit)
     GC_EXPECT_FALSE(UncommitterTestAccess::Canceled());
 }
 
-// ZPhysicalMemoryManager's partial completion feeds ZUncommitter::register_uncommit.
-GC_TEST(Uncommitter, PartialPrefixIsRetainedNotRounded)
-{
-    struct PartialBackend final : MemMapBackend {
-        void* Reserve(void*, size_t, unsigned int, const char*, bool) override
-        { return reinterpret_cast<void*>(0x10000000); }
-        size_t Commit(void*, size_t size, int, uint32_t, bool) override { return size; }
-        bool Protect(void*, size_t, int) override { return true; }
-        size_t Release(void*, size_t, uint32_t) override { return 4096; }
-        bool Unreserve(void*, size_t) override { return true; }
-    } backend;
-    const size_t requested = 4 * 4096;
-    MemMap* map = MemMap::TryMapMemory(requested, requested, MemMap::DEFAULT_OPTIONS,
-        AddressSpaceBudget::Seal(1024 * 1024), NumaTopology::Seal({0}), backend);
-    GC_EXPECT_TRUE(map != nullptr);
-    const size_t before = map->GetCommittedSize();
-    const size_t completed = map->ReleaseMemoryDeferred(map->GetBaseAddr(), requested);
-    GC_EXPECT_EQ(completed, 4096U);
-    GC_EXPECT_EQ(map->GetCommittedSize(), before);
-    GC_EXPECT_EQ(map->PublishMemoryRelease(map->GetBaseAddr(), completed), completed);
-    GC_EXPECT_EQ(map->GetCommittedSize(), before - completed);
-    GC_EXPECT_EQ(map->PublishMemoryRelease(map->GetBaseAddr(), completed), 0U);
-    MemMap::DestroyMemMap(map);
-}
-
 GC_TEST(Uncommitter, AllocationTakeBumpsIdleClock)
 {
     CartesianTree tree;
@@ -221,56 +197,90 @@ static void BindUncommitWorkerThread()
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
 }
 
-static void InitializeUncommitCache(FreeRegionManager& frm, size_t n, uintptr_t heapStart, MemMap& map)
+// ZPageAllocator::prime (zPageAllocator.cpp:954-997): claim virtual and
+// physical memory for the whole capacity, commit, map, and cache it.
+struct ProbeHeap {
+    size_t units;
+    ZTest::ZBackingLimitSetter backingLimits;
+    ZAddressOffsetMaxSetter offsetMax;
+    std::unique_ptr<ZVirtualMemoryManager> virtualMemory;
+    std::unique_ptr<ZPhysicalMemoryManager> physicalMemory;
+    void* metadata{ nullptr };
+    size_t metadataSize{ 0 };
+
+    explicit ProbeHeap(size_t n)
+        : units(n), offsetMax(ZAddressOffsetMax)
+    {
+        EnsureZAddressDomain();
+        virtualMemory.reset(new ZVirtualMemoryManager(n * RegionInfo::UNIT_SIZE));
+        GC_EXPECT_TRUE(virtualMemory->is_initialized());
+        physicalMemory.reset(new ZPhysicalMemoryManager(n * RegionInfo::UNIT_SIZE));
+        GC_EXPECT_TRUE(physicalMemory->is_initialized());
+        const ZVirtualMemory span = RegionManager::ReservedAddressSpan(*virtualMemory);
+        const std::vector<RegionInfo::UnitSegment> segments{
+            RegionInfo::UnitSegment{ untype(ZOffset::address_unsafe(span.start())), span.size(), 0 } };
+        metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(segments));
+        metadata = mmap(nullptr, metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        GC_EXPECT_TRUE(metadata != MAP_FAILED);
+        RegionInfo::InitializeSegments(reinterpret_cast<uintptr_t>(metadata) + metadataSize, segments);
+    }
+
+    ~ProbeHeap()
+    {
+        physicalMemory.reset();
+        virtualMemory.reset();
+        if (metadata != nullptr) { (void)munmap(metadata, metadataSize); }
+    }
+};
+
+static void InitializeUncommitCache(FreeRegionManager& frm, ProbeHeap& heap)
 {
-    frm.Initialize(n, {{heapStart, n * RegionInfo::UNIT_SIZE}}, map);
+    const size_t bytes = heap.units * RegionInfo::UNIT_SIZE;
+    frm.Initialize(heap.units, *heap.virtualMemory, *heap.physicalMemory, bytes);
     for (auto& partition : frm.partitions) {
-        partition->virtualMemory.ClaimLow(partition->virtualMemory.TotalSize());
         partition->cache.SetRefresh({});
     }
+    // Prime partition 0 with all of its capacity: claim, commit, map, cache.
+    const size_t primed = frm.partitions.front()->currentMaxCapacity;
+    const ZVirtualMemory vmem = frm.claim_virtual(primed, 0);
+    GC_EXPECT_FALSE(vmem.is_null());
+    GC_EXPECT_EQ(frm.increase_capacity(0, primed), primed);
+    frm.claim_physical(vmem, 0);
+    GC_EXPECT_EQ(frm.commit_physical(vmem, 0), primed);
+    frm.map_virtual(vmem, 0);
+    frm.partitions.front()->cache.Insert({FreeRegionManager::UnitIndexOf(vmem),
+                                          static_cast<uint32_t>(vmem.granule_count())});
 }
 
 static size_t ProbeProductUncommit(bool cancelFirst)
 {
     BindUncommitWorkerThread();
     const size_t n = 64 * MB / RegionInfo::UNIT_SIZE;
-    const size_t meta = RegionManager::GetMetadataSize(n);
-    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
-    const size_t total = meta + heapBytes;
-    std::fprintf(stderr, "DETAIL probe n=%zu meta=%zu total=%zu\n", n, meta, total);
+    std::fprintf(stderr, "DETAIL probe n=%zu\n", n);
     std::fflush(stderr);
-    MemMap* map = MemMap::MapMemory(total, total);
-    GC_EXPECT_TRUE(map != nullptr);
-    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
-    std::fprintf(stderr, "DETAIL probe mapped base=%p heapStart=%#zx\n", map->GetBaseAddr(), heapStart);
-    std::fflush(stderr);
-    RegionInfo::Initialize(n, heapStart, map);
-    std::fprintf(stderr, "DETAIL probe initialized\n");
-    std::fflush(stderr);
+    ProbeHeap heap(n);
     auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& rm = space.GetRegionManager();
     FreeRegionManager& frm = rm.freeRegionManager;
-    InitializeUncommitCache(frm, n, heapStart, *map);
-    std::fprintf(stderr, "DETAIL probe tree ready\n");
+    InitializeUncommitCache(frm, heap);
+    std::fprintf(stderr, "DETAIL probe cache ready committed=%zu cached=%u\n", frm.capacity(), frm.GetDirtyUnitCount());
     std::fflush(stderr);
-    RegionInfo::InitFreeRegion(0, 1);
-    frm.partitions.front()->cache.Insert({0, 1});
     // ZGC caches virtual memory after withdrawing the page-table entry.
-    GC_EXPECT_TRUE(RegionInfo::TryGetRegionInfoAt(heapStart) == nullptr);
-    std::fprintf(stderr, "DETAIL probe releasedCount=%u\n", frm.GetDirtyUnitCount());
-    std::fflush(stderr);
+    GC_EXPECT_TRUE(RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(0)) == nullptr);
     UncommitterTestAccess::ResetCancel();
     if (cancelFirst) {
         UncommitterTestAccess::Cancel();
     }
     Uncommitter& worker = space.GetUncommitter();
     UncommitterTestAccess::PrepareChunk(worker);
+    const size_t before = frm.capacity();
     const size_t backendReleased = UncommitterTestAccess::Uncommit(worker);
     std::fprintf(stderr,
-                 "DETAIL backendReleased=%zu cancelFirst=%d unit=%zu\n",
-                 backendReleased, cancelFirst ? 1 : 0, RegionInfo::UNIT_SIZE);
+                 "DETAIL backendReleased=%zu cancelFirst=%d unit=%zu capacity before=%zu after=%zu\n",
+                 backendReleased, cancelFirst ? 1 : 0, RegionInfo::UNIT_SIZE, before, frm.capacity());
     std::fflush(stderr);
-    MemMap::DestroyMemMap(map);
+    // ZPartition::decrease_capacity followed the uncommit (zUncommitter.cpp:417-419).
+    GC_EXPECT_EQ(frm.capacity(), before - backendReleased);
     return backendReleased;
 }
 

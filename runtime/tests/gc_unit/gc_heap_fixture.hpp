@@ -11,6 +11,7 @@
 #define MRT_GC_HEAP_FIXTURE_HPP
 
 #include "gc_cycle_sequence_fixture.hpp"
+#include <memory>
 #include <cstdlib>
 #include <cstring>
 #include <new>
@@ -25,6 +26,7 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #undef private
+#include "zunittest.hpp"
 #include "Heap/Collector/LiveInfoArena.h"
 #include "Heap/z/zLiveMap.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -112,23 +114,17 @@ struct GcHeapFixture {
 
     static constexpr size_t kUnits = 6;
 
-    explicit GcHeapFixture(bool withMemoryOwner = false)
+    GcHeapFixture()
     {
         // ZInitialize initializes statistics before any allocation can sample.
-        if (ZAddressHeapBase == 0) { ZGlobalsPointers::initialize(); }
+        EnsureZAddressDomain();
         ZStat::Initialize();
         const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
         mappedSize = metadataSize + kUnits * RegionInfo::UNIT_SIZE;
-        // Use the product address-domain reservation, as ZTest's address
-        // reserver does. The optional page owner remains a separate fixture axis.
-        const MemMap::Option options = { "cangjie_heap", nullptr,
-            MemMap::DEFAULT_MEM_FLAGS, MemMap::DEFAULT_MEM_PROT, false };
-        reservationOwner = MemMap::MapMemory(mappedSize, mappedSize, options);
-        memoryOwner = withMemoryOwner ? reservationOwner : nullptr;
-        mapping = reservationOwner == nullptr ? MAP_FAILED : reservationOwner->GetBaseAddr();
-        if (mapping == MAP_FAILED) {
-            std::abort();
-        }
+        // Reserve in the heap address domain and back it with a committed,
+        // mapped backing file, as ZTest's address reserver and backing mocker do.
+        heapMapping.reset(new ZTestHeapMapping(mappedSize));
+        mapping = heapMapping->base();
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
         EnsureHeapRange(heapStart);
         // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
@@ -138,7 +134,7 @@ struct GcHeapFixture {
                 AdvanceGeneration(generation);
             }
         }
-        RegionInfo::Initialize(kUnits, heapStart, memoryOwner);
+        RegionInfo::Initialize(kUnits, heapStart);
         region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
@@ -187,10 +183,7 @@ struct GcHeapFixture {
         if (region1 != nullptr && region1->IsYoungRegion()) {
             region1->SetYoungRegionFlag(0);
         }
-        if (mapping != nullptr && mapping != MAP_FAILED) {
-            MemMap::DestroyMemMap(reservationOwner);
-            memoryOwner = nullptr;
-        }
+        heapMapping.reset();
     }
 
     BaseObject* PlaceObject(MAddress addr)
@@ -299,8 +292,7 @@ struct GcHeapFixture {
         auto owned = LiveInfoArena::GetLiveInfoArena().TakePageLiveInfo(live->bindedRegion, live);
     }
 
-    MemMap* reservationOwner = nullptr;
-    MemMap* memoryOwner = nullptr;
+    std::unique_ptr<ZTestHeapMapping> heapMapping;
     void* mapping = nullptr;
     size_t mappedSize = 0;
     MAddress heapStart = 0;

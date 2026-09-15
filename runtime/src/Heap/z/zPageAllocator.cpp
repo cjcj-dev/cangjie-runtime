@@ -354,23 +354,28 @@ RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, RegionI
 {
     (void)expectPhysicalMem;
     committedUnits = 0;
+    // satisfied_from_cache_vmem: a contiguous cache hit is already committed and mapped.
+    const bool fromCache = memory.virtualClaimed;
     if (!PreparePageMemory(memory)) { return nullptr; }
     const size_t idx = memory.index;
     const size_t num = memory.units;
     const uint32_t partitionId = memory.partition;
-    const bool wasCommitted = memory.committed;
-    committedUnits = wasCommitted ? num : 0;
-    if (!wasCommitted) {
+    committedUnits = fromCache ? num : 0;
+    if (!fromCache) {
+        // The vmem was built from harvested memory and/or increased capacity.
         const ZVirtualMemory vmem = VirtualMemoryOf(idx, num);
         const size_t alreadyCommitted = memory.harvestedUnits * RegionInfo::UNIT_SIZE;
         const ZVirtualMemory nonCommitted = vmem.last_part(alreadyCommitted);
 
-        // Claim physical memory for the increased capacity
-        claim_physical(nonCommitted, partitionId);
+        size_t committed = 0;
+        if (nonCommitted.size() > 0) {
+            // Claim physical memory for the increased capacity
+            claim_physical(nonCommitted, partitionId);
 
-        // Commit memory for the increased capacity
-        const size_t committed = commit_physical(nonCommitted, partitionId);
-        CHECK(committed <= nonCommitted.size() && committed % RegionInfo::UNIT_SIZE == 0);
+            // Commit memory for the increased capacity
+            committed = commit_physical(nonCommitted, partitionId);
+            CHECK(committed <= nonCommitted.size() && committed % RegionInfo::UNIT_SIZE == 0);
+        }
         const size_t totalCommitted = alreadyCommitted + committed;
         committedUnits = totalCommitted / RegionInfo::UNIT_SIZE;
 
@@ -396,11 +401,11 @@ RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, RegionI
         }
         memory.committed = true;
     }
-    if ((wasCommitted || memory.harvestedUnits != 0) && clearPayload) {
+    if ((fromCache || memory.harvestedUnits != 0) && clearPayload) {
         RegionInfo::ClearUnits(idx, num);
     }
     RegionInfo* region = RegionInfo::InitRegion(idx, num, role, age);
-    if (!wasCommitted) {
+    if (!fromCache) {
         PrehandleReleasedUnit(clearPayload, idx, num);
     }
     return region;
