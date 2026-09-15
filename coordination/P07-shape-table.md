@@ -11,7 +11,7 @@ ZGC根：/root/cj_build/reference/jdk/src/hotspot/share/gc/；我方根：runtim
 | shared/workerThread.hpp:85 WorkerThreads；cpp:93/133/200 | workerThread.hpp:69；cpp:106/137/173 | 独立派发器，无Heap/Mutator调用；线程入口另做运行时线程注册 |
 | shared/workerThread.hpp:131 WorkerThread；cpp:211 | workerThread.hpp:118；cpp:185/216 | TLS id以任务参与次序分配，非固定OS线程下标 |
 | shared/workerThread.hpp:154 WithActiveWorkers | workerThread.hpp:150 | 临时改变参与数后恢复 |
-| z/zTask.cpp:26/38/41/45 | zTask.cpp:11/26/21/31 | 内嵌WorkerTask适配器→无参work；ZRestartableTask默认空resize |
+| z/zTask.cpp:26/37/41/45 | zTask.cpp:11/21/26/31 | 内嵌WorkerTask适配器→无参work；ZRestartableTask默认空resize |
 | z/zWorkers.hpp:38 六字段 | zWorkers.hpp:26 | WorkerThreads、generation_name、resize_lock、requested、active、stats |
 | z/zWorkers.cpp:45/67/71/75/81/87 | zWorkers.cpp:28/46/51/56/63/70 | 构造建池；锁下改变active与请求 |
 | z/zWorkers.cpp:92/108/126 | zWorkers.cpp:77/95/116 | 普通run统计前后包围；重启任务锁内resize；run_all暂时用最大参与数 |
