@@ -34,6 +34,7 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
 #include "Heap/z/zMarkStack.hpp"
@@ -890,7 +891,10 @@ void* RunVisibleArrayGraph(void*)
 {
     Mutator::GetMutator()->SetManagedContext(false);
     MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(array);
+    NativeSlot root;
+    Heap::GetBarrier().WriteStaticRef(root, array);
+    NativeSlot* roots[] = { &root };
+    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::vector<size_t> visits(array->GetLength(), 0);
     size_t invalid = 0;
     size_t objects = 0;
@@ -910,7 +914,7 @@ void* RunVisibleArrayGraph(void*)
                 }
             });
     }
-    Heap::GetHeap().RemoveExportObject(handle);
+    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     for (size_t count : visits) { invalid += count != 1; }
     const bool complete = objects == 1 && invalid == 0;
     std::fprintf(stderr, "SEGMENTED_GRAPH_RANGE_ASSERT objects=%zu fields=%zu invalid=%zu pass=%d\n",
@@ -957,7 +961,8 @@ void* RunInvisibleArrayGraph(void*)
     return reinterpret_cast<void*>(excluded ? 0 : 1);
 }
 
-int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
+int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1,
+                   bool runtimeThread = false)
 {
 #if defined(__linux__)
     const pid_t child = fork();
@@ -968,6 +973,18 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
         param.coParam.processorNum = processorCount;
         if (InitCJRuntime(&param) != E_OK) {
             _exit(100);
+        }
+        if (runtimeThread) {
+            // Use the real native runtime-thread registration for graph tests.
+            // RunCJTask stores a native FutureImpl in LWTData::obj; that is not
+            // a managed heap-object root and is a separate scheduler/root issue.
+            auto& manager = MutatorManager::Instance();
+            manager.CreateRuntimeMutator(ThreadType::GC_THREAD);
+            void* result = task(reinterpret_cast<void*>(argument));
+            manager.DestroyRuntimeMutator(ThreadType::GC_THREAD);
+            const uintptr_t status = reinterpret_cast<uintptr_t>(result);
+            if (FiniCJRuntime() != E_OK) { _exit(103); }
+            _exit(status > 99 ? 99 : static_cast<int>(status));
         }
         CJThreadHandle handle = RunCJTask(task, reinterpret_cast<void*>(argument));
         if (handle == nullptr) {
@@ -993,6 +1010,7 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
     (void)task;
     (void)argument;
     (void)processorCount;
+    (void)runtimeThread;
     return 0;
 #endif
 }
@@ -1033,12 +1051,12 @@ GC_OTHER_VM_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, VisibleArrayGraphUsesRangeChunks)
 {
-    GC_EXPECT_EQ(RunRuntimeCase(RunVisibleArrayGraph, 0), 0);
+    GC_EXPECT_EQ(RunRuntimeCase(RunVisibleArrayGraph, 0, 1, true), 0);
 }
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, InvisibleRootIsExcludedFromHeapGraph)
 {
-    GC_EXPECT_EQ(RunRuntimeCase(RunInvisibleArrayGraph, 0), 0);
+    GC_EXPECT_EQ(RunRuntimeCase(RunInvisibleArrayGraph, 0, 1, true), 0);
 }
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedFirstInactiveExtentUsesSegmentedInitializer)
