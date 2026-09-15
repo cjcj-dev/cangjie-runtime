@@ -475,14 +475,14 @@ inline bool RegionInfo::MarkLargeObject(MarkView<G> view, const BaseObject* obj,
         const size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
         bool incLive = false;
-        const bool already = writeBm->MarkBits(offset, size, regionSize, incLive);
+        const bool newlyMarked = writeBm->MarkBits(offset, size, regionSize, incLive);
         firstLive = incLive;
         if (incLive) {
             if (accountLive) {
                 AddLiveCounts(1, size);
             }
         }
-        return !already;
+        return newlyMarked;
     }
 
     template<Generation G>
@@ -504,12 +504,12 @@ inline bool RegionInfo::MarkObject(MarkView<G> view, const BaseObject* obj)
         RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
 
         bool incLive = false;
-        bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
+        bool newlyMarked = writeBm->MarkBits(offset, objSize, regionSize, incLive);
         if (incLive) {
             AddLiveCounts(1, objSize);
         }
         CHECK(IsMarkedObject(view, offset));
-        return !already;
+        return newlyMarked;
     }
 
     template<Generation G>
@@ -538,7 +538,7 @@ inline bool RegionInfo::MarkObjectWithLiveClaim(MarkView<G> view, const BaseObje
         RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
 
         bool incLive = false;
-        bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
+        bool newlyMarked = writeBm->MarkBits(offset, objSize, regionSize, incLive);
         firstLive = incLive;
         if (incLive) {
             if (accountLive) {
@@ -546,7 +546,7 @@ inline bool RegionInfo::MarkObjectWithLiveClaim(MarkView<G> view, const BaseObje
             }
         }
         CHECK(IsMarkedObject(view, offset));
-        return !already;
+        return newlyMarked;
     }
 
 // ZPage::mark_object / is_object_marked (zPage.inline.hpp:280-294).
@@ -611,7 +611,7 @@ inline bool RegionInfo::ResurrectObjectWithLiveClaim(const BaseObject* obj, size
         MarkView<Generation::Old> view = GetMarkView<Generation::Old>();
         RegionBitmap* bitmap = GetOrAllocMarkBitmap(view);
         bool incLive = false;
-        bool already = bitmap->MarkFinalizableBits(offset, objSize, regionSize, incLive);
+        bool newlyMarked = bitmap->MarkFinalizableBits(offset, objSize, regionSize, incLive);
         firstLive = incLive;
         if (incLive) {
             if (accountLive) {
@@ -619,7 +619,7 @@ inline bool RegionInfo::ResurrectObjectWithLiveClaim(const BaseObject* obj, size
             }
         }
         CHECK(bitmap->IsLive(offset));
-        return !already;
+        return newlyMarked;
     }
 
 inline bool RegionInfo::EnqueueObject(const BaseObject* obj, size_t offset)
@@ -643,9 +643,10 @@ inline bool RegionInfo::EnqueueObject(const BaseObject* obj, size_t offset)
         RegionBitmap* bitmap = GetEnqueueBitmap();
         // enqueue face is not the route geometry face; still report if mark-face sealed.
 
-        bool marked = bitmap->MarkBits(offset, objSize, regionSize);
+        const bool newlyMarked = bitmap->MarkBits(offset, objSize, regionSize);
         CHECK(bitmap->IsMarked(offset));
-        return marked;
+        // The legacy enqueue interface returns already-enqueued (P3 boundary).
+        return !newlyMarked;
     }
 
 inline bool RegionInfo::IsResurrectedObject(const BaseObject* obj)

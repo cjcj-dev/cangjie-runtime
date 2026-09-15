@@ -106,13 +106,13 @@ GC_TEST(ZLiveMapPort, OneObjectPageMarkAccountsLiveOnce)
 
     GC_EXPECT_FALSE(bitmap->IsMarked(0));
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(0));
-    GC_EXPECT_FALSE(bitmap->MarkBits(0, kPageSize, kPageSize));
+    GC_EXPECT_TRUE(bitmap->MarkBits(0, kPageSize, kPageSize));
     GC_EXPECT_TRUE(bitmap->IsMarked(0));
     GC_EXPECT_FALSE(bitmap->IsMarked(kPageSize - kMarkedBytesPerBit));
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), kPageSize);
     GC_EXPECT_EQ(bitmap->RecomputeLiveBytes(), kPageSize);
 
-    GC_EXPECT_TRUE(bitmap->MarkBits(0, kPageSize, kPageSize));
+    GC_EXPECT_FALSE(bitmap->MarkBits(0, kPageSize, kPageSize));
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), kPageSize);
     GcHeapFixture::FreePlantedBitmap(bitmap);
 }
@@ -132,13 +132,13 @@ GC_TEST(LiveMap, MarkAndSurvive)
     GC_EXPECT_FALSE(live->IsSurvivedObject(view, off0));
     GC_EXPECT_FALSE(live->IsSurvivedObject(view, off64));
 
-    bool was = bm->MarkBits(off64, 8, regionSize);
-    GC_EXPECT_FALSE(was);
+    bool newlyMarked = bm->MarkBits(off64, 8, regionSize);
+    GC_EXPECT_TRUE(newlyMarked);
     GC_EXPECT_TRUE(live->IsSurvivedObject(view, off64));
     GC_EXPECT_FALSE(live->IsSurvivedObject(view, off0));
     GC_EXPECT_FALSE(live->IsSurvivedObject(view, 128));
 
-    GC_EXPECT_TRUE(bm->MarkBits(off64, 8, regionSize));
+    GC_EXPECT_FALSE(bm->MarkBits(off64, 8, regionSize));
     GC_EXPECT_TRUE(live->IsSurvivedObject(view, off64));
     GC_EXPECT_TRUE(bm->IsMarked(off64));
 
@@ -520,7 +520,7 @@ GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
     RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kPageSize);
     bool incLive = false;
 
-    GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 16, kPageSize, incLive));
+    GC_EXPECT_TRUE(bitmap->MarkFinalizableBits(64, 16, kPageSize, incLive));
     GC_EXPECT_TRUE(incLive);
     bitmap->AddLiveCounts(1, 16);
     GC_EXPECT_TRUE(bitmap->IsLive(64));
@@ -528,7 +528,7 @@ GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
     GC_EXPECT_FALSE(bitmap->IsMarked(64));
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(16));
 
-    GC_EXPECT_FALSE(bitmap->MarkBits(64, 16, kPageSize, incLive));
+    GC_EXPECT_TRUE(bitmap->MarkBits(64, 16, kPageSize, incLive));
     GC_EXPECT_FALSE(incLive);
     GC_EXPECT_TRUE(bitmap->IsLive(64));
     GC_EXPECT_FALSE(bitmap->IsFinalizable(64));
@@ -555,13 +555,13 @@ GC_TEST(ZLiveMapPort, DuplicatePublicationConvergesAtStrongMark)
 
     bool firstIncLive = false;
     bool secondIncLive = false;
-    const bool firstAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), firstIncLive);
-    const bool secondAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), secondIncLive);
-    // zLiveMap.inline.hpp: set() returns inc_live; the caller accounts bytes.
+    const bool firstNew = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), firstIncLive);
+    const bool secondNew = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), secondIncLive);
+    // zLiveMap.inline.hpp: set() returns newly marked; the caller accounts bytes.
     if (firstIncLive) bitmap->AddLiveCounts(1, 8);
     if (secondIncLive) bitmap->AddLiveCounts(1, 8);
     const size_t liveBytes = bitmap->GetLiveBytes();
-    const bool receiptOnce = !firstAlready && secondAlready;
+    const bool receiptOnce = firstNew && !secondNew;
     const bool incLiveOnce = firstIncLive && !secondIncLive;
     const bool bytesOnce = liveBytes == static_cast<size_t>(8);
     std::fprintf(stderr,

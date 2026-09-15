@@ -20,9 +20,8 @@ using namespace MapleRuntime::GcUnit;
 
 // Shared half of test_zBitMap.cpp::test_set_pair_unset.  A Cangjie mark bit
 // covers eight bytes, so a strongly marked 16-byte object is the same two-bit
-// transition.  MarkBits returns "already marked" (the inverse polarity of
-// ZBitMap::par_set_bit_pair's success return), and live bytes are the inc_live
-// witness.
+// transition. MarkBits returns newly marked, matching
+// ZBitMap::par_set_bit_pair; live bytes are the inc_live witness.
 GC_TEST(ZBitMapPort, StrongPairUnset)
 {
     constexpr size_t kBitsPerWord = sizeof(uintptr_t) * 8;
@@ -37,7 +36,7 @@ GC_TEST(ZBitMapPort, StrongPairUnset)
             }
             RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kBackingRegionSize);
             const size_t offset = i * kMarkedBytesPerBit;
-            GC_EXPECT_FALSE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
+            GC_EXPECT_TRUE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
             GC_EXPECT_TRUE(bitmap->IsMarked(offset));
             GC_EXPECT_FALSE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
             GC_EXPECT_EQ(bitmap->GetLiveBytes(), 2 * kMarkedBytesPerBit);
@@ -48,7 +47,7 @@ GC_TEST(ZBitMapPort, StrongPairUnset)
 }
 
 // Shared half of test_zBitMap.cpp::test_set_pair_set.  Once every bit is set,
-// setting any pair must report "already", leave both bits set, and not account
+// setting any pair must return false (already marked), leave both bits set, and not account
 // live bytes a second time.
 GC_TEST(ZBitMapPort, StrongPairSet)
 {
@@ -62,7 +61,7 @@ GC_TEST(ZBitMapPort, StrongPairSet)
         // test_zBitMap.cpp::test_set_pair_set premarks every pair. MarkBits
         // marks one object start; byteCnt accounts its size, not a bit range.
         for (size_t i = 0; i < bitSize; ++i) {
-            GC_EXPECT_FALSE(bitmap->MarkBits(i * kMarkedBytesPerBit,
+            GC_EXPECT_TRUE(bitmap->MarkBits(i * kMarkedBytesPerBit,
                                             kMarkedBytesPerBit, kBackingRegionSize));
         }
         GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
@@ -72,7 +71,7 @@ GC_TEST(ZBitMapPort, StrongPairSet)
                 continue;
             }
             const size_t offset = i * kMarkedBytesPerBit;
-            GC_EXPECT_TRUE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
+            GC_EXPECT_FALSE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
             GC_EXPECT_TRUE(bitmap->IsMarked(offset));
             GC_EXPECT_TRUE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
             GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
@@ -98,7 +97,7 @@ GC_TEST(RegionBitmap, BitCoverMatchesRegionSize)
     // Last byte of region is in-range for IsMarked/MarkBits.
     size_t lastOff = regionSize - 8;
     GC_EXPECT_FALSE(bm->IsMarked(lastOff));
-    GC_EXPECT_FALSE(bm->MarkBits(lastOff, 8, regionSize));
+    GC_EXPECT_TRUE(bm->MarkBits(lastOff, 8, regionSize));
     GC_EXPECT_TRUE(bm->IsMarked(lastOff));
 
     fx.region0->metadata.liveInfo = nullptr;
@@ -124,9 +123,9 @@ GC_TEST(RegionBitmap, MarkBitsIdempotentAndDisjoint)
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
 
-    GC_EXPECT_FALSE(bm->MarkBits(0, 8, regionSize));
     GC_EXPECT_TRUE(bm->MarkBits(0, 8, regionSize));
-    GC_EXPECT_FALSE(bm->MarkBits(64, 8, regionSize));
+    GC_EXPECT_FALSE(bm->MarkBits(0, 8, regionSize));
+    GC_EXPECT_TRUE(bm->MarkBits(64, 8, regionSize));
     GC_EXPECT_TRUE(bm->IsMarked(0));
     GC_EXPECT_TRUE(bm->IsMarked(64));
     GC_EXPECT_FALSE(bm->IsMarked(128));
@@ -146,19 +145,19 @@ GC_TEST(RegionBitmap, MarkBitsAlreadyIsStartBitOnly)
     auto* bm = new (mem) RegionBitmap(kBig);
 
     // Neighbor object at offset 8 (bit 1).
-    GC_EXPECT_FALSE(bm->MarkBits(8, 8, kBig));
+    GC_EXPECT_TRUE(bm->MarkBits(8, 8, kBig));
     GC_EXPECT_TRUE(bm->IsMarked(8));
     GC_EXPECT_FALSE(bm->IsMarked(0));
 
     // Large mark at offset 0 spans bit 0 and bit 1. Old already-test used any head-mask
     // bit ⇒ returned true without setting bit 0. Start-bit already ⇒ must write bit 0.
-    bool already = bm->MarkBits(0, 16, kBig);
-    GC_EXPECT_FALSE(already);
+    bool newlyMarked = bm->MarkBits(0, 16, kBig);
+    GC_EXPECT_TRUE(newlyMarked);
     GC_EXPECT_TRUE(bm->IsMarked(0));
     GC_EXPECT_TRUE(bm->IsMarked(8));
 
     // True already: start bit set ⇒ second MarkBits is idempotent.
-    GC_EXPECT_TRUE(bm->MarkBits(0, 16, kBig));
+    GC_EXPECT_FALSE(bm->MarkBits(0, 16, kBig));
     GC_EXPECT_TRUE(bm->IsMarked(0));
 
     bm->~RegionBitmap();

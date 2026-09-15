@@ -35,12 +35,12 @@ GC_TEST(ZLiveMapPort, FinalizableUpgradeAccountsOnce)
     constexpr size_t pageSize = 4096;
     RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(pageSize);
     bool incLive = false;
-    GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 32, pageSize, incLive));
+    GC_EXPECT_TRUE(bitmap->MarkFinalizableBits(64, 32, pageSize, incLive));
     GC_EXPECT_TRUE(incLive);
     GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(0));
     bitmap->AddLiveCounts(1, 32);
     GC_EXPECT_TRUE(bitmap->IsFinalizable(64));
-    GC_EXPECT_FALSE(bitmap->MarkBits(64, 32, pageSize, incLive));
+    GC_EXPECT_TRUE(bitmap->MarkBits(64, 32, pageSize, incLive));
     GC_EXPECT_FALSE(incLive);
     GC_EXPECT_TRUE(bitmap->IsMarked(64));
     GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));

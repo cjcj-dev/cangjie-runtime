@@ -135,6 +135,7 @@ struct RegionBitmap {
 
     size_t GetLiveObjects() const;
 
+    // ZLiveMap::set: true means newly marked; incLive is the first live claim.
     bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive);
 
     bool MarkBits(size_t start, size_t byteCnt, size_t regionSize);
