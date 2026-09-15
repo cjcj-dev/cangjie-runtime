@@ -36,6 +36,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -193,8 +194,10 @@ void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase val
 // ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
 void WCollector::MarkYoungRootObject(BaseObject* object) const
 {
-    CHECK_DETAIL(youngMarkDomain != nullptr, "young root mark requires its mark domain");
-    youngMarkDomain->MarkRootObject(object);
+    // #596's barrier already established current and selected young. Keep the
+    // generation mark-phase assertion at ZGeneration::mark_object's entry.
+    auto& cycle = const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG));
+    cycle.MarkObject<false, true, true, false>(from_object(object));
 }
 
 void WCollector::FlushAllocationRegions()
@@ -991,6 +994,7 @@ namespace MapleRuntime {
 #include "Heap/Collector/GcStats.h"
 #include "Common/BaseObject.h"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Common/StateWord.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"

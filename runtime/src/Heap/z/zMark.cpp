@@ -1069,13 +1069,6 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
                      MarkStackEntry::MarkAndFollow(object), true);
 }
 
-// #596's MarkYoungGoodBarrier has already resolved and qualified this value.
-// ZMark::mark_object<DontResurrect, GCThread, Follow, Strong>, zMark.inline.hpp:48-87.
-void MarkDomain::MarkRootObject(BaseObject* object)
-{
-    MarkObject<false, true, true, false>(from_object(object));
-}
-
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                           MinorSlotSet& weakSlots,
