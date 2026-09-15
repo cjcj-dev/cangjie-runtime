@@ -67,9 +67,8 @@ inline void RegionManager::PrepareFromRegionList()
                      "forwarding arena budget allocation failed");
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
-                 region->GetLiveByteCount(), region->GetRegionEnd());
-            MarkView<G> view = region->GetMarkView<G>();
-            region->PrepareForwardableRegion(view);
+                 region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd());
+            region->PrepareForwardableRegion<G>();
             // ZGC installs the page and its forwarding record as one relocation-set
             // operation (zRelocationSet.cpp:91-96).  Keep the equivalent invariant
             // at this GC phase boundary: a from-region must not become visible to

@@ -394,9 +394,10 @@ BaseObject* Barrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoin
             if (region->IsYoungRegion()) {
                 theCollector.MarkYoungObjectIfActive(target);
             } else {
-                const bool stronglyLive = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), target);
+                const zaddress targetAddr = from_object(target);
+                const bool stronglyLive = region->is_object_strongly_live(targetAddr);
                 const bool live = stronglyLive || (strength == ReferenceStrength::Phantom &&
-                                                   region->IsResurrectedObject(target));
+                                                   region->is_object_live(targetAddr));
                 if (!live) {
                     return nullptr; // A load never clears a referent (ZBarrier::self_heal).
                 }

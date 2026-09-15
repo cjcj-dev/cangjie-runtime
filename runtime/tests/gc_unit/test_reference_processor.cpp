@@ -33,8 +33,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
 {
     GcHeapFixture fx;
     ReferenceProcessor processor;
-    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_TRUE(fx.region0->ResurrectObject(fx.obj0, offset));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
                    ReferenceStatus::DISCOVERED);
 
@@ -72,10 +71,8 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
 GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
 {
     GcHeapFixture fx;
-    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_TRUE(fx.region0->ResurrectObject(fx.obj0, offset));
-    GC_EXPECT_TRUE(fx.region0->MarkObject(
-        fx.region0->GetMarkView<Generation::Old>(), fx.obj0, fx.obj0->GetSize()));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
 
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
@@ -88,7 +85,7 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
     });
 
     GC_EXPECT_EQ(enqueued, static_cast<size_t>(0));
-    GC_EXPECT_FALSE(fx.region0->IsResurrectedObject(fx.obj0));
+    GC_EXPECT_FALSE(RegionSpace::IsResurrectedObject(fx.obj0));
     GC_EXPECT_TRUE(processor.Empty());
 }
 
@@ -186,8 +183,7 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
     for (size_t index = 0; index < kWorkers * kPerWorker; ++index) {
         BaseObject* object = fx.PlaceObject(fx.heapStart + 64 + index * 64);
         objects.push_back(object);
-        const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(object));
-        GC_EXPECT_TRUE(fx.region0->ResurrectObject(object, offset));
+        GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, object));
     }
     fx.region0->SetRegionAllocPtr(
         reinterpret_cast<MAddress>(objects.back()) + 64);

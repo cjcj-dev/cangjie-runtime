@@ -398,7 +398,7 @@ public:
             // their address falls inside that span (zGeneration.cpp:254).
             RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             return region != nullptr &&
-                (region->GetLiveInfo0ForProbe() != nullptr ||
+                (region->FromPageLiveMap() != nullptr ||
                  ForwardingTable::RetainPageOwner(region).get() != nullptr ||
                  region->IsForwardingDone());
         }

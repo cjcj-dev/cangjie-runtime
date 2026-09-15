@@ -34,11 +34,6 @@ class BaseObject;
 //
 namespace MarkPartialArray {
 
-// Partial-array payload bounds come from the typed MarkStackEntry layout.
-constexpr size_t MAX_LENGTH = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_ARRAY_LENGTH);
-constexpr size_t MAX_OFFSET = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_ARRAY_OFFSET);
-
-
 using FieldVisitor = std::function<void(MAddress)>;
 using EntryPublisher = std::function<void(const MarkStackEntry&)>;
 
@@ -55,13 +50,10 @@ void FollowElements(MAddress start, size_t length, bool finalizable,
 // Hot path: runs on every work-stack pop.
 inline bool IsPartialArrayEntry(const MarkStackEntry& entry)
 {
-    return entry.partialArray();
+    return entry.partial_array();
 }
 
-// Encodable() must hold before Encode(). A heap wider than
-// MAX_OFFSET * MIN_SIZE, or an array longer than MAX_LENGTH, cannot be
-// expressed in one word; callers then trace the array inline as before.
-bool Encodable(const void* chunkStart, size_t length);
+// zMark.cpp:177-196: the entry stores ZAddress::offset(chunk) >> MIN_SIZE_SHIFT.
 MarkStackEntry Encode(const void* chunkStart, size_t length, bool finalizable = false);
 void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length);
 

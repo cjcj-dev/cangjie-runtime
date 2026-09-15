@@ -127,7 +127,9 @@ bool ReferenceProcessor::IsFinalizable(BaseObject* reference)
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
-    return region->IsResurrectedObject(reference);
+    // Finalizable-only marked: live bit set, strong bit clear (zPage.inline.hpp:254-260).
+    const zaddress addr = from_object(reference);
+    return region->is_object_live(addr) && !region->is_object_strongly_live(addr);
 }
 
 ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithResult(BaseObject* reference)
@@ -143,8 +145,7 @@ ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithRe
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(referent));
     if (region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion()) {
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        if (region->IsMarkedObject(view, referent)) {
+        if (region->is_object_strongly_live(from_object(referent))) {
             return { false, false, referent };
         }
     }

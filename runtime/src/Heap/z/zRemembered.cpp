@@ -68,10 +68,7 @@ bool HolderObjectIsLive(BaseObject* holder)
     if (region->IsAllocating()) {
         return true;
     }
-    if (region->IsYoungRegion()) {
-        return RegionSpace::IsMarkedObject<Generation::Young>(holder);
-    }
-    return RegionSpace::IsMarkedObject<Generation::Old>(holder);
+    return region->is_object_strongly_live(from_object(holder));
 }
 
 bool SlotHeldByLiveObject(const void* slot)
@@ -86,8 +83,9 @@ bool SlotHeldByLiveObject(const void* slot)
     if (region->IsAllocating()) {
         return true;
     }
-    BaseObject* holder = reinterpret_cast<BaseObject*>(
-        region->FindLiveObjectStart(reinterpret_cast<MAddress>(slot)));
+    // zRememberedSet.cpp:144-152 / zPage.inline.hpp:371-386 find_base.
+    const MAddress base = region->find_base_unsafe(reinterpret_cast<MAddress>(slot));
+    BaseObject* holder = base == 0 ? nullptr : from_region_addr(base);
     if (holder == nullptr || reinterpret_cast<MAddress>(slot) - reinterpret_cast<MAddress>(holder) >=
         RegionSpace::GetAllocSize(*holder)) {
         return false;
@@ -118,7 +116,7 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
                 if (page == nullptr) {
                     return;
                 }
-                const MAddress addr = page->FindLiveObjectStart(field);
+                const MAddress addr = page->find_base_unsafe(field);
                 if (addr == 0 || addr > field) {
                     return;
                 }

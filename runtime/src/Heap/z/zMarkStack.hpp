@@ -24,6 +24,7 @@
 
 namespace MapleRuntime {
 
+class BaseObject;
 class RegionInfo;
 
 // ZGC zMarkStack.hpp:35-54. A chunk is single-owner while it is being

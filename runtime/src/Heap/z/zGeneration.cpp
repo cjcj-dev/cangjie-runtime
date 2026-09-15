@@ -256,16 +256,16 @@ void WCollector::DoYoungGarbageCollection()
          "[GCV2][candfix] prepare_candidates candidate_regions=%zu candidate_bytes=%zu "
          "from_visited=%zu from_units=%zu unmovable_visited=%zu unmovable_units=%zu "
          "unmovable_young=%zu recent_visited=%zu recent_units=%zu "
-         "recent_young=%zu clear_live_regions=%zu clear_live_units=%zu "
+         "recent_young=%zu "
          "objects_visited=%zu slots_visited=%zu repark_ns=%llu unmovable_ns=%llu recent_ns=%llu "
-         "clear_live_ns=%llu visitor_ns=%llu list_move_ns=%llu",
+         "visitor_ns=%llu list_move_ns=%llu",
          stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedUnits,
          stats.unmovableVisited, stats.unmovableVisitedUnits, stats.unmovableYoung,
          stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung,
-         stats.clearLiveRegions, stats.clearLiveUnits, stats.objectVisits, stats.slotVisits,
+         stats.objectVisits, stats.slotVisits,
          static_cast<unsigned long long>(stats.reparkNs), static_cast<unsigned long long>(stats.unmovableNs),
          static_cast<unsigned long long>(stats.recentFullNs),
-         static_cast<unsigned long long>(stats.clearLiveNs), static_cast<unsigned long long>(stats.visitorNs),
+         static_cast<unsigned long long>(stats.visitorNs),
          static_cast<unsigned long long>(stats.listMoveNs));
     // Even an empty candidate set completes remembered scanning and clearing.
     // Otherwise the mark-start flip would leave previous unconsumed when the
@@ -380,7 +380,7 @@ void WCollector::DoYoungGarbageCollection()
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
             }
-            workStack.push_back(MarkStackEntry::MarkOnly(object));
+            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
         }, stackScanEpoch);
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *youngMarkDomain);
@@ -606,7 +606,7 @@ void WCollector::DoYoungGarbageCollection()
     tenuringIn.softMaxCapacity = Heap::GetHeap().GetMaxCapacity();
     tenuringIn.youngAllocated = stats.candidateBytes;
     for (RegionInfo* region : minorCandidateRegions) {
-        const size_t live = region->GetLiveByteCount();
+        const size_t live = region->is_marked() ? region->live_bytes() : 0;
         liveBytes += live;
         uint32_t age = region->GetYoungAge();
         if (age >= kPageAgeCount) {
@@ -915,11 +915,6 @@ void TracingCollector::CurrentizeValueRootMap(
 // Registered finalizers are discovered during old root marking and fixed by
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
 
-
-void TracingCollector::EnumAllSurrectedExportRoots(RootSet& rootSet)
-{
-    VisitSurrectedExportRoots([&](BaseObject* object) { rootSet.push_back(object); });
-}
 
 void TracingCollector::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor)
 {
