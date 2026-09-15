@@ -1,4 +1,3 @@
-#include "gc_cycle_sequence_fixture.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -9,6 +8,7 @@
 // selects the slow path from the previous colour and remembers old heap slots;
 // zRemembered.cpp:578-589 re-registers scanned slots whose target remains young.
 
+#include "gc_cycle_sequence_fixture.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <cstdint>

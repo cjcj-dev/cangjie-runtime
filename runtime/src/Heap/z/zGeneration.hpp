@@ -23,9 +23,7 @@ struct TenuringInputs;
 // and phase together; the phase atomic serves existing barrier readers.
 // ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
 enum class GCCycleGeneration : uint8_t { YOUNG, OLD };
-#if defined(MRT_TESTABLE_INTERNALS)
 enum class MarkStartPoint : uint8_t { Begin, BeforeRetire, BeforeSequence, BeforeDomain, BeforeRemembered, Complete };
-#endif
 struct GCCycleSnapshot {
     GCCycleGeneration generation;
     uint64_t sequence;

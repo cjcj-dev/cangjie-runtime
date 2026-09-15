@@ -1,7 +1,7 @@
-#include "gc_cycle_sequence_fixture.hpp"
 // Product mark-domain fixture: observes the real M3 stripe carrier.
 #ifndef MRT_MARK_PUBLICATION_FIXTURE_HPP
 #define MRT_MARK_PUBLICATION_FIXTURE_HPP
+#include "gc_cycle_sequence_fixture.hpp"
 #include "Heap/Collector/CollectorProxy.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"

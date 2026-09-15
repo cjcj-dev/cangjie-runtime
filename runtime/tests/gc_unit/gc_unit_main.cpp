@@ -4,6 +4,25 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// Preserve the existing isolated-process fixture configuration.
+#ifndef MRT_TESTABLE_INTERNALS
+#define MRT_TESTABLE_INTERNALS 1
+#endif
+
+// Only this test TU receives access to synthetic cycle identity. Product
+// builds have neither this friend nor a sequence-advance test entry.
+#define MRT_GENERATION_SEQUENCE_FIXTURE 1
+#include "gc_cycle_sequence_fixture.hpp"
+#undef MRT_GENERATION_SEQUENCE_FIXTURE
+
+void MapleRuntime::GenerationSequenceFixture::Advance(GenerationCycle& cycle)
+{
+    std::lock_guard<std::mutex> lock(cycle.mutex);
+    CHECK(cycle.active);
+    CHECK(cycle.sequence != UINT64_MAX);
+    ++cycle.sequence;
+}
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
