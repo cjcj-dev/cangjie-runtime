@@ -14,6 +14,14 @@
 
 namespace MapleRuntime {
 
+#if defined(MRT_TESTABLE_INTERNALS)
+// P02's three scheduling points share this product TU. They are absent from
+// the default build; tests install them before spawning and clear after join.
+void (*BitMap::testAfterPartialClearLoad)(const volatile bm_word_t*) = nullptr;
+void (*ZBitMap::testBeforeStrongCAS)(const ZBitMap*, idx_t) = nullptr;
+void (*ZLiveMap::testReset)(const ZLiveMap*, bool) = nullptr;
+#endif
+
 // ZGC zLiveMap.cpp:34-35.
 static const ZStatCounter ZCounterMarkSeqNumResetContention("Contention", "Mark SeqNum Reset Contention",
                                                             ZStatUnit::OPS_PER_SECOND);
@@ -84,6 +92,12 @@ void ZLiveMap::reset(ZGenerationId id)
     const uint64_t seqnum_initializing = (uint64_t)-1;
     bool contention = false;
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testReset != nullptr) {
+        testReset(this, false);
+    }
+#endif
+
     // Multiple threads can enter here, make sure only one of them
     // resets the marking information while the others busy wait.
     for (uint64_t seqnum = _seqnum.load(std::memory_order_acquire);
@@ -95,6 +109,12 @@ void ZLiveMap::reset(ZGenerationId id)
             if (_seqnum.compare_exchange_strong(seqnum, seqnum_initializing, std::memory_order_acq_rel,
                                                 std::memory_order_acquire)) {
                 // This thread claimed the initialization
+
+#if defined(MRT_TESTABLE_INTERNALS)
+                if (testReset != nullptr) {
+                    testReset(this, true);
+                }
+#endif
 
                 // Reset marking information
                 _live_bytes.store(0u, std::memory_order_relaxed);

@@ -36,6 +36,11 @@ public:
     // operation was requested. Measured in words.
     static constexpr size_t small_range_words = 32;
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    // P02 deterministic segment-reset test; scheduling only, no bitmap writes.
+    MRT_EXPORT static void (*testAfterPartialClearLoad)(const volatile bm_word_t*);
+#endif
+
 protected:
     bm_word_t* _map; // First word in bitmap
     idx_t _size;     // Size of bitmap (in bits)
@@ -102,7 +107,15 @@ protected:
     {
         if (beg != end) {
             bm_word_t mask = inverted_bit_mask_for_range(beg, end);
+#if defined(MRT_TESTABLE_INTERNALS)
+            const bm_word_t value = *word_addr(beg);
+            if (testAfterPartialClearLoad != nullptr) {
+                testAfterPartialClearLoad(word_addr(beg));
+            }
+            *word_addr(beg) = value & mask;
+#else
             *word_addr(beg) &= mask;
+#endif
         }
     }
 
