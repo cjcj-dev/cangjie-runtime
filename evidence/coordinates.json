@@ -1,0 +1,12 @@
+{
+  "command": [
+    "git",
+    "-C",
+    "/root/cj_build/cangjie_runtime",
+    "rev-parse",
+    "cjcjdev/main"
+  ],
+  "rc": 0,
+  "stdout": "c3973505c171aa7e72095c3357ffd57f56156707\n",
+  "frozen": "4f9a173ed86a77cd72de1863277c75e6652f8379"
+}

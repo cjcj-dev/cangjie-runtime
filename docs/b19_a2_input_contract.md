@@ -31,3 +31,14 @@ IncomingNew(second.to) 必须保持 second.to；历史根 second.from 经所属�
 ## FALSIFIED
 
 “旧报告 stack/value scanner 基础设施说明已包含逐项历史色合同”不成立，前轮 review R1 已明确指出。
+
+
+## 追加裁定与实施（覆盖上文 WIP 未资格状态）
+
+`/root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_596_implement_r5673746875-20260915T023905Z.md` 授权本包修 C1–C4 eager 同槽输入，覆盖此前归属限制；`024158Z` 确认 value/export 生产端在包内。StackWatermark 的 lazy/历史色保存恢复仍归 #498，未标为 ZGC 形态对齐。
+
+实现顺序：真实 RootSlot 读取 observed → make_load_good(保留历史色) → PublishThreadRoot(current, young, follow) → HealRoot 写回同槽 plain。C1 用 stack 字段槽，C2 用 ObjectRef 槽，C3 用 invisible 原槽并保留 follow=false，C4 用 record+0 槽，不能用 memcpy 副本替代。无 ReadStaticRef 中转，无全局当前色重染，无页归属猜测根身份。
+
+value/export：GetExportObject 的 ReadStaticRef 已建立 load-good。删除 CrossAccessBarrier 中随后按页归属 ForwardObject 的重复解析；原调用层把一个已 current 的 second.to 当成 first.from。这是同包 current 输入资格错误，非一般 forwarding 算法修改。
+
+修前 N=3/面真实测试（kkk2:/root/sym_cangjie_runtime_596_implement_r5673746875/a2-baseline/results.json）四路径均 current_marked=0/stale_marked=1/healed=0；export 入口 identity=0；NativeRootCurrent.MajorSeed 阳性 current_marked=1/stale_marked=0。只修 export 后，同 ELF 下只有四线程根路径仍红，export identity=1（a2-export/results.json）。完整修复及故障臂证据待补。

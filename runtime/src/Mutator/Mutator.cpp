@@ -881,16 +881,24 @@ static void StripRootObjectColour(ObjectRef& root)
     }
 }
 
-static bool PushHeapRoot(BaseObject* obj, bool young, bool follow = true)
+// Eager ZUncoloredRoot::barrier (zUncoloredRoot.inline.hpp:38-59).
+// The handshake owns the actual ABI slot. Keep its observed color through
+// resolution, publish the current object, and only then restore a plain word.
+// Plain roots were current when saved and are healed by the eager relocation
+// handshake before resumption; lazy frame-color history remains a separate port.
+static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
 {
-    BaseObject* plain = PlainRootObject(to_zaddress_unsafe(reinterpret_cast<MAddress>(obj)));
-    if (!Heap::IsHeapAddress(plain)) {
-
+    const zaddress_unsafe observed = root.LoadPlain();
+    BaseObject* object = PlainRootObject(observed);
+    if (!Heap::IsHeapAddress(object)) {
         return false;
     }
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    collector.PublishThreadRoot(plain, young, follow);
-
+    RefField<> value(to_zpointer(raw(observed)));
+    const ForwardingProvenance provenance{ForwardingHolderKind::StackSlot, nullptr, &root};
+    BaseObject* current = collector.make_load_good(value, provenance);
+    collector.PublishThreadRoot(current, young, follow);
+    HealRoot(root, from_object(current), HealSite::MutatorMarkRoot);
     return true;
 }
 
@@ -899,9 +907,9 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool
     if (record == nullptr) {
         return false;
     }
-    zaddress_unsafe word;
-    memcpy(&word, record, sizeof(word));
-    return PushHeapRoot(PlainRootObject(word), young);
+    // This is record+0 itself, not a copy of the field or its decoded value.
+    RootSlot& field = RootSlotAt(static_cast<void*>(record));
+    return PushHeapRoot(field, young);
 }
 
 // Argument-form struct-live: `root` holds a pointer to a headerless record
@@ -1020,7 +1028,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
         RootSlot& rootField = RootSlotAt(
             static_cast<void*>(&refFieldAddr)); // Stack-object field metadata denotes a root word.
         BaseObject* obj = PlainRootObject(rootField.LoadPlain());
-        if (PushHeapRoot(obj, young)) {
+        if (PushHeapRoot(rootField, young)) {
 
             DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
@@ -1033,11 +1041,8 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
     };
 
     RootVisitor visitor = [&rootSet, &rootStack, this, &refVisitor, young](ObjectRef& root) {
-        // Peel colour so IsHeapAddress/gate see the real address; leave plain in the slot
-        // so mutator restore after STW does not reload a non-canonical pointer (si_code=128).
-        StripRootObjectColour(root);
         BaseObject* obj = PlainRootObject(root.LoadPlain());
-        if (PushHeapRoot(obj, young)) {
+        if (PushHeapRoot(root, young)) {
 
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
@@ -1054,9 +1059,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
         }
     };
     RootVisitor invisibleRootVisitor = [young](ObjectRef& root) {
-        StripRootObjectColour(root);
-        BaseObject* obj = PlainRootObject(root.LoadPlain());
-        (void)PushHeapRoot(obj, young, false);
+        (void)PushHeapRoot(root, young, false);
     };
     DerivedPtrVisitor derivedVisitor = MakeDerivedRootVisitor(visitor);
     if (stackScanEpoch == 0) {
