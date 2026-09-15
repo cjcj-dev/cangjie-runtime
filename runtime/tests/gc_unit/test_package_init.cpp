@@ -53,6 +53,7 @@ struct Metadata {
     Uptr entries[2] { reinterpret_cast<Uptr>(&PackageA), reinterpret_cast<Uptr>(&PackageB) };
 };
 Metadata metadata;
+Metadata secondaryMetadata;
 CJFile* image;
 
 bool Await(const std::atomic<bool>& flag)
@@ -70,16 +71,18 @@ void Target(const char* name, bool passed)
     std::fflush(stderr);
     if (!passed) { std::_Exit(1); }
 }
-void RegisterImage()
+CJFile* RegisterMetadata(Metadata& value, const char* name)
 {
-    metadata.header.cJFileSize = sizeof(metadata);
-    metadata.header.tables[GC_FLAGS_TABLE] = { offsetof(Metadata, flags), sizeof(metadata.flags) };
-    metadata.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(Metadata, entries), sizeof(metadata.entries) };
-    image = new CJFile(CString("package-init-main"), reinterpret_cast<Uptr>(&metadata));
+    value.header.cJFileSize = sizeof(value);
+    value.header.tables[GC_FLAGS_TABLE] = { offsetof(Metadata, flags), sizeof(value.flags) };
+    value.header.tables[GLOBAL_INIT_FUNC_TABLE] = { offsetof(Metadata, entries), sizeof(value.entries) };
+    auto* file = new CJFile(CString(name), reinterpret_cast<Uptr>(&value));
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
-    loader->AddLoadedFiles(image);
-    loader->RegisterLoadFile(reinterpret_cast<Uptr>(&metadata));
+    loader->AddLoadedFiles(file);
+    loader->RegisterLoadFile(reinterpret_cast<Uptr>(&value));
+    return file;
 }
+void RegisterImage() { image = RegisterMetadata(metadata, "package-init-main"); }
 void Init()
 {
     (void)setenv("cjProcessorNum", "1", 1);
@@ -129,7 +132,7 @@ const void* V() { return reinterpret_cast<const void*>(&UnitB); }
 struct Completion {
     Waitqueue release {};
     std::atomic<bool> ownerStarted { false }, waiterStarted { false }, waiterDone { false };
-    std::atomic<bool> witnessDone { false }, finish { false };
+    std::atomic<bool> witnessDone { false }, finish { false }, secondPackageDone { false };
     uint32_t waiterResult = 99;
     int payload = 0;
     int observedPayload = 0;
@@ -200,6 +203,19 @@ void AggregateOwner(void* p)
     Target("aggregate-dependency-complete", Begin(P(), U(), 0, &dependency) == Code(Result::Ready));
     Target("aggregate-sees-body", c.payload == 73);
     MCC_PackageInitComplete(aggregate);
+}
+
+void SharedDependencyPackage(void* p)
+{
+    auto& c = *static_cast<Completion*>(p);
+    void* owner = nullptr;
+    Target("second-package-execute", Begin(reinterpret_cast<const void*>(&PackageB),
+        reinterpret_cast<const void*>(&Aggregate), 0, &owner) == Code(Result::Execute));
+    void* dependency = nullptr;
+    Target("shared-dependency-not-reexecuted", Begin(P(), U(), 0, &dependency) == Code(Result::Ready) &&
+           dependency == nullptr && c.payload == 73);
+    MCC_PackageInitComplete(owner);
+    c.secondPackageDone.store(true, std::memory_order_release);
 }
 
 void Repeat(void* p)
@@ -392,6 +408,7 @@ GC_OTHER_VM_TEST(PackageInit, AggregateWaitsForLastUnit)
     Start(Owner, &c);
     Target("owner-reached-body", Await(c.ownerStarted));
     Start(AggregateOwner, &c);
+    Start(SharedDependencyPackage, &c);
     Start(Waiter, &c);
     Target("waiter-reached-begin", Await(c.waiterStarted));
     Start(Witness, &c);
@@ -399,6 +416,7 @@ GC_OTHER_VM_TEST(PackageInit, AggregateWaitsForLastUnit)
     c.finish.store(true, std::memory_order_release);
     WaitqueueWakeAll(&c.release, nullptr, nullptr);
     Target("aggregate-completed", Await(c.waiterDone) && c.waiterResult == Code(Result::Ready));
+    Target("both-packages-share-completed-dependency", Await(c.secondPackageDone));
     Target("runtime-finish", FiniCJRuntime() == E_OK);
     WaitqueueDelete(&c.release);
 }
@@ -727,6 +745,39 @@ void CheckTokenMisuse(bool nonOwner)
 }
 GC_TEST(PackageInit, DuplicateTokenRejected) { CheckTokenMisuse(false); }
 GC_TEST(PackageInit, NonOwnerTokenRejected) { CheckTokenMisuse(true); }
+GC_OTHER_VM_TEST(PackageInit, MultipleMetadataOwnersRequireExactIdentity)
+{
+    Init();
+    // The second metadata owner shares the executable image, with P as its
+    // only canonical initializer. Q remains unambiguous in the first owner.
+    secondaryMetadata.entries[0] = reinterpret_cast<Uptr>(&PackageA);
+    secondaryMetadata.entries[1] = reinterpret_cast<Uptr>(&PackageA);
+    auto* secondary = RegisterMetadata(secondaryMetadata, "package-init-secondary");
+    std::atomic<bool> done { false };
+    Start([](void* argument) {
+        void* token = reinterpret_cast<void*>(1);
+        Target("duplicate-canonical-owner-rejected", Begin(P(), U(), 0, &token) == Code(Result::Unavailable) && !token);
+        Target("ambiguous-image-fallback-rejected", Begin(V(), U(), 0, &token) == Code(Result::Unavailable) && !token);
+        Target("exact-owner-disambiguates-image", Begin(reinterpret_cast<const void*>(&PackageB), U(), 0,
+            &token) == Code(Result::Execute));
+        MCC_PackageInitComplete(token);
+        static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
+    }, &done);
+    Target("multi-owner-completed", Await(done));
+    static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader())->RemoveLoadedFiles(secondary);
+    Target("remaining-image-still-linked", ElfUnloadQuiescence::IsLinkedAddress(reinterpret_cast<Uptr>(P())));
+    done.store(false, std::memory_order_release);
+    Start([](void* argument) {
+        void* token = nullptr;
+        Target("remaining-owner-state-retained", Begin(reinterpret_cast<const void*>(&PackageB), U(), 0,
+            &token) == Code(Result::Ready));
+        Target("former-ambiguity-now-resolves", Begin(P(), U(), 0, &token) == Code(Result::Execute));
+        MCC_PackageInitComplete(token);
+        static_cast<std::atomic<bool>*>(argument)->store(true, std::memory_order_release);
+    }, &done);
+    Target("remaining-owner-completed", Await(done));
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {
     void* token = reinterpret_cast<void*>(1);
