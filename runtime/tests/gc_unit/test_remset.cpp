@@ -347,8 +347,6 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     // Product remset consumption accepts exact object starts through the loaded
     // TypeInfo registry (Remembered.cpp:1157-1204). GcHeapFixture normally needs
     // residence only; this product-entry test needs the stronger real-object precondition.
@@ -441,9 +439,6 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     GC_EXPECT_TRUE(secondCount == 1);
     GC_EXPECT_EQ(sizeAfterSecondDrain, 0u);
     GC_EXPECT_TRUE(sizeAfterSecondConsume == 1);
-
-    fx.region1->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
 }
 
 // r6b positive control: if the product consumer were absent, the existing

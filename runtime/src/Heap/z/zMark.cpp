@@ -50,16 +50,6 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
-// Preserve the two existing product template instantiations while internal
-// consumers move to the richer first-live result. Their inline definitions
-// and visibility are unchanged; this does not export a test-only API.
-template bool RegionInfo::MarkObject<Generation::Young>(
-    MarkView<Generation::Young>, const BaseObject*, size_t, bool);
-template bool RegionInfo::MarkObject<Generation::Old>(
-    MarkView<Generation::Old>, const BaseObject*, size_t, bool);
-
-
-
 bool WCollector::MarkObject(BaseObject* obj) const
 {
     return MarkObjectImpl(obj, false);
@@ -67,33 +57,41 @@ bool WCollector::MarkObject(BaseObject* obj) const
 
 bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache* liveCache) const
 {
+    (void)youngClaim;
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
 
     size_t objectSize = obj->GetSize();
-    // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
-    // ZGC zPage.inline.hpp:284-294: the target page owns mark authority. gcReason
-    // names the running closure, not the target object's face.
-    // When liveCache is set, mark bits stay atomic and live bytes are coalesced
-    // per worker (ZGC zMarkCache.hpp).
+    // ZPage::mark_object (zPage.inline.hpp:284-294) followed by the caller's
+    // inc_live (zMark.cpp:417-425): per worker through the ZMarkCache when one
+    // is supplied, otherwise straight onto the page.
     bool firstLive = false;
-    bool marked = !region->MarkObjectByOwnerWithLiveClaim(obj, objectSize, liveCache == nullptr, firstLive);
-    if (firstLive && liveCache != nullptr) {
-        liveCache->IncLive(region, objectSize);
+    bool marked = !region->mark_object(from_object(obj), false, firstLive);
+    if (firstLive) {
+        if (liveCache != nullptr) {
+            liveCache->IncLive(region, objectSize);
+        } else {
+            region->inc_live(1, objectSize);
+        }
     }
     if (!marked) {
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
-             region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
+             region, region->GetRegionType(), region->GetRegionStart(), region->live_bytes());
     }
     return marked;
 }
 
 bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* region)
 {
-    // livesame: ResurrectObject counts on 0→1 inside.
-    bool resurrected = !region->ResurrectObject(obj, offset);
+    (void)offset;
+    // ZPage::mark_object(addr, finalizable = true) + inc_live on the first claim.
+    bool firstLive = false;
+    bool resurrected = !region->mark_object(from_object(obj), true, firstLive);
+    if (firstLive) {
+        region->inc_live(1, obj->GetSize());
+    }
     if (!resurrected) {
         DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
-             obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
+             obj, obj->GetTypeInfo(), obj->GetSize(), region->live_bytes());
     }
     return resurrected;
 }
@@ -120,7 +118,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
             return;
         }
         CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
-        rootSet.push_back(target);
+        rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(target))), true, true, true, false));
         return;
     }
 
@@ -162,7 +160,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
              latest->GetTypeInfo(), latest->GetSize());
     }
-    rootSet.push_back(latest);
+    rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(latest))), true, true, true, false));
 }
 
 void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const
@@ -187,7 +185,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
     }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
     HealRoot(ref, from_object(root), HealSite::WCollectorEnumRawRoot);
-    rootSet.push_back(root);
+    rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(root))), true, true, true, false));
 }
 
 // note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
@@ -246,7 +244,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                      obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject<Generation::Old>(targetObj)) {
 
-            workStack.push_back(MarkStackEntry::MarkAndFollow(targetObj, finalizable));
+            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(targetObj))), true, true, true, finalizable));
         }
         return;
     }
@@ -310,21 +308,14 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
     if (!IsMarkedObject<Generation::Old>(latest)) {
 
-        workStack.push_back(MarkStackEntry::MarkAndFollow(latest, finalizable));
+        workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(latest))), true, true, true, finalizable));
     }
 }
 
-// Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196). ZGC pushes a
-// tagged entry onto its mark stack; we push the same descriptor encoded into a
-// BaseObject* slot of our work stack so another stripe worker can steal it.
-// If the descriptor does not fit one word we trace the chunk here
-// rather than drop it -- correctness never depends on the encoding succeeding.
+// Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196): the heap
+// offset is bounded, so the descriptor always fits one entry word.
 void WCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable) const
 {
-    if (UNLIKELY(!MarkPartialArray::Encodable(addr, length))) {
-        FollowArrayElementsSmall(nullptr, addr, length, workStack, finalizable);
-        return;
-    }
     workStack.push_back(MarkPartialArray::Encode(addr, length, finalizable));
 }
 
@@ -372,9 +363,7 @@ void WCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, 
     FollowArrayElementsSmall(holder, start, static_cast<size_t>(middleStart - start), workStack, finalizable);
 }
 
-// zMark.cpp:257-263 (follow_array_elements). The encodability probe has no ZGC
-// counterpart: ZGC bounds its heap so the entry always fits, whereas ours is
-// only checked here. Failing it means "trace inline", i.e. today's behaviour.
+// zMark.cpp:257-263 (follow_array_elements).
 void WCollector::FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
                                      WorkStack& workStack, bool finalizable) const
 {
@@ -818,8 +807,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
                  region == nullptr ? 0u : static_cast<unsigned>(region->IsFreeRegion()),
                  region == nullptr ? 0u : static_cast<unsigned>(region->IsGarbageRegion()),
                  region == nullptr ? 0u
-                                   : static_cast<unsigned>(region->GetMarkBitmap(
-                                         region->GetMarkView<Generation::Young>()) == nullptr &&
+                                   : static_cast<unsigned>(!region->is_marked() &&
                                                           region->GetRegionAllocPtr() > region->GetRegionStart()));
         }
         CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
@@ -831,17 +819,13 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         }
         return;
     }
-    if (region->IsYoungRegion() &&
-        !region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
-
-
+    if (region->IsYoungRegion() && !region->is_object_marked(from_object(object), finalizable)) {
+        // ZMark::mark_object gc_thread arm (zMark.inline.hpp:58-73): mark before
+        // push; the first-live claim travels with the entry.
         bool firstLive = false;
-        const bool already = finalizable
-            ? !region->ResurrectObjectWithLiveClaim(object,
-                region->GetAddressOffset(reinterpret_cast<MAddress>(object)), false, firstLive)
-            : !region->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, firstLive);
+        const bool already = !region->mark_object(from_object(object), finalizable, firstLive);
         if (!already) {
-            workStack.push_back(MarkStackEntry::Claimed(object, firstLive, true, finalizable));
+            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(object))), false, firstLive, true, finalizable));
         }
     }
 }
@@ -875,18 +859,17 @@ void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStac
 {
     BaseObject* admitted = AdmitYoungObject(object, origin, slot, holder);
     if (admitted != nullptr) {
-
-        workStack.push_back(admitted);
+        workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(admitted))), true, true, true, false));
     }
 }
 
 void PushAdmittedYoung(const MarkStackEntry& entry, TracingCollector::WorkStack& workStack, const char* origin,
                        const void* slot, BaseObject* holder)
 {
-    BaseObject* admitted = AdmitYoungObject(entry.object(), origin, slot, holder);
+    BaseObject* admitted =
+        AdmitYoungObject(to_object(ZOffset::address(to_zoffset(entry.object_address()))), origin, slot, holder);
     if (admitted != nullptr) {
-
-        workStack.push_back(MarkStackEntry(admitted, entry.mark(), entry.incLive(), entry.follow(),
+        workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(admitted))), entry.mark(), entry.inc_live(), entry.follow(),
                                            entry.finalizable()));
     }
 }
@@ -1007,17 +990,17 @@ private:
 
     void PushObject(MarkContext& ctx, BaseObject* object, bool finalizable = false)
     {
-        PublishEntry(ctx, MarkStackEntry::MarkAndFollow(object, finalizable));
+        PublishEntry(ctx, MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, true, finalizable));
     }
 
     void PublishEntry(MarkContext& ctx, const MarkStackEntry& entry)
     {
         MAddress address = 0;
-        if (entry.partialArray()) {
+        if (entry.partial_array()) {
             size_t length = 0;
             MarkPartialArray::Decode(entry, address, length);
         } else {
-            address = reinterpret_cast<MAddress>(entry.object());
+            address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(entry.object_address()))));
         }
         const size_t stripeIndex = shared.StripeFor(reinterpret_cast<BaseObject*>(address));
         const bool publish = stripeIndex != ctx.StripeId();
@@ -1044,7 +1027,7 @@ private:
             }
             return;
         }
-        if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
+        if (region->is_object_strongly_live(from_object(object))) {
             return;
         }
 
@@ -1067,11 +1050,11 @@ private:
             }
         };
         auto publish = [this, &ctx](const MarkStackEntry& work) { PublishEntry(ctx, work); };
-        if (entry.partialArray()) {
+        if (entry.partial_array()) {
             MarkPartialArray::FollowPartialReferences(entry, visitSlot, publish);
             return;
         }
-        BaseObject* object = entry.object();
+        BaseObject* object = to_object(ZOffset::address(to_zoffset(entry.object_address())));
         if (!Heap::IsHeapAddress(object)) {
             return;
         }
@@ -1135,7 +1118,7 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
     MarkStripeSet& stripes = youngMarkDomain->Stripes();
     MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*youngMarkDomain);
     publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-                     MarkStackEntry::MarkAndFollow(object), true);
+                     MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, true, false), true);
 }
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
@@ -1175,11 +1158,11 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
         MAddress address = 0;
-        if (entry.partialArray()) {
+        if (entry.partial_array()) {
             size_t length = 0;
             MarkPartialArray::Decode(entry, address, length);
         } else {
-            address = reinterpret_cast<MAddress>(entry.object());
+            address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(entry.object_address()))));
         }
         seed.Push(shared.Stripes(), shared.StripeFor(reinterpret_cast<BaseObject*>(address)), entry, true);
     }
@@ -1326,11 +1309,11 @@ bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
         const MarkStackEntry entry = work.back();
         work.pop_back();
         MAddress address = 0;
-        if (entry.partialArray()) {
+        if (entry.partial_array()) {
             size_t length = 0;
             MarkPartialArray::Decode(entry, address, length);
         } else {
-            address = reinterpret_cast<MAddress>(entry.object());
+            address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(entry.object_address()))));
         }
         if (address == 0) {
             continue;
@@ -1358,7 +1341,7 @@ void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& w
         RefField<>& field = HeapSlotAt<>(slot);
         BaseObject* target = ResolveMinorReference(field);
         if (target != nullptr && Heap::IsHeapAddress(target)) {
-            work.push_back(MarkStackEntry::MarkAndFollow(target, false));
+            work.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(target))), true, true, true, false));
         }
     });
 }
@@ -1370,7 +1353,7 @@ void WCollector::PublishThreadRoot(BaseObject* object, bool young, bool follow)
     MarkStripeSet& stripes = domain->Stripes();
     ThreadLocal::GetMarkStacks(*domain).Push(stripes,
         stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-        follow ? MarkStackEntry::MarkAndFollow(object) : MarkStackEntry::MarkOnly(object), true);
+        MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, follow, false), true);
 }
 
 bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls)
@@ -1431,11 +1414,11 @@ struct MajorMarkShared {
     size_t StripeFor(const MarkStackEntry& entry) const
     {
         MAddress address = 0;
-        if (entry.partialArray()) {
+        if (entry.partial_array()) {
             size_t length = 0;
             MarkPartialArray::Decode(entry, address, length);
         } else {
-            address = reinterpret_cast<MAddress>(entry.object());
+            address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(entry.object_address()))));
         }
         return domain->Stripes().StripeForAddress(address);
     }
@@ -1489,7 +1472,7 @@ private:
             PublishStaging(ctx, staging);
             return;
         }
-        BaseObject* obj = entry.object();
+        BaseObject* obj = to_object(ZOffset::address(to_zoffset(entry.object_address())));
         const bool wasMarked = collector.MarkEntryObject(obj, entry, &ctx.Cache());
         if ((!entry.mark() || !wasMarked) && entry.follow()) {
             if (entry.mark()) {
@@ -1571,7 +1554,9 @@ void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) 
     MarkStripeSet& stripes = majorMarkDomain->Stripes();
     MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*majorMarkDomain);
     publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-                     gcThread ? MarkStackEntry::FollowOnly(object) : MarkStackEntry::MarkAndFollow(object), true);
+                     gcThread ? MarkStackEntry(untype(ZAddress::offset(from_object(object))), false, false, true, false)
+                              : MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, true, false),
+                     true);
 }
 
 size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
@@ -1632,7 +1617,7 @@ void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
         }
         const MarkStackEntry entry = foreignRootsSet.back();
         foreignRootsSet.pop_back();
-        BaseObject* exportObj = entry.object();
+        BaseObject* exportObj = to_object(ZOffset::address(to_zoffset(entry.object_address())));
         if (exportObj == nullptr) {
             continue;
         }
@@ -1714,16 +1699,16 @@ bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& en
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     CHECK_DETAIL(region->IsRelocatable(), "mark consumer requires a relocatable page");
-    bool firstLive = entry.incLive();
+    bool firstLive = entry.inc_live();
     bool already = false;
     if (entry.mark()) {
-        already = !region->MarkObject(from_object(obj), entry.finalizable(), firstLive);
+        already = !region->mark_object(from_object(obj), entry.finalizable(), firstLive);
     }
     if (!already && firstLive) {
         if (cache != nullptr) {
             cache->IncLive(region, obj->GetSize());
         } else {
-            region->AddLiveCounts(1, obj->GetSize());
+            region->inc_live(1, obj->GetSize());
         }
     }
     return already;
@@ -1998,63 +1983,39 @@ void VerifyEmpty(size_t pending)
 
 namespace MapleRuntime {
 namespace MarkPartialArray {
-bool Encodable(const void* chunkStart, size_t length)
-{
-    const MAddress addr = reinterpret_cast<MAddress>(chunkStart);
-    const MAddress base = Heap::GetHeapStartAddress();
-    if (addr < base) {
-        return false;
-    }
-    // Encode/Decode store (addr - base) >> MIN_SIZE_SHIFT and reconstruct
-    // base + (offset << MIN_SIZE_SHIFT).  Keep this predicate relative to
-    // that same base (zMark.cpp:177-186).
-    if (((addr - base) & (MIN_SIZE - 1)) != 0) {
-        return false;
-    }
-    if (length == 0 || length > MAX_LENGTH) {
-        return false;
-    }
-    return ((addr - base) >> MIN_SIZE_SHIFT) <= MAX_OFFSET;
-}
-
+// zMark.cpp:177-183 encode_partial_array_offset / decode_partial_array_offset.
 MarkStackEntry Encode(const void* chunkStart, size_t length, bool finalizable)
 {
     const MAddress addr = reinterpret_cast<MAddress>(chunkStart);
-    const size_t offset = static_cast<size_t>((addr - Heap::GetHeapStartAddress()) >> MIN_SIZE_SHIFT);
-    return MarkStackEntry::PartialArray(offset, length, finalizable);
+    DCHECK_D((addr & (MIN_SIZE - 1)) == 0, "Address misaligned");
+    const size_t offset = untype(ZAddress::offset(to_zaddress(addr))) >> MIN_SIZE_SHIFT;
+    return MarkStackEntry(offset, length, finalizable);
 }
 
 void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length)
 {
-    const size_t offset = entry.partialArrayOffset();
-    length = entry.partialArrayLength();
-    chunkStart = Heap::GetHeapStartAddress() + (offset << MIN_SIZE_SHIFT);
+    const size_t offset = entry.partial_array_offset();
+    length = entry.partial_array_length();
+    chunkStart = raw(ZOffset::address(to_zoffset(offset << MIN_SIZE_SHIFT)));
 }
 
-// ZGC zMark.cpp:216-270. Always visit the leading range locally; only
-// publish ranges whose complete descriptor can be represented. The inline
-// fallback visits every field of a legal but unencodable array.
+// ZGC zMark.cpp:208-263 follow_array_elements: small arrays are visited
+// locally, large arrays publish their aligned middle and trailing parts as
+// partial-array entries and follow the leading part locally.
 void FollowElements(MAddress start, size_t length, bool finalizable,
                     const FieldVisitor& visit, const EntryPublisher& publish)
 {
-    const MAddress end = start + length * sizeof(MAddress);
-    const MAddress middleStart = AlignUp(start + sizeof(MAddress), MIN_SIZE);
-    if (length <= MIN_LENGTH || length > MAX_LENGTH ||
-        !Encodable(reinterpret_cast<const void*>(AlignDown(end, MIN_SIZE)), 1)) {
+    if (length <= MIN_LENGTH) {
         for (size_t i = 0; i < length; ++i) {
             visit(start + i * sizeof(MAddress));
         }
         return;
     }
+    const MAddress end = start + length * sizeof(MAddress);
+    const MAddress middleStart = AlignUp(start + sizeof(MAddress), MIN_SIZE);
     const size_t middleLength = AlignDown((end - middleStart) / sizeof(MAddress), MIN_LENGTH);
     const MAddress middleEnd = middleStart + middleLength * sizeof(MAddress);
     auto push = [&](MAddress address, size_t count) {
-        if (!Encodable(reinterpret_cast<const void*>(address), count)) {
-            for (size_t i = 0; i < count; ++i) {
-                visit(address + i * sizeof(MAddress));
-            }
-            return;
-        }
         publish(Encode(reinterpret_cast<const void*>(address), count, finalizable));
     };
     if (end > middleEnd) {
@@ -2120,8 +2081,12 @@ namespace MapleRuntime {
 bool TracingCollector::MarkObject(BaseObject* obj) const
     {
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
-        bool marked = !regionInfo->MarkObjectByOwner(obj);
+        // ZPage::mark_object + inc_live on the first live claim (zMark.cpp:405-425).
+        bool incLive = false;
+        bool marked = !regionInfo->mark_object(from_object(obj), false, incLive);
+        if (incLive) {
+            regionInfo->inc_live(1, obj->GetSize());
+        }
         if (!marked) {
             size_t objSize = obj->GetSize();
             if (!fixReferences && regionInfo->IsFromRegion()) {

@@ -3,44 +3,61 @@
 // with Runtime Library Exception.
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
-#pragma once
+
+#ifndef MRT_Z_BITFIELD_HPP
+#define MRT_Z_BITFIELD_HPP
+
 #include <cstddef>
-#include <limits>
+#include <cstdint>
+
+#include "Base/Log.h"
+
 namespace MapleRuntime {
-template<typename T>
-class BitField {
-public:
-    // pos: the position where the bit locates. It starts from 0.
-    // bitLen: the length that is to be read.
-    T GetAtomicValue(size_t pos, size_t bitLen) const
-    {
-        T value = __atomic_load_n(&fieldVal, __ATOMIC_ACQUIRE);
-        T bitMask = FieldMask(pos, bitLen);
-        return value & bitMask;
-    }
-    void SetAtomicValue(size_t pos, size_t bitLen, T newValue)
-    {
-        do {
-            T oldValue = fieldVal;
-            T bitMask = FieldMask(pos, bitLen);
-            T unchangedBitMask = ~bitMask;
-            T newFieldValue = (static_cast<T>(newValue << pos) & bitMask) | (oldValue & unchangedBitMask);
-            if (__atomic_compare_exchange_n(&fieldVal, &oldValue, newFieldValue, false, __ATOMIC_ACQ_REL,
-                                            __ATOMIC_ACQUIRE)) {
-                return;
-            }
-        } while (true);
-    }
 
+//
+// ZGC zBitField.hpp:29-79. Static encode/decode of one field inside a
+// container word.
+//
+//  Example
+//  -------
+//
+//  typedef ZBitField<uint64_t, uint8_t,  0,  2, 3> field_word_aligned_size;
+//  typedef ZBitField<uint64_t, uint32_t, 2, 30>    field_length;
+//
+//  field_word_aligned_size::encode(16) = 2
+//  field_length::encode(2342) = 9368
+//
+//  field_word_aligned_size::decode(9368 | 2) = 16
+//  field_length::decode(9368 | 2) = 2342
+//
+
+template <typename ContainerType, typename ValueType, int FieldShift, int FieldBits, int ValueShift = 0>
+class ZBitField {
 private:
-    static constexpr T FieldMask(size_t pos, size_t bitLen)
+    static const int BitsPerByte = 8;
+    static const int ContainerBits = sizeof(ContainerType) * BitsPerByte;
+
+    static_assert(FieldBits < ContainerBits, "Field too large");
+    static_assert(FieldShift + FieldBits <= ContainerBits, "Field too large");
+    static_assert(ValueShift + FieldBits <= ContainerBits, "Field too large");
+
+    static const ContainerType FieldMask = (((ContainerType)1 << FieldBits) - 1);
+
+    ZBitField() = delete;
+
+public:
+    static ValueType decode(ContainerType container)
     {
-        constexpr size_t width = std::numeric_limits<T>::digits;
-        const T lowMask = bitLen >= width ? static_cast<T>(~T(0))
-                                          : static_cast<T>((T(1) << bitLen) - T(1));
-        return static_cast<T>(lowMask << pos);
+        return (ValueType)(((container >> FieldShift) & FieldMask) << ValueShift);
     }
 
-    T fieldVal;
+    static ContainerType encode(ValueType value)
+    {
+        DCHECK_D(((ContainerType)value & (FieldMask << ValueShift)) == (ContainerType)value, "Invalid value");
+        return (ContainerType)(((ContainerType)value >> ValueShift) << FieldShift);
+    }
 };
-}
+
+} // namespace MapleRuntime
+
+#endif // MRT_Z_BITFIELD_HPP

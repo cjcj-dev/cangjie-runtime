@@ -34,7 +34,7 @@ struct RootPublicationSnapshot {
             const auto* stack = node->Stack();
             for (size_t i = 0; i < stack->top; ++i) {
                 const auto entry = stack->entries(stack)[i];
-                if (!entry.partialArray()) { result.push_back(entry); }
+                if (!entry.partial_array()) { result.push_back(entry); }
             }
         }
     }

@@ -268,7 +268,7 @@ GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
     auto* young = ForwardingTable::get(fixture.heapStart, Generation::Young);
     GC_EXPECT_TRUE(young != nullptr && young != old);
     GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
-        fixture.region0, fixture.region0->GetLiveInfo(), fixture.region0->GetSnapshotEpoch(),
+        fixture.region0, fixture.region0->livemap(), fixture.region0->GetSnapshotEpoch(),
         fixture.region0->GetRegionAllocPtr(), 0, static_cast<uint8_t>(Generation::Young),
         0, fixture.region0->GetRegionLifeId()));
     RegionInfo::RetainScope oldSource{ForwardingTable::Owner(old)};

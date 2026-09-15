@@ -40,11 +40,9 @@ int WaitChild(pid_t pid)
     return -2;
 }
 
-// Isolate a CHECK/SEGV child from the parent's logger and live-info arena
-// singleton. FormatLog(RTLOG_FATAL) aborts after writing the shared logger;
-// a later test then AllocateRegionBitmap against an uninitialized arena
-// (bitmap != nullptr). Child stderr is discarded so the parent's PASS line
-// is not spliced with the child's Check-failed line.
+// Isolate a CHECK/SEGV child from the parent's logger. FormatLog(RTLOG_FATAL)
+// aborts after writing the shared logger. Child stderr is discarded so the
+// parent's PASS line is not spliced with the child's Check-failed line.
 void EnterIsolatedChild()
 {
     int devnull = open("/dev/null", O_WRONLY);

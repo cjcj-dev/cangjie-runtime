@@ -257,8 +257,6 @@ struct ValueRootRoute {
     RegionInfo* destination = nullptr;
     BaseObject* from = nullptr;
     BaseObject* to = nullptr;
-    LiveInfo* sourceLive = nullptr;
-    LiveInfo* destinationLive = nullptr;
 };
 
 ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
@@ -277,16 +275,12 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     }
 
     route.source->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    route.sourceLive = route.source->GetLiveInfo();
-    RegionBitmap* sourceBitmap =
-        fx.PlantMarkBitmap<Generation::Old>(route.sourceLive, route.source->GetRegionSize());
-    const size_t sourceOffset = route.source->GetAddressOffset(reinterpret_cast<MAddress>(route.from));
-    (void)sourceBitmap->MarkBits(sourceOffset, route.from->GetSize(), route.source->GetRegionSize());
+    GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(route.source, route.from));
     RegionList selected("old-source-value-root");
     selected.PrependRegion(route.source, RegionInfo::RegionType::FROM_REGION);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
-    route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
+    route.source->PrepareForwardableRegion<Generation::Old>();
     route.from->SetStateCode(ObjectState::FORWARDED);
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         route.source, reinterpret_cast<MAddress>(route.from));
@@ -298,17 +292,12 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     GC_EXPECT_EQ(ForwardingTable::RetainPageOwner(route.source)->find(reinterpret_cast<MAddress>(route.from)),
                  reinterpret_cast<MAddress>(route.to));
 
-    route.destinationLive = route.destination->GetLiveInfo();
-    (void)fx.PlantMarkBitmap<Generation::Young>(route.destinationLive,
-                                                route.destination->GetRegionSize());
     return route;
 }
 
 bool IsValueRootMarked(const ValueRootRoute& route)
 {
-    return route.destination->IsYoungRegion()
-        ? route.destination->IsMarkedObject(route.destination->GetMarkView<Generation::Young>(), route.to)
-        : route.destination->IsMarkedObject(route.destination->GetMarkView<Generation::Old>(), route.to);
+    return route.destination->is_object_strongly_live(from_object(route.to));
 }
 
 struct WeakGraph {
@@ -351,10 +340,7 @@ struct WeakGraph {
     bool IsMarked(BaseObject* object) const
     {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (region->IsYoungRegion()) {
-            return region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object);
-        }
-        return region->IsMarkedObject(region->GetMarkView<Generation::Old>(), object);
+        return region->is_object_strongly_live(from_object(object));
     }
 
     GcHeapFixture& fx;
@@ -392,7 +378,7 @@ struct ExportForeignGraph {
 
     bool IsMarked(BaseObject* object) const
     {
-        return owner->IsMarkedObject(owner->GetMarkView<Generation::Old>(), object);
+        return owner->is_object_strongly_live(from_object(object));
     }
 
     GcHeapFixture& fx;
@@ -413,9 +399,6 @@ void RunYoungWeakVariant(size_t helpers)
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    // Promotion transfers arena-owned page metadata (ZPage::clone_for_promotion).
-    LiveInfo* live = fx.region1->GetLiveInfo();
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     WeakGraph graph(fx, fx.region1);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
@@ -464,7 +447,6 @@ void RunYoungWeakVariant(size_t helpers)
     GC_EXPECT_TRUE(weakMarked);
     GC_EXPECT_TRUE(referentMarked);
     GC_EXPECT_TRUE(childMarked);
-    (void)live;
 }
 
 void RunYoungWeakRemsetFlow()
@@ -501,10 +483,6 @@ void RunYoungWeakRemsetFlow()
     const MAddress weakSlot = reinterpret_cast<MAddress>(&referentField);
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 
-    LiveInfo* holderLive = fx.PlantLiveInfo(fx.region0);
-    LiveInfo* targetLive = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Old>(holderLive, fx.region0->GetRegionSize());
-    (void)fx.PlantMarkBitmap<Generation::Young>(targetLive, fx.region1->GetRegionSize());
     RuntimeWorkers threadPool(1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -537,8 +515,6 @@ void RunYoungWeakRemsetFlow()
     GC_EXPECT_TRUE(recordedBeforeMinor);
     GC_EXPECT_TRUE(referentMarked);
     GC_EXPECT_TRUE(closure.Saw(graph.child));
-    (void)holderLive;
-    (void)targetLive;
 }
 
 enum class MajorRootFamily {
@@ -698,7 +674,7 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
         MarkDomain& other = domain == &old ? young : old;
         auto& stacks = ThreadLocal::GetMarkStacks(current);
         stacks.Push(current.Stripes(), 0,
-                    MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(0x1000)), true);
+                    MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
         GC_EXPECT_TRUE(current.Stripes().IsEmpty());
         GC_EXPECT_FALSE(stacks.IsEmpty());
         {
