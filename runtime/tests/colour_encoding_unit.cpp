@@ -57,10 +57,10 @@ int main()
     Expect(ClassifySlotWord(0) == SlotWordVerdict::kNull, "slot-null");
     Expect(ClassifySlotWord(address) == SlotWordVerdict::kIllegal, "slot-plain-illegal");
     constexpr uintptr_t expectedProducerFamilies[] = {
-        REMAP_COLOUR_MASK,
-        MARKED_YOUNG_MASK,
-        MARKED_OLD_MASK,
-        REMEMBERED_MASK,
+        ZPointerRemappedMask,
+        ZPointerMarkedYoungMask,
+        ZPointerMarkedOldMask,
+        ZPointerRememberedMask,
     };
     Expect(kHeapSlotRequiredColourFamilyCount ==
                sizeof(expectedProducerFamilies) / sizeof(expectedProducerFamilies[0]),
@@ -93,18 +93,18 @@ int main()
     }
     Expect(ClassifySlotWord(address | ZPointerRemapped00) == SlotWordVerdict::kIllegal,
            "slot-partial-remap-only");
-    Expect(ClassifySlotWord(address | ZPointerRemapped00 | MARKED_YOUNG_0 | MARKED_OLD_0) ==
+    Expect(ClassifySlotWord(address | ZPointerRemapped00 | ZPointerMarkedYoung0 | ZPointerMarkedOld0) ==
                SlotWordVerdict::kIllegal,
            "slot-partial-missing-remembered");
     Expect(ClassifySlotWord(address | ZPointerRemapped00 | ZPointerRemapped01) == SlotWordVerdict::kIllegal,
            "slot-illegal-remap-popcount");
-    Expect(ClassifySlotWord(address | MARKED_YOUNG_0 | MARKED_YOUNG_1) == SlotWordVerdict::kIllegal,
+    Expect(ClassifySlotWord(address | ZPointerMarkedYoung0 | ZPointerMarkedYoung1) == SlotWordVerdict::kIllegal,
            "slot-illegal-marked-young-popcount");
-    Expect(ClassifySlotWord(address | MARKED_OLD_0 | MARKED_OLD_1) == SlotWordVerdict::kIllegal,
+    Expect(ClassifySlotWord(address | ZPointerMarkedOld0 | ZPointerMarkedOld1) == SlotWordVerdict::kIllegal,
            "slot-illegal-marked-old-popcount");
-    Expect(ClassifySlotWord(address | REMEMBERED_0 | REMEMBERED_1) == SlotWordVerdict::kIllegal,
+    Expect(ClassifySlotWord(address | ZPointerRemembered0 | ZPointerRemembered1) == SlotWordVerdict::kIllegal,
            "slot-illegal-remembered-popcount");
-    Expect(ClassifySlotWord(address | FINALIZABLE_0) == SlotWordVerdict::kIllegal,
+    Expect(ClassifySlotWord(address | ZPointerFinalizable0) == SlotWordVerdict::kIllegal,
            "slot-illegal-unwired-finalizable");
     Expect(ClassifySlotWord(uintptr_t(1) << 60) == SlotWordVerdict::kIllegal,
            "slot-illegal-unused-high-bit");

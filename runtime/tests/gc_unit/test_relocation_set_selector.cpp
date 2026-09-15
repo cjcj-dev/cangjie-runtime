@@ -34,7 +34,7 @@ bool ContainsId(const RelocSelectResult& r, uint32_t id)
 GC_TEST(RelocationSetSelector, EmptySet)
 {
     std::vector<RelocRegionDesc> in;
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     GC_EXPECT_EQ(r.selectedIds.size(), 0u);
 }
 
@@ -45,7 +45,7 @@ GC_TEST(RelocationSetSelector, AllSparseSelected)
     for (uint32_t i = 0; i < 16; ++i) {
         in.push_back(Make(i, 64, cap));
     }
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     GC_EXPECT_EQ(r.selectedIds.size(), 16u);
 }
 
@@ -61,7 +61,7 @@ GC_TEST(RelocationSetSelector, FragmentationLimitStopsPrefix)
     for (uint32_t i = 8; i < 24; ++i) {
         in.push_back(Make(i, cap - 1, cap));
     }
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     GC_EXPECT_TRUE(r.selectedIds.size() >= 8u);
     GC_EXPECT_TRUE(r.selectedIds.size() < 24u);
     for (uint32_t i = 0; i < 8; ++i) {
@@ -77,7 +77,7 @@ GC_TEST(RelocationSetSelector, EqualLiveBytesStableOrder)
     in.push_back(Make(11, 80, cap));
     in.push_back(Make(12, 80, cap));
     in.push_back(Make(13, 80, cap));
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     GC_EXPECT_EQ(r.selectedIds.size(), 4u);
     GC_EXPECT_EQ(r.selectedIds[0], 10u);
     GC_EXPECT_EQ(r.selectedIds[1], 11u);
@@ -93,7 +93,7 @@ GC_TEST(RelocationSetSelector, LargeRegionsNeverSelected)
     in.push_back(Make(2, 64, 4096, RelocRegionKind::Small));
     in.push_back(Make(99, 100, cap, RelocRegionKind::Large));
     in.push_back(Make(100, 200, cap, RelocRegionKind::Large));
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     GC_EXPECT_FALSE(ContainsId(r, 99u));
     GC_EXPECT_FALSE(ContainsId(r, 100u));
     GC_EXPECT_TRUE(ContainsId(r, 1u));
@@ -108,7 +108,7 @@ GC_TEST(RelocationSetSelector, PreFilterDropsLowGarbage)
     in.push_back(Make(1, cap - 100, cap));
     in.push_back(Make(2, 64, cap));
     in.push_back(Make(3, 64, cap));
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     GC_EXPECT_FALSE(ContainsId(r, 1u));
 }
 
@@ -122,7 +122,7 @@ GC_TEST(RelocationSetSelector, AllocatingPagesNeverSelected)
     in.push_back(allocating);
     in.push_back(Make(8, 64, cap));
     in.push_back(Make(9, 64, cap));
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     GC_EXPECT_FALSE(ContainsId(r, 7u));
     GC_EXPECT_TRUE(ContainsId(r, 8u));
     GC_EXPECT_TRUE(ContainsId(r, 9u));
@@ -136,7 +136,7 @@ GC_TEST(RelocationSetSelector, SemiSortUsesPartitionFingers)
     std::vector<RelocRegionDesc> in{
         Make(1, 191, cap), Make(2, 127, cap), Make(3, 128, cap), Make(4, 64, cap),
         Make(5, 0, cap), Make(6, 192, cap)};
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     const std::vector<uint32_t> expected{5, 2, 4, 1, 3, 6};
     GC_EXPECT_TRUE(r.selectedIds == expected);
 }
@@ -147,7 +147,7 @@ GC_TEST(RelocationSetSelector, PartitionUsesEachPageCapacity)
 {
     std::vector<RelocRegionDesc> in{
         Make(1, 1024, 4096), Make(2, 2048, 16384), Make(3, 1536, 12288)};
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     const std::vector<uint32_t> expected{2, 3, 1};
     GC_EXPECT_TRUE(r.selectedIds == expected);
 }
@@ -159,9 +159,9 @@ GC_TEST(RelocationSetSelector, SelectionContinuesPastUnprofitablePrefix)
     const size_t cap = kRelocationMaxSmallRegionBytes;
     const size_t live = 60000;
     std::vector<RelocRegionDesc> in{Make(1, live, cap), Make(2, live, cap)};
-    GC_EXPECT_TRUE(SelectRelocationSet(in).selectedIds.empty());
+    GC_EXPECT_TRUE(SelectRelocationSet(in, ZYoungCompactionLimit).selectedIds.empty());
     in.push_back(Make(3, live, cap));
-    const RelocSelectResult r = SelectRelocationSet(in);
+    const RelocSelectResult r = SelectRelocationSet(in, ZYoungCompactionLimit);
     const std::vector<uint32_t> expected{1, 2, 3};
     GC_EXPECT_TRUE(r.selectedIds == expected);
 }

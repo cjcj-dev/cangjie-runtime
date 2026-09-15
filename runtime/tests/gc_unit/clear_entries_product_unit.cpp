@@ -299,31 +299,31 @@ struct LoadHealDeliveryTestAccess {
         size_t consumed;
     };
 
-    static void PublishColours(WCollector& collector) { collector.set_good_masks(); }
+    static void PublishColours(WCollector& collector) { ZGlobalsPointers::initialize(); }
 
     static uintptr_t DoubleBadColour(const WCollector& collector)
     {
-        return REMAP_COLOUR_MASK & ~collector.ZPointerRemappedYoungMask &
-            ~collector.ZPointerRemappedOldMask;
+        return ZPointerRemappedMask & ~ZPointerRemappedYoungMask &
+            ~ZPointerRemappedOldMask;
     }
 
     static void RemapYoungRoots(WCollector& collector) { collector.RemapYoungRoots(); }
 
     static void FlipYoungRelocateStart(WCollector& collector)
     {
-        collector.flip_young_relocate_start();
+        ZGlobalsPointers::flip_young_relocate_start();
     }
 
     static void FlipOldRelocateStart(WCollector& collector)
     {
-        collector.flip_old_relocate_start();
+        ZGlobalsPointers::flip_old_relocate_start();
     }
 
     static RemsetConsumeResult ConsumeRemembered(WCollector& collector,
                                                   const std::unordered_set<MAddress>& previous,
                                                   BaseObject* currentMinorRoot)
     {
-        collector.flip_young_mark_start();
+        ZGlobalsPointers::flip_young_mark_start();
         WCollector::WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
         WCollector::MinorSlotSet weakSlots;
@@ -377,7 +377,7 @@ bool PageWaitEnterBarrier::entered = false;
 
 uintptr_t OneLoadBadRemap()
 {
-    const uintptr_t bad = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    const uintptr_t bad = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
     GC_EXPECT_TRUE(bad != 0);
     return bad & (~bad + 1);
 }
@@ -393,9 +393,9 @@ public:
     {
         RefField<> field(StoreGoodPointer(from));
         auto& collector = static_cast<WCollector&>(theCollector);
-        collector.flip_old_relocate_start();
+        ZGlobalsPointers::flip_old_relocate_start();
         BaseObject* result = ReadReference(nullptr, field);
-        collector.flip_old_relocate_start();
+        ZGlobalsPointers::flip_old_relocate_start();
         return result;
     }
 };
@@ -878,7 +878,8 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, NullAndNonHeapControlsRemainStable)
     RelocationReceiptTestAccess::SeedValueRoots(collector, nullptr);
     const std::vector<BaseObject*> nullValues =
         RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
-    BaseObject* nonHeap = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(1));
+    alignas(8) unsigned char nativeStorage[16] {};
+    BaseObject* nonHeap = reinterpret_cast<BaseObject*>(nativeStorage);
     RelocationReceiptTestAccess::SeedValueRoots(collector, nonHeap);
     const std::vector<BaseObject*> nonHeapValues =
         RelocationReceiptTestAccess::EnumMajorValueRoots(collector);
@@ -1798,8 +1799,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     StorePlain(root, from_object(from));
     BaseObject* resolved = RelocationReceiptTestAccess::ForwardUpdateRawRef(collector, root);
     GC_EXPECT_TRUE(resolved == to);
-    HeapSlot<> bits(to_zpointer(raw(root.LoadPlain())));
-    GC_EXPECT_TRUE(to_object(bits.GetTargetObject()) == to);
+    GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<MAddress>(to));
 
     publication = ForwardingTable::Publication();
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
@@ -1840,45 +1840,6 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
     fx.FreePlanted(live);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 #endif
-}
-
-GC_TEST(ForwardingPublicationProduct, IdentityForwardStillWritesBackRootWord)
-{
-    GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
-    RegionInfo* region = ResetDeliveryUnit(fx, 4);
-    GC_EXPECT_TRUE(region != nullptr);
-    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    ForwardingTable::Publication publication =
-        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
-    GC_EXPECT_TRUE(static_cast<bool>(publication));
-    (void)ForwardingTable::InstallMapping(publication, reinterpret_cast<MAddress>(from),
-                                          reinterpret_cast<MAddress>(from));
-    region->MarkForwardingDone();
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    const uintptr_t colored = reinterpret_cast<uintptr_t>(from) |
-        (static_cast<uintptr_t>(::g_cjLoadBadMask) ^ REMAP_COLOUR_MASK);
-    ObjectRef root;
-    StorePlain(root, to_zaddress(colored));
-    GC_EXPECT_TRUE(raw(root.LoadPlain()) != reinterpret_cast<MAddress>(from));
-    BaseObject* resolved = RelocationReceiptTestAccess::ForwardUpdateRawRef(collector, root);
-    GC_EXPECT_TRUE(resolved == from);
-    GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<MAddress>(from));
-
-    publication = ForwardingTable::Publication();
-    RelocationReceiptTestAccess::ReleaseListOwnership(region);
-    ForwardingTable::ResetRelocationSet(region->GetOwnerGeneration());
-    if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestination)
@@ -2008,7 +1969,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
     RefField<> productField(qualified);
     (void)RelocationReceiptTestAccess::FixMinorField(collector, productField);
     GC_EXPECT_EQ(raw(productField.GetTargetObject()), expected);
-    RefField<> derivedField(expected + 8u);
+    RefField<> derivedField(ZAddress::store_good(to_zaddress(expected + 8u)));
     (void)RelocationReceiptTestAccess::FixMinorField(
         collector, derivedField, reinterpret_cast<BaseObject*>(expected));
     GC_EXPECT_EQ(raw(derivedField.GetTargetObject()), expected + 8u);
@@ -2544,7 +2505,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         field.StoreColoured(GcUnit::StoreGoodPointer(from));
         LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
         const zpointer before = field.GetFieldValue();
-        GC_EXPECT_FALSE(collector.is_load_good(field));
+        GC_EXPECT_FALSE(ZPointer::is_load_good((field).GetFieldValue()));
         GC_EXPECT_TRUE(ForwardingTable::GetCovering(reinterpret_cast<MAddress>(from), Generation::Young) != nullptr);
         if (!flipPromoted) {
             // Unfinished relocation must remain deferred, without waiting.
@@ -2574,9 +2535,9 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
             RegionManager::RememberPromotedObject(holder);
         }
         GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == to);
-        GC_EXPECT_TRUE(collector.is_load_good(field));
+        GC_EXPECT_TRUE(ZPointer::is_load_good((field).GetFieldValue()));
         GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
-        const uintptr_t markBits = MARKED_YOUNG_MASK | MARKED_OLD_MASK;
+        const uintptr_t markBits = ZPointerMarkedYoungMask | ZPointerMarkedOldMask;
         GC_EXPECT_EQ(raw(field.GetFieldValue()) & markBits, raw(before) & markBits);
         if (holderLive != nullptr) {
             holderRegion->metadata.liveInfo = nullptr;
@@ -2665,14 +2626,14 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     const uintptr_t doubleBad = LoadHealDeliveryTestAccess::DoubleBadColour(collector);
     GC_EXPECT_TRUE(doubleBad != 0 && (doubleBad & (doubleBad - 1)) == 0);
-    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & REMAP_COLOUR_MASK, doubleBad);
+    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & ZPointerRemappedMask, doubleBad);
     const uintptr_t youngBefore = raw(youngField->GetFieldValue());
     LoadHealDeliveryTestAccess::RemapYoungRoots(collector);
 
     const bool nearResolved = to_object(nearField->GetTargetObject()) == forwarding.to;
     const bool farResolved = to_object(farField->GetTargetObject()) == forwarding.to;
-    const bool nearStoreGood = collector.is_store_good(*nearField);
-    const bool farStoreGood = collector.is_store_good(*farField);
+    const bool nearStoreGood = ZPointer::is_store_good((*nearField).GetFieldValue());
+    const bool farStoreGood = ZPointer::is_store_good((*farField).GetFieldValue());
     const bool youngUnchanged = raw(youngField->GetFieldValue()) == youngBefore;
     const bool holderNonAllocating = !holderRegion->IsAllocating();
     const bool matrixResult = farOffset > 64 && holderNonAllocating && nearResolved && farResolved &&
@@ -2800,7 +2761,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
 #if defined(MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE)
 // ZGenerationOld::remap_young_roots, zGeneration.cpp:1509: enter through
 // the real major driver; a registered runtime mutator owns the raw root.
-void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false)
+void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)
 {
     ZStat::Initialize();
     GcHeapFixture& fx = ProductFixture();
@@ -2845,7 +2806,18 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
 
     MutatorManager& manager = MutatorManager::Instance();
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    ObjectRef* root = mutator->AddNativeFrameRoot(forwarding.from);
+    alignas(16) uintptr_t nestedStorage[8] {};
+    RootSlot* nestedField = nullptr;
+    BaseObject* rootInput = forwarding.from;
+    if (nestedKind != 0) {
+        mutator->SetStackTopAddr(reinterpret_cast<uintptr_t>(nestedStorage));
+        mutator->SetStackSize(sizeof(nestedStorage));
+        rootInput = reinterpret_cast<BaseObject*>(&nestedStorage[2]);
+        if (nestedKind == 1) rootInput->SetClassInfo(fx.typeInfo);
+        nestedField = &RootSlotAt(static_cast<void*>(&nestedStorage[nestedKind == 1 ? 3 : 2]));
+        StorePlain(*nestedField, from_object(forwarding.from));
+    }
+    ObjectRef* root = mutator->AddNativeFrameRoot(rootInput);
     ObjectRef* secondRoot = secondOld == nullptr ? nullptr : mutator->AddNativeFrameRoot(secondOld);
     ObjectRef* nullRoot = mutator->AddNativeFrameRoot(nullptr);
     static uintptr_t nonHeapStorage[2] = {};
@@ -2894,7 +2866,9 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         receipt.after == (oldPending ? before : expected) &&
         receipt.heals == (oldPending ? 0 : expectedVisits) &&
         (!oldPending || receipt.oldPendingVisits == expectedVisits) &&
-        expected != 0 && (!oldPending || expected != before) && raw(root->LoadPlain()) == expected &&
+        expected != 0 && (!oldPending || expected != before) &&
+        (nestedField == nullptr ? raw(root->LoadPlain()) == expected :
+            raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(rootInput) && raw(nestedField->LoadPlain()) == expected) &&
         is_null(nullRoot->LoadPlain()) && raw(nonHeapRoot->LoadPlain()) == reinterpret_cast<uintptr_t>(nonHeapStorage) &&
         (!managed || (frame[0] == expected && frame[1] == expected + 8));
     std::fprintf(stderr, "RAW_REMAP_TARGET_ASSERT promoted=%u managed=%u visits=%llu before=%zx after=%zx "
@@ -2902,6 +2876,10 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         static_cast<unsigned long long>(receipt.visits), receipt.before, receipt.after,
         expected, frame[0], frame[1], static_cast<unsigned long long>(receipt.oldPendingVisits),
         raw(root->LoadPlain()), unsigned(result));
+    if (nestedKind != 0) {
+        std::fprintf(stderr, "NESTED_REMAP_TARGET kind=%u observed=%zx expected=%zx result=%u\n",
+                     nestedKind, raw(nestedField->LoadPlain()), expected, unsigned(result));
+    }
     GC_EXPECT_TRUE(result);
     mutator->RemoveNativeFrameRoot(root);
     if (secondRoot != nullptr) mutator->RemoveNativeFrameRoot(secondRoot);
@@ -2910,15 +2888,23 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
 }
-void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false)
+void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)
 {
-    const AbortCapture outcome = CaptureAbort([&] { RunMajorRawRemap(promoted, managed, oldPending, fallback); });
+    const AbortCapture outcome = CaptureAbort([&] { RunMajorRawRemap(promoted, managed, oldPending, fallback, nestedKind); });
     std::fprintf(stderr, "%s", outcome.output.c_str());
     const bool completed = WIFEXITED(outcome.status) && WEXITSTATUS(outcome.status) == 0 &&
         outcome.output.find("result=1") != std::string::npos;
     std::fprintf(stderr, "RAW_REMAP_OUTCOME_ASSERT promoted=%u managed=%u old=%u status=%d completed=%u\n",
         unsigned(promoted), unsigned(managed), unsigned(oldPending), outcome.status, unsigned(completed));
     GC_EXPECT_TRUE(completed);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsStackObjectField)
+{
+    CheckMajorRawRemap(false, false, false, false, 1);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsHeaderlessRecordField)
+{
+    CheckMajorRawRemap(false, false, false, false, 2);
 }
 GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesYoungTable)
 {

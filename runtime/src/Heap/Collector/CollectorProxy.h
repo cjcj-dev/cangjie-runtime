@@ -99,8 +99,6 @@ public:
 
     bool IsOldPointer(RefField<>& ref) const override { return currentCollector->IsOldPointer(ref); }
     bool IsCurrentPointer(RefField<>& ref) const override { return currentCollector->IsCurrentPointer(ref); }
-    bool is_young_load_good(RefField<>& ref) const override { return currentCollector->is_young_load_good(ref); }
-    bool is_old_load_good(RefField<>& ref) const override { return currentCollector->is_old_load_good(ref); }
     ZGenerationId remap_generation(RefField<>& ref) const override
     {
         return currentCollector->remap_generation(ref);

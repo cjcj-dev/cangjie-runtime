@@ -107,12 +107,12 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     // Non-heap ELF literals are not GC roots and keep the skip below.
     CHECK_DETAIL(!Heap::IsHeapAddress(to_object(oldField.GetTargetObject())) ||
                      (raw(oldField.GetFieldValue()) &
-                      (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
+                      (ZPointerRemappedMask | ZPointerMarkedYoungMask | ZPointerMarkedOldMask)) != 0,
                  "NativeSlot requires colored value at EnumRefFieldRoot slot=%p word=%#zx",
                  &field, raw(oldField.GetFieldValue()));
     // A mark-good root has passed this mark epoch and is necessarily load-good
     // (OpenJDK zAddress.inline.hpp:658-664).
-    if (is_mark_good(oldField)) {
+    if (ZPointer::is_mark_good(oldField.GetFieldValue())) {
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
         BaseObject* target = to_object(oldField.GetTargetObject());
         // Reject non-heap: do not call make_load_good (remap would touch non-heap).
@@ -172,11 +172,8 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
         return;
     }
 
-    // RootSlot contains an uncoloured address. Constructing a local HeapSlot is
-    // only a bit-layout decoder for legacy coloured roots at external ABI edges;
-    // the root storage itself is never exposed as a HeapSlot.
-    HeapSlot<> observedBits(to_zpointer(raw(observed)));
-    BaseObject* root = to_object(observedBits.GetTargetObject());
+    // ZUncoloredRoot supplies an address, never a colored HeapSlot word.
+    BaseObject* root = to_object(safe(observed));
     if (root == nullptr || !Heap::IsHeapAddress(root)) {
         return;
     }
@@ -189,7 +186,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
         }
     }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-    HealRootWriteback(ref, root, HealSite::WCollectorEnumRawRoot);
+    HealRoot(ref, from_object(root), HealSite::WCollectorEnumRawRoot);
     rootSet.push_back(root);
 }
 
@@ -243,7 +240,7 @@ void WCollector::TraceFinalizableRefField(BaseObject* obj, RefField<>& field, Wo
             }
         }
     }
-    if (is_mark_good(oldField) && !staleTarget) {
+    if (ZPointer::is_mark_good(oldField.GetFieldValue()) && !staleTarget) {
         BaseObject* targetObj = to_object(oldField.GetTargetObject());
         // zbisect: plain non-heap (0x55–0x65) was admitted here → IsMarkedObject → GetUnitIdxAt OOB.
         // Skip field on reject — same as pre-zcolor7 slow path for plain non-heap.
@@ -281,7 +278,7 @@ void WCollector::TraceFinalizableRefField(BaseObject* obj, RefField<>& field, Wo
     // not relocate phase, so do not TryMutatorRelocate / forward_object here.
     {
         const MAddress fromAddr = reinterpret_cast<MAddress>(latest);
-        MAddress stored = is_load_good(oldField) ? 0 : ForwardingTable::FindTo(
+        MAddress stored = ZPointer::is_load_good(oldField.GetFieldValue()) ? 0 : ForwardingTable::FindTo(
             raw(oldField.GetTargetObject()), static_cast<Generation>(remap_generation(oldField)));
         if (stored != 0) {
             BaseObject* to = reinterpret_cast<BaseObject*>(stored);
@@ -455,7 +452,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     RefField<> oldField(field);
     const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
     BaseObject* latest = nullptr;
-    if (is_mark_good(oldField)) {
+    if (ZPointer::is_mark_good(oldField.GetFieldValue())) {
         BaseObject* targetObj = to_object(oldField.GetTargetObject());
         if (!Heap::IsHeapAddress(targetObj)) {
             return nullptr;

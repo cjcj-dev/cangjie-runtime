@@ -77,7 +77,7 @@ struct RemsetRearmTestAccess {
     {
         // WCollector::DoYoungGarbageCollection publishes the new young mark and
         // remembered colours before RememberedSet::DrainForMinor (Generation.cpp:533,649-651).
-        collector.flip_young_mark_start();
+        ZGlobalsPointers::flip_young_mark_start();
     }
 
     static bool FixInteriorSlot(WCollector& collector, RefField<>& field, BaseObject* knownBase)
@@ -121,12 +121,11 @@ GC_TEST(RelocateInterior, MinorFixPublishesCurrentStoreGoodColour)
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     BaseObject* interior = reinterpret_cast<BaseObject*>(
         reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    const uintptr_t desired = MakeStoreGoodSlotWord(
-        reinterpret_cast<uintptr_t>(interior), static_cast<uintptr_t>(::g_cjStoreGoodMask));
+    const uintptr_t desired = raw(ZAddress::color(static_cast<zaddress>(reinterpret_cast<uintptr_t>(interior)), static_cast<uintptr_t>(::g_cjStoreGoodMask)));
     // Change only the remembered epoch.  The word remains load/mark-good, so
     // ResolveMinorReference returns the payload without rewriting the slot;
     // the interior StoreGood publication below is therefore the sole repair.
-    const uintptr_t initial = desired ^ REMEMBERED_MASK;
+    const uintptr_t initial = desired ^ ZPointerRememberedMask;
     field->StoreColoured(to_zpointer(initial));
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -211,7 +210,7 @@ private:
 // and store-good slots intentionally do not. Keep all other colour families good.
 zpointer PreviousRememberedPointer(BaseObject* object)
 {
-    return to_zpointer(raw(GcUnit::StoreGoodPointer(object)) ^ REMEMBERED_MASK);
+    return to_zpointer(raw(GcUnit::StoreGoodPointer(object)) ^ ZPointerRememberedMask);
 }
 
 bool ExpectRecorded(RememberedSet& rs, MAddress fieldAddr)
@@ -293,12 +292,12 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
 
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
-    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_FALSE(rs.Contains(slot));
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
@@ -325,13 +324,13 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
     rs.DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
     GC_EXPECT_EQ(rs.Size(), 0u);
-    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
 
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
 
     GC_EXPECT_FALSE(rs.Contains(slot));
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
@@ -555,7 +554,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 
     field->StoreColoured(zpointer::null);
     barrier.WriteReference(fx.obj0, *field, fx.obj0);
-    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
     GC_EXPECT_FALSE(rs.Contains(slot));
 
     fx.region1->SetYoungRegionFlag(1);

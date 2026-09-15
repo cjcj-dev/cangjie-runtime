@@ -135,7 +135,7 @@ inline double GcTriggerMaxAllocRateBps(const GcTriggerInputs& in)
 {
     const double avg = in.allocRateAvgBps;
     const double sd = in.allocRateSdBps;
-    return (avg * kGcTriggerSpikeTolerance) + (sd * kGcTriggerOneIn1000);
+    return (avg * ZAllocationSpikeTolerance) + (sd * kGcTriggerOneIn1000);
 }
 
 inline size_t GcTriggerSoftMaxBytes(const GcTriggerInputs& in)
@@ -367,7 +367,7 @@ inline GcDynamicRequest RuleDynamicAllocRate(const GcTriggerInputs& in, uint32_t
     }
     const double deviation = in.allocRateSdBps / (in.allocRateAvgBps + 1.0);
     const double rate = conservative ?
-        std::max(in.allocRatePredictBps, in.allocRateAvgBps) * kGcTriggerSpikeTolerance +
+        std::max(in.allocRatePredictBps, in.allocRateAvgBps) * ZAllocationSpikeTolerance +
             in.allocRateSdBps * kGcTriggerOneIn1000 + 1.0 : in.allocRateAvgBps;
     const double untilOom = (GcTriggerFreeBytes(in) / rate) / (1.0 + deviation);
     const uint32_t workers = DiscreteGcWorkers(SelectYoungGcWorkers(in, in.youngSerialTimeSec,

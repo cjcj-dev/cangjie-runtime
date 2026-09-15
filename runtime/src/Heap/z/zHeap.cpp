@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zInitialize.hpp"
 
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/CollectorProxy.h"
@@ -50,6 +51,7 @@
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
@@ -209,6 +211,7 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 
 void HeapImpl::Init(const HeapParam& param)
 {
+    ZInitialize::initialize();
     theSpace->Init(param);
     rememberedSet.Initialize(theSpace->GetSpaceStartAddress(),
                              theSpace->GetSpaceEndAddress() - theSpace->GetSpaceStartAddress());

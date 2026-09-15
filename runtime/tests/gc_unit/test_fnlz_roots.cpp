@@ -24,20 +24,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
     auto& local = mutator.GetLocalFinalizers();
     NativeSlot* const originalSlot = &local.front();
     const zpointer originalWord = originalSlot->GetFieldValue();
-    struct RestoreMasks {
-        unsigned long mark = ::g_cjMarkBadMask;
-        unsigned long store = ::g_cjStoreGoodMask;
-        unsigned long bad = ::g_cjStoreBadMask;
-        ~RestoreMasks()
-        {
-            ::g_cjMarkBadMask = mark;
-            ::g_cjStoreGoodMask = store;
-            ::g_cjStoreBadMask = bad;
-        }
-    } masks;
-    ::g_cjMarkBadMask ^= MARKED_YOUNG_MASK;
-    ::g_cjStoreGoodMask ^= MARKED_YOUNG_MASK;
-    ::g_cjStoreBadMask ^= MARKED_YOUNG_MASK;
+    ZGlobalsPointers::flip_young_mark_start();
     processor.RegisterFinalizers(local);
     size_t seen = 0;
     processor.VisitFinalizers([&](NativeSlot& slot) {
@@ -46,7 +33,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistrationTransferPreservesSlotAndYoungEpoch)
                      raw(slot.GetFieldValue()), raw(originalWord));
         GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(originalWord));
         GC_EXPECT_TRUE(&slot == originalSlot);
-        GC_EXPECT_FALSE(ColourPredicates::is_marked_young(raw(slot.GetFieldValue()), ::g_cjMarkBadMask));
+        GC_EXPECT_FALSE(ZPointer::is_marked_young(to_zpointer(raw(slot.GetFieldValue()))));
     });
     GC_EXPECT_EQ(seen, size_t(1));
     GC_EXPECT_TRUE(local.empty());

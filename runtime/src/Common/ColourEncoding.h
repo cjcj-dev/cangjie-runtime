@@ -43,11 +43,12 @@ __attribute__((visibility("hidden"))) constexpr bool IsRepresentableLow48Range(u
     return start < kPointerAddressLimit && size <= kPointerAddressLimit - start;
 }
 
-__attribute__((visibility("hidden"))) constexpr bool IsAddressLayoutSealValid(
+__attribute__((visibility("hidden"))) inline bool IsAddressLayoutSealValid(
     HeapSlotAddressRange heap, StateWordTypeInfoRange typeInfo)
 {
     return heap.start < heap.end && typeInfo.start < typeInfo.end &&
-        heap.end <= kPointerAddressLimit && typeInfo.end <= kPointerAddressLimit;
+        heap.start >= ZAddressHeapBase && heap.end <= ZAddressHeapBase + ZAddressOffsetMax &&
+        typeInfo.end <= kPointerAddressLimit;
 }
 
 __attribute__((visibility("hidden"))) inline bool CheckedMulSize(size_t left, size_t right, size_t& result)
@@ -86,64 +87,15 @@ __attribute__((visibility("hidden"))) constexpr bool ColourFamilyHasExactlyOneBi
     return family != 0 && (family & (family - 1)) == 0;
 }
 
-// Single source of truth for the full-colour producer/consumer contract.  A
-// HeapSlot word contains one epoch bit per row, except remembered may hold
-// both bits after a load/mark heal. Coloured null uses the same metadata. Tests derive
-// both the accepted cardinality and the missing-family negatives from this
-// table, so removing a wired family cannot silently weaken the oracle.
-constexpr uintptr_t kHeapSlotRequiredColourFamilies[] = {
-    REMAP_COLOUR_MASK,
-    MARKED_YOUNG_MASK,
-    MARKED_OLD_MASK,
-    REMEMBERED_MASK,
-};
-constexpr size_t kHeapSlotRequiredColourFamilyCount =
-    sizeof(kHeapSlotRequiredColourFamilies) / sizeof(kHeapSlotRequiredColourFamilies[0]);
 
-__attribute__((visibility("hidden"))) constexpr bool IsPlainNonNullSlotWord(uintptr_t value)
+inline bool IsPlainNonNullSlotWord(uintptr_t value)
 {
-    constexpr uintptr_t allMetadata =
-        REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK |
-        REMEMBERED_MASK | FINALIZABLE_MASK | (uintptr_t(0xf) << 60u);
-    return (value & kPointerAddressMask) != 0 && (value & allMetadata) == 0;
+    return value != 0 && (value & ZPointerAllMetadataMask) == 0;
 }
-
-// Fail-closed admission for the full-colour HeapSlot carrier.  The producer
-// includes store-good, load/mark-healed and stale-load-bad words. Remembered=11
-// is the ZGC state that forces the next store slow path; other families carry
-// exactly one epoch bit. Raw null remains valid for uninitialized storage.
-__attribute__((visibility("hidden"))) constexpr SlotWordVerdict ClassifySlotWord(uintptr_t value)
+inline SlotWordVerdict ClassifySlotWord(uintptr_t value)
 {
-    if (value == 0) {
-        return SlotWordVerdict::kNull;
-    }
-    constexpr uintptr_t unusedHighMask = uintptr_t(0xf) << 60u;
-    if ((value & unusedHighMask) != 0 ||
-        (!kFinalizableWired && (value & FINALIZABLE_MASK) != 0)) {
-        return SlotWordVerdict::kIllegal;
-    }
-    for (size_t i = 0; i < kHeapSlotRequiredColourFamilyCount; ++i) {
-        const uintptr_t family = kHeapSlotRequiredColourFamilies[i];
-        // ZAddress::load_good/mark_good set both remembered bits. That state
-        // intentionally trips the next store barrier (zAddress.inline.hpp:752-780).
-        if (family == REMEMBERED_MASK ? (value & family) == 0
-                                     : !ColourFamilyHasExactlyOneBit(value, family)) {
-            return SlotWordVerdict::kIllegal;
-        }
-    }
-    return SlotWordVerdict::kColoured;
+    if (value == 0) { return SlotWordVerdict::kNull; }
+    return is_valid(static_cast<zpointer>(value)) ? SlotWordVerdict::kColoured : SlotWordVerdict::kIllegal;
 }
-
-// ZAddress::store_good (zAddress.inline.hpp:806-808) for the frozen low-48
-// layout.  Used by producers whose payload is a derived/interior address and
-// therefore cannot be routed through a BaseObject classifier.
-__attribute__((visibility("hidden"))) constexpr uintptr_t MakeStoreGoodSlotWord(
-    uintptr_t address, uintptr_t storeGoodMask)
-{
-    const uintptr_t payload = address & kPointerAddressMask;
-    return payload | storeGoodMask;
-}
-
 } // namespace MapleRuntime
-
 #endif // MRT_COLOUR_ENCODING_H

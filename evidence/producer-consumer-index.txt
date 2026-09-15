@@ -1,0 +1,21 @@
+runtime/src/Mutator/Mutator.cpp:871:    return to_object(safe(uncolor_bits(to_zpointer(raw(maybeColoured)))));
+runtime/src/Sync/Sync.cpp:568:    // True read barrier (not uncolor_bits): pin must land on load-good / to-copy.
+runtime/src/Heap/Allocator/SlotList.h:55:        return bits != raw(uncolor_bits(to_zpointer(bits)));
+runtime/src/Heap/WCollector/WCollector.h:313:    void flip_young_mark_start()
+runtime/src/Heap/WCollector/WCollector.h:325:    void flip_old_mark_start()
+runtime/src/Inspector/CjHeapData.cpp:391:        zaddress_unsafe value = uncolor_bits(objRef.GetFieldValue());
+runtime/src/ObjectModel/RefField.h:192:    // 若要当对象指针，经 uncolor_bits(GetFieldValue()) 或 GetTargetObject()。
+runtime/src/ObjectModel/RefField.h:483:                    to_zpointer(MakeStoreGoodSlotWord(address, ::g_cjStoreGoodMask)), site);
+runtime/src/ObjectModel/RefField.h:495:                    to_zpointer(MakeStoreGoodSlotWord(address, ::g_cjStoreGoodMask)), site);
+runtime/src/Common/ColourEncoding.h:140:__attribute__((visibility("hidden"))) constexpr uintptr_t MakeStoreGoodSlotWord(
+runtime/src/Heap/z/zAddress.inline.hpp:78:// uncolor_bits: strip colour high bits → address bits only, still unsafe.
+runtime/src/Heap/z/zAddress.inline.hpp:80:constexpr zaddress_unsafe uncolor_bits(zpointer p)
+runtime/src/Heap/z/zBarrier.cpp:172:        const zpointer good = to_zpointer(MakeStoreGoodSlotWord(
+runtime/src/Heap/z/zBarrier.cpp:209:    field.StoreColoured(to_zpointer(MakeStoreGoodSlotWord(
+runtime/src/Heap/z/zBarrier.cpp:252:        const zpointer good = to_zpointer(MakeStoreGoodSlotWord(
+runtime/src/Heap/z/zBarrier.cpp:387:    field.StoreColoured(to_zpointer(MakeStoreGoodSlotWord(
+runtime/src/Heap/z/zBarrier.cpp:405:    const zpointer desired = to_zpointer(MakeStoreGoodSlotWord(
+runtime/src/Heap/z/zBarrier.cpp:430:    const zpointer expected = to_zpointer(MakeStoreGoodSlotWord(
+runtime/src/Heap/z/zBarrier.cpp:432:    const zpointer desired = to_zpointer(MakeStoreGoodSlotWord(
+runtime/src/Heap/z/zGeneration.cpp:62:    collector.flip_young_mark_start();
+runtime/src/Heap/z/zGeneration.cpp:133:    collector.flip_old_mark_start();

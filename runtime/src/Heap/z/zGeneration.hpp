@@ -40,6 +40,7 @@ public:
     GCCycleSnapshot Snapshot() const;
     void BindMarkDomain(MarkDomain* domain) { markDomain = domain; }
     bool IsPhaseMark() const;
+    double FragmentationLimit() const;
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
     void MarkObject(zaddress address);
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>

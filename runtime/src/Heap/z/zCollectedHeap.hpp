@@ -233,16 +233,9 @@ public:
         return (raw(ref.GetFieldValue()) & ::g_cjLoadBadMask) != 0;
     }
 
-    virtual bool is_young_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_young_load_good"); }
-    virtual bool is_old_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_old_load_good"); }
 
     // ZPointer::is_load_good (zAddress.inline.hpp:631-633). Keep the product
     // predicate in the collector domain; diagnostic mode selection must not own it.
-    bool is_load_good(RefField<>& ref) const
-    {
-        return ColourPredicates::is_load_good(static_cast<uintptr_t>(raw(ref.GetFieldValue())),
-                                              static_cast<uintptr_t>(::g_cjLoadBadMask));
-    }
 
     virtual ZGenerationId remap_generation(RefField<>&) const
     {
@@ -275,7 +268,7 @@ public:
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
         BaseObject* target = to_object(ref.GetTargetObject());
-        if (target == nullptr || is_load_good(ref)) {
+        if (target == nullptr || ZPointer::is_load_good(ref.GetFieldValue())) {
             return target;
         }
 
@@ -292,26 +285,10 @@ public:
     //
     // Encoding completeness is enforced at HeapSlot publication. As in ZGC,
     // this phase predicate is only the single not-bad-mask test.
-    bool is_mark_good(RefField<>& ref) const
-    {
-        return ColourPredicates::is_mark_good(static_cast<uintptr_t>(raw(ref.GetFieldValue())),
-                                              static_cast<uintptr_t>(::g_cjLoadBadMask),
-                                              static_cast<uintptr_t>(::g_cjMarkBadMask));
-    }
 
     // OpenJDK ZPointer::is_store_good (zAddress.inline.hpp:679-684): store-good includes
     // mark-good plus the current Remembered epoch bit. Fast path for write barrier.
-    bool is_store_good(RefField<>& ref) const
-    {
-        return ColourPredicates::is_store_good(static_cast<uintptr_t>(raw(ref.GetFieldValue())),
-                                               static_cast<uintptr_t>(::g_cjLoadBadMask),
-                                               static_cast<uintptr_t>(::g_cjStoreBadMask));
-    }
 
-    bool is_store_bad(RefField<>& ref) const
-    {
-        return (raw(ref.GetFieldValue()) & ::g_cjStoreBadMask) != 0;
-    }
 
     virtual bool IsOldPointer(RefField<>&) const { AbortUnimplemented("Collector::IsOldPointer"); }
     virtual bool IsCurrentPointer(RefField<>&) const { AbortUnimplemented("Collector::IsCurrentPointer"); }

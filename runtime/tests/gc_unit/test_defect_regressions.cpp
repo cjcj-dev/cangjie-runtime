@@ -78,12 +78,6 @@ bool ModelShouldSelfHealCas(bool loadGoodIsHeap)
     return loadGoodIsHeap;
 }
 
-// ABI strip of coloured field *place* (fe6d163f / CompilerCalls PlainManagedAddr).
-Uptr ModelStripFieldPlace(Uptr maybeColouredPlace)
-{
-    return RefField<>(maybeColouredPlace).GetAddress();
-}
-
 class ExportHandleTestCollector final : public Collector {
 public:
     void Init() override {}
@@ -284,19 +278,8 @@ GC_TEST(DefectRegress, MinorNonHeapResolveNeverCasNull)
 
 // ⑦ fe6d163f — field *address* may arrive coloured; ABI must peel before dereference.
 // Product: RefField::GetAddress / CompilerCalls PlainManagedAddr shape.
-GC_TEST(DefectRegress, FieldPlaceColourMustStripAtAbi)
-{
-    GcHeapFixture fx;
-    Uptr plainPlace = reinterpret_cast<Uptr>(fx.obj0) + 16;
-    Uptr colouredPlace = plainPlace | ZPointerRemapped00 | MARKED_YOUNG_1;
-    Uptr stripped = ModelStripFieldPlace(colouredPlace);
-    GC_EXPECT_EQ(stripped, plainPlace);
-    GC_EXPECT_EQ(stripped & ~kAddrMask, 0u);
-    // Coloured base + offset (lea off(coloured_base)) must peel to plain place.
-    Uptr colouredBase = reinterpret_cast<Uptr>(fx.obj0) | ZPointerRemapped01;
-    Uptr leaPlace = colouredBase + 16;
-    GC_EXPECT_EQ(ModelStripFieldPlace(leaPlace), (reinterpret_cast<Uptr>(fx.obj0) + 16) & kAddrMask);
-}
+// P01 removed field-address peeling. Compiler boundary tests now reject
+// applying uncolor to a plain slot address (ZGC zAddress.inline.hpp:609).
 
 // T6: the compiler may provide no holder object for a field GEP.  The product
 // call must classify the destination slot itself, publishing a coloured heap
@@ -315,8 +298,8 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     // ZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-705)
     // skips raw null. Flip remembered metadata to exercise the actual slow path.
-    field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK));
-    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
 
     // obj == nullptr is the triggering ABI shape; field is demonstrably in heap.
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
@@ -344,7 +327,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask;
     std::memcpy(field, &initial, sizeof(initial));
 
     AllocBuffer alloc;
@@ -355,7 +338,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
 
-    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
@@ -386,7 +369,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask;
     std::memcpy(field, &initial, sizeof(initial));
 
     AllocBuffer alloc;
@@ -397,7 +380,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
 
-    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
@@ -432,7 +415,7 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ REMEMBERED_MASK;
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask;
     std::memcpy(field, &initial, sizeof(initial));
 
     AllocBuffer alloc;
@@ -443,7 +426,7 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     GC_EXPECT_TRUE(Heap::IsHeapAddress(nonHeapHolder));
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
 
-    GC_EXPECT_FALSE(fx.collector.is_store_good(*field));
+    GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
@@ -462,13 +445,13 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     GC_EXPECT_EQ(WEXITSTATUS(status), 0);
 }
 
-// T6 control arm: a non-heap destination remains a root slot even when the
-// optional holder is null, and uses the native zpointer encoding.
-GC_TEST(DefectRegress, CompilerWriteNullHolderStaticSlotUsesRootPath)
+// P01: mutable global value fields carry the explicit $BP=1 owner;
+// $BP=0 is reserved for plain value-type storage.
+GC_TEST(DefectRegress, CompilerWriteGlobalOwnerStaticSlotUsesRootPath)
 {
     ExportHandleFixture fx;
     RefField<false> staticField(zpointer::null);
-    MCC_WriteRefField(fx.heap.obj0, nullptr, &staticField);
+    MCC_WriteRefField(fx.heap.obj0, reinterpret_cast<ObjectPtr>(uintptr_t(1)), &staticField);
 
     const uintptr_t installed = static_cast<uintptr_t>(raw(staticField.GetFieldValue()));
     GC_EXPECT_EQ(installed, raw(StoreGoodPointer(fx.heap.obj0)));

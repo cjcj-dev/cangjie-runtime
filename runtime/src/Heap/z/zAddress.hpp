@@ -1,221 +1,316 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
+/*
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
 
 #pragma once
-
-// The bit layout of a reference, and the mask the read barrier tests against.
-//
-// This header includes nothing from the project on purpose. It sits at the bottom of the include
-// graph, below RefField.h and TypeDef.h, both of which need the layout; reaching upward for so
-// much as a typedef would put it in a cycle with them, which is how the first two attempts at
-// declaring the mask failed. <cstdint> is the only dependency.
-
-#include <cstdint>
+#include <cassert>
+#include <type_traits>
 #include "Base/Types.h"
-
-// Arena generation count for LiveInfoArena's LiveInfo ring. Not a pointer field.
-// Default 2; rebuild with -DMRT_TAG_ID_COUNT=N to widen the ring.
-#ifndef MRT_TAG_ID_COUNT
-#define MRT_TAG_ID_COUNT 2
-#endif
-
+#include "Heap/z/zGenerationId.hpp"
 extern "C" {
-// Any bit set means the reference needs the barrier before use: it is mid-evacuation, or it
-// carries a colour other than the one being handed out now. The collector owns the value and
-// swaps it at a phase boundary; see WCollector::set_good_masks. The compiler emits a reference
-// to this symbol by name (CJBarrierLowering.cpp:653), so it is extern "C": a mangled name would
-// drift between compiler versions.
-extern unsigned long g_cjLoadBadMask;
+extern uintptr_t g_cjLoadGoodMask;
+extern uintptr_t g_cjLoadBadMask;
+extern uintptr_t g_cjMarkGoodMask;
+extern uintptr_t g_cjMarkBadMask;
+extern uintptr_t g_cjStoreGoodMask;
+extern uintptr_t g_cjStoreBadMask;
+extern size_t g_cjLoadShift;
+extern uintptr_t g_cjHeapStart;
+extern uintptr_t g_cjHeapEnd;
+constexpr unsigned kCjHeapRangeCap = 8;
+extern uintptr_t g_cjHeapRangeCount;
+extern uintptr_t g_cjHeapRangeStart[kCjHeapRangeCap];
+extern uintptr_t g_cjHeapRangeEnd[kCjHeapRangeCap];
+}
+#define ZPointerLoadGoodMask g_cjLoadGoodMask
+#define ZPointerLoadBadMask g_cjLoadBadMask
+#define ZPointerMarkGoodMask g_cjMarkGoodMask
+#define ZPointerMarkBadMask g_cjMarkBadMask
+#define ZPointerStoreGoodMask g_cjStoreGoodMask
+#define ZPointerStoreBadMask g_cjStoreBadMask
+namespace MapleRuntime {
+class BaseObject;
+size_t ZPlatformAddressOffsetBits();
+size_t ZPlatformAddressHeapBaseShift();
+extern const bool ZVerifyOops;
+// One bit that denotes where the heap start. All uncolored
+// oops have this bit set, plus an offset within the heap.
+extern uintptr_t  ZAddressHeapBase;
+extern uintptr_t  ZAddressHeapBaseShift;
 
-// Positive half of the compiler load-good predicate. It is published in the
-// same set_good_masks round as g_cjLoadBadMask (OpenJDK zAddress.cpp:81-85).
-extern unsigned long g_cjLoadGoodMask;
+// Describes the maximal offset inside the heap.
+extern size_t    ZAddressOffsetBits;
+const  size_t    ZAddressOffsetShift = 0;
+extern uintptr_t ZAddressOffsetMask;
+extern size_t    ZAddressOffsetMax;
 
-// ⭐ 构建溯源符号的**声明**；⭐ 定义在 `ColourMask.cpp`（⛔ 头里放定义会多重定义）
-extern "C" const char g_cjRuntimeProvenance[];
+// Describes the maximal offset inside the backing storage.
+extern size_t    ZBackingOffsetMax;
 
-// Mark barriers use the same dynamic-mask ABI as load barriers. The mark mask additionally rejects
-// references carrying the previous young or old mark epoch (OpenJDK zAddress.hpp:209-217).
-extern unsigned long g_cjMarkBadMask;
+// Describes the maximal granule index inside the backing storage.
+extern uint32_t  ZBackingIndexMax;
 
-// Store barriers reject references that are mark-bad or missing the current Remembered epoch bit
-// (OpenJDK zAddress.hpp:216-217, zAddress.cpp:83-87). Load/mark masks do not include Remembered.
-extern unsigned long g_cjStoreBadMask;
+// Layout of metadata bits in colored pointer / zpointer.
+//
+// A zpointer is a combination of the address bits (heap base bit + offset)
+// and two low-order metadata bytes, with the following layout:
+//
+// RRRRMMmmFFrr0000
+// ****               : Used by load barrier
+// **********         : Used by mark barrier
+// ************       : Used by store barrier
+//             ****   : Reserved bits
+//
+// The table below describes what each color does.
+//
+// +-------------+-------------------+--------------------------+
+// | Bit pattern | Description       | Included colors          |
+// +-------------+-------------------+--------------------------+
+// |     rr      | Remembered bits   | Remembered[0, 1]         |
+// +-------------+-------------------+--------------------------+
+// |     FF      | Finalizable bits  | Finalizable[0, 1]        |
+// +-------------+-------------------+--------------------------+
+// |     mm      | Marked young bits | MarkedYoung[0, 1]        |
+// +-------------+-------------------+--------------------------+
+// |     MM      | Marked old bits   | MarkedOld[0, 1]          |
+// +-------------+-------------------+--------------------------+
+// |    RRRR     | Remapped bits     | Remapped[00, 01, 10, 11] |
+// +-------------+-------------------+--------------------------+
+//
+// The low order zero address bits sometimes overlap with the high order zero metadata
+// bits, depending on the remapped bit being set.
+//
+//             vvv- overlapping address and metadata zeros
+//    aaa...aaa0001MMmmFFrr0000 = Remapped00 zpointer
+//
+//             vv-- overlapping address and metadata zeros
+//   aaa...aaa00010MMmmFFrr0000 = Remapped01 zpointer
+//
+//             v--- overlapping address and metadata zero
+//  aaa...aaa000100MMmmFFrr0000 = Remapped10 zpointer
+//
+//             ---- no overlapping address and metadata zeros
+// aaa...aaa0001000MMmmFFrr0000 = Remapped11 zpointer
+//
+// The overlapping is performed because the x86 JIT-compiled load barriers expect the
+// address bits to start right after the load-good bit. It allows combining the good
+// bit check and unmasking into a single speculative shift instruction. On AArch64 we
+// don't do this, and hence there are no overlapping address and  metadata zeros there.
+//
+// The remapped bits are notably not grouped into two sets of bits, one for the young
+// collection and one for the old collection, like the other bits. The reason is that
+// the load barrier is only compatible with bit patterns where there is a single zero in
+// its bits of operation (the load metadata bit mask). Instead, the single bit that we
+// set encodes the combined state of a conceptual RemappedYoung[0, 1] and
+// RemappedOld[0, 1] pair. The encoding scheme is that the shift of the load good bit,
+// minus the shift of the load metadata bit start encodes the numbers 0, 1, 2 and 3.
+// These numbers in binary correspond to 00, 01, 10 and 11. The low order bit in said
+// numbers correspond to the simulated RemappedYoung[0, 1] value, and the high order bit
+// corresponds to the simulated RemappedOld[0, 1] value. On AArch64, the remap bits
+// of zpointers are the complement of this bit. So there are 3 good bits and one bad bit
+// instead. This lends itself better to AArch64 instructions.
+//
+// We decide the bit to be taken by having the RemappedYoungMask and RemappedOldMask
+// variables, which alternate between what two bits they accept for their corresponding
+// old and young phase. The Remapped bit is chosen by taking the intersection of those
+// two variables.
+//
+// RemappedOldMask alternates between these two bit patterns:
+//
+//  RemappedOld0 => 0011
+//  RemappedOld1 => 1100
+//
+// RemappedYoungMask alternates between these two bit patterns:
+//
+//  RemappedYoung0 => 0101
+//  RemappedYoung1 => 1010
+//
+// The corresponding intersections look like this:
+//
+//  RemappedOld0 & RemappedYoung0 = 0001 = Remapped00
+//  RemappedOld0 & RemappedYoung1 = 0010 = Remapped01
+//  RemappedOld1 & RemappedYoung0 = 0100 = Remapped10
+//  RemappedOld1 & RemappedYoung1 = 1000 = Remapped11
 
-// Store-good colour the compiler ORs onto a newly stored heap reference after the store-bad
-// test hits (OpenJDK ZPointerStoreGoodMask, zAddress.cpp:83 / zBarrier.inline.hpp:448-450).
-// StoreGood = current remap ∨ current MarkedYoung ∨ current MarkedOld ∨ current Remembered.
-extern unsigned long g_cjStoreGoodMask;
+constexpr uintptr_t z_pointer_mask(size_t shift, size_t bits) {
+  return (((uintptr_t)1 << bits) - 1) << shift;
 }
 
-#include "Heap/z/zGenerationId.hpp"
-namespace MapleRuntime {
-// OpenJDK zGenerationId.hpp:29-32.
+constexpr uintptr_t z_pointer_bit(size_t shift, size_t offset) {
+  return (uintptr_t)1 << (shift + offset);
+}
 
+// Reserved bits
+const size_t      ZPointerReservedShift   = 0;
+const size_t      ZPointerReservedBits    = 4;
+const uintptr_t   ZPointerReservedMask    = z_pointer_mask(ZPointerReservedShift, ZPointerReservedBits);
 
-constexpr uint16_t TAG_ID_COUNT = static_cast<uint16_t>(MRT_TAG_ID_COUNT);
-constexpr unsigned TAG_ID_BITS =
-    (TAG_ID_COUNT <= 2) ? 1u : (TAG_ID_COUNT <= 4) ? 2u : (TAG_ID_COUNT <= 8) ? 3u : 4u;
+const uintptr_t   ZPointerReserved0       = z_pointer_bit(ZPointerReservedShift, 0);
+const uintptr_t   ZPointerReserved1       = z_pointer_bit(ZPointerReservedShift, 1);
+const uintptr_t   ZPointerReserved2       = z_pointer_bit(ZPointerReservedShift, 2);
+const uintptr_t   ZPointerReserved3       = z_pointer_bit(ZPointerReservedShift, 3);
 
-// A reference always carries a colour, so that "this value may be stale" is something the value
-// itself says rather than something the reader has to already know. ZGC uses one physical bit for
-// each RemappedYoung x RemappedOld state. A two-bit binary encoding cannot preserve the compiler's
-// single-AND fast path: when 11 is current, a stale 10 or 01 differs by a missing bit, which AND
-// cannot observe (OpenJDK zAddress.hpp:95-128,168-176).
-//
-// Layout matches ZGC (zAddress.hpp:60-128): no isTagged, no tagID. "This page is being
-// relocated" lives on the region (GetRegionInfoAt / GetLiveInfo), not in the pointer.
-//
-// A generation relocate-start flip changes the accepted one-hot subset and republishes
-// g_cjLoadGoodMask/g_cjLoadBadMask; see
-// WCollector::flip_young_relocate_start/flip_old_relocate_start.
-constexpr unsigned REMAP_COLOUR_BITS = 4u;
-// MarkedYoung[0,1] and MarkedOld[0,1] are independent one-hot epochs. Each family needs two
-// physical bits so that a mark-start flip makes the previous epoch bad without a zero-bit trust
-// state (OpenJDK zAddress.hpp:156-166, zAddress.cpp:120-146).
-constexpr unsigned MARKED_YOUNG_BITS = 2u;
-constexpr unsigned MARKED_OLD_BITS = 2u;
-// address:48 + remapColour:4 + markedYoung:2 + markedOld:2
-// + remembered:2 + spare padding == 64 (spare = TAG_ID_PADDING_BITS - REMEMBERED_BITS)
-constexpr unsigned TAG_ID_PADDING_BITS =
-    16u - REMAP_COLOUR_BITS - MARKED_YOUNG_BITS - MARKED_OLD_BITS;
-constexpr unsigned REMAP_COLOUR_SHIFT = 48u;
-constexpr uintptr_t ZPointerRemapped00 = uintptr_t(1) << REMAP_COLOUR_SHIFT;
-constexpr uintptr_t ZPointerRemapped01 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 1u);
-constexpr uintptr_t ZPointerRemapped10 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 2u);
-constexpr uintptr_t ZPointerRemapped11 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 3u);
-constexpr uintptr_t REMAP_COLOUR_MASK =
-    ZPointerRemapped00 | ZPointerRemapped01 | ZPointerRemapped10 | ZPointerRemapped11;
-constexpr unsigned MARKED_YOUNG_SHIFT = REMAP_COLOUR_SHIFT + REMAP_COLOUR_BITS;
-constexpr uintptr_t MARKED_YOUNG_0 = uintptr_t(1) << MARKED_YOUNG_SHIFT;
-constexpr uintptr_t MARKED_YOUNG_1 = uintptr_t(1) << (MARKED_YOUNG_SHIFT + 1u);
-constexpr uintptr_t MARKED_YOUNG_MASK = MARKED_YOUNG_0 | MARKED_YOUNG_1;
-constexpr unsigned MARKED_OLD_SHIFT = MARKED_YOUNG_SHIFT + MARKED_YOUNG_BITS;
-constexpr uintptr_t MARKED_OLD_0 = uintptr_t(1) << MARKED_OLD_SHIFT;
-constexpr uintptr_t MARKED_OLD_1 = uintptr_t(1) << (MARKED_OLD_SHIFT + 1u);
-constexpr uintptr_t MARKED_OLD_MASK = MARKED_OLD_0 | MARKED_OLD_1;
-// Remembered[0,1] one-hot epoch (OpenJDK zAddress.hpp:148-154). Lives in former padding at
-// bits 56-57 (ops/design/REMEMBERED_BIT_DESIGN.md).
-//
-// The "bits 58-59 when TAG_ID_BITS=1" this comment used to claim was written while isTagged and
-// tagID still occupied two bits below the colour families. zshape deleted both, so every family
-// moved down by two; the comment did not follow. Recomputed from the shifts above:
-//   Remapped 48-51 | MarkedYoung 52-53 | MarkedOld 54-55 | Remembered 56-57 | Finalizable 58-59
-//
-// Bit 56 is not an arbitrary boundary. Under LA57 a pointer is canonical only while bits 63:57
-// all equal bit 56, and our addresses keep 57-63 clear, so setting bit 56 alone already makes the
-// word non-canonical: dereferencing a store-coloured reference raw raises #GP (si_code=128,
-// si_addr=0) rather than a page fault (si_code=1 with a real si_addr). A crash report therefore
-// tells you which family leaked -- load colours (<=55) fault, store colours (>=56) trap -- and
-// reading the wrong bit numbers off this comment sends that diagnosis to the wrong family.
-constexpr unsigned REMEMBERED_BITS = 2u;
-constexpr unsigned REMEMBERED_SHIFT = MARKED_OLD_SHIFT + MARKED_OLD_BITS;
-constexpr uintptr_t REMEMBERED_0 = uintptr_t(1) << REMEMBERED_SHIFT;
-constexpr uintptr_t REMEMBERED_1 = uintptr_t(1) << (REMEMBERED_SHIFT + 1u);
-constexpr uintptr_t REMEMBERED_MASK = REMEMBERED_0 | REMEMBERED_1;
-static_assert(REMEMBERED_BITS <= TAG_ID_PADDING_BITS,
-              "Remembered family needs free RefField padding bits");
+// Remembered set bits
+const size_t      ZPointerRememberedShift = ZPointerReservedShift + ZPointerReservedBits;
+const size_t      ZPointerRememberedBits  = 2;
+const uintptr_t   ZPointerRememberedMask  = z_pointer_mask(ZPointerRememberedShift, ZPointerRememberedBits);
 
-// Finalizable[0,1] one-hot epoch, flipped together with old mark start
-// (OpenJDK zAddress.hpp:161-162, zAddress.cpp:143-147).
-//
-// ZGC colours a finalizable-marked reference LoadGood | MarkedYoung | Finalizable | Remembered
-// (zAddress.inline.hpp:764-769) -- note: no MarkedOld bit. The Finalizable bits sit inside
-// ZPointerMarkedMask (zAddress.hpp:157-165), which is part of ZPointerMarkMetadataMask
-// (zAddress.hpp:192) but NOT of ZPointerMarkGoodMask (zAddress.cpp:81-83). So such a reference
-// is permanently mark-bad and a strong mark/keep-alive barrier is forced down the slow path,
-// where the object is upgraded to strongly reachable (zBarrier.inline.hpp:610-620).
-//
-// We do not carry that state in the pointer. Our equivalent lives in a side table:
-// LiveInfo.h:204 resurrectBitmap, folded into liveness by LiveInfo.h:210 / Heap.cpp:76, and
-// filled by TracingCollector.cpp:696-697 DoResurrection -- which runs inside the concurrent
-// marking segment (TracingCollector.cpp:680-698), so "unreachable by schedule" is not available
-// as an argument. The bits are reserved here, and only reserved: kFinalizableWired says so, no
-// live mask includes them, and nothing publishes them. What this buys is that the padding budget
-// is now checked by the compiler instead of by a comment, and that the state machine table
-// (runtime/tests/colour_state_machine_probe.cpp) can name the cell we are missing.
-constexpr unsigned FINALIZABLE_BITS = 2u;
-constexpr unsigned FINALIZABLE_SHIFT = REMEMBERED_SHIFT + REMEMBERED_BITS;
-constexpr uintptr_t FINALIZABLE_0 = uintptr_t(1) << FINALIZABLE_SHIFT;
-constexpr uintptr_t FINALIZABLE_1 = uintptr_t(1) << (FINALIZABLE_SHIFT + 1u);
-constexpr uintptr_t FINALIZABLE_MASK = FINALIZABLE_0 | FINALIZABLE_1;
-// False until the family is actually published in a live mask (that is C4 knife 6, and it is a
-// real behaviour change plus a two-half pin bump: g_cjMarkBadMask is an ABI atom shared with the
-// compiler). Reading this constant is how code asks "is the fifth family real yet?".
-constexpr bool kFinalizableWired = false;
-static_assert(REMEMBERED_BITS + FINALIZABLE_BITS <= TAG_ID_PADDING_BITS,
-              "Remembered+Finalizable exceed the RefField padding budget");
-static_assert(FINALIZABLE_SHIFT + FINALIZABLE_BITS <= 64u, "Finalizable family runs off the word");
+const uintptr_t   ZPointerRemembered0     = z_pointer_bit(ZPointerRememberedShift, 0);
+const uintptr_t   ZPointerRemembered1     = z_pointer_bit(ZPointerRememberedShift, 1);
 
-// Store metadata = remap + MY + MO + Remembered (OpenJDK zAddress.hpp:194). Finalizable is
-// deliberately absent: see kFinalizableWired above.
-constexpr uintptr_t STORE_METADATA_MASK =
-    REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK | REMEMBERED_MASK;
-// Gone from the pointer (ZGC zAddress.hpp:60-128 has neither isTagged nor tagID).
-// Kept as 0 so existing `| TAGGED_BITS_MASK` sites stay well-formed and so the
-// layout self-check is `TAGGED_BITS_MASK == 0`.
-constexpr uintptr_t TAGGED_BITS_MASK = 0;
+// Marked bits
+const size_t      ZPointerMarkedShift     = ZPointerRememberedShift + ZPointerRememberedBits;
+const size_t      ZPointerMarkedBits      = 6;
+const uintptr_t   ZPointerMarkedMask      = z_pointer_mask(ZPointerMarkedShift, ZPointerMarkedBits);
 
-// The epoch state the collector hands out, and the three bad masks derived from it.
-//
-// These two POD structs and ComputeBadMasks are the whole of C4 knife 1 on the product side:
-// the body of WCollector::set_good_masks, lifted verbatim so that it has exactly one writer.
-// Before this there were two -- WCollector.h:131-140 and the three literal initialisers in
-// BaseObject.cpp:240-258, the latter carrying a comment saying it was written to "match live
-// set_good_masks shape". A second copy of a formula that must agree bit for bit is the defect;
-// which of the two is wrong is a detail.
-//
-// Nothing here includes anything: this header sits at the bottom of the include graph (see the
-// note at the top), so these must stay plain uintptr_t PODs.
-struct EpochColours {
-    uintptr_t remappedYoungMask;
-    uintptr_t remappedOldMask;
-    uintptr_t markedYoung;
-    uintptr_t markedOld;
-    uintptr_t remembered;
+const uintptr_t   ZPointerFinalizable0    = z_pointer_bit(ZPointerMarkedShift, 0);
+const uintptr_t   ZPointerFinalizable1    = z_pointer_bit(ZPointerMarkedShift, 1);
+const uintptr_t   ZPointerMarkedYoung0    = z_pointer_bit(ZPointerMarkedShift, 2);
+const uintptr_t   ZPointerMarkedYoung1    = z_pointer_bit(ZPointerMarkedShift, 3);
+const uintptr_t   ZPointerMarkedOld0      = z_pointer_bit(ZPointerMarkedShift, 4);
+const uintptr_t   ZPointerMarkedOld1      = z_pointer_bit(ZPointerMarkedShift, 5);
+
+// Remapped bits
+const size_t      ZPointerRemappedShift   = ZPointerMarkedShift + ZPointerMarkedBits;
+const size_t      ZPointerRemappedBits    = 4;
+const uintptr_t   ZPointerRemappedMask    = z_pointer_mask(ZPointerRemappedShift, ZPointerRemappedBits);
+
+const uintptr_t   ZPointerRemapped00      = z_pointer_bit(ZPointerRemappedShift, 0);
+const uintptr_t   ZPointerRemapped01      = z_pointer_bit(ZPointerRemappedShift, 1);
+const uintptr_t   ZPointerRemapped10      = z_pointer_bit(ZPointerRemappedShift, 2);
+const uintptr_t   ZPointerRemapped11      = z_pointer_bit(ZPointerRemappedShift, 3);
+
+// The shift table is tightly coupled with the zpointer layout given above
+constexpr int     ZPointerLoadShiftTable[] = {
+  ZPointerRemappedShift + ZPointerRemappedShift, // [0] Null
+  ZPointerRemappedShift + 1,                     // [1] Remapped00
+  ZPointerRemappedShift + 2,                     // [2] Remapped01
+  0,
+  ZPointerRemappedShift + 3,                     // [4] Remapped10
+  0,
+  0,
+  0,
+  ZPointerRemappedShift + 4                      // [8] Remapped11
 };
 
-struct BadMasks {
-    // The remap colour currently handed out; WCollector::currentRemapColour is a member, not a
-    // global, and WCollector.h:428-429 storeColour reads it -- so a pure function has to return
-    // it alongside the three published masks.
-    uintptr_t remapColour;
-    uintptr_t loadBad;
-    uintptr_t markBad;
-    uintptr_t storeBad;
-    // Store-good colour word (zAddress.cpp:83). Kept next to storeBad so a flip cannot
-    // publish one without the other; storeGood ^ STORE_METADATA_MASK == storeBad.
-    uintptr_t storeGood;
-};
+// Barrier metadata masks
+const uintptr_t   ZPointerLoadMetadataMask  = ZPointerRemappedMask;
+const uintptr_t   ZPointerMarkMetadataMask  = ZPointerLoadMetadataMask | ZPointerMarkedMask;
+const uintptr_t   ZPointerStoreMetadataMask = ZPointerMarkMetadataMask | ZPointerRememberedMask;
+const uintptr_t   ZPointerAllMetadataMask   = ZPointerStoreMetadataMask;
 
-// Token-for-token transcription of WCollector::set_good_masks (WCollector.h:132-139 @ 6adf9dd0),
-// which itself mirrors ZGlobalsPointers::set_good_masks (OpenJDK zAddress.cpp:78-94).
-//
-// OpenJDK ZGlobalsPointers::set_good_masks (zAddress.cpp:78-94):
-//   LoadBad = Remapped metadata bits that are not the current one-hot.
-// Mid-evacuation is no longer a pointer bit; relocate-start flips the accepted
-// remap colour and the reader finds out by testing the value it holds.
+// The current expected bit
+extern uintptr_t  ZPointerRemapped;
+extern uintptr_t  ZPointerMarkedOld;
+extern uintptr_t  ZPointerMarkedYoung;
+extern uintptr_t  ZPointerFinalizable;
+extern uintptr_t  ZPointerRemembered;
 
-class BaseObject;
+// The current expected remap bit for the young (or old) collection is either of two bits.
+// The other collection alternates the bits, so we need to use a mask.
+extern uintptr_t  ZPointerRemappedYoungMask;
+extern uintptr_t  ZPointerRemappedOldMask;
 
-// Coloured reference — must NOT be dereferenced.
+// Good/bad masks (C ABI storage is g_cj*; ZGC names alias those symbols)
+constexpr uintptr_t ZPointerMarkedYoungMask = ZPointerMarkedYoung0 | ZPointerMarkedYoung1;
+constexpr uintptr_t ZPointerMarkedOldMask = ZPointerMarkedOld0 | ZPointerMarkedOld1;
+constexpr uintptr_t ZPointerFinalizableMask = ZPointerFinalizable0 | ZPointerFinalizable1;
+extern uint32_t* ZPointerStoreGoodMaskLowOrderBitsAddr;
+enum class zoffset : Uptr { zero = 0, invalid = UINTPTR_MAX };
+enum class zoffset_end : Uptr { invalid = UINTPTR_MAX };
 enum class zpointer : Uptr { null = 0 };
-
-// Uncoloured — safe to dereference (barrier / proof already applied).
 enum class zaddress : Uptr { null = 0 };
-
-// Uncoloured — NOT safe to dereference; memory may be uncommitted / reclaimed.
 enum class zaddress_unsafe : Uptr { null = 0 };
+class ZOffset {
+public:
+  static zaddress address(zoffset offset);
+  static zaddress_unsafe address_unsafe(zoffset offset);
+};
 
-// Heap-base-relative virtual address offset. It is neither an address nor a
-// coloured pointer and therefore has no implicit conversion to/from either.
-// Mirror OpenJDK ZGC zAddress.hpp:230-233. A valid value is formed only by the
-// range-checking owner of the heap address space (currently ZGranuleMap).
-enum class zoffset : Uptr { zero = 0, invalid = static_cast<Uptr>(-1) };
+class ZPointer {
+public:
+  static zaddress uncolor(zpointer ptr);
+  static zaddress uncolor_store_good(zpointer ptr);
+  static zaddress_unsafe uncolor_unsafe(zpointer ptr);
 
+  static bool is_load_bad(zpointer ptr);
+  static bool is_load_good(zpointer ptr);
+  static bool is_load_good_or_null(zpointer ptr);
 
-} // namespace MapleRuntime
+  static bool is_old_load_good(zpointer ptr);
+  static bool is_young_load_good(zpointer ptr);
+
+  static bool is_mark_bad(zpointer ptr);
+  static bool is_mark_good(zpointer ptr);
+  static bool is_mark_good_or_null(zpointer ptr);
+
+  static bool is_store_bad(zpointer ptr);
+  static bool is_store_good(zpointer ptr);
+  static bool is_store_good_or_null(zpointer ptr);
+
+  static bool is_marked_finalizable(zpointer ptr);
+  static bool is_marked_old(zpointer ptr);
+  static bool is_marked_young(zpointer ptr);
+  static bool is_marked_any_old(zpointer ptr);
+  static bool is_remapped(zpointer ptr);
+  static bool is_remembered_exact(zpointer ptr);
+
+  static constexpr int load_shift_lookup_index(uintptr_t value);
+  static constexpr int load_shift_lookup(uintptr_t value);
+  static uintptr_t remap_bits(uintptr_t colored);
+};
+
+class ZAddress {
+public:
+  static zpointer color(zaddress addr, uintptr_t color);
+  static zpointer color(zaddress_unsafe addr, uintptr_t color);
+
+  static zoffset offset(zaddress addr);
+  static zoffset offset(zaddress_unsafe addr);
+
+  static zpointer load_good(zaddress addr, zpointer prev);
+  static zpointer finalizable_good(zaddress addr, zpointer prev);
+  static zpointer mark_good(zaddress addr, zpointer prev);
+  static zpointer mark_old_good(zaddress addr, zpointer prev);
+  static zpointer mark_young_good(zaddress addr, zpointer prev);
+  static zpointer store_good(zaddress addr);
+  static zpointer store_good_or_null(zaddress addr);
+};
+
+class ZGlobalsPointers {
+private:
+  static void set_good_masks();
+  static void pd_set_good_masks();
+
+public:
+  static void initialize();
+
+  static void flip_young_mark_start();
+  static void flip_young_relocate_start();
+  static void flip_old_mark_start();
+  static void flip_old_relocate_start();
+
+  static size_t min_address_offset_request();
+};
+
+}
 #include "Heap/z/zAddress.inline.hpp"

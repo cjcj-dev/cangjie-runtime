@@ -68,36 +68,6 @@
 namespace MapleRuntime {
 
 
-// Compiler may pass coloured managed refs as C ABI pointers (addrspace(1) GEP without peel).
-// Runtime must strip bits 48+ before treating them as C++ addresses (same as PlainArrayRef /
-// acqstrip). RefField address field is bits 0..47; mask matches UncolorIfGCPtr / load-good AND.
-static MAddress PlainManagedAddr(MAddress maybeColoured)
-{
-    return RefField<>(maybeColoured).GetAddress();
-}
-
-static ObjectPtr PlainObjectPtr(ObjectPtr maybeColoured)
-{
-    return reinterpret_cast<ObjectPtr>(PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
-}
-
-// TypeInfo lives in private mmap / static modules (TypeInfoManager), not the GC heap.
-// Compiler may still pass TypeInfo* with GC colour bits set (isTagged/remap); strip before
-// treating as a C++ TypeInfo* (titaint / tistrip; same PlainManagedAddr as acqstrip/mmstrip).
-static TypeInfo* PlainTypeInfoPtr(TypeInfo* maybeColoured)
-{
-    return reinterpret_cast<TypeInfo*>(PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
-}
-
-extern "C" void MRT_DumpTiStripProbe(void) {}
-
-template<bool isAtomic>
-static RefField<isAtomic>* PlainRefFieldPtr(RefField<isAtomic>* maybeColoured)
-{
-    MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured));
-    return &HeapSlotAt<isAtomic>(address);
-}
-
 static bool IsGlobalStruct(const ObjectPtr basePtr, MAddress field)
 {
 #if defined(__aarch64__) && !defined(__ANDROID__)
@@ -344,9 +314,9 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
 {
     // arrayinit2: compiler GEP of coloured base yields coloured field place; strip before use.
-    ObjectPtr plainObj = PlainObjectPtr(obj);
-    RefField<false>* plainField = PlainRefFieldPtr(field);
-    ObjectPtr plainRef = PlainObjectPtr(ref);
+    ObjectPtr plainObj = obj;
+    RefField<false>* plainField = field;
+    ObjectPtr plainRef = ref;
     // Storage class is determined by the destination slot.  The compiler may
     // pass a null/opaque holder for a GEP into a managed object; classifying by
     // that holder would misroute a heap slot through RootSlot::StorePlain.
@@ -364,47 +334,49 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
         Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
         return;
     }
-    // Non-heap destination (static/global): same remset duty as WriteStaticRef.
-    // This remains the root path even when the optional holder is null.
-    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef);
+    // The remaining value-type field is a stack/plain slot ($BP == 0).
+    // ZUncoloredRoot's carrier stays uncolored; global storage was selected above.
+    StorePlain(RootSlotAt(static_cast<void*>(plainField)), from_object(plainRef));
 }
 
 extern "C" MRT_EXPORT void CJ_MCC_PostWriteRefField(const ObjectPtr ref, const ObjectPtr obj,
                                                      RefField<false>* field, uintptr_t observedPrev)
 {
-    Heap::GetBarrier().PostWriteReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref),
+    Heap::GetBarrier().PostWriteReference(obj, *field, ref,
                                           to_zpointer(observedPrev));
 }
 
 extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                      GCTib gctib)
 {
-    ObjectPtr plainObj = PlainObjectPtr(obj);
-    MAddress plainDst = PlainManagedAddr(dst);
-    MAddress plainSrc = PlainManagedAddr(src);
+    ObjectPtr plainObj = obj;
+    MAddress plainDst = dst;
+    MAddress plainSrc = src;
     CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStructField wrong parameter, dst: %p src: %p", plainDst,
                  plainSrc);
+    if (Heap::IsHeapAddress(plainDst)) {
+        Heap::GetBarrier().WriteStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
+        return;
+    }
     if (IsGlobalStruct(plainObj, plainDst)) {
         Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
         return;
     }
-    if (UNLIKELY(!Heap::IsHeapAddress(plainObj))) {
-        Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
-        return;
-    }
-    Heap::GetBarrier().WriteStruct(plainObj, plainDst, dstLen, plainSrc, srcLen);
+    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(plainDst), dstLen,
+                           reinterpret_cast<const void*>(plainSrc), srcLen) == EOK,
+                 "plain value struct write failed");
 }
 
 extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, NativeSlot* field)
 {
-    MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(field));
-    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(address), PlainObjectPtr(ref));
+    MAddress address = reinterpret_cast<MAddress>(field);
+    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(address), ref);
 }
 
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
 {
-    MAddress plainDst = PlainManagedAddr(dst);
-    MAddress plainSrc = PlainManagedAddr(src);
+    MAddress plainDst = dst;
+    MAddress plainSrc = src;
     CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", plainDst,
                  plainSrc);
     Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gcTib);
@@ -439,8 +411,8 @@ extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, s
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    Heap::GetBarrier().CopyRefArray(PlainObjectPtr(dstObj), PlainManagedAddr(dstField), dstSize,
-                                    PlainObjectPtr(srcObj), PlainManagedAddr(srcField), srcSize);
+    Heap::GetBarrier().CopyRefArray(dstObj, dstField, dstSize,
+                                    srcObj, srcField, srcSize);
 }
 
 extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField, size_t dstSize,
@@ -450,32 +422,32 @@ extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    Heap::GetBarrier().CopyStructArray(PlainObjectPtr(dstObj), PlainManagedAddr(dstField), dstSize,
-                                       PlainObjectPtr(srcObj), PlainManagedAddr(srcField), srcSize);
+    Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize,
+                                       srcObj, srcField, srcSize);
 }
 extern "C" void MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                          MemoryOrder order)
 {
-    Heap::GetBarrier().AtomicWriteReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref), order);
+    Heap::GetBarrier().AtomicWriteReference(obj, *field, ref, order);
 }
 
 extern "C" ObjectPtr MCC_AtomicReadReference(const ObjectPtr obj, RefField<true>* field, MemoryOrder order)
 {
-    return Heap::GetBarrier().AtomicReadReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), order);
+    return Heap::GetBarrier().AtomicReadReference(obj, *field, order);
 }
 
 extern "C" ObjectPtr MCC_AtomicSwapReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                              MemoryOrder order)
 {
-    return Heap::GetBarrier().AtomicSwapReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref),
+    return Heap::GetBarrier().AtomicSwapReference(obj, *field, ref,
                                                   order);
 }
 
 extern "C" bool MCC_AtomicCompareSwapReference(const ObjectPtr oldRef, const ObjectPtr newRef, const ObjectPtr obj,
                                                RefField<true>* field, MemoryOrder succOrder, MemoryOrder failOrder)
 {
-    return Heap::GetBarrier().CompareAndSwapReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field),
-                                                      PlainObjectPtr(oldRef), PlainObjectPtr(newRef), succOrder,
+    return Heap::GetBarrier().CompareAndSwapReference(obj, *field,
+                                                      oldRef, newRef, succOrder,
                                                       failOrder);
 }
 
@@ -918,19 +890,12 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
     return snapshot;
 }
 
-// Strip ZGC colour / tag bits (bits 48+) so IsHeapAddress / Pin / C payload see a plain VA.
-// RefField address field is bits 0..47 (RefField.h); same mask as the compiler load-good AND.
-static ArrayRef PlainArrayRef(const ArrayRef array)
-{
-    return reinterpret_cast<ArrayRef>(RefField<>(reinterpret_cast<MAddress>(array)).GetAddress());
-}
-
 static ArrayRef PinArray(const ArrayRef array)
 {
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
     CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
-    // forbid gc thread to move this region. array must already be plain (see PlainArrayRef).
+    // The array argument is a plain address; pinning resolves it before native access.
     // The pin may resolve a movable from-copy to its to-version (oracleblack face c):
     // the caller must hand out the RESOLVED payload, and MCC_ReleaseRawData will Dec the
     // same region the pin Inc'd.
@@ -945,7 +910,7 @@ static ArrayRef PinArray(const ArrayRef array)
 extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 {
     // Coloured refs fail the heap-range check and skip pin; strip first (ffibound / acqstrip).
-    ArrayRef plain = PlainArrayRef(array);
+    ArrayRef plain = array;
     if (!Heap::IsHeapAddress(plain)) {
         return plain == nullptr ? nullptr : plain->ConvertToCArray();
     }
@@ -994,7 +959,7 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 // Release the raw pointer
 extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
 {
-    ArrayRef plain = PlainArrayRef(array);
+    ArrayRef plain = array;
     if (!Heap::IsHeapAddress(plain)) {
         return;
     }
@@ -1902,10 +1867,13 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
+    if (Heap::IsHeapAddress(field)) {
+        return Heap::GetBarrier().ReadReference(obj, *field);
+    }
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
         return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
     }
-    return Heap::GetBarrier().ReadReference(obj, *field);
+    return Heap::GetBarrier().ReadPlainRoot(RootSlotAt(static_cast<void*>(field)));
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
@@ -1922,11 +1890,17 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
     if (size == 0) {
         return;
     }
+    if (Heap::IsHeapAddress(srcField)) {
+        Heap::GetBarrier().ReadStruct(dstPtr, srcField, size, gctib);
+        return;
+    }
     if (IsGlobalStruct(obj, srcField)) {
         Heap::GetBarrier().ReadStaticStruct(dstPtr, srcField, size, gctib);
         return;
     }
-    Heap::GetBarrier().ReadStruct(dstPtr, obj, srcField, size);
+    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstPtr), size,
+                           reinterpret_cast<const void*>(srcField), size) == EOK,
+                 "plain value struct read failed");
 }
 extern "C" ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field)
 {
@@ -1941,33 +1915,11 @@ extern "C" void* MCC_GetTypeInfoAnnotations(TypeInfo* cls, TypeInfo* arrayTi) { 
 // for generic
 extern "C" TypeInfo* CJ_MCC_GetOrCreateTypeInfo(TypeTemplate* typeTemplate, U32 argSize, TypeInfo* typeArgs[])
 {
-    TypeInfo** plainArgs = typeArgs;
-    TypeInfo* stackPlain[16];
-    TypeInfo** heapPlain = nullptr;
-    if (typeArgs != nullptr && argSize > 0) {
-        if (argSize <= 16) {
-            plainArgs = stackPlain;
-        } else {
-            heapPlain = static_cast<TypeInfo**>(std::malloc(sizeof(TypeInfo*) * argSize));
-            CHECK_DETAIL(heapPlain != nullptr, "CJ_MCC_GetOrCreateTypeInfo plainArgs malloc failed");
-            plainArgs = heapPlain;
-        }
-        for (U32 i = 0; i < argSize; ++i) {
-            plainArgs[i] = PlainTypeInfoPtr(typeArgs[i]);
-        }
-    }
-    TypeInfo* result =
-        TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(typeTemplate, argSize, plainArgs);
-    if (heapPlain != nullptr) {
-        std::free(heapPlain);
-    }
-    return result;
+    return TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(typeTemplate, argSize, typeArgs);
 }
 
 extern "C" bool CJ_MCC_IsSubType(TypeInfo* typeInfo, TypeInfo* superTypeInfo)
 {
-    typeInfo = PlainTypeInfoPtr(typeInfo);
-    superTypeInfo = PlainTypeInfoPtr(superTypeInfo);
     if (typeInfo == nullptr || superTypeInfo == nullptr) {
         return false;
     }
@@ -2033,8 +1985,6 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
 
 extern "C" bool CJ_MCC_IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTypeInfo)
 {
-    typeInfo = PlainTypeInfoPtr(typeInfo);
-    targetTypeInfo = PlainTypeInfoPtr(targetTypeInfo);
     if (obj == nullptr || targetTypeInfo == nullptr) {
         return false;
     }
@@ -2046,14 +1996,13 @@ extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const O
     if (src == nullptr || size == 0) {
         return;
     }
-    Heap::GetBarrier().WriteGeneric(PlainObjectPtr(obj),
-                                    reinterpret_cast<void*>(PlainManagedAddr(reinterpret_cast<MAddress>(fieldPtr))),
-                                    PlainObjectPtr(src), size);
+    Heap::GetBarrier().WriteGeneric(obj,
+                                    reinterpret_cast<void*>(reinterpret_cast<MAddress>(fieldPtr)),
+                                    src, size);
 }
 
 extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo)
 {
-    typeInfo = PlainTypeInfoPtr(typeInfo);
     if (typeInfo == nullptr) {
         return;
     }
@@ -2173,22 +2122,16 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
 
 extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf)
 {
-    ti = PlainTypeInfoPtr(ti);
-    itf = PlainTypeInfoPtr(itf);
     return ti->GetMTable(itf);
 }
 
 extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index)
 {
-    ti = PlainTypeInfoPtr(ti);
-    itf = PlainTypeInfoPtr(itf);
     return ti->GetMethodOuterTI(itf, index);
 }
 
 extern "C" void CJ_MCC_UpdateVMT(TypeInfo* ti, TypeInfo* itf, ExtensionData* extensionData)
 {
-    ti = PlainTypeInfoPtr(ti);
-    itf = PlainTypeInfoPtr(itf);
     if (UNLIKELY(!extensionData->IsFuncTableUpdated())) {
         return ti->TryUpdateExtensionData(itf, extensionData);
     }
@@ -2358,7 +2301,7 @@ extern "C" int32_t __ccc_personality_v0() { return 0; }
 // @deprecated
 extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBaseKey)
 {
-    (void)PlainTypeInfoPtr(cls);
+    (void)cls;
     (void)callBaseKey;
 }
 

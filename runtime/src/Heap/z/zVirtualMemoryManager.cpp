@@ -1,3 +1,5 @@
+#include "Heap/z/zAddress.hpp"
+#include <cstring>
 #include "Heap/z/zVirtualMemory.inline.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
@@ -401,6 +403,30 @@ bool MemMap::IsValidRange(uintptr_t start, size_t size)
     return start != 0 && size != 0 && !AddOverflows(start, size);
 }
 
+// ZVirtualMemoryReserver::reserve_contiguous, zVirtualMemoryManager.cpp:169-203.
+// Native metadata mappings keep their native address domain; heap reservations
+// and each fallback segment use the same bounded heap-address search.
+static void* ReserveHeapAddress(MemMapBackend& backend, size_t size, const MemMap::Option& opt)
+{
+    if (size > ZAddressOffsetMax) { return nullptr; }
+    const uintptr_t end = ZAddressHeapBase + ZAddressOffsetMax;
+    if (opt.reqBase != nullptr) {
+        const uintptr_t start = reinterpret_cast<uintptr_t>(opt.reqBase);
+        if (start < ZAddressHeapBase || start > end - size) { return nullptr; }
+        return backend.Reserve(opt.reqBase, size, opt.flags, opt.tag, true);
+    }
+    const size_t granule = size_t(1) << 21;
+    const size_t unused = ZAddressOffsetMax - size;
+    const size_t increment = std::max(AllocUtilRndUp(unused / 8192, granule), granule);
+    for (uintptr_t offset = 0; offset <= unused; offset += increment) {
+        void* requested = reinterpret_cast<void*>(raw(ZOffset::address_unsafe(to_zoffset(offset))));
+        void* result = backend.Reserve(requested, size, opt.flags, opt.tag, true);
+        if (result == requested) { return result; }
+        if (result != nullptr) { (void)backend.Unreserve(result, size); }
+    }
+    return nullptr;
+}
+
 MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
                             const AddressSpaceBudget& budget, const NumaTopology& topology,
                             MemMapBackend& osBackend, size_t fallbackSegmentSize)
@@ -415,7 +441,9 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
     }
 
     ReservationRegistry registry;
-    void* base = osBackend.Reserve(opt.reqBase, mappedSize, opt.flags, opt.tag, opt.reqBase != nullptr);
+    const bool heapDomain = std::strcmp(opt.tag, "cangjie_heap") == 0;
+    void* base = heapDomain ? ReserveHeapAddress(osBackend, mappedSize, opt)
+                            : osBackend.Reserve(opt.reqBase, mappedSize, opt.flags, opt.tag, opt.reqBase != nullptr);
     if (base != nullptr) {
         if (!registry.Insert(MemoryRange{ reinterpret_cast<uintptr_t>(base), mappedSize })) {
             (void)osBackend.Unreserve(base, mappedSize);
@@ -433,7 +461,8 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
         size_t reserved = 0;
         while (reserved < mappedSize) {
             const size_t currentSize = std::min(segmentSize, mappedSize - reserved);
-            void* segment = osBackend.Reserve(nullptr, currentSize, opt.flags, opt.tag, false);
+            void* segment = heapDomain ? ReserveHeapAddress(osBackend, currentSize, opt)
+                                       : osBackend.Reserve(nullptr, currentSize, opt.flags, opt.tag, false);
             if (segment == nullptr ||
                 !registry.Insert(MemoryRange{ reinterpret_cast<uintptr_t>(segment), currentSize })) {
                 if (segment != nullptr) {

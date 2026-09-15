@@ -232,8 +232,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
 BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generation)
 {
     zaddress_unsafe observed = root.LoadPlain();
-    HeapSlot<> observedBits(to_zpointer(raw(observed)));
-    BaseObject* oldObj = to_object(observedBits.GetTargetObject());
+    BaseObject* oldObj = to_object(safe(observed));
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
     // Static / RO slots (e.g. .data.rel.ro under GNU_RELRO) hold non-heap objects that
     // are never evacuated. Keep their existing plain value and skip write-back.
@@ -245,7 +244,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
         const MAddress mappedAddr = ForwardingTable::FindTo(reinterpret_cast<MAddress>(oldObj), generation);
         if (mappedAddr != 0) {
             BaseObject* mapped = reinterpret_cast<BaseObject*>(mappedAddr);
-            HealRootWriteback(root, mapped, HealSite::WCollectorForwardRawGhost);
+            HealRoot(root, from_object(mapped), HealSite::WCollectorForwardRawGhost);
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
             return mapped;
         }
@@ -263,11 +262,11 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
                 reinterpret_cast<uintptr_t>(&root),
                 ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
         }
-        HealRootWriteback(root, toVersion, HealSite::WCollectorForwardRawGhost);
+        HealRoot(root, from_object(toVersion), HealSite::WCollectorForwardRawGhost);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
     } else {
-        HealRootWriteback(root, oldObj, HealSite::WCollectorNormalizeRawRoot);
+        HealRoot(root, from_object(oldObj), HealSite::WCollectorNormalizeRawRoot);
     }
 
     return oldObj;
@@ -297,7 +296,7 @@ void WCollector::RemapYoungRoots()
         bool healed = HealSlot(field, observed.GetFieldValue(), current.GetFieldValue(),
                                HealSite::WCollectorRemapYoungRoots);
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteRemapYoungRootsTestReceipt(field, raw(observed.GetFieldValue()), healed, is_store_good(field));
+        NoteRemapYoungRootsTestReceipt(field, raw(observed.GetFieldValue()), healed, ZPointer::is_store_good(field.GetFieldValue()));
 #else
         (void)healed;
 #endif
@@ -318,12 +317,18 @@ void WCollector::RemapYoungRoots()
 #endif
     };
     VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
+        // Cangjie stack maps may name stack objects/headerless records. Expand
+        // their plain fields before remapping, as verification and mark do.
+        // ZGC zStackWatermark.cpp:164-214 processes each oop frame slot.
+        RootVisitor heapRoots = [&](ObjectRef& root) {
+            mutator.VisitHeapRootSlots(root, visitor);
+        };
         DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
         size_t frames = 0;
-        if (!mutator.DrainStackWatermark(visitor, visitor, FlipSeq().load(std::memory_order_acquire) + 1,
+        if (!mutator.DrainStackWatermark(heapRoots, heapRoots, __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE),
                                          StackWatermark::WM_OWNER_GC, &derived, frames, true,
                                          StackWatermark::ProcessingPhase::REMAP)) {
-            mutator.VisitHeapReferences(visitor, derived);
+            mutator.VisitHeapReferences(heapRoots, derived);
         }
     });
 }
@@ -376,7 +381,7 @@ bool WCollector::Preforward()
         MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
         // zGeneration.cpp:old relocate_start flips only the old remap epoch.
         // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
-        flip_old_relocate_start();
+        ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         StartRelocationTasks(GCCycleGeneration::OLD);
     }
@@ -581,14 +586,14 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
         CHECK_DETAIL(Collector::JudgeHandOutTarget(object) == HandVerdict::Usable,
                      "resolved heal target must be usable target=%p", object);
     }
-    zpointer desired = is_null(target) ? zpointer::null : ColourStoreGood(target).GetFieldValue();
+    zpointer desired = is_null(target) ? zpointer::null : RefField<>(ZAddress::store_good(target)).GetFieldValue();
     if (expected == raw(desired)) {
         return true;
     }
     const zpointer observed = to_zpointer(expected);
     auto loadGood = [this](zpointer value) {
         RefField<> probe(value);
-        return is_null(probe.GetTargetObject()) || is_load_good(probe);
+        return is_null(probe.GetTargetObject()) || ZPointer::is_load_good(probe.GetFieldValue());
     };
     if (loadGood(observed)) {
         return true;
@@ -632,8 +637,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
 {
     (void)stw;
     zaddress_unsafe observed = root.LoadPlain();
-    HeapSlot<> observedBits(to_zpointer(raw(observed)));
-    BaseObject* from = to_object(observedBits.GetTargetObject());
+    BaseObject* from = to_object(safe(observed));
     if (from == nullptr || !Heap::IsHeapAddress(from)) {
         return from;
     }
@@ -647,10 +651,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
     CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    const HealSite site = IsOldPointer(observedBits)
-        ? HealSite::WCollectorResolveRootOldForward
-        : HealSite::WCollectorResolveRootLoadGoodForward;
-    HealRootWriteback(root, resolved, site);
+    HealRoot(root, from_object(resolved), HealSite::WCollectorResolveRootLoadGoodForward);
     return resolved;
 }
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
@@ -769,14 +770,11 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
 bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     MAddress oldValue = raw(root.LoadPlain());
-    HeapSlot<> observedBits(to_zpointer(oldValue));
-    BaseObject* observed = to_object(observedBits.GetTargetObject());
     BaseObject* target = ResolveMinorReference(root, stw);
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
-    HeapSlot<> oldBits(to_zpointer(oldValue));
-    BaseObject* oldObj = to_object(oldBits.GetTargetObject());
+    BaseObject* oldObj = to_object(to_zaddress(oldValue));
     // resolveto: Resolve already remapped FROM→TO. Do not Admit the to-address
     // against the from-offset bitmap (offpast same-target probe: sameObj=0).
     RegionInfo* targetRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
@@ -809,7 +807,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             "WCollector::FixMinorEvacuatedSlot", provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
-            HealRootWriteback(root, viaTable, HealSite::WCollectorFixRootForwarded);
+            HealRoot(root, from_object(viaTable), HealSite::WCollectorFixRootForwarded);
             return true;
         }
         Collector::FailClosedLoad(
@@ -821,7 +819,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
         return false;
     }
-    HealRootWriteback(root, current, HealSite::WCollectorFixRootForwarded);
+    HealRoot(root, from_object(current), HealSite::WCollectorFixRootForwarded);
     return true;
 }
 
@@ -961,7 +959,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
-                flip_young_relocate_start();
+                ZGlobalsPointers::flip_young_relocate_start();
                 ZVerify::OnColorFlip();
             }
             // Publish the relocate phase and submit page work while the
@@ -1092,21 +1090,17 @@ static BaseObject* RemapPromotedField(Collector& collector, RefField<>& field, z
 {
     RefField<> value(observed);
     auto loadGood = [](zpointer word) {
-        return ColourPredicates::is_load_good_or_null(raw(word), ::g_cjLoadBadMask);
+        return ZPointer::is_load_good_or_null(to_zpointer(raw(word)));
     };
     if (loadGood(observed)) {
         return to_object(value.GetTargetObject());
     }
     const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
     BaseObject* target = collector.make_load_good(value, provenance);
-    CHECK_DETAIL(target != nullptr || !ColourPredicates::has_address(raw(observed)),
+    CHECK_DETAIL(target != nullptr || !(!is_null_any(to_zpointer(raw(observed)))),
                  "promotion remap must preserve a non-null reference");
     // ZAddress::load_good: upgrade remap bits without claiming a marking epoch.
-    const zpointer healed = !ColourPredicates::has_address(raw(observed))
-        ? to_zpointer(::g_cjStoreGoodMask | REMEMBERED_MASK)
-        : to_zpointer(reinterpret_cast<uintptr_t>(target) | REMEMBERED_MASK |
-            (raw(observed) & ~kPointerAddressMask & ~REMAP_COLOUR_MASK) |
-            (::g_cjLoadBadMask ^ REMAP_COLOUR_MASK));
+    const zpointer healed = ZAddress::load_good(from_object(target), observed);
     ZgcSelfHeal(field, observed, healed, loadGood, HealSite::WCollectorMinorResolveLoadGoodForward);
     return target;
 }
@@ -1128,7 +1122,7 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
         BaseObject* target = to_object(value.GetTargetObject());
         if (target != nullptr && Heap::IsHeapAddress(target)) {
             const MAddress address = reinterpret_cast<MAddress>(target);
-            ZForwarding* forwarding = collector.is_load_good(value) ? nullptr :
+            ZForwarding* forwarding = ZPointer::is_load_good(value.GetFieldValue()) ? nullptr :
                 ForwardingTable::GetCovering(address, Generation::Young);
             const MAddress to = forwarding == nullptr ? address : forwarding->find(address);
             if (to == 0 || RegionInfo::GetRegionInfoAt(to)->IsYoungRegion()) {

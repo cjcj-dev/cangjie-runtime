@@ -1,88 +1,591 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
+/*
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
 
 #pragma once
 #include "Heap/z/zAddress.hpp"
 namespace MapleRuntime {
-constexpr BadMasks ComputeBadMasks(EpochColours e)
-{
-    // :133  currentRemapColour = ZPointerRemappedYoungMask & ZPointerRemappedOldMask;
-    const uintptr_t remapColour = e.remappedYoungMask & e.remappedOldMask;
-    // loadBad = REMAP_COLOUR_MASK ^ currentRemapColour  (TAGGED_BITS_MASK is 0)
-    const uintptr_t loadBad = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ remapColour);
-    // :135  g_cjMarkBadMask = loadBad | (MARKED_YOUNG_MASK & ~currentMarkedYoung)
-    //                                 | (MARKED_OLD_MASK & ~currentMarkedOld);
-    const uintptr_t markBad =
-        loadBad | (MARKED_YOUNG_MASK & ~e.markedYoung) | (MARKED_OLD_MASK & ~e.markedOld);
-    // :139  g_cjStoreBadMask = markBad | (REMEMBERED_MASK & ~currentRemembered);
-    const uintptr_t storeBad = markBad | (REMEMBERED_MASK & ~e.remembered);
-    // :83   ZPointerStoreGoodMask = MarkGood | Remembered
-    //       = current remap | current MarkedYoung | current MarkedOld | current Remembered.
-    // :87   StoreBad = StoreGood ^ StoreMetadataMask  (TAGGED_BITS_MASK is 0).
-    const uintptr_t storeGood = remapColour | e.markedYoung | e.markedOld | e.remembered;
-    return BadMasks{ remapColour, loadBad, markBad, storeBad, storeGood };
-}
-
-// The epoch WCollector starts in: the member initialisers at WCollector.h:116-122.
-constexpr EpochColours kInitialEpochColours = { ZPointerRemapped10 | ZPointerRemapped00,
-                                                ZPointerRemapped01 | ZPointerRemapped00,
-                                                MARKED_YOUNG_0,
-                                                MARKED_OLD_0,
-                                                REMEMBERED_0 };
-
-// zAddress.cpp:87 at the initial epoch: StoreBad == StoreGood ^ StoreMetadataMask.
-constexpr BadMasks kInitialBadMasks = ComputeBadMasks(kInitialEpochColours);
-static_assert((kInitialBadMasks.storeGood ^ STORE_METADATA_MASK) == kInitialBadMasks.storeBad,
-              "initial StoreGood ^ STORE_METADATA_MASK != StoreBad");
-
-// Self-heal CAS bound for load barriers (ATOMIC_READ_PROTOCOL Q2). ZGC terminates
-// self-heal via colour monotonicity; our Forward-phase writers can re-tag the same
-// slot, so an unbounded heal loop is a livelock. After K failures the reader returns
-// the resolved payload without writing the slot (wait-free escape).
-constexpr int kSelfHealAttempts = 2;
-// Colour-aware identity CAS (CompareAndSwapReferenceImpl family). A concurrent reader
-// may self-heal the slot on every load so the raw expected bits keep moving while the
-// decoded identity stays oldRef; without a bound that is the 47-minute natural_wave spin
-// fixed on main by c3179214. Exhaustion returns false (callers already handle CAS fail).
-constexpr int kCasAttempts = 8;
-
-// ── raw bit views (for CAS expected/new, masks, logging) ──────────────────
-// 凭什么: enum class stores the same bits; raw is identity, not a state change.
 constexpr Uptr raw(zpointer p) { return static_cast<Uptr>(p); }
-constexpr Uptr raw(zaddress a) { return static_cast<Uptr>(a); }
-constexpr Uptr raw(zaddress_unsafe u) { return static_cast<Uptr>(u); }
-constexpr Uptr raw(zoffset offset) { return static_cast<Uptr>(offset); }
+constexpr Uptr raw(zaddress p) { return static_cast<Uptr>(p); }
+constexpr Uptr raw(zaddress_unsafe p) { return static_cast<Uptr>(p); }
+constexpr Uptr raw(zoffset p) { return static_cast<Uptr>(p); }
+inline uintptr_t untype(zaddress_unsafe p) { return raw(p); }
+inline bool is_power_of_2(uintptr_t value) { return value != 0 && (value & (value - 1)) == 0; }
+inline uintptr_t ZPointer::remap_bits(uintptr_t value) {
+#ifdef __aarch64__
+  return (value ^ ZPointerRemappedMask) & ZPointerRemappedMask;
+#else
+  return value & ZPointerRemappedMask;
+#endif
+}
+inline constexpr int ZPointer::load_shift_lookup(uintptr_t value) {
+#ifdef __aarch64__
+  return 16;
+#else
+  const size_t index = (value >> ZPointerRemappedShift) & 0xf;
+  assert(index == 0 || index == 1 || index == 2 || index == 4 || index == 8);
+  return ZPointerLoadShiftTable[index];
+#endif
+}
+// Offset Operator Macro
+// Creates operators for the offset, offset_end style types
 
-// ── constructors from raw machine words ───────────────────────────────────
-// to_zpointer: 凭什么: value was just read from a ref-field slot (or is about to
-// be written into one). Only valid at the slot boundary.
-constexpr zpointer to_zpointer(Uptr v) { return static_cast<zpointer>(v); }
+#define CREATE_ZOFFSET_OPERATORS(offset_type)                                             \
+                                                                                          \
+  /* Arithmetic operators for offset_type */                                              \
+                                                                                          \
+inline offset_type operator+(offset_type offset, size_t size) {                           \
+  const auto size_value = static_cast<std::underlying_type_t<offset_type>>(size);        \
+  return to_##offset_type(untype(offset) + size_value);                                   \
+}                                                                                         \
+                                                                                          \
+inline offset_type& operator+=(offset_type& offset, size_t size) {                        \
+  const auto size_value = static_cast<std::underlying_type_t<offset_type>>(size);        \
+  offset = to_##offset_type(untype(offset) + size_value);                                 \
+  return offset;                                                                          \
+}                                                                                         \
+                                                                                          \
+inline offset_type operator-(offset_type offset, size_t size) {                           \
+  const auto size_value = static_cast<std::underlying_type_t<offset_type>>(size);        \
+  return to_##offset_type(untype(offset) - size_value);                                   \
+}                                                                                         \
+                                                                                          \
+inline size_t operator-(offset_type first, offset_type second) {                          \
+  return untype(first - untype(second));                                                  \
+}                                                                                         \
+                                                                                          \
+inline offset_type& operator-=(offset_type& offset, size_t size) {                        \
+  const auto size_value = static_cast<std::underlying_type_t<offset_type>>(size);        \
+  offset = to_##offset_type(untype(offset) - size_value);                                 \
+  return offset;                                                                          \
+}                                                                                         \
+                                                                                          \
+  /* Arithmetic operators for offset_type##_end */                                        \
+                                                                                          \
+inline offset_type##_end operator+(offset_type##_end offset, size_t size) {               \
+  const auto size_value = static_cast<std::underlying_type_t<offset_type##_end>>(size);  \
+  return to_##offset_type##_end(untype(offset) + size_value);                             \
+}                                                                                         \
+                                                                                          \
+inline offset_type##_end& operator+=(offset_type##_end& offset, size_t size) {            \
+  const auto size_value = static_cast<std::underlying_type_t<offset_type##_end>>(size);  \
+  offset = to_##offset_type##_end(untype(offset) + size_value);                           \
+  return offset;                                                                          \
+}                                                                                         \
+                                                                                          \
+inline offset_type##_end operator-(offset_type##_end first, size_t size) {                \
+  const auto size_value = static_cast<std::underlying_type_t<offset_type##_end>>(size);  \
+  return to_##offset_type##_end(untype(first) - size_value);                              \
+}                                                                                         \
+                                                                                          \
+inline size_t operator-(offset_type##_end first, offset_type##_end second) {              \
+  return untype(first - untype(second));                                                  \
+}                                                                                         \
+                                                                                          \
+inline offset_type##_end& operator-=(offset_type##_end& offset, size_t size) {            \
+  const auto size_value = static_cast<std::underlying_type_t<offset_type##_end>>(size);  \
+  offset = to_##offset_type##_end(untype(offset) - size_value);                           \
+  return offset;                                                                          \
+}                                                                                         \
+                                                                                          \
+  /* Arithmetic operators for offset_type cross offset_type##_end */                      \
+                                                                                          \
+inline size_t operator-(offset_type##_end first, offset_type second) {                    \
+  return untype(first - untype(second));                                                  \
+}                                                                                         \
+                                                                                          \
+  /* Logical operators for offset_type cross offset_type##_end */                         \
+                                                                                          \
+inline bool operator!=(offset_type first, offset_type##_end second) {                     \
+  return untype(first) != untype(second);                                                 \
+}                                                                                         \
+                                                                                          \
+inline bool operator!=(offset_type##_end first, offset_type second) {                     \
+  return untype(first) != untype(second);                                                 \
+}                                                                                         \
+                                                                                          \
+inline bool operator==(offset_type first, offset_type##_end second) {                     \
+  return untype(first) == untype(second);                                                 \
+}                                                                                         \
+                                                                                          \
+inline bool operator==(offset_type##_end first, offset_type second) {                     \
+  return untype(first) == untype(second);                                                 \
+}                                                                                         \
+                                                                                          \
+inline bool operator<(offset_type##_end first, offset_type second) {                      \
+  return untype(first) < untype(second);                                                  \
+}                                                                                         \
+                                                                                          \
+inline bool operator<(offset_type first, offset_type##_end second) {                      \
+  return untype(first) < untype(second);                                                  \
+}                                                                                         \
+                                                                                          \
+inline bool operator<=(offset_type##_end first, offset_type second) {                     \
+  return untype(first) <= untype(second);                                                 \
+}                                                                                         \
+                                                                                          \
+inline bool operator>(offset_type first, offset_type##_end second) {                      \
+  return untype(first) > untype(second);                                                  \
+}                                                                                         \
+                                                                                          \
+inline bool operator>=(offset_type first, offset_type##_end second) {                     \
+  return untype(first) >= untype(second);                                                 \
+}                                                                                         \
 
-// to_zaddress_unsafe: 凭什么: bits are already uncoloured, but the referent may
-// be dead / unmapped (e.g. strip-only, or a non-heap word mistaken for a ref).
-constexpr zaddress_unsafe to_zaddress_unsafe(Uptr v) { return static_cast<zaddress_unsafe>(v); }
+// zoffset functions
 
-// to_zaddress (raw): 凭什么: caller already holds a proven-good uncoloured address
-// (null, or a value that went through make_load_good / safe). Prefer those.
-constexpr zaddress to_zaddress(Uptr v) { return static_cast<zaddress>(v); }
-
-// ── state transitions ─────────────────────────────────────────────────────
-// safe: 凭什么: caller has *separately* proven the memory is live/mapped.
-// Every call site MUST document the proof in a comment. If you cannot write the
-// proof, the site is a defect — report it, do not call safe().
-constexpr zaddress safe(zaddress_unsafe u) { return static_cast<zaddress>(raw(u)); }
-
-// uncolor_bits: strip colour high bits → address bits only, still unsafe.
-// 凭什么: bit layout (ColourMask.h); does NOT run a barrier or check liveness.
-constexpr zaddress_unsafe uncolor_bits(zpointer p)
-{
-    // address occupies bits 0..47 on 64-bit (RefField.h); ARM32 is abandoned.
-    return to_zaddress_unsafe(raw(p) & ((Uptr(1) << 48) - 1u));
+inline uintptr_t untype(zoffset offset) {
+  const uintptr_t value = static_cast<uintptr_t>(offset);
+  assert(value < ZAddressOffsetMax);
+  return value;
 }
 
+inline uintptr_t untype(zoffset_end offset) {
+  const uintptr_t value = static_cast<uintptr_t>(offset);
+  assert(value <= ZAddressOffsetMax);
+  return value;
+}
+
+inline zoffset to_zoffset(uintptr_t value) {
+  assert(value < ZAddressOffsetMax);
+  return zoffset(value);
+}
+
+inline zoffset to_zoffset(zoffset_end offset) {
+  const uintptr_t value = untype(offset);
+  return to_zoffset(value);
+}
+
+inline bool to_zoffset_end(zoffset_end* result, zoffset_end start, size_t size) {
+  const uintptr_t value = untype(start) + size;
+  if (value <= ZAddressOffsetMax) {
+    *result = zoffset_end(value);
+    return true;
+  }
+  return false;
+}
+
+inline zoffset_end to_zoffset_end(zoffset start, size_t size) {
+  const uintptr_t value = untype(start) + size;
+  assert(value <= ZAddressOffsetMax);
+  return zoffset_end(value);
+}
+
+inline zoffset_end to_zoffset_end(uintptr_t value) {
+  assert(value <= ZAddressOffsetMax);
+  return zoffset_end(value);
+}
+
+inline zoffset_end to_zoffset_end(zoffset offset) {
+  return zoffset_end(untype(offset));
+}
+
+CREATE_ZOFFSET_OPERATORS(zoffset)
+
+
+#undef CREATE_ZOFFSET_OPERATORS
+#define report_is_valid_failure(str) assert(!assert_on_failure);
+
+inline bool is_valid(zpointer ptr, bool assert_on_failure = false) {
+  if (assert_on_failure && !ZVerifyOops) {
+    return true;
+  }
+
+  const uintptr_t value = static_cast<uintptr_t>(ptr);
+
+  if (value == 0) {
+    // Accept raw null
+    return false;
+  }
+
+  if ((value & ~ZPointerStoreMetadataMask) != 0) {
+#ifndef __aarch64__
+    const int index = ZPointer::load_shift_lookup_index(value);
+    if (index != 0 && !is_power_of_2(index)) {
+      report_is_valid_failure("Invalid remap bits");
+      return false;
+    }
+#endif
+
+    const int shift = ZPointer::load_shift_lookup(value);
+    if (!is_power_of_2(value & (ZAddressHeapBase << shift))) {
+      report_is_valid_failure("Missing heap base");
+      return false;
+    }
+
+    if (((value >> shift) & 7) != 0) {
+      report_is_valid_failure("Alignment bits should not be set");
+      return false;
+    }
+  }
+
+  const uintptr_t load_metadata = ZPointer::remap_bits(value);
+  if (!is_power_of_2(load_metadata)) {
+    report_is_valid_failure("Must have exactly one load metadata bit");
+    return false;
+  }
+
+  const uintptr_t store_metadata = (value & (ZPointerStoreMetadataMask ^ ZPointerLoadMetadataMask));
+  const uintptr_t marked_young_metadata = store_metadata & (ZPointerMarkedYoung0 | ZPointerMarkedYoung1);
+  const uintptr_t marked_old_metadata = store_metadata & (ZPointerMarkedOld0 | ZPointerMarkedOld1 |
+                                                          ZPointerFinalizable0 | ZPointerFinalizable1);
+  const uintptr_t remembered_metadata = store_metadata & (ZPointerRemembered0 | ZPointerRemembered1);
+  if (!is_power_of_2(marked_young_metadata)) {
+    report_is_valid_failure("Must have exactly one marked young metadata bit");
+    return false;
+  }
+
+  if (!is_power_of_2(marked_old_metadata)) {
+    report_is_valid_failure("Must have exactly one marked old metadata bit");
+    return false;
+  }
+
+  if (remembered_metadata == 0) {
+    report_is_valid_failure("Must have at least one remembered metadata bit set");
+    return false;
+  }
+
+  if ((marked_young_metadata | marked_old_metadata | remembered_metadata) != store_metadata) {
+    report_is_valid_failure("Must have exactly three sets of store metadata bits");
+    return false;
+  }
+
+  if ((value & ZPointerReservedMask) != 0) {
+    report_is_valid_failure("Dirty reserved bits");
+    return false;
+  }
+
+  return true;
+}
+
+inline void assert_is_valid(zpointer ptr) {
+  #ifndef NDEBUG
+  is_valid(ptr, true);
+#endif
+}
+
+inline uintptr_t untype(zpointer ptr) {
+  return static_cast<uintptr_t>(ptr);
+}
+
+inline zpointer to_zpointer(uintptr_t value) {
+  assert_is_valid(zpointer(value));
+  return zpointer(value);
+}
+
+
+inline bool is_null(zpointer ptr) {
+  return ptr == zpointer::null;
+}
+
+inline bool is_null_any(zpointer ptr) {
+  const uintptr_t raw_addr = untype(ptr);
+  return (raw_addr & ~ZPointerAllMetadataMask) == 0;
+}
+
+// Is it null - colored or not?
+inline bool is_null_assert_load_good(zpointer ptr) {
+  const bool result = is_null_any(ptr);
+  assert(!result || ZPointer::is_load_good(ptr));
+  return result;
+}
+
+// zaddress functions
+
+inline bool is_null(zaddress addr) {
+  return addr == zaddress::null;
+}
+
+inline bool is_valid(zaddress addr, bool assert_on_failure = false) {
+  if (assert_on_failure && !ZVerifyOops) {
+    return true;
+  }
+
+  if (is_null(addr)) {
+    // Null is valid
+    return true;
+  }
+
+  const uintptr_t value = static_cast<uintptr_t>(addr);
+
+  if (value & 0x7) {
+    // No low order bits
+    report_is_valid_failure("Has low-order bits set");
+    return false;
+  }
+
+  if ((value & ZAddressHeapBase) == 0) {
+    // Must have a heap base bit
+    report_is_valid_failure("Missing heap base");
+    return false;
+  }
+
+  if (value >= (ZAddressHeapBase + ZAddressOffsetMax)) {
+    // Must not point outside of the heap's virtual address range
+    report_is_valid_failure("Address outside of the heap");
+    return false;
+  }
+
+  return true;
+}
+
+inline void assert_is_valid(zaddress addr) {
+  #ifndef NDEBUG
+  is_valid(addr, true);
+#endif
+}
+
+inline uintptr_t untype(zaddress addr) {
+  return static_cast<uintptr_t>(addr);
+}
+
+inline void dereferenceable_test(zaddress addr) {
+  if (ZVerifyOops && addr != zaddress::null) { (void)*reinterpret_cast<volatile uintptr_t*>(static_cast<Uptr>(addr)); }
+}
+inline zaddress to_zaddress(uintptr_t value) {
+  const zaddress addr = static_cast<zaddress>(value);
+  assert_is_valid(addr);
+  dereferenceable_test(addr);
+  return addr;
+}
+inline zaddress_unsafe to_zaddress_unsafe(uintptr_t value) { return static_cast<zaddress_unsafe>(value); }
+inline bool is_null(zaddress_unsafe addr) { return addr == zaddress_unsafe::null; }
+// ZOffset functions
+
+inline zaddress ZOffset::address(zoffset offset) {
+  return to_zaddress(untype(offset) | ZAddressHeapBase);
+}
+
+inline zaddress_unsafe ZOffset::address_unsafe(zoffset offset) {
+  return to_zaddress_unsafe(untype(offset) | ZAddressHeapBase);
+}
+
+// ZPointer functions
+
+inline zaddress ZPointer::uncolor(zpointer ptr) {
+  assert(ZPointer::is_load_good(ptr) || is_null_any(ptr));
+  const uintptr_t raw_addr = untype(ptr);
+  return to_zaddress(raw_addr >> ZPointer::load_shift_lookup(raw_addr));
+}
+
+inline zaddress ZPointer::uncolor_store_good(zpointer ptr) {
+  assert(ZPointer::is_store_good(ptr));
+  return uncolor(ptr);
+}
+
+inline zaddress_unsafe ZPointer::uncolor_unsafe(zpointer ptr) {
+  assert(ZPointer::is_store_bad(ptr));
+  const uintptr_t raw_addr = untype(ptr);
+  return to_zaddress_unsafe(raw_addr >> ZPointer::load_shift_lookup(raw_addr));
+}
+
+inline bool ZPointer::is_load_bad(zpointer ptr) {
+  return untype(ptr) & ZPointerLoadBadMask;
+}
+
+inline bool ZPointer::is_load_good(zpointer ptr) {
+  return !is_load_bad(ptr) && !is_null(ptr);
+}
+
+inline bool ZPointer::is_load_good_or_null(zpointer ptr) {
+  // Checking if an address is "not bad" is an optimized version of
+  // checking if it's "good or null", which eliminates an explicit
+  // null check. However, the implicit null check only checks that
+  // the mask bits are zero, not that the entire address is zero.
+  // This means that an address without mask bits would pass through
+  // the barrier as if it was null. This should be harmless as such
+  // addresses should ever be passed through the barrier.
+  const bool result = !is_load_bad(ptr);
+  assert((is_load_good(ptr) || is_null(ptr)) == result);
+  return result;
+}
+
+inline bool ZPointer::is_young_load_good(zpointer ptr) {
+  assert(!is_null(ptr));
+  return (remap_bits(untype(ptr)) & ZPointerRemappedYoungMask) != 0;
+}
+
+inline bool ZPointer::is_old_load_good(zpointer ptr) {
+  assert(!is_null(ptr));
+  return (remap_bits(untype(ptr)) & ZPointerRemappedOldMask) != 0;
+}
+
+inline bool ZPointer::is_mark_bad(zpointer ptr) {
+  return untype(ptr) & ZPointerMarkBadMask;
+}
+
+inline bool ZPointer::is_mark_good(zpointer ptr) {
+  return !is_mark_bad(ptr) && !is_null(ptr);
+}
+
+inline bool ZPointer::is_mark_good_or_null(zpointer ptr) {
+  // Checking if an address is "not bad" is an optimized version of
+  // checking if it's "good or null", which eliminates an explicit
+  // null check. However, the implicit null check only checks that
+  // the mask bits are zero, not that the entire address is zero.
+  // This means that an address without mask bits would pass through
+  // the barrier as if it was null. This should be harmless as such
+  // addresses should ever be passed through the barrier.
+  const bool result = !is_mark_bad(ptr);
+  assert((is_mark_good(ptr) || is_null(ptr)) == result);
+  return result;
+}
+
+inline bool ZPointer::is_store_bad(zpointer ptr) {
+  return untype(ptr) & ZPointerStoreBadMask;
+}
+
+inline bool ZPointer::is_store_good(zpointer ptr) {
+  return !is_store_bad(ptr) && !is_null(ptr);
+}
+
+inline bool ZPointer::is_store_good_or_null(zpointer ptr) {
+  // Checking if an address is "not bad" is an optimized version of
+  // checking if it's "good or null", which eliminates an explicit
+  // null check. However, the implicit null check only checks that
+  // the mask bits are zero, not that the entire address is zero.
+  // This means that an address without mask bits would pass through
+  // the barrier as if it was null. This should be harmless as such
+  // addresses should ever be passed through the barrier.
+  const bool result = !is_store_bad(ptr);
+  assert((is_store_good(ptr) || is_null(ptr)) == result);
+  return result;
+}
+
+inline bool ZPointer::is_marked_finalizable(zpointer ptr) {
+  assert(!is_null(ptr));
+  return untype(ptr) & ZPointerFinalizable;
+}
+
+inline bool ZPointer::is_marked_old(zpointer ptr) {
+  return untype(ptr) & (ZPointerMarkedOld);
+}
+
+inline bool ZPointer::is_marked_young(zpointer ptr) {
+  return untype(ptr) & (ZPointerMarkedYoung);
+}
+
+inline bool ZPointer::is_marked_any_old(zpointer ptr) {
+  return untype(ptr) & (ZPointerMarkedOld |
+                        ZPointerFinalizable);
+}
+
+inline bool ZPointer::is_remapped(zpointer ptr) {
+  assert(!is_null(ptr));
+  return remap_bits(untype(ptr)) & ZPointerRemapped;
+}
+
+inline bool ZPointer::is_remembered_exact(zpointer ptr) {
+  assert(!is_null(ptr));
+  return (untype(ptr) & ZPointerRemembered) == ZPointerRemembered;
+}
+
+inline constexpr int ZPointer::load_shift_lookup_index(uintptr_t value) {
+  return (value >> ZPointerRemappedShift) & ((1 << ZPointerRemappedBits) - 1);
+}
+
+// ZAddress functions
+
+inline zpointer ZAddress::color(zaddress addr, uintptr_t color) {
+  return to_zpointer((untype(addr) << ZPointer::load_shift_lookup(color)) | color);
+}
+
+inline zpointer ZAddress::color(zaddress_unsafe addr, uintptr_t color) {
+  return to_zpointer((untype(addr) << ZPointer::load_shift_lookup(color)) | color);
+}
+
+inline zoffset ZAddress::offset(zaddress addr) {
+  return to_zoffset(untype(addr) & ZAddressOffsetMask);
+}
+
+inline zoffset ZAddress::offset(zaddress_unsafe addr) {
+  return to_zoffset(untype(addr) & ZAddressOffsetMask);
+}
+
+inline zpointer color_null() {
+  return ZAddress::color(zaddress::null, ZPointerStoreGoodMask | ZPointerRememberedMask);
+}
+
+inline zpointer ZAddress::load_good(zaddress addr, zpointer prev) {
+  if (is_null_any(prev)) {
+    return color_null();
+  }
+
+  const uintptr_t non_load_bits_mask = ZPointerLoadMetadataMask ^ ZPointerAllMetadataMask;
+  const uintptr_t non_load_prev_bits = untype(prev) & non_load_bits_mask;
+  return color(addr, ZPointerLoadGoodMask | non_load_prev_bits | ZPointerRememberedMask);
+}
+
+inline zpointer ZAddress::finalizable_good(zaddress addr, zpointer prev) {
+  if (is_null_any(prev)) {
+    return color_null();
+  }
+
+  return color(addr, ZPointerLoadGoodMask | ZPointerMarkedYoung | ZPointerFinalizable | ZPointerRememberedMask);
+}
+
+inline zpointer ZAddress::mark_good(zaddress addr, zpointer prev) {
+  if (is_null_any(prev)) {
+    return color_null();
+  }
+
+  return color(addr, ZPointerLoadGoodMask | ZPointerMarkedYoung | ZPointerMarkedOld | ZPointerRememberedMask);
+}
+
+inline zpointer ZAddress::mark_old_good(zaddress addr, zpointer prev) {
+  if (is_null_any(prev)) {
+    return color_null();
+  }
+
+  const uintptr_t prev_color = untype(prev);
+
+  const uintptr_t young_marked_mask = ZPointerMarkedYoung0 | ZPointerMarkedYoung1;
+  const uintptr_t young_marked = prev_color & young_marked_mask;
+
+  return color(addr, ZPointerLoadGoodMask | ZPointerMarkedOld | young_marked | ZPointerRememberedMask);
+}
+
+inline zpointer ZAddress::mark_young_good(zaddress addr, zpointer prev) {
+  if (is_null_any(prev)) {
+    return color_null();
+  }
+
+  const uintptr_t prev_color = untype(prev);
+
+  const uintptr_t old_marked_mask = ZPointerMarkedMask ^ (ZPointerMarkedYoung0 | ZPointerMarkedYoung1);
+  const uintptr_t old_marked = prev_color & old_marked_mask;
+
+  return color(addr, ZPointerLoadGoodMask | ZPointerMarkedYoung | old_marked | ZPointerRememberedMask);
+}
+
+inline zpointer ZAddress::store_good(zaddress addr) {
+  return color(addr, ZPointerStoreGoodMask);
+}
+
+inline zpointer ZAddress::store_good_or_null(zaddress addr) {
+  return is_null(addr) ? zpointer::null : store_good(addr);
+}
+
+inline zaddress safe(zaddress_unsafe value) { return to_zaddress(raw(value)); }
 // to_object: 凭什么: sole exit from the colour type system to a C++ object pointer.
 // Input must already be zaddress (load-good or proven).
 // ⭐ This is the ONLY production site allowed to write reinterpret_cast<BaseObject*>.
@@ -157,231 +660,5 @@ inline BaseObject* as_abi_ref_slot(void* p)
     return to_object(to_zaddress(reinterpret_cast<Uptr>(p)));
 }
 
-// null checks (enum class does not compare to 0 without cast)
-constexpr bool is_null(zpointer p) { return p == zpointer::null; }
-constexpr bool is_null(zaddress a) { return a == zaddress::null; }
-constexpr bool is_null(zaddress_unsafe u) { return u == zaddress_unsafe::null; }
-
 
 }
-namespace MapleRuntime {
-namespace ColourPredicates {
-
-constexpr unsigned HEAP_ADDRESS_BITS = 48u;
-constexpr uintptr_t HEAP_ADDRESS_MASK = (uintptr_t(1) << HEAP_ADDRESS_BITS) - 1u;
-
-constexpr bool has_address(uintptr_t value)
-{
-    return (value & HEAP_ADDRESS_MASK) != 0;
-}
-
-// The current combined RemappedYoung x RemappedOld bit is the only remap bit
-// excluded from load-bad. This derives it from the compiler ABI mask instead
-// of publishing a second current-remap global.
-constexpr uintptr_t current_remapped(uintptr_t loadBadMask)
-{
-    return REMAP_COLOUR_MASK & ~loadBadMask;
-}
-
-constexpr uintptr_t current_remapped_young_mask(uintptr_t loadBadMask)
-{
-    const uintptr_t current = current_remapped(loadBadMask);
-    return (current == ZPointerRemapped00 || current == ZPointerRemapped10)
-        ? (ZPointerRemapped00 | ZPointerRemapped10)
-        : (current == ZPointerRemapped01 || current == ZPointerRemapped11)
-            ? (ZPointerRemapped01 | ZPointerRemapped11)
-            : uintptr_t(0);
-}
-
-constexpr uintptr_t current_remapped_old_mask(uintptr_t loadBadMask)
-{
-    const uintptr_t current = current_remapped(loadBadMask);
-    return (current == ZPointerRemapped00 || current == ZPointerRemapped01)
-        ? (ZPointerRemapped00 | ZPointerRemapped01)
-        : (current == ZPointerRemapped10 || current == ZPointerRemapped11)
-            ? (ZPointerRemapped10 | ZPointerRemapped11)
-            : uintptr_t(0);
-}
-
-constexpr uintptr_t current_marked_young(uintptr_t markBadMask)
-{
-    return MARKED_YOUNG_MASK & ~markBadMask;
-}
-
-constexpr uintptr_t current_marked_old(uintptr_t markBadMask)
-{
-    return MARKED_OLD_MASK & ~markBadMask;
-}
-
-// Finalizable is reserved but not yet published (kFinalizableWired == false).
-// ZGC flips it with MarkedOld. Deriving the reserved current bit from the live
-// MarkedOld epoch lets the predicate and its tests exist without pretending
-// that any product phase currently emits the bit.
-constexpr uintptr_t current_finalizable(uintptr_t markBadMask)
-{
-    const uintptr_t markedOld = current_marked_old(markBadMask);
-    return markedOld == MARKED_OLD_0 ? FINALIZABLE_0
-        : markedOld == MARKED_OLD_1 ? FINALIZABLE_1 : uintptr_t(0);
-}
-
-constexpr uintptr_t current_remembered(uintptr_t storeBadMask)
-{
-    return REMEMBERED_MASK & ~storeBadMask;
-}
-
-// ZPointer::is_load_bad -- true when a non-current remap bit is present.
-// Mid-evacuation is not a pointer bit (zAddress.hpp:60-128). A plain word is
-// not mask-bad; HeapSlot encoding legality is enforced at publication and the
-// legacy-generation load-heal path explicitly diverts it before this predicate.
-// The answer can change when the remap epoch flips in GC_PHASE_PREFORWARD.
-constexpr bool is_load_bad(uintptr_t value, uintptr_t loadBadMask)
-{
-    return (value & loadBadMask) != 0;
-}
-
-// ZPointer::is_remapped -- current combined remap epoch. Changes at relocate
-// start (our GC_PHASE_PREFORWARD paths).
-constexpr bool is_remapped(uintptr_t value, uintptr_t loadBadMask)
-{
-    const uintptr_t remapped = current_remapped(loadBadMask);
-    return remapped != 0 && (value & remapped) != 0;
-}
-
-// ZPointer::is_load_good (zAddress.inline.hpp:631-633).
-constexpr bool is_load_good(uintptr_t value, uintptr_t loadBadMask)
-{
-    return value != 0 && !is_load_bad(value, loadBadMask);
-}
-
-constexpr bool is_load_good_or_null(uintptr_t value, uintptr_t loadBadMask)
-{
-    (void)value;
-    return !is_load_bad(value, loadBadMask);
-}
-
-// As in ZGC, the negative-mask predicate alone does not establish encoding
-// legality: a plain non-null word is not mask-bad. HeapSlot publication is
-// separately fail-closed through ClassifySlotWord.
-//
-// ZPointer::is_young_load_good/is_old_load_good -- true when the word's remap
-// bit belongs to the current conceptual young/old half of the four-way colour.
-// The halves change at the generation's relocate start in
-// GC_PHASE_PREFORWARD. Both masks are derived from g_cjLoadBadMask; no phase
-// or duplicate epoch word is consulted.
-constexpr bool is_young_load_good(uintptr_t value, uintptr_t loadBadMask)
-{
-    return (value & current_remapped_young_mask(loadBadMask)) != 0;
-}
-
-constexpr bool is_old_load_good(uintptr_t value, uintptr_t loadBadMask)
-{
-    return (value & current_remapped_old_mask(loadBadMask)) != 0;
-}
-
-// ZPointer::is_mark_bad -- true for any load-bad bit or a stale
-// MarkedYoung/MarkedOld bit. Mark epochs change around GC_PHASE_ENUM and remap
-// epochs change during GC_PHASE_PREFORWARD.
-constexpr bool is_mark_bad(uintptr_t value, uintptr_t markBadMask)
-{
-    return (value & markBadMask) != 0;
-}
-
-// ZPointer::is_mark_good (zAddress.inline.hpp:658-664).
-constexpr bool is_mark_good(uintptr_t value, uintptr_t loadBadMask, uintptr_t markBadMask)
-{
-    (void)loadBadMask;
-    return value != 0 && !is_mark_bad(value, markBadMask);
-}
-
-constexpr bool is_mark_good_or_null(uintptr_t value, uintptr_t loadBadMask, uintptr_t markBadMask)
-{
-    (void)value;
-    (void)loadBadMask;
-    return !is_mark_bad(value, markBadMask);
-}
-
-// Encoding completeness is checked at HeapSlot publication, not repeated in
-// this phase predicate. ENUM/PREFORWARD changes are represented by the bad
-// masks passed here.
-//
-// ZPointer::is_store_bad -- true for any mark-bad bit or a stale Remembered
-// bit. Remembered changes with MarkedYoung around GC_PHASE_ENUM.
-constexpr bool is_store_bad(uintptr_t value, uintptr_t storeBadMask)
-{
-    return (value & storeBadMask) != 0;
-}
-
-// ZPointer::is_store_good (zAddress.inline.hpp:683-685).
-constexpr bool is_store_good(uintptr_t value, uintptr_t loadBadMask, uintptr_t storeBadMask)
-{
-    (void)loadBadMask;
-    return value != 0 && !is_store_bad(value, storeBadMask);
-}
-
-constexpr bool is_store_good_or_null(uintptr_t value, uintptr_t loadBadMask, uintptr_t storeBadMask)
-{
-    (void)value;
-    (void)loadBadMask;
-    return !is_store_bad(value, storeBadMask);
-}
-
-// Encoding completeness is checked at HeapSlot publication, not repeated in
-// this phase predicate. This function is the ZGC single-not-bad test.
-
-// ZPointer::is_marked_finalizable -- tests the current reserved finalizable
-// epoch. Synthetic words can exercise it, but kFinalizableWired documents that
-// no GC_PHASE currently publishes such a word.
-constexpr bool is_marked_finalizable(uintptr_t value, uintptr_t markBadMask)
-{
-    const uintptr_t finalizable = current_finalizable(markBadMask);
-    return finalizable != 0 && (value & finalizable) != 0;
-}
-
-// ZPointer::is_marked_old -- true for the current MarkedOld epoch bit. Full
-// collection flips it before GC_PHASE_ENUM; young collection leaves it alone.
-constexpr bool is_marked_old(uintptr_t value, uintptr_t markBadMask)
-{
-    const uintptr_t markedOld = current_marked_old(markBadMask);
-    return markedOld != 0 && (value & markedOld) != 0;
-}
-
-// ZPointer::is_marked_young -- true for the current MarkedYoung epoch bit. It
-// flips around GC_PHASE_ENUM in both full and young collections.
-constexpr bool is_marked_young(uintptr_t value, uintptr_t markBadMask)
-{
-    const uintptr_t markedYoung = current_marked_young(markBadMask);
-    return markedYoung != 0 && (value & markedYoung) != 0;
-}
-
-// ZPointer::is_marked_any_old -- true for current MarkedOld or current
-// Finalizable. Today only MarkedOld is publishable; Finalizable maps to no
-// GC_PHASE while kFinalizableWired is false.
-constexpr bool is_marked_any_old(uintptr_t value, uintptr_t markBadMask)
-{
-    return is_marked_old(value, markBadMask) || is_marked_finalizable(value, markBadMask);
-}
-
-// ZPointer::is_remembered_exact -- true when the current Remembered epoch bit
-// is present. It changes with MarkedYoung around GC_PHASE_ENUM.
-constexpr bool is_remembered_exact(uintptr_t value, uintptr_t storeBadMask)
-{
-    const uintptr_t remembered = current_remembered(storeBadMask);
-    return remembered != 0 && (value & remembered) == remembered;
-}
-
-constexpr unsigned ZGC_PREDICATE_COUNT = 17u;
-
-} // namespace ColourPredicates
-
-// ZAddress::mark_young_good, zAddress.inline.hpp:793-805.
-inline zpointer ColorAddressMarkYoungGood(zaddress address, zpointer previous)
-{
-    if (!ColourPredicates::has_address(raw(previous))) {
-        return to_zpointer(::g_cjStoreGoodMask | REMEMBERED_MASK);
-    }
-    const uintptr_t oldMarked = raw(previous) & (MARKED_OLD_MASK | FINALIZABLE_MASK);
-    return to_zpointer(raw(address) | (::g_cjLoadBadMask ^ REMAP_COLOUR_MASK) |
-                      (MARKED_YOUNG_MASK & ~::g_cjMarkBadMask) | oldMarked | REMEMBERED_MASK);
-}
-
-} // namespace MapleRuntime

@@ -21,12 +21,6 @@ template<typename SlowPath>
 inline zaddress Barrier::MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
                                  RefField<>& field, zpointer observed, const ForwardingProvenance& provenance) const
 {
-    // Cangjie value records may contain references to non-heap literals.
-    // This carrier adaptation preserves those words; they have no ZGC page.
-    const zaddress payload = RefField<>(observed).GetTargetObject();
-    if (!is_null(payload) && !Heap::IsHeapAddress(raw(payload))) {
-        return payload;
-    }
     if (fast(observed)) {
         return RefField<>(observed).GetTargetObject();
     }
@@ -59,13 +53,13 @@ inline void Barrier::MarkYoung(zaddress address) const
 // ZBarrier::is_mark_young_good_fast_path, zBarrier.inline.hpp:392-394.
 inline bool Barrier::IsMarkYoungGoodFastPath(zpointer value)
 {
-    return ColourPredicates::is_load_good(raw(value), ::g_cjLoadBadMask) &&
-           ColourPredicates::is_marked_young(raw(value), ::g_cjMarkBadMask);
+    return ZPointer::is_load_good(to_zpointer(raw(value))) &&
+           ZPointer::is_marked_young(to_zpointer(raw(value)));
 }
 
 inline zpointer Barrier::ColorMarkYoungGood(zaddress address, zpointer previous)
 {
-    return ColorAddressMarkYoungGood(address, previous);
+    return ZAddress::mark_young_good(address, previous);
 }
 
 inline void Barrier::MarkYoungGoodBarrierOnOopField(NativeSlot& field) const

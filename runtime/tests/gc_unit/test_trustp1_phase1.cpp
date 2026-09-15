@@ -1,106 +1,71 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-// TRUST_STATE_KILL_PLAN Phase 1 contracts (header-level positive/negative).
-// The model below is the positive control for the live coloured-write assertion.
-
+// Licensed under Apache-2.0 with Runtime Library Exception.
 #include "Heap/z/zAddress.hpp"
-#include "Heap/z/zAddress.inline.hpp"
+#include "ObjectModel/RefField.h"
+#include "Common/ColourEncoding.h"
 #include "gc_unittest.hpp"
-
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
-
 namespace {
-
-constexpr Uptr kAddrMask = (Uptr(1) << 48) - 1u;
-constexpr Uptr kSampleAddr = Uptr(0x00007f12'34567000ULL);
-constexpr Uptr kColourMetaMask = REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK;
-
-// Model of Phase-1 TryUntag / HeapSlot write-back: install current colour, not plain.
-constexpr Uptr ModelHeapSlotWriteback(Uptr addr, Uptr currentColour)
+zaddress SampleAddress()
 {
-    return (addr & kAddrMask) | (currentColour & kColourMetaMask);
+    ZGlobalsPointers::initialize();
+    return static_cast<zaddress>(ZAddressHeapBase | 0x1000);
 }
-
-// Model of RootSlot write-back under PLAIN_ROOTS=1: address bits only.
-constexpr Uptr ModelRootSlotWritebackPlain(Uptr addr)
+}
+GC_TEST(TrustP1, HeapSlotWritebackIsColoured)
 {
-    return addr & kAddrMask;
+    const auto address = SampleAddress();
+    HeapSlot<> slot(zpointer::null);
+    slot.StoreColoured(ZAddress::store_good(address));
+    GC_EXPECT_EQ(ClassifySlotWord(raw(slot.GetFieldValue())), SlotWordVerdict::kColoured);
+    GC_EXPECT_EQ(raw(slot.GetTargetObject()), raw(address));
 }
-
-// Plain-reference definition: non-null address bits, zero colour metadata.
-constexpr bool IsPlainHeapRef(Uptr v)
+GC_TEST(TrustP1, PlainWritebackIsEncodingIllegal)
 {
-    if ((v & kAddrMask) == 0) {
-        return false;
-    }
-    return (v & kColourMetaMask) == 0;
+    const auto address = SampleAddress();
+    GC_EXPECT_EQ(ClassifySlotWord(raw(address)), SlotWordVerdict::kIllegal);
 }
-
-} // namespace
-
-// ① positive: HeapSlot write-back after untag must be coloured (not plain).
-GC_TEST(TrustP1, TryUntagHeapSlotWritebackIsColoured)
-{
-    Uptr current = ZPointerRemapped00 | MARKED_YOUNG_0 | MARKED_OLD_0;
-    Uptr written = ModelHeapSlotWriteback(kSampleAddr, current);
-    GC_EXPECT_FALSE(IsPlainHeapRef(written));
-    GC_EXPECT_EQ(written & kAddrMask, kSampleAddr);
-    GC_EXPECT_NE(written & kColourMetaMask, 0u);
-}
-
-// ① negative: a plain untag write-back violates the coloured-write invariant.
-GC_TEST(TrustP1, PlainUntagWritebackWouldBeCensusHit)
-{
-    Uptr plain = kSampleAddr; // old TryUntag shape RefField<>(target)
-    GC_EXPECT_TRUE(IsPlainHeapRef(plain));
-}
-
-// ② positive: RootSlot plain write-back stays plain (legal outside HeapSlot storage).
 GC_TEST(TrustP1, RootSlotWritebackPlainIsPlain)
 {
-    Uptr plain = ModelRootSlotWritebackPlain(kSampleAddr | ZPointerRemapped01);
-    GC_EXPECT_TRUE(IsPlainHeapRef(plain) || (plain & kAddrMask) == kSampleAddr);
-    GC_EXPECT_EQ(plain & kColourMetaMask, 0u);
-    GC_EXPECT_EQ(plain, kSampleAddr);
+    const auto address = SampleAddress();
+    RootSlot slot;
+    StorePlain(slot, address);
+    GC_EXPECT_EQ(raw(slot.LoadPlain()), raw(address));
+    GC_EXPECT_TRUE(is_valid(static_cast<zaddress>(raw(slot.LoadPlain()))));
 }
-
-// ② negative: HeapSlot must not use the plain root write-back shape.
 GC_TEST(TrustP1, HeapSlotMustNotUseRootPlainShape)
 {
-    Uptr rootShape = ModelRootSlotWritebackPlain(kSampleAddr);
-    Uptr heapShape = ModelHeapSlotWriteback(kSampleAddr, ZPointerRemapped00);
-    GC_EXPECT_TRUE(IsPlainHeapRef(rootShape));
-    GC_EXPECT_FALSE(IsPlainHeapRef(heapShape));
+    const auto address = SampleAddress();
+    RootSlot root;
+    StorePlain(root, address);
+    HeapSlot<> heap(ZAddress::store_good(address));
+    GC_EXPECT_NE(raw(root.LoadPlain()), raw(heap.GetFieldValue()));
+    GC_EXPECT_EQ(ClassifySlotWord(raw(root.LoadPlain())), SlotWordVerdict::kIllegal);
+    GC_EXPECT_EQ(ClassifySlotWord(raw(heap.GetFieldValue())), SlotWordVerdict::kColoured);
 }
-
-// ③ positive: derived interior plain is legal (derived_legal column), distinct from K1.
-GC_TEST(TrustP1, DerivedInteriorPlainIsDistinctFromK1ObjectRoot)
+GC_TEST(TrustP1, DerivedInteriorPlainIsDistinctFromObjectRoot)
 {
-    // Interior tip = base+8, still plain bits — product tags FixMinorInterior.
-    Uptr interior = kSampleAddr + 8;
-    GC_EXPECT_TRUE(IsPlainHeapRef(interior));
-    // Object root with colour is not plain.
-    Uptr colouredRoot = ModelHeapSlotWriteback(kSampleAddr, ZPointerRemapped00);
-    GC_EXPECT_FALSE(IsPlainHeapRef(colouredRoot));
+    const auto address = SampleAddress();
+    RootSlot base;
+    StorePlain(base, address);
+    DerivedSlot derived;
+    RebaseDerived(derived, base, 3);
+    GC_EXPECT_EQ(raw(derived.LoadDerived()), raw(address) + 3);
+    GC_EXPECT_FALSE(is_valid(static_cast<zpointer>(raw(derived.LoadDerived()))));
 }
-
-// ④ positive-control model: removing colour produces the forbidden heap-slot shape.
-GC_TEST(TrustP1, ColouredWriteGuardRejectsPlainShape)
+GC_TEST(TrustP1, SlotClassifierRejectsPlainShape)
 {
-    Uptr coloured = ModelHeapSlotWriteback(kSampleAddr, ZPointerRemapped00 | MARKED_YOUNG_0);
-    Uptr injected = coloured & kAddrMask; // inject peels colour meta
-    GC_EXPECT_FALSE(IsPlainHeapRef(coloured));
-    GC_EXPECT_TRUE(IsPlainHeapRef(injected));
+    const auto address = SampleAddress();
+    const auto colored = ZAddress::store_good(address);
+    GC_EXPECT_EQ(ClassifySlotWord(raw(colored)), SlotWordVerdict::kColoured);
+    const auto uncolored = ZPointer::uncolor_store_good(colored);
+    GC_EXPECT_EQ(ClassifySlotWord(raw(uncolored)), SlotWordVerdict::kIllegal);
 }
-
-// ④ null is never a plain residual.
 GC_TEST(TrustP1, NullIsNotPlainResidual)
 {
-    GC_EXPECT_FALSE(IsPlainHeapRef(0));
-    GC_EXPECT_FALSE(IsPlainHeapRef(ZPointerRemapped00)); // colour-only null-ish
+    SampleAddress();
+    GC_EXPECT_FALSE(IsPlainNonNullSlotWord(0));
+    GC_EXPECT_TRUE(is_null_any(color_null()));
+    GC_EXPECT_EQ(ClassifySlotWord(raw(color_null())), SlotWordVerdict::kColoured);
 }

@@ -41,9 +41,9 @@ GC_TEST(ObjectGate, SlotListPopFrontRejectsColouredHead)
     size_t size = fx.obj0->GetSize();
     GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), reinterpret_cast<uintptr_t>(fx.obj0));
 
-    // Coloured head: Remembered bit 56 (store-good) makes the word non-canonical.
+    // A complete colored pointer is not a metadata-list address.
     auto coloured = reinterpret_cast<ObjectSlot*>(
-        reinterpret_cast<uintptr_t>(fx.obj0) | MapleRuntime::REMEMBERED_0);
+        raw(ZAddress::store_good(from_object(fx.obj0))));
     SlotListTestAccess::SetHead(list, coloured);
     GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), static_cast<uintptr_t>(0));
     GC_EXPECT_TRUE(SlotListTestAccess::GetHead(list) == nullptr);
@@ -63,7 +63,7 @@ GC_TEST(ObjectGate, SlotListPopFrontDropsColouredNext)
     size_t size = fx.obj0->GetSize();
     auto* slot = reinterpret_cast<ObjectSlot*>(fx.obj0);
     slot->next = reinterpret_cast<ObjectSlot*>(
-        reinterpret_cast<uintptr_t>(fx.obj1) | MapleRuntime::REMEMBERED_0);
+        raw(ZAddress::store_good(from_object(fx.obj1))));
     GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), reinterpret_cast<uintptr_t>(fx.obj0));
     GC_EXPECT_TRUE(SlotListTestAccess::GetHead(list) == nullptr);
 }
