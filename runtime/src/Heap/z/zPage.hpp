@@ -36,10 +36,8 @@
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
-#include "Heap/Collector/LiveInfoArena.h"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/Collector/GcInfos.h"
-#include "Heap/z/zLiveMap.hpp"
 #include "Heap/z/zSafeDelete.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zForwardingTable.hpp"
@@ -52,9 +50,54 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 
-#include "Heap/z/zBitField.hpp"
+#include "Heap/z/zLiveMap.hpp"
 namespace MapleRuntime {
 class RegionList;
+
+// Descriptor incarnation id used by the forwarding carrier / ghost walk
+// (page-descriptor package retires it with the reused slot).
+using RegionLifeId = uint64_t;
+
+// Atomic accessor for the C++ bit fields packed in UnitMetadata (unitRole /
+// regionState words). This is a RegionInfo state-word helper, not the ZGC
+// ZBitField encode/decode template (zBitField.hpp).
+template<typename T>
+class AtomicBitField {
+public:
+    // pos: the position where the bit locates. It starts from 0.
+    // bitLen: the length that is to be read.
+    T GetAtomicValue(size_t pos, size_t bitLen) const
+    {
+        T value = __atomic_load_n(&fieldVal, __ATOMIC_ACQUIRE);
+        T bitMask = FieldMask(pos, bitLen);
+        return value & bitMask;
+    }
+    void SetAtomicValue(size_t pos, size_t bitLen, T newValue)
+    {
+        do {
+            T oldValue = fieldVal;
+            T bitMask = FieldMask(pos, bitLen);
+            T unchangedBitMask = ~bitMask;
+            T newFieldValue = (static_cast<T>(newValue << pos) & bitMask) | (oldValue & unchangedBitMask);
+            if (__atomic_compare_exchange_n(&fieldVal, &oldValue, newFieldValue, false, __ATOMIC_ACQ_REL,
+                                            __ATOMIC_ACQUIRE)) {
+                return;
+            }
+        } while (true);
+    }
+
+private:
+    static constexpr T FieldMask(size_t pos, size_t bitLen)
+    {
+        constexpr size_t width = std::numeric_limits<T>::digits;
+        const T lowMask = bitLen >= width ? static_cast<T>(~T(0))
+                                          : static_cast<T>((T(1) << bitLen) - T(1));
+        return static_cast<T>(lowMask << pos);
+    }
+
+    T fieldVal;
+};
+
 // this class is the metadata of region, it contains all the information needed to manage its corresponding memory.
 // Region memory is composed of several Units, described by UnitInfo.
 // sizeof(RegionInfo) must be equal to sizeof(UnitInfo). We rely on this fact to calculate region-related address.
@@ -79,13 +122,6 @@ public:
     // release a large object when the size is greater than 4096KB.
     static constexpr size_t LARGE_OBJECT_RELEASE_THRESHOLD = 4096 * KB;
 
-    // sealcheck: mark face frozen for geometry (M3). Set at RouteRegion ROUTING entry.
-    bool IsMarkFaceSealed() const
-    {
-        return (__atomic_load_n(&metadata.markFaceSealed, std::memory_order_acquire) & MARK_FACE_SEALED_BIT) != 0;
-    }
-    void SetMarkFaceSealed(bool v);
-
     // ZPage::generation()->seqnum(), shared by all pages in that generation.
     uint64_t GetSnapshotEpoch() const;
     void ResetPageSequence();
@@ -103,16 +139,6 @@ public:
     {
         return metadata.regionLifeId.load(std::memory_order_acquire);
     }
-
-    template<Generation G>
-    uint64_t GetMarkSnapshotEpoch() const;
-
-    template<Generation G>
-    MarkView<G> GetMarkView();
-
-    template<Generation G>
-    bool ValidateMarkView(MarkView<G> view) const;
-
 
     bool IsCompacted() const;
 
@@ -139,12 +165,12 @@ public:
     RegionInfo();
     static RegionInfo* NullRegion();
 
-    LiveInfo* GetLiveInfo();
-
-    LiveInfo* GetLiveInfo() const;
-
-    template<Generation G>
-    LiveInfo* GetLiveInfoForView(MarkView<G> view) const;
+    // ZPage::_livemap (zPage.hpp:52). One ZLiveMap per page life, owned by
+    // this descriptor and constructed with object_max_count() at InitRegionInfo.
+    // It is held by pointer only because RegionInfo is a reused slot of the
+    // reverse metadata array; the independent page descriptor (zPage.cpp:33-62)
+    // embeds it by value.
+    ZLiveMap* livemap() const;
 
     ZForwarding* GetFromPageCarrier() const;
 
@@ -155,30 +181,16 @@ public:
 
     bool HasFromPageMetadata() const;
 
-    // Probe-only compatibility surface. The storage is no longer a second
-    // current face; it belongs to the immutable from-page metadata carrier.
-    LiveInfo* GetLiveInfo0ForProbe() const;
+    // The original page livemap retained by the forwarding carrier while this
+    // slot already describes the reused/promoted page (zForwarding.hpp:44-110
+    // holds the whole from ZPage; only its livemap is carried here).
+    ZLiveMap* FromPageLiveMap() const;
 
     Generation GetRouteMarkGeneration() const;
 
-    template<Generation G>
-    MarkView<G> GetRouteMarkView();
-
-    template<Generation G>
-    uint64_t GetMarkEpoch(MarkView<G> view, LiveInfo* liveInfo) const;
-
-    template<Generation G>
-    RegionBitmap* GetMarkBitmap(MarkView<G> view, LiveInfo* liveInfo) const;
-
-    template<Generation G>
-    bool IsSurvivedObject(MarkView<G> view, LiveInfo* liveInfo, size_t offset) const;
-
     bool IsFromPageAllocating() const;
 
-
-
-    template<Generation G>
-    bool IsFromPageSurvivedObject(MarkView<G> view, size_t offset) const;
+    bool IsFromPageSurvivedObject(size_t offset) const;
 
     bool IsRouteSurvivedObject(size_t offset);
 
@@ -189,25 +201,9 @@ public:
         return IsRouteSurvivedObject(offset);
     }
 
-    // A "greatest survived start at or below offset" scan used to live here.  It was unsound
-    // and is deleted rather than bounded: IsOwnerSurvivedObject is a *coverage* predicate, not
-    // a start predicate.  MarkBits paints every 8B slot an object covers (the property this
-    // header already states at AdmitForRoute below), so scanning down from an offset returns
-    // the last covered slot of the preceding object, never that object's start.  Measured:
-    // a 96-slot window around one such refusal reported 82 "starts" for ~7 objects, and the
-    // address handed back was 40 bytes inside a 48-byte object -- a garbage base that only the
-    // fail-closed load kept out of a root slot.  ZGC has no such ambiguity because ZLiveMap
-    // carries one bit pair per object *start* and ZPage::object_iterate is _livemap.iterate
-    // (zPage.inline.hpp:320-331); a coverage bitmap cannot be read as if it were that.
-
     bool IsOwnerKnownEmpty()
     {
         return IsRouteKnownEmpty();
-    }
-
-    RegionBitmap* GetOwnerMarkBitmap(LiveInfo* face = nullptr)
-    {
-        return GetRouteMarkBitmap(face);
     }
 
     bool IsRouteMarkedObject(size_t offset);
@@ -219,20 +215,10 @@ public:
 
     bool IsRouteKnownEmpty();
 
-    RegionBitmap* GetRouteMarkBitmap(LiveInfo* face = nullptr);
-
-    uint64_t GetRouteMarkEpoch(LiveInfo* face);
-
-    uint64_t GetRouteMarkSnapshotEpoch() const;
-
-    size_t RecomputeRouteBitmapLiveBytes(LiveInfo* face);
-
-    size_t GetRouteBitmapLiveBytes(LiveInfo* face);
-
-    // installdomain: if PrepareForwardable snapshotted a null liveInfo, GetRoute always
-    // rejects. After MarkObject created current liveInfo, bind it as ghost while still
+    // installdomain: if PrepareForwardable snapshotted a null livemap, GetRoute always
+    // rejects. After mark_object created the current livemap, bind it as ghost while still
     // FORWARDABLE so the paint is route-visible (pointer-share, same as PrepareForwardable).
-    void BindLiveInfo0FromLiveIfNull();
+    void BindFromPageLiveMapIfNull();
 
     MAddress GetCensusBoundary() const
     {
@@ -242,112 +228,59 @@ public:
     void StampCensusBoundary();
     void ResetCensusBoundary() { metadata.censusBoundaryOffset = 0; }
 
-    // ZPage constructs its livemap before publishing the page in the page table.
-    void InitializeLiveInfo();
-
-    template<Generation G>
-    RegionBitmap* GetMarkBitmap(MarkView<G> view);
-
-    template<Generation G>
-    RegionBitmap* GetOrAllocMarkBitmap(MarkView<G> view);
-
-    RegionBitmap* GetResurrectBitmap();
-
-    RegionBitmap* GetEnqueueBitmap();
-
-    template<Generation G>
-    uint8_t GetMarkedRegionFlag(MarkView<G> view) const;
-
-    template<Generation G>
-    void SetMarkedRegionFlag(MarkView<G> view, uint8_t flag);
-
+    // ZPage constructs its livemap before publishing the page in the page table
+    // (zPage.cpp:42 _livemap(object_max_count())).
+    void InitializeLiveMap();
 
     Generation GetOwnerGeneration() const;
 
-    template<Generation G>
-    bool MarkFaceMatchesOwner() const
-    {
-        return GetOwnerGeneration() == G;
-    }
+    // ---- ZPage livemap surface (zPage.inline.hpp:57-70, 223-331, 371-392) ----
+    // Names follow ZGC; the page type split (small/large) uses UnitRole until
+    // ZPageType lands.
+    int object_alignment_shift() const;
+    uint32_t object_max_count() const;
 
+    bool is_in(zaddress addr) const;
 
+    bool is_marked() const;
 
+    BitMap::idx_t bit_index(zaddress addr) const;
+    MAddress offset_from_bit_index(BitMap::idx_t index) const;
+    BaseObject* object_from_bit_index(BitMap::idx_t index) const;
 
+    bool is_live_bit_set(zaddress addr) const;
+    bool is_strong_bit_set(zaddress addr) const;
 
+    bool is_object_live(zaddress addr) const;
+    bool is_object_strongly_live(zaddress addr) const;
+    bool is_object_marked_live(zaddress addr) const;
+    bool is_object_marked_strong(zaddress addr) const;
+    bool is_object_marked(zaddress addr, bool finalizable) const;
 
-    template<Generation G>
-    void VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const;
+    // ZPage::mark_object: the only mark entry. Returns true when this call set
+    // the bit(s); inc_live reports the first live claim for the caller's
+    // ZMarkCache / inc_live accounting (zMark.cpp:405-425).
+    bool mark_object(zaddress addr, bool finalizable, bool& inc_live);
 
+    void inc_live(uint32_t objects, size_t bytes);
+    uint32_t live_objects() const;
+    size_t live_bytes() const;
 
-    bool MarkObject(zaddress address, bool finalizable, bool& incLive);
-    bool IsObjectMarked(zaddress address, bool finalizable);
+    template <typename Function>
+    void object_iterate(Function function);
 
-    // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
-    // Page mark primitives return true on a new mark (ZPage::mark_object).
-    // The bitmap RMW still reports already-marked internally.
-    template<Generation G>
-    bool MarkLargeObject(MarkView<G> view, const BaseObject* obj, size_t size, bool accountLive, bool& firstLive);
+    // zPage.inline.hpp:371-392: nearest object-start pair (strong or
+    // finalizable) at or before a field address; 0 when no bit is found
+    // (zaddress_unsafe::null).
+    MAddress find_base_unsafe(MAddress p);
+    MAddress find_base(MAddress p);
 
-    template<Generation G>
-    bool MarkObject(MarkView<G> view, const BaseObject* obj);
+    void verify_live(uint32_t live_objects, size_t live_bytes, bool in_place) const;
 
-    template<Generation G>
-    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive = true);
+    // ZPage::reset_livemap (zPage.cpp:115-117).
+    void reset_livemap();
 
-    // ZGC zMark.cpp:405-418: the mark transition and first-live ownership
-    // are separate results. A finalizable-to-strong upgrade only owns the
-    // former; deferred accounting must carry the latter out of the pair RMW.
-    template<Generation G>
-    bool MarkObjectWithLiveClaim(MarkView<G> view, const BaseObject* obj, size_t objSize,
-                                 bool accountLive, bool& firstLive);
-
-    bool MarkObjectByOwner(const BaseObject* obj);
-
-    bool MarkObjectByOwner(const BaseObject* obj, size_t objSize, bool accountLive = true);
-
-    bool MarkObjectByOwnerWithLiveClaim(const BaseObject* obj, size_t objSize,
-                                        bool accountLive, bool& firstLive);
-
-    bool ResurrectObject(const BaseObject* obj, size_t offset);
-
-    bool ResurrectObjectWithLiveClaim(const BaseObject* obj, size_t offset,
-                                     bool accountLive, bool& firstLive);
-
-    bool EnqueueObject(const BaseObject* obj, size_t offset);
-
-    bool IsResurrectedObject(const BaseObject* obj);
-
-    bool IsResurrectedObject(size_t offset);
-
-
-
-    // cjpmnull2: ZGC empty = this-cycle marked ∧ live==0. Epoch mismatch / no face
-    // is "not marked this cycle", not empty (zPage.inline.hpp:223-225).
-    static std::atomic<size_t> ikeTrueEmpty;
-    static std::atomic<size_t> ikeConservativeKeep;
-    static std::atomic<size_t> ikeConservativeKeepBytes;
-    static std::atomic<size_t> ikeNullFaceKeep;
-    static std::atomic<size_t> ikeEpochKeep;
-    static std::atomic<bool> ikeAtexitInstalled;
-
-
-
-    // Returns false if face is stale (counts as unmarked). true ⇒ epoch matches; caller checks bits.
-    template<Generation G>
-    bool NoteMarkEpochOnRead(MarkView<G> view, LiveInfo* liveInfo);
-
-    template<Generation G>
-    bool IsMarkedObject(MarkView<G> view, const BaseObject* obj);
-
-    template<Generation G>
-    bool IsMarkedObject(MarkView<G> view, size_t offset);
-
-    template<Generation G>
-    bool IsSurvivedObject(MarkView<G> view, size_t offset);
-
-    bool IsEnqueuedObject(size_t offset);
-
-    ALWAYS_INLINE size_t GetAddressOffset(MAddress address);
+    ALWAYS_INLINE size_t GetAddressOffset(MAddress address) const;
 
     enum class UnitRole : uint8_t {
         // for the head unit
@@ -536,18 +469,11 @@ public:
     const char* GetTypeName() const;
 #endif
 
+    // ZGC has no allocPtr-linear object walk (zPage.inline.hpp:319-331 iterates
+    // the livemap). Kept for the relocation residual sweep until the relocate
+    // package retires ClearRelocationResiduals.
     void VisitAllObjects(const std::function<void(BaseObject*)>&& func);
-    bool VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func);
 
-    // zRememberedSet.cpp:144-152 / zLiveMap.inline.hpp:181-221 find_base:
-    // nearest object-start pair (strong or finalizable) at or before a field.
-    RegionBitmap* GetLiveStartBitmap();
-
-    MAddress FindLiveObjectStart(MAddress field);
-
-    bool fromPageLargeMarked();
-
-    void CollectLiveObjectStarts(std::vector<MAddress>& out);
 
     // After-copy Exempt parks FORWARDED residuals (zRelocate.cpp:1041-1047).
     // CSet empty-select still needs those headers; strip only at the next install,
@@ -566,16 +492,16 @@ public:
     ZGenerationId generation_id() const;
 
     template<Generation G>
-    void PublishFromPageMetadata(MarkView<G> view);
+    void PublishFromPageMetadata();
 
     // Product publication edge shared by forwarding and from-page liveness.
     // Keep this in the ordinary product inline path: the operation is part of
     // PrepareForwardableRegion, not a test-facing ABI surface.
     template<Generation G>
-    __attribute__((always_inline)) inline void PublishForwardingCarrier(MarkView<G> view);
+    __attribute__((always_inline)) inline void PublishForwardingCarrier();
 
     template<Generation G>
-    void PrepareForwardableRegion(MarkView<G> view);
+    void PrepareForwardableRegion();
 
     void ClearGhostRegionBit();
 
@@ -605,11 +531,6 @@ public:
 
     // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).
     void AssertGhostClearedAfterReuse(size_t nUnit) const;
-
-
-    template<Generation G>
-    void ClearLiveInfo(MarkView<G> view);
-
 
     // ZForwarding::retain_page (zForwarding.cpp:86-108). Three-state: 0 refuses,
     // <0 waits for done then refuses, >0 CAS +1.
@@ -664,13 +585,6 @@ public:
     void MarkForwardingDone();
 
     bool IsForwardingDone() const;
-
-
-
-
-    void ClearCurrentMarkFace();
-
-    bool IsCurrentFacePublished() const;
 
     // ZGC has no terminal kept: a page not selected this cycle is an ordinary
     // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
@@ -738,20 +652,6 @@ public:
     }
     void SetInGhostRegion(uint8_t flag);
 
-    void SetOldMarkedRegionFlag(uint8_t flag)
-    {
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
-    }
-
-    void SetEnqueuedRegionFlag(uint8_t flag)
-    {
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::ENQUEUED_REGION_FLAG, 1, flag);
-    }
-    void SetResurrectedRegionFlag(uint8_t flag)
-    {
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
-    }
-
     void SetYoungRegionFlag(uint8_t flag);
 
     bool IsYoungRegion() const;
@@ -761,28 +661,28 @@ public:
     static bool HasYoungRegions();
 
     // Promotion replaces current page metadata instead of retargeting the same
-    // liveness object. The old Young metadata remains available only through the
-    // from-page carrier; the new Old current metadata starts with no livemap.
-    MarkView<Generation::Old> PromoteYoungRegion(MarkView<Generation::Young> youngView);
+    // liveness object. The old Young livemap remains available only through the
+    // from-page carrier (parked in retiredLivemap); the new Old current metadata
+    // starts with a fresh livemap.
+    void PromoteYoungRegion();
 
     // The original young ZPage left by ZPage::clone_for_promotion. The
     // region slot becomes old; this object owns the original, un-copied map.
     class PromotionPage {
     public:
-        PromotionPage(LiveInfoArena::OwnedLiveInfo live, MAddress start, MAddress top,
-                      uint8_t age, bool large)
-            : liveInfo(std::move(live)), start(start), top(top), age(age), large(large) {}
+        PromotionPage(std::unique_ptr<ZLiveMap> live, MAddress start, MAddress top, uint8_t age, bool large)
+            : livemap(std::move(live)), start(start), top(top), age(age), large(large) {}
         void ObjectIterate(const std::function<void(BaseObject*)>& visitor) const;
         uint8_t Age() const { return age; }
     private:
-        LiveInfoArena::OwnedLiveInfo liveInfo;
+        std::unique_ptr<ZLiveMap> livemap;
         MAddress start;
         MAddress top;
         uint8_t age;
         bool large;
     };
 
-    std::unique_ptr<PromotionPage> CloneForPromotion(MarkView<Generation::Young> youngView);
+    std::unique_ptr<PromotionPage> CloneForPromotion();
 
     void SetYoungAge(uint8_t age);
 
@@ -803,10 +703,6 @@ public:
 
 
 
-    // offset ≥ mark-start allocPtr (exclusive end at ClearLiveInfo). Objects
-    // bumped after that point are ZGC allocate-black / is_allocating.
-    // water == start means the region was empty at mark-start, so every
-    // object now in it was born after that snapshot.
 
 
 
@@ -871,57 +767,20 @@ public:
     bool IsFreeRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::FREE_UNITS; }
 
     bool IsValidRegion() const;
+    // zRelocationSetSelector.cpp / zGeneration.cpp:216-221: a relocatable page
+    // marked this cycle with no live bytes. Four names are kept for the
+    // page-descriptor package to converge on is_relocatable && !is_marked.
+    bool IsKnownEmpty() const;
 
-    // ZPage::live_bytes/live_objects use the page's single livemap. A page
-    // not touched in this generation sequence has no published marking data.
-    RegionBitmap* GetCurrentLiveMap() const;
+    bool IsKnownYoungEmpty() const;
 
-    uint64_t GetLiveByteCount() const;
+    bool IsSafeKnownEmpty();
 
-    uint32_t GetLiveObjectCount() const;
-
-    void VerifyLive(size_t liveObjects, size_t liveBytes, bool inPlace) const;
-
-    // ZPage::inc_live: the mark winner or its worker cache owns this addition.
-    void AddLiveCounts(uint32_t objects, uint64_t bytes);
-
-    bool IsLiveCountAuthoritative() const
-    {
-        return IsCurrentFacePublished();
-    }
-
-    // ZGC zGeneration.cpp:216-221 / zPage.inline.hpp:223-225:
-    //   is_marked = livemap.seqnum == generation.seqnum
-    //   register_empty_page iff !is_marked — but that is safe only because ZGC's mark
-    //   is complete for every relocatable page. Ours is not (GetRouteMarkView mints
-    //   epoch from liveInfo0; stale_read viewEpoch≠snapshotEpoch).
-    // cjpmnull2: empty = this-cycle marked ∧ live==0. Epoch mismatch / null face
-    // means "not marked this cycle", not "empty". Authority still required so a
-    // minor cannot reclaim non-young on a bare zero.
-    bool IsKnownEmpty(MarkView<Generation::Old> view) const;
-
-    bool IsKnownYoungEmpty(MarkView<Generation::Young> view) const;
-
-    bool IsSafeKnownEmpty(MarkView<Generation::Old> view);
-
-    bool IsSafeKnownYoungEmpty(MarkView<Generation::Young> view);
-
-    // ZForwarding::in_place_relocation_finish drops the completed from-page
-    // livemap. The next first mark resets counts before publishing its seqnum.
-    template<Generation G>
-    void ResetLiveMapAfterForward(MarkView<G> view);
+    bool IsSafeKnownYoungEmpty();
 
     void RemoveFromList();
 
 private:
-
-
-    ALWAYS_INLINE void CheckObjectSize(
-        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const;
-
-    NO_RETURN ATTR_COLD ATTR_NO_INLINE void ReportInvalidObjectSize(
-        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const;
-
 
     static std::atomic<size_t> youngRegionCount;
     static std::mutex youngRegionFlagMutex;
@@ -930,14 +789,10 @@ private:
     static constexpr uint8_t YOUNG_AGE_BIT_LENGTH = 6;
     static constexpr uint8_t YOUNG_STATE_BIT_LENGTH = 1 + YOUNG_AGE_BIT_LENGTH;
     static constexpr uint8_t MAX_YOUNG_AGE = (1U << YOUNG_AGE_BIT_LENGTH) - 1;
-    static constexpr uint8_t MARK_FACE_SEALED_BIT = 1U << 0;
     enum RegionStateBitPos : uint8_t {
         REGION_TYPE_FLAG = 0,
         TRACE_REGION_FLAG = BIT_LENGTH,
         IN_GHOST_FROM_REGION_FLAG,
-        MARKED_REGION_FLAG,
-        ENQUEUED_REGION_FLAG,
-        RESURRECTED_REGION_FLAG,
         YOUNG_REGION_FLAG,
         YOUNG_AGE_FLAG
     };
@@ -962,7 +817,13 @@ private:
         // identity. It is deliberately not packed into routeDestHold.
         std::atomic<RegionLifeId> regionLifeId{ 0 };
 
-        LiveInfo* liveInfo = nullptr;
+        // ZPage::_livemap (zPage.hpp:52); see RegionInfo::livemap().
+        ZLiveMap* livemap = nullptr;
+        // The young livemap a promotion replaced. ZGC keeps the original ZPage
+        // in the relocation set (zPage.cpp:64-72); the reused slot parks that
+        // map here until the descriptor is retired, so a from-page reader
+        // holding it through the forwarding carrier never sees it freed.
+        ZLiveMap* retiredLivemap = nullptr;
         RegionInfo* ownerRegion = nullptr; // if unit is SUBORDINATE_UNIT
 
         RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
@@ -991,7 +852,7 @@ private:
                 uint8_t unitRole : BIT_LENGTH;
                 uint8_t unitRole0 : BIT_LENGTH; // unit class before forwarded and reclaimed.
             };
-            BitField<uint8_t> unitRoleBitField;
+            AtomicBitField<uint8_t> unitRoleBitField;
         };
 
         // the writing operation in C++ Bit-Field feature is not atomic, if we wants to
@@ -1010,11 +871,8 @@ private:
                 // flag is cleared when ghost-from-space is cleared. Note this flag is essentially important for
                 // FindToVersion().
                 uint8_t inGhostFromRegion : 1;
-                uint8_t isMarked : 1;
-                uint8_t isEnqueued : 1;
-                uint8_t isResurrected : 1;
             };
-            BitField<uint16_t> regionStateBitField;
+            AtomicBitField<uint16_t> regionStateBitField;
         };
         // One atomic snapshot binds state to region life. The exact-start table
         // reuses the old split-field footprint, preserving UnitInfo size.
@@ -1025,8 +883,6 @@ private:
         // notRelocatableThisCycle = allocated after mark start this cycle → not a
         // relocation / CSet candidate until next PrepareTrace. Never read by ShouldEnqueue.
         uint8_t notRelocatableThisCycle = 0;
-        // sealcheck: 1 after RouteRegion enters ROUTING (geometry face frozen).
-        uint8_t markFaceSealed = 0;
         ZGenerationId _generation_id;
         RwLock rwLock;
     };
@@ -1113,21 +969,6 @@ private:
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
             if (flag != 0) {
             }
-        }
-
-        void SetOldMarkedRegionFlag(uint8_t flag)
-        {
-            metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
-        }
-
-        void SetEnqueuedRegionFlag(uint8_t flag)
-        {
-            metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::ENQUEUED_REGION_FLAG, 1, flag);
-        }
-
-        void SetResurrectedRegionFlag(uint8_t flag)
-        {
-            metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
         }
 
         // Publish the owner before the discriminator that guards it, so a reader which observes

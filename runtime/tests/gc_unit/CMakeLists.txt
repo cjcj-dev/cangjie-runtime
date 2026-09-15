@@ -14,6 +14,7 @@ set(GC_UNIT_SOURCES
     gc_unit_stubs.cpp
     test_colour_address.cpp
     test_zBitField.cpp
+    test_zBitMap.cpp
     test_zList.cpp
     test_region_list.cpp
     test_zArray.cpp
@@ -24,8 +25,6 @@ set(GC_UNIT_SOURCES
     test_zserviceability.cpp
     test_trustp1_phase1.cpp
 
-    test_live_map.cpp
-    test_live_map_segments.cpp
     test_object_gate.cpp
     test_remset.cpp
     test_defect_regressions.cpp

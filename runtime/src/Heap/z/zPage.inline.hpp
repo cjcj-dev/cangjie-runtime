@@ -8,47 +8,10 @@
 #define MRT_REGIONINFO_INLINE_H
 
 #include "Heap/z/zPage.hpp"
+#include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zSafeDelete.inline.hpp"
 
 namespace MapleRuntime {
-
-
-
-inline void RegionInfo::SetMarkFaceSealed(bool v)
-    {
-        if (v) {
-            __atomic_fetch_or(&metadata.markFaceSealed, MARK_FACE_SEALED_BIT, __ATOMIC_RELEASE);
-        } else {
-            __atomic_fetch_and(&metadata.markFaceSealed, static_cast<uint8_t>(~MARK_FACE_SEALED_BIT),
-                               __ATOMIC_RELEASE);
-        }
-    }
-
-    template<Generation G>
-inline uint64_t RegionInfo::GetMarkSnapshotEpoch() const
-    {
-        (void)G;
-        return GetSnapshotEpoch();
-    }
-
-    template<Generation G>
-inline MarkView<G> RegionInfo::GetMarkView()
-    {
-        // A major closure visits both young and old regions.  A minor closure is
-        // only authoritative for young regions, so minting the inverse binding is
-        // rejected at the sole constructor boundary.
-        CHECK_DETAIL(G != Generation::Young || IsYoungRegion(),
-                     "cannot bind a young mark view to old region %p", this);
-        const RegionLifeId life = GetRegionLifeId();
-        return MarkView<G>(this, GetMarkSnapshotEpoch<G>(), life);
-    }
-
-    template<Generation G>
-inline bool RegionInfo::ValidateMarkView(MarkView<G> view) const
-    {
-        CHECK(view.GetRegion() == this);
-        return (view.GetLifeId() == GetRegionLifeId());
-    }
 
 inline bool RegionInfo::IsCompacted() const
     {
@@ -62,36 +25,10 @@ inline bool RegionInfo::IsRoutingState()
         return owner && owner->is_claimed() && !owner->is_done();
     }
 
-
-
-
-
-inline LiveInfo* RegionInfo::GetLiveInfo()
-    {
-        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-        return liveInfo;
-    }
-
-inline LiveInfo* RegionInfo::GetLiveInfo() const
-    {
-        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-        return liveInfo;
-    }
-
-    template<Generation G>
-inline LiveInfo* RegionInfo::GetLiveInfoForView(MarkView<G> view) const
-    {
-        LiveInfo* current = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-        if (current != nullptr && view.GetEpoch() != 0 && view.GetEpoch() == GetSnapshotEpoch() &&
-            current->GetMarkFace().epoch.load(std::memory_order_acquire) == view.GetEpoch()) {
-            return current;
-        }
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        if (from != nullptr && from->owner == static_cast<uint8_t>(G) && from->epoch == view.GetEpoch()) {
-            return from->liveInfo;
-        }
-        return nullptr;
-    }
+inline ZLiveMap* RegionInfo::livemap() const
+{
+    return __atomic_load_n(&metadata.livemap, std::memory_order_acquire);
+}
 
 inline ZForwarding* RegionInfo::GetFromPageCarrier() const
     {
@@ -105,61 +42,16 @@ inline bool RegionInfo::HasFromPageMetadata() const
         return from != nullptr && (from->lifeId == GetRegionLifeId());
     }
 
-
+inline ZLiveMap* RegionInfo::FromPageLiveMap() const
+{
+    const ZForwarding::FromPageView* from = GetFromPageView();
+    return from == nullptr ? nullptr : from->livemap;
+}
 
 inline Generation RegionInfo::GetRouteMarkGeneration() const
     {
         const ZForwarding::FromPageView* from = GetFromPageView();
         return from == nullptr ? GetOwnerGeneration() : static_cast<Generation>(from->owner);
-    }
-
-    template<Generation G>
-inline MarkView<G> RegionInfo::GetRouteMarkView()
-    {
-        CHECK_DETAIL(GetRouteMarkGeneration() == G,
-                     "route mark generation mismatch region=%p have=%u want=%u", this,
-                     static_cast<unsigned>(GetRouteMarkGeneration()), static_cast<unsigned>(G));
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        if (from == nullptr) {
-            return GetMarkView<G>();
-        }
-        return MarkView<G>(this, from->epoch, from->lifeId);
-    }
-
-    template<Generation G>
-inline uint64_t RegionInfo::GetMarkEpoch(MarkView<G> view, LiveInfo* liveInfo) const
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return 0;
-        }
-        return liveInfo == nullptr ? 0 : liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire);
-    }
-
-    template<Generation G>
-inline RegionBitmap* RegionInfo::GetMarkBitmap(MarkView<G> view, LiveInfo* liveInfo) const
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return nullptr;
-        }
-        if (liveInfo == nullptr || view.GetEpoch() == 0 ||
-            liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) != view.GetEpoch()) {
-            return nullptr;
-        }
-        RegionBitmap* bitmap =
-            __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-        return bitmap;
-    }
-
-    template<Generation G>
-inline bool RegionInfo::IsSurvivedObject(MarkView<G> view, LiveInfo* liveInfo, size_t offset) const
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return false;
-        }
-        return liveInfo != nullptr && liveInfo->IsSurvivedObject(view, offset);
     }
 
 inline bool RegionInfo::IsFromPageAllocating() const
@@ -168,68 +60,12 @@ inline bool RegionInfo::IsFromPageAllocating() const
     return from != nullptr && from->birthSequence == from->epoch;
 }
 
-    template<Generation G>
-inline bool RegionInfo::IsFromPageSurvivedObject(MarkView<G> view, size_t offset) const
+// The from page is read through the livemap the carrier retained; the page
+// identity (generation, geometry) is the one published with it.
+inline bool RegionInfo::IsFromPageSurvivedObject(size_t offset) const
     {
         const ZForwarding::FromPageView* from = GetFromPageView();
         if (from == nullptr) {
-            return false;
-        }
-        if (IsLargeRegion()) {
-            return from->largeMarked != 0 || IsFromPageAllocating();
-        }
-        return IsSurvivedObject(view, from->liveInfo, offset) || IsFromPageAllocating();
-    }
-
-inline bool RegionInfo::IsRouteSurvivedObject(size_t offset)
-    {
-        if (!HasFromPageMetadata()) {
-            if (IsYoungRegion()) {
-                MarkView<Generation::Young> view = GetMarkView<Generation::Young>();
-                return IsSurvivedObject(view, GetLiveInfo(), offset) || IsAllocating();
-            }
-            MarkView<Generation::Old> view = GetMarkView<Generation::Old>();
-            return IsSurvivedObject(view, GetLiveInfo(), offset) || IsAllocating();
-        }
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            if (!ValidateMarkView(view)) {
-                return false;
-            }
-            return IsFromPageSurvivedObject(view, offset);
-        }
-        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-        if (!ValidateMarkView(view)) {
-            return false;
-        }
-        return IsFromPageSurvivedObject(view, offset);
-    }
-
-inline bool RegionInfo::IsRouteMarkedObject(size_t offset)
-    {
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        if (from == nullptr) {
-            if (IsYoungRegion()) {
-                return IsMarkedObject(GetMarkView<Generation::Young>(), offset);
-            }
-            return IsMarkedObject(GetMarkView<Generation::Old>(), offset);
-        }
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            if (!ValidateMarkView(view)) {
-                return false;
-            }
-            if (IsFromPageAllocating()) {
-                return true;
-            }
-            if (IsLargeRegion()) {
-                return from->largeMarked != 0;
-            }
-            RegionBitmap* bitmap = GetMarkBitmap(view, from->liveInfo);
-            return bitmap != nullptr && bitmap->IsMarked(offset);
-        }
-        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-        if (!ValidateMarkView(view)) {
             return false;
         }
         if (IsFromPageAllocating()) {
@@ -238,8 +74,42 @@ inline bool RegionInfo::IsRouteMarkedObject(size_t offset)
         if (IsLargeRegion()) {
             return from->largeMarked != 0;
         }
-        RegionBitmap* bitmap = GetMarkBitmap(view, from->liveInfo);
-        return bitmap != nullptr && bitmap->IsMarked(offset);
+        ZLiveMap* map = from->livemap;
+        if (map == nullptr) {
+            return false;
+        }
+        const ZGenerationId id = static_cast<Generation>(from->owner) == Generation::Young
+            ? ZGenerationId::young : ZGenerationId::old;
+        return map->get(id, bit_index(to_zaddress(GetRegionStart() + offset)));
+    }
+
+inline bool RegionInfo::IsRouteSurvivedObject(size_t offset)
+    {
+        if (!HasFromPageMetadata()) {
+            return is_object_live(to_zaddress(GetRegionStart() + offset));
+        }
+        return IsFromPageSurvivedObject(offset);
+    }
+
+inline bool RegionInfo::IsRouteMarkedObject(size_t offset)
+    {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (from == nullptr) {
+            return is_object_strongly_live(to_zaddress(GetRegionStart() + offset));
+        }
+        if (IsFromPageAllocating()) {
+            return true;
+        }
+        if (IsLargeRegion()) {
+            return from->largeMarked != 0;
+        }
+        ZLiveMap* map = from->livemap;
+        if (map == nullptr) {
+            return false;
+        }
+        const ZGenerationId id = static_cast<Generation>(from->owner) == Generation::Young
+            ? ZGenerationId::young : ZGenerationId::old;
+        return map->get(id, bit_index(to_zaddress(GetRegionStart() + offset)) + 1);
     }
 
 inline bool RegionInfo::IsRouteKnownEmpty()
@@ -247,82 +117,34 @@ inline bool RegionInfo::IsRouteKnownEmpty()
         const ZForwarding::FromPageView* from = GetFromPageView();
         if (from == nullptr) {
             if (IsYoungRegion()) {
-                return IsKnownYoungEmpty(GetMarkView<Generation::Young>());
+                return IsKnownYoungEmpty();
             }
-            return IsKnownEmpty(GetMarkView<Generation::Old>());
+            return IsKnownEmpty();
         }
         if (IsFromPageAllocating()) {
             return false;
         }
-        RegionBitmap* bitmap = GetRouteMarkBitmap(from->liveInfo);
-        return bitmap != nullptr && bitmap->GetLiveBytes() == 0;
+        ZLiveMap* map = from->livemap;
+        const ZGenerationId id = static_cast<Generation>(from->owner) == Generation::Young
+            ? ZGenerationId::young : ZGenerationId::old;
+        return map != nullptr && map->is_marked(id) && map->live_bytes() == 0;
     }
 
-inline RegionBitmap* RegionInfo::GetRouteMarkBitmap(LiveInfo* face)
+inline void RegionInfo::BindFromPageLiveMapIfNull()
     {
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        LiveInfo* selected = face != nullptr ? face
-            : (from != nullptr ? from->liveInfo : GetLiveInfo());
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            return GetMarkBitmap(GetRouteMarkView<Generation::Young>(), selected);
-        }
-        return GetMarkBitmap(GetRouteMarkView<Generation::Old>(), selected);
-    }
-
-inline uint64_t RegionInfo::GetRouteMarkEpoch(LiveInfo* face)
-    {
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            return GetMarkEpoch(GetRouteMarkView<Generation::Young>(), face);
-        }
-        return GetMarkEpoch(GetRouteMarkView<Generation::Old>(), face);
-    }
-
-inline uint64_t RegionInfo::GetRouteMarkSnapshotEpoch() const
-    {
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        return from == nullptr ? GetSnapshotEpoch() : from->epoch;
-    }
-
-inline size_t RegionInfo::RecomputeRouteBitmapLiveBytes(LiveInfo* face)
-    {
-        if (face == nullptr) {
-            return 0;
-        }
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            return face->RecomputeBitmapLiveBytes(GetRouteMarkView<Generation::Young>());
-        }
-        return face->RecomputeBitmapLiveBytes(GetRouteMarkView<Generation::Old>());
-    }
-
-inline size_t RegionInfo::GetRouteBitmapLiveBytes(LiveInfo* face)
-    {
-        if (face == nullptr) {
-            return 0;
-        }
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            return face->GetBitmapLiveBytes(view);
-        }
-        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-        return face->GetBitmapLiveBytes(view);
-    }
-
-inline void RegionInfo::BindLiveInfo0FromLiveIfNull()
-    {
-        if (GetLiveInfo0ForProbe() != nullptr) {
+        if (FromPageLiveMap() != nullptr) {
             return;
         }
-        LiveInfo* live = GetLiveInfo();
+        ZLiveMap* live = livemap();
         if (live == nullptr) {
             return;
         }
-        const uint64_t epoch = live->GetMarkFace().epoch.load(std::memory_order_acquire);
         const RegionLifeId life = GetRegionLifeId();
         CHECK_DETAIL(ForwardingTable::PublishFromPageView(
-                         this, live, epoch, GetRegionAllocPtr(), BirthSequence(),
+                         this, live, GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
                          static_cast<uint8_t>(GetOwnerGeneration()),
-                         static_cast<uint8_t>((IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
-                                              metadata.isResurrected != 0),
+                         static_cast<uint8_t>(IsLargeRegion() && is_marked() &&
+                                              is_live_bit_set(to_zaddress(GetRegionStart()))),
                          life),
                      "from-page forwarding carrier missing while binding live face region=%p", this);
     }
@@ -334,468 +156,183 @@ inline void RegionInfo::StampCensusBoundary()
             static_cast<uint32_t>(std::min<uintptr_t>(offset, std::numeric_limits<uint32_t>::max()));
     }
 
-inline void RegionInfo::InitializeLiveInfo()
+// zPage.cpp:42: _livemap(object_max_count()). Constructed once per page life.
+inline void RegionInfo::InitializeLiveMap()
     {
-        LiveInfo* live = LiveInfoArena::GetLiveInfoArena().AllocateLiveInfo(this);
-        live->bindedRegion = this;
-        live->resurrectBitmap = LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
-        live->enqueueBitmap = LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
-        __atomic_store_n(&metadata.liveInfo, live, std::memory_order_release);
+        CHECK(livemap() == nullptr);
+        ZLiveMap* live = new ZLiveMap(object_max_count());
+        __atomic_store_n(&metadata.livemap, live, std::memory_order_release);
     }
 
-    template<Generation G>
-inline RegionBitmap* RegionInfo::GetMarkBitmap(MarkView<G> view)
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return nullptr;
-        }
-        LiveInfo* liveInfo = GetLiveInfoForView(view);
-        if (liveInfo == nullptr) {
-            return nullptr;
-        }
-        LiveInfo::MarkFace& face = liveInfo->GetMarkFace();
-        if (face.epoch.load(std::memory_order_acquire) != view.GetEpoch()) {
-            return nullptr;
-        }
-        RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
-        return bitmap;
-    }
+// ---- ZPage livemap surface ----
 
-    template<Generation G>
-inline RegionBitmap* RegionInfo::GetOrAllocMarkBitmap(MarkView<G> view)
-    {
-        CHECK(view.GetRegion() == this);
-        CHECK(view.GetEpoch() != 0 && view.GetEpoch() == GetMarkSnapshotEpoch<G>());
-        LiveInfo* liveInfo = GetLiveInfo();
-        CHECK(liveInfo != nullptr);
-        LiveInfo::MarkFace& face = liveInfo->GetMarkFace();
-        constexpr uint64_t kInitializing = std::numeric_limits<uint64_t>::max();
-        for (;;) {
-            uint64_t seq = face.epoch.load(std::memory_order_acquire);
-            if (seq == view.GetEpoch()) {
-                return __atomic_load_n(&face.bitmap, std::memory_order_acquire);
-            }
-            if (seq != kInitializing &&
-                face.epoch.compare_exchange_strong(seq, kInitializing, std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
-                RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
-                if (bitmap == nullptr) {
-                    bitmap = LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
-                    __atomic_store_n(&face.bitmap, bitmap, std::memory_order_relaxed);
-                } else if (!bitmap->CoversRegionSize(GetRegionSize())) {
-                    bitmap = LiveInfoArena::GetLiveInfoArena().PublishMatchingBitmap(
-                        &face.bitmap, bitmap, GetRegionSize(), liveInfo);
-                }
-                bitmap->Reset();
-                // ZLiveMap::reset: publish only after allocation and metadata reset.
-                face.epoch.store(view.GetEpoch(), std::memory_order_release);
-                return bitmap;
-            }
-            sched_yield();
-        }
-    }
-
-inline RegionBitmap* RegionInfo::GetResurrectBitmap()
-    {
-        LiveInfo* liveInfo = GetLiveInfo();
-        if (liveInfo == nullptr) {
-            return nullptr;
-        }
-        RegionBitmap* bitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
-        return bitmap;
-    }
-
-inline RegionBitmap* RegionInfo::GetEnqueueBitmap()
-    {
-        LiveInfo* liveInfo = GetLiveInfo();
-        if (liveInfo == nullptr) {
-            return nullptr;
-        }
-        RegionBitmap* bitmap = __atomic_load_n(&liveInfo->enqueueBitmap, std::memory_order_acquire);
-        return bitmap;
-    }
-
-    template<Generation G>
-inline uint8_t RegionInfo::GetMarkedRegionFlag(MarkView<G> view) const
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return 0;
-        }
-        // Large pages use one atomic face sequence as both their liveness bit and
-        // publication marker. A captured view from an earlier metadata incarnation
-        // must not observe a later incarnation's reused bit.
-        if (view.GetEpoch() != GetMarkSnapshotEpoch<G>()) {
-            const ZForwarding::FromPageView* from = GetFromPageView();
-            return from != nullptr && from->owner == static_cast<uint8_t>(G) &&
-                from->epoch == view.GetEpoch() ? from->largeMarked : 0;
-        }
-        if (IsLargeRegion()) {
-            return IsCurrentFacePublished() ? 1 : 0;
-        }
-        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1) != 0;
-    }
-
-    template<Generation G>
-inline void RegionInfo::SetMarkedRegionFlag(MarkView<G> view, uint8_t flag)
-    {
-        CHECK(view.GetRegion() == this);
-        CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
-        if (IsLargeRegion()) {
-            if (flag != 0) {
-                (void)GetOrAllocMarkBitmap(view);
-            } else {
-                ClearCurrentMarkFace();
-            }
-            return;
-        }
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
-    }
-
-    template<Generation G>
-inline void RegionInfo::VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const
-    {
-        if (LIKELY(MarkFaceMatchesOwner<G>())) {
-            return;
-        }
-        CHECK_DETAIL(false, "mark face does not match page owner site=%s object=%p region=%p owner=%s face=%s",
-                     site, obj, this, GetOwnerGeneration() == Generation::Young ? "young" : "old",
-                     G == Generation::Young ? "young" : "old");
-    }
-
-
-    template<Generation G>
-inline bool RegionInfo::MarkLargeObject(MarkView<G> view, const BaseObject* obj, size_t size, bool accountLive, bool& firstLive)
-    {
-        firstLive = false;
-        MAddress regionStart = GetRegionStart();
-        MAddress regionEnd = GetRegionEnd();
-        CheckObjectSize(obj, size, regionStart, regionEnd);
-        const size_t offset = reinterpret_cast<MAddress>(obj) - regionStart;
-        const size_t regionSize = regionEnd - regionStart;
-        RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
-        bool incLive = false;
-        const bool newlyMarked = writeBm->MarkBits(offset, size, regionSize, incLive);
-        firstLive = incLive;
-        if (incLive) {
-            if (accountLive) {
-                AddLiveCounts(1, size);
-            }
-        }
-        return newlyMarked;
-    }
-
-    template<Generation G>
-inline bool RegionInfo::MarkObject(MarkView<G> view, const BaseObject* obj)
-    {
-        CHECK(view.GetRegion() == this);
-        VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
-        if (IsLargeRegion()) {
-            bool firstLive = false;
-            return MarkLargeObject(view, obj, obj->GetSize(), true, firstLive);
-        }
-        U32 objSize = obj->GetSize();
-        MAddress objAddr = reinterpret_cast<MAddress>(obj);
-        MAddress regionStart = GetRegionStart();
-        MAddress regionEnd = GetRegionEnd();
-        CheckObjectSize(obj, objSize, regionStart, regionEnd);
-        size_t offset = objAddr - regionStart;
-        size_t regionSize = regionEnd - regionStart;
-        RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
-
-        bool incLive = false;
-        bool newlyMarked = writeBm->MarkBits(offset, objSize, regionSize, incLive);
-        if (incLive) {
-            AddLiveCounts(1, objSize);
-        }
-        CHECK(IsMarkedObject(view, offset));
-        return newlyMarked;
-    }
-
-    template<Generation G>
-inline bool RegionInfo::MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive)
-    {
-        bool firstLive = false;
-        return MarkObjectWithLiveClaim(view, obj, objSize, accountLive, firstLive);
-    }
-
-    template<Generation G>
-inline bool RegionInfo::MarkObjectWithLiveClaim(MarkView<G> view, const BaseObject* obj, size_t objSize,
-                                 bool accountLive, bool& firstLive)
-    {
-        firstLive = false;
-        CHECK(view.GetRegion() == this);
-        VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
-        if (IsLargeRegion()) {
-            return MarkLargeObject(view, obj, objSize, accountLive, firstLive);
-        }
-        MAddress objAddr = reinterpret_cast<MAddress>(obj);
-        MAddress regionStart = GetRegionStart();
-        MAddress regionEnd = GetRegionEnd();
-        CheckObjectSize(obj, objSize, regionStart, regionEnd);
-        size_t offset = objAddr - regionStart;
-        size_t regionSize = regionEnd - regionStart;
-        RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
-
-        bool incLive = false;
-        bool newlyMarked = writeBm->MarkBits(offset, objSize, regionSize, incLive);
-        firstLive = incLive;
-        if (incLive) {
-            if (accountLive) {
-                AddLiveCounts(1, objSize);
-            }
-        }
-        CHECK(IsMarkedObject(view, offset));
-        return newlyMarked;
-    }
-
-// ZPage::mark_object / is_object_marked (zPage.inline.hpp:280-294).
-inline bool RegionInfo::MarkObject(zaddress address, bool finalizable, bool& incLive)
+// zPage.inline.hpp:72-101 object_alignment_shift: large pages hold one object
+// at start; small pages use the minimum object alignment.
+inline int RegionInfo::object_alignment_shift() const
 {
-    BaseObject* object = to_object(address);
-    return finalizable
-        ? ResurrectObjectWithLiveClaim(object, GetAddressOffset(raw(address)), false, incLive)
-        : MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, incLive);
+    return IsLargeRegion() ? ZObjectAlignmentLargeShift : ZObjectAlignmentSmallShift;
 }
 
-inline bool RegionInfo::IsObjectMarked(zaddress address, bool finalizable)
+// zPage.inline.hpp:57-70 object_max_count.
+inline uint32_t RegionInfo::object_max_count() const
 {
-    BaseObject* object = to_object(address);
-    if (IsYoungRegion()) {
-        return IsMarkedObject(GetMarkView<Generation::Young>(), object);
+    if (IsLargeRegion()) {
+        return 1;
     }
-    return finalizable ? IsSurvivedObject(GetMarkView<Generation::Old>(), GetAddressOffset(raw(address)))
-                       : IsMarkedObject(GetMarkView<Generation::Old>(), object);
+    return static_cast<uint32_t>(GetRegionSize() >> object_alignment_shift());
 }
 
-inline bool RegionInfo::MarkObjectByOwner(const BaseObject* obj)
-    {
-        if (IsYoungRegion()) {
-            return MarkObject(GetMarkView<Generation::Young>(), obj);
-        }
-        return MarkObject(GetMarkView<Generation::Old>(), obj);
+// zPage.inline.hpp:188-195 is_in: [start, top).
+inline bool RegionInfo::is_in(zaddress addr) const
+{
+    const MAddress address = raw(addr);
+    return address >= GetRegionStart() && address < GetRegionAllocPtr();
+}
+
+// zPage.inline.hpp:223-226.
+inline bool RegionInfo::is_marked() const
+{
+    DCHECK_D(IsRelocatable(), "Invalid page state");
+    return livemap()->is_marked(generation_id());
+}
+
+// zPage.inline.hpp:228-230.
+inline BitMap::idx_t RegionInfo::bit_index(zaddress addr) const
+{
+    return (GetAddressOffset(raw(addr)) >> object_alignment_shift()) * 2;
+}
+
+// zPage.inline.hpp:232-235.
+inline MAddress RegionInfo::offset_from_bit_index(BitMap::idx_t index) const
+{
+    const uintptr_t l_offset = ((index / 2) << object_alignment_shift());
+    return GetRegionStart() + l_offset;
+}
+
+// zPage.inline.hpp:237-240.
+inline BaseObject* RegionInfo::object_from_bit_index(BitMap::idx_t index) const
+{
+    return from_region_addr(offset_from_bit_index(index));
+}
+
+// zPage.inline.hpp:242-252.
+inline bool RegionInfo::is_live_bit_set(zaddress addr) const
+{
+    DCHECK_D(IsRelocatable(), "Invalid page state");
+    const BitMap::idx_t index = bit_index(addr);
+    return livemap()->get(generation_id(), index);
+}
+
+inline bool RegionInfo::is_strong_bit_set(zaddress addr) const
+{
+    DCHECK_D(IsRelocatable(), "Invalid page state");
+    const BitMap::idx_t index = bit_index(addr);
+    return livemap()->get(generation_id(), index + 1);
+}
+
+// zPage.inline.hpp:254-260: an allocating page is implicitly live.
+inline bool RegionInfo::is_object_live(zaddress addr) const
+{
+    return IsAllocating() || is_live_bit_set(addr);
+}
+
+inline bool RegionInfo::is_object_strongly_live(zaddress addr) const
+{
+    return IsAllocating() || is_strong_bit_set(addr);
+}
+
+// zPage.inline.hpp:262-282: marking-only readers.
+inline bool RegionInfo::is_object_marked_live(zaddress addr) const
+{
+    return is_object_live(addr);
+}
+
+inline bool RegionInfo::is_object_marked_strong(zaddress addr) const
+{
+    return is_object_strongly_live(addr);
+}
+
+inline bool RegionInfo::is_object_marked(zaddress addr, bool finalizable) const
+{
+    return finalizable ? is_object_marked_live(addr) : is_object_marked_strong(addr);
+}
+
+// zPage.inline.hpp:284-294.
+inline bool RegionInfo::mark_object(zaddress addr, bool finalizable, bool& inc_live)
+{
+    DCHECK_D(IsRelocatable(), "Invalid page state");
+    DCHECK_D(is_in(addr), "Invalid address");
+
+    // Set mark bit
+    const BitMap::idx_t index = bit_index(addr);
+    return livemap()->set(generation_id(), index, finalizable, inc_live);
+}
+
+// zPage.inline.hpp:296-317.
+inline void RegionInfo::inc_live(uint32_t objects, size_t bytes)
+{
+    livemap()->inc_live(objects, bytes);
+}
+
+inline uint32_t RegionInfo::live_objects() const
+{
+    return livemap()->live_objects();
+}
+
+inline size_t RegionInfo::live_bytes() const
+{
+    return livemap()->live_bytes();
+}
+
+// zPage.inline.hpp:319-331.
+template <typename Function>
+inline void RegionInfo::object_iterate(Function function)
+{
+    auto do_bit = [&](BitMap::idx_t index) -> bool {
+        BaseObject* const obj = object_from_bit_index(index);
+
+        // Apply function
+        function(obj);
+
+        return true;
+    };
+
+    livemap()->iterate(generation_id(), do_bit);
+}
+
+// zPage.inline.hpp:371-386.
+inline MAddress RegionInfo::find_base_unsafe(MAddress p)
+{
+    if (IsLargeRegion()) {
+        return GetRegionStart();
     }
 
-inline bool RegionInfo::MarkObjectByOwner(const BaseObject* obj, size_t objSize, bool accountLive)
-    {
-        if (IsYoungRegion()) {
-            return MarkObject(GetMarkView<Generation::Young>(), obj, objSize, accountLive);
-        }
-        return MarkObject(GetMarkView<Generation::Old>(), obj, objSize, accountLive);
+    // Note: when thinking about excluding looking at the index corresponding to
+    // the field address p, it's important to note that for medium pages both p
+    // and it's associated base could map to the same index.
+    const BitMap::idx_t index = bit_index(to_zaddress(p));
+    const BitMap::idx_t base_index = livemap()->find_base_bit(index);
+    if (base_index == BitMap::idx_t(-1)) {
+        return 0;
+    } else {
+        return offset_from_bit_index(base_index);
     }
+}
 
-inline bool RegionInfo::MarkObjectByOwnerWithLiveClaim(const BaseObject* obj, size_t objSize,
-                                        bool accountLive, bool& firstLive)
-    {
-        if (IsYoungRegion()) {
-            return MarkObjectWithLiveClaim(GetMarkView<Generation::Young>(), obj, objSize, accountLive, firstLive);
-        }
-        return MarkObjectWithLiveClaim(GetMarkView<Generation::Old>(), obj, objSize, accountLive, firstLive);
-    }
+// zPage.inline.hpp:388-392.
+inline MAddress RegionInfo::find_base(MAddress p)
+{
+    DCHECK_D(is_marked(), "Should be marked");
+    return find_base_unsafe(p);
+}
 
-inline bool RegionInfo::ResurrectObject(const BaseObject* obj, size_t offset)
-    {
-        bool firstLive = false;
-        return ResurrectObjectWithLiveClaim(obj, offset, true, firstLive);
-    }
+// zPage.cpp:115-117.
+inline void RegionInfo::reset_livemap()
+{
+    livemap()->reset();
+}
 
-inline bool RegionInfo::ResurrectObjectWithLiveClaim(const BaseObject* obj, size_t offset,
-                                     bool accountLive, bool& firstLive)
-    {
-        firstLive = false;
-        U32 objSize = obj->GetSize();
-        MAddress regionStart = GetRegionStart();
-        MAddress regionEnd = GetRegionEnd();
-        CheckObjectSize(obj, objSize, regionStart, regionEnd);
-        size_t regionSize = regionEnd - regionStart;
-        MarkView<Generation::Old> view = GetMarkView<Generation::Old>();
-        RegionBitmap* bitmap = GetOrAllocMarkBitmap(view);
-        bool incLive = false;
-        bool newlyMarked = bitmap->MarkFinalizableBits(offset, objSize, regionSize, incLive);
-        firstLive = incLive;
-        if (incLive) {
-            if (accountLive) {
-                AddLiveCounts(1, objSize);
-            }
-        }
-        CHECK(bitmap->IsLive(offset));
-        return newlyMarked;
-    }
-
-inline bool RegionInfo::EnqueueObject(const BaseObject* obj, size_t offset)
-    {
-        if (IsFreeRegion() || IsGarbageRegion() || GetRegionType() == RegionType::FREE_REGION) {
-            return true;
-        }
-        if (IsLargeRegion()) {
-            if (metadata.isEnqueued != 1) {
-                SetEnqueuedRegionFlag(1);
-                return false;
-            }
-            return true;
-        }
-        U32 objSize = obj->GetSize();
-        MAddress regionStart = GetRegionStart();
-        MAddress regionEnd = GetRegionEnd();
-        CheckObjectSize(obj, objSize, regionStart, regionEnd);
-        size_t regionSize = regionEnd - regionStart;
-        CHECK(regionSize > 0);
-        RegionBitmap* bitmap = GetEnqueueBitmap();
-        // enqueue face is not the route geometry face; still report if mark-face sealed.
-
-        const bool newlyMarked = bitmap->MarkBits(offset, objSize, regionSize);
-        CHECK(bitmap->IsMarked(offset));
-        // The legacy enqueue interface returns already-enqueued (P3 boundary).
-        return !newlyMarked;
-    }
-
-inline bool RegionInfo::IsResurrectedObject(const BaseObject* obj)
-    {
-        RegionBitmap* bitmap = GetMarkBitmap(GetMarkView<Generation::Old>());
-        if (bitmap == nullptr) {
-            return false;
-        }
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        return bitmap->IsFinalizable(offset);
-    }
-
-inline bool RegionInfo::IsResurrectedObject(size_t offset)
-    {
-        RegionBitmap* bitmap = GetMarkBitmap(GetMarkView<Generation::Old>());
-        if (bitmap == nullptr) {
-            return false;
-        }
-        return bitmap->IsFinalizable(offset);
-    }
-
-
-
-
-
-    template<Generation G>
-inline bool RegionInfo::NoteMarkEpochOnRead(MarkView<G> view, LiveInfo* liveInfo)
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return false;
-        }
-        if (liveInfo == nullptr) {
-            return false;
-        }
-        LiveInfo::MarkFace& markFace = liveInfo->GetMarkFace();
-        RegionBitmap* bitmap = __atomic_load_n(&markFace.bitmap, std::memory_order_acquire);
-        // Absence is ordinary "unmarked", not a stale-livemap read.
-        if (bitmap == nullptr) {
-            return false;
-        }
-        const uint64_t face = markFace.epoch.load(std::memory_order_acquire);
-        const uint64_t now = GetMarkSnapshotEpoch<G>();
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        const bool currentOrFrom = view.GetEpoch() == now ||
-            (from != nullptr && from->owner == static_cast<uint8_t>(G) && from->epoch == view.GetEpoch());
-        if (currentOrFrom && face == view.GetEpoch()) {
-            return true;
-        }
-        return false;
-    }
-
-    template<Generation G>
-inline bool RegionInfo::IsMarkedObject(MarkView<G> view, const BaseObject* obj)
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return false;
-        }
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && IsAllocating()) {
-            return true;
-        }
-        LiveInfo* liveInfo = GetLiveInfoForView(view);
-        if (liveInfo == nullptr) {
-            return false;
-        }
-        // markepoch §5: stale face ⇒ unmarked (ZGC is_marked false before bit test).
-        if (!NoteMarkEpochOnRead(view, liveInfo)) {
-            return false;
-        }
-        RegionBitmap* markBitmap =
-            __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-        if (markBitmap == nullptr) {
-            return false;
-        }
-        return markBitmap->IsMarked(offset);
-    }
-
-    template<Generation G>
-inline bool RegionInfo::IsMarkedObject(MarkView<G> view, size_t offset)
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return false;
-        }
-        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && IsAllocating()) {
-            return true;
-        }
-        LiveInfo* liveInfo = GetLiveInfoForView(view);
-        if (liveInfo == nullptr) {
-            return false;
-        }
-        if (!NoteMarkEpochOnRead(view, liveInfo)) {
-            return false;
-        }
-        RegionBitmap* markBitmap =
-            __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-        if (markBitmap == nullptr) {
-            return false;
-        }
-        return markBitmap->IsMarked(offset);
-    }
-
-    template<Generation G>
-inline bool RegionInfo::IsSurvivedObject(MarkView<G> view, size_t offset)
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return false;
-        }
-        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && IsAllocating()) {
-            return true;
-        }
-
-        LiveInfo* liveInfo = GetLiveInfoForView(view);
-        if (liveInfo == nullptr) {
-            return false;
-        }
-        if (NoteMarkEpochOnRead(view, liveInfo)) {
-            RegionBitmap* markBitmap =
-                __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-            if (markBitmap != nullptr &&
-                markBitmap->IsLive(offset)) {
-                return true;
-            }
-        }
-        if (G == Generation::Old) {
-            RegionBitmap* resurrectBitmap =
-                __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
-            if (resurrectBitmap != nullptr &&
-                resurrectBitmap->IsMarked(offset)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-inline bool RegionInfo::IsEnqueuedObject(size_t offset)
-    {
-        RegionBitmap* enqueBitmap = GetEnqueueBitmap();
-        if (enqueBitmap == nullptr) {
-            return false;
-        }
-        return enqueBitmap->IsMarked(offset);
-    }
-
-inline ALWAYS_INLINE size_t RegionInfo::GetAddressOffset(MAddress address)
+inline ALWAYS_INLINE size_t RegionInfo::GetAddressOffset(MAddress address) const
     {
         DCHECK(GetRegionStart() <= address);
         return (address - GetRegionStart());
@@ -1052,86 +589,6 @@ inline size_t RegionInfo::GetAvailableSize() const
         return GetRegionEnd() - GetRegionAllocPtr();
     }
 
-inline RegionBitmap* RegionInfo::GetLiveStartBitmap()
-    {
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        if (from != nullptr) {
-            return GetRouteMarkBitmap(from->liveInfo);
-        }
-        return GetOwnerMarkBitmap();
-    }
-
-inline MAddress RegionInfo::FindLiveObjectStart(MAddress field)
-    {
-        const MAddress start = GetRegionStart();
-        if (field < start) {
-            return 0;
-        }
-        if (IsLargeRegion()) {
-            RegionBitmap* bitmap = GetLiveStartBitmap();
-            if (bitmap != nullptr && bitmap->IsObjectStart(0)) {
-                return start;
-            }
-            if (fromPageLargeMarked()) {
-                return start;
-            }
-            return 0;
-        }
-        if (!IsSmallRegion()) {
-            return 0;
-        }
-        RegionBitmap* bitmap = GetLiveStartBitmap();
-        if (bitmap == nullptr) {
-            return 0;
-        }
-        size_t off = field - start;
-        off -= off % kMarkedBytesPerBit;
-        for (;;) {
-            if (bitmap->IsObjectStart(off)) {
-                return start + off;
-            }
-            if (off < kMarkedBytesPerBit) {
-                return 0;
-            }
-            off -= kMarkedBytesPerBit;
-        }
-    }
-
-inline bool RegionInfo::fromPageLargeMarked()
-    {
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        return from != nullptr && from->largeMarked != 0;
-    }
-
-inline void RegionInfo::CollectLiveObjectStarts(std::vector<MAddress>& out)
-    {
-        out.clear();
-        if (IsFreeRegion() || IsGarbageRegion() || IsOwnerKnownEmpty()) {
-            return;
-        }
-        const MAddress start = GetRegionStart();
-        if (IsLargeRegion()) {
-            if (FindLiveObjectStart(start) == start) {
-                out.push_back(start);
-            }
-            return;
-        }
-        if (!IsSmallRegion()) {
-            return;
-        }
-        RegionBitmap* bitmap = GetLiveStartBitmap();
-        if (bitmap == nullptr) {
-            return;
-        }
-        const uintptr_t allocPtr = GetRegionAllocPtr();
-        const size_t regionBytes = allocPtr > start ? (allocPtr - start) : 0;
-        for (size_t off = 0; off < regionBytes; off += kMarkedBytesPerBit) {
-            if (bitmap->IsObjectStart(off)) {
-                out.push_back(start + off);
-            }
-        }
-    }
-
 inline void RegionInfo::InitFreeUnits()
     {
 
@@ -1175,24 +632,23 @@ inline bool RegionInfo::IsCompactRouteDestination(MAddress address) const
 
 
     template<Generation G>
-inline void RegionInfo::PublishFromPageMetadata(MarkView<G> view)
+inline void RegionInfo::PublishFromPageMetadata()
     {
-        CHECK(view.GetRegion() == this);
-        const RegionLifeId life = view.GetLifeId();
+        const RegionLifeId life = GetRegionLifeId();
         CHECK_DETAIL(ForwardingTable::PublishFromPageView(
-                         this, GetLiveInfo(), view.GetEpoch(), GetRegionAllocPtr(), BirthSequence(),
+                         this, livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
                          static_cast<uint8_t>(G),
-                         static_cast<uint8_t>((IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
-                                              metadata.isResurrected != 0),
+                         static_cast<uint8_t>(IsLargeRegion() && is_marked() &&
+                                              is_live_bit_set(to_zaddress(GetRegionStart()))),
                          life),
                      "forwarding carrier missing at from-page publication region=%p", this);
     }
 
     template<Generation G>
-inline __attribute__((always_inline)) void RegionInfo::PublishForwardingCarrier(MarkView<G> view)
+inline __attribute__((always_inline)) void RegionInfo::PublishForwardingCarrier()
     {
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
-        PublishFromPageMetadata(view);
+        PublishFromPageMetadata<G>();
         // zForwarding.inline.hpp:67-70 — construction token = 1. Late retain
         // after detach (count 0) is refused; carrier and token are published
         // by this single product operation.
@@ -1220,9 +676,8 @@ inline __attribute__((always_inline)) void RegionInfo::PublishForwardingCarrier(
     }
 
     template<Generation G>
-inline void RegionInfo::PrepareForwardableRegion(MarkView<G> view)
+inline void RegionInfo::PrepareForwardableRegion()
     {
-        CHECK(view.GetRegion() == this);
         CHECK(IsFromRegion());
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(metadata.inGhostFromRegion == 0);
@@ -1257,11 +712,9 @@ inline void RegionInfo::PrepareForwardableRegion(MarkView<G> view)
 #if !defined(MRT_GC_UNIT_TESTS)
         NoteEnrolPhase();
 #endif
-        // sealcheck: snapshot is not yet sealed; geometry freeze is at RouteRegion ROUTING.
-        SetMarkFaceSealed(false);
         // Shared boundary: publish immutable from-page metadata, forwarding
         // construction token, and ghost membership through one product edge.
-        PublishForwardingCarrier(view);
+        PublishForwardingCarrier<G>();
 
     }
 
@@ -1302,17 +755,13 @@ inline void RegionInfo::DispelGhostFromRegion()
         // lets step 3 change *when* it happens without changing *where*.
         const size_t nUnit = GetGhostRegionUnitCount();
         ClearGhostFromRegionBits();
-        LiveInfoArena::GetLiveInfoArena().RecycleOwnerBitmaps(GetLiveInfo());
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
         VLOG(REPORT,
              "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
-             this, GetRegionStart(), nUnit, GetLiveByteCount(),
+             this, GetRegionStart(), nUnit, livemap()->live_bytes(),
               IsForwardingDone() ? 1u : 0u,
              static_cast<unsigned>(IsYoungRegion()));
-        // Publish route retirement before detaching the table. A reader that observes
-        // the atomic nullptr then also observes NORMAL and soft-misses in GetRoute.
-        SetMarkFaceSealed(false);
         // The old top/livemap disappeared with the forwarding carrier above;
         // only page-owned ghost/route state is reset in this body.
     }
@@ -1337,20 +786,6 @@ inline void RegionInfo::AssertGhostClearedAfterReuse(size_t nUnit) const
         }
     }
 
-    template<Generation G>
-inline void RegionInfo::ClearLiveInfo(MarkView<G> view)
-    {
-        CHECK(view.GetRegion() == this);
-        UnitRole unitRole = LoadUnitRole(reinterpret_cast<UnitInfo*>(this));
-        if (unitRole == UnitRole::FREE_UNITS) {
-            return;
-        }
-        CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
-                     "ClearLiveInfo must be called on a region head");
-        // Ordinary livemap metadata and segments reset lazily on the first mark,
-        // including the single-object large-page map.
-        SetMarkFaceSealed(false);
-    }
 
 inline bool RegionInfo::RetainForwarding()
     {
@@ -1383,21 +818,6 @@ inline bool RegionInfo::IsForwardingDone() const
         return owner && owner->is_done();
     }
 
-inline void RegionInfo::ClearCurrentMarkFace()
-    {
-        LiveInfo* live = GetLiveInfo();
-        if (live != nullptr) {
-            live->GetMarkFace().epoch.store(0, std::memory_order_relaxed);
-        }
-    }
-
-inline bool RegionInfo::IsCurrentFacePublished() const
-    {
-        LiveInfo* live = GetLiveInfo();
-        const uint64_t seqnum = GetSnapshotEpoch();
-        return seqnum != 0 && live != nullptr &&
-            live->GetMarkFace().epoch.load(std::memory_order_acquire) == seqnum;
-    }
 
 inline int32_t RegionInfo::ForwardingRefCount() const
     {
@@ -1433,22 +853,20 @@ inline void RegionInfo::SetInGhostRegion(uint8_t flag)
         }
     }
 
-inline MarkView<Generation::Old> RegionInfo::PromoteYoungRegion(MarkView<Generation::Young> youngView)
+// ZPage::clone_for_promotion + ZPage::reset(age) (zPage.cpp:64-72, 103-113)
+// on the reused slot: the young livemap is parked for the carrier's readers
+// and the slot continues with a fresh map; readers see one or the other,
+// never a missing map.
+inline void RegionInfo::PromoteYoungRegion()
     {
-        CHECK_DETAIL(youngView.GetRegion() == this, "young promotion view belongs to another region");
         CHECK_DETAIL(IsYoungRegion(), "cannot promote an old region %p", this);
-        CHECK_DETAIL(youngView.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>(),
-                     "cannot promote region %p through a stale young mark view", this);
-        SetOldMarkedRegionFlag(0);
-        SetEnqueuedRegionFlag(0);
-        SetResurrectedRegionFlag(0);
-
-        __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
+        CHECK_DETAIL(metadata.retiredLivemap == nullptr, "region %p promoted twice in one life", this);
+        ZLiveMap* fresh = new ZLiveMap(object_max_count());
         SetYoungRegionFlag(0);
         SetYoungAge(0);
         ResetPageSequence();
-        InitializeLiveInfo();
-        return GetMarkView<Generation::Old>();
+        metadata.retiredLivemap = livemap();
+        __atomic_store_n(&metadata.livemap, fresh, std::memory_order_release);
     }
 
 inline void RegionInfo::SetYoungAge(uint8_t age)
@@ -1605,185 +1023,35 @@ inline bool RegionInfo::IsValidRegion() const
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-inline RegionBitmap* RegionInfo::GetCurrentLiveMap() const
+// zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:216-221: a relocatable
+// page that was marked this cycle and has no live bytes is garbage. A page not
+// marked this cycle is not known empty here (kept for the selector's ZGC
+// convergence in the page-descriptor package).
+inline bool RegionInfo::IsKnownEmpty() const
     {
-        LiveInfo* live = GetLiveInfo();
-        const uint64_t seqnum = GetSnapshotEpoch();
-        if (live == nullptr || seqnum == 0 ||
-            live->GetMarkFace().epoch.load(std::memory_order_acquire) != seqnum) {
-            return nullptr;
-        }
-        return __atomic_load_n(&live->GetMarkFace().bitmap, std::memory_order_relaxed);
-    }
-
-inline uint64_t RegionInfo::GetLiveByteCount() const
-    {
-        RegionBitmap* bitmap = GetCurrentLiveMap();
-        return bitmap == nullptr ? 0 : bitmap->GetLiveBytes();
-    }
-
-inline uint32_t RegionInfo::GetLiveObjectCount() const
-    {
-        RegionBitmap* bitmap = GetCurrentLiveMap();
-        return bitmap == nullptr ? 0 : static_cast<uint32_t>(bitmap->GetLiveObjects());
-    }
-
-inline void RegionInfo::AddLiveCounts(uint32_t objects, uint64_t bytes)
-    {
-        RegionBitmap* bitmap = GetCurrentLiveMap();
-        CHECK(bitmap != nullptr);
-        bitmap->AddLiveCounts(objects, bytes);
-    }
-
-inline bool RegionInfo::IsKnownEmpty(MarkView<Generation::Old> view) const
-    {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return false;
-        }
-        // ZGC allocate-black: a mark-start watermark gap means objects were
-        // born after ClearLiveInfo and are implicitly live. Do not treat the
-        // region empty, and do not count them as explicitly marked.
         if (IsAllocating()) {
             return false;
         }
-        const uint64_t liveBytes = GetLiveByteCount();
-        const bool auth = IsLiveCountAuthoritative();
-        bool markedThisCycle = false;
-        bool keepNullFace = false;
-        bool keepEpoch = false;
-        if (IsLargeRegion()) {
-            if (view.GetEpoch() != GetMarkSnapshotEpoch<Generation::Old>()) {
-                keepEpoch = true;
-            } else {
-                markedThisCycle = true;
-            }
-        } else {
-            LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-            if (liveInfo == nullptr) {
-                markedThisCycle = false;
-                keepNullFace = true;
-            } else if (liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) !=
-                           view.GetEpoch() ||
-                       view.GetEpoch() != GetMarkSnapshotEpoch<Generation::Old>()) {
-                markedThisCycle = false;
-                keepEpoch = true;
-            } else {
-                markedThisCycle = true;
-            }
-        }
-        const bool emptyByMark = markedThisCycle && (IsLargeRegion()
-            ? GetMarkedRegionFlag(view) == 0
-            : (liveBytes == 0));
-
-        if (!ikeAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
-            std::atexit([]() {
-                std::fprintf(stderr,
-                             "[GCV2][ike-keep] atexit trueEmpty=%zu keep=%zu keepBytes=%zu "
-                             "nullFace=%zu epoch=%zu\n",
-                             ikeTrueEmpty.load(std::memory_order_relaxed),
-                             ikeConservativeKeep.load(std::memory_order_relaxed),
-                             ikeConservativeKeepBytes.load(std::memory_order_relaxed),
-                             ikeNullFaceKeep.load(std::memory_order_relaxed),
-                             ikeEpochKeep.load(std::memory_order_relaxed));
-                std::fflush(stderr);
-            });
-        }
-        if (!auth) {
-            return false;
-        }
-        if (emptyByMark) {
-            ikeTrueEmpty.fetch_add(1, std::memory_order_relaxed);
-            return true;
-        }
-        if (keepNullFace || keepEpoch) {
-            size_t n = ikeConservativeKeep.fetch_add(1, std::memory_order_relaxed) + 1;
-            ikeConservativeKeepBytes.fetch_add(GetRegionSize(), std::memory_order_relaxed);
-            if (keepNullFace) {
-                ikeNullFaceKeep.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (keepEpoch) {
-                ikeEpochKeep.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (n <= 8 || (n & (n - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][ike-keep] n=%zu region=%p start=%#zx nullFace=%u epoch=%u "
-                    "live=%llu — not empty (unmarked this cycle)",
-                    n, this, GetRegionStart(), static_cast<unsigned>(keepNullFace),
-                    static_cast<unsigned>(keepEpoch),
-                    static_cast<unsigned long long>(liveBytes));
-            }
-        }
-        return false;
+        return is_marked() && live_bytes() == 0;
     }
 
-inline bool RegionInfo::IsKnownYoungEmpty(MarkView<Generation::Young> view) const
+inline bool RegionInfo::IsKnownYoungEmpty() const
     {
-        CHECK(view.GetRegion() == this);
-        if (!ValidateMarkView(view)) {
-            return false;
-        }
         if (IsAllocating()) {
             return false;
         }
-        const uint64_t liveBytes = GetLiveByteCount();
-        const bool auth = IsLiveCountAuthoritative();
-        bool markedThisCycle = false;
-        if (IsLargeRegion()) {
-            markedThisCycle = view.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>();
-        } else {
-            LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-            if (liveInfo == nullptr) {
-                markedThisCycle = false;
-            } else {
-                markedThisCycle = liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) ==
-                        view.GetEpoch() &&
-                    view.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>();
-            }
-        }
-        const bool emptyByMark = markedThisCycle && (IsLargeRegion()
-            ? GetMarkedRegionFlag(view) == 0
-            : (liveBytes == 0));
-        return auth && emptyByMark;
+        return is_marked() && live_bytes() == 0;
     }
 
-inline bool RegionInfo::IsSafeKnownEmpty(MarkView<Generation::Old> view)
+inline bool RegionInfo::IsSafeKnownEmpty()
     {
-        if (!IsKnownEmpty(view)) {
-            return false;
-        }
-        if (GetRegionAllocPtr() <= GetRegionStart()) {
-            return true;
-        }
-        // Examined: either large, or we had a mark face this cycle that is now stale/null
-        // (authority already required by IsKnownEmpty). Residual bitmap pointer may remain.
-        return GetMarkBitmap(view) != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion() ||
-            __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
+        return IsKnownEmpty();
     }
 
-inline bool RegionInfo::IsSafeKnownYoungEmpty(MarkView<Generation::Young> view)
+inline bool RegionInfo::IsSafeKnownYoungEmpty()
     {
-        if (!IsKnownYoungEmpty(view)) {
-            return false;
-        }
-        if (GetRegionAllocPtr() <= GetRegionStart()) {
-            return true;
-        }
-        return GetMarkBitmap(view) != nullptr || IsLargeRegion() ||
-            __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
+        return IsKnownYoungEmpty();
     }
-
-    template<Generation G>
-inline void RegionInfo::ResetLiveMapAfterForward(MarkView<G> view)
-    {
-        CHECK(view.GetRegion() == this);
-        ClearCurrentMarkFace();
-
-        if (IsLargeRegion()) {
-            SetMarkedRegionFlag(view, 0);
-        }
-    }
-
 inline void RegionInfo::RemoveFromList()
     {
         RegionInfo* prev = GetPrevRegion();
@@ -1805,18 +1073,6 @@ inline void RegionInfo::RemoveFromList()
 
 
 
-
-
-
-inline ALWAYS_INLINE void RegionInfo::CheckObjectSize(
-        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
-    {
-        MAddress objAddr = reinterpret_cast<MAddress>(obj);
-        // kMarkedBytesPerBit is 8, matching Allocator::ALLOC_ALIGN (Allocator.h:19).
-        if (UNLIKELY(objSize == 0 || (objSize % kMarkedBytesPerBit) != 0 || objSize > regionEnd - objAddr)) {
-            ReportInvalidObjectSize(obj, objSize, regionStart, regionEnd);
-        }
-    }
 
 
 
@@ -1863,7 +1119,12 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
-        LiveInfoArena::GetLiveInfoArena().RecyclePageLiveInfo(this);
+        // ZPageAllocator::safe_destroy_page: the previous page life's livemap
+        // (and a promotion's parked young map) goes with it (~ZPage / ~CHeapBitMap).
+        delete livemap();
+        __atomic_store_n(&metadata.livemap, static_cast<ZLiveMap*>(nullptr), std::memory_order_release);
+        delete metadata.retiredLivemap;
+        metadata.retiredLivemap = nullptr;
         SetYoungRegionFlag(0);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
@@ -1879,8 +1140,6 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         metadata.nextRegionIdx0 = NULLPTR_IDX;
         metadata.regionListOwner.store(nullptr, std::memory_order_relaxed);
         metadata.censusBoundaryOffset = 0;
-        metadata.liveInfo = nullptr;
-        ClearCurrentMarkFace();
 
         // routedest: this is the reuse edge named in the defect. TakeRegion has already run
         // ClearUnits over this payload; if a published route still names this region, the
@@ -1895,15 +1154,14 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
         // TakeRegion reuses garbage without DispelGhostFromRegion.
         SetInGhostRegion(0);
-        SetOldMarkedRegionFlag(0);
-        SetEnqueuedRegionFlag(0);
-        SetResurrectedRegionFlag(0);
-        SetMarkFaceSealed(false);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
-        if (uClass != UnitRole::FREE_UNITS) {
-            InitializeLiveInfo();
-        }
+        // ZPage::ZPage (zPage.cpp:33-42): _type is initialized before
+        // _livemap(object_max_count()), which reads it. The role is the page
+        // type here, so it is written before the livemap is sized from it.
         SetUnitRole(uClass);
+        if (uClass != UnitRole::FREE_UNITS) {
+            InitializeLiveMap();
+        }
     }
 
 inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass, PageAge age)

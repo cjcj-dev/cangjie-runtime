@@ -21,7 +21,7 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 MarkStackEntry Entry(size_t i)
 {
-    return MarkStackEntry::PartialArray(i + 1, i + 3, false);
+    return MarkStackEntry(size_t(i + 1), size_t(i + 3), false);
 }
 
 void DrainFollow(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, MarkTerminate& terminate,
@@ -30,7 +30,7 @@ void DrainFollow(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, 
     MapleRuntime::GcUnit::WorkerFixture workerThread(workerId);
     (void)MarkEngine::FollowWork(context, smr, stripes, terminate, workerId, partial,
                                  [&seen](const MarkStackEntry& entry) {
-                                     seen.push_back(entry.partialArrayOffset());
+                                     seen.push_back(entry.partial_array_offset());
                                  });
 }
 } // namespace
@@ -113,10 +113,10 @@ GC_TEST(MarkPort203Engine, OverflowPreferredOverPublished)
     stripes.At(0).PublishStack(overflow, false);
     stripes.At(0).PublishStack(published, true);
     MarkStripeStack* first = stripes.At(0).StealStack(smr, 0);
-    GC_EXPECT_EQ(first->Pop().partialArrayOffset(), 2u);
+    GC_EXPECT_EQ(first->Pop().partial_array_offset(), 2u);
     MarkStripeStack::Destroy(first);
     MarkStripeStack* second = stripes.At(0).StealStack(smr, 0);
-    GC_EXPECT_EQ(second->Pop().partialArrayOffset(), 3u);
+    GC_EXPECT_EQ(second->Pop().partial_array_offset(), 3u);
     MarkStripeStack::Destroy(second);
 }
 
@@ -158,7 +158,7 @@ GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
     std::vector<size_t> seen;
     auto result = MarkEngine::FollowWork(context, smr, stripes, terminate, 0, true,
                                          [&seen](const MarkStackEntry& entry) {
-                                             seen.push_back(entry.partialArrayOffset());
+                                             seen.push_back(entry.partial_array_offset());
                                          });
     GC_EXPECT_TRUE(result == MarkEngine::Result::Partial);
     GC_EXPECT_TRUE(!terminate.Terminated());

@@ -145,11 +145,10 @@ size_t ForwardingTable::ObjectCountUpperBound(RegionInfo* region, size_t regionS
     // ZForwarding::nentries sizes the attached array from live object count.
     // Before a mark count is authoritative (standalone setup), retain the
     // existing capacity upper bound; selected product pages use their livemap.
-    if (!region->IsLiveCountAuthoritative()) {
+    if (!region->is_marked()) {
         return regionSize >> ZForwarding::kAlignShift;
     }
-    if (region->IsLargeRegion()) return region->GetLiveByteCount() != 0 ? 1 : 0;
-    return region->GetLiveObjectCount();
+    return region->live_objects();
 }
 
 void ForwardingTable::insert(ZForwarding* forwarding)
@@ -214,7 +213,7 @@ void ForwardingTable::VisitAll(Generation generation, const std::function<void(Z
     g_relocationSets[static_cast<size_t>(generation)].map.visit_unique(visitor);
 }
 
-bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
+bool ForwardingTable::PublishFromPageView(RegionInfo* region, ZLiveMap* livemap, uint64_t epoch,
                                           MAddress topAtStart, uint64_t birthSequence,
                                           uint8_t owner,
                                           uint8_t largeMarked, RegionLifeId lifeId)
@@ -227,7 +226,7 @@ bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo
     if (carrier == nullptr || carrier->page() != region) {
         return false;
     }
-    carrier->publish_from_page_view(liveInfo, epoch, topAtStart, birthSequence,
+    carrier->publish_from_page_view(livemap, epoch, topAtStart, birthSequence,
                                     owner, largeMarked, lifeId);
     ZForwarding* previous = region->metadata.fwdOwner.load(std::memory_order_acquire);
     if (previous != carrier) {

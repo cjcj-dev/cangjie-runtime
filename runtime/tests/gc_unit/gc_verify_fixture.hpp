@@ -27,8 +27,6 @@ struct GcVerifyFixture : GcHeapFixture {
     {
         region0->SetYoungRegionFlag(0);
         region1->SetYoungRegionFlag(0);
-        LiveInfo* live = PlantLiveInfo(region0);
-        (void)PlantMarkBitmap<Generation::Old>(live, region0->GetRegionSize());
         (void)RegionSpace::MarkObject<Generation::Old>(obj0);
         LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Old)
             .PublishPhase(GC_PHASE_MARK_COMPLETE);
@@ -39,7 +37,7 @@ struct GcVerifyFixture : GcHeapFixture {
         selected.PrependRegion(region0, region0->GetRegionType());
         CHECK(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
         (void)selected.TakeHeadRegion();
-        region0->PrepareForwardableRegion(region0->GetMarkView<Generation::Old>());
+        region0->PrepareForwardableRegion<Generation::Old>();
     }
 };
 } // namespace MapleRuntime::GcUnit

@@ -385,14 +385,11 @@ struct YoungCollectionStats {
     size_t recentFullVisited = 0;
     size_t recentFullVisitedUnits = 0;
     size_t recentFullYoung = 0;
-    size_t clearLiveRegions = 0;
-    size_t clearLiveUnits = 0;
     size_t objectVisits = 0;
     size_t slotVisits = 0;
     uint64_t reparkNs = 0;
     uint64_t unmovableNs = 0;
     uint64_t recentFullNs = 0;
-    uint64_t clearLiveNs = 0;
     uint64_t visitorNs = 0;
     uint64_t listMoveNs = 0;
 };
@@ -637,16 +634,6 @@ public:
 
     size_t GetYoungAllocatedSize() const;
 
-    static bool IsKnownEmptyForView(RegionInfo* region, MarkView<Generation::Young> view)
-    {
-        return region->IsKnownYoungEmpty(view);
-    }
-
-    static bool IsKnownEmptyForView(RegionInfo* region, MarkView<Generation::Old> view)
-    {
-        return region->IsKnownEmpty(view);
-    }
-
     template<Generation G>
     size_t CollectRegion(RegionInfo* region);
 
@@ -747,7 +734,6 @@ public:
     // prior minor PrepareForwardTable are the ones that covered the TRACE window.
     void ReleaseMarkQuarantine();
 
-    void ClearAllLiveInfo();
 
     // Probe-only: visit every region on managed lists with its list name (tag-reuse scan).
     template <typename F>
@@ -786,9 +772,6 @@ private:
     inline void CheckRegionWhetherCreatedInFixPhase(RegionInfo* region);
     inline void TagHugePage(RegionInfo* region, size_t num) const;
     inline void UntagHugePage(RegionInfo* region, size_t num) const;
-
-    template<Generation G>
-    void ClearLiveInfo(RegionList& list);
 
     // ZObjectAllocator::PerAge (zObjectAllocator.hpp:37-71): per-CPU shared
     // small page in ZPerCPU storage (zValue.hpp), one PerAge per page age

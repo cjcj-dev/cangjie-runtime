@@ -24,7 +24,7 @@ void MarkLiveCache::IncLive(RegionInfo* region, size_t bytes)
 void MarkLiveCache::Evict(Entry& entry)
 {
     if (entry.region != nullptr) {
-        entry.region->AddLiveCounts(entry.objects, entry.bytes);
+        entry.region->inc_live(entry.objects, entry.bytes);
         entry.region = nullptr;
         entry.bytes = 0;
         entry.objects = 0;

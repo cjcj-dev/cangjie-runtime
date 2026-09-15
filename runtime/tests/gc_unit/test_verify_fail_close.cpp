@@ -106,10 +106,9 @@ GC_OTHER_VM_TEST(ZVerify, SourcePreparationPreservesMarkedObjects)
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
     size_t visits = 0;
-    fixture.region0->VisitLiveObjectsUntilFalse([&](BaseObject* object) {
+    fixture.region0->object_iterate([&](BaseObject* object) {
         GC_EXPECT_TRUE(object == fixture.obj0);
         ++visits;
-        return true;
     });
     GC_EXPECT_EQ(visits, size_t(1));
     std::fprintf(stderr, "SOURCE_MARKED_OBJECT_ASSERT_EXECUTED visits=%zu\n", visits);
@@ -130,12 +129,12 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     owner->verify();
     ExpectSceneAbort("Invalid number of live objects", [&] {
-        fixture.region0->AddLiveCounts(1, RegionSpace::GetAllocSize(*fixture.obj0));
+        fixture.region0->inc_live(1, RegionSpace::GetAllocSize(*fixture.obj0));
         owner->verify();
     });
     owner->verify();
     ExpectSceneAbort("Invalid number of live bytes", [&] {
-        fixture.region0->AddLiveCounts(0, RegionSpace::GetAllocSize(*fixture.obj0));
+        fixture.region0->inc_live(0, RegionSpace::GetAllocSize(*fixture.obj0));
         owner->verify();
     });
     owner->verify();
@@ -192,7 +191,6 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
     // A page from a previous owner cycle is relocatable.
-    fixture.region0->ClearLiveInfo(fixture.region0->GetMarkView<Generation::Old>());
     ExpectSceneAbort("Raw null requires allocating holder", [&] {
         ZVerify::Oop(fixture.obj0, field, false);
     });
