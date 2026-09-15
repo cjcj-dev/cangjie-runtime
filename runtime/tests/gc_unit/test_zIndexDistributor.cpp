@@ -164,8 +164,8 @@ public:
     // that is not atomic loses increments under this contention.
     static void test_claim_tree_concurrent_claims_are_accounted()
     {
-        constexpr int workers = 8;
-        constexpr int calls = 5000;
+        constexpr int workers = 16;
+        constexpr int calls = 10000;
         constexpr size_t count = 4096; // claim_level_size(ClaimLevels): one index per leaf segment
         ZIndexDistributorClaimTree tree(static_cast<int>(count));
         std::vector<std::atomic<unsigned>> visits(count);
@@ -196,6 +196,27 @@ public:
         // Target invariant: the level-0 claim word accounts for every claim.
         const int level0 = tree._claim_array[ZIndexDistributorClaimTree::claim_index(nullptr, 0)];
         GC_EXPECT_EQ(level0, 16 + workers * calls);
+    }
+
+    // The claim primitive itself (zIndexDistributor.inline.hpp:171-173): one
+    // fetch-and-add per call, so contending callers never lose an increment.
+    static void test_claim_tree_claim_is_atomic()
+    {
+        constexpr int workers = 16;
+        constexpr int iterations = 200000;
+        ZIndexDistributorClaimTree tree(4096);
+        std::vector<std::thread> threads;
+        for (int worker = 0; worker < workers; ++worker) {
+            threads.emplace_back([&]() {
+                for (int i = 0; i < iterations; ++i) {
+                    (void)tree.claim(0);
+                }
+            });
+        }
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        GC_EXPECT_EQ(tree._claim_array[0], workers * iterations);
     }
 
     // Invariant 3 (spec): every index in [0, count) is claimed exactly once.
@@ -264,6 +285,11 @@ GC_TEST(ZIndexDistributorTest, test_claim_tree_claim_level_index)
 GC_TEST(ZIndexDistributorTest, test_claim_tree_claim_index)
 {
     ZIndexDistributorTest::test_claim_tree_claim_index();
+}
+
+GC_TEST(ZIndexDistributorTest, test_claim_tree_claim_is_atomic)
+{
+    ZIndexDistributorTest::test_claim_tree_claim_is_atomic();
 }
 
 GC_TEST(ZIndexDistributorTest, test_claim_tree_concurrent_claims_are_accounted)
