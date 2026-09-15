@@ -46,3 +46,13 @@ Pending with replacement consumers: instance Barrier members; Load/Store/NativeS
 - Buffer: real store producer → relocation-start install → watermark on_new_phase → remembered scanning. Cut base installation only after reconstructing a real moved holder; assert remapped slot/target, with nonmoving and empty-buffer controls. Removing fake collector observation is not evidence of product behavior.
 - Compiler: generated load/preloaded ABI and zero-call good-store/atomic blocks, plus force bad-color to observe real slow result. Keep P01 stack/global/non-contiguous reserved-range tests. Removing PostWrite alone is not sufficient without remset/old-value slow evidence.
 - Build default/testable in shared build slots; default + filler (same default ELF), testable and actual OHOS attempt. Managed finalizer_trigger/segmented_array_managed N≥3 only after joint LLVM/runtime/std identity exists. No baseline or historical result borrowed as current pass.
+
+## Accepted rulings and saved partial implementation
+
+The snapshots in coordination-inputs/answer-201638Z.md supersede the earlier pending phase/install questions: retain the ZGC phase/generation slow conditions, both base-install call sites and color claim. LLVM base and sparse candidate are recorded in llvm-coordinate.txt. No further candidate publishing is authorized to this implementer after this ruling; the existing draft runtime PR remains at its earlier save point.
+
+Runtime 74e0de14e035d1ecbbf8af460575d96f6435577e embeds markStacks[2], owns the store-buffer pointer and adds mask/invisible-root storage plus relative field offsets. It deliberately does not yet change attach lifecycle, phase mask publication, or invisible-root ownership; those remain part of the unfinished P08/P10 seam. Existing tests only adapt field dereferences without weakening assertions.
+
+LLVM 4bb0c3ab7187c0e9fef3ce3e5378003aa15edcf9 removes phase-check lowering, keeps proven non-heap writes, and adds p08-phase-free-write.ll. No candidate binary has been built. The added test is a prepared input, not test evidence.
+
+The remaining 202355Z thread-identity/shared-function ruling and a fresh capacity recovery receipt are required for dependent work. This is WIP; neither partial candidate is proposed for Review.

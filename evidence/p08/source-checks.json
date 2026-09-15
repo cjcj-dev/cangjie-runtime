@@ -1,0 +1,425 @@
+{
+  "kind": "source checks only, not product acceptance",
+  "commands": [
+    {
+      "cmd": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "ReadPlainRoot|WritePlainRoot|WriteI8|WriteI16|WriteI32|WriteI64|WriteF32|WriteF64",
+        "91f3dcc232201d4ad98ec3af6f10165edb950416",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 0,
+      "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CjScheduler.cpp:359:    BaseObject* future = Heap::GetBarrier().ReadPlainRoot(RootSlotAt(&lwtData->obj));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CjScheduler.cpp:382:    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data.obj), from_native_ref(future));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CjScheduler.cpp:487:    BaseObject* executeClosure = Heap::GetBarrier().ReadPlainRoot(RootSlotAt(&lwtData->execute));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CjScheduler.cpp:488:    BaseObject* closureObj = Heap::GetBarrier().ReadPlainRoot(RootSlotAt(&lwtData->obj));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CjScheduler.cpp:507:    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data.obj), from_native_ref(closurePtr));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CjScheduler.cpp:508:    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data.execute), from_native_ref(executeClosure));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CjScheduler.cpp:624:    BaseObject* closureObj = Heap::GetBarrier().ReadPlainRoot(RootSlotAt(&lwtData->obj));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CjScheduler.cpp:645:    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data.obj), from_native_ref(closurePtr));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/CompilerCalls.cpp:1876:    return Heap::GetBarrier().ReadPlainRoot(RootSlotAt(static_cast<void*>(field)));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.cpp:135:void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.cpp:137:void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.cpp:139:void Barrier::WriteI32(BaseObject* obj, Field<int32_t>& field, int32_t val) const { field.SetFieldValue(obj, val); }\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.cpp:141:void Barrier::WriteI64(BaseObject* obj, Field<int64_t>& field, int64_t val) const { field.SetFieldValue(obj, val); }\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.cpp:143:void Barrier::WriteF32(BaseObject* obj, Field<float>& field, float val) const { field.SetFieldValue(obj, val); }\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.cpp:145:void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const { field.SetFieldValue(obj, val); }\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.cpp:287:BaseObject* Barrier::ReadPlainRoot(RootSlot& field) const\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.cpp:292:void Barrier::WritePlainRoot(RootSlot& field, BaseObject* ref) const\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.hpp:31:    void WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const;\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.hpp:32:    void WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const;\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.hpp:33:    void WriteI32(BaseObject* obj, Field<int32_t>& field, int32_t val) const;\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.hpp:34:    void WriteI64(BaseObject* obj, Field<int64_t>& field, int64_t val) const;\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.hpp:35:    void WriteF32(BaseObject* obj, Field<float>& field, float val) const;\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.hpp:36:    void WriteF64(BaseObject* obj, Field<double>& field, double val) const;\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.hpp:41:    BaseObject* ReadPlainRoot(RootSlot& field) const;\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.hpp:52:    void WritePlainRoot(RootSlot& field, BaseObject* ref) const;\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.inline.hpp:75:    WriteI8(obj, field, val);\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.inline.hpp:81:    WriteI16(obj, field, val);\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.inline.hpp:87:    WriteI32(obj, field, val);\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.inline.hpp:93:    WriteI64(obj, field, val);\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.inline.hpp:99:    WriteF32(obj, field, val);\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zBarrier.inline.hpp:105:    WriteF64(obj, field, val);\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zHeapIterator.cpp:89:        Push(Heap::GetBarrier().ReadPlainRoot(root), objectVisitor);\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zMark.cpp:690:            MarkOldObjectIfActive(Heap::GetBarrier().ReadPlainRoot(root));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Sync/Sync.cpp:650:    auto res = Heap::GetBarrier().ReadPlainRoot(root);\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Sync/Sync.cpp:666:    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data->threadObject), from_native_ref(ptr));\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/windows_x86_64_exports.def:2386:    _ZNK12MapleRuntime7Barrier7WriteI8EPNS_10BaseObjectERNS_5FieldIaLb0EEEa @2701\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/windows_x86_64_exports.def:2387:    _ZNK12MapleRuntime7Barrier8WriteF32EPNS_10BaseObjectERNS_5FieldIfLb0EEEf @2702\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/windows_x86_64_exports.def:2388:    _ZNK12MapleRuntime7Barrier8WriteF64EPNS_10BaseObjectERNS_5FieldIdLb0EEEd @2703\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/windows_x86_64_exports.def:2389:    _ZNK12MapleRuntime7Barrier8WriteI16EPNS_10BaseObjectERNS_5FieldIsLb0EEEs @2704\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/windows_x86_64_exports.def:2390:    _ZNK12MapleRuntime7Barrier8WriteI32EPNS_10BaseObjectERNS_5FieldIiLb0EEEi @2705\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/windows_x86_64_exports.def:2391:    _ZNK12MapleRuntime7Barrier8WriteI64EPNS_10BaseObjectERNS_5FieldIxLb0EEEx @2706\n",
+      "stderr": ""
+    },
+    {
+      "cmd": [
+        "git",
+        "grep",
+        "-n",
+        "-E",
+        "ReadPlainRoot|WritePlainRoot|WriteI8|WriteI16|WriteI32|WriteI64|WriteF32|WriteF64",
+        "HEAD",
+        "--",
+        "runtime/src"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "cmd": [
+        "git",
+        "-C",
+        "/root/cj_build/llvm_rebase_wt/sym_cangjie_runtime_614_implement_r5687433872",
+        "diff",
+        "--check"
+      ],
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "cmd": [
+        "git",
+        "-C",
+        "/root/cj_build/llvm_rebase_wt/sym_cangjie_runtime_614_implement_r5687433872",
+        "grep",
+        "-n",
+        "-E",
+        "GCPhaseCheck|EnableGCPhase|GetGCPhase",
+        "1a01451912f160219665abdc497274e574338bad",
+        "--",
+        "llvm/lib/CodeGen/CJBarrierLowering.cpp"
+      ],
+      "rc": 0,
+      "stdout": "1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:41:static cl::opt<bool> EnableGCPhase(\"enable-gc-phase\", cl::init(true),\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:324:class GCPhaseCheck {\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:326:  explicit GCPhaseCheck(Function &F) : C(F.getContext()) {\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:327:    GCStateCheckFunc = F.getParent()->getFunction(\"GetGCPhase\");\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:328:    assert(GCStateCheckFunc && \"Has no GetGCPhase\");\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:330:  ~GCPhaseCheck() = default;\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:968:  Function *GCStateCheckFunc = M.getFunction(\"GetGCPhase\");\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:969:  if (GCStateCheckFunc != nullptr) { // have GetGCPhase in module\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:975:      cast<Function>(M.getOrInsertFunction(\"GetGCPhase\", FuncType).getCallee());\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:983:static bool fastBarrierInline(Function &F, GCPhaseCheck &GCPhase) {\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:1044:  if (!EnableGCPhase || CangjieJIT)\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:1047:  GCPhaseCheck GCPhase(F);\n1a01451912f160219665abdc497274e574338bad:llvm/lib/CodeGen/CJBarrierLowering.cpp:1258:    EnableGCPhase = false;\n",
+      "stderr": ""
+    },
+    {
+      "cmd": [
+        "git",
+        "-C",
+        "/root/cj_build/llvm_rebase_wt/sym_cangjie_runtime_614_implement_r5687433872",
+        "grep",
+        "-n",
+        "-E",
+        "GCPhaseCheck|EnableGCPhase|GetGCPhase",
+        "HEAD",
+        "--",
+        "llvm/lib/CodeGen/CJBarrierLowering.cpp"
+      ],
+      "rc": 1,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "main_feature_counts": {
+    "ZLiveMap": {
+      "91f3dcc232201d4ad98ec3af6f10165edb950416": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZLiveMap",
+          "91f3dcc232201d4ad98ec3af6f10165edb950416",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/Allocator/zForwardingTable.cpp:1\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zForwarding.hpp:3\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zForwardingTable.hpp:2\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zGeneration.hpp:1\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zLiveMap.cpp:8\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zLiveMap.hpp:5\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zLiveMap.inline.hpp:23\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zPage.cpp:4\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zPage.hpp:7\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zPage.inline.hpp:9\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zRelocate.cpp:7\n",
+        "by_file": {
+          "runtime/src/Heap/Allocator/zForwardingTable.cpp": 1,
+          "runtime/src/Heap/z/zForwarding.hpp": 3,
+          "runtime/src/Heap/z/zForwardingTable.hpp": 2,
+          "runtime/src/Heap/z/zGeneration.hpp": 1,
+          "runtime/src/Heap/z/zLiveMap.cpp": 8,
+          "runtime/src/Heap/z/zLiveMap.hpp": 5,
+          "runtime/src/Heap/z/zLiveMap.inline.hpp": 23,
+          "runtime/src/Heap/z/zPage.cpp": 4,
+          "runtime/src/Heap/z/zPage.hpp": 7,
+          "runtime/src/Heap/z/zPage.inline.hpp": 9,
+          "runtime/src/Heap/z/zRelocate.cpp": 7
+        }
+      },
+      "HEAD": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZLiveMap",
+          "HEAD",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "HEAD:runtime/src/Heap/Allocator/zForwardingTable.cpp:1\nHEAD:runtime/src/Heap/z/zForwarding.hpp:3\nHEAD:runtime/src/Heap/z/zForwardingTable.hpp:2\nHEAD:runtime/src/Heap/z/zGeneration.hpp:1\nHEAD:runtime/src/Heap/z/zLiveMap.cpp:8\nHEAD:runtime/src/Heap/z/zLiveMap.hpp:5\nHEAD:runtime/src/Heap/z/zLiveMap.inline.hpp:23\nHEAD:runtime/src/Heap/z/zPage.cpp:4\nHEAD:runtime/src/Heap/z/zPage.hpp:7\nHEAD:runtime/src/Heap/z/zPage.inline.hpp:9\nHEAD:runtime/src/Heap/z/zRelocate.cpp:7\n",
+        "by_file": {
+          "runtime/src/Heap/Allocator/zForwardingTable.cpp": 1,
+          "runtime/src/Heap/z/zForwarding.hpp": 3,
+          "runtime/src/Heap/z/zForwardingTable.hpp": 2,
+          "runtime/src/Heap/z/zGeneration.hpp": 1,
+          "runtime/src/Heap/z/zLiveMap.cpp": 8,
+          "runtime/src/Heap/z/zLiveMap.hpp": 5,
+          "runtime/src/Heap/z/zLiveMap.inline.hpp": 23,
+          "runtime/src/Heap/z/zPage.cpp": 4,
+          "runtime/src/Heap/z/zPage.hpp": 7,
+          "runtime/src/Heap/z/zPage.inline.hpp": 9,
+          "runtime/src/Heap/z/zRelocate.cpp": 7
+        }
+      }
+    },
+    "ZSafeDelete": {
+      "91f3dcc232201d4ad98ec3af6f10165edb950416": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZSafeDelete",
+          "91f3dcc232201d4ad98ec3af6f10165edb950416",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zPage.cpp:1\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zPage.hpp:3\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zSafeDelete.hpp:2\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zSafeDelete.inline.hpp:5\n",
+        "by_file": {
+          "runtime/src/Heap/z/zPage.cpp": 1,
+          "runtime/src/Heap/z/zPage.hpp": 3,
+          "runtime/src/Heap/z/zSafeDelete.hpp": 2,
+          "runtime/src/Heap/z/zSafeDelete.inline.hpp": 5
+        }
+      },
+      "HEAD": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZSafeDelete",
+          "HEAD",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "HEAD:runtime/src/Heap/z/zPage.cpp:1\nHEAD:runtime/src/Heap/z/zPage.hpp:3\nHEAD:runtime/src/Heap/z/zSafeDelete.hpp:2\nHEAD:runtime/src/Heap/z/zSafeDelete.inline.hpp:5\n",
+        "by_file": {
+          "runtime/src/Heap/z/zPage.cpp": 1,
+          "runtime/src/Heap/z/zPage.hpp": 3,
+          "runtime/src/Heap/z/zSafeDelete.hpp": 2,
+          "runtime/src/Heap/z/zSafeDelete.inline.hpp": 5
+        }
+      }
+    },
+    "ZArrayParallelIterator": {
+      "91f3dcc232201d4ad98ec3af6f10165edb950416": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZArrayParallelIterator",
+          "91f3dcc232201d4ad98ec3af6f10165edb950416",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zArray.hpp:1\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zRelocate.cpp:6\n",
+        "by_file": {
+          "runtime/src/Heap/z/zArray.hpp": 1,
+          "runtime/src/Heap/z/zRelocate.cpp": 6
+        }
+      },
+      "HEAD": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZArrayParallelIterator",
+          "HEAD",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "HEAD:runtime/src/Heap/z/zArray.hpp:1\nHEAD:runtime/src/Heap/z/zRelocate.cpp:6\n",
+        "by_file": {
+          "runtime/src/Heap/z/zArray.hpp": 1,
+          "runtime/src/Heap/z/zRelocate.cpp": 6
+        }
+      }
+    },
+    "object_copy_disjoint": {
+      "91f3dcc232201d4ad98ec3af6f10165edb950416": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "object_copy_disjoint",
+          "91f3dcc232201d4ad98ec3af6f10165edb950416",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zRelocate.cpp:3\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zUtils.hpp:2\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zUtils.inline.hpp:2\n",
+        "by_file": {
+          "runtime/src/Heap/z/zRelocate.cpp": 3,
+          "runtime/src/Heap/z/zUtils.hpp": 2,
+          "runtime/src/Heap/z/zUtils.inline.hpp": 2
+        }
+      },
+      "HEAD": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "object_copy_disjoint",
+          "HEAD",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "HEAD:runtime/src/Heap/z/zRelocate.cpp:3\nHEAD:runtime/src/Heap/z/zUtils.hpp:2\nHEAD:runtime/src/Heap/z/zUtils.inline.hpp:2\n",
+        "by_file": {
+          "runtime/src/Heap/z/zRelocate.cpp": 3,
+          "runtime/src/Heap/z/zUtils.hpp": 2,
+          "runtime/src/Heap/z/zUtils.inline.hpp": 2
+        }
+      }
+    },
+    "ZFuture<bool>": {
+      "91f3dcc232201d4ad98ec3af6f10165edb950416": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZFuture<bool>",
+          "91f3dcc232201d4ad98ec3af6f10165edb950416",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zPageAllocator.hpp:3\n",
+        "by_file": {
+          "runtime/src/Heap/z/zPageAllocator.hpp": 3
+        }
+      },
+      "HEAD": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZFuture<bool>",
+          "HEAD",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "HEAD:runtime/src/Heap/z/zPageAllocator.hpp:3\n",
+        "by_file": {
+          "runtime/src/Heap/z/zPageAllocator.hpp": 3
+        }
+      }
+    },
+    "ZPerCPU": {
+      "91f3dcc232201d4ad98ec3af6f10165edb950416": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZPerCPU",
+          "91f3dcc232201d4ad98ec3af6f10165edb950416",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zPageAllocator.hpp:2\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zValue.hpp:4\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zValue.inline.hpp:3\n",
+        "by_file": {
+          "runtime/src/Heap/z/zPageAllocator.hpp": 2,
+          "runtime/src/Heap/z/zValue.hpp": 4,
+          "runtime/src/Heap/z/zValue.inline.hpp": 3
+        }
+      },
+      "HEAD": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZPerCPU",
+          "HEAD",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "HEAD:runtime/src/Heap/z/zPageAllocator.hpp:2\nHEAD:runtime/src/Heap/z/zValue.hpp:4\nHEAD:runtime/src/Heap/z/zValue.inline.hpp:3\n",
+        "by_file": {
+          "runtime/src/Heap/z/zPageAllocator.hpp": 2,
+          "runtime/src/Heap/z/zValue.hpp": 4,
+          "runtime/src/Heap/z/zValue.inline.hpp": 3
+        }
+      }
+    },
+    "ZDeferredConstructed": {
+      "91f3dcc232201d4ad98ec3af6f10165edb950416": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZDeferredConstructed",
+          "91f3dcc232201d4ad98ec3af6f10165edb950416",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zDeferredConstructed.hpp:5\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zDeferredConstructed.inline.hpp:9\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zPageAllocator.hpp:2\n",
+        "by_file": {
+          "runtime/src/Heap/z/zDeferredConstructed.hpp": 5,
+          "runtime/src/Heap/z/zDeferredConstructed.inline.hpp": 9,
+          "runtime/src/Heap/z/zPageAllocator.hpp": 2
+        }
+      },
+      "HEAD": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "ZDeferredConstructed",
+          "HEAD",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "HEAD:runtime/src/Heap/z/zDeferredConstructed.hpp:5\nHEAD:runtime/src/Heap/z/zDeferredConstructed.inline.hpp:9\nHEAD:runtime/src/Heap/z/zPageAllocator.hpp:2\n",
+        "by_file": {
+          "runtime/src/Heap/z/zDeferredConstructed.hpp": 5,
+          "runtime/src/Heap/z/zDeferredConstructed.inline.hpp": 9,
+          "runtime/src/Heap/z/zPageAllocator.hpp": 2
+        }
+      }
+    },
+    "g_cjHeapRange": {
+      "91f3dcc232201d4ad98ec3af6f10165edb950416": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "g_cjHeapRange",
+          "91f3dcc232201d4ad98ec3af6f10165edb950416",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zAddress.cpp:3\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zAddress.hpp:3\n91f3dcc232201d4ad98ec3af6f10165edb950416:runtime/src/Heap/z/zHeap.hpp:8\n",
+        "by_file": {
+          "runtime/src/Heap/z/zAddress.cpp": 3,
+          "runtime/src/Heap/z/zAddress.hpp": 3,
+          "runtime/src/Heap/z/zHeap.hpp": 8
+        }
+      },
+      "HEAD": {
+        "cmd": [
+          "git",
+          "grep",
+          "-c",
+          "-F",
+          "g_cjHeapRange",
+          "HEAD",
+          "--",
+          "runtime/src"
+        ],
+        "rc": 0,
+        "stdout": "HEAD:runtime/src/Heap/z/zAddress.cpp:3\nHEAD:runtime/src/Heap/z/zAddress.hpp:3\nHEAD:runtime/src/Heap/z/zHeap.hpp:8\n",
+        "by_file": {
+          "runtime/src/Heap/z/zAddress.cpp": 3,
+          "runtime/src/Heap/z/zAddress.hpp": 3,
+          "runtime/src/Heap/z/zHeap.hpp": 8
+        }
+      }
+    }
+  }
+}

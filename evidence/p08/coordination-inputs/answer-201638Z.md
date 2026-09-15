@@ -1,0 +1,11 @@
+LANE=sym_cangjie_runtime_614_implement_r5687433872
+ROLE=synthesize
+201638Z反证成立，替换原绝对判据：fast path/需不需要remap按颜色/TLS决定；remap按ZGC实际forwarding/代路由；slow与store-buffer保留ZGC调用层确实需要的is_phase_mark/is_old条件。删除我方额外GCPhaseCheck/RemapPendingField的错误相位路由，不把“GCPhase消费0/不读页态”作为跨全部路径的机械指标。明确逐函数对照ASSERT与真实控制条件，分别以标记/快照/记忆集不变量及控制臂验收。
+on_new_phase调用install_base_pointers与relocate-start入口都保留，按last_installed_color/同颜色防重。原“仅relocate start一次”被ZGC实际caller证伪，写入FALSIFIED，不为满足旧句子删合法入口。
+
+201455Z坐标：runtime实际main=91f3dcc232201d4ad98ec3af6f10165edb950416（已含P02/P06）；LLVM权威主树/root/cj_build/llvm_rebase，main与cjcjdev/main=1a01451912f160219665abdc497274e574338bad。允许建立本棒独立LLVM工作树/root/cj_build/llvm_rebase_wt/sym_cangjie_runtime_614_implement_r5687433872，候选分支sym/614-p08-llvm-r5687433872；先核未存在，不动主树/原P01成果。runtime+LLVM按原同批联合候选独立Review，精确两仓ref/PR交主控，由独立publisher/merge角色发布；不自行push。
+可复用P01基线输入：kkk2:/root/sym_cangjie_runtime_608_implement_r5683164869/abi-final-green/（包含既有host/target/LLVM产物），consumer-final-green及/root/sym_cangjie_runtime_608_implement_r5683164869-finalrt/两SO；完整身份见/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_608_implement_r5683164869/evidence/p01-real-consumers/final-summary.json。LLVM产物原源071fd4b2ec5c90c9bc09849b8fb6e80b789b5f4d与main1a014519产品tree相同，不能把原产物改标新SHA。若P08实际改LLVM则构建新候选，不以旧产物证明新码；不复制/改原SDK/build树。
+
+#607当前可读产品快照efde143b243b88a6ef5733bbdd3077f53ba11680，报告REPORT-sym_cangjie_runtime_607_implement_r5684610492.md，仍WIP。后续188a711d是测试/证据续件，runtime/src tree同一（最终使用前由你回读）。这不是已放行最终接口移交：共享MarkBarrier/4 slow path、from-old/from-young field、Finalizable root/field、zMark字段消费者正在独立函数表核对。先做不撞这些函数的旧Write*删除、独立BarrierSet/Runtime/LLVM/TLS骨架与已明确P08部分；不整分支覆盖#607，不因同文件将P08全串行。具体重叠函数迁移和P10线程身份接缝由主控下一条裁定，未裁前不在那几处自行改范围。
+
+资源：较新的本轮根盘告警优先于旧10.9GB解除通知；当前先读证/本地实现，不新增大SDK/LLVM复制或大构建，等待新容量回执。已完成交付不因资源消息回滚状态。
