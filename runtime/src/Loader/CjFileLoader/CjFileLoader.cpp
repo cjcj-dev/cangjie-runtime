@@ -15,6 +15,8 @@
 #include "ExceptionManager.inline.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Loader/ElfUnloadQuiescence.h"
+#include "schedule.h"
+#include "timer.h"
 #include "LoaderManager.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -448,12 +450,16 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
 #ifdef MRT_TESTABLE_INTERNALS
         ElfUnloadQuiescence::NoteDirectPreflightForTesting();
 #endif
-        directAdmission = std::make_unique<ElfUnloadQuiescence::TaskAdmissionScope>();
-        directAdmission->WaitUntilNoPendingForImage(imageAddress);
-
-        // The platform close cannot be rejected after its fini callback starts.
-        // Wait outside the retirement cut until every active image frame leaves.
+        // Recheck BOTH pending entries and active frames under each acquired
+        // admission. Never hold exclusive admission while an initializer may
+        // need to enter a dependency to finish its current pending task.
         for (;;) {
+            directAdmission = std::make_unique<ElfUnloadQuiescence::TaskAdmissionScope>();
+            if (directAdmission->HasPendingForImage(imageAddress)) {
+                directAdmission.reset();
+                ElfUnloadQuiescence::WaitForPendingTasks(imageAddress);
+                continue;
+            }
             bool active = false;
             {
                 ScopedEnterSaferegion enterSaferegion(false);
@@ -463,7 +469,13 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
             if (!active) {
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            directAdmission.reset();
+            if (CJThreadGetHandle() != nullptr) {
+                ScopedEnterSaferegion safe(false);
+                TimerSleep(1000000); // Native scheduler timer; no stdlib bootstrap.
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
         }
     }
 
@@ -609,11 +621,21 @@ void CJFileLoader::ClearLoadedFiles()
 
 bool CJFileLoader::LibInit(const char* libName)
 {
-    ElfUnloadQuiescence::ReadScope reader;
-    BaseFile* baseFile = GetBaseFile(libName);
-    if (baseFile == nullptr) {
-        return false;
+    BaseFile* baseFile = nullptr;
+    std::unique_ptr<ElfUnloadQuiescence::PendingTask> pending;
+    ScopedEnterSaferegion safe(false);
+    {
+        ElfUnloadQuiescence::SharedTaskAdmissionScope admission;
+        ElfUnloadQuiescence::ReadScope reader;
+        baseFile = GetBaseFile(libName);
+        if (baseFile == nullptr) { return false; }
+        std::vector<Uptr> entries;
+        baseFile->GetGlobalInitFunc(entries);
+        // An empty image has no initializer body to execute or protect.
+        if (entries.empty()) { return true; }
+        pending = std::make_unique<ElfUnloadQuiescence::PendingTask>(entries.front(), admission);
     }
+    // OS TLS reader/short admission never spans managed code or CJThread park.
     return DoInitImage(baseFile);
 }
 

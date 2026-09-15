@@ -65,10 +65,22 @@ public:
     // records that complete interval; CompletionScope closes its final removal
     // against an unload preflight.
     class TaskAdmissionScope;
+    class SharedTaskAdmissionScope final {
+    public:
+        SharedTaskAdmissionScope();
+        ~SharedTaskAdmissionScope() = default;
+        SharedTaskAdmissionScope(const SharedTaskAdmissionScope&) = delete;
+        SharedTaskAdmissionScope& operator=(const SharedTaskAdmissionScope&) = delete;
+    private:
+        friend class PendingTask;
+        static bool TryAcquire(void* scope);
+        std::shared_lock<std::shared_timed_mutex> admissionLock;
+    };
 
     class PendingTask final {
     public:
         explicit PendingTask(Uptr entryAddress);
+        PendingTask(Uptr entryAddress, const SharedTaskAdmissionScope& admission);
         ~PendingTask();
 
         PendingTask(const PendingTask&) = delete;
@@ -96,7 +108,7 @@ public:
     class TaskAdmissionScope final {
     public:
         TaskAdmissionScope();
-        ~TaskAdmissionScope() = default;
+        ~TaskAdmissionScope();
 
         TaskAdmissionScope(const TaskAdmissionScope&) = delete;
         TaskAdmissionScope& operator=(const TaskAdmissionScope&) = delete;
@@ -127,6 +139,9 @@ public:
         const TaskAdmissionScope* previousAdmission { nullptr };
     };
 
+    // Outside exclusive admission: owners must be able to admit dependencies
+    // while a direct unload waits. Caller must reacquire and recheck afterwards.
+    static void WaitForPendingTasks(Uptr imageAddress);
     static void LinkImage(Uptr imageAddress);
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address);

@@ -5,6 +5,7 @@
 #include "Loader/ElfUnloadQuiescence.h"
 
 #include <array>
+#include <climits>
 #include <condition_variable>
 #include <new>
 #include <thread>
@@ -13,6 +14,8 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"
 #include "RuntimeConfig.h"
+#include "schedule.h"
+#include "waitqueue.h"
 
 #ifdef _WIN64
 #include <windows.h>
@@ -23,6 +26,20 @@
 namespace MapleRuntime {
 namespace {
 constexpr size_t MAX_LINKED_IMAGES = 4096;
+struct AdmissionWaitqueue {
+    Waitqueue queue {};
+    AdmissionWaitqueue() { CHECK_DETAIL(WaitqueueNew(&queue) == 0, "ELF admission waitqueue creation failed"); }
+};
+Waitqueue* AdmissionWaiters()
+{
+    static AdmissionWaitqueue waiters;
+    return &waiters.queue;
+}
+void WakeAdmissionWaiters()
+{
+    const int rc = WaitqueueWakeAll(AdmissionWaiters(), nullptr, nullptr);
+    CHECK_DETAIL(rc == 0 || rc == ERRNO_QUEUE_IS_EMPTY, "ELF admission wake failed: %d", rc);
+}
 std::array<std::atomic<Uptr>, MAX_LINKED_IMAGES> linkedImages {};
 thread_local U32 readerDepth = 0;
 thread_local bool unloadWriter = false;
@@ -201,9 +218,37 @@ ElfUnloadQuiescence::UnloadScope::~UnloadScope()
     unloadWriterImage = 0;
 }
 
-ElfUnloadQuiescence::PendingTask::PendingTask(Uptr entryAddress) : entry(entryAddress)
+bool ElfUnloadQuiescence::SharedTaskAdmissionScope::TryAcquire(void* scope)
 {
-    std::shared_lock<std::shared_timed_mutex> admission(TaskAdmissionMutex());
+    return static_cast<SharedTaskAdmissionScope*>(scope)->admissionLock.try_lock();
+}
+
+ElfUnloadQuiescence::SharedTaskAdmissionScope::SharedTaskAdmissionScope()
+    : admissionLock(TaskAdmissionMutex(), std::defer_lock)
+{
+    ScopedEnterSaferegion safe(false);
+    if (CJThreadGetHandle() == nullptr) {
+        admissionLock.lock();
+        return;
+    }
+    while (!admissionLock.owns_lock()) {
+        if (admissionLock.try_lock()) { break; }
+        // The callback retries under the queue lock. A release either precedes
+        // this retry or wakes the node after it has atomically entered the queue.
+        int rc = WaitqueuePark(AdmissionWaiters(), LLONG_MAX, TryAcquire, this, false);
+        CHECK_DETAIL(rc == 0 || rc == ERRNO_CALLBACK_RETURN_TRUE, "ELF admission park failed: %d", rc);
+    }
+}
+
+ElfUnloadQuiescence::PendingTask::PendingTask(Uptr entryAddress)
+    : PendingTask(entryAddress, SharedTaskAdmissionScope())
+{
+}
+
+ElfUnloadQuiescence::PendingTask::PendingTask(Uptr entryAddress, const SharedTaskAdmissionScope& admission)
+    : entry(entryAddress)
+{
+    CHECK_DETAIL(admission.admissionLock.owns_lock(), "ELF task registration requires shared admission");
     std::lock_guard<std::mutex> lock(PendingTaskMutex());
     pending = PendingTasks().insert(this).second;
     CHECK_DETAIL(pending, "ELF pending task must be registered exactly once");
@@ -217,6 +262,7 @@ ElfUnloadQuiescence::PendingTask::~PendingTask()
         pending = false;
     }
     PendingTaskCondition().notify_all();
+    WakeAdmissionWaiters();
 }
 
 ElfUnloadQuiescence::PendingTask::CompletionScope::CompletionScope(PendingTask& task)
@@ -234,11 +280,18 @@ void ElfUnloadQuiescence::PendingTask::MarkCompleted()
         pending = false;
     }
     PendingTaskCondition().notify_all();
+    WakeAdmissionWaiters();
 }
 
 ElfUnloadQuiescence::TaskAdmissionScope::TaskAdmissionScope()
     : admissionLock(TaskAdmissionMutex())
 {
+}
+
+ElfUnloadQuiescence::TaskAdmissionScope::~TaskAdmissionScope()
+{
+    admissionLock.unlock();
+    WakeAdmissionWaiters();
 }
 
 bool ElfUnloadQuiescence::TaskAdmissionScope::HasPendingForImage(Uptr imageAddress) const
@@ -254,15 +307,34 @@ bool ElfUnloadQuiescence::TaskAdmissionScope::HasPendingForImage(Uptr imageAddre
 
 void ElfUnloadQuiescence::TaskAdmissionScope::WaitUntilNoPendingForImage(Uptr imageAddress) const
 {
-    std::unique_lock<std::mutex> lock(PendingTaskMutex());
-    PendingTaskCondition().wait(lock, [imageAddress]() {
+    WaitForPendingTasks(imageAddress);
+}
+
+void ElfUnloadQuiescence::WaitForPendingTasks(Uptr imageAddress)
+{
+    const auto empty = [](Uptr image) {
         for (const PendingTask* task : PendingTasks()) {
-            if (IsAddressInImage(task->entry, imageAddress)) {
-                return false;
-            }
+            if (IsAddressInImage(task->entry, image)) { return false; }
         }
         return true;
-    });
+    };
+    if (CJThreadGetHandle() == nullptr) {
+        std::unique_lock<std::mutex> lock(PendingTaskMutex());
+        PendingTaskCondition().wait(lock, [&]() { return empty(imageAddress); });
+        return;
+    }
+    ScopedEnterSaferegion safe(false);
+    const auto finished = [](void* address) {
+        std::lock_guard<std::mutex> lock(PendingTaskMutex());
+        for (const PendingTask* task : PendingTasks()) {
+            if (IsAddressInImage(task->entry, *static_cast<Uptr*>(address))) { return false; }
+        }
+        return true;
+    };
+    while (!finished(&imageAddress)) {
+        const int rc = WaitqueuePark(AdmissionWaiters(), LLONG_MAX, finished, &imageAddress, false);
+        CHECK_DETAIL(rc == 0 || rc == ERRNO_CALLBACK_RETURN_TRUE, "ELF pending task park failed: %d", rc);
+    }
 }
 
 ElfUnloadQuiescence::PurgeAuthorizationScope::PurgeAuthorizationScope(Uptr imageAddress)

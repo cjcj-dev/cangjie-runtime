@@ -76,6 +76,7 @@ set(GC_UNIT_SOURCES
     test_mark_port_203_engine.cpp
     test_partial_array.cpp
     test_segmented_array_init.cpp
+    test_package_init.cpp
     test_verify_roots.cpp
     test_verify_fail_close.cpp
     test_verify_phase.cpp
