@@ -140,7 +140,7 @@ void* Exercise(void*)
         const auto young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
         const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
         Expect(young.active, "young_mark_start_active");
-        if (resources.YoungPreludeRequest() != nullptr) {
+        if (collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
             ++combinedMarkStarts;
             preludeOld = old;
             preludeOldColor = ::g_cjMarkBadMask & MARKED_OLD_MASK;
@@ -223,7 +223,7 @@ void* Exercise(void*)
         });
         std::set<BaseObject*> concurrencyRoots;
         RootVisitor concurrentVisitor = [&](ObjectRef& slot) {
-            auto* object = to_object(slot.GetTargetObject());
+            auto* object = to_object(safe(slot.LoadPlain()));
             if (object != nullptr && Heap::IsHeapAddress(object)) concurrencyRoots.insert(object);
         };
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrentVisitor);
