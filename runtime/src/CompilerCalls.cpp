@@ -334,9 +334,9 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
         Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
         return;
     }
-    // Non-heap destination (static/global): same remset duty as WriteStaticRef.
-    // This remains the root path even when the optional holder is null.
-    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef);
+    // The remaining value-type field is a stack/plain slot ($BP == 0).
+    // ZUncoloredRoot's carrier stays uncolored; global storage was selected above.
+    StorePlain(RootSlotAt(static_cast<void*>(plainField)), from_object(plainRef));
 }
 
 extern "C" MRT_EXPORT void CJ_MCC_PostWriteRefField(const ObjectPtr ref, const ObjectPtr obj,
@@ -354,15 +354,17 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
     MAddress plainSrc = src;
     CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStructField wrong parameter, dst: %p src: %p", plainDst,
                  plainSrc);
+    if (Heap::IsHeapAddress(plainDst)) {
+        Heap::GetBarrier().WriteStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
+        return;
+    }
     if (IsGlobalStruct(plainObj, plainDst)) {
         Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
         return;
     }
-    if (UNLIKELY(!Heap::IsHeapAddress(plainObj))) {
-        Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
-        return;
-    }
-    Heap::GetBarrier().WriteStruct(plainObj, plainDst, dstLen, plainSrc, srcLen);
+    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(plainDst), dstLen,
+                           reinterpret_cast<const void*>(plainSrc), srcLen) == EOK,
+                 "plain value struct write failed");
 }
 
 extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, NativeSlot* field)
@@ -1865,10 +1867,13 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
+    if (Heap::IsHeapAddress(field)) {
+        return Heap::GetBarrier().ReadReference(obj, *field);
+    }
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
         return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
     }
-    return Heap::GetBarrier().ReadReference(obj, *field);
+    return Heap::GetBarrier().ReadPlainRoot(RootSlotAt(static_cast<void*>(field)));
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
@@ -1885,11 +1890,17 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
     if (size == 0) {
         return;
     }
+    if (Heap::IsHeapAddress(srcField)) {
+        Heap::GetBarrier().ReadStruct(dstPtr, srcField, size, gctib);
+        return;
+    }
     if (IsGlobalStruct(obj, srcField)) {
         Heap::GetBarrier().ReadStaticStruct(dstPtr, srcField, size, gctib);
         return;
     }
-    Heap::GetBarrier().ReadStruct(dstPtr, obj, srcField, size);
+    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstPtr), size,
+                           reinterpret_cast<const void*>(srcField), size) == EOK,
+                 "plain value struct read failed");
 }
 extern "C" ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field)
 {

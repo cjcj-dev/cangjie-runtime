@@ -110,6 +110,28 @@ void CopyReferenceSlots(const Barrier& barrier,
 }
 } // namespace
 
+// Value-type ABI entries carry their GC layout even when the optional holder
+// is null. Process the same slots as object-layout copies without guessing a base.
+void Barrier::WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib) const
+{
+    std::vector<size_t> offsets;
+    gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
+        offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
+    }, src, src + srcLen);
+    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+        Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
+}
+
+void Barrier::ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib) const
+{
+    std::vector<size_t> offsets;
+    gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
+        offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
+    }, src, src + size);
+    CopyReferenceSlots(*this, dst, size, src, size, std::move(offsets),
+        CopySlotKind::Heap, CopySlotKind::Uncolored);
+}
+
 void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
 
 void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
