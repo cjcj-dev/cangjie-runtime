@@ -1177,3 +1177,27 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
 }
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// Instantiate the product template for the policy matrix. Tests import these
+// exact bodies from the DSO, as the existing page-mark tests do.
+#include "Heap/z/zGeneration.inline.hpp"
+namespace MapleRuntime {
+template void GenerationCycle::MarkObjectIfActive<false, false, false, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, false, false, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, false, true, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, false, true, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, true, false, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, true, false, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, true, true, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<false, true, true, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, false, false, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, false, false, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, false, true, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, false, true, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, true, false, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, true, false, true>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, true, true, false>(zaddress);
+template void GenerationCycle::MarkObjectIfActive<true, true, true, true>(zaddress);
+}
+#endif

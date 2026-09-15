@@ -2,6 +2,7 @@
 #ifndef MRT_MARK_PUBLICATION_FIXTURE_HPP
 #define MRT_MARK_PUBLICATION_FIXTURE_HPP
 #include "Heap/Collector/CollectorProxy.h"
+#include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
 namespace MapleRuntime {
 struct MarkPublicationFixture {
@@ -17,6 +18,9 @@ struct MarkPublicationFixture {
         current = this;
         collector.youngCycle.InitializeWorkers(1);
         collector.oldCycle.InitializeWorkers(1);
+        if (previousCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *previousCollector);
+        }
         resources.collectorProxy.currentCollector = &collector;
         collector.youngCycle.SelectReason(GC_REASON_YOUNG);
         collector.youngCycle.Begin(1);
@@ -30,6 +34,7 @@ struct MarkPublicationFixture {
         collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         collector.oldCycle.SelectReason(GC_REASON_USER);
         collector.oldCycle.Begin(2);
+        collector.oldCycle.StartOldMark();
         collector.StartOldMarkWork();
         collector.oldCycle.PublishPhase(GC_PHASE_TRACE);
     }

@@ -336,7 +336,10 @@ GC_TEST(LiveMap, PromotionCarrierLivesUntilForwardingRelease)
         // The relocation set owns forwarding storage beyond page detach.
         ForwardingTable::ResetRelocationSet(Generation::Young);
         GC_EXPECT_FALSE(region->HasFromPageMetadata());
-        GC_EXPECT_FALSE(ProductSourceSurvives(region, large ? 0 : 64));
+        // The current promoted page is allocating; source metadata is gone.
+        // ZPage::is_object_live includes allocating pages (zPage.inline.hpp:254).
+        GC_EXPECT_TRUE(region->IsAllocating());
+        GC_EXPECT_TRUE(ProductSourceSurvives(region, large ? 0 : 64));
         size_t visits = 0;
         original->ObjectIterate([&](BaseObject* visited) {
             GC_EXPECT_TRUE(visited == object);

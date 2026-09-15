@@ -14,6 +14,7 @@
 // hooks exist; the top-level guard makes the default build an empty TU.
 
 #include <algorithm>
+#include <dlfcn.h>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -95,6 +96,9 @@ struct RelocationReceiptTestAccess {
             for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
                 resources.collectorProxy.currentCollector->GetGenerationCycle(generation).StopWorkers();
             }
+        }
+        if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);
         }
         resources.collectorProxy.currentCollector = collector;
         if (collector != nullptr) {
@@ -1056,4 +1060,122 @@ GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
     buffer->PushY2yDirtyHolder(fx.obj1);
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
 }
+
+// ZMark::mark_object policy matrix. These calls enter the actual product
+// GenerationCycle template instantiations, not a test-compiled mark body.
+namespace {
+using P1Mark = void (*)(GenerationCycle*, zaddress);
+P1Mark P1Entry(bool resurrect, bool gcThread, bool follow, bool finalizable)
+{
+    const std::string symbol = std::string("_ZN12MapleRuntime15GenerationCycle18MarkObjectIfActiveILb") +
+        (resurrect ? "1" : "0") + "ELb" + (gcThread ? "1" : "0") + "ELb" +
+        (follow ? "1" : "0") + "ELb" + (finalizable ? "1" : "0") + "EEEvNS_8zaddressE";
+    auto fn = reinterpret_cast<P1Mark>(dlsym(RTLD_DEFAULT, symbol.c_str()));
+    GC_EXPECT_TRUE(fn != nullptr);
+    return fn;
+}
+}
+
+GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
+{
+    for (bool young : {false, true}) {
+        for (bool gcThread : {false, true}) {
+            for (bool follow : {false, true}) {
+                for (bool finalizable : {false, true}) {
+                    if (young && finalizable) continue;
+                    GcHeapFixture fx;
+                    MarkPublicationFixture publication;
+                    auto& cycle = publication.collector.GetGenerationCycle(
+                        young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+                    fx.region0->SetYoungRegionFlag(young);
+                    fx.region0->ResetPageSequence();
+                    auto fn = P1Entry(false, gcThread, follow, finalizable);
+                    fn(&cycle, from_object(fx.obj0));
+                    const size_t pending = young ? publication.YoungPending() : publication.OldPending();
+                    std::fprintf(stderr, "P1_ALLOCATING_ASSERT young=%d gc=%d follow=%d finalizable=%d pending=%zu live=%zu\n",
+                                 young, gcThread, follow, finalizable, pending,
+                                 static_cast<size_t>(fx.region0->GetLiveByteCount()));
+                    GC_EXPECT_EQ(pending, 0u);
+                    GC_EXPECT_FALSE(fx.region0->IsCurrentFacePublished());
+                    GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
+                    cycle.PublishPhase(GC_PHASE_TRACE);
+                    fn(&cycle, from_object(fx.obj0));
+                    MarkDomain& domain = young ? *publication.collector.YoungMarkDomain()
+                                              : *publication.collector.MajorMarkDomain();
+                    ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
+                    MarkStackEntry entry;
+                    size_t entries = 0;
+                    for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
+                        while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
+                            ++entries;
+                            GC_EXPECT_TRUE(entry.object() == fx.obj0);
+                            GC_EXPECT_EQ(entry.objectOffset(), reinterpret_cast<uintptr_t>(fx.obj0) - MarkStackEntry::HeapBase());
+                            GC_EXPECT_EQ(entry.mark(), !gcThread);
+                            GC_EXPECT_EQ(entry.incLive(), gcThread);
+                            GC_EXPECT_EQ(entry.follow(), follow);
+                            GC_EXPECT_EQ(entry.finalizable(), finalizable);
+                        }
+                    }
+                    std::fprintf(stderr, "P1_RELOCATABLE_ASSERT young=%d gc=%d follow=%d finalizable=%d entries=%zu\n",
+                                 young, gcThread, follow, finalizable, entries);
+                    GC_EXPECT_EQ(entries, 1u);
+                }
+            }
+        }
+    }
+}
+
+GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    ZStat::Initialize();
+    MutatorManager manager;
+    YoungConcTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    MarkPublicationFixture publication;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->ResetPageSequence();
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    auto& cycle = publication.collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+    cycle.PublishPhase(GC_PHASE_TRACE);
+    auto fn = P1Entry(false, false, false, false);
+    fn(&cycle, from_object(fx.obj0));
+    fn(&cycle, from_object(fx.obj0));
+    TracingCollector::WorkStack work;
+    std::vector<BaseObject*> reached;
+    publication.FollowYoung(work, reached);
+    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu\n", reached.size(),
+                 static_cast<size_t>(fx.region0->GetLiveByteCount()));
+    GC_EXPECT_EQ(reached.size(), 1u);
+    GC_EXPECT_TRUE(reached[0] == fx.obj0);
+    GC_EXPECT_EQ(fx.region0->GetLiveByteCount(), fx.obj0->GetSize());
+}
+
+
+GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture publication;
+    auto& cycle = publication.collector.GetGenerationCycle(GCCycleGeneration::OLD);
+    auto& domain = *publication.collector.MajorMarkDomain();
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->ResetPageSequence();
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    auto fn = P1Entry(true, true, true, false);
+    cycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+    fn(&cycle, from_object(fx.obj0));
+    GC_EXPECT_EQ(publication.OldPending(), 0u);
+    GC_EXPECT_FALSE(domain.Terminate().Resurrected());
+    cycle.PublishPhase(GC_PHASE_TRACE);
+    fn(&cycle, from_object(fx.obj0));
+    std::fprintf(stderr, "P1_RESURRECT_ASSERT pending=%zu resurrected=%d\n",
+                 publication.OldPending(), domain.Terminate().Resurrected());
+    GC_EXPECT_EQ(publication.OldPending(), 1u);
+    GC_EXPECT_TRUE(domain.Terminate().Resurrected());
+    domain.Terminate().SetResurrected(false);
+    fn(&cycle, from_object(fx.obj0));
+    GC_EXPECT_EQ(publication.OldPending(), 1u);
+    GC_EXPECT_FALSE(domain.Terminate().Resurrected());
+}
+
 #endif // MRT_TESTABLE_INTERNALS

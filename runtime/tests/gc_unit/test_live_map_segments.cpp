@@ -105,7 +105,7 @@ GC_TEST(ZLiveMapPort, GenerationChangeLazilyInitializesProductMap)
     auto* object = fx.obj0;
     auto mark = ProductMark();
     auto first = region->GetMarkView<Generation::Old>();
-    GC_EXPECT_FALSE(mark(region, first, object, object->GetSize(), true));
+    GC_EXPECT_TRUE(mark(region, first, object, object->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
     RegionBitmap* bitmap = region->GetMarkBitmap(first);
@@ -120,7 +120,7 @@ GC_TEST(ZLiveMapPort, GenerationChangeLazilyInitializesProductMap)
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(0));
     GC_EXPECT_EQ(LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young).Sequence(), youngSequence);
-    GC_EXPECT_FALSE(mark(region, next, object, object->GetSize(), true));
+    GC_EXPECT_TRUE(mark(region, next, object, object->GetSize(), true));
     GC_EXPECT_TRUE(region->GetMarkBitmap(next) == bitmap);
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
@@ -147,10 +147,10 @@ GC_TEST(ZLiveMapPort, ConcurrentProductFirstMarkPublishesMetadata)
     for (size_t i = 0; i < workers; ++i) {
         threads[i] = std::thread([&, i]() {
             while (!go.load(std::memory_order_acquire)) {}
-            if (!mark(region, view, fx.obj0, fx.obj0->GetSize(), true)) {
+            if (mark(region, view, fx.obj0, fx.obj0->GetSize(), true)) {
                 firstMarks.fetch_add(1, std::memory_order_relaxed);
             }
-            if (!mark(region, view, objects[i], objects[i]->GetSize(), true)) {
+            if (mark(region, view, objects[i], objects[i]->GetSize(), true)) {
                 firstMarks.fetch_add(1, std::memory_order_relaxed);
             }
         });
@@ -182,7 +182,7 @@ GC_TEST(ZLiveMapPort, PageRetirementReclaimsMapStorage)
         BaseObject* object = fx.PlaceObject(region->GetRegionStart() + 64);
         region->SetRegionAllocPtr(region->GetRegionStart() + 64 + object->GetSize());
         auto view = region->GetMarkView<Generation::Old>();
-        GC_EXPECT_FALSE(mark(region, view, object, object->GetSize(), true));
+        GC_EXPECT_TRUE(mark(region, view, object, object->GetSize(), true));
         GC_EXPECT_EQ(region->GetMarkBitmap(view)->GetLiveObjects(), size_t(1));
         RegionInfo::RetirePage(region, [region]() { region->InitFreeUnits(); });
         fx.region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
@@ -200,7 +200,7 @@ GC_TEST(ZLiveMapPort, DeferredProductCountsUseOnlyLiveMap)
     auto* object = fx.obj0;
     auto view = region->GetMarkView<Generation::Old>();
     auto mark = ProductMark();
-    GC_EXPECT_FALSE(mark(region, view, object, object->GetSize(), false));
+    GC_EXPECT_TRUE(mark(region, view, object, object->GetSize(), false));
     RegionBitmap* bitmap = region->GetMarkBitmap(view);
     GC_EXPECT_TRUE(bitmap != nullptr);
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
@@ -212,7 +212,7 @@ GC_TEST(ZLiveMapPort, DeferredProductCountsUseOnlyLiveMap)
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
     GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), size_t(object->GetSize()));
-    GC_EXPECT_TRUE(mark(region, view, object, object->GetSize(), true));
+    GC_EXPECT_FALSE(mark(region, view, object, object->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
 }
@@ -226,12 +226,12 @@ GC_TEST(ZLiveMapPort, ProductFinalizableUpgradeKeepsSingleCount)
     auto* object = fx.obj0;
     auto view = region->GetMarkView<Generation::Old>();
     bool firstLive = false;
-    GC_EXPECT_FALSE(region->ResurrectObjectWithLiveClaim(object,
+    GC_EXPECT_TRUE(region->ResurrectObjectWithLiveClaim(object,
         region->GetAddressOffset(reinterpret_cast<MAddress>(object)), false, firstLive));
     GC_EXPECT_TRUE(firstLive);
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
     region->AddLiveCounts(1, object->GetSize());
-    GC_EXPECT_FALSE(ProductMark()(region, view, object, object->GetSize(), true));
+    GC_EXPECT_TRUE(ProductMark()(region, view, object, object->GetSize(), true));
     GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
     GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
     GC_EXPECT_EQ(region->GetMarkBitmap(view)->GetLiveObjects(), size_t(1));

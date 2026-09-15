@@ -39,6 +39,7 @@
 #include "TypeInfoManager.h"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/WCollector/WCollector.h"
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
@@ -797,6 +798,9 @@ void* RunMarkAllocationCase(void* rawExisting)
     auto& heap = Heap::GetHeap();
     auto& collector = heap.GetCollector();
     Mutator* mutator = Mutator::GetMutator();
+    MArray* beforeSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
+    const U64 beforeSmallRoot = heap.RegisterExportRoot(beforeSmall);
+    RegionInfo* beforeSmallPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(beforeSmall));
     MArray* target = existing ? MCC_NewArray8(GetByteArrayTypeInfos().array, 16) : nullptr;
     const U64 targetRoot = target != nullptr ? heap.RegisterExportRoot(target) : 0;
     MarkAllocationWindow::entered = false;
@@ -818,6 +822,13 @@ void* RunMarkAllocationCase(void* rawExisting)
         return reinterpret_cast<void*>(2);
     }
     mutator->SetManagedContext(true);
+    MArray* afterSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
+    RegionInfo* afterSmallPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(afterSmall));
+    const bool retiredTLAB = afterSmallPage != beforeSmallPage && afterSmallPage->IsAllocating();
+    std::fprintf(stderr, "P1_TLAB_RETIRE_ASSERT_EXECUTED different=%d birth=%llu owner=%llu\n",
+                 afterSmallPage != beforeSmallPage,
+                 static_cast<unsigned long long>(afterSmallPage->BirthSequence()),
+                 static_cast<unsigned long long>(afterSmallPage->GetSnapshotEpoch()));
     MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
     if (!existing) target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     const U64 holderRoot = heap.RegisterExportRoot(holder);
@@ -829,6 +840,18 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool live = productLive(page, page->GetMarkView<Generation::Young>(), holder);
     const bool targetLive = productLive(targetPage, targetPage->GetMarkView<Generation::Young>(), target);
     const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty(page->GetMarkView<Generation::Young>());
+    auto& productCollector = static_cast<WCollector&>(collector);
+    MarkDomain* domain = productCollector.YoungMarkDomain();
+    const size_t pendingBefore = domain->Stripes().Population() + domain->Stacks().Population();
+    holder->OnFinalizerCreated();
+    const size_t pendingAfter = domain->Stripes().Population() + domain->Stacks().Population();
+    const bool noExplicitMark = !page->IsCurrentFacePublished();
+    const bool noPublication = pendingAfter == pendingBefore;
+    std::fprintf(stderr, "P1_NEW_REGISTRATION_ASSERT_EXECUTED birth=%llu owner=%llu no_bitmap=%d "
+                 "pending_before=%zu pending_after=%zu\n",
+                 static_cast<unsigned long long>(page->BirthSequence()),
+                 static_cast<unsigned long long>(page->GetSnapshotEpoch()), noExplicitMark,
+                 pendingBefore, pendingAfter);
     const auto during = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const auto phase = during.phase;
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
@@ -845,6 +868,7 @@ void* RunMarkAllocationCase(void* rawExisting)
         std::fprintf(stderr, "MARK_ALLOC_MARK_END_ASSERT_EXECUTED sequence=%llu phase=%u live=%d\n",
                      static_cast<unsigned long long>(markEnd.sequence), unsigned(markEnd.phase), markEndTargetLive);
     };
+    heap.RemoveExportObject(beforeSmallRoot);
     if (existing) heap.RemoveExportObject(targetRoot);
     mutator->SetManagedContext(false);
     MarkAllocationWindow::released.store(true, std::memory_order_release);
@@ -875,7 +899,7 @@ void* RunMarkAllocationCase(void* rawExisting)
                  static_cast<unsigned long long>(after.sequence), resampled);
     heap.RemoveExportObject(holderRoot);
     mutator->SetManagedContext(true);
-    const uintptr_t status = (implicit ? 0 : 1) | (live ? 0 : 2) |
+    const uintptr_t status = (retiredTLAB ? 0 : 1024) | ((noExplicitMark && noPublication) ? 0 : 512) | (implicit ? 0 : 1) | (live ? 0 : 2) |
         (targetLive ? 0 : 4) | (excluded ? 0 : 8) | (nextCycle ? 0 : 16) |
         (resampled ? 0 : 32) |
         ((markEndObservations == 1 && markEndTargetLive) ? 0 : 128) |

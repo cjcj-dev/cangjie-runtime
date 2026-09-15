@@ -86,6 +86,30 @@ struct GcHeapFixture {
         }
     }
 
+    // When a fixture replaces the collector, page birth/livemap sequence values
+    // must keep the same meaning. Advance the replacement through product starts.
+    static void AdoptGenerationIdentity(Collector& next, Collector& previous)
+    {
+        if (&next == &previous) return;
+        for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+            auto& cycle = next.GetGenerationCycle(generation);
+            const uint64_t sequence = previous.GetCycleSnapshot(generation).sequence;
+            while (cycle.Sequence() < sequence) {
+                if (cycle.Snapshot().active) cycle.End();
+                cycle.Begin(0);
+                if (generation == GCCycleGeneration::YOUNG) {
+                    alignas(8) uint64_t storage[16] {};
+                    RememberedSet remembered;
+                    remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
+                    cycle.StartYoungMark(remembered);
+                } else {
+                    cycle.StartOldMark();
+                }
+                cycle.End();
+            }
+        }
+    }
+
     static constexpr size_t kUnits = 6;
 
     explicit GcHeapFixture(bool withMemoryOwner = false)

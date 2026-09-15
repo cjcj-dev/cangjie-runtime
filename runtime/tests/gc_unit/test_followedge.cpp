@@ -90,6 +90,7 @@ struct LargeArrayFixture {
         region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + obj0->GetSize());
         region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + obj1->GetSize());
         GC_EXPECT_TRUE(region1->GetRegionAllocPtr() <= region1->GetRegionEnd());
+        GcHeapFixture::AdvanceGeneration(Generation::Old);
     }
     ~LargeArrayFixture()
     {

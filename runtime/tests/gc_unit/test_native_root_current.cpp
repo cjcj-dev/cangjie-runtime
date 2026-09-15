@@ -22,6 +22,9 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, RuntimeWorkers& pool)
     {
+        if (resources.collectorProxy.currentCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.collectorProxy.currentCollector);
+        }
         resources.collectorProxy.currentCollector = &collector;
         resources.runtimeWorkers = &pool;
         resources.gcThreadCount = resources.concurrentGcThreadCount = 1;

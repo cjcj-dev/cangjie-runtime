@@ -84,6 +84,9 @@ struct RelocationReceiptTestAccess {
 
     static void BindCollector(CollectorResources& resources, TracingCollector* collector)
     {
+        if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);
+        }
         resources.collectorProxy.currentCollector = collector != nullptr ? collector : &resources.collectorProxy.wCollector;
         Collector& active = collector != nullptr ? static_cast<Collector&>(*collector)
                                                  : static_cast<Collector&>(resources.collectorProxy.wCollector);
@@ -96,6 +99,8 @@ struct RelocationReceiptTestAccess {
                 RememberedSet empty;
                 empty.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
                 cycle.StartYoungMark(empty);
+            } else {
+                cycle.StartOldMark();
             }
         }
     }
@@ -542,6 +547,7 @@ private:
 LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liveObject)
 {
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    if (region->IsAllocating()) GcHeapFixture::AdvanceGeneration(region->GetOwnerGeneration());
     for (MAddress address = region->GetRegionStart(); address < liveObject;) {
         BaseObject* prefix = fx.PlaceObject(address);
         address += prefix->GetSize();
@@ -845,6 +851,21 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     GC_EXPECT_TRUE(insertCurrent);
     GC_EXPECT_TRUE(lateCurrent);
+}
+
+// Keep the null boundary independently observable while the non-heap root
+// adapter is pending P3 (advisor 606-20260915T021104Z).
+GC_OTHER_VM_TEST(ValueRootCurrentization, NullControlRemainsStable)
+{
+    (void)ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::SeedValueRoots(collector, nullptr);
+    const auto values = RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
+    const bool stable = AllVisitedEqual(values, nullptr);
+    std::fprintf(stderr, "P1_NULL_CONTROL_ASSERT stable=%d\n", stable);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    GC_EXPECT_TRUE(stable);
 }
 
 GC_OTHER_VM_TEST(ValueRootCurrentization, NullAndNonHeapControlsRemainStable)
@@ -2401,6 +2422,7 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     const size_t objectSize = from->GetSize();
     BaseObject* to = fx.PlaceObject(reinterpret_cast<MAddress>(from) + objectSize);
     BaseObject* youngTarget = fx.PlaceObject(targetRegion->GetRegionStart());
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
     LiveInfo* targetLive = fx.PlantLiveInfo(targetRegion);
     (void)fx.PlantMarkBitmap<Generation::Young>(targetLive, targetRegion->GetRegionSize());
     fx.typeInfo->SetUUID(1);
@@ -2588,6 +2610,7 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     youngRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
     // Snapshot after the holder allocation so it is not covered by the
     // allocate-black mark-start gap. Only its object-head live bit applies.
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
     holderRegion->ClearLiveInfo(holderRegion->GetMarkView<Generation::Old>());
     auto* nearField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset());
     for (size_t i = 0; i < 16; ++i) {
@@ -2693,6 +2716,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     BaseObject* youngTarget = fx.PlaceObject(youngRegion->GetRegionStart());
     holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetMArraySize());
     youngRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
     holderRegion->ClearLiveInfo(holderRegion->GetMarkView<Generation::Old>());
     for (size_t i = 0; i < 16; ++i) {
         HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + i * sizeof(void*))
@@ -2841,6 +2865,11 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(2);
     collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(2);
+    // This fixture invokes the old body without the driver's young prelude.
+    // Supply the product mark-start sequence event before publishing old roots.
+    auto& oldCycle = collector.GetGenerationCycle(GCCycleGeneration::OLD);
+    if (!oldCycle.Snapshot().active) oldCycle.Begin(0);
+    oldCycle.StartOldMark();
     collector.StartOldMarkWork();
     {
         DriverLocker driver(resources);
