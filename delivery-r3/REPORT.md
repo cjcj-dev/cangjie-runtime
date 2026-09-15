@@ -76,6 +76,11 @@ Testable：729项，728通过，唯一失败同上；这项上一轮已按P3归�
 
 ## 产品接线证明
 
+断线补丁：`/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_606_implement_r5675167676/delivery-r3/cut.diff`。
+实际断线日志：`kkk2:/root/sym_cangjie_runtime_606_implement_r5675167676-final/targeted/cut/P1Mark.PinnedMarkStartRetiresAllocationPage.log`。
+恢复日志：`kkk2:/root/sym_cangjie_runtime_606_implement_r5675167676-final/targeted/restored/P1Mark.PinnedMarkStartRetiresAllocationPage.log`。
+生产端回退日志：`kkk2:/root/sym_cangjie_runtime_606_implement_r5675167676-final/targeted/retire/P1Mark.PinnedMarkStartRetiresAllocationPage.log`；消费端回退日志：`kkk2:/root/sym_cangjie_runtime_606_implement_r5675167676-final/targeted/consumer/P1Mark.PinnedMarkStartRetiresAllocationPage.log`。
+
 |测试|真实产品函数|结果进入断言|断开后|
 |---|---|---|---|
 |P1Mark.PinnedMarkStartRetiresAllocationPage|MObject::NewPinnedObject → AllocPinned；RequestGC → DoYoungGarbageCollection → StartOldMark → RetireSharedPages；DoTracing:1204仅暂停窗口|/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_606_implement_r5675167676/runtime/tests/gc_unit/test_segmented_array_init.cpp:956–964读取实际after页、birth/owner/phase/位图；:975合并判据，:1294断言|retire、consumer、cut均rc=1；green/restored rc=0|
