@@ -88,6 +88,9 @@ void Init()
     param.heapParam.heapSize = 32 * 1024;
     Target("runtime-start", InitCJRuntime(&param) == E_OK);
     RegisterImage();
+    void* nativeToken = reinterpret_cast<void*>(1);
+    Target("unattached-after-runtime-init", MCC_PackageInitBegin(reinterpret_cast<const void*>(&PackageA),
+        reinterpret_cast<const void*>(&UnitA), 0, &nativeToken) == Code(Result::Unavailable) && nativeToken == nullptr);
 }
 
 struct Task {

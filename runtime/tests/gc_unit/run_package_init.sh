@@ -16,7 +16,7 @@ uptime > "$OUT/uptime-before.txt"
 df -h /root > "$OUT/disk-before.txt"
 start=$SECONDS
 flags=()
-if [[ "${MRT_TESTABLE_INTERNALS:-0}" == 1 ]]; then flags=(-DMRT_TESTABLE_INTERNALS=1 -DMRT_GC_UNIT_TESTS=1); fi
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == 1 ]]; then flags=(-DMRT_TESTABLE_INTERNALS=1 -DMRT_GC_UNIT_TESTS=1 -DMRT_PRODUCT_TESTABLE_INTERNALS=1); fi
 if [[ -z "${PACKAGE_INIT_ELF:-}" ]]; then
     objects=()
     pids=()
