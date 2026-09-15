@@ -717,6 +717,11 @@ void CheckTokenMisuse(bool nonOwner)
                 void* token = nullptr;
                 Target("misuse-first-execute", Begin(P(), U(), 0, &token) == Code(Result::Execute));
                 MCC_PackageInitComplete(token);
+                static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader())->RemoveLoadedFiles(image);
+                RegisterImage();
+                void* newGeneration = nullptr;
+                Target("new-generation-own-token", Begin(P(), U(), 0, &newGeneration) == Code(Result::Execute) &&
+                       newGeneration != nullptr && newGeneration != token);
                 std::fprintf(stderr, "PACKAGE_INIT_MISUSE_TARGET duplicate\n");
                 MCC_PackageInitFail(token, 1);
                 std::_Exit(77);
