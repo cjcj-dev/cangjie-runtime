@@ -27,6 +27,12 @@ inline zaddress Barrier::MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor
     if (payload != nullptr && !Heap::IsHeapAddress(payload)) {
         return from_object(payload);
     }
+    // Retain the colored native-root admission invariant from ReadStaticRef.
+    // ZPointer::assert_is_valid, zAddress.inline.hpp:320-393.
+    CHECK_DETAIL(payload == nullptr ||
+                     (raw(observed) & (REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK)) != 0,
+                 "NativeSlot requires colored value at MarkYoungGoodBarrier slot=%p word=%#zx", &field,
+                 raw(observed));
     if (fast(observed)) {
         return RefField<>(observed).GetTargetObject();
     }

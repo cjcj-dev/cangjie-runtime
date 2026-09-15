@@ -135,7 +135,10 @@ void CheckNativeRoot(bool minor, bool plain = false)
     else RelocationReceiptTestAccess::NativeRootTrace(collector);
     const bool currentMarked = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), to);
     const bool staleMarked = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), from);
-    const bool marker = currentMarked && !staleMarked;
+    // ZMarkYoungRootsTask -> mark_if_young (zBarrier.inline.hpp:763-767)
+    // remaps this promoted root without publishing old strong. The old root
+    // task below must independently mark the current address.
+    const bool marker = minor ? !currentMarked && !staleMarked : currentMarked && !staleMarked;
     const bool healed = to_object(slot.GetTargetObject()) == to;
     std::fprintf(stderr, "native_root_marker_current executed=1 entry=%s current=%zu stale=%zu expected=%p result=%u\n",
                  minor ? "minor" : "major", size_t(currentMarked), size_t(staleMarked), to, unsigned(marker));
@@ -162,10 +165,13 @@ void CheckNativeRoot(bool minor, bool plain = false)
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testRootsResult = nullptr;
+    const bool oldMarkedCurrent = region->IsMarkedObject(region->GetMarkView<Generation::Old>(), to) &&
+        !region->IsMarkedObject(region->GetMarkView<Generation::Old>(), from);
     std::fprintf(stderr, "native_root_after_reset executed=1 enumerated=%u slot=%#zx expected=%p\n",
                  unsigned(enumerated), raw(slot.GetFieldValue()), to);
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 2);
     GC_EXPECT_TRUE(enumerated && to_object(slot.GetTargetObject()) == to);
+    GC_EXPECT_TRUE(oldMarkedCurrent);
 }
 void CheckPlainRejected(bool minor)
 {
@@ -188,7 +194,7 @@ void CheckPlainRejected(bool minor)
     close(pipefd[0]);
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    const char* site = minor ? "NativeSlot requires colored value at ReadStaticRef"
+    const char* site = minor ? "NativeSlot requires colored value at MarkYoungGoodBarrier"
                              : "NativeSlot requires colored value at EnumRefFieldRoot";
     const bool rejected = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT &&
                           output.find(site) != std::string::npos;
