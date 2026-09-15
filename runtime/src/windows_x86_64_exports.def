@@ -2383,12 +2383,6 @@ EXPORTS
     _ZNK12MapleRuntime7Barrier27RecordCrossGenEdgesInStructEPNS_10BaseObjectEyy @2698
     _ZNK12MapleRuntime7Barrier30CopyStaticStructPlainToNonHeapEyyyNS_5GCTibE @2699
     _ZNK12MapleRuntime7Barrier29RecordCrossGenEdgesInRefArrayEPNS_10BaseObjectEyy @2700
-    _ZNK12MapleRuntime7Barrier7WriteI8EPNS_10BaseObjectERNS_5FieldIaLb0EEEa @2701
-    _ZNK12MapleRuntime7Barrier8WriteF32EPNS_10BaseObjectERNS_5FieldIfLb0EEEf @2702
-    _ZNK12MapleRuntime7Barrier8WriteF64EPNS_10BaseObjectERNS_5FieldIdLb0EEEd @2703
-    _ZNK12MapleRuntime7Barrier8WriteI16EPNS_10BaseObjectERNS_5FieldIsLb0EEEs @2704
-    _ZNK12MapleRuntime7Barrier8WriteI32EPNS_10BaseObjectERNS_5FieldIiLb0EEEi @2705
-    _ZNK12MapleRuntime7Barrier8WriteI64EPNS_10BaseObjectERNS_5FieldIxLb0EEEx @2706
     _ZNK12MapleRuntime7CString16RemoveBlankSpaceEv @2707
     _ZNK12MapleRuntime7CString3StrEv @2708
     _ZNK12MapleRuntime7CString4FindEPKcy @2709

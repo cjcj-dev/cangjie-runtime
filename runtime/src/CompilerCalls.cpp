@@ -1873,7 +1873,7 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
         return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
     }
-    return Heap::GetBarrier().ReadPlainRoot(RootSlotAt(static_cast<void*>(field)));
+    return to_object(safe(RootSlotAt(static_cast<void*>(field)).LoadPlain()));
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)

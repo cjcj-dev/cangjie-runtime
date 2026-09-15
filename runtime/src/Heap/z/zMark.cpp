@@ -687,7 +687,7 @@ void TracingCollector::EnumAllCommonRoots(GCWorkers& workers)
     CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before roots");
     MarkOldRootsTask task(*this, *majorMarkDomain, [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
-            MarkOldObjectIfActive(Heap::GetBarrier().ReadPlainRoot(root));
+            MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
         }, {});
         VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
     }, workers.ActiveWorkers());

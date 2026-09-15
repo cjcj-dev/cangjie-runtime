@@ -62,7 +62,7 @@ template<typename T>
 inline void MObject::Store(size_t offset, T value)
 {
     Field<T>& field = GetField<T>(offset);
-    Heap::GetBarrier().WriteField(this, field, value);
+    field.SetFieldValue(this, value);
 }
 
 inline MObject* MObject::LoadRef(size_t offset)

@@ -79,7 +79,7 @@ template<typename T>
 inline void MArray::SetPrimitiveElement(MIndex index, T value)
 {
     Field<T>& field = GetField<T>(MArray::GetContentOffset() + GetElementSize() * index);
-    Heap::GetBarrier().WriteField(this, field, value);
+    field.SetFieldValue(this, value);
 }
 
 static inline MIndex CalculateArraySize(MIndex nElems, const U32 elemBytes)
