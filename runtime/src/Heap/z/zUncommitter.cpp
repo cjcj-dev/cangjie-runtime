@@ -92,10 +92,12 @@ void Uncommitter::Start()
 }
 
 // ConcurrentGCThread::stop; the wait for termination runs in a safe region
-// because the uncommitter thread participates in safepoints (I17).
+// because the uncommitter thread participates in safepoints (I17). A set
+// that was never started has no thread to stop; only its wait is released.
 void Uncommitter::Stop()
 {
     if (!started) {
+        terminate();
         return;
     }
     started = false;

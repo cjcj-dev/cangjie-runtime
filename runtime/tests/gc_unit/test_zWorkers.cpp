@@ -67,18 +67,23 @@ struct Record {
     std::mutex mutex;
     std::vector<uint32_t> ids;
     std::set<pthread_t> threads;
+    pthread_t coordinator = pthread_self();
     void Add()
     {
         std::lock_guard<std::mutex> lock(mutex);
         ids.push_back(WorkerThread::worker_id());
         threads.insert(pthread_self());
     }
-    // Invariant 1: n executions, n distinct threads, ids exactly {0..n-1}.
+    // Invariant 1: n executions with ids exactly {0..n-1}, none on the
+    // coordinator. workerThread.cpp:63-70 hands ids out per start-semaphore
+    // token, so a worker that finishes early may take a second token: the
+    // number of distinct threads is between 1 and n, not necessarily n.
     void Check(unsigned n)
     {
         std::sort(ids.begin(), ids.end());
         GC_EXPECT_EQ(ids.size(), n);
-        GC_EXPECT_EQ(threads.size(), n);
+        GC_EXPECT_TRUE(!threads.empty() && threads.size() <= n);
+        GC_EXPECT_EQ(threads.count(coordinator), 0u);
         for (unsigned i = 0; i < n; ++i) GC_EXPECT_EQ(ids[i], i);
     }
 };
@@ -98,13 +103,21 @@ GC_TEST(ZWorkers, RunGivesEachActiveWorkerOneDistinctIdBelowActive)
     fx.workers.set_active_workers(3);
     GC_EXPECT_EQ(fx.workers.active_workers(), 3u);
     Record result;
-    Task task([&] { result.Add(); });
-    fx.workers.run(&task);
+    Latch entered, release;
+    // Holding every execution until all three have entered forces three
+    // distinct worker threads to carry the three ids at the same time.
+    Task task([&] { result.Add(); entered.Add(); (void)release.Wait(1); });
+    std::thread coordinator([&] { fx.workers.run(&task); });
+    JoinGuard guard(coordinator);
+    const bool ready = entered.Wait(3);
+    release.Add();
+    coordinator.join();
+    GC_EXPECT_TRUE(ready);
     result.Check(3);
+    GC_EXPECT_EQ(result.threads.size(), 3u);
     // The coordinating thread is never a worker (workerThread.cpp:211).
     GC_EXPECT_EQ(WorkerThread::worker_id(), UINT32_MAX);
-    GC_EXPECT_EQ(result.threads.count(pthread_self()), 0u);
-    std::puts("OBSERVED three distinct thread-local worker ids 0..2 on three worker threads");
+    std::puts("OBSERVED three distinct thread-local worker ids 0..2 on three simultaneously held worker threads");
 }
 
 GC_TEST(ZWorkers, RunAllUsesMaxWorkersAndRestoresActive)
@@ -275,28 +288,29 @@ GC_TEST(ZWorkers, PendingRequestSurvivesOrdinaryRunUntilNextCycle)
     std::puts("OBSERVED ordinary task retains request; next cycle clears it");
 }
 
-// workerThread.hpp:44-49, workerThread.cpp:72: the task captures the
-// coordinator's collection id at construction and workers run under it.
-GC_TEST(ZWorkers, WorkersRunUnderTheTaskGcId)
+// workerThread.hpp:44-49: a WorkerTask captures the constructing thread's
+// collection id (GCId::current_or_undefined) at construction, not at
+// dispatch. GCIdMark's slot is an inline thread_local, so this check stays
+// inside one image: the worker-side GCIdMark (workerThread.cpp:72) is only
+// observable from product code.
+GC_TEST(ZWorkers, WorkerTaskCapturesGcIdAtConstruction)
 {
-    Fixture fx(GCCycleGeneration::YOUNG, 2);
-    std::mutex mutex;
-    std::vector<uint64_t> seen;
+    struct Plain final : WorkerTask {
+        Plain() : WorkerTask("ZWorkersUnitPlain") {}
+        void work(uint32_t) override {}
+    };
+    Plain outside;
+    GC_EXPECT_EQ(outside.gc_id(), GCIdMark::Current());
     uint64_t expected = 0;
     {
         GCIdMark mark;
         expected = GCIdMark::Current();
-        Task task([&] {
-            std::lock_guard<std::mutex> lock(mutex);
-            seen.push_back(GCIdMark::Current());
-        });
-        GC_EXPECT_EQ(task.worker_task()->gc_id(), expected);
-        fx.workers.run(&task);
+        Plain inside;
+        GC_EXPECT_EQ(inside.gc_id(), expected);
+        GC_EXPECT_NE(inside.gc_id(), outside.gc_id());
     }
     GC_EXPECT_NE(expected, 0u);
-    GC_EXPECT_EQ(seen.size(), 2u);
-    for (uint64_t id : seen) GC_EXPECT_EQ(id, expected);
-    std::puts("OBSERVED both workers ran under the constructing thread's gc id");
+    std::puts("OBSERVED WorkerTask gc_id captured at construction");
 }
 
 // Invariant 3 through the product wiring: ZWorkers::run brackets the task
