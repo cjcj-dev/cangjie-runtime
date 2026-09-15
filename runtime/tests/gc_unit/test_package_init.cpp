@@ -83,13 +83,14 @@ CJFile* RegisterMetadata(Metadata& value, const char* name)
     return file;
 }
 void RegisterImage() { image = RegisterMetadata(metadata, "package-init-main"); }
-void Init()
+void Init(uint32_t workers = 1)
 {
-    (void)setenv("cjProcessorNum", "1", 1);
+    (void)setenv("cjProcessorNum", workers == 1 ? "1" : "2", 1);
     RuntimeParam param {};
-    param.coParam.processorNum = 1;
+    param.coParam.processorNum = workers;
     param.heapParam.heapSize = 32 * 1024;
     Target("runtime-start", InitCJRuntime(&param) == E_OK);
+    Target("configured-scheduler-workers", Runtime::Current().GetConcurrencyModel().GetProcessorNum() == workers);
     RegisterImage();
     void* nativeToken = reinterpret_cast<void*>(1);
     Target("unattached-after-runtime-init", MCC_PackageInitBegin(reinterpret_cast<const void*>(&PackageA),
@@ -226,9 +227,9 @@ void Repeat(void* p)
     Target("sticky-terminal", Begin(P(), U(), 0, &token) == expected && token == nullptr);
     c.witnessDone.store(true, std::memory_order_release);
 }
-void CompletionCase(bool fail, bool abandon)
+void CompletionCase(bool fail, bool abandon, uint32_t workers = 1)
 {
-    Init();
+    Init(workers);
     Completion c;
     c.fail = fail;
     c.abandon = abandon;
@@ -361,6 +362,7 @@ void AdmissionWitness(void* p)
 } // namespace
 
 GC_OTHER_VM_TEST(PackageInit, CompletionWaitsForBodyAndHandshake) { CompletionCase(false, false); }
+GC_OTHER_VM_TEST(PackageInit, CompletionWithTwoSchedulerWorkers) { CompletionCase(false, false, 2); }
 GC_OTHER_VM_TEST(PackageInit, FailureWakesAndRemainsSticky) { CompletionCase(true, false); }
 GC_OTHER_VM_TEST(PackageInit, OwnerExitWakesAndFails) { CompletionCase(false, true); }
 GC_OTHER_VM_TEST(PackageInit, PackagePhaseUnitAndReentry)
