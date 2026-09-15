@@ -2761,7 +2761,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
 #if defined(MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE)
 // ZGenerationOld::remap_young_roots, zGeneration.cpp:1509: enter through
 // the real major driver; a registered runtime mutator owns the raw root.
-void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false)
+void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)
 {
     ZStat::Initialize();
     GcHeapFixture& fx = ProductFixture();
@@ -2806,7 +2806,18 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
 
     MutatorManager& manager = MutatorManager::Instance();
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
-    ObjectRef* root = mutator->AddNativeFrameRoot(forwarding.from);
+    alignas(16) uintptr_t nestedStorage[8] {};
+    RootSlot* nestedField = nullptr;
+    BaseObject* rootInput = forwarding.from;
+    if (nestedKind != 0) {
+        mutator->SetStackTopAddr(reinterpret_cast<uintptr_t>(nestedStorage));
+        mutator->SetStackSize(sizeof(nestedStorage));
+        rootInput = reinterpret_cast<BaseObject*>(&nestedStorage[2]);
+        if (nestedKind == 1) rootInput->SetClassInfo(fx.typeInfo);
+        nestedField = &RootSlotAt(static_cast<void*>(&nestedStorage[nestedKind == 1 ? 3 : 2]));
+        StorePlain(*nestedField, from_object(forwarding.from));
+    }
+    ObjectRef* root = mutator->AddNativeFrameRoot(rootInput);
     ObjectRef* secondRoot = secondOld == nullptr ? nullptr : mutator->AddNativeFrameRoot(secondOld);
     ObjectRef* nullRoot = mutator->AddNativeFrameRoot(nullptr);
     static uintptr_t nonHeapStorage[2] = {};
@@ -2855,7 +2866,9 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         receipt.after == (oldPending ? before : expected) &&
         receipt.heals == (oldPending ? 0 : expectedVisits) &&
         (!oldPending || receipt.oldPendingVisits == expectedVisits) &&
-        expected != 0 && (!oldPending || expected != before) && raw(root->LoadPlain()) == expected &&
+        expected != 0 && (!oldPending || expected != before) &&
+        (nestedField == nullptr ? raw(root->LoadPlain()) == expected :
+            raw(root->LoadPlain()) == reinterpret_cast<uintptr_t>(rootInput) && raw(nestedField->LoadPlain()) == expected) &&
         is_null(nullRoot->LoadPlain()) && raw(nonHeapRoot->LoadPlain()) == reinterpret_cast<uintptr_t>(nonHeapStorage) &&
         (!managed || (frame[0] == expected && frame[1] == expected + 8));
     std::fprintf(stderr, "RAW_REMAP_TARGET_ASSERT promoted=%u managed=%u visits=%llu before=%zx after=%zx "
@@ -2863,6 +2876,10 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         static_cast<unsigned long long>(receipt.visits), receipt.before, receipt.after,
         expected, frame[0], frame[1], static_cast<unsigned long long>(receipt.oldPendingVisits),
         raw(root->LoadPlain()), unsigned(result));
+    if (nestedKind != 0) {
+        std::fprintf(stderr, "NESTED_REMAP_TARGET kind=%u observed=%zx expected=%zx result=%u\n",
+                     nestedKind, raw(nestedField->LoadPlain()), expected, unsigned(result));
+    }
     GC_EXPECT_TRUE(result);
     mutator->RemoveNativeFrameRoot(root);
     if (secondRoot != nullptr) mutator->RemoveNativeFrameRoot(secondRoot);
@@ -2871,15 +2888,23 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     manager.DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
 }
-void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false)
+void CheckMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool fallback = false, unsigned nestedKind = 0)
 {
-    const AbortCapture outcome = CaptureAbort([&] { RunMajorRawRemap(promoted, managed, oldPending, fallback); });
+    const AbortCapture outcome = CaptureAbort([&] { RunMajorRawRemap(promoted, managed, oldPending, fallback, nestedKind); });
     std::fprintf(stderr, "%s", outcome.output.c_str());
     const bool completed = WIFEXITED(outcome.status) && WEXITSTATUS(outcome.status) == 0 &&
         outcome.output.find("result=1") != std::string::npos;
     std::fprintf(stderr, "RAW_REMAP_OUTCOME_ASSERT promoted=%u managed=%u old=%u status=%d completed=%u\n",
         unsigned(promoted), unsigned(managed), unsigned(oldPending), outcome.status, unsigned(completed));
     GC_EXPECT_TRUE(completed);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsStackObjectField)
+{
+    CheckMajorRawRemap(false, false, false, false, 1);
+}
+GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorRemapsHeaderlessRecordField)
+{
+    CheckMajorRawRemap(false, false, false, false, 2);
 }
 GC_OTHER_VM_TEST(RawRemapYoungProduct, MajorWatermarkConsumesYoungTable)
 {
