@@ -16,10 +16,11 @@
 #include <vector>
 
 #include "AllocUtil.h"
+#include "Heap/z/zServiceability.hpp"
 #include "Allocator.h"
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
-#include "RegionManager.h"
+#include "Heap/z/zPageAllocator.hpp"
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -50,9 +51,12 @@ public:
             allocBufferManager = nullptr;
         }
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
-        Sanitizer::OnHeapDeallocated(map->GetBaseAddr(), map->GetMappedSize());
+        for (const auto& range : map->GetReservationRegistry().Ranges()) {
+            Sanitizer::OnHeapDeallocated(reinterpret_cast<void*>(range.start), range.size);
+        }
 #endif
         MemMap::DestroyMemMap(map);
+        MemMap::DestroyMemMap(metadataMap);
     }
 
     void Init(const HeapParam&) override;
@@ -65,8 +69,19 @@ public:
 
     MAddress GetSpaceEndAddress() const override { return reservedEnd; }
 
-    size_t GetCurrentCapacity() const override { return regionManager.GetInactiveZone() - reservedStart; }
-    size_t GetMaxCapacity() const override { return reservedEnd - reservedStart; }
+    size_t GetCurrentCapacity() const override { return regionManager.GetActiveUnitCount() * RegionInfo::UNIT_SIZE; }
+    size_t GetMaxCapacity() const override { return regionManager.GetHeapCapacity(); }
+
+    ZMemoryUsageInfo GetMemoryUsage() const
+    {
+        // ZHeap::used_generation -> ZPageAllocator::used_generation. Use
+        // page occupancy for both generations, never object bytes minus pages.
+        const size_t young = regionManager.GetYoungAllocatedSize();
+        const size_t used = regionManager.GetUsedRegionSize();
+        const size_t old = used - std::min(used, young);
+        return ComputeMemoryUsageInfo(regionManager.GetCommittedCapacity(), GetMaxCapacity(), young, old);
+    }
+
 
     inline size_t GetRecentAllocatedSize() const { return regionManager.GetRecentAllocatedSize(); }
 
@@ -97,49 +112,20 @@ public:
     void GetInstances(const TypeInfo*, bool, size_t, std::vector<MObject*>&) const {}
     void ClassInstanceNum(std::map<CString, long>&) const {}
 
-    size_t ReclaimGarbageMemory(bool releaseAll) override
+    size_t ReclaimGarbageMemory(bool /* releaseAll */) override
     {
-        size_t dirtyHeapBefore = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
-        {
-            MRT_PHASE_TIMER("ReclaimGarbageRegions");
-            regionManager.ReclaimGarbageRegions();
-        }
-
-        MRT_PHASE_TIMER("ReleaseGarbageMemory");
-        if (releaseAll) {
-            return regionManager.ReleaseGarbageRegions(0);
-        } else {
-            size_t dirtyHeapAfter = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
-            // estimation of additional heap memory that was used since last GC
-            size_t dirtyHeapUsed = dirtyHeapAfter > dirtyHeapBefore ? dirtyHeapAfter - dirtyHeapBefore : 0;
-            
-            size_t sizeAfter = regionManager.GetAllocatedSize();
-            double cachedRatio = 1.0 / CangjieRuntime::GetHeapParam().heapUtilization - 1.0;
-
-            // Release memory to OS only when it was not used since previous GC and is over heapUtilization threshold.
-            // It is important for avoiding the case where before GC we request more memory from OS
-            // then GC happens and releases memory, and then we need to request same memory from OS again.
-            size_t targetCachedSize =
-                std::max(dirtyHeapUsed, static_cast<size_t>(sizeAfter * cachedRatio));
-            return regionManager.ReleaseGarbageRegions(targetCachedSize);
-        }
+        const size_t cachedBefore = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        MRT_PHASE_TIMER(ZStatPhases::PReclaimGarbageRegions);
+        // zPageAllocator.cpp: free pages return to the mapped cache. Physical
+        // uncommit belongs to zUncommitter.cpp:367-421, including OOM reclaim.
+        regionManager.ReclaimGarbageRegions();
+        const size_t cachedAfter = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        return cachedAfter > cachedBefore ? cachedAfter - cachedBefore : 0;
     }
 #if defined(__EULER__)
     void TryReclaimGarbageMemory() override
     {
-        double cachedRatio = regionManager.GetCacheRatio();
-        if (cachedRatio == 1.0) { // 1.0 is the default value
-            return;
-        }
-        {
-            MRT_PHASE_TIMER("TryReclaimGarbageRegions");
-            regionManager.ReclaimGarbageRegions();
-        }
-        MRT_PHASE_TIMER("TryReleaseGarbageMemory");
-        size_t size = regionManager.GetAllocatedSize();
-        size_t targetCachedSize = static_cast<size_t>(size * cachedRatio);
-        regionManager.ReleaseGarbageRegions(targetCachedSize);
-        return;
+        ReclaimGarbageMemory(false);
     }
 #endif
     bool ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const override
@@ -155,20 +141,23 @@ public:
     // Return the garbage size of from space.
     size_t RefineFromSpace()
     {
-        MRT_PHASE_TIMER("ExemptFromRegions");
+        MRT_PHASE_TIMER(ZStatPhases::PExemptFromRegions);
         return regionManager.ExemptFromRegions();
     }
 
-    BaseObject* RouteObject(BaseObject* fromObj) { return regionManager.RouteObject(fromObj); }
 
-    void PrepareFromSpace() { regionManager.PrepareFromRegionList(); }
+
+    template<Generation G>
+    void PrepareFromSpace() { regionManager.PrepareFromRegionList<G>(); }
 
     void ClearAllLiveInfo() { regionManager.ClearAllLiveInfo(); }
 
-    void ForwardFromSpace(GCThreadPool* threadPool)
+    template<Generation G>
+    void ForwardFromSpace(GCWorkers& workers)
     {
-        MRT_PHASE_TIMER("ForwardFromRegions");
-        regionManager.ForwardFromRegions(threadPool);
+        MRT_PHASE_TIMER(G == Generation::Young ? ZStatPhases::YoungForwardFromRegions :
+                        ZStatPhases::OldForwardFromRegions);
+        regionManager.ForwardFromRegions<G>(workers);
     }
 
     size_t CollectLargeGarbage() { return regionManager.CollectLargeGarbage(); }
@@ -188,9 +177,9 @@ public:
         regionManager.AssembleLargeGarbageCandidates();
     }
 
-    void DumpRegionStats(const char* msg, bool dumpToError = false) const
+    void DumpRegionStats(const char* msg) const
     {
-        regionManager.DumpRegionStats(msg, dumpToError);
+        regionManager.DumpRegionStats(msg);
     }
 
     void CountLiveObject(const BaseObject* obj) { regionManager.CountLiveObject(obj); }
@@ -198,29 +187,38 @@ public:
     void PrepareTrace() { regionManager.PrepareTrace(); }
     void FeedHungryBuffers() override;
 
+
+    template<Generation G>
     static bool MarkObject(const BaseObject* obj)
     {
+        // getsize7: no live callers (grep). Unsized GetSize hazard documented in GETSIZE_CALLSITES;
+        // do not include Collector.h here (Allocator include path / cycle). Gate at call sites if revived.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        return regionInfo->MarkObject(obj);
+        (void)G;
+        return !regionInfo->MarkObjectByOwner(obj);
     }
 
+    template<Generation G>
     static bool IsMarkedObject(const BaseObject* obj)
     {
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        return regionInfo->IsMarkedObject(obj);
+        MarkView<G> view = regionInfo->GetMarkView<G>();
+        return regionInfo->IsMarkedObject(view, obj);
     }
 
+    template<Generation G>
     static bool ShouldEnqueue(const BaseObject* obj)
     {
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        if (regionInfo->IsTraceRegion()) {
+        RegionInfo* regionInfo = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        if (regionInfo == nullptr || regionInfo->IsFreeRegion() || regionInfo->IsGarbageRegion() ||
+            regionInfo->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
             return false;
         }
-        size_t offset = regionInfo->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        if (regionInfo->IsMarkedObject(offset)) {
-            return false;
-        }
-        return !regionInfo->EnqueueObject(obj, offset);
+        MarkView<G> view = regionInfo->GetMarkView<G>();
+        // ZGC SATB entries are not suppressed by an independent enqueue
+        // bitmap.  The mark pair is the sole epoch authority; until the strong
+        // bit is visible, every observation remains eligible for publication.
+        return !regionInfo->IsMarkedObject(view, obj);
     }
 
     static bool IsResurrectedObject(const BaseObject* obj)
@@ -236,16 +234,12 @@ public:
     friend class Allocator;
 
 private:
-    enum class TryAllocationThreshold {
-        RESCHEDULE = 3,
-        TRIGGER_OOM = 5,
-    };
     MAddress TryAllocateOnce(size_t allocSize, AllocType allocType);
-    bool ShouldRetryAllocation(size_t& tryTimes, size_t size) const;
     MAddress reservedStart = 0;
     MAddress reservedEnd = 0;
     RegionManager regionManager;
     MemMap* map{ nullptr };
+    MemMap* metadataMap{ nullptr };
 };
 } // namespace MapleRuntime
 #endif // MRT_REGION_SPACE_H

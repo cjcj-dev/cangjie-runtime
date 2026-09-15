@@ -12,7 +12,7 @@
 #include <functional>
 #include <unordered_set>
 
-#include "AllocBuffer.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Base/AtomicSpinLock.h"
 #include "Common/PageAllocator.h"
 #include "Common/RunType.h"

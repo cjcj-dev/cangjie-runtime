@@ -9,8 +9,9 @@
 #define MRT_ALLOCATOR_H
 
 #include "AllocBufferManager.h"
-#include "Heap/GcThreadPool.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zUncommitter.hpp"
+#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 // Allocator abstract class
@@ -29,6 +30,7 @@ public:
 #if defined(__EULER__)
     virtual void TryReclaimGarbageMemory() = 0;
 #endif
+    Uncommitter& GetUncommitter() { return uncommitter; }
     virtual void FeedHungryBuffers() = 0;
 
     // returns the total size of live large objects, excluding alignment/roundup/header, ...
@@ -82,6 +84,7 @@ protected:
     AllocBufferManager* allocBufferManager;
     std::atomic<bool> isAsyncAllocationEnable = { true };
 private:
+    Uncommitter uncommitter{*this};
     bool InitAyncAllocation();
     bool asyncAllocationInitSwitch = true;
 };
