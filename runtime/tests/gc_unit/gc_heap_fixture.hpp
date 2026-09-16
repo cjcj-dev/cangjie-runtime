@@ -170,6 +170,8 @@ struct GcHeapFixture {
         RegionInfo::Initialize(kUnits, heapStart);
         region0 = RegionInfo::InitRegion(0, 1, role);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        ZPageTable::heap_table().insert(region0);
+        ZPageTable::heap_table().insert(region1);
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
         AdvanceGeneration(Generation::Old);
         AdvanceGeneration(Generation::Young);
