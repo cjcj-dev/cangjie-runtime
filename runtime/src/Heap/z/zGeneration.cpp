@@ -217,7 +217,7 @@ void WCollector::MarkYoungRootObject(BaseObject* object) const
     // #596's barrier already established current and selected young. Keep the
     // generation mark-phase assertion at ZGeneration::mark_object's entry.
     auto& cycle = const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG));
-    cycle.MarkObject<false, true, true, false>(from_object(object));
+    cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
 }
 
 void WCollector::FlushAllocationRegions()
