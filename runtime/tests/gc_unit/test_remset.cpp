@@ -659,8 +659,8 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
     Barrier idle(collector, rs);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    idle.WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+    GC_EXPECT_TRUE(ExpectRecorded(Heap::GetHeap().GetRememberedSet(), reinterpret_cast<MAddress>(field)));
 }
 
 // Static roots are enumerated directly by every minor and must not enter the
