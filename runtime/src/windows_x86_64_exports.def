@@ -303,6 +303,7 @@ EXPORTS
     CJ_MCC_UpdateVMT @297
     CJ_MCC_WaitQueueForMonitorInit @298
     CJ_MCC_WaitQueueInit @299
+    CJ_MCC_WriteGeneric
     CJ_MCC_WriteGenericPayload @301
     CJ_MCC_ReadGenericPayload
     CJ_MCC_WriteRefField @302

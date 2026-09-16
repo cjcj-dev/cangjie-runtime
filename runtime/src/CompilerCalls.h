@@ -161,6 +161,7 @@ extern "C" MRT_EXPORT TypeInfo* CJ_MCC_GetOrCreateTypeInfo(TypeTemplate* typeTem
 extern "C" MRT_EXPORT bool CJ_MCC_IsSubType(TypeInfo* typeInfo, TypeInfo* superTypeInfo);
 extern "C" MRT_EXPORT bool CJ_MCC_IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTypeInfo);
 extern "C" MRT_EXPORT void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo);
+extern "C" MRT_EXPORT void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size);
 extern "C" MRT_EXPORT void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, size_t srcSize);
 extern "C" MRT_EXPORT void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t size);
 extern "C" MRT_EXPORT void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size);
