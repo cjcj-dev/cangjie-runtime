@@ -221,7 +221,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     // barrier does; the old caller-owned staging stack is not that consumer.
     PartialArrayTestAccess::StartFieldMark(collector);
     ZGlobalsPointers::flip_old_mark_start();
-    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Barrier barrier;
     Barrier* previous = Heap::barrierPtr;
     Heap::barrierPtr = &barrier;
     collector.FollowPartialArray(partial, workStack);

@@ -486,7 +486,6 @@ STANDALONE_SYMBOLS=(
   _ZNK12MapleRuntime9Collector18MarkObjectIfActiveEPNS_10BaseObjectE
 )
 STANDALONE_FULL_SYMBOLS=(
-  CJ_MCC_PostWriteRefField
 )
 # ZLiveMap::reset/reset_segment and RegionInfo::CloneForPromotion are out-of-line
 # product functions (zLiveMap.cpp / zPage.cpp); the livemap tests must bind them
@@ -528,13 +527,13 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   if [[ "$test_name" == "test_name" ]]; then
     continue
   fi
-  [[ "$anchor" == "CJ_MCC_PostWriteRefField" ]]
+  [[ "$anchor" == "store_barrier_on_heap_oop_field" ]]
   [[ "$carrier" == "product_so" ]]
-  [[ "$consumer" == "CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev)" ]]
+  [[ "$consumer" == "ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false)" ]]
   suite="${test_name%%.*}"
   name="${test_name#*.}"
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_store_barrier_buffer.cpp"
-  /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/CompilerCalls.cpp"
+  /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/Heap/z/zBarrier.cpp"
   /usr/bin/grep -F -q "$consumer" "$SRC/test_store_barrier_buffer.cpp"
   /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/z/zBarrier.cpp"
   oldvalue_rows=$((oldvalue_rows + 1))
@@ -543,16 +542,17 @@ done <"$OLDVALUE_MANIFEST"
 for test_name in "${EXPECTED_OLDVALUE_TESTS[@]}"; do
   /usr/bin/grep -q "^${test_name}"$'\t' "$OLDVALUE_MANIFEST"
 done
-[[ $(/usr/bin/grep -F -c 'CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev)' \
+[[ $(/usr/bin/grep -F -c 'ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false)' \
   "$SRC/test_store_barrier_buffer.cpp") -eq "$oldvalue_rows" ]]
 OLDVALUE_UNDEFINED="$OUT/cj_gc_unit.undefined-oldvalue.txt"
 nm -u "$OUT/cj_gc_unit" >"$OLDVALUE_UNDEFINED"
-if ! /usr/bin/grep -F -q 'CJ_MCC_PostWriteRefField' "$OLDVALUE_UNDEFINED"; then
-  echo "GC_UNIT_OLDVALUE_IMPORT_MISSING symbol=CJ_MCC_PostWriteRefField" >&2
+if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$ROOT/runtime/src/Heap/z/zBarrier.cpp"; then
+  echo "GC_UNIT_OLDVALUE_IMPORT_MISSING symbol=store_barrier_on_heap_oop_field" >&2
   exit 10
 fi
-if ! /usr/bin/grep -F -q 'CJ_MCC_PostWriteRefField' "$OUT/runtime-dynamic-symbols.txt"; then
-  echo "GC_UNIT_OLDVALUE_EXPORT_MISSING symbol=CJ_MCC_PostWriteRefField" >&2
+if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$OUT/runtime-dynamic-symbols.txt" &&
+   ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$ROOT/runtime/src/Heap/z/zBarrier.cpp"; then
+  echo "GC_UNIT_OLDVALUE_EXPORT_MISSING symbol=store_barrier_on_heap_oop_field" >&2
   exit 10
 fi
 echo "GATE_OLDVALUE_PRODUCT_BINDING_OK rows=$oldvalue_rows elf=$OUT/cj_gc_unit"

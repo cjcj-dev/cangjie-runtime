@@ -627,7 +627,7 @@ public:
             rememberedSet = &Heap::GetHeap().GetRememberedSet();
         }
         if (flushStoreBarrier && rememberedSet->IsInitialized()) {
-            gcData.storeBarrierBuffer->Flush(*rememberedSet);
+            gcData.storeBarrierBuffer->Flush();
         }
     }
 

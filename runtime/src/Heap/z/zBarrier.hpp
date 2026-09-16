@@ -12,6 +12,7 @@
 #include <functional>
 #endif
 #include "Common/ColourEncoding.h"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "ObjectModel/Field.h"
@@ -28,7 +29,6 @@ using ZBarrierColor = zpointer (*)(zaddress, zpointer);
 class ZBarrier {
 public:
     ZBarrier() = default;
-    ZBarrier(Collector&, RememberedSet&) {}
     ZBarrier(const ZBarrier&) = delete;
     ZBarrier& operator=(const ZBarrier&) = delete;
 
@@ -50,7 +50,6 @@ public:
     static void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib);
 
     static void WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref);
-    static void PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref, zpointer prev);
     static void WriteStaticRef(NativeSlot& field, BaseObject* ref);
     static void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen);
     static void WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib);
@@ -69,11 +68,8 @@ public:
     static bool CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
                                  MemoryOrder succOrder, MemoryOrder failOrder);
 
-    static void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size);
-    static void ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size);
-
     static zpointer load_atomic(volatile zpointer* p);
-    static ZGenerationId remap_generation(zpointer ptr);
+    static ZGeneration* remap_generation(zpointer ptr);
     static void remap_young_relocated(volatile zpointer* p, zpointer o);
     static zaddress make_load_good(zpointer ptr);
     static zaddress make_load_good_no_relocate(zpointer ptr);
@@ -99,8 +95,6 @@ public:
                                         MemoryOrder order);
     static bool CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                      BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder);
-    static void WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size);
-    static void ReadGenericImpl(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size);
 
     static void CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, size_t size);
     static void CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib);
@@ -165,8 +159,8 @@ public:
     static void StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
                       ReferenceStrength strength = ReferenceStrength::Strong);
 
-    static zaddress relocate_or_remap(zaddress_unsafe addr, ZGenerationId generation);
-    static zaddress remap(zaddress_unsafe addr, ZGenerationId generation);
+    static zaddress relocate_or_remap(zaddress_unsafe addr, ZGeneration* generation);
+    static zaddress remap(zaddress_unsafe addr, ZGeneration* generation);
     static zaddress load_good_slow_path(zaddress addr);
     static zaddress keep_alive_slow_path(zaddress addr);
     static zaddress blocking_keep_alive_on_weak_slow_path(zaddress addr);

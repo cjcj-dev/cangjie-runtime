@@ -10,6 +10,9 @@
 
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
 #include "ObjectModel/RefField.inline.h"
@@ -199,18 +202,36 @@ inline zpointer ZBarrier::load_atomic(volatile zpointer* p)
     return reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p))->GetFieldValue(std::memory_order_relaxed);
 }
 
-inline ZGenerationId ZBarrier::remap_generation(zpointer ptr)
+inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
 {
-    RefField<> ref(ptr);
-    return Heap::GetHeap().GetCollector().remap_generation(ref);
+    CHECK_DETAIL(!ZPointer::is_load_good(ptr), "load-good reference does not need remap");
+    auto& collector = Heap::GetHeap().GetCollector();
+    if (ZPointer::is_old_load_good(ptr)) {
+        return &collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+    }
+    if (ZPointer::is_young_load_good(ptr)) {
+        return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
+    }
+    if ((raw(ptr) & ZPointerRememberedMask) == ZPointerRememberedMask) {
+        return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
+    }
+    const MAddress address = untype(RefField<>(ptr).GetTargetObject());
+    if (ForwardingTable::get(address, Generation::Young) != nullptr) {
+        CHECK(ForwardingTable::get(address, Generation::Old) == nullptr);
+        return &collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+    }
+    return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
 }
 
-inline zaddress ZBarrier::relocate_or_remap(zaddress_unsafe addr, ZGenerationId generation)
+inline zaddress ZBarrier::relocate_or_remap(zaddress_unsafe addr, ZGeneration* generation)
 {
-    return from_object(Heap::GetHeap().GetCollector().relocate_or_remap_object(to_object(safe(addr)), generation));
+    const ZGenerationId id = (generation == &Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG))
+        ? ZGenerationId::young
+        : ZGenerationId::old;
+    return from_object(Heap::GetHeap().GetCollector().relocate_or_remap_object(to_object(safe(addr)), id));
 }
 
-inline zaddress ZBarrier::remap(zaddress_unsafe addr, ZGenerationId generation)
+inline zaddress ZBarrier::remap(zaddress_unsafe addr, ZGeneration* generation)
 {
     return relocate_or_remap(addr, generation);
 }
@@ -255,8 +276,7 @@ inline void ZBarrier::self_heal(ZBarrierFastPath fast_path, volatile zpointer* p
     for (;;) {
         assert_transition_monotonicity(ptr, heal_ptr);
         zpointer prev = zpointer::null;
-        if (HealSlot(field, ptr, heal_ptr, HealSite::BarrierReadReference, HealNull::Allow,
-                     std::memory_order_relaxed, std::memory_order_relaxed, &prev)) {
+        if (field.CompareExchange(ptr, heal_ptr, std::memory_order_relaxed, std::memory_order_relaxed, &prev)) {
             return;
         }
         if (fast_path(prev)) {

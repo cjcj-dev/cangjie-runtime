@@ -145,9 +145,9 @@ void* Exercise(void*)
                    "prelude_starts_old_mark");
             StoreBarrierBuffer buffer;
             RootSlot slot;
-            buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
-            Expect((buffer.LastProcessedColorForTest() & ZPointerMarkedOldMask) == (::g_cjStoreGoodMask & ZPointerMarkedOldMask), "prelude_store_buffer_old_obligation");
-            buffer.Discard();
+            buffer.add(reinterpret_cast<MAddress>(&slot), zpointer::null);
+            Expect(buffer.Pending() == 1u, "prelude_store_buffer_old_obligation");
+            buffer.Flush();
         } else {
             ++minorMarkStarts;
             Expect(!old.active, "independent_minor_does_not_start_old");
@@ -172,8 +172,8 @@ void* Exercise(void*)
         // its own state; the test does not provide a phase or generation.
         StoreBarrierBuffer buffer;
         RootSlot slot;
-        buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
-        const auto storedColor = buffer.LastProcessedColorForTest();
+        buffer.add(reinterpret_cast<MAddress>(&slot), zpointer::null);
+        const auto storedPending = buffer.Pending();
         const bool young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).active;
         ZWorkers& current = resources.GetWorkers(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
         ZWorkers& other = resources.GetWorkers(young ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
@@ -184,7 +184,7 @@ void* Exercise(void*)
         Expect(!other.is_active(), "worker_other_inactive_during_cycle");
         if (young) {
             ++youngLabels;
-            Expect(storedColor == static_cast<uintptr_t>(::g_cjStoreGoodMask), "store_buffer_young_color");
+            Expect(storedPending == 1u, "store_buffer_young_color");
         } else {
             ++oldLabels;
             const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
@@ -194,9 +194,9 @@ void* Exercise(void*)
                    "old_body_keeps_prelude_color");
             for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
             GenerationCycleRootTestAccess::Install(tracing, witnesses);
-            Expect(storedColor == static_cast<uintptr_t>(::g_cjStoreGoodMask), "store_buffer_old_color");
+            Expect(storedPending == 1u, "store_buffer_old_color");
         }
-        buffer.Discard();
+        buffer.Flush();
     };
     // Old root publication, read from the product's own published mark stacks
     // at the top of DoTracing (zGeneration.cpp: after DoEnumeration returned,

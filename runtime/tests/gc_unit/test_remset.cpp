@@ -47,9 +47,6 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-extern "C" void CJ_MCC_PostWriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field,
-                                          uintptr_t observedPrev);
-
 namespace MapleRuntime {
 
 // The product minor path drains the previous face in Generation.cpp and then
@@ -280,7 +277,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -301,7 +298,7 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
 
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
@@ -329,7 +326,7 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -375,7 +372,7 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     InstalledBarrierScope installedBarrier(barrier);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
@@ -474,7 +471,7 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     InstalledBarrierScope installedBarrier(barrier);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
@@ -490,7 +487,7 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     field->StoreColoured(taggedB.GetFieldValue());
     const uintptr_t fieldBeforeHook = raw(field->GetFieldValue());
     const bool containsBeforeHook = rs.Contains(slot);
-    CJ_MCC_PostWriteRefField(objectB, fx.obj0, field, observedPrev);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     const uintptr_t fieldAfterHook = raw(field->GetFieldValue());
     const bool containsAfterHook = rs.Contains(slot);
     const size_t sizeAfterHook = rs.Size();
@@ -532,16 +529,16 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
     InstalledBarrierScope installedBarrier(barrier);
 
     const uintptr_t good = raw(GcUnit::StoreGoodPointer(fx.obj0));
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
-    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field, good);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_FALSE(rs.Contains(slot));
     const uintptr_t previousEpoch = raw(PreviousRememberedPointer(fx.obj0));
-    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field, previousEpoch);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
 
@@ -558,7 +555,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     InstalledBarrierScope installedBarrier(barrier);
 
     field->StoreColoured(zpointer::null);
@@ -573,9 +570,9 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     field->StoreColoured(installed.GetFieldValue());
     GC_EXPECT_FALSE(rs.Contains(slot)); // the direct store does not run a barrier
 
-    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field, observedPrev);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_FALSE(rs.Contains(slot));
-    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field, raw(PreviousRememberedPointer(fx.obj0)));
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false)));
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
 
@@ -590,7 +587,7 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(zpointer::null);
     barrier.AtomicWriteReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
@@ -608,7 +605,7 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(zpointer::null);
     BaseObject* old = barrier.AtomicSwapReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
@@ -627,7 +624,7 @@ GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(zpointer::null);
     GC_EXPECT_FALSE(barrier.CompareAndSwapReference(fx.obj0, *field, fx.obj1, fx.obj1,
@@ -674,7 +671,7 @@ GC_TEST(Remset, StaticRootNotRecorded)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     NativeSlot root(zpointer::null);
 
     barrier.WriteStaticRef(root, fx.obj1);
@@ -697,7 +694,7 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(zpointer::null);
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -737,7 +734,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -779,7 +776,7 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -807,7 +804,7 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);

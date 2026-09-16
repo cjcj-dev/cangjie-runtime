@@ -139,6 +139,7 @@ public:
     void StoreColoured(zpointer value, std::memory_order order = std::memory_order_release);
 
 private:
+    friend class ZBarrier;
     template<bool atomic>
     friend bool HealSlot(HeapSlot<atomic>&, zpointer, zpointer, HealSite, HealNull,
                          std::memory_order, std::memory_order, zpointer*);

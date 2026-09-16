@@ -389,18 +389,15 @@ uintptr_t OneLoadBadRemap()
     return bad & (~bad + 1);
 }
 
-class ResolveBarrier final : public Barrier {
+class ResolveBarrier final {
 public:
-    ResolveBarrier(Collector& collector, RememberedSet& rememberedSet)
-        : Barrier(collector, rememberedSet)
-    {
-    }
+    ResolveBarrier(Collector&, RememberedSet&) {}
 
     BaseObject* Resolve(BaseObject* from) const
     {
         RefField<> field(StoreGoodPointer(from));
         ZGlobalsPointers::flip_old_relocate_start();
-        BaseObject* result = ReadReference(nullptr, field);
+        BaseObject* result = ZBarrier::ReadReference(nullptr, field);
         ZGlobalsPointers::flip_old_relocate_start();
         return result;
     }
@@ -893,7 +890,7 @@ GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollect
     RememberedSet rememberedSet;
     rememberedSet.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     LoadHealDeliveryTestAccess::PublishColours(collector);
-    ResolveBarrier barrier(collector, rememberedSet);
+    ResolveBarrier barrier;
 
     BaseObject* resolved = barrier.Resolve(state.from);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(resolved), reinterpret_cast<uintptr_t>(state.to));
@@ -2370,7 +2367,7 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     EmptyBothRememberedFaces(remembered);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LoadHealDeliveryTestAccess::PublishColours(collector);
-    Barrier barrier(collector, remembered);
+    Barrier barrier;
     {
         DeliveryNoAllocBufferScope directRemember;
         fromField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
@@ -2549,7 +2546,7 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     EmptyBothRememberedFaces(remembered);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LoadHealDeliveryTestAccess::PublishColours(collector);
-    Barrier barrier(collector, remembered);
+    Barrier barrier;
     {
         DeliveryNoAllocBufferScope directRemember;
         nearField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
@@ -2647,7 +2644,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     LoadHealDeliveryTestAccess::PublishColours(collector);
-    Barrier barrier(collector, remembered);
+    Barrier barrier;
     {
         DeliveryNoAllocBufferScope directRemember;
         farField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));

@@ -148,7 +148,7 @@ void ZBarrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
     auto slow = [p, prev, heal](zaddress addr) {
         StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(heal);
         if (buffer != nullptr) {
-            buffer->Add(reinterpret_cast<MAddress>(p), prev, Heap::GetHeap().GetRememberedSet());
+            buffer->add(reinterpret_cast<MAddress>(p), prev);
         } else {
             mark_and_remember(p, addr);
         }
@@ -167,26 +167,6 @@ void ZBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObjec
         reinterpret_cast<MAddress>(&field) == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     StoreBarrier(obj, field, false, weakReferent ? ReferenceStrength::Weak : ReferenceStrength::Strong);
     WriteReferenceImpl(obj, field, ref);
-}
-
-void ZBarrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref, zpointer prev)
-{
-    RefField<> previous(prev);
-    const MAddress address = reinterpret_cast<MAddress>(&field);
-    const bool weakReferent = obj != nullptr && Heap::IsHeapAddress(obj) && obj->IsWeakRef() &&
-        address == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
-    // ZZBarrier::no_keep_alive_store_barrier_on_heap_oop_field uses store-good,
-    // including raw null in the slow path so that remember(p) is not skipped.
-    if (!ZPointer::is_store_good_or_null(previous.GetFieldValue()) ||
-        (weakReferent && !ZPointer::is_store_good(previous.GetFieldValue()))) {
-        if (weakReferent) {
-            if (!RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
-                Heap::GetHeap().GetRememberedSet().Record(address, true);
-            }
-        } else {
-            RecordCrossGenEdge(obj, address, ref, prev);
-        }
-    }
 }
 
 void ZBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref)
@@ -776,73 +756,13 @@ void ZBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const G
     CopyStaticStructColouredToHeap(dst, size, src, size, gctib);
 }
 
-void ZBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size)
-{
-    WriteGenericImpl(obj, fieldPtr, src, size);
-}
-
-void ZBarrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size)
-{
-    ObjectPtr dst = obj;
-    void* fp = fieldPtr;
-    ObjectPtr from = src;
-
-    if ((dst != nullptr && !dst->HasRefField()) || (!Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
-        CHECK_DETAIL(memcpy_s(fp, size,
-                              reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE),
-                              size) == EOK,
-                     "WriteGeneric memcpy_s failed");
-#if defined(CANGJIE_TSAN_SUPPORT)
-        if (Heap::IsHeapAddress(from)) {
-            Sanitizer::TsanReadMemoryRange(
-                reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE), size);
-        }
-        if (Heap::IsHeapAddress(dst)) {
-            Sanitizer::TsanWriteMemoryRange(fp, size);
-        }
-#endif
-    } else if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from)) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
-        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
-        ReadStruct(dstAddr, from, srcAddr, size);
-    } else if ((Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))||
-        (Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from))) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
-        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
-        WriteStruct(dst, dstAddr, size, srcAddr, size);
-    }
-}
-void ZBarrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size)
-{
-    ReadGenericImpl(dstObj, obj, fieldPtr, size);
-}
-
-void ZBarrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size)
-{
-
-    if (!Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj)) {
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstObj) + TYPEINFO_PTR_SIZE),
-                              size, fieldPtr, size) == EOK,
-                     "ReadGeneric memcpy_s failed");
-    } else if (!Heap::IsHeapAddress(dstObj) && Heap::IsHeapAddress(obj)) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(dstObj) + TYPEINFO_PTR_SIZE;
-        MAddress srcAddr = reinterpret_cast<MAddress>(fieldPtr);
-        ReadStruct(dstAddr, obj, srcAddr, size);
-    } else if ((Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj))||
-        (Heap::IsHeapAddress(dstObj) && Heap::IsHeapAddress(obj))) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(dstObj) + TYPEINFO_PTR_SIZE;
-        MAddress srcAddr = reinterpret_cast<MAddress>(fieldPtr);
-        WriteStruct(dstObj, dstAddr, size, srcAddr, size);
-    }
-}
-
 void ZBarrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref, zpointer prev)
 {
     (void)obj;
     (void)ref;
     StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false);
     if (buffer != nullptr) {
-        buffer->Add(fieldAddress, prev, Heap::GetHeap().GetRememberedSet());
+        buffer->add(fieldAddress, prev);
         return;
     }
     mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));

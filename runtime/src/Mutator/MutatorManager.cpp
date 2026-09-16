@@ -689,7 +689,7 @@ bool FlushTargetGCData(ThreadGCData& data, MarkDomain* domain)
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     auto& remembered = Heap::GetHeap().GetRememberedSet();
     if (remembered.IsInitialized()) {
-        data.storeBarrierBuffer->Flush(remembered);
+        data.storeBarrierBuffer->Flush();
     }
     return domain == nullptr ? collector.FlushGCDataMarkProducers(data)
                              : collector.FlushGCDataMarkProducers(data, domain);
@@ -732,7 +732,10 @@ void MutatorManager::VisitStoreBarrierBuffers(const std::function<void(MAddress)
 {
     DCHECK(WorldStopped());
     ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-        data.storeBarrierBuffer->VisitEntries([&](const StoreBarrierEntry& store) { visitor(store.p); });
+        StoreBarrierBuffer* buf = data.storeBarrierBuffer;
+        for (size_t i = buf->Current(); i < kStoreBarrierBufferLength; ++i) {
+            visitor(buf->buffer[i].p);
+        }
     });
 }
 

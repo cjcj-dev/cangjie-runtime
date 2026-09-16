@@ -96,7 +96,7 @@ class HeapImpl : public Heap {
 public:
     HeapImpl()
         : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
-          collectorProxy(*theSpace, collectorResources), barrier(collectorProxy, rememberedSet)
+          collectorProxy(*theSpace, collectorResources)
     {
         Heap::barrierPtr = &barrier;
         RunType::InitRunTypeMap();

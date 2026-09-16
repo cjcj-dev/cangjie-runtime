@@ -46,9 +46,6 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-extern "C" void CJ_MCC_PostWriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field,
-                                          uintptr_t observedPrev);
-
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
@@ -98,32 +95,6 @@ MAddress SlotAt(GcHeapFixture& fx, size_t i)
 {
     return fx.heapStart + i * sizeof(void*);
 }
-
-#if defined(MRT_GC_UNIT_TESTS)
-thread_local std::vector<StoreBarrierFlushEvent>* g_flushEvents = nullptr;
-
-void RecordFlushEvent(StoreBarrierFlushEvent event, const StoreBarrierEntry&)
-{
-    if (g_flushEvents != nullptr) {
-        g_flushEvents->push_back(event);
-    }
-}
-
-class FlushObserverScope final {
-public:
-    explicit FlushObserverScope(std::vector<StoreBarrierFlushEvent>& events)
-    {
-        g_flushEvents = &events;
-        StoreBarrierBuffer::SetFlushObserverForTest(RecordFlushEvent);
-    }
-
-    ~FlushObserverScope()
-    {
-        StoreBarrierBuffer::SetFlushObserverForTest(nullptr);
-        g_flushEvents = nullptr;
-    }
-};
-#endif
 
 class AllocBufferScope final {
 public:
@@ -181,12 +152,12 @@ GC_TEST(StoreBuf, EntryCarriesPairedPrevAndInstallColour)
     const MAddress slot = SlotAt(fx, 8);
     const zpointer prev = RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue();
 
-    buf.Add(slot, prev, rs);
+    buf.add(slot, prev);
 
     const StoreBarrierEntry& entry = buf.buffer[buf.current];
     GC_EXPECT_EQ(entry.p, slot);
     GC_EXPECT_EQ(raw(entry.prev), raw(prev));
-    GC_EXPECT_EQ(buf.LastProcessedColorForTest(), static_cast<uintptr_t>(::g_cjStoreGoodMask));
+    GC_EXPECT_EQ(buf.Pending(), 1u);
 }
 
 GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
@@ -199,7 +170,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -248,7 +219,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
         buf.current = StoreBarrierBuffer::Capacity();
         return;
     }
-    buf.Flush(rs, collector);
+    buf.Flush();
     DrainPublishedMarkObjects(retired);
     // The product TraceBarrier path contributes exactly one SATB retirement;
     // its former direct enqueue was removed, leaving the paired flush as the
@@ -266,7 +237,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -325,7 +296,7 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     Mutator mutator;
@@ -355,7 +326,7 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     Mutator mutator;
@@ -398,7 +369,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     InstalledBarrierScope installedBarrier(barrier);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
@@ -434,7 +405,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
 
     // This is the compiler slow-arm ordering: capture, overwrite, then ABI exit.
     field.StoreColoured(newWord);
-    CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
 
@@ -475,7 +446,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -532,21 +503,14 @@ GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)
     const MAddress slot = SlotAt(fx, 8);
     const zpointer prev = RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue();
 #if defined(MRT_GC_UNIT_TESTS)
-    std::vector<StoreBarrierFlushEvent> events;
-    FlushObserverScope observe(events);
-#endif
-    buf.Add(slot, prev, rs);
-    buf.Flush(rs, collector);
+    #endif
+    buf.add(slot, prev);
+    buf.Flush();
     DrainPublishedMarkObjects(retired);
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
-#if defined(MRT_GC_UNIT_TESTS)
-    GC_EXPECT_EQ(events.size(), 2u);
-    GC_EXPECT_EQ(events[0], StoreBarrierFlushEvent::PREVIOUS_RETIRED);
-    GC_EXPECT_EQ(events[1], StoreBarrierFlushEvent::SLOT_REMEMBERED);
-#endif
 }
 
 GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
@@ -561,8 +525,8 @@ GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
     retired.clear();
 
     const MAddress slot = SlotAt(fx, 8);
-    buf.Add(slot, zpointer::null, rs);
-    buf.Flush(rs);
+    buf.add(slot, zpointer::null);
+    buf.Flush();
     DrainPublishedMarkObjects(retired);
 
     GC_EXPECT_TRUE(retired.empty());
@@ -580,10 +544,10 @@ GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
-    buf.Add(slot, previous, rs);
-    buf.Add(SlotAt(fx, 9), zpointer::null, rs);
+    buf.add(slot, previous);
+    buf.add(SlotAt(fx, 9), zpointer::null);
     ::g_cjStoreGoodMask ^= ZPointerMarkedOldMask;
-    buf.Flush(rs);
+    buf.Flush();
     ::g_cjStoreGoodMask = saved;
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
@@ -610,11 +574,9 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     const uintptr_t colour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const MAddress slot = SlotAt(fx, 8);
 #if defined(MRT_GC_UNIT_TESTS)
-    std::vector<StoreBarrierFlushEvent> events;
-    FlushObserverScope observe(events);
-#endif
-    buf.Add(slot, previous, rs);
-    buf.Flush(rs, collector);
+    #endif
+    buf.add(slot, previous);
+    buf.Flush();
     DrainPublishedMarkObjects(retired);
 
     std::fprintf(stderr,
@@ -627,11 +589,6 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     GC_EXPECT_TRUE(retired.empty());
     GC_EXPECT_EQ(buf.Current(), StoreBarrierBuffer::Capacity());
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
-#if defined(MRT_GC_UNIT_TESTS)
-    GC_EXPECT_EQ(events.size(), 2u);
-    GC_EXPECT_EQ(events[0], StoreBarrierFlushEvent::PREVIOUS_INVALID);
-    GC_EXPECT_EQ(events[1], StoreBarrierFlushEvent::SLOT_REMEMBERED);
-#endif
 }
 
 #if defined(MRT_GC_UNIT_TESTS) && defined(__linux__)
@@ -647,9 +604,9 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
     fx.region0->SetYoungRegionFlag(1);
-    buf.Add(slot, previous, rs);
+    buf.add(slot, previous);
     ::g_cjStoreGoodMask ^= ZPointerMarkedYoungMask;
-    buf.Flush(rs);
+    buf.Flush();
     ::g_cjStoreGoodMask = saved;
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
@@ -675,8 +632,8 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE;
     const uintptr_t colour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, colour).GetFieldValue();
-    buf.Add(slot, prev, rs);
-    buf.Flush(rs, collector);
+    buf.add(slot, prev);
+    buf.Flush();
     DrainPublishedMarkObjects(retired);
 
     GC_EXPECT_EQ(retired.size(), 1u);
@@ -695,12 +652,12 @@ GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
-    buf.Add(slot, previous, rs);
+    buf.add(slot, previous);
     ::g_cjStoreGoodMask ^= ZPointerMarkedOldMask;
     const MAddress currentSlot = SlotAt(fx, 9);
-    buf.Add(currentSlot, RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue(), rs);
+    buf.add(currentSlot, RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue());
     GC_EXPECT_EQ(buf.Pending(), 2u);
-    buf.Flush(rs);
+    buf.Flush();
     ::g_cjStoreGoodMask = saved;
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
@@ -722,11 +679,11 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
 
     const uintptr_t before = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, before).GetFieldValue();
-    buf.Add(SlotAt(fx, 12), prev, rs);
+    buf.add(SlotAt(fx, 12), prev);
     // Publish the next old-mark epoch before this thread drains.  The pending
     // entry belongs to the install-time epoch and must not enter the new SATB.
     ::g_cjStoreGoodMask = before ^ ZPointerMarkedOldMask;
-    buf.Flush(rs, collector);
+    buf.Flush();
     ::g_cjStoreGoodMask = before;
     DrainPublishedMarkObjects(retired);
 
@@ -748,11 +705,11 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
 
     const uintptr_t before = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, before).GetFieldValue();
-    buf.Add(SlotAt(fx, 13), prev, rs);
+    buf.add(SlotAt(fx, 13), prev);
     // A young-mark publication does not change the old-mark epoch that owns
     // this entry, so its SATB half must still be retired after the flip.
     ::g_cjStoreGoodMask = before ^ ZPointerMarkedYoungMask;
-    buf.Flush(rs, collector);
+    buf.Flush();
     ::g_cjStoreGoodMask = before;
     DrainPublishedMarkObjects(retired);
 
@@ -771,11 +728,11 @@ GC_TEST(StoreBuf, PhaseFlipLeavesOnePreviousAndOneCurrentSlot)
     const MAddress currentSlot = SlotAt(fx, 9);
 
     RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
-    buf.Add(previousSlot, zpointer::null, rs);
-    buf.Flush(rs);
+    buf.add(previousSlot, zpointer::null);
+    buf.Flush();
     heapRs.FlipForMinor();
-    buf.Add(currentSlot, zpointer::null, rs);
-    buf.Flush(rs);
+    buf.add(currentSlot, zpointer::null);
+    buf.Flush();
 
     std::unordered_set<MAddress> previous;
     GC_EXPECT_EQ(heapRs.ScanPreviousForMinor(previous), 1u);
@@ -793,12 +750,12 @@ GC_TEST(StoreBuf, FullAutoFlushKeepsEveryEntry)
     StoreBarrierBuffer buf;
     const size_t n = StoreBarrierBuffer::Capacity() + 1;
     for (size_t i = 0; i < n; ++i) {
-        buf.Add(SlotAt(fx, i + 8), zpointer::null, rs);
+        buf.add(SlotAt(fx, i + 8), zpointer::null);
     }
     GC_EXPECT_EQ(buf.Pending(), 1u);
     RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
     GC_EXPECT_EQ(heapRs.Size(), StoreBarrierBuffer::Capacity());
-    buf.Flush(rs);
+    buf.Flush();
     GC_EXPECT_TRUE(buf.IsEmpty());
     for (size_t i = 0; i < n; ++i) {
         GC_EXPECT_TRUE(heapRs.Contains(SlotAt(fx, i + 8)));
@@ -813,7 +770,7 @@ GC_TEST(StoreBuf, UnflushedPendingInvisibleToDrain)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
-    buf.Add(slot, zpointer::null, rs);
+    buf.add(slot, zpointer::null);
     GC_EXPECT_EQ(buf.Pending(), 1u);
     std::unordered_set<MAddress> lost;
     rs.DrainForMinor(lost);
@@ -829,10 +786,10 @@ GC_TEST(StoreBuf, FlushBeforeRelocateSnapshotPublishesPending)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
-    buf.Add(slot, zpointer::null, rs);
+    buf.add(slot, zpointer::null);
     RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
     GC_EXPECT_TRUE(!heapRs.Contains(slot));
-    buf.Flush(rs);
+    buf.Flush();
     GC_EXPECT_TRUE(heapRs.Contains(slot));
 }
 
@@ -844,8 +801,8 @@ GC_TEST(StoreBuf, MarkEndSnapshotLeavesCurrentForNextMinor)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 11);
-    buf.Add(slot, zpointer::null, rs);
-    buf.Flush(rs);
+    buf.add(slot, zpointer::null);
+    buf.Flush();
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
 
@@ -858,9 +815,9 @@ GC_TEST(StoreBuf, FlushBeforeMinorDoesNotLoseEdges)
     StoreBarrierBuffer buf;
     const size_t n = 7;
     for (size_t i = 0; i < n; ++i) {
-        buf.Add(SlotAt(fx, i + 8), zpointer::null, rs);
+        buf.add(SlotAt(fx, i + 8), zpointer::null);
     }
-    buf.Flush(rs);
+    buf.Flush();
     RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
     for (size_t i = 0; i < n; ++i) {
         GC_EXPECT_TRUE(heapRs.Contains(SlotAt(fx, i + 8)));
@@ -875,8 +832,8 @@ GC_TEST(StoreBuf, ThreadExitFlushRedeems)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 9);
-    buf.Add(slot, zpointer::null, rs);
-    buf.Flush(rs);
+    buf.add(slot, zpointer::null);
+    buf.Flush();
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
 
@@ -888,11 +845,11 @@ GC_TEST(StoreBuf, ReRememberDoesNotFightBuffer)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 10);
-    buf.Add(slot, zpointer::null, rs);
+    buf.add(slot, zpointer::null);
     rs.Record(slot);
     rs.Record(slot);
     GC_EXPECT_EQ(rs.Size(), 1u);
-    buf.Flush(rs);
+    buf.Flush();
     GC_EXPECT_EQ(rs.Size(), 1u);
     std::unordered_set<MAddress> drained;
     rs.DrainForMinor(drained);
@@ -945,7 +902,7 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
             RememberedSet rs;
             rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
             StoreBufferCollector collector;
-            Barrier barrier(collector, rs);
+            Barrier barrier;
             AllocBuffer alloc;
             AllocBufferScope allocScope(alloc);
             Mutator mutator;
@@ -954,7 +911,7 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
             field.StoreColoured(zpointer::null);
             if (preloaded) {
                 field.StoreColoured(StoreGoodPointer(fx.obj1));
-                barrier.PostWriteReference(fx.obj0, field, fx.obj1, zpointer::null);
+                ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
             } else {
                 barrier.WriteReference(fx.obj0, field, fx.obj1);
             }
@@ -972,7 +929,7 @@ GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
     StoreBufferCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     HeapSlot<true> native(zpointer::null);
     barrier.AtomicWriteReference(nullptr, native, nullptr, std::memory_order_seq_cst);
     GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(nullptr));
@@ -994,7 +951,7 @@ GC_TEST(StoreBuf, BulkPreservesSourceStorageProtocol)
     StoreBufferCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     RootSlot local;
     StorePlain(local, from_object(fx.obj0));
     NativeSlot native(zpointer::null);
@@ -1043,12 +1000,12 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    Barrier barrier(collector, rs);
+    Barrier barrier;
     InstalledBarrierScope installed(barrier);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const zpointer previous = StoreGoodPointer(fx.obj0);
     field.StoreColoured(StoreGoodPointer(fx.obj1));
-    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, &field, raw(previous));
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false));
     std::vector<BaseObject*> marked;
     marking.DrainObjects(marked);
     GC_EXPECT_TRUE(marked.empty());

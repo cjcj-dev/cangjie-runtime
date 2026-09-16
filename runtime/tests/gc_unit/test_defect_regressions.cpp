@@ -28,8 +28,6 @@ extern "C" size_t MCC_GetGCCount();
 extern "C" int CJ_ScheduleManagerInit();
 extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const MapleRuntime::ObjectPtr obj,
                                    MapleRuntime::RefField<false>* field);
-extern "C" void CJ_MCC_PostWriteRefField(const MapleRuntime::ObjectPtr ref, const MapleRuntime::ObjectPtr obj,
-                                        MapleRuntime::RefField<false>* field, uintptr_t observedPrev);
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
@@ -387,8 +385,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
         field->StoreColoured(StoreGoodPointer(fx.heap.obj1));
-        CJ_MCC_PostWriteRefField(fx.heap.obj1, nonHeapHolder,
-                                reinterpret_cast<RefField<false>*>(field), initial);
+        ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(reinterpret_cast<RefField<false>*>(field)), false);
         std::fprintf(stderr, "POST_BUFFER_TARGET_ASSERT_EXECUTED pending=%zu\n",
                      ThreadLocal::GetGCData().storeBarrierBuffer->Pending());
         GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 0u);

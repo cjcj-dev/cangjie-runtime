@@ -339,13 +339,6 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     StorePlain(RootSlotAt(static_cast<void*>(plainField)), from_object(plainRef));
 }
 
-extern "C" MRT_EXPORT void CJ_MCC_PostWriteRefField(const ObjectPtr ref, const ObjectPtr obj,
-                                                     RefField<false>* field, uintptr_t observedPrev)
-{
-    Heap::GetBarrier().PostWriteReference(obj, *field, ref,
-                                          to_zpointer(observedPrev));
-}
-
 extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                      GCTib gctib)
 {
@@ -1996,9 +1989,22 @@ extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const O
     if (src == nullptr || size == 0) {
         return;
     }
-    Heap::GetBarrier().WriteGeneric(obj,
-                                    reinterpret_cast<void*>(reinterpret_cast<MAddress>(fieldPtr)),
-                                    src, size);
+    ObjectPtr dst = obj;
+    void* fp = fieldPtr;
+    if ((dst != nullptr && !dst->HasRefField()) || (!Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(src))) {
+        CHECK_DETAIL(memcpy_s(fp, size,
+                              reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE),
+                              size) == EOK,
+                     "WriteGeneric memcpy_s failed");
+        return;
+    }
+    if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(src)) {
+        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(fp), src,
+                                      reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size);
+        return;
+    }
+    Heap::GetBarrier().WriteStruct(dst, reinterpret_cast<MAddress>(fp), size,
+                                   reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size);
 }
 
 extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo)
@@ -2018,7 +2024,7 @@ extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typ
                      "MCC_AssignGeneric memcpy_s failed");
     } else {
         MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
-        Heap::GetBarrier().WriteGeneric(dst, reinterpret_cast<void*>(dstAddr), src, instanceSize);
+        CJ_MCC_WriteGeneric(dst, reinterpret_cast<void*>(dstAddr), src, instanceSize);
     }
 }
 
@@ -2104,7 +2110,9 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
             char stackMem[stackCache]{ 0 };
             Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<MAddress>(stackMem),
                 reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
-            Heap::GetBarrier().ReadGeneric(dstPtr, nullptr, stackMem, size);
+            CJ_MCC_WriteGeneric(dstPtr, reinterpret_cast<void*>(
+                reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
+                reinterpret_cast<ObjectPtr>(stackMem - TYPEINFO_PTR_SIZE), size);
             return;
         } else {
             char* nativeHeapMem = (char*)malloc(size);
@@ -2112,12 +2120,26 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
                          dstPtr, obj, fieldPtr, size);
             Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<MAddress>(nativeHeapMem),
                 reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
-            Heap::GetBarrier().ReadGeneric(dstPtr, nullptr, nativeHeapMem, size);
+            CJ_MCC_WriteGeneric(dstPtr, reinterpret_cast<void*>(
+                reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
+                reinterpret_cast<ObjectPtr>(nativeHeapMem - TYPEINFO_PTR_SIZE), size);
             free(nativeHeapMem);
             return;
         }
     }
-    Heap::GetBarrier().ReadGeneric(dstPtr, obj, fieldPtr, size);
+    if (!Heap::IsHeapAddress(dstPtr) && !Heap::IsHeapAddress(obj)) {
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
+                              size, fieldPtr, size) == EOK,
+                     "ReadGeneric memcpy_s failed");
+        return;
+    }
+    if (!Heap::IsHeapAddress(dstPtr) && Heap::IsHeapAddress(obj)) {
+        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, obj,
+                                      reinterpret_cast<MAddress>(fieldPtr), size);
+        return;
+    }
+    Heap::GetBarrier().WriteStruct(dstPtr, reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size,
+                                   reinterpret_cast<MAddress>(fieldPtr), size);
 }
 
 extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf)

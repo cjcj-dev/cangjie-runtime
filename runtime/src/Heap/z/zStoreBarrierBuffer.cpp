@@ -22,8 +22,6 @@
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
-#include "Heap/Barrier/StoreBarrierBufferTestObservations.h"
-
 StoreBarrierBuffer::StoreBarrierBuffer()
     : current(kStoreBarrierBufferLength),
       lastProcessedColor(::g_cjStoreGoodMask),
@@ -57,8 +55,11 @@ void StoreBarrierBuffer::install_base_pointers_inner()
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress_unsafe pUnsafe = to_zaddress_unsafe(entry.p);
         const zpointer ptr = ZAddress::color(pUnsafe, lastProcessedColor);
-        const ZGenerationId gid = ZBarrier::remap_generation(ptr);
-        const Generation gen = gid == ZGenerationId::young ? Generation::Young : Generation::Old;
+        ZGeneration* generation = ZBarrier::remap_generation(ptr);
+        const Generation gen =
+            (generation == &Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG))
+                ? Generation::Young
+                : Generation::Old;
         ZForwarding* forwarding = ForwardingTable::get(entry.p, gen);
         if (forwarding != nullptr && forwarding->page() != nullptr) {
             basePointers[i] = to_zaddress_unsafe(forwarding->page()->find_base(entry.p));
@@ -154,34 +155,18 @@ void StoreBarrierBuffer::on_new_phase()
     lastProcessedColor = ::g_cjStoreGoodMask;
 }
 
-void StoreBarrierBuffer::Flush(RememberedSet& rs, Collector& collector)
+void StoreBarrierBuffer::Flush()
 {
-    (void)rs;
+    Collector& collector = Heap::GetHeap().GetCollector();
     for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
         if (!is_null(addr)) {
             collector.MarkObjectIfActive(to_object(addr));
-#if defined(MRT_GC_UNIT_TESTS)
-            NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_RETIRED, entry);
-#endif
         }
         ZBarrier::remember(reinterpret_cast<volatile zpointer*>(entry.p));
-#if defined(MRT_GC_UNIT_TESTS)
-        NotifyFlushObserver(StoreBarrierFlushEvent::SLOT_REMEMBERED, entry);
-#endif
         buffer[i] = {};
     }
-    clear();
-}
-
-void StoreBarrierBuffer::Flush(RememberedSet& rs)
-{
-    Flush(rs, Heap::GetHeap().GetCollector());
-}
-
-void StoreBarrierBuffer::Discard()
-{
     clear();
 }
 

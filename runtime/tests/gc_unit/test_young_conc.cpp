@@ -154,18 +154,12 @@ public:
     }
 };
 
-class TestBarrier final : public Barrier {
+class TestBarrier final {
 public:
-    TestBarrier(Collector& collector, RememberedSet& rememberedSet) : Barrier(collector, rememberedSet) {}
+    TestBarrier(Collector&, RememberedSet&) {}
     void Record(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
     {
-        RecordCrossGenEdge(obj, fieldAddress, ref);
-    }
-
-protected:
-    void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
-    {
-        field.StoreColoured(GcUnit::StoreGoodPointer(ref));
+        ZBarrier::RecordCrossGenEdge(obj, fieldAddress, ref);
     }
 };
 
@@ -640,7 +634,7 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
     TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
+    TestBarrier barrier;
 
     field->StoreColoured(zpointer::null);
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -755,7 +749,7 @@ GC_TEST(YoungConc, LoadBarrierRemapsPreviousRelocationEpoch)
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::StartYoungRelocate(collector);
-    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Barrier barrier;
     GC_EXPECT_TRUE(barrier.ReadReference(fx.obj1, *field) == fx.obj1);
 
     BaseObject* healed = to_object(field->GetTargetObject());
@@ -783,7 +777,7 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
+    TestBarrier barrier;
 
     field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
@@ -809,7 +803,7 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     TestCollector collector;
     RememberedSet remembered;
     remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, remembered);
+    TestBarrier barrier;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     BaseObject* incoming = nullptr;
@@ -838,7 +832,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     TestCollector collector;
     RememberedSet remembered;
     remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, remembered);
+    TestBarrier barrier;
     // ZBarrier::store_barrier_on_heap_oop_field reads prev before the store
     // (zBarrier.inline.hpp:695-705); stale mark colors force its slow path.
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
@@ -867,7 +861,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     TestCollector collector;
     RememberedSet remembered;
     remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, remembered);
+    TestBarrier barrier;
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     barrier.WriteReference(fx.obj0, field, nullptr);
     std::vector<BaseObject*> work;
@@ -943,10 +937,10 @@ GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
     StoreBarrierBuffer buffer;
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
     const zpointer previous = RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue();
-    buffer.Add(slot, fx.obj0, previous, remembered);
+    buffer.add(slot, previous);
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
     GC_EXPECT_EQ(buffer.Pending(), 1u);
-    buffer.Flush(remembered);
+    buffer.Flush();
     GC_EXPECT_TRUE(buffer.IsEmpty());
     GC_EXPECT_EQ(markFixture.YoungPending(), 1u);
     GC_EXPECT_TRUE(remembered.Contains(slot));

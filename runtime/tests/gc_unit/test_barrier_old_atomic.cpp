@@ -304,7 +304,7 @@ GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
     BarrierCollector collector;
     RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, remembered);
+    Barrier barrier;
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(heap.obj0);
@@ -332,7 +332,7 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(collector.to) + collector.to->GetSize());
     RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, remembered);
+    Barrier barrier;
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(collector.from);
@@ -359,7 +359,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
     RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, remembered);
+    Barrier barrier;
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     collector.pauseBeforeHeal = true;
@@ -405,7 +405,7 @@ GC_TEST(BarrierOldAtomic, NativeBulkLoadBadSourceResolvesBeforeHeapPublication)
     BarrierCollector collector;
     RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, remembered);
+    Barrier barrier;
     collector.from = heap.obj0;
     collector.to = heap.obj1;
     NativeSlot source(LoadBadPointer(heap.obj0));
@@ -437,7 +437,7 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
         BarrierCollector collector;
         RememberedSet remembered;
         remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-        Barrier barrier(collector, remembered);
+        Barrier barrier;
         InstalledBarrierScope installed(barrier);
         alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};
         auto* component = reinterpret_cast<TypeInfo*>(componentStorage);

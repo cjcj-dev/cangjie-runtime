@@ -201,7 +201,7 @@ void Mutator::ResetMutator()
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     auto& remembered = Heap::GetHeap().GetRememberedSet();
     if (remembered.IsInitialized()) {
-        gcData.storeBarrierBuffer->Flush(remembered);
+        gcData.storeBarrierBuffer->Flush();
     }
     (void)collector.FlushGCDataMarkProducers(gcData);
     uwContext.Reset();
