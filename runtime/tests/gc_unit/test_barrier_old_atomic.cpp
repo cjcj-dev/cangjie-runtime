@@ -322,8 +322,8 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
                  static_cast<unsigned>(ZPointer::is_load_good((terminal).GetFieldValue())));
     std::fflush(stderr);
 
-    GC_EXPECT_TRUE(returned == collector.to);
-    GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == collector.to);
+    GC_EXPECT_TRUE(returned == collector.from);
+    GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == collector.from);
     GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
 }
 

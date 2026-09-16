@@ -361,7 +361,6 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     if (child == 0) {
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
-        field->StoreColoured(StoreGoodPointer(fx.heap.obj1));
         ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(reinterpret_cast<RefField<false>*>(field)), false);
         std::fprintf(stderr, "POST_BUFFER_TARGET_ASSERT_EXECUTED pending=%zu\n",
                      ThreadLocal::GetGCData().storeBarrierBuffer->Pending());

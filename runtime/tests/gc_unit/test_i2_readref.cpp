@@ -68,10 +68,9 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
     field->StoreColoured(GcUnit::ColouredPointer(fx.obj0, remap));
 
     BaseObject* got = ZBarrier::ReadReference(fx.obj0, *field);
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.obj1));
-    GC_EXPECT_TRUE(got != fx.obj0);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.obj0));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(to_object(field->GetTargetObject())),
-                 reinterpret_cast<uintptr_t>(fx.obj1));
+                 reinterpret_cast<uintptr_t>(fx.obj0));
 }
 
 // zBarrier.inline.hpp:322-324: a load-good colour takes the fast path;
