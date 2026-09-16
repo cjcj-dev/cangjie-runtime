@@ -1314,7 +1314,7 @@ static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
 // address as an alternate result.
 BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const
 {
-    if (!owner || ZForwardingLife::CurrentPageWork() == owner) return nullptr;
+    if (!owner || ZForwarding::CurrentPageWork() == owner) return nullptr;
     const MAddress from = reinterpret_cast<MAddress>(obj);
     if (const MAddress found = owner->find(from)) {
         return reinterpret_cast<BaseObject*>(found);
@@ -1550,7 +1550,7 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj, Generation generation)
         }
         // zRelocate.cpp:412-415: after wait, the table holds the winner. The page
         // worker copying this object (CurrentPageWork) must not wait on itself.
-        if (ZForwardingLife::CurrentPageWork() != nullptr) {
+        if (ZForwarding::CurrentPageWork() != nullptr) {
             return nullptr;
         }
         CHECK_DETAIL(false, "should be forwarded from=%p", obj);
@@ -1755,7 +1755,7 @@ template<Generation G>
 void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed, bool inPlace)
 {
     if (!owner || (!claimed && !owner->claim())) return;
-    ZForwardingLife::PageWorkScope work(owner);
+    ZForwarding::PageWorkScope work(owner);
     if (inPlace) {
         (void)fromRegionList.TryDeleteRegion(region);
         owner->set_in_place();
@@ -1779,7 +1779,7 @@ void WaitCopiedObjectsUnlocked(ZPage* region)
     if (region == nullptr || region->IsFreeRegion()) {
         return;
     }
-    ZForwardingLife::WaitPageDone(region->PeekForwardingOwner());
+    ZForwarding::WaitPageDone(region->PeekForwardingOwner());
 }
 
 template<typename Fn>
@@ -2022,8 +2022,8 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
 void RegionManager::CompactRegion(ZPage* region)
 {
     auto owner = forwarding_for_page(region);
-    ZForwardingLife::PageWorkScope work(owner,
-        owner && ZForwardingLife::CurrentPageWork() != owner);
+    ZForwarding::PageWorkScope work(owner,
+        owner && ZForwarding::CurrentPageWork() != owner);
     if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {
         owner->in_place_relocation_claim_page();
     }

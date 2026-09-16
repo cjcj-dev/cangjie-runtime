@@ -569,13 +569,13 @@ public:
     // zForwarding.cpp:110-181 in_place_relocation_claim_page + detach_page.
     class InPlaceClaimScope {
     public:
-        MRT_EXPORT InPlaceClaimScope(ZPage* region, ZForwardingLife::Retire site);
+        MRT_EXPORT InPlaceClaimScope(ZPage* region, ZForwarding::Retire site);
 
         ~InPlaceClaimScope()
         {
             if (!retiring) return;
             owner->release_page();
-            if (ZForwardingLife::CurrentPageWork() != owner) owner->mark_done();
+            if (ZForwarding::CurrentPageWork() != owner) owner->mark_done();
         }
 
         InPlaceClaimScope(const InPlaceClaimScope&) = delete;

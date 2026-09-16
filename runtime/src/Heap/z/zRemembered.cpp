@@ -145,7 +145,7 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
         } else {
             // ref == 0 releases source bytes before PageWorkScope marks done.
             // Consume the published fields only after that same page task completes.
-            ZForwardingLife::WaitPageDone(forwarding);
+            ZForwarding::WaitPageDone(forwarding);
             CHECK(forwarding->is_done());
             forwarding->relocated_remembered_fields_apply_to_published([&](MAddress field) {
                 rememberedSlots.insert(field);

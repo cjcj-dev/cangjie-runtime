@@ -1757,7 +1757,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt
 
     {
         DeliverySharedPageScope allocation(state.destination);
-        ZForwardingLife::PageWorkScope task(forwarding_for_page(state.region), true);
+        ZForwarding::PageWorkScope task(forwarding_for_page(state.region), true);
         GC_EXPECT_TRUE(manager.RelocateClaimedPage(state.region));
     }
 

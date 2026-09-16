@@ -532,7 +532,7 @@ inline void ZPage::WaitCopiedBeforePayloadWipe(ZPage* region, const char* site)
             return;
         }
         (void)site;
-        ZForwardingLife::WaitPageDone(region->_scratch.fwdOwner.load(std::memory_order_acquire));
+        ZForwarding::WaitPageDone(region->_scratch.fwdOwner.load(std::memory_order_acquire));
     }
 
 inline void ZPage::ClearUnits(size_t idx, size_t cnt)
@@ -696,7 +696,7 @@ inline void ZPage::DispelGhostFromRegion()
 
         // portmutreloc: hold the forwarding drain across the whole body. It is held
         // run while a retained reader is inside the route lookup or a mutator copy.
-        InPlaceClaimScope drain(this, ZForwardingLife::Retire::DISPEL_GHOST);
+        InPlaceClaimScope drain(this, ZForwarding::Retire::DISPEL_GHOST);
         // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
         // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
         // lets step 3 change *when* it happens without changing *where*.
@@ -756,7 +756,7 @@ inline bool ZPage::ClaimForwarding()
 inline void ZPage::MarkForwardingDone()
     {
         auto owner = forwarding_for_page(this);
-        if (owner && ZForwardingLife::CurrentPageWork() != owner) owner->mark_done();
+        if (owner && ZForwarding::CurrentPageWork() != owner) owner->mark_done();
     }
 
 inline bool ZPage::IsForwardingDone() const

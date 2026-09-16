@@ -47,13 +47,13 @@ namespace {
 thread_local ZForwarding* currentPageWork = nullptr;
 }
 
-ZForwardingLife::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
+ZForwarding::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
     : previous(currentPageWork), forwarding(forwarding), complete(complete)
 {
     if (complete) CHECK(forwarding != nullptr && forwarding->claim());
     currentPageWork = forwarding;
 }
-ZForwardingLife::PageWorkScope::~PageWorkScope()
+ZForwarding::PageWorkScope::~PageWorkScope()
 {
     if (complete) {
         if (forwarding->ref_count().load(std::memory_order_acquire) != 0) forwarding->release_page();
@@ -62,24 +62,9 @@ ZForwardingLife::PageWorkScope::~PageWorkScope()
     }
     currentPageWork = previous;
 }
-ZForwarding* ZForwardingLife::CurrentPageWork() { return currentPageWork; }
+ZForwarding* ZForwarding::CurrentPageWork() { return currentPageWork; }
 
-void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect)
-{
-    if (refCount.load(std::memory_order_acquire) == expect) {
-        return;
-    }
-    // Yield, do not park on the process-wide cv: a mutator in cv.wait is
-    // not in a saferegion and blocks STW (fifth-face all-futex hang).
-    // MRT_EnterSaferegion around cv.wait was tried; FormatLog FATAL in a
-    // forked gc_unit child then SEGV'd the parent (logger lock). Observe
-    // the published word via acquire load instead.
-    while (refCount.load(std::memory_order_acquire) != expect) {
-        sched_yield();
-    }
-}
-
-ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Retire site)
+ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwarding::Retire site)
     : owner(forwarding_for_page(region))
 {
     (void)site;
@@ -88,7 +73,7 @@ ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Reti
         return;
     }
     const int32_t before = owner->ref_count().load(std::memory_order_acquire);
-    const bool borrowed = ZForwardingLife::CurrentPageWork() == owner;
+    const bool borrowed = ZForwarding::CurrentPageWork() == owner;
     if (before == 0 || (!borrowed && !owner->claim())) {
         owner->detach_page();
     } else if (before > 0) {
@@ -97,7 +82,7 @@ ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Reti
     }
 }
 
-void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
+void ZForwarding::WaitPageDone(ZForwarding* forwarding)
 {
     if (forwarding == nullptr) {
         return;
@@ -115,12 +100,27 @@ void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
 
 namespace MapleRuntime {
 bool ZForwarding::claim()
-{ return ZForwardingLife::claim(_claimed); }
+{
+    bool expected = false;
+    return _claimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+}
 
 bool ZForwarding::retain_page()
 {
-        return ZForwardingLife::retain_page(_ref_count, [this] { ZForwardingLife::WaitPageDone(this); });
+    for (;;) {
+        int32_t n = _ref_count.load(std::memory_order_acquire);
+        if (n == 0) {
+            return false;
+        }
+        if (n < 0) {
+            WaitPageDone(this);
+            return false;
+        }
+        if (_ref_count.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return true;
+        }
     }
+}
 
 void ZForwarding::release_page()
 {
@@ -146,10 +146,14 @@ void ZForwarding::detach_page()
     }
 
 void ZForwarding::mark_done()
-{ ZForwardingLife::mark_done(_done); }
+{
+    _done.store(true, std::memory_order_release);
+}
 
 bool ZForwarding::is_done() const
-{ return ZForwardingLife::is_done(_done); }
+{
+    return _done.load(std::memory_order_acquire);
+}
 
 void ZForwarding::in_place_relocation_claim_page()
 {
@@ -185,79 +189,6 @@ bool ZForwarding::in_place_relocation_is_below_top_at_start(MAddress offset) con
     return _in_place_thread.load(std::memory_order_relaxed) == std::this_thread::get_id() &&
            offset < _in_place_top_at_start;
 }
-}
-
-namespace MapleRuntime {
-bool ZForwardingLife::claim(std::atomic<bool>& claimed)
-    {
-        bool expected = false;
-        return claimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
-    }
-}
-
-namespace MapleRuntime {
-void ZForwardingLife::mark_done(std::atomic<bool>& done)
-    {
-        done.store(true, std::memory_order_release);
-        NotifyAll();
-    }
-}
-
-namespace MapleRuntime {
-bool ZForwardingLife::is_done(const std::atomic<bool>& done) { return done.load(std::memory_order_acquire); }
-}
-
-namespace MapleRuntime {
-void ZForwardingLife::release_page(std::atomic<int32_t>& refCount)
-    {
-        for (;;) {
-            int32_t n = refCount.load(std::memory_order_relaxed);
-            CHECK(n != 0);
-            if (n > 0) {
-                if (!refCount.compare_exchange_weak(n, n - 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                    continue;
-                }
-                if (n == 1) {
-                    NotifyAll();
-                }
-            } else {
-                if (!refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                    continue;
-                }
-                if (n == -2 || n == -1) {
-                    NotifyAll();
-                }
-            }
-            return;
-        }
-    }
-}
-
-namespace MapleRuntime {
-void ZForwardingLife::in_place_relocation_claim_page(std::atomic<int32_t>& refCount)
-    {
-        for (;;) {
-            int32_t n = refCount.load(std::memory_order_relaxed);
-            CHECK(n > 0);
-            if (!refCount.compare_exchange_weak(n, -n, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                continue;
-            }
-            if (n != 1) {
-                WaitUntilRef(refCount, -1);
-            }
-            return;
-        }
-    }
-}
-
-namespace MapleRuntime {
-void ZForwardingLife::detach_page(std::atomic<int32_t>& refCount)
-    {
-        if (refCount.load(std::memory_order_acquire) == 0) {
-            return;
-        }
-        WaitUntilRef(refCount, 0);
-    }
 }
 
 namespace MapleRuntime {
