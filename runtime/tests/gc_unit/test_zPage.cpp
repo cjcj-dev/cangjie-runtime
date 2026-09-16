@@ -27,8 +27,8 @@ GC_TEST(ZPage, AllocPagePublishedInTable)
     GcHeapFixture fx;
     RegionInfo* page = fx.region0;
     GC_EXPECT_TRUE(page != nullptr);
-    GC_EXPECT_EQ(ZPageTable::heap_table().get(page->GetRegionStart()), page);
-    GC_EXPECT_EQ(Heap::page(page->GetRegionStart()), page);
+    GC_EXPECT_TRUE(ZPageTable::heap_table().get(page->GetRegionStart()) == page);
+    GC_EXPECT_TRUE(Heap::page(page->GetRegionStart()) == page);
     GC_EXPECT_TRUE(page->is_allocating());
     GC_EXPECT_TRUE(!page->is_relocatable());
 }
