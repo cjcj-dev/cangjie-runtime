@@ -141,8 +141,8 @@ void HeapIterator::ColoredRootOopClosure<Weak>::do_root(NativeSlot& root)
     }
     BaseObject* object = nullptr;
     if constexpr (Weak) {
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-        object = to_object(safe(*reinterpret_cast<zaddress_unsafe*>(&root)));
+        // ZGC zHeapIterator.cpp:116-119 NativeAccess<AS_NO_KEEPALIVE | ON_PHANTOM_OOP_REF>
+        object = ZBarrier::ReadPhantomRef(nullptr, root);
     } else {
         object = ZBarrier::ReadStaticRef(root);
     }
