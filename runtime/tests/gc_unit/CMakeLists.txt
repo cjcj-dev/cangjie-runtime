@@ -93,6 +93,7 @@ set(GC_UNIT_SOURCES
     test_verify_marking_stacks.cpp
     test_colour_census.cpp
     test_payload_clamp.cpp
+    test_write_generic.cpp
     test_cycle_ref_saferegion.cpp
 )
 

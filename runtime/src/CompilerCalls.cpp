@@ -2007,6 +2007,11 @@ static void CopyGenericField(const ObjectPtr obj, void* fieldPtr, const ObjectPt
                                    reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size);
 }
 
+extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size)
+{
+    CopyGenericField(obj, fieldPtr, src, size);
+}
+
 extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo)
 {
     if (typeInfo == nullptr) {
