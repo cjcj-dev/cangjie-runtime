@@ -7,6 +7,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zTask.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
@@ -526,16 +527,14 @@ extern "C" int p2ArrayFieldExercise()
 }
 
 namespace {
-class P2FieldInputTask final : public GCWorkerTask {
+class P2FieldInputTask final : public ZTask {
 public:
     P2FieldInputTask(WCollector& collector, std::function<void()> exercise)
-        : collector(collector), exercise(std::move(exercise)) {}
-    void Work(uint32_t) override
+        : ZTask("P2FieldInputTask"), collector(collector), exercise(std::move(exercise)) {}
+    void work() override
     {
         if (!claimed.exchange(true)) exercise();
-        // Same GC-worker tail protocol as MarkOldRootsTask. The field entry
-        // produced these entries; the test never supplies mark/current output.
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.MajorMarkDomain());
+        ThreadLocal::FlushCurrentThreadMarkStacks();
         Expect(collector.MajorMarkDomain()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
     }
 private:
@@ -640,7 +639,7 @@ extern "C" int p2SlowFieldInputExercise()
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
             Expect(collector.MajorMarkDomain()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
         });
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->Run(task);
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->run(&task);
         Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");
         Expect(strongSlow == 1 && finalSlow == 1, "slow_input_both_field_entries_reached");
         Expect(strongFast == 1 && finalFast == 1, "slow_input_legal_fast_controls_reached");
