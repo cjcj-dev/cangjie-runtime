@@ -7,6 +7,7 @@
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Base/Macros.h"
+#include "Base/Panic.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zPage.hpp"
@@ -263,7 +264,7 @@ zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
 {
     auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
     auto& young = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
-    CHECK(old.IsPhaseMark() || young.IsPhaseMark());
+    ASSERT(old.IsPhaseMark() || young.IsPhaseMark());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, true>(address);

@@ -61,7 +61,9 @@ RememberedSet::RememberedSet()
 
 void RememberedSet::Initialize(MAddress start, size_t size)
 {
-    CHECK_DETAIL(!initialized, "remembered set initialized twice");
+    if (initialized) {
+        return;
+    }
     CHECK_DETAIL(size != 0, "remembered set heap range is empty");
     CHECK_DETAIL(start % kFieldBytes == 0, "remembered set heap start %#zx is not field-aligned", start);
     heapStart = start;
