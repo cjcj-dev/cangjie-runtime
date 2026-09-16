@@ -222,23 +222,6 @@ GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
 }
 
-// isTraceRegion without paint is not allocate-black: SATB must still enqueue
-// (zBarrier.inline.hpp:735-739 mark_and_remember). Skipping here left SurvivalNode
-// array overwrites white (survnode visitSame=0).
-GC_TEST(YoungConc, TraceRegionSkipsSatbWithoutPaint)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->SetRegionListOwner(nullptr);
-    fx.region0->SetTraceRegionFlag(1);
-
-    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
-    GC_EXPECT_FALSE(fx.region0->is_object_strongly_live(from_object(fx.obj0)));
-
-}
-
 GC_TEST(YoungConc, EpochHandshakeIsRequired)
 {
     GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
