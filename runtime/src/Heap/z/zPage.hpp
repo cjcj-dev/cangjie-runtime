@@ -130,7 +130,7 @@ enum class RegionType : uint8_t {
     GARBAGE_REGION,
 };
 
-class ZPage {
+class RegionInfo {
     friend class ForwardingTable;
 private:
     const ZPageType _type;
@@ -194,7 +194,7 @@ public:
     bool undo_alloc_object_atomic(uintptr_t addr, size_t size);
     RegionInfo* reset(PageAge age);
 
-    ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
+    RegionInfo(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
 
     uint8_t GetRegionLifeSeq() const
     {
@@ -228,7 +228,7 @@ public:
     static std::atomic<uint64_t>& EnrolAfterFlip();
     void NoteEnrolPhase();
 
-    ZPage();
+    RegionInfo();
     static RegionInfo* NullRegion();
 
     // ZPage::_livemap (zPage.hpp:52). One ZLiveMap per page life, owned by

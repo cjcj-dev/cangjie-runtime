@@ -295,7 +295,7 @@ uint64_t RegionInfo::GetSnapshotEpoch() const
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-ZPage::ZPage()
+RegionInfo::RegionInfo()
     : _type(ZPageType::small),
       _generation_id(ZGenerationId::old),
       _age(PageAge::old),
@@ -311,7 +311,7 @@ ZPage::ZPage()
         metadata.regionEnd = reinterpret_cast<uintptr_t>(nullptr);
     }
 
-ZPage::ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
+RegionInfo::RegionInfo(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
     : _type(type),
       _generation_id(age != PageAge::old ? ZGenerationId::young : ZGenerationId::old),
       _age(age),
@@ -353,7 +353,7 @@ RegionInfo* RegionInfo::reset(PageAge age)
 RegionInfo* RegionInfo::clone_for_promotion() const
 {
     CHECK(IsYoungRegion());
-    RegionInfo* page = new ZPage(_type, PageAge::old, _virtual);
+    RegionInfo* page = new RegionInfo(_type, PageAge::old, _virtual);
     page->metadata.allocPtr = metadata.allocPtr;
     page->metadata.regionEnd = metadata.regionEnd;
     page->_top = _top;

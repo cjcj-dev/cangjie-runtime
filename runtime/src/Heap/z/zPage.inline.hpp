@@ -515,7 +515,7 @@ inline ZPageType RegionInfoTypeFor(size_t nUnit, RegionInfo::UnitRole uclass)
 inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, RegionInfo::UnitRole uclass, PageAge age)
     {
         const MAddress start = GetUnitAddress(unitIdx);
-        RegionInfo* region = new ZPage(RegionInfoTypeFor(nUnit, uclass), age,
+        RegionInfo* region = new RegionInfo(RegionInfoTypeFor(nUnit, uclass), age,
                                             ZVirtualMemory(ZAddress::offset(to_zaddress_unsafe(start)),
                                                            nUnit * UNIT_SIZE));
         region->InitRegion(nUnit, uclass, age);

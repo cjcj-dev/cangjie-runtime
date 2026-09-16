@@ -10,8 +10,8 @@
 #include "Heap/z/zIndexDistributor.hpp"
 
 namespace MapleRuntime {
-class ZPage;
-using RegionInfo = ZPage;
+class RegionInfo;
+using ZPage = RegionInfo;
 class ZPageAllocator;
 
 template<typename T>
