@@ -23,6 +23,7 @@ namespace MapleRuntime {
 
 template <typename T> uintptr_t ZValueStorage<T>::_end = 0;
 template <typename T> uintptr_t ZValueStorage<T>::_top = 0;
+template <typename T> uint32_t ZValueStorage<T>::_block_count = 0;
 
 template <typename S>
 uintptr_t ZValueStorage<S>::alloc(size_t size)
@@ -30,17 +31,19 @@ uintptr_t ZValueStorage<S>::alloc(size_t size)
     assert(size <= Offset && "Allocation too large");
 
     // Allocate entry in existing memory block
+    const uint32_t n = S::count() == 0 ? uint32_t{1} : S::count();
     const uintptr_t addr = (_top + S::alignment() - 1) & ~(S::alignment() - 1);
     _top = addr + size;
 
-    if (_top < _end) {
+    if (_top < _end && n == _block_count) {
         return addr;
     }
 
     const size_t block_alignment = Offset;
-    const size_t block_size = Offset * (S::count() == 0 ? uint32_t{1} : S::count());
+    const size_t block_size = Offset * n;
     _top = ZUtils::alloc_aligned_unfreeable(block_alignment, block_size);
     _end = _top + Offset;
+    _block_count = n;
 
     return alloc(size);
 }
