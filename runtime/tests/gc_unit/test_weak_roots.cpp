@@ -1,7 +1,9 @@
 #include "Common/SuspendibleThreadSet.h"
 #include "Common/WeakHandle.inline.h"
 #include "Heap/z/zAccess.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "gc_heap_fixture.hpp"
@@ -58,7 +60,7 @@ GC_TEST(WeakHandleProduct, EmptyHandleIsNull)
     WeakHandle handle;
     GC_EXPECT_TRUE(handle.is_null());
     GC_EXPECT_TRUE(handle.is_empty());
-    GC_EXPECT_EQ(handle.ptr_raw(), static_cast<NativeSlot*>(nullptr));
+    GC_EXPECT_TRUE(handle.ptr_raw() == nullptr);
     std::fprintf(stderr, "WEAK_HANDLE_EMPTY_ASSERT_EXECUTED\n");
 }
 
@@ -72,7 +74,7 @@ GC_TEST(WeakRootsProduct, PhantomCleanDeadClearsSlot)
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
     resources.BlockResurrection();
     GC_EXPECT_TRUE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
-    GC_EXPECT_TRUE(ZPointer::is_null(*SlotOf(slot)));
+    GC_EXPECT_TRUE(is_null(*SlotOf(slot)));
     std::fprintf(stderr, "WEAK_ROOTS_DEAD_CLEAN_ASSERT_EXECUTED\n");
 }
 
