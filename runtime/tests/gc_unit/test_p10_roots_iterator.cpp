@@ -38,10 +38,10 @@ GC_TEST(P10Roots, HeapIteratorBitMapTrySetOnce)
 GC_TEST(P10Roots, PackedWatermarkState)
 {
     StackWatermark watermark;
-    GC_EXPECT_TRUE(watermark.TryBegin(11, StackWatermark::WM_OWNER_SELF, 0));
+    GC_EXPECT_TRUE(watermark.TryBegin(11, 0));
     GC_EXPECT_EQ(StackWatermark::UnpackEpoch(watermark.PackedState()), 11u);
     GC_EXPECT_FALSE(StackWatermark::UnpackDone(watermark.PackedState()));
-    watermark.Finish(StackWatermark::WM_OWNER_SELF);
+    watermark.Finish();
     GC_EXPECT_TRUE(StackWatermark::UnpackDone(watermark.PackedState()));
     std::fprintf(stderr, "P10_WATERMARK_PACK_ASSERT_EXECUTED state=%u\n", watermark.PackedState());
 }

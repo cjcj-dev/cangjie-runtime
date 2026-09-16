@@ -274,17 +274,9 @@ public:
     virtual void PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex);
     virtual void PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex);
 
-    static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
-                                Mutator& mutator);
+    static void Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
+                        RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
     static size_t CurrentThreadRootMapMissCount();
-
-    static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
-                                           RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator,
-                                           bool young = false);
-
-    static void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
-                                           const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                           const FrameInfo& frame, Mutator& mutator, bool young = false);
 
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
 #ifdef __arm__
@@ -326,7 +318,6 @@ public:
                               const std::function<void(Mutator&)>& threadVisitor) const;
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    void DumpRoots(LogType logType);
     void DumpHeap(const CString& tag);
     void DumpBeforeGC();
 
@@ -524,7 +515,6 @@ protected:
 
 
     // enum all common roots.
-    void EnumAllCommonRoots(ZWorkers& workers);
     ZWorkers& GetWorkers(GCCycleGeneration generation) const
     {
         return *(generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Workers();
@@ -536,6 +526,7 @@ protected:
     void DiscoverFinalizableRoot(NativeSlot& slot) const;
 
     void MergeMutatorRoots(WorkStack& workStack);
+    void DoOldRoots();
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);

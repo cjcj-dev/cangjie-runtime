@@ -220,7 +220,7 @@ void Mutator::ResetMutator()
     }
     exceptionWrapper.ClearInfo();
     // stackwm #1 lifecycle: exit/reset closes watermark (must not leave SCANNING dangling).
-    stackWatermark.OnExit();
+    stackWatermark.Reset();
     MutatorUnlock();
 }
 
@@ -300,9 +300,9 @@ void Mutator::MarkBornCleanForEpoch(uint64_t epoch)
     if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
         CHECK_DETAIL(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD) == GCPhase::GC_PHASE_ENUM,
                      "concurrent stack-scan join before ENUM barrier publication");
-        bool began = stackWatermark.TryBegin(epoch, StackWatermark::WM_OWNER_SELF, 0);
+        bool began = stackWatermark.TryBegin(epoch, 0);
         CHECK_DETAIL(began, "born-clean mutator failed to close empty stack watermark");
-        stackWatermark.Finish(StackWatermark::WM_OWNER_SELF);
+        stackWatermark.Finish();
     }
     // Publish completion before state so a concurrent FinishedEpochHandshake
     // observer that sees ACKNOWLEDGED also sees the matching completion.
@@ -375,7 +375,7 @@ void Mutator::CreateCurrentGCInfo() { gcInfos.CreateCurrentGCInfo(); }
 // has started, and never read frames still waiting for processing.
 void Mutator::VisitProcessedRoots(const RootVisitor& visitor)
 {
-    if (GetStackWatermark().IsNotStarted()) { return; }
+    if (!GetStackWatermark().IsDone() && GetStackWatermark().GetEpoch() == 0) { return; }
     VisitExceptionRoots(visitor);
     VisitNativeFrameRoots(visitor);
     if (GetStackWatermark().IsDone()) { VisitStackRoots(visitor, visitor); }
@@ -943,8 +943,8 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
 }
 
 bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
-                                  uint64_t epoch, StackWatermark::Owner owner,
-                                  const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young)
+                                  uint64_t epoch, const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames,
+                                  bool young)
 {
     scannedFrames = 0;
     MutatorLock();
@@ -959,16 +959,12 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
 #else
     const RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
 #endif
-    if (owner == StackWatermark::WM_OWNER_GC && !InSaferegion()) {
-        MutatorUnlock();
-        return false;
-    }
     if (stackWatermark.IsDone(epoch)) {
         MutatorUnlock();
         return true;
     }
     if (!IsManagedContext()) {
-        bool began = stackWatermark.TryBegin(epoch, owner, 0);
+        bool began = stackWatermark.TryBegin(epoch, 0);
         if (began) {
             VisitExceptionRoots(visitor);
             VisitNativeFrameRoots(visitor);
@@ -977,14 +973,11 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
             if (gcData.storeBarrierBuffer != nullptr) {
                 gcData.storeBarrierBuffer->on_new_phase();
             }
-            stackWatermark.Finish(owner);
+            stackWatermark.Finish();
         }
         MutatorUnlock();
         return began;
     }
-    // A managed stack without a usable address range cannot classify stack
-    // objects in CheckAndPush. Keep it NOT_STARTED so the second STW takes the
-    // exact legacy VisitMutatorRoots fallback instead of silently claiming DONE.
     if (GetStackTopAddr() == 0 || GetStackSize() == 0) {
         MutatorUnlock();
         return false;
@@ -995,7 +988,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     CreateCurrentGCInfo();
 #endif
     StackFrameCursor cursor(uwContext);
-    bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
+    bool began = stackWatermark.TryBegin(epoch, cursor.FrameCount());
     if (began) {
         VisitExceptionRoots(visitor);
         VisitNativeFrameRoots(visitor);
@@ -1005,24 +998,14 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
             gcData.storeBarrierBuffer->on_new_phase();
         }
         while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor, young)) {
-            stackWatermark.AdvanceTo(cursor.Cursor(), owner);
+            stackWatermark.AdvanceTo(cursor.Cursor());
         }
-        // Frame coverage is the completion quantity.  FrameCount alone is the
-        // size of the snapshot and therefore cannot prove that the cursor
-        // actually processed it.
         scannedFrames = cursor.Cursor();
-    }
-    bool complete = began && scannedFrames == stackWatermark.GetFrameCount();
-    if (began) {
-        if (complete) {
-            stackWatermark.Finish(owner);
-        } else {
-            stackWatermark.FinishIncomplete(owner);
-        }
+        stackWatermark.Finish();
     }
     DecObserver();
     MutatorUnlock();
-    return complete;
+    return began;
 }
 
 bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
@@ -1089,9 +1072,9 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
     // The required epoch handshake always carries the stack traversal; young
     // and old marking share this stack-watermark path.
     size_t frames = 0;
-    StackWatermark::Owner owner = bySelf ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
+    (void)bySelf;
     bool scanned = DrainStackWatermark(
-        visitor, invisibleRootVisitor, stackScanEpoch, owner, &derivedVisitor, frames, young);
+        visitor, invisibleRootVisitor, stackScanEpoch, &derivedVisitor, frames, young);
     if (scannedFrames != nullptr) {
         *scannedFrames = frames;
     }
@@ -1194,8 +1177,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     ForwardLocalFinalizers(collector);
     size_t frames = 0;
     const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
-    const auto owner = GetMutator() == this ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
-    if (!DrainStackWatermark(visitor, visitor, epoch, owner, &derivedPtrVisitor, frames, false)) {
+    if (!DrainStackWatermark(visitor, visitor, epoch, &derivedPtrVisitor, frames, false)) {
         // Complete under the phase handshake before publishing mutatorPhase.
         VisitHeapReferences(visitor, derivedPtrVisitor);
     }

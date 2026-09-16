@@ -329,7 +329,7 @@ void WCollector::RemapYoungRoots()
         DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
         size_t frames = 0;
         if (!mutator.DrainStackWatermark(heapRoots, heapRoots, __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE),
-                                         StackWatermark::WM_OWNER_GC, &derived, frames, true)) {
+                                         &derived, frames, true)) {
             mutator.VisitHeapReferences(heapRoots, derived);
         }
     });

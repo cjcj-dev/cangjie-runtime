@@ -47,9 +47,6 @@ class CollectorResources;
 class Heap {
 public:
     static Heap& GetHeap();
-#ifdef MRT_TESTABLE_INTERNALS
-    static size_t GetStaticRootCountForTesting();
-#endif
     virtual RememberedSet& GetRememberedSet() = 0;
 
 

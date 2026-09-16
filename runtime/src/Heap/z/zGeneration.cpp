@@ -38,6 +38,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Mutator/MutatorManager.h"
+#include "Heap/z/zStackWatermark.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
@@ -294,30 +295,13 @@ void WCollector::DoYoungGarbageCollection()
         stw.reset();
 
 
-        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-minor-stack", true);
-        stackScanEpoch = handshake.epoch;
-        CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
-                     "minor concurrent stack scan accounting failed: epoch=%llu requested=%zu scanned=%zu "
-                     "fallback=%zu",
-                     static_cast<unsigned long long>(stackScanEpoch), handshake.requested, handshake.stackScanned,
-                     handshake.stackFallback);
-
-        // CLEAR is the closing edge for ENUM writes: it flushes every mutator's
-        // store buffer before the root pass follows published mark work.
+        stackScanEpoch = StackWatermark::epoch_id();
         stw = std::make_unique<ScopedStopTheWorld>("young collection", false);
         ZVerify::BeforeZOperation();
         TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true, true);
-
-        // finish_processing semantics: under the closing STW first ask the GC
-        // owner to complete every unfinished epoch cursor. If a cursor still
-        // cannot establish DONE (for example, missing managed bounds), preserve
-        // the exact legacy phase-enum fallback before roots are merged.
         MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
             if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
                 (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, true, stackScanEpoch, false);
-            }
-            if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, true);
             }
         });
 

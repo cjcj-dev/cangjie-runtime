@@ -18,14 +18,14 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(StackWatermark, PackedEpochDoneIsIdempotent)
 {
     StackWatermark watermark;
-    GC_EXPECT_TRUE(watermark.TryBegin(7, StackWatermark::WM_OWNER_SELF, 1));
-    watermark.AdvanceTo(1, StackWatermark::WM_OWNER_SELF);
-    watermark.Finish(StackWatermark::WM_OWNER_SELF);
+    GC_EXPECT_TRUE(watermark.TryBegin(7, 1));
+    watermark.AdvanceTo(1);
+    watermark.Finish();
     GC_EXPECT_TRUE(watermark.IsDone(7));
-    GC_EXPECT_FALSE(watermark.TryBegin(7, StackWatermark::WM_OWNER_SELF, 1));
-    GC_EXPECT_TRUE(watermark.TryBegin(8, StackWatermark::WM_OWNER_SELF, 1));
-    watermark.AdvanceTo(1, StackWatermark::WM_OWNER_SELF);
-    watermark.Finish(StackWatermark::WM_OWNER_SELF);
+    GC_EXPECT_FALSE(watermark.TryBegin(7, 1));
+    GC_EXPECT_TRUE(watermark.TryBegin(8, 1));
+    watermark.AdvanceTo(1);
+    watermark.Finish();
     GC_EXPECT_TRUE(watermark.IsDone(8));
     GC_EXPECT_FALSE(watermark.IsDone(7));
 }
@@ -33,13 +33,13 @@ GC_TEST(StackWatermark, PackedEpochDoneIsIdempotent)
 GC_TEST(StackWatermark, RemapRetainsLogicalStackIdentityAcrossGrow)
 {
     StackWatermark watermark;
-    GC_EXPECT_TRUE(watermark.TryBegin(9, StackWatermark::WM_OWNER_SELF, 2));
-    watermark.AdvanceTo(1, StackWatermark::WM_OWNER_SELF);
+    GC_EXPECT_TRUE(watermark.TryBegin(9, 2));
+    watermark.AdvanceTo(1);
     watermark.OnStackGrow(4096);
     GC_EXPECT_EQ(watermark.GetCursorIndex(), size_t(1));
     GC_EXPECT_EQ(watermark.GetFrameCount(), size_t(2));
     GC_EXPECT_FALSE(watermark.IsDone(9));
-    watermark.AdvanceTo(2, StackWatermark::WM_OWNER_SELF);
-    watermark.Finish(StackWatermark::WM_OWNER_SELF);
+    watermark.AdvanceTo(2);
+    watermark.Finish();
     GC_EXPECT_TRUE(watermark.IsDone(9));
 }

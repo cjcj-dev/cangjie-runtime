@@ -41,8 +41,8 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
-                TracingCollector::VisitHeapReferencesOnStack(
-                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
+                (void)young;
+                TracingCollector::Process(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
                 break;
             }
             case FrameType::C2R_STUB:
@@ -81,7 +81,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
         switch (frame->GetFrameType()) {
             case FrameType::MANAGED: {
                 currentFramePtr = frame;
-                TracingCollector::VisitStackRoots(func, regSlotsMap, ref, mutator);
+                TracingCollector::Process(func, nullptr, regSlotsMap, ref, mutator);
                 break;
             }
             case FrameType::STACKGROW:
@@ -159,8 +159,8 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
-                TracingCollector::VisitHeapReferencesOnStack(
-                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
+                (void)young;
+                TracingCollector::Process(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
                 break;
             }
             case FrameType::C2R_STUB:
@@ -216,7 +216,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
         switch (frame->GetFrameType()) {
             case FrameType::MANAGED: {
                 currentFramePtr = frame;
-                TracingCollector::VisitStackRoots(func, regSlotsMap, ref, mutator);
+                TracingCollector::Process(func, nullptr, regSlotsMap, ref, mutator);
                 break;
             }
             case FrameType::SAFEPOINT:

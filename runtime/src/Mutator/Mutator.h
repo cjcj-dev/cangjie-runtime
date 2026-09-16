@@ -92,7 +92,7 @@ public:
         epochHandshakeCompletion.store(0, std::memory_order_relaxed);
         epochHandshakeState.store(EPOCH_HANDSHAKE_IDLE, std::memory_order_relaxed);
         epochHandshakeLifecycle.store(EPOCH_HANDSHAKE_STARTING, std::memory_order_relaxed);
-        stackWatermark.OnCreate();
+        stackWatermark.Reset();
 
 #ifdef INTERPRETER_ENABLED
         InitInterpreterPart();
@@ -387,8 +387,8 @@ public:
     bool GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
     bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
-                             uint64_t epoch, StackWatermark::Owner owner,
-                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young);
+                             uint64_t epoch, const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames,
+                             bool young);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase, bool bySelf);

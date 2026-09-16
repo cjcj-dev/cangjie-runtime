@@ -127,7 +127,7 @@ void TracingCollector::DumpHeap(const CString& tag)
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "Not In STW");
     DLOG(FRAGMENT, "DumpHeap %s", tag.Str());
     // dump roots
-    DumpRoots(FRAGMENT);
+
     // dump object contents
     auto dumpVisitor = [](BaseObject* obj) { obj->DumpObject(FRAGMENT); };
     bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
@@ -151,48 +151,6 @@ void TracingCollector::DumpHeap(const CString& tag)
     DLOG(FRAGMENT, "Dump Allocator");
 }
 
-ATTR_NO_SANITIZE_ADDRESS
-void TracingCollector::DumpRoots(LogType logType)
-{
-    RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
-        zaddress_unsafe value = ref.LoadPlain();
-        if (is_null(value)) {
-            return;
-        }
-        // DumpRoots is called while the root owner retains the target for inspection.
-        auto obj = to_object(safe(value));
-        DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
-             theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
-             theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
-    };
-
-    DLOG(logType, "stack roots");
-    MutatorManager::Instance().VisitAllMutators(
-        [&rootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rootVisitor); });
-
-    DLOG(logType, "finalizer processor roots");
-
-    NativeSlotVisitor rootSlotVisitor = [this, logType](NativeSlot& ref) {
-        zpointer value = ref.GetFieldValue();
-        if (is_null(value)) {
-            return;
-        }
-        // StaticRootTable keeps the referent live while DumpRoots inspects it.
-        auto obj = ZBarrier::ReadStaticRef(ref);
-        if (obj == nullptr) {
-            return;
-        }
-        DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
-             theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
-             theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
-    };
-
-    DLOG(logType, "static fields");
-    VisitFinalizerRoots(rootSlotVisitor);
-    VisitStaticRoots(rootSlotVisitor);
-
-    DLOG(logType, "Dump GCRoots end");
-}
 #endif
 
 } // namespace MapleRuntime
@@ -313,13 +271,7 @@ void TracingCollector::DumpAfterGC()
 }
 
 namespace MapleRuntime {
-#ifdef MRT_TESTABLE_INTERNALS
-USize StaticRootTable::RootCountForTesting()
-{
-    std::lock_guard<std::mutex> lock(gcRootsLock);
-    return totalRootsCount;
-}
-#endif
+
 
 
 } // namespace MapleRuntime

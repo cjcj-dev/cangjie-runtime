@@ -56,17 +56,12 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #ifdef __arm__
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
-            if (derivedPtrVisitor != nullptr) {
-                // The shared frame closure processes derived values before ordinary bases.
-                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
-                                                             young);
-            } else {
-                TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
-            }
+            (void)young;
+            TracingCollector::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
         case FrameType::STACKGROW:
-            LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
+            LOG(RTLOG_FATAL, "STACKGROW frame is not supported in Process");
             break;
         case FrameType::SAFEPOINT:
             TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
@@ -87,13 +82,8 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #else
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
-            if (derivedPtrVisitor != nullptr) {
-                // The shared frame closure processes derived values before ordinary bases.
-                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
-                                                             young);
-            } else {
-                TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
-            }
+            (void)young;
+            TracingCollector::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
         case FrameType::SAFEPOINT:

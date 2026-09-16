@@ -348,63 +348,17 @@ void WCollector::TraceHeap()
     MarkingStacks::VerifyEmpty(workStack.size());
     MarkingStacks::VerifyEmpty(foreignStack.size());
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
-    uint64_t stackScanEpoch = 0;
 
-    // Old mark-start belongs to the preceding young pause. The old body
-    // begins with concurrent roots/follow (zGeneration.cpp:1015-1020).
     if (concurrentStackScan) {
         ScopedStopTheWorld stw("major stack scan prepare", false);
         ZVerify::BeforeZOperation();
         Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
     }
 
-    if (concurrentStackScan) {
-
-        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack", false);
-        stackScanEpoch = handshake.epoch;
-        CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
-                     "major concurrent stack scan accounting failed: epoch=%llu requested=%zu scanned=%zu "
-                     "fallback=%zu",
-                     static_cast<unsigned long long>(stackScanEpoch), handshake.requested, handshake.stackScanned,
-                     handshake.stackFallback);
-    }
-
     {
         MRT_PHASE_TIMER(ZStatPhases::PEnumRootsUpdateOldPointersWithin);
         if (concurrentStackScan) {
-            // This is major's root-enumeration closing edge. StopTheWorld establishes
-            // InSaferegion for the fixed mutator roster, so WM_OWNER_GC may finish a
-            // different mutator's epoch cursor. If completion still cannot be
-            // established, run the legacy enum but leave the watermark incomplete;
-            // the report-only postcondition below must observe that residual state.
-            {
-                ScopedStopTheWorld stw("major stack scan close", false);
-                ZVerify::BeforeZOperation();
-                TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-                MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
-                    if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false, stackScanEpoch, false);
-                    }
-                    if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false);
-                    }
-#if defined(MRT_GC_UNIT_TESTS)
-                    NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
-                                                mutator.GetStackWatermark().IsDone(stackScanEpoch));
-#endif
-                });
-                // CLEAR freezes further ENUM pushes before releasing the
-                // mutator-list lock owned by StopTheWorld. DoEnumeration cannot
-                // run inside this scope: MergeMutatorRoots takes that same
-                // non-recursive write lock.
-            }
-
-            // Merge mutator alloc-buffer roots before declaring enumeration closed.
-            // Mutators are under the TRACE barrier's CLEAR phase, but DoTracing has
-            // not started; this is the last point at which an incomplete stack-root
-            // receipt can be reported before any mark-closure work consumes the roots.
             DoEnumeration(workStack, foreignStack);
-
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
             TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true, false);
@@ -588,18 +542,7 @@ private:
 };
 } // namespace
 
-void TracingCollector::EnumAllCommonRoots(ZWorkers& workers)
-{
-    CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before roots");
-    MarkOldRootsTask task(*this, *majorMarkDomain,
-                         [this](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
-        VisitStrongPlainRoots([&](ObjectRef& root) {
-            MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
-        }, {});
-        VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
-    }, workers.active_workers());
-    workers.run(&task);
-}
+
 
 namespace {
 // ZMarkYoungOopClosure, zMark.cpp:678-681.
@@ -647,6 +590,19 @@ private:
     RootsIteratorAllUncolored rootsUncolored;
 };
 } // namespace
+
+void TracingCollector::DoOldRoots()
+{
+    CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before roots");
+    MarkOldRootsTask task(*this, *majorMarkDomain,
+                         [this](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
+        VisitStrongPlainRoots([&](ObjectRef& root) {
+            MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
+        }, {});
+        VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
+    }, GetWorkers(GCCycleGeneration::OLD).active_workers());
+    GetWorkers(GCCycleGeneration::OLD).run(&task);
+}
 
 void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
                                  const std::function<void(BaseObject*)>& invisibleVisitor,

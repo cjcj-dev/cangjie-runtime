@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #pragma once
+#include <array>
 #include <atomic>
 #include <functional>
 #include <list>
@@ -182,9 +183,7 @@ public:
     void RegisterRoots(StaticRootArray* addr, U32 size);
     void UnregisterRoots(StaticRootArray* addr, U32 size);
     void VisitRoots(const NativeSlotVisitor& visitor);
-#ifdef MRT_TESTABLE_INTERNALS
-    USize RootCountForTesting();
-#endif
+
 
 private:
     std::mutex gcRootsLock;                         // lock gcRootsBuckets
