@@ -336,8 +336,7 @@ bool GlobalPoll()
     if (Runtime::CurrentRef() == nullptr) {
         return HasPendingCpuProfileRequest();
     }
-    return HasPendingCpuProfileRequest() ||
-           MutatorManager::Instance().SyncTriggered() || MutatorManager::Instance().EpochHandshakeActive();
+    return HasPendingCpuProfileRequest() || MutatorManager::Instance().SyncTriggered();
 }
 
 bool HasPendingSafepoint(ThreadLocalData* tls)

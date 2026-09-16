@@ -66,7 +66,9 @@ extern "C" MRT_EXPORT void MRT_LibraryUnLoad(uint64_t address)
 #ifdef MRT_TESTABLE_INTERNALS
 extern "C" MRT_EXPORT size_t MRT_TestElfUnloadStaticRootCount()
 {
-    return Heap::GetStaticRootCountForTesting();
+    size_t count = 0;
+    Heap::GetHeap().VisitStaticRoots([&](NativeSlot&) { ++count; });
+    return count;
 }
 
 extern "C" MRT_EXPORT bool MRT_TestElfUnloadPackagePathPresent(const char* path)

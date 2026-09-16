@@ -56,17 +56,12 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #ifdef __arm__
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
-            if (derivedPtrVisitor != nullptr) {
-                // The shared frame closure processes derived values before ordinary bases.
-                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
-                                                             young);
-            } else {
-                TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
-            }
+            (void)young;
+            TracingCollector::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
         case FrameType::STACKGROW:
-            LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
+            LOG(RTLOG_FATAL, "STACKGROW frame is not supported in Process");
             break;
         case FrameType::SAFEPOINT:
             TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
@@ -87,13 +82,8 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #else
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
-            if (derivedPtrVisitor != nullptr) {
-                // The shared frame closure processes derived values before ordinary bases.
-                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
-                                                             young);
-            } else {
-                TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
-            }
+            (void)young;
+            TracingCollector::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
         case FrameType::SAFEPOINT:
@@ -132,41 +122,6 @@ void StackFrameCursor::ProcessAll(const RootVisitor& visitor, Mutator& mutator,
 {
     while (ProcessOne(visitor, mutator, derivedPtrVisitor, young)) {
     }
-}
-
-bool StackFrameCursor::ResumeAt(size_t resumeIndex, Mutator& mutator)
-{
-    if (resumeIndex > frames.size()) {
-        return false;
-    }
-    // Rebuild RegSlotsMap to match a sequential ProcessOne drain that stopped at
-    // resumeIndex. Replay every prior frame with a no-op root visitor so stub
-    // bookkeeping and any MANAGED register-map updates land, without re-emitting
-    // roots (those were already counted under the watermark).
-    regSlotsMap = RegSlotsMap();
-    index = 0;
-    RootVisitor noop = [](ObjectRef&) {};
-
-    while (index < resumeIndex) {
-        ProcessFrame(frames[index], regSlotsMap, noop, mutator);
-        ++index;
-    }
-    return true;
-}
-
-bool StackFrameCursor::SkipNextManagedFrame()
-{
-    // Advance past the next MANAGED frame without visiting its roots.
-    // Stub frames before that MANAGED frame must already have been processed via ProcessOne
-    // so RegSlotsMap remains consistent with the legacy walker.
-    while (!Done()) {
-        if (frames[index].GetFrameType() == FrameType::MANAGED) {
-            ++index;
-            return true;
-        }
-        ++index;
-    }
-    return false;
 }
 
 } // namespace MapleRuntime

@@ -33,6 +33,13 @@ public:
     {
         return Done() ? nullptr : &frames[index];
     }
+    void Advance()
+    {
+        if (!Done()) {
+            ++index;
+        }
+    }
+    RegSlotsMap& RegMap() { return regSlotsMap; }
 
     // Process exactly one frame (barrier-frame or stub bookkeeping), advance cursor.
     // Returns false when already done.
@@ -54,11 +61,6 @@ public:
     // Replays stub bookkeeping for frames [0, resumeIndex) so RegSlotsMap matches a
     // ProcessOne drain that stopped at resumeIndex; then leaves index at resumeIndex.
     // Returns false if resumeIndex is out of range.
-    bool ResumeAt(size_t resumeIndex, Mutator& mutator);
-
-    // Skip the next MANAGED frame without visiting its roots (positive-control only).
-    bool SkipNextManagedFrame();
-
     // Shared per-frame dispatch used by the legacy full-stack loop and this cursor.
     static void ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
                              Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor = nullptr,

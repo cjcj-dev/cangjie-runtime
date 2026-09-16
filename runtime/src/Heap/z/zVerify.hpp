@@ -26,6 +26,7 @@ public:
     static void OnColorFlip();
     static void Object(BaseObject* object, const void* slot);
     static void Oop(BaseObject* base, RefField<>& field, bool verifyWeaks);
+    static void threads_start_processing();
 private:
     static void RootsStrong(bool afterOldMark);
     static void RootsWeak();
