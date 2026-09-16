@@ -95,6 +95,7 @@ set(GC_UNIT_SOURCES
     test_payload_clamp.cpp
     test_write_generic.cpp
     test_cycle_ref_saferegion.cpp
+    test_p2_field_barrier.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

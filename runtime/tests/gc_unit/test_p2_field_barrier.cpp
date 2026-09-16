@@ -16,6 +16,7 @@
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
+#include "gc_unittest.hpp"
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo*, MIndex);
@@ -661,4 +662,29 @@ extern "C" int p2SlowFieldInputExercise()
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
                 failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
     return failures.load();
+}
+
+GC_OTHER_VM_TEST(P2FieldBarrier, FieldBarrierExercise)
+{
+    GC_EXPECT_EQ(p2FieldBarrierExercise(), 0);
+}
+
+GC_OTHER_VM_TEST(P2FieldBarrier, FinalizerRegistrationExercise)
+{
+    GC_EXPECT_EQ(p2FinalizerRegistrationExercise(), 0);
+}
+
+GC_OTHER_VM_TEST(P2FieldBarrier, FinalizerClosureExercise)
+{
+    GC_EXPECT_EQ(p2FinalizerClosureExercise(), 0);
+}
+
+GC_OTHER_VM_TEST(P2FieldBarrier, ArrayFieldExercise)
+{
+    GC_EXPECT_EQ(p2ArrayFieldExercise(), 0);
+}
+
+GC_OTHER_VM_TEST(P2FieldBarrier, SlowFieldInputExercise)
+{
+    GC_EXPECT_EQ(p2SlowFieldInputExercise(), 0);
 }
