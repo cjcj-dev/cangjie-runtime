@@ -1276,7 +1276,7 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarrier
 {
     GcHeapFixture fixture;
     RegionList selected("diagnostic-generations");
-    selected.PrependRegion(fixture.region0));
+    selected.PrependRegion(fixture.region0);
     fixture.region0->SetYoungRegionFlag(1);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     fixture.region0->SetYoungRegionFlag(0);
@@ -1831,8 +1831,8 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     RegionList selected("forwarding-chain-fixture");
-    selected.PrependRegion(firstRegion));
-    selected.PrependRegion(secondRegion));
+    selected.PrependRegion(firstRegion);
+    selected.PrependRegion(secondRegion);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     while (selected.TakeHeadRegion() != nullptr) {}
     ZLiveMap* firstLive = PrepareForwardable(fx, firstRegion, reinterpret_cast<MAddress>(first));
