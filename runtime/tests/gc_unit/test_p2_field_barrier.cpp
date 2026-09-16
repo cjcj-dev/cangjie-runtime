@@ -77,6 +77,12 @@ void EnsureOld(BaseObject* object, Collector& collector)
         collector.RequestGC(GC_REASON_YOUNG, false);
     }
 }
+BaseObject* NewOld(TypeInfo* type, size_t size, Collector& collector)
+{
+    BaseObject* object = MObject::NewObject(type, size, AllocType::MOVEABLE_OBJECT);
+    EnsureOld(object, collector);
+    return object;
+}
 }
 
 // The compiler-generated managed caller owns runtime startup. Inputs use real
@@ -93,13 +99,13 @@ extern "C" int p2FieldBarrierExercise()
     finalType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     auto& heap = Heap::GetHeap();
     auto& collector = heap.GetCollector();
-    auto* holder = MObject::NewPinnedObject(holderType, 24);
-    auto* oldChild = MObject::NewPinnedObject(leafType, 16);
+    auto* holder = MObject::NewObject(holderType, 24, AllocType::MOVEABLE_OBJECT);
+    auto* oldChild = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     const U64 root = heap.RegisterExportRoot(holder);
-    EnsureOld(holder, collector);
-    EnsureOld(oldChild, collector);
     ZBarrier::WriteReference(holder, Slot(holder), oldChild);
     ZBarrier::WriteReference(holder, Slot(holder, 1), oldChild);
+    EnsureOld(holder, collector);
+    EnsureOld(oldChild, collector);
     const bool finalizableCase = std::getenv("P2_FINALIZABLE") != nullptr;
     BaseObject* finalHolder = nullptr;
     BaseObject* finalOld = nullptr;
@@ -109,17 +115,18 @@ extern "C" int p2FieldBarrierExercise()
     const auto discoveredBefore = references.Discovered(ReferenceType::FINAL);
     const auto enqueuedBefore = references.Enqueued(ReferenceType::FINAL);
     if (finalizableCase) {
-        finalHolder = MObject::NewPinnedObject(finalType, 24);
-        finalOld = MObject::NewPinnedObject(edgeType, 24);
-        auto* finalSentinel = MObject::NewPinnedObject(leafType, 16);
-        EnsureOld(finalHolder, collector);
-        EnsureOld(finalOld, collector);
-        EnsureOld(finalSentinel, collector);
+        finalHolder = MObject::NewObject(finalType, 24, AllocType::MOVEABLE_OBJECT);
+        finalOld = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
+        auto* finalSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
         ZBarrier::WriteReference(finalOld, Slot(finalOld), finalSentinel);
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder), oldChild);
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder, 1), finalOld);
+        heap.RegisterExportRoot(finalHolder);
+        EnsureOld(finalHolder, collector);
+        EnsureOld(finalOld, collector);
+        EnsureOld(finalSentinel, collector);
         finalHolder->OnFinalizerCreated();
-        upgraded = MObject::NewPinnedObject(finalType, 24);
+        upgraded = MObject::NewObject(finalType, 24, AllocType::MOVEABLE_OBJECT);
         ZBarrier::WriteReference(upgraded, Slot(upgraded), oldChild);
         upgraded->OnFinalizerCreated();
         upgradeRoot = heap.RegisterExportRoot(upgraded);
@@ -129,8 +136,10 @@ extern "C" int p2FieldBarrierExercise()
     collector.RequestGC(GC_REASON_YOUNG, false);
     auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
     auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
-    auto* oldViaYoung = MObject::NewPinnedObject(leafType, 16);
+    auto* oldViaYoung = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    const U64 oldViaYoungRoot = heap.RegisterExportRoot(oldViaYoung);
     EnsureOld(oldViaYoung, collector);
+    heap.RemoveExportObject(oldViaYoungRoot);
     ZBarrier::WriteReference(child, Slot(child), sentinel);
     ZBarrier::WriteReference(child, Slot(child, 1), oldViaYoung);
     ZBarrier::WriteReference(holder, Slot(holder), child);
@@ -427,24 +436,29 @@ extern "C" int p2FinalizerClosureExercise()
     edgeType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     auto& heap = Heap::GetHeap();
     auto& references = heap.GetFinalizerProcessor().GetReferenceProcessor();
-    auto* holder = MObject::NewPinnedObject(edgeType, 16);
-    auto* child = MObject::NewPinnedObject(edgeType, 16);
-    auto* sentinel = MObject::NewPinnedObject(leafType, 16);
-    auto* upgraded = MObject::NewPinnedObject(edgeType, 16);
-    auto* control = MObject::NewPinnedObject(leafType, 16);
+    auto* holder = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    auto* child = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    auto* upgraded = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    auto* control = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     auto& collector = heap.GetCollector();
+    ZBarrier::WriteReference(holder, Slot(holder), child);
+    ZBarrier::WriteReference(child, Slot(child), sentinel);
+    ZBarrier::WriteReference(upgraded, Slot(upgraded), control);
+    NativeSlot strongRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(strongRoot, upgraded);
+    NativeSlot holderRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(holderRoot, holder);
+    NativeSlot* live[] = { &strongRoot, &holderRoot };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(live), 2);
     EnsureOld(holder, collector);
     EnsureOld(child, collector);
     EnsureOld(sentinel, collector);
     EnsureOld(upgraded, collector);
     EnsureOld(control, collector);
-    ZBarrier::WriteReference(holder, Slot(holder), child);
-    ZBarrier::WriteReference(child, Slot(child), sentinel);
-    ZBarrier::WriteReference(upgraded, Slot(upgraded), control);
     holder->OnFinalizerCreated();
     upgraded->OnFinalizerCreated();
-    NativeSlot strongRoot(zpointer::null);
-    ZBarrier::WriteStaticRef(strongRoot, upgraded);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(live), 2);
     NativeSlot* roots[] = { &strongRoot };
     heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     const size_t discovered = references.Discovered(ReferenceType::FINAL);
@@ -591,24 +605,31 @@ extern "C" int p2SlowFieldInputExercise()
     auto* leafType = Type(types[2], false, 1);
     auto& heap = Heap::GetHeap();
     auto& collector = static_cast<WCollector&>(heap.GetCollector());
-    auto* strongHolder = MObject::NewPinnedObject(holderType, 24);
-    auto* finalHolder = MObject::NewPinnedObject(holderType, 24);
-    auto* oldChild = MObject::NewPinnedObject(edgeType, 16);
-    auto* oldSentinel = MObject::NewPinnedObject(leafType, 16);
-    auto* finalChild = MObject::NewPinnedObject(edgeType, 16);
-    auto* finalSentinel = MObject::NewPinnedObject(leafType, 16);
-    EnsureOld(strongHolder, collector);
-    EnsureOld(finalHolder, collector);
-    EnsureOld(oldChild, collector);
-    EnsureOld(oldSentinel, collector);
-    EnsureOld(finalChild, collector);
-    EnsureOld(finalSentinel, collector);
+    auto* strongHolder = MObject::NewObject(holderType, 24, AllocType::MOVEABLE_OBJECT);
+    auto* finalHolder = MObject::NewObject(holderType, 24, AllocType::MOVEABLE_OBJECT);
+    auto* oldChild = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    auto* oldSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
+    auto* finalChild = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
+    auto* finalSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(oldChild, Slot(oldChild), oldSentinel);
     ZBarrier::WriteReference(finalChild, Slot(finalChild), finalSentinel);
     ZBarrier::WriteReference(strongHolder, Slot(strongHolder), oldChild);
     ZBarrier::WriteReference(strongHolder, Slot(strongHolder, 1), oldChild);
     ZBarrier::WriteReference(finalHolder, Slot(finalHolder), finalChild);
     ZBarrier::WriteReference(finalHolder, Slot(finalHolder, 1), finalChild);
+    NativeSlot bootRoot(zpointer::null);
+    ZBarrier::WriteStaticRef(bootRoot, strongHolder);
+    NativeSlot bootFinal(zpointer::null);
+    ZBarrier::WriteStaticRef(bootFinal, finalHolder);
+    NativeSlot* boot[] = { &bootRoot, &bootFinal };
+    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(boot), 2);
+    EnsureOld(strongHolder, collector);
+    EnsureOld(finalHolder, collector);
+    EnsureOld(oldChild, collector);
+    EnsureOld(oldSentinel, collector);
+    EnsureOld(finalChild, collector);
+    EnsureOld(finalSentinel, collector);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(boot), 2);
     finalHolder->OnFinalizerCreated();
     NativeSlot strongRoot(zpointer::null);
     ZBarrier::WriteStaticRef(strongRoot, strongHolder);
@@ -708,7 +729,7 @@ extern "C" int p2SlowFieldInputExercise()
 static void RunP2(int (*exercise)())
 {
     RuntimeParam param{};
-    param.heapParam.heapSize = 4 * 1024 * 1024;
+    param.heapParam.heapSize = 256 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     const int rc = exercise();
