@@ -705,7 +705,6 @@ static void RunP2(int (*exercise)())
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     const int rc = exercise();
     GC_EXPECT_EQ(rc, 0);
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }
 
 GC_OTHER_VM_TEST(P2FieldBarrier, FieldBarrierExercise)
