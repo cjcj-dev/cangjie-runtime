@@ -365,6 +365,11 @@ zaddress ZBarrier::blocking_keep_alive_on_phantom_slow_path(zaddress addr)
     return addr;
 }
 
+zaddress ZBarrier::blocking_load_barrier_on_phantom_slow_path(zaddress addr)
+{
+    return blocking_keep_alive_on_phantom_slow_path(addr);
+}
+
 zpointer ZBarrier::ColorLoadGood(zaddress address, zpointer previous)
 {
     return ZAddress::load_good(address, previous);

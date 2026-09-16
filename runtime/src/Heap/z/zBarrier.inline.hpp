@@ -9,6 +9,7 @@
 #define MRT_BARRIER_INLINE_H
 
 #include "Heap/z/zBarrier.hpp"
+#include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
@@ -325,6 +326,24 @@ inline void ZBarrier::mark_and_remember(volatile zpointer* p, zaddress addr)
         Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
     }
     remember(p);
+}
+
+inline zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
+        return barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
+                       ColorMarkGood, p, o, false);
+    }
+    return load_barrier_on_oop_field_preloaded(p, o);
+}
+
+inline bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)
+{
+    CHECK_DETAIL(Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked(),
+                 "phantom clean is only valid when resurrection is blocked");
+    const zpointer o = load_atomic(p);
+    return is_null(barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
+                           ColorMarkGood, p, o, true));
 }
 
 } // namespace MapleRuntime

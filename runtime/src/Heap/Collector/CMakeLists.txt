@@ -23,6 +23,7 @@ set(SRC_LIST
     "../z/zDriverPort.cpp"
     "TracingCollector.cpp"
     "../z/zRootsIterator.cpp"
+    "../z/zWeakRootsProcessor.cpp"
     "../z/zMarkStack.cpp"
     "MarkStripe.cpp"
     "../z/zMarkingSMR.cpp"

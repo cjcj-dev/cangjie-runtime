@@ -43,6 +43,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zStackWatermark.hpp"
@@ -618,6 +619,7 @@ void TracingCollector::DoOldRoots()
         }, {});
         VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
     }, GetWorkers(GCCycleGeneration::OLD).active_workers());
+    SuspendibleThreadSetJoiner joiner;
     GetWorkers(GCCycleGeneration::OLD).run(&task);
 }
 
@@ -637,6 +639,7 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
         VisitMinorValueRoots(visitor);
     }, GetWorkers(GCCycleGeneration::YOUNG).active_workers());
+    SuspendibleThreadSetJoiner joiner;
     GetWorkers(GCCycleGeneration::YOUNG).run(&task);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().GetRememberedSet().CheckStaticCoverageForMinor();

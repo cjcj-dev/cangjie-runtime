@@ -7,6 +7,7 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Base/Log.h"
+#include "Common/SuspendibleThreadSet.h"
 namespace MapleRuntime {
 void MarkTerminate::Reset(size_t workers)
 {
@@ -48,7 +49,10 @@ bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
         return true;
     }
     MaybeReduceStripes(stripes, usedNStripes);
-    condition.wait(lock);
+    {
+        SuspendibleThreadSetLeaver leaver;
+        condition.wait(lock);
+    }
     if (awakening != 0) {
         --awakening;
     }

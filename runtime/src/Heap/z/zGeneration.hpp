@@ -9,6 +9,7 @@
 #include <mutex>
 #include <memory>
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/z/zGlobals.hpp"
@@ -56,6 +57,7 @@ public:
     void InitializeWorkers(uint32_t capacity);
     void StopWorkers();
     ZWorkers* Workers() const { return workers.get(); }
+    ZWeakRootsProcessor* WeakRootsProcessor() const { return weakRootsProcessor.get(); }
     GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
@@ -84,6 +86,7 @@ private:
     MarkDomain* markDomain = nullptr;
     const GCCycleGeneration generation;
     std::unique_ptr<ZWorkers> workers;
+    std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
     GCStats stats;
     ZStatCycle cycleStats;
     // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
