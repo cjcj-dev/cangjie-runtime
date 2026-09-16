@@ -373,6 +373,7 @@ MAIN_SOURCES=(
   "$SRC/test_verify_marking_stacks.cpp"
   "$SRC/test_colour_census.cpp"
   "$SRC/test_payload_clamp.cpp"
+  "$SRC/test_write_generic.cpp"
   "$SRC/test_cycle_ref_saferegion.cpp"
 )
 
