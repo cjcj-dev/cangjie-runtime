@@ -286,7 +286,6 @@ GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
 {
     GcHeapFixture heap;
     BarrierCollector collector;
-    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(heap.obj0);
     field.StoreColoured(before);
@@ -311,7 +310,6 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
     collector.from = heap.obj0;
     collector.to = heap.PlaceObject(heap.heapStart + 256);
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(collector.to) + collector.to->GetSize());
-    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(collector.from);
     field.StoreColoured(before);
@@ -335,7 +333,6 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
     BarrierCollector collector;
     BaseObject* const winner = heap.PlaceObject(heap.heapStart + 256);
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
-    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     collector.pauseBeforeHeal = true;
     constexpr size_t kForcedCasFailures = 8;
@@ -350,7 +347,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
         std::thread writer([&]() {
             std::unique_lock<std::mutex> lock(collector.hookMutex);
             collector.hookCv.wait(lock, [&]() { return collector.slowLoadObserved; });
-            // ZZBarrier::self_heal (zBarrier.inline.hpp:98) preserves a winner
+            // ZBarrier::self_heal (zBarrier.inline.hpp:98) preserves a winner
             // satisfying the fast path. A real mutator store publishes store-good.
             field.StoreColoured(StoreGoodPointer(winner), std::memory_order_release);
             collector.winnerStored = true;
@@ -378,7 +375,6 @@ GC_TEST(BarrierOldAtomic, NativeBulkLoadBadSourceResolvesBeforeHeapPublication)
 {
     GcHeapFixture heap;
     BarrierCollector collector;
-    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
     collector.from = heap.obj0;
     collector.to = heap.obj1;
     NativeSlot source(LoadBadPointer(heap.obj0));
@@ -408,8 +404,7 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
         heap.region0->reset(PageAge::old);
         heap.region1->reset(PageAge::eden);
         BarrierCollector collector;
-            remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-        alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};
+                alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};
         auto* component = reinterpret_cast<TypeInfo*>(componentStorage);
         component->SetType(TypeKind::TYPE_KIND_CLASS);
         heap.typeInfo->SetType(kind);

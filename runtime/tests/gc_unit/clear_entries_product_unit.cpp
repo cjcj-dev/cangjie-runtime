@@ -378,9 +378,9 @@ struct PageWaitEnterBarrier {
     static std::condition_variable cv;
     static bool entered;
 };
-std::mutex PageWaitEnterZBarrier::mu;
-std::condition_variable PageWaitEnterZBarrier::cv;
-bool PageWaitEnterZBarrier::entered = false;
+std::mutex PageWaitEnterBarrier::mu;
+std::condition_variable PageWaitEnterBarrier::cv;
+bool PageWaitEnterBarrier::entered = false;
 
 uintptr_t OneLoadBadRemap()
 {
@@ -398,7 +398,7 @@ public:
     {
         RefField<> field(StoreGoodPointer(from));
         ZGlobalsPointers::flip_old_relocate_start();
-        BaseObject* result = ZZBarrier::ReadReference(nullptr, field);
+        BaseObject* result = ZBarrier::ReadReference(nullptr, field);
         ZGlobalsPointers::flip_old_relocate_start();
         return result;
     }
@@ -893,7 +893,7 @@ GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollect
     LoadHealDeliveryTestAccess::PublishColours(collector);
     ResolveBarrier barrier;
 
-    BaseObject* resolved = ZBarrier::Resolve(state.from);
+    BaseObject* resolved = barrier.Resolve(state.from);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(resolved), reinterpret_cast<uintptr_t>(state.to));
 
     CleanupLateBackfill(fx, state);
@@ -1312,7 +1312,7 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarrier
     (void)selected.TakeHeadRegion();
 }
 
-// ZZBarrier::is_good_or_null_fast_path does not send a load-good to-version
+// ZBarrier::is_good_or_null_fast_path does not send a load-good to-version
 // through the from-side slow path (zBarrier.inline.hpp:294-343).  Reproduce the
 // NW256 identity with two retired carriers: the source carrier retains an
 // explicit from->to receipt, while the destination carrier has no receipt for
@@ -1989,14 +1989,14 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     if (ZForwarding* forwarding = region->PeekForwardingOwner()) {
         forwarding->in_place_relocation_claim_page();
     }
-    PageWaitEnterZBarrier::Reset();
-    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterZBarrier::Hook);
+    PageWaitEnterBarrier::Reset();
+    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, liveObject, nullptr, region);
     });
-    PageWaitEnterZBarrier::WaitEntered();
+    PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
     RelocationRequestQueue::SetWaitEnterHook(nullptr);
     const auto claimed = seeded.request;
@@ -2065,14 +2065,14 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     if (ZForwarding* forwarding = region->PeekForwardingOwner()) {
         forwarding->in_place_relocation_claim_page();
     }
-    PageWaitEnterZBarrier::Reset();
-    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterZBarrier::Hook);
+    PageWaitEnterBarrier::Reset();
+    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, fromObject, nullptr, region);
     });
-    PageWaitEnterZBarrier::WaitEntered();
+    PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
     RelocationRequestQueue::SetWaitEnterHook(nullptr);
     const auto claimed = seeded.request;

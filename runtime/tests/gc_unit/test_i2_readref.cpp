@@ -59,7 +59,7 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
 
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
@@ -84,7 +84,7 @@ GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
     collector.to = fx.obj1;
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     const uintptr_t remap = ZPointerRemapped;
     const auto good = GcUnit::ColouredPointer(fx.obj0, remap);
@@ -98,7 +98,7 @@ GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)
     GcHeapFixture fx;
     ToCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     const uintptr_t stale = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;

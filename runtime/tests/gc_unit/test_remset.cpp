@@ -202,7 +202,7 @@ private:
     ThreadType previous;
 };
 
-// ZZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706):
+// ZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706):
 // a previous-epoch, non-null slot takes the ordinary store slow path. Raw null
 // and store-good slots intentionally do not. Keep all other colour families good.
 zpointer PreviousRememberedPointer(BaseObject* object)
@@ -263,7 +263,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -283,7 +283,7 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
 
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
@@ -310,7 +310,7 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -467,7 +467,7 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     field->StoreColoured(taggedB.GetFieldValue());
     const uintptr_t fieldBeforeHook = raw(field->GetFieldValue());
     const bool containsBeforeHook = Heap::GetHeap().GetRememberedSet().Contains(slot);
-    ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     const uintptr_t fieldAfterHook = raw(field->GetFieldValue());
     const bool containsAfterHook = Heap::GetHeap().GetRememberedSet().Contains(slot);
     const size_t sizeAfterHook = rs.Size();
@@ -508,15 +508,15 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
 
     const uintptr_t good = raw(GcUnit::StoreGoodPointer(fx.obj0));
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
-    ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
     const uintptr_t previousEpoch = raw(PreviousRememberedPointer(fx.obj0));
-    ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
 
@@ -532,7 +532,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(zpointer::null);
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj0);
@@ -546,9 +546,9 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     field->StoreColoured(installed.GetFieldValue());
     GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot)); // the direct store does not run a barrier
 
-    ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
-    ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
 
@@ -562,7 +562,7 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(zpointer::null);
     ZBarrier::AtomicWriteReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
@@ -579,7 +579,7 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(zpointer::null);
     BaseObject* old = ZBarrier::AtomicSwapReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
@@ -597,7 +597,7 @@ GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(zpointer::null);
     GC_EXPECT_FALSE(ZBarrier::CompareAndSwapReference(fx.obj0, *field, fx.obj1, fx.obj1,
@@ -639,7 +639,7 @@ GC_TEST(Remset, StaticRootNotRecorded)
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     NativeSlot root(zpointer::null);
 
     ZBarrier::WriteStaticRef(root, fx.obj1);
@@ -661,7 +661,7 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(zpointer::null);
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -673,7 +673,7 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
 // The write barrier conditions on the SLOT's generation, never the target's.  OpenJDK,
 // zBarrier.inline.hpp:729-733:
 //
-//     inline void ZZBarrier::remember(volatile zpointer* p) {
+//     inline void ZBarrier::remember(volatile zpointer* p) {
 //       if (ZHeap::heap()->is_old(p)) {
 //         ZGeneration::young()->remember(p);
 //       }
@@ -700,7 +700,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -716,7 +716,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 // stays in the heap indefinitely.  From the second minor on, the young object is reachable only
 // through a slot nobody scans.
 //
-// OpenJDK does not prevent this at record time -- ZZBarrier::remember (zBarrier.inline.hpp:729-733)
+// OpenJDK does not prevent this at record time -- ZBarrier::remember (zBarrier.inline.hpp:729-733)
 // conditions only on the slot being old, and never looks at the target.  It repairs it at scan
 // time instead: ZRemembered::scan_field (zRemembered.cpp:578-589) re-arms every scanned slot whose
 // healed target is still young, and drops the rest by simply not re-arming them.
@@ -741,7 +741,7 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -768,7 +768,7 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);

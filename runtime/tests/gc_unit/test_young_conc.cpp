@@ -607,7 +607,7 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     TestCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(zpointer::null);
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -748,7 +748,7 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     TestCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -773,7 +773,7 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     fx.region1->reset(PageAge::old);
     TestCollector collector;
     RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     BaseObject* incoming = nullptr;
@@ -801,8 +801,8 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     TestCollector collector;
     RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    // ZZBarrier::store_barrier_on_heap_oop_field reads prev before the store
+    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
+    // ZBarrier::store_barrier_on_heap_oop_field reads prev before the store
     // (zBarrier.inline.hpp:695-705); stale mark colors force its slow path.
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     ZBarrier::WriteReference(fx.obj0, field, incoming);
@@ -829,7 +829,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     TestCollector collector;
     RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     ZBarrier::WriteReference(fx.obj0, field, nullptr);
     std::vector<BaseObject*> work;

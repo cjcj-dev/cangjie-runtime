@@ -63,7 +63,7 @@ public:
 };
 
 struct LoadFcFixture {
-    LoadFcFixture() : barrier(), installed(barrier)
+    LoadFcFixture()
     {
         rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         auto& heapRemset = Heap::GetHeap().GetRememberedSet();

@@ -385,7 +385,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     InstalledMutatorScope mutatorScope(mutator);
 
     // ZGC store_at_resolved: store barrier sees the previous colored word, then the store.
-    ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false); // oldvalue-anchor
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false); // oldvalue-anchor
     field.StoreColoured(newWord);
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
@@ -583,7 +583,7 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
-    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::eden);
     buf.add(slot, previous);
     ::g_cjStoreGoodMask ^= ZPointerMarkedYoungMask;
     buf.Flush();
@@ -868,7 +868,7 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
     GC_EXPECT_EQ(old, 1u);
 }
 
-// ZZBarrier::no_keep_alive_store_barrier_on_heap_oop_field (zBarrier.inline.hpp:719):
+// ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field (zBarrier.inline.hpp:719):
 // raw null takes remember(p), whereas an ordinary strong store may bypass it.
 GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
 {
@@ -876,8 +876,8 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
         {
             const bool weak = true;
             GcHeapFixture fx;
-            fx.region0->SetYoungRegionFlag(0);
-            fx.region1->SetYoungRegionFlag(1);
+            fx.region0->reset(PageAge::old);
+            fx.region1->reset(PageAge::eden);
             fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
             RememberedSet rs;
             rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
@@ -890,7 +890,7 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
             field.StoreColoured(zpointer::null);
             if (preloaded) {
                 field.StoreColoured(StoreGoodPointer(fx.obj1));
-                ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
+                ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
             } else {
                 ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
             }
@@ -901,13 +901,13 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
 }
 
 // Derived from ZBarrierSet::oop_atomic_{cmpxchg,xchg}_not_in_heap and
-// ZZBarrier::self_heal: native atomics publish store-good, including null.
+// ZBarrier::self_heal: native atomics publish store-good, including null.
 GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
 {
     GcHeapFixture fx;
     StoreBufferCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     HeapSlot<true> native(zpointer::null);
     ZBarrier::AtomicWriteReference(nullptr, native, nullptr, std::memory_order_seq_cst);
     GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(nullptr));
@@ -928,7 +928,7 @@ GC_TEST(StoreBuf, BulkPreservesSourceStorageProtocol)
     GcHeapFixture fx;
     StoreBufferCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     RootSlot local;
     StorePlain(local, from_object(fx.obj0));
     NativeSlot native(zpointer::null);
@@ -968,7 +968,7 @@ GC_TEST(StoreBuf, ThreadRootVisitorIncludesExecuteClosure)
     GC_EXPECT_TRUE(data.execute == static_cast<void*>(fx.obj1));
 }
 
-// ZZBarrier::store_barrier_on_heap_oop_field: a store-good old word is a fast exit.
+// ZBarrier::store_barrier_on_heap_oop_field: a store-good old word is a fast exit.
 // Paired with CompilerStoreBadOverwriteHandsObservedOldToMark as its control.
 GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
 {
@@ -980,7 +980,7 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const zpointer previous = StoreGoodPointer(fx.obj0);
     field.StoreColoured(StoreGoodPointer(fx.obj1));
-    ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
     std::vector<BaseObject*> marked;
     marking.DrainObjects(marked);
     GC_EXPECT_TRUE(marked.empty());

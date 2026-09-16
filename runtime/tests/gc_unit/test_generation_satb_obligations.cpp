@@ -97,7 +97,7 @@ GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
 }
 
 // Migrated weak-get cases from gc.TestReferenceRefersToDuringConcMark and
-// ZZBarrier::blocking_keep_alive_on_weak_slow_path. These are admission tests;
+// ZBarrier::blocking_keep_alive_on_weak_slow_path. These are admission tests;
 // the fixture does not execute the old mark-end pause or the rendezvous.
 GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
 {

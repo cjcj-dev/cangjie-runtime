@@ -262,10 +262,10 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     WCollector collector(heap.GetAllocator(), heap.GetCollectorResources());
     RelocationReceiptTestAccess::BindNativeRootFixture(heap.GetCollectorResources(), collector);
     NativeSlot slot(zpointer::null);
-    ZZBarrier::WriteStaticRef(slot, fx.obj0);
-    GC_EXPECT_TRUE(ZZBarrier::ReadStaticRef(slot) == fx.obj0);
-    ZZBarrier::WriteStaticRef(slot, nullptr);
-    GC_EXPECT_TRUE(ZZBarrier::ReadStaticRef(slot) == nullptr);
+    ZBarrier::WriteStaticRef(slot, fx.obj0);
+    GC_EXPECT_TRUE(ZBarrier::ReadStaticRef(slot) == fx.obj0);
+    ZBarrier::WriteStaticRef(slot, nullptr);
+    GC_EXPECT_TRUE(ZBarrier::ReadStaticRef(slot) == nullptr);
     std::fprintf(stderr, "native_root_boundary executed=1 colored=1 null=1\n");
 }
 
@@ -287,7 +287,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     // ZBarrier's mark-young slow path even though no remapping is needed.
     NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     const size_t before = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
-    ZZBarrier::MarkYoungGoodBarrierOnOopField(root);
+    ZBarrier::MarkYoungGoodBarrierOnOopField(root);
     const bool marked = fx.region0->is_object_strongly_live(from_object(fx.obj0));
     const size_t first = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
     std::fprintf(stderr, "B19_YOUNG_MARK_BEFORE_HEAL executed=1 marked=%u before=%zu after=%zu word=%#lx\n",
@@ -296,7 +296,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     GC_EXPECT_EQ(first, before + 1);
     GC_EXPECT_TRUE(ZPointer::is_marked_young(to_zpointer(raw(root.GetFieldValue()))));
     // The same physical, now young-good slot must not publish another follow.
-    ZZBarrier::MarkYoungGoodBarrierOnOopField(root);
+    ZBarrier::MarkYoungGoodBarrierOnOopField(root);
     GC_EXPECT_EQ(RelocationReceiptTestAccess::PendingYoungRootWork(collector), first);
     RelocationReceiptTestAccess::DrainYoungRootWork(collector);
     GC_EXPECT_EQ(RelocationReceiptTestAccess::PendingYoungRootWork(collector), size_t(0));

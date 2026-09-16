@@ -48,7 +48,7 @@ struct GenerationCycleRootTestAccess {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (size_t i = 0; i < strongSlots.size(); ++i) {
             NativeSlot coloured(zpointer::null);
-            ZZBarrier::WriteStaticRef(coloured, objects[i]);
+            ZBarrier::WriteStaticRef(coloured, objects[i]);
             strongSlots[i] = storage.Allocate();
             strongSlots[i]->StoreColoured(coloured.GetFieldValue(), std::memory_order_relaxed);
         }

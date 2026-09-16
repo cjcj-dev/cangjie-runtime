@@ -50,7 +50,7 @@ public:
 };
 
 struct PayloadFixture {
-    PayloadFixture() : barrier(), installed(barrier)
+    PayloadFixture()
     {
         rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         auto& heapRemset = Heap::GetHeap().GetRememberedSet();
