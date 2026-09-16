@@ -8,6 +8,20 @@
 
 namespace MapleRuntime {
 
+void ZForwardingTable::insert(ZForwarding* forwarding)
+{
+    const zoffset offset = static_cast<zoffset>(forwarding->start() - _map->base());
+    CHECK(_map->get(offset) == nullptr);
+    _map->put(offset, forwarding->size(), forwarding);
+}
+
+void ZForwardingTable::remove(ZForwarding* forwarding)
+{
+    const zoffset offset = static_cast<zoffset>(forwarding->start() - _map->base());
+    CHECK(_map->get(offset) == forwarding);
+    _map->put(offset, forwarding->size(), nullptr);
+}
+
 ZForwardingTable& generation_forwarding_table(Generation generation)
 {
     return Heap::GetHeap().GetCollector().GetGenerationCycle(generation).forwarding_table();
