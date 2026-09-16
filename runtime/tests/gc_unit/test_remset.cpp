@@ -284,7 +284,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
+    GC_EXPECT_TRUE(ExpectRecorded(Heap::GetHeap().GetRememberedSet(), reinterpret_cast<MAddress>(field)));
 }
 
 // ZGC zBarrier.inline.hpp:695-706: store-good fast path, old epoch slow path.
@@ -659,7 +659,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
     Barrier idle(collector, rs);
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+    idle.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(ExpectRecorded(Heap::GetHeap().GetRememberedSet(), reinterpret_cast<MAddress>(field)));
 }
 
