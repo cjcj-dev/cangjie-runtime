@@ -7,9 +7,9 @@
 #include <cmath>
 #include <thread>
 
-#include "Heap/z/zCPU.hpp"
+#include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
-#include "Heap/z/zNUMA.hpp"
+#include "Heap/z/zNUMA.inline.hpp"
 
 namespace MapleRuntime {
 namespace {
