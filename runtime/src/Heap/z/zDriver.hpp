@@ -14,6 +14,7 @@
 #include "Heap/z/zStat.hpp"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Collector/TaskQueue.h"
+#include "Heap/z/zThread.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Inspector/CjHeapData.h"
 #include "Heap/z/zDriverPort.hpp"
@@ -21,21 +22,43 @@
 namespace MapleRuntime {
 class Collector;
 class CollectorProxy;
+class CollectorResources;
 #if defined(MRT_TESTABLE_INTERNALS)
 class CollectorResourcesTestPeer;
 #endif
+
+// zDirector.hpp:30-42: the director is a ZThread; run_thread is its sampling
+// loop and terminate wakes it out of the monitor wait.
+class ZDirector final : public ZThread {
+public:
+    explicit ZDirector(CollectorResources& resources);
+    void run_thread() override;
+    void terminate() override;
+private:
+    CollectorResources& resources;
+};
+
+// zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
+// receives requests from their port and whose terminate closes that port.
+class ZDriver final : public ZThread {
+public:
+    ZDriver(CollectorResources& resources, GCDriverKind kind);
+    void run_thread() override;
+    void terminate() override;
+private:
+    CollectorResources& resources;
+    const GCDriverKind kind;
+};
+
 // CollectorResources provides the resources that a functional collector need,
-// such as GC drivers and runtime workers.
+// such as GC drivers and workers.
 class CollectorResources {
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MarkPublicationFixture;
 #endif
+    friend class ZDirector;
+    friend class ZDriver;
 public:
-    // the collector thread entry routine.
-    static void* DirectorThreadEntry(void* arg);
-    MRT_EXPORT static void* MinorDriverThreadEntry(void* arg);
-    MRT_EXPORT static void* MajorDriverThreadEntry(void* arg);
-
     // a collectorResources without a collector entity is functionless
     explicit CollectorResources(CollectorProxy& proxy);
     ATTR_NO_INLINE virtual ~CollectorResources() = default;
@@ -46,11 +69,8 @@ public:
     void LockDriver() { driverLock.lock(); }
     void UnlockDriver() { driverLock.unlock(); }
     void RequestGC(GCReason reason, bool async);
-    int32_t GetGCThreadCount(const bool isConcurrent) const;
 
-    RuntimeWorkers& GetRuntimeWorkers() const { return *runtimeWorkers; }
-
-    GCWorkers& GetWorkers(GCCycleGeneration generation) const;
+    ZWorkers& GetWorkers(GCCycleGeneration generation) const;
 
     // ZYoungType::major_full_roots selects the combined mark-start pause.
 
@@ -116,9 +136,6 @@ private:
     bool ExecuteDriverRequest(const GCDriverRequest& request);
     bool ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request);
     void CancelDriverRequestLifecycle(GCDriverKind kind);
-    // zCollectedHeap.hpp: heap-owned safepoint workers, separate from both generations.
-    RuntimeWorkers* runtimeWorkers = nullptr;
-    int32_t gcThreadCount = 1;
     GCDriverPort minorDriverPort { GCDriverKind::MINOR };
     GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
     // zDriver.cpp:59-72: held by young; old releases it for its body.
@@ -131,17 +148,18 @@ private:
     std::atomic<size_t> testCompletionCount { 0 };
 #endif
 
-    // the collector thread handle.
-    pthread_t directorThread = 0;
+    // zCollectedHeap.cpp:65-71 / zHeap.hpp: the concurrent GC threads are
+    // created when GC starts and stopped through ConcurrentGCThread::stop.
+    ZDirector* director = nullptr;
+    ZDriver* minorDriver = nullptr;
+    ZDriver* majorDriver = nullptr;
     std::mutex directorMutex;
     std::condition_variable directorCondition;
     bool directorStopped = false;
     bool directorReevaluate = false;
     bool minorBusy = false;
     bool majorBusy = false;
-    ZStat statistics;
-    pthread_t minorDriverThread = 0;
-    pthread_t majorDriverThread = 0;
+    ZStat* statistics = nullptr;
     int32_t concurrentGcThreadCount = 1;
     std::atomic<bool> gcThreadRunning = { false };
     std::atomic<bool> resurrectionBlocked { false };

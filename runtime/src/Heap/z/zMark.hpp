@@ -45,7 +45,7 @@ void VerifyAllEmpty(MarkDomain& domain);
 namespace MapleRuntime {
 
 class MarkStripeSet;
-class GCWorkers;
+class ZWorkers;
 
 // ZGC zMarkTerminate.inline.hpp:43-125.
 
@@ -73,7 +73,7 @@ public:
     void PrepareWork(size_t nworkers);
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
-    void BindWorkers(GCWorkers* workers) { gcWorkers = workers; }
+    void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
     void BindAbort(ZAbort* token) { abortToken = token; }
     bool PollStop();
     MarkStripeSet& Stripes() { return stripes; }
@@ -98,7 +98,7 @@ private:
     MarkTerminate terminate;
     std::unique_ptr<MarkingSMR> smr;
     size_t proactiveFlushes = 0;
-    GCWorkers* gcWorkers = nullptr;
+    ZWorkers* gcWorkers = nullptr;
     ZAbort* abortToken = nullptr;
 };
 
@@ -299,12 +299,10 @@ public:
     using WorkStack = MarkStack<MarkStackEntry>;
     using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
 #if defined(MRT_TESTABLE_INTERNALS)
-    // Observers see the product result after dispatch; neither supplies work.
+    // Observers see the product result after dispatch; none supplies work.
     // Static storage keeps the instance layout identical in both build shapes.
-    static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
     // Observes the post-closure slot; nullptr denotes that worker completing.
-    static std::function<void(GCWorkers::Generation, NativeSlot*)> testColoredRootResult;
-    void ObservePublishedRoots(GCWorkers::Generation generation);
+    static std::function<void(GCCycleGeneration, NativeSlot*)> testColoredRootResult;
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
     static std::function<void()> testOldMarkStarted;
@@ -518,11 +516,6 @@ protected:
     void CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const;
     void CurrentizeValueRootMap(ValueRootMap& roots, Generation generation) const;
 
-    int32_t GetGCThreadCount(const bool isConcurrent) const
-    {
-        return collectorResources.GetGCThreadCount(isConcurrent);
-    }
-
     inline WorkStack NewWorkStack() const
     {
         WorkStack workStack = WorkStack();
@@ -531,8 +524,8 @@ protected:
 
 
     // enum all common roots.
-    void EnumAllCommonRoots(GCWorkers& workers);
-    GCWorkers& GetWorkers(GCCycleGeneration generation) const
+    void EnumAllCommonRoots(ZWorkers& workers);
+    ZWorkers& GetWorkers(GCCycleGeneration generation) const
     {
         return *(generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Workers();
     }

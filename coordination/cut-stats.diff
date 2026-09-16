@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zWorkers.cpp b/runtime/src/Heap/z/zWorkers.cpp
+index d408f5ceb..ca21074ef 100644
+--- a/runtime/src/Heap/z/zWorkers.cpp
++++ b/runtime/src/Heap/z/zWorkers.cpp
+@@ -80,7 +80,7 @@ void ZWorkers::run(ZTask* task)
+ 
+     {
+         std::lock_guard<std::mutex> locker(_resize_lock);
+-        _stats->at_start(active_workers());
++        /* controlled cut: omit worker statistics start */
+     }
+ 
+     _workers.run_task(task->worker_task());

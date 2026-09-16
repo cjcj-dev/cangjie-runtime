@@ -33,14 +33,26 @@
 
 
 namespace MapleRuntime {
-void* CollectorResources::DirectorThreadEntry(void* arg)
+// zDirector.cpp:73-80: the director names itself and starts in its
+// constructor; run_thread (:916-930) is the sampling loop and terminate
+// (:932-936) sets the stop flag under the monitor and notifies.
+ZDirector::ZDirector(CollectorResources& resources) : resources(resources)
 {
-    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
-    static_cast<CollectorResources*>(arg)->RunDirectorLoop();
-    return nullptr;
+    set_name("ZDirector");
+    create_and_start();
 }
 
+void ZDirector::run_thread()
+{
+    resources.RunDirectorLoop();
+}
 
+void ZDirector::terminate()
+{
+    std::lock_guard<std::mutex> locker(resources.directorMutex);
+    resources.directorStopped = true;
+    resources.directorCondition.notify_all();
+}
 } // namespace MapleRuntime
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -105,7 +117,8 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     GcTriggerInputs in = ZStat::SampleDirectorStats(now,
         collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).CycleStats(),
         collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).CycleStats(), regions,
-        GetWorkers(GCCycleGeneration::YOUNG), GetWorkers(GCCycleGeneration::OLD));
+        GetWorkers(GCCycleGeneration::YOUNG), GetWorkers(GCCycleGeneration::OLD),
+        static_cast<uint32_t>(concurrentGcThreadCount));
     in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
     in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;
     const GcTriggerDecision decision = DecideGcTrigger(in);
@@ -122,7 +135,7 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         } else {
             minorDriverPort.EnqueueAsync(GC_REASON_YOUNG, selection.youngWorkers);
             if (in.oldWorkersActive && in.activeOldWorkers != selection.oldWorkers) {
-                GetWorkers(GCCycleGeneration::OLD).RequestResize(selection.oldWorkers);
+                GetWorkers(GCCycleGeneration::OLD).request_resize_workers(selection.oldWorkers);
             }
         }
         return;
@@ -141,10 +154,10 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         desired = std::min(in.workerCapacity, in.activeYoungWorkers + 2 * (desired - in.activeYoungWorkers));
         const auto adjusted = SelectWorkerThreads(in, desired, in.workerCapacity, in.oldWorkersActive);
         if (in.oldWorkersActive && in.activeOldWorkers != adjusted.oldWorkers) {
-            GetWorkers(GCCycleGeneration::OLD).RequestResize(adjusted.oldWorkers);
+            GetWorkers(GCCycleGeneration::OLD).request_resize_workers(adjusted.oldWorkers);
         }
         if (in.activeYoungWorkers != adjusted.youngWorkers) {
-            GetWorkers(GCCycleGeneration::YOUNG).RequestResize(adjusted.youngWorkers);
+            GetWorkers(GCCycleGeneration::YOUNG).request_resize_workers(adjusted.youngWorkers);
         }
     }
 }

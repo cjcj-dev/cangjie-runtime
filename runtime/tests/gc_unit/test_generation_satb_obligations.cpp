@@ -18,9 +18,11 @@
 
 #include "Common/Runtime.h"
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zAddress.hpp"
 #include "Concurrency/Concurrency.h"
 #include "gc_unittest.hpp"
 #include "mark_publication_fixture.hpp"
+#include <cstdio>
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -106,7 +108,12 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
         CollectorResources& resources;
         ~RestoreBlock() { resources.UnblockResurrection(); }
     } restore { resources };
-    RefField<> field(StoreGoodPointer(fx.obj0));
+    RestoreMarkFlips flips;
+    const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
+    GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
+    std::fprintf(stderr, "SATB_QUAL name=BlockedWeakReadSeparatesOldStrongAndFinalizable mark_bad=%d\n",
+                 ZPointer::is_mark_bad(stored) ? 1 : 0);
+    RefField<> field(stored);
     mark.CompleteOldMarkForAdmissionTest();
     resources.BlockResurrection();
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
@@ -127,7 +134,12 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
     } restore { resources };
     fx.region0->SetYoungRegionFlag(1);
     resources.BlockResurrection();
-    RefField<> field(StoreGoodPointer(fx.obj0));
+    RestoreMarkFlips flips;
+    const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, true, false);
+    GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
+    std::fprintf(stderr, "SATB_QUAL name=BlockedWeakReadKeepsYoungAlive mark_bad=%d\n",
+                 ZPointer::is_mark_bad(stored) ? 1 : 0);
+    RefField<> field(stored);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
     std::vector<BaseObject*> published;
     mark.Drain([&](BaseObject* object, bool) { published.push_back(object); });
@@ -139,7 +151,12 @@ GC_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    RefField<> field(StoreGoodPointer(fx.obj0));
+    RestoreMarkFlips flips;
+    const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
+    GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
+    std::fprintf(stderr, "SATB_QUAL name=UnblockedWeakReadPublishesOldKeepAlive mark_bad=%d\n",
+                 ZPointer::is_mark_bad(stored) ? 1 : 0);
+    RefField<> field(stored);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
     std::vector<BaseObject*> published;
     mark.DrainOld([&](BaseObject* object, bool) { published.push_back(object); });

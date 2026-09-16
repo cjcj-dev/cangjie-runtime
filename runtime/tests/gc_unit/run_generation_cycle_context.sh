@@ -78,7 +78,7 @@ if [[ "$SATB_ENABLED" == 1 ]]; then
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
   -I"$ROOT/runtime/include" -I"$HEADERS/include" \
   -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
-  "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp" \
+  "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp" "$SRC/gc_worker_fixture.cpp" \
   "$SRC/test_generation_satb_obligations.cpp" \
   -L"$LIB" -Wl,-rpath,"$LIB" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck -ldl -o "$OUT/generation_satb_obligations"
