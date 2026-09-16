@@ -60,6 +60,14 @@ RefField<>& Slot(BaseObject* object, unsigned index = 0)
 {
     return HeapSlotAt<>(reinterpret_cast<MAddress>(object) + sizeof(uintptr_t) * (index + 1));
 }
+void EnsureOld(BaseObject* object, Collector& collector)
+{
+    for (unsigned i = 0; i < 16; ++i) {
+        auto* page = Heap::page(reinterpret_cast<MAddress>(object));
+        if (page != nullptr && !page->IsYoungRegion()) return;
+        collector.RequestGC(GC_REASON_YOUNG, false);
+    }
+}
 }
 
 // The compiler-generated managed caller owns runtime startup. Inputs use real
@@ -79,6 +87,8 @@ extern "C" int p2FieldBarrierExercise()
     auto* holder = MObject::NewPinnedObject(holderType, 24);
     auto* oldChild = MObject::NewPinnedObject(leafType, 16);
     const U64 root = heap.RegisterExportRoot(holder);
+    EnsureOld(holder, collector);
+    EnsureOld(oldChild, collector);
     ZBarrier::WriteReference(holder, Slot(holder), oldChild);
     ZBarrier::WriteReference(holder, Slot(holder, 1), oldChild);
     const bool finalizableCase = std::getenv("P2_FINALIZABLE") != nullptr;
@@ -93,6 +103,9 @@ extern "C" int p2FieldBarrierExercise()
         finalHolder = MObject::NewPinnedObject(finalType, 24);
         finalOld = MObject::NewPinnedObject(edgeType, 24);
         auto* finalSentinel = MObject::NewPinnedObject(leafType, 16);
+        EnsureOld(finalHolder, collector);
+        EnsureOld(finalOld, collector);
+        EnsureOld(finalSentinel, collector);
         ZBarrier::WriteReference(finalOld, Slot(finalOld), finalSentinel);
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder), oldChild);
         ZBarrier::WriteReference(finalHolder, Slot(finalHolder, 1), finalOld);
@@ -409,6 +422,12 @@ extern "C" int p2FinalizerClosureExercise()
     auto* sentinel = MObject::NewPinnedObject(leafType, 16);
     auto* upgraded = MObject::NewPinnedObject(edgeType, 16);
     auto* control = MObject::NewPinnedObject(leafType, 16);
+    auto& collector = heap.GetCollector();
+    EnsureOld(holder, collector);
+    EnsureOld(child, collector);
+    EnsureOld(sentinel, collector);
+    EnsureOld(upgraded, collector);
+    EnsureOld(control, collector);
     ZBarrier::WriteReference(holder, Slot(holder), child);
     ZBarrier::WriteReference(child, Slot(child), sentinel);
     ZBarrier::WriteReference(upgraded, Slot(upgraded), control);
@@ -470,6 +489,10 @@ extern "C" int p2ArrayFieldExercise()
     auto* last = MObject::NewPinnedObject(leafType, 16);
     auto* control = MObject::NewPinnedObject(leafType, 16);
     auto* holder = MObject::NewPinnedObject(holderType, 16);
+    EnsureOld(first, collector);
+    EnsureOld(last, collector);
+    EnsureOld(control, collector);
+    EnsureOld(holder, collector);
     ZBarrier::WriteReference(holder, Slot(holder), control);
     if (finalizable) holder->OnFinalizerCreated();
     collector.RequestGC(GC_REASON_YOUNG, false);
@@ -486,6 +509,7 @@ extern "C" int p2ArrayFieldExercise()
     ZBarrier::WriteStaticRef(controlRoot, control);
     NativeSlot* roots[] = { &controlRoot, &arrayRoot };
     heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), finalizable ? 1 : 2);
+    EnsureOld(array, collector);
     std::atomic<size_t> fields{0};
     std::atomic<bool> rangeTarget{false};
     auto arrayAddress = [&] {
@@ -565,6 +589,12 @@ extern "C" int p2SlowFieldInputExercise()
     auto* oldSentinel = MObject::NewPinnedObject(leafType, 16);
     auto* finalChild = MObject::NewPinnedObject(edgeType, 16);
     auto* finalSentinel = MObject::NewPinnedObject(leafType, 16);
+    EnsureOld(strongHolder, collector);
+    EnsureOld(finalHolder, collector);
+    EnsureOld(oldChild, collector);
+    EnsureOld(oldSentinel, collector);
+    EnsureOld(finalChild, collector);
+    EnsureOld(finalSentinel, collector);
     ZBarrier::WriteReference(oldChild, Slot(oldChild), oldSentinel);
     ZBarrier::WriteReference(finalChild, Slot(finalChild), finalSentinel);
     ZBarrier::WriteReference(strongHolder, Slot(strongHolder), oldChild);
