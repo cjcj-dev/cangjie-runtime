@@ -128,7 +128,7 @@ inline void RegionManager::EnlistFullThreadLocalRegion(RegionInfo* region) noexc
             if (!fullTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION)) {
                 recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
                 RecentFullAccounting::Enqueue(1, region->GetUnitCount());
-                region->SetTraceRegionFlag(0);
+                (void)region;
             }
             return;
         }

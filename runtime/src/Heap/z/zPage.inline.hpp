@@ -410,8 +410,8 @@ inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vec
 
 inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vector<UnitSegment>& segments)
     {
-        UnitInfo::totalUnitCount = IndexedUnitCount(segments);
-        UnitInfo::heapStartAddress = metadataEnd;
+        totalUnitCount = IndexedUnitCount(segments);
+        heapStartAddress = metadataEnd;
         unitSegments.clear();
         size_t index = 0;
         for (const auto& range : segments) {
@@ -429,11 +429,11 @@ inline size_t RegionInfo::FindUnitIndex(uintptr_t address)
         auto next = std::upper_bound(unitSegments.begin(), unitSegments.end(), address,
             [](uintptr_t addr, const UnitSegment& segment) { return addr < segment.start; });
         if (next == unitSegments.begin()) {
-            return UnitInfo::INVALID_IDX;
+            return INVALID_IDX;
         }
         const auto& segment = *std::prev(next);
         return address < segment.End()
-            ? segment.firstIndex + (address - segment.start) / UNIT_SIZE : UnitInfo::INVALID_IDX;
+            ? segment.firstIndex + (address - segment.start) / UNIT_SIZE : INVALID_IDX;
     }
 
 inline bool RegionInfo::ContainsUnitRange(uintptr_t start, size_t size)
@@ -472,26 +472,26 @@ inline RegionInfo* RegionInfo::GetRegionInfoAt(uintptr_t allocAddr)
 
 inline RegionInfo* RegionInfo::GetGhostFromRegionAt(uintptr_t allocAddr)
     {
-        const size_t idx = FindUnitIndex(allocAddr);
-        if (idx == UnitInfo::INVALID_IDX) {
-            return nullptr;
-        }
-        UnitInfo* unit = UnitInfo::GetUnitInfo(idx);
-        if (unit->GetMetadata().regionStateBitField.GetAtomicValue(
-                RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) == 0) {
-            return nullptr;
-        }
-        RegionInfo* region = LoadUnitRole0(unit) == UnitRole::SUBORDINATE_UNIT
-            ? unit->GetMetadata().ownerRegion0 : reinterpret_cast<RegionInfo*>(unit);
-        if (region == nullptr ||
-            __atomic_load_n(&unit->GetMetadata().ghostLifeId, __ATOMIC_ACQUIRE) !=
-                region->GetRegionLifeId()) {
+        RegionInfo* region = TryGetRegionInfoAt(allocAddr);
+        if (region == nullptr || !region->IsGhostFromRegion()) {
             return nullptr;
         }
 #if defined(MRT_GC_UNIT_TESTS)
         RunGhostLookupTestHook(region);
 #endif
         return region;
+    }
+
+inline MAddress RegionInfo::GetUnitAddress(size_t idx)
+    {
+        CHECK(idx < totalUnitCount);
+        for (const auto& segment : unitSegments) {
+            if (idx >= segment.firstIndex && idx - segment.firstIndex < segment.size / UNIT_SIZE) {
+                return segment.start + (idx - segment.firstIndex) * UNIT_SIZE;
+            }
+        }
+        LOG(RTLOG_FATAL, "unit index denotes a reservation boundary: %zu", idx);
+        return 0;
     }
 
 inline void RegionInfo::InitFreeRegion(size_t unitIdx, size_t nUnit)
@@ -515,7 +515,7 @@ inline ZPageType RegionInfoTypeFor(size_t nUnit, RegionInfo::UnitRole uclass)
 inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, RegionInfo::UnitRole uclass, PageAge age)
     {
         const MAddress start = GetUnitAddress(unitIdx);
-        RegionInfo* region = new RegionInfo(RegionInfoTypeFor(nUnit, uclass), age,
+        ZPage* region = new ZPage(RegionInfoTypeFor(nUnit, uclass), age,
                                             ZVirtualMemory(ZAddress::offset(to_zaddress_unsafe(start)),
                                                            nUnit * UNIT_SIZE));
         region->InitRegion(nUnit, uclass, age);
@@ -524,7 +524,7 @@ inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, RegionIn
 
 inline RegionInfo* RegionInfo::InitRegionAt(uintptr_t addr, size_t nUnit, RegionInfo::UnitRole uclass)
     {
-        size_t idx = RegionInfo::UnitInfo::GetUnitIdxAt(addr);
+        size_t idx = RegionInfo::GetUnitIdxAt(addr);
         return InitRegion(idx, nUnit, uclass);
     }
 
@@ -638,39 +638,16 @@ inline void RegionInfo::PublishFromPageMetadata()
     template<Generation G>
 inline __attribute__((always_inline)) void RegionInfo::PublishForwardingCarrier()
     {
-        SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         PublishFromPageMetadata<G>();
-        // zForwarding.inline.hpp:67-70 — construction token = 1. Late retain
-        // after detach (count 0) is refused; carrier and token are published
-        // by this single product operation.
-
-        // zRelocationSet.cpp:110-118 / zVerify.cpp:601: the forwarding still
-        // reads this source page's livemap. Publication does not reset it;
-        // detach/reuse owns that transition after source-page consumers finish.
-        // Always install ghost membership, including a zero-live page. This is
-        // what keeps the from-page carrier reachable until forwarding drain.
         SetInGhostRegion(1);
         metadata.nextRegionIdx0 = metadata.nextRegionIdx;
-
-        size_t nUnit = GetUnitCount();
-        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
-        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
-        for (size_t i = 1; i < nUnit; i++) {
-            UnitMetadata& mdata = array[i].GetMetadata();
-            CHECK(static_cast<UnitRole>(mdata.unitRole) == UnitRole::SUBORDINATE_UNIT);
-            CHECK(mdata.ownerRegion == this);
-            CHECK(mdata.inGhostFromRegion == 0);
-            array[i].SetUnitRole0(UnitRole::SUBORDINATE_UNIT);
-            mdata.ownerRegion0 = this;
-            array[i].SetInGhostRegion(1, GetRegionLifeId());
-        }
     }
 
     template<Generation G>
 inline void RegionInfo::PrepareForwardableRegion()
     {
         CHECK(IsFromRegion());
-        CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
+        CHECK(is_small());
         CHECK(metadata.inGhostFromRegion == 0);
         (void)IsForwardingDone();
         // The preceding generation reset removed its forwarding set.
@@ -712,23 +689,13 @@ inline void RegionInfo::PrepareForwardableRegion()
 inline void RegionInfo::ClearGhostRegionBit()
     {
         if (IsGhostFromRegion()) {
-            size_t nUnit = GetUnitCount();
-            UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
-            UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
-            for (size_t i = 0; i < nUnit; i++) {
-                array[i].SetInGhostRegion(0, GetRegionLifeId());
-            }
+            SetInGhostRegion(0);
         }
     }
 
 inline void RegionInfo::ClearGhostFromRegionBits()
     {
-        const size_t nUnit = GetGhostRegionUnitCount();
-        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
-        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
-        for (size_t i = 0; i < nUnit; i++) {
-            array[i].SetInGhostRegion(0, GetRegionLifeId());
-        }
+        SetInGhostRegion(0);
     }
 
 inline void RegionInfo::DispelGhostFromRegion()
@@ -978,7 +945,7 @@ inline RegionInfo* RegionInfo::GetNextRegion() const
         if (UNLIKELY(metadata.nextRegionIdx == NULLPTR_IDX)) {
             return nullptr;
         }
-        DCHECK(metadata.nextRegionIdx < UnitInfo::totalUnitCount);
+        DCHECK(metadata.nextRegionIdx < totalUnitCount);
         return TryGetRegionInfoAt(GetUnitAddress(metadata.nextRegionIdx));
     }
 
@@ -987,7 +954,7 @@ inline RegionInfo* RegionInfo::GetNextGhostRegion() const
         if (UNLIKELY(metadata.nextRegionIdx0 == NULLPTR_IDX)) {
             return nullptr;
         }
-        DCHECK(metadata.nextRegionIdx0 < UnitInfo::totalUnitCount);
+        DCHECK(metadata.nextRegionIdx0 < totalUnitCount);
         return TryGetRegionInfoAt(GetUnitAddress(metadata.nextRegionIdx0));
     }
 
@@ -1010,8 +977,7 @@ inline bool RegionInfo::IsUnmovableFromRegion() const
 
 inline bool RegionInfo::IsValidRegion() const
     {
-        return static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS ||
-            static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
+        return is_small() || is_medium() || is_large();
     }
 
 // zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:216-221: a relocatable
@@ -1068,12 +1034,6 @@ inline void RegionInfo::RemoveFromList()
 
 
 
-inline RegionInfo::UnitRole RegionInfo::LoadUnitRole0(UnitInfo* unit)
-    {
-        return static_cast<UnitRole>(
-            unit->GetMetadata().unitRoleBitField.GetAtomicValue(BIT_LENGTH, BIT_LENGTH) >> BIT_LENGTH);
-    }
-
 inline void RegionInfo::BumpRegionLifeId()
     {
         RegionLifeId old = metadata.regionLifeId.load(std::memory_order_relaxed);
@@ -1097,7 +1057,6 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         CHECK(TryGetRegionInfoAt(GetRegionStart()) == nullptr);
         CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
 
-        SetUnitRole(UnitRole::FREE_UNITS);
         // Invalidate every old-life carrier before clearing any of its payload.
         // Readers either retain the old page (detachgate) or observe this bump and
         // reject the old incarnation; there is no wraparound fallback.
@@ -1140,16 +1099,9 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
         // next collection set instead of silently papering over the escape.
         SetRegionType(RegionType::FREE_REGION);
-        SetTraceRegionFlag(0);
         SetNotRelocatableThisCycle(0);
-        // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
-        // TakeRegion reuses garbage without DispelGhostFromRegion.
         SetInGhostRegion(0);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
-        // ZPage::ZPage (zPage.cpp:33-42): _type is initialized before
-        // _livemap(object_max_count()), which reads it. The role is the page
-        // type here, so it is written before the livemap is sized from it.
-        SetUnitRole(uClass);
         if (uClass != UnitRole::FREE_UNITS) {
             InitializeLiveMap();
         }
@@ -1159,9 +1111,7 @@ inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass, PageAge age)
     {
         InitRegionInfo(nUnit, uClass, age);
         CHECK(uClass != UnitRole::FREE_UNITS);
-        if (ZPageTable::heap_table().get(GetRegionStart()) != this) {
-            ZPageTable::heap_table().insert(this);
-        }
+        (void)nUnit;
     }
 
 } // namespace MapleRuntime

@@ -20,6 +20,7 @@
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zPageAge.hpp"
+#include "Heap/Allocator/RegionListTypes.hpp"
 #include "Common/BaseObject.h"
 #include "RuntimeConfig.h"
 
@@ -34,7 +35,7 @@ extern uintptr_t g_cjHeapRangeEnd[];
 namespace MapleRuntime {
 class RegionInfo;
 class ZPageTable;
-enum class UnitRole : uint8_t;
+enum class UnitRole : uint8_t; // RegionListTypes.hpp
 class OopStorage;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;

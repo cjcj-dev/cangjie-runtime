@@ -160,7 +160,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(listMutex);
         for (RegionInfo *node = listHead; node != nullptr; node = node->GetNextRegion()) {
-            node->SetTraceRegionFlag(0);
+            (void)node;
         }
     }
 
@@ -257,7 +257,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(listMutex);
         for (RegionInfo *node = listHead; node != nullptr; node = node->GetNextRegion()) {
-            node->SetTraceRegionFlag(0);
+            (void)node;
         }
         active = false;
     }

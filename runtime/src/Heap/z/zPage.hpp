@@ -9,6 +9,7 @@
 
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
+#include "Heap/Allocator/RegionListTypes.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -100,37 +101,7 @@ private:
     T fieldVal;
 };
 
-// this class is the metadata of region, it contains all the information needed to manage its corresponding memory.
-// Region memory is composed of several Units, described by UnitInfo.
-// sizeof(RegionInfo) must be equal to sizeof(UnitInfo). We rely on this fact to calculate region-related address.
-
-
-enum class UnitRole : uint8_t {
-    FREE_UNITS = 0,
-    SMALL_SIZED_UNITS,
-    LARGE_SIZED_UNITS,
-    SUBORDINATE_UNIT,
-};
-
-enum class RegionType : uint8_t {
-    FREE_REGION,
-    THREAD_LOCAL_REGION,
-    RECENT_FULL_REGION,
-    FROM_REGION,
-    LONE_FROM_REGION,
-    UNMOVABLE_FROM_REGION,
-    TO_REGION,
-    FULL_PINNED_REGION,
-    RECENT_PINNED_REGION,
-    RAW_POINTER_PINNED_REGION,
-    TL_RAW_POINTER_REGION,
-    TL_LARGE_RAW_POINTER_REGION,
-    LARGE_REGION,
-    RECENT_LARGE_REGION,
-    GARBAGE_REGION,
-};
-
-class RegionInfo {
+class ZPage {
     friend class ForwardingTable;
 private:
     const ZPageType _type;
@@ -146,6 +117,7 @@ private:
 public:
     using UnitRole = MapleRuntime::UnitRole;
     using RegionType = MapleRuntime::RegionType;
+    using Page = ZPage;
     // The table serializes publication/unbinding of this facade's owner.
     friend class ForwardingTable;
 public:
@@ -187,14 +159,14 @@ public:
         return GetRegionEnd() > GetRegionAllocPtr() ? GetRegionEnd() - GetRegionAllocPtr() : 0;
     }
     size_t used() const { return GetRegionAllocatedSize(); }
-    RegionInfo* clone_for_promotion() const;
+    ZPage* clone_for_promotion() const;
     uintptr_t alloc_object(size_t size);
     uintptr_t alloc_object_atomic(size_t size);
     bool undo_alloc_object(uintptr_t addr, size_t size);
     bool undo_alloc_object_atomic(uintptr_t addr, size_t size);
-    RegionInfo* reset(PageAge age);
+    ZPage* reset(PageAge age);
 
-    RegionInfo(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
+    ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
 
     uint8_t GetRegionLifeSeq() const
     {
@@ -228,8 +200,8 @@ public:
     static std::atomic<uint64_t>& EnrolAfterFlip();
     void NoteEnrolPhase();
 
-    RegionInfo();
-    static RegionInfo* NullRegion();
+    ZPage();
+    static ZPage* NullRegion();
 
     // ZPage::_livemap (zPage.hpp:52). One ZLiveMap per page life, owned by
     // this descriptor and constructed with object_max_count() at InitRegionInfo.
@@ -443,8 +415,6 @@ public:
                                   PageAge age = PageAge::old);
 
     static RegionInfo* InitRegionAt(uintptr_t addr, size_t nUnit, RegionInfo::UnitRole uclass);
-
-    static MAddress GetUnitAddress(size_t unitIdx) { return UnitInfo::GetUnitAddress(unitIdx); }
 
     static void WaitCopiedBeforePayloadWipe(RegionInfo* region, const char* site);
 
@@ -876,141 +846,18 @@ private:
         RwLock rwLock;
     };
 
-    class UnitInfo {
-    public:
-        // propgated from RegionManager
-        static uintptr_t heapStartAddress; // exported ABI anchor: end of the reverse metadata array
-        static size_t totalUnitCount;
-        constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
+    static uintptr_t heapStartAddress;
+    static size_t totalUnitCount;
+    constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
 
-        ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
-        {
-            const size_t idx = FindUnitIndex(allocAddr);
-            CHECK_DETAIL(idx != INVALID_IDX, "address is outside heap reservations: %#zx", allocAddr);
-            return idx;
-        }
-
-        ALWAYS_INLINE static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr)
-        {
-            return GetUnitInfo(GetUnitIdxAt(allocAddr));
-        }
-
-        // get the unit address by index
-        static MAddress GetUnitAddress(size_t idx)
-        {
-            CHECK(idx < totalUnitCount);
-            for (const auto& segment : unitSegments) {
-                if (idx >= segment.firstIndex && idx - segment.firstIndex < segment.size / UNIT_SIZE) {
-                    return segment.start + (idx - segment.firstIndex) * UNIT_SIZE;
-                }
-            }
-            LOG(RTLOG_FATAL, "unit index denotes a reservation boundary: %zu", idx);
-            return 0;
-        }
-
-        static UnitInfo* GetUnitInfo(size_t idx)
-        {
-            CHECK(idx < totalUnitCount);
-            return reinterpret_cast<UnitInfo*>(heapStartAddress - (idx + 1) * sizeof(UnitInfo));
-        }
-
-        static size_t GetUnitIdx(const UnitInfo* unit)
-        {
-            uintptr_t ptr = reinterpret_cast<uintptr_t>(unit);
-            if (ptr < heapStartAddress) {
-                const size_t distance = heapStartAddress - ptr;
-                if (distance % sizeof(UnitInfo) == 0 && distance / sizeof(UnitInfo) <= totalUnitCount) {
-                    return distance / sizeof(UnitInfo) - 1;
-                }
-            }
-
-            LOG(RTLOG_FATAL, "UnitInfo::GetUnitIdx() Should not execute here, abort.");
-            return 0;
-        }
-
-        UnitInfo() = delete;
-        UnitInfo(const UnitInfo&) = delete;
-        UnitInfo& operator=(const UnitInfo&) = delete;
-        ~UnitInfo() = delete;
-
-        // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
-        void SetUnitRole(UnitRole role)
-        {
-            metadata.unitRoleBitField.SetAtomicValue(0, BIT_LENGTH, static_cast<uint8_t>(role));
-        }
-        void SetUnitRole0(UnitRole role)
-        {
-            metadata.unitRoleBitField.SetAtomicValue(BIT_LENGTH, BIT_LENGTH, static_cast<uint8_t>(role));
-        }
-        void SetRegionType(RegionType type)
-        {
-            metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH,
-                                                        static_cast<uint8_t>(type));
-        }
-        void SetTraceRegionFlag(uint8_t flag)
-        {
-            metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
-        }
-        void SetInGhostRegion(uint8_t flag, RegionLifeId life = 0)
-        {
-            __atomic_store_n(&metadata.ghostLifeId, life, __ATOMIC_RELEASE);
-            metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
-            if (flag != 0) {
-            }
-        }
-
-        // Publish the owner before the discriminator that guards it, so a reader which observes
-        // SUBORDINATE_UNIT always finds a non-null ownerRegion (:530-546). SetUnitRole is an
-        // acq_rel compare-exchange (BitField::SetAtomicValue :46-58), which orders the store
-        // above it.
-        void InitSubordinateUnit(RegionInfo* owner)
-        {
-            metadata.ownerRegion = owner;
-            SetInGhostRegion(0);
-            SetUnitRole(UnitRole::SUBORDINATE_UNIT);
-        }
-
-        void ToFreeRegion() { InitFreeRegion(GetUnitIdx(this), 1); }
-
-        void ClearUnit() { ClearUnits(GetUnitIdx(this), 1); }
-
-
-        UnitMetadata& GetMetadata() { return metadata; }
-
-        UnitRole GetUnitRole() const { return static_cast<UnitRole>(metadata.unitRole); }
-
-        class UnitInfoArray {
-        private:
-            UnitInfo* unitArray;
-            size_t size;
-        public:
-            UnitInfoArray(UnitInfo* unit, size_t size): size(size)
-            {
-                uintptr_t lastUnitAddress = reinterpret_cast<uintptr_t>(unit) -
-                                            (size - 1) * sizeof(RegionInfo::UnitInfo);
-                unitArray = reinterpret_cast<RegionInfo::UnitInfo*>(lastUnitAddress);
-            }
-
-            UnitInfo& operator[](size_t index)
-            {
-                CHECK(index >= 0 && index < size);
-                return unitArray[size - index - 1];
-            }
-        };
-
-    private:
-        UnitMetadata metadata;
-    };
-
-    // The metadata role remains an ABI/ghost-lifetime discriminator. Current
-    // page ownership is published and read through pageOwners, independently
-    // of subordinate metadata placement.
-    static UnitRole LoadUnitRole(UnitInfo* unit)
+    ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
     {
-        return static_cast<UnitRole>(unit->GetMetadata().unitRoleBitField.GetAtomicValue(0, BIT_LENGTH));
+        const size_t idx = FindUnitIndex(allocAddr);
+        CHECK_DETAIL(idx != INVALID_IDX, "address is outside heap reservations: %#zx", allocAddr);
+        return idx;
     }
 
-    static UnitRole LoadUnitRole0(UnitInfo* unit);
+    static MAddress GetUnitAddress(size_t idx);
 
     void BumpRegionLifeId();
 
@@ -1020,9 +867,10 @@ private:
 
     void InitRegion(size_t nUnit, UnitRole uClass, PageAge age = PageAge::old);
 
-    static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;
+    static constexpr uint32_t NULLPTR_IDX = INVALID_IDX;
     UnitMetadata metadata;
 };
+using RegionInfo = ZPage;
 } // namespace MapleRuntime
 
 #include "Heap/z/zPage.inline.hpp"

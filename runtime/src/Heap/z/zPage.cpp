@@ -52,14 +52,14 @@
 namespace MapleRuntime {
 // Keep the empty allocation page identity in the product DSO. An inline
 // function-local object gives callers in another DSO a different sentinel.
-RegionInfo* RegionInfo::NullRegion()
+ZPage* ZPage::NullRegion()
 {
-    static RegionInfo nullRegion;
+    static ZPage nullRegion;
     return &nullRegion;
 }
 
-uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
-uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
+size_t ZPage::totalUnitCount = 0;
+uintptr_t ZPage::heapStartAddress = 0;
 std::vector<RegionInfo::UnitSegment> RegionInfo::unitSegments;
 ZSafeDelete<RegionInfo::PageRetirement> RegionInfo::safeDestroy;
 
@@ -295,7 +295,7 @@ uint64_t RegionInfo::GetSnapshotEpoch() const
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-RegionInfo::RegionInfo()
+ZPage::ZPage()
     : _type(ZPageType::small),
       _generation_id(ZGenerationId::old),
       _age(PageAge::old),
@@ -311,7 +311,7 @@ RegionInfo::RegionInfo()
         metadata.regionEnd = reinterpret_cast<uintptr_t>(nullptr);
     }
 
-RegionInfo::RegionInfo(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
+ZPage::ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
     : _type(type),
       _generation_id(age != PageAge::old ? ZGenerationId::young : ZGenerationId::old),
       _age(age),
@@ -353,7 +353,7 @@ RegionInfo* RegionInfo::reset(PageAge age)
 RegionInfo* RegionInfo::clone_for_promotion() const
 {
     CHECK(IsYoungRegion());
-    RegionInfo* page = new RegionInfo(_type, PageAge::old, _virtual);
+    ZPage* page = new ZPage(_type, PageAge::old, _virtual);
     page->metadata.allocPtr = metadata.allocPtr;
     page->metadata.regionEnd = metadata.regionEnd;
     page->_top = _top;

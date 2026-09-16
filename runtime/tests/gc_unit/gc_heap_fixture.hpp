@@ -201,7 +201,7 @@ struct GcHeapFixture {
         // Some life-clock tests intentionally keep several fixtures alive.
         // RegionInfo's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
-        if (RegionInfo::UnitInfo::heapStartAddress == heapStart) {
+        if (RegionInfo::heapStartAddress == heapStart) {
             ForwardingTable::ResetRelocationSet(Generation::Young);
             ForwardingTable::ResetRelocationSet(Generation::Old);
         }

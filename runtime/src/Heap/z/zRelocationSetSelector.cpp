@@ -124,7 +124,7 @@ void RegionManager::AssembleLargeGarbageCandidates()
 void RegionManager::ClearNotRelocatableThisCycleFlags()
 {
     auto clearList = [](RegionList& list) {
-        list.VisitAllRegions([](RegionInfo* region) { region->SetNotRelocatableThisCycle(0); });
+        (void)list;
     };
     clearList(tlRegionList);
     clearList(recentFullRegionList);

@@ -39,15 +39,8 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetHeapUnitCo
 
 inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSize(size_t num)
     {
-        size_t metadataSize = 0;
-        CHECK_DETAIL(CheckedMulSize(num, sizeof(RegionInfo), metadataSize),
-                     "region metadata geometry overflows: units=%zu regionInfoSize=%zu", num,
-                     sizeof(RegionInfo));
-        size_t roundedMetadataSize = 0;
-        CHECK_DETAIL(CheckedRoundUpSize(metadataSize, MapleRuntime::MRT_PAGE_SIZE, roundedMetadataSize),
-                     "region metadata round-up overflows: metadataSize=%zu pageSize=%zu", metadataSize,
-                     MapleRuntime::MRT_PAGE_SIZE);
-        return roundedMetadataSize;
+        (void)num;
+        return MapleRuntime::MRT_PAGE_SIZE;
     }
 
     template<Generation G>
