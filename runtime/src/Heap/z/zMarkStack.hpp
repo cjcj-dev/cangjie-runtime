@@ -21,11 +21,11 @@
 #include "Heap/z/zMarkCache.hpp"
 
 #include "Heap/z/zMarkContext.hpp"
+#include "Heap/z/zPageFwd.hpp"
 
 namespace MapleRuntime {
 
 class BaseObject;
-#include "Heap/z/zPageFwd.hpp"
 
 // ZGC zMarkStack.hpp:35-54. A chunk is single-owner while it is being
 // filled/drained and becomes immutable while linked on a shared stripe.

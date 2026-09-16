@@ -13,10 +13,10 @@
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zPageFwd.hpp"
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
-#include "Heap/z/zPageFwd.hpp"
 class RegionList;
 class BaseObject;
 class ZLiveMap;

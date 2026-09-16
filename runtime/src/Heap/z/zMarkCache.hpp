@@ -8,9 +8,9 @@
 #define MRT_ZMARKCACHE_HPP
 #include <cstddef>
 #include <cstdint>
+#include "Heap/z/zPageFwd.hpp"
 
 namespace MapleRuntime {
-#include "Heap/z/zPageFwd.hpp"
 class MarkLiveCache {
 public:
     explicit MarkLiveCache(size_t stripeCount);
