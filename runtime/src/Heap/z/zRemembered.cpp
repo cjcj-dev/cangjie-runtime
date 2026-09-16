@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zRelocationSet.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/WCollector/WCollector.h"
 
@@ -104,11 +105,12 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
         MAddress field;
     };
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    ForwardingTable::VisitAll(Generation::Old, [&](ZForwarding* forwarding) {
+    ZRelocationSetIterator iter(&Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).relocation_set());
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
         if (forwarding == nullptr) {
-            return;
+            continue;
         }
-        if (forwarding->retain_page()) {
+        if (forwarding->retain_page(&generation_relocate_queue())) {
             forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
             std::vector<Containing> containing;
             ZPage* page = forwarding->page();
@@ -143,14 +145,14 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
         } else {
             // ref == 0 releases source bytes before PageWorkScope marks done.
             // Consume the published fields only after that same page task completes.
-            ZForwardingLife::WaitPageDone(forwarding);
+            ZForwarding::WaitPageDone(forwarding);
             CHECK(forwarding->is_done());
             forwarding->relocated_remembered_fields_apply_to_published([&](MAddress field) {
                 rememberedSlots.insert(field);
             });
         }
         ZVerify::AfterScan(forwarding);
-    });
+    }
 }
 
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,

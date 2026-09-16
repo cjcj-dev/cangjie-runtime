@@ -4,8 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef MRT_RELOCATION_REQUEST_QUEUE_H
-#define MRT_RELOCATION_REQUEST_QUEUE_H
+#ifndef MRT_Z_RELOCATE_HPP
+#define MRT_Z_RELOCATE_HPP
 
 #include <atomic>
 #include <condition_variable>
@@ -18,6 +18,7 @@
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zPageAge.hpp"
 
 namespace MapleRuntime {
@@ -26,7 +27,7 @@ namespace MapleRuntime {
 // One handle per forwarding, shared by every object on the page. Claim and
 // completion live in ZForwarding; the queue stores neither an object address
 // nor an independent answer. Worker rendezvous is atomic with enqueue.
-class RelocationRequestQueue {
+class ZRelocateQueue {
 public:
     enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED };
 
@@ -34,16 +35,16 @@ public:
     public:
         MAddress from() const { return forwarding ? forwarding->start() : 0; }
         void* owner() const { return forwarding ? forwarding->page() : nullptr; }
-        ZForwarding* page_forwarding() const { return forwarding.get(); }
+        ZForwarding* page_forwarding() const { return forwarding; }
         State state() const
         {
             if (forwarding->is_done()) return State::COMPLETED;
             return forwarding->claimed().load(std::memory_order_acquire) ? State::CLAIMED : State::QUEUED;
         }
     private:
-        friend class RelocationRequestQueue;
-        explicit Request(ForwardingTable::Owner value) : forwarding(std::move(value)) {}
-        ForwardingTable::Owner forwarding;
+        friend class ZRelocateQueue;
+        explicit Request(ZForwarding* value) : forwarding(std::move(value)) {}
+        ZForwarding* forwarding;
     };
 
     using Handle = std::shared_ptr<Request>;
@@ -69,7 +70,8 @@ public:
     // generation would leave a waiter with no completion owner.
     void BeginWorkers(size_t workers);
     EnqueueResult Add(void* owner, MAddress from);
-    EnqueueResult Add(ForwardingTable::Owner forwarding);
+    EnqueueResult Add(ZForwarding* forwarding);
+    void add_and_wait(ZForwarding* forwarding);
     MAddress Wait(const Handle& request);
 
     // Wait for the canonical forwarding completion. Always returns zero;
@@ -137,4 +139,4 @@ public:
 
 } // namespace MapleRuntime
 
-#endif // MRT_RELOCATION_REQUEST_QUEUE_H
+#endif // MRT_Z_RELOCATE_HPP

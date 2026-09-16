@@ -108,6 +108,7 @@ inline bool ShouldPromoteAge(uint8_t youngAge, uint32_t tenuringThreshold)
 #include <vector>
 
 #include "Heap/z/zArray.hpp"
+#include "Heap/z/zPageFwd.hpp"
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
 
@@ -309,6 +310,26 @@ inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>&
     }
     return out;
 }
+
+class ZRelocationSetSelector {
+private:
+    ZArray<ZPage*> _small;
+    ZArray<ZPage*> _medium;
+    size_t _forwarding_entries;
+
+public:
+    ZRelocationSetSelector() : _forwarding_entries(0) {}
+
+    void add_selected_small(ZPage* page, size_t nentries)
+    {
+        _small.push(page);
+        _forwarding_entries += nentries;
+    }
+
+    const ZArray<ZPage*>* selected_small() const { return &_small; }
+    const ZArray<ZPage*>* selected_medium() const { return &_medium; }
+    size_t forwarding_entries() const { return _forwarding_entries; }
+};
 
 } // namespace MapleRuntime
 

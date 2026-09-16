@@ -88,7 +88,8 @@ inline ZForwarding* ZForwarding::alloc(size_t liveObjects, MAddress start, MAddr
         if (arena) {
             AttachedArray::initialize(addr, n);
         }
-        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId);
+        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId,
+            PageAge::old, PageAge::old, kAlignShift);
         return forwarding;
     }
 }
@@ -102,7 +103,10 @@ inline size_t ZForwarding::size() const { return _size; }
 }
 
 namespace MapleRuntime {
-inline uintptr_t ZForwarding::index(MAddress from) const { return static_cast<uintptr_t>((from - _start) >> kAlignShift); }
+inline uintptr_t ZForwarding::index(MAddress from) const
+{
+    return static_cast<uintptr_t>((from - _start) >> _object_alignment_shift);
+}
 }
 
 namespace MapleRuntime {
@@ -139,13 +143,13 @@ namespace MapleRuntime {
 inline ForwardingEntry ZForwarding::find(uintptr_t fromIndex, ForwardingCursor* cursor) const
     {
         ForwardingEntry entry = first(fromIndex, cursor);
-        for (size_t probes = 0; probes < _entries.length() && entry.populated(); ++probes) {
+        while (entry.populated()) {
             if (entry.from_index() == fromIndex) {
                 return entry;
             }
             entry = next(cursor);
         }
-        return entry.populated() ? ForwardingEntry() : entry;
+        return entry;
     }
 }
 
@@ -237,16 +241,21 @@ inline
 
 namespace MapleRuntime {
 inline ZForwarding::ZForwarding(ZPage* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId)
+                RegionLifeId pageLifeId, PageAge from_age, PageAge to_age, size_t object_alignment_shift)
         : _start(start),
           _size(regionSize),
           _heapBase(heapBase),
+          _object_alignment_shift(object_alignment_shift),
           _entries(nentries),
           _page(page),
+          _from_age(from_age),
+          _to_age(to_age),
           _page_life_id(pageLifeId),
           _table_generation(0),
           _claimed(false),
           _in_place(false),
+          _in_place_top_at_start(0),
+          _in_place_thread(),
           _ref_lock(),
           _ref_count(1),
           _done(false),

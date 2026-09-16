@@ -1054,7 +1054,6 @@ EXPORTS
     _ZN12MapleRuntime10ZPage20youngRegionFlagMutexE @1057 DATA
     _ZN12MapleRuntime10ZPage21DispelGhostFromRegionEv @1058
     _ZN12MapleRuntime10ZPage24IncRawPointerObjectCountEv @1060
-    _ZN12MapleRuntime10ZPage24PrepareForwardableRegionEv @1061
     _ZN12MapleRuntime10ZPage26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10ZPage27BindLiveInfo0FromLiveIfNullEv @1065
     _ZN12MapleRuntime10ZPage30LARGE_OBJECT_DEFAULT_THRESHOLDE @1068 DATA

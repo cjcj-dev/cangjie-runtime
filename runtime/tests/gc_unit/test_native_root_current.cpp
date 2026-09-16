@@ -162,27 +162,14 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
     RegionList selected("native-root-relocation");
     selected.PrependRegion(region);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
-    // Invoke the explicit product instantiation, not a header-instantiated
-    // fixture copy of the forwarding publication mechanism.
-    using Prepare = void (*)(ZPage*);
-    void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    GC_EXPECT_TRUE(product != nullptr);
-    auto prepare = reinterpret_cast<Prepare>(dlsym(product,
-        "_ZN12MapleRuntime10ZPage24PrepareForwardableRegionILNS_10GenerationE0EEEvv"));
-    GC_EXPECT_TRUE(prepare != nullptr);
-    Dl_info identity{};
-    GC_EXPECT_TRUE(dladdr(reinterpret_cast<void*>(prepare), &identity) != 0 &&
-                   identity.dli_fname != nullptr && std::strstr(identity.dli_fname, "libcangjie-runtime.so") != nullptr);
-    prepare(region);
-    dlclose(product);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_PREFORWARD);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     manager.CompactRegion(region);
     region->MarkForwardingDone();
-    auto forwarding = ForwardingTable::RetainPageOwner(region);
+    auto forwarding = forwarding_for_page(region);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
@@ -220,7 +207,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
     collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
-    ForwardingTable::ResetRelocationSet(Generation::Young);
+    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
     // Observe the product's published old mark stacks after the root task
     // returned and before follow starts (testOldMarkStarted fires at the top
     // of DoTracing, after DoEnumeration). The slot visit is recorded too, so

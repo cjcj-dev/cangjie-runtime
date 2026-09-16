@@ -621,7 +621,13 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     heapUnitCount = nUnit;
     CHECK(nUnit * ZPage::UNIT_SIZE <= span.size());
     // zPageTable.cpp:37-52: address tables cover the highest available end.
-    CHECK(ForwardingTable::Initialize(regionHeapStart, regionHeapEnd - regionHeapStart, ZPage::UNIT_SIZE));
+    {
+        auto& collector = Heap::GetHeap().GetCollector();
+        collector.GetGenerationCycle(GCCycleGeneration::YOUNG).forwarding_table().initialize(
+            regionHeapEnd - regionHeapStart, regionHeapStart, ZPage::UNIT_SIZE);
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table().initialize(
+            regionHeapEnd - regionHeapStart, regionHeapStart, ZPage::UNIT_SIZE);
+    }
     this->inactiveZone = regionHeapStart;
     SetMaxUnitCountForRegion(heapParam.regionSize);
     SetMaxUnitCountForPinnedRegion(heapParam.regionSize);
@@ -671,7 +677,7 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
     // must not re-scan O(N) under remset mutex.
 
     {
-        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_DIRTY);
+        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_DIRTY);
     }
     region->InitFreeUnits();
     ReturnPageMemory(PageMemory{ unitIndex, num, 0, true });
@@ -792,7 +798,7 @@ void RegionManager::ReclaimRetiredRegionToMarkQuarantine(ZPage* region)
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
     {
-        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_MARK_QUARANTINE);
+        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_MARK_QUARANTINE);
     }
     region->InitFreeUnits();
     ScopedEnterSaferegion enterSaferegion(true);
@@ -825,7 +831,7 @@ void RegionManager::ReleaseRetiredRegion(ZPage* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
     {
-        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RELEASE_REGION);
+        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RELEASE_REGION);
     }
     region->InitFreeUnits();
     // ZPageAllocator::free_page (zPageAllocator.cpp:2083-2165): freed memory
