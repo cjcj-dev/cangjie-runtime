@@ -532,7 +532,7 @@ inline void ZPage::WaitCopiedBeforePayloadWipe(ZPage* region, const char* site)
             return;
         }
         (void)site;
-        ZForwarding::WaitPageDone(region->_scratch.fwdOwner.load(std::memory_order_acquire));
+        ZForwarding::WaitPageDone(forwarding_for_page(region));
     }
 
 inline void ZPage::ClearUnits(size_t idx, size_t cnt)

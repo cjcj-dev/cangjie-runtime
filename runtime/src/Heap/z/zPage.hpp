@@ -550,7 +550,7 @@ public:
     // Next cycle must not treat last cycle's in-place done as this cycle's done.
     ZForwarding* PeekForwardingOwner() const
     {
-        return _scratch.fwdOwner.load(std::memory_order_acquire);
+        return forwarding_for_page(const_cast<ZPage*>(this));
     }
 
     int32_t CopyInflightWord() const

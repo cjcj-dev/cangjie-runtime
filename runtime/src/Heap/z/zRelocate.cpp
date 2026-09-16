@@ -1779,7 +1779,7 @@ void WaitCopiedObjectsUnlocked(ZPage* region)
     if (region == nullptr || region->IsFreeRegion()) {
         return;
     }
-    ZForwarding::WaitPageDone(region->PeekForwardingOwner());
+    ZForwarding::WaitPageDone(forwarding_for_page(region));
 }
 
 template<typename Fn>
