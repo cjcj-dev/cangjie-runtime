@@ -1046,7 +1046,6 @@ EXPORTS
     _ZN12MapleRuntime10ZPage16dispelGhostCountE @1047 DATA
     _ZN12MapleRuntime10ZPage16youngRegionCountE @1048 DATA
 
-    _ZN12MapleRuntime10ZPage18SetYoungRegionFlagEh @1050
     _ZN12MapleRuntime10ZPage19ClearGhostRegionBitEv @1051
     _ZN12MapleRuntime10ZPage19GetYoungRegionCountEv @1052
     _ZN12MapleRuntime10ZPage19IsResurrectedObjectEPKNS_10BaseObjectE @1053
