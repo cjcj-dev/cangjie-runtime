@@ -244,7 +244,8 @@ inline zaddress ZBarrier::make_load_good(zpointer ptr)
     if (ZPointer::is_load_good_or_null(ptr)) {
         return RefField<>(ptr).GetTargetObject();
     }
-    return relocate_or_remap(to_zaddress_unsafe(raw(ptr)), remap_generation(ptr));
+    return relocate_or_remap(to_zaddress_unsafe(untype(RefField<>(ptr).GetTargetObject())),
+                            remap_generation(ptr));
 }
 
 inline zaddress ZBarrier::make_load_good_no_relocate(zpointer ptr)
@@ -255,7 +256,7 @@ inline zaddress ZBarrier::make_load_good_no_relocate(zpointer ptr)
     if (ZPointer::is_load_good_or_null(ptr)) {
         return RefField<>(ptr).GetTargetObject();
     }
-    return remap(to_zaddress_unsafe(raw(ptr)), remap_generation(ptr));
+    return remap(to_zaddress_unsafe(untype(RefField<>(ptr).GetTargetObject())), remap_generation(ptr));
 }
 
 inline void ZBarrier::assert_transition_monotonicity(zpointer oldPtr, zpointer newPtr)

@@ -461,8 +461,6 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
 
     RefField<> taggedB = RemsetRearmTestAccess::Tag(collector, objectB);
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    const uintptr_t observedPrev = raw(field->GetFieldValue());
-    field->StoreColoured(taggedB.GetFieldValue());
     const uintptr_t fieldBeforeHook = raw(field->GetFieldValue());
     const bool containsBeforeHook = Heap::GetHeap().GetRememberedSet().Contains(slot);
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
@@ -813,7 +811,7 @@ GC_TEST(Remset, SparsePagesConsumeAndRearmAcrossFaces)
     rs.ScanPreviousForMinor(previous);
     const std::unordered_set<MAddress> expectedPrevious{first, last};
     GC_EXPECT_TRUE(previous == expectedPrevious);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(stale));
+    GC_EXPECT_TRUE(rs.Contains(stale));
     rs.FlipForMinor();
     previous.clear();
     rs.ScanPreviousForMinor(previous);
@@ -1066,7 +1064,6 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
-    rs.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
     size_t checked = 0;
     for (uint8_t initial = 0; initial != 2; ++initial) {
         for (size_t flips = 0; flips != 4; ++flips) {
@@ -1094,7 +1091,6 @@ GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
     RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
-    rs.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
@@ -1113,7 +1109,6 @@ GC_OTHER_VM_TEST(Remset, InPlacePreviousFieldsPublishDuringYoungMark)
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
     RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
-    rs.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_TRACE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     const MAddress from = heap.heapStart + 256;
