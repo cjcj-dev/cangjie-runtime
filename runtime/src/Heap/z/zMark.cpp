@@ -44,6 +44,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Heap/z/zStackWatermark.hpp"
@@ -684,6 +685,7 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
         VisitMinorValueRoots(visitor);
     }, GetWorkers(GCCycleGeneration::YOUNG).active_workers());
+    SuspendibleThreadSetJoiner joiner;
     GetWorkers(GCCycleGeneration::YOUNG).run(&task);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().GetRememberedSet().CheckStaticCoverageForMinor();
@@ -839,7 +841,11 @@ public:
 
     void resize_workers(uint32_t workers) override { mark->ResizeWorkers(workers); }
 
-    void work() override { mark->FollowWorkComplete(partial); }
+    void work() override
+    {
+        SuspendibleThreadSetJoiner stsJoiner;
+        mark->FollowWorkComplete(partial);
+    }
 
 private:
     ZMark* const mark;
