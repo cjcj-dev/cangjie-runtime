@@ -401,7 +401,6 @@ bool MRT_NewForeignCJThread()
     if (ThreadLocal::IsCJProcessor() || ThreadLocal::GetMutator() != nullptr) {
         return false;
     }
-    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
     TRACE_START("CJRT_INVOKE_CJTASK");
     ScheduleHandle scheduler = nullptr;
     if (ThreadLocal::GetForeignCJThread() == nullptr) {
@@ -536,7 +535,6 @@ static void FiniAndFreeFinalizerScheduler(ScheduleHandle scheduler)
 
 void* NewFinalizerCJThread()
 {
-    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
     // prepare foreign scheduler
     ScheduleHandle scheduler = nullptr;
     auto runtime = reinterpret_cast<MapleRuntime::CangjieRuntime*>(&MapleRuntime::Runtime::Current());

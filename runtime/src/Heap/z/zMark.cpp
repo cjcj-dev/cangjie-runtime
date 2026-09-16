@@ -1486,12 +1486,18 @@ void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
             }
             // Discovery is not keep-alive (zReferenceProcessor.cpp:175-203):
             // do not turn a weak referent into an export ownership edge.
-            HeapIterator::Fields(object, false, [&](BaseObject* holder, RefField<>& field) {
-                BaseObject* target = GetAndTryTagObj(RefSlotKind::STRONG, holder, field);
+            const uintptr_t referent = reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE;
+            auto fields = [&](RefField<>& field) {
+                if (object->IsWeakRef() && reinterpret_cast<uintptr_t>(&field) == referent) {
+                    return;
+                }
+                BaseObject* target = GetAndTryTagObj(RefSlotKind::STRONG, object, field);
                 if (target != nullptr) {
                     pending.push_back(target);
                 }
-            });
+            };
+            ZBasicOopIterateClosure<decltype(fields)> closure(fields);
+            ZIterator::oop_iterate(object, &closure);
         }
     }
 }

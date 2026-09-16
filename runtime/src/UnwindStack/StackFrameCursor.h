@@ -33,6 +33,13 @@ public:
     {
         return Done() ? nullptr : &frames[index];
     }
+    void Advance()
+    {
+        if (!Done()) {
+            ++index;
+        }
+    }
+    RegSlotsMap& RegMap() { return regSlotsMap; }
 
     // Process exactly one frame (barrier-frame or stub bookkeeping), advance cursor.
     // Returns false when already done.

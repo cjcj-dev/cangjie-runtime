@@ -44,8 +44,6 @@ public:
     void object_iterate(const ObjectVisitor& objectVisitor, uint32_t worker_id);
     void object_and_field_iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor& fieldVisitor,
                                   uint32_t worker_id);
-    static void Fields(BaseObject* object, bool visitReferents, const FieldVisitor& visitor);
-
     void push_strong_roots(const HeapIteratorContext& context);
     void push_weak_roots(const HeapIteratorContext& context);
     void drain(const HeapIteratorContext& context);

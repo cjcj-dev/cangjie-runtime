@@ -232,7 +232,6 @@ public:
     EpochHandshakeStats RunEpochHandshake(const char* source, bool young);
     void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
     void RecordEpochHandshakeStackScan(bool scanned, size_t frames);
-    void RecordEpochHandshakeCreateAttempt();
     // dynjoin (乙): create during active epoch marks mutator born-clean for that
     // epoch (completion=active, state=ACKNOWLEDGED) and excludes it from the wait
     // set. OpenJDK handshake.cpp:293-295: new ThreadsList members have no op.

@@ -763,7 +763,7 @@ bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRoo
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
     MarkStripeSet& stripes = majorMarkDomain->Stripes();
-    ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
+    ScopedStopTheWorld stw("old mark end", true);
     ZVerify::BeforeZOperation();
     NoteMarkTerminatePause();
     const size_t before = stripes.Population();

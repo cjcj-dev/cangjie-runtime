@@ -213,7 +213,7 @@ void ZVerify::threads_start_processing()
     RootVisitor noop = [](ObjectRef&) {};
     threads.Apply([&](Mutator& mutator) {
         size_t frames = 0;
-        (void)mutator.DrainStackWatermark(noop, noop, epoch, nullptr, frames, false);
+        (void)StackWatermarkSet::finish_processing(mutator, noop, noop, epoch, nullptr, frames);
     });
 }
 

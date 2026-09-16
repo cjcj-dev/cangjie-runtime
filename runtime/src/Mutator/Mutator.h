@@ -38,6 +38,7 @@ class BaseObject;
 
 class Mutator {
     friend class StackWatermark;
+    friend class StackWatermarkSet;
 public:
     // flag which indicates the reason why mutator should suspend. flag is set by some external thread.
     enum SuspensionType : uint32_t {
@@ -387,9 +388,8 @@ public:
 
     bool GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
-    bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
-                             uint64_t epoch, const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames,
-                             bool young);
+    AllocBuffer* GetAllocBuffer() const { return foreignThreadInfo.allocBuffer; }
+    void SetAllocBuffer(AllocBuffer* buffer) { foreignThreadInfo.allocBuffer = buffer; }
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
@@ -723,6 +723,7 @@ private:
 public:
     StackWatermark& GetStackWatermark() { return stackWatermark; }
     const StackWatermark& GetStackWatermark() const { return stackWatermark; }
+    friend class StackWatermarkSet;
 
 #ifdef INTERPRETER_ENABLED
     void InitInterpreterPart();

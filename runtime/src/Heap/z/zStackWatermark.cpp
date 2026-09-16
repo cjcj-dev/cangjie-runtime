@@ -8,7 +8,6 @@
 #include "Heap/z/zThreadLocalData.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.h"
-#include "Mutator/ThreadLocal.h"
 #include "UnwindStack/StackFrameCursor.h"
 
 namespace MapleRuntime {
@@ -93,7 +92,7 @@ bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint
     }
     process_head(mutator, context, visitor, invisibleRootVisitor);
     mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
-    AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
+    AllocBuffer* buffer = mutator.GetAllocBuffer();
     if (buffer != nullptr) {
         const bool youngMark = Heap::GetHeap().GetGCPhase(GCCycleGeneration::YOUNG) == GCPhase::GC_PHASE_ENUM ||
             Heap::GetHeap().GetGCPhase(GCCycleGeneration::YOUNG) == GCPhase::GC_PHASE_TRACE;
@@ -111,13 +110,52 @@ bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint
 }
 
 void StackWatermark::process(const FrameInfo& frame, Mutator& mutator, void* context, const RootVisitor& visitor,
-                             const DerivedPtrVisitor* derivedPtrVisitor)
+                             const DerivedPtrVisitor* derivedPtrVisitor, RegSlotsMap& regSlotsMap)
 {
-    (void)frame;
-    (void)mutator;
+    StackFrameCursor::ProcessFrame(frame, regSlotsMap, visitor, mutator, derivedPtrVisitor, false);
     (void)context;
-    (void)visitor;
-    (void)derivedPtrVisitor;
+}
+
+bool StackWatermarkSet::finish_processing(Mutator& mutator, const RootVisitor& visitor,
+                                          const RootVisitor& invisibleRootVisitor, uint64_t epoch,
+                                          const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames,
+                                          void* context)
+{
+    scannedFrames = 0;
+    mutator.MutatorLock();
+    if (mutator.stackWatermark.IsDone(epoch)) {
+        mutator.MutatorUnlock();
+        return true;
+    }
+    if (!mutator.IsManagedContext()) {
+        bool began = mutator.stackWatermark.start_processing_impl(mutator, context, epoch, 0, visitor,
+                                                                  invisibleRootVisitor);
+        if (began) {
+            mutator.stackWatermark.finish_processing();
+        }
+        mutator.MutatorUnlock();
+        return began;
+    }
+    mutator.IncObserver();
+    StackFrameCursor cursor(mutator.uwContext);
+    bool began = mutator.stackWatermark.start_processing_impl(mutator, context, epoch, cursor.FrameCount(), visitor,
+                                                              invisibleRootVisitor);
+    if (began) {
+        while (!cursor.Done()) {
+            const FrameInfo* frame = cursor.CurrentFrame();
+            if (frame != nullptr) {
+                mutator.stackWatermark.process(*frame, mutator, context, visitor, derivedPtrVisitor,
+                                               cursor.RegMap());
+            }
+            cursor.Advance();
+            mutator.stackWatermark.AdvanceTo(cursor.Cursor());
+        }
+        scannedFrames = cursor.Cursor();
+        mutator.stackWatermark.finish_processing();
+    }
+    mutator.DecObserver();
+    mutator.MutatorUnlock();
+    return began;
 }
 
 } // namespace MapleRuntime

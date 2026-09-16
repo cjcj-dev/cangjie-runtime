@@ -112,6 +112,7 @@ void MutatorManager::BindMutator(Mutator& mutator) const
     }
     MutatorManager::Instance().RegisterMarkFlushThread(tlData);
     tlData->SetMutator(&mutator);
+    mutator.SetAllocBuffer(tlData->buffer);
     UpdatePollValues(tlData);
 }
 
@@ -125,7 +126,6 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
 
 Mutator* MutatorManager::CreateMutator()
 {
-    RecordEpochHandshakeCreateAttempt();
     Mutator* mutator = ConcurrencyModel::GetMutator();
     if (mutator == nullptr) {
         mutator = new (std::nothrow) Mutator();
@@ -201,7 +201,6 @@ void MutatorManager::DestroyMutator(Mutator* mutator)
 
 Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
 {
-    RecordEpochHandshakeCreateAttempt();
     // Because TSAN tool can't identify the RwLock implemented by ourselves,
     // we use a global instance fpMutatorInstance instead of an instance created on
     // heap in order to prevent false positives.
@@ -354,13 +353,6 @@ void MutatorManager::RecordEpochHandshakeStackScan(bool scanned, size_t frames)
         epochHandshakeStackScanned.fetch_add(1, std::memory_order_relaxed);
     } else {
         epochHandshakeStackFallback.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-void MutatorManager::RecordEpochHandshakeCreateAttempt()
-{
-    if (epochHandshakeActive.load(std::memory_order_acquire) != 0) {
-        epochHandshakeDeferredCreates.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

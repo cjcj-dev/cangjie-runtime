@@ -932,54 +932,6 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
     }
 }
 
-bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
-                                  uint64_t epoch, const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames,
-                                  bool young)
-{
-    scannedFrames = 0;
-    MutatorLock();
-    const RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
-    if (stackWatermark.IsDone(epoch)) {
-        MutatorUnlock();
-        return true;
-    }
-    if (!IsManagedContext()) {
-        bool began = stackWatermark.start_processing_impl(*this, nullptr, epoch, 0, visitor,
-                                                          visitedInvisibleRootVisitor);
-        if (began) {
-            stackWatermark.finish_processing();
-        }
-        MutatorUnlock();
-        return began;
-    }
-    if (GetStackTopAddr() == 0 || GetStackSize() == 0) {
-        MutatorUnlock();
-        return false;
-    }
-
-    IncObserver();
-    StackFrameCursor cursor(uwContext);
-    bool began = stackWatermark.start_processing_impl(*this, nullptr, epoch, cursor.FrameCount(), visitor,
-                                                      visitedInvisibleRootVisitor);
-    if (began) {
-        while (!cursor.Done()) {
-            const FrameInfo* frame = cursor.CurrentFrame();
-            if (frame != nullptr) {
-                stackWatermark.process(*frame, *this, nullptr, visitor, derivedPtrVisitor);
-            }
-            if (!cursor.ProcessOne(visitor, *this, derivedPtrVisitor, young)) {
-                break;
-            }
-            stackWatermark.AdvanceTo(cursor.Cursor());
-        }
-        scannedFrames = cursor.Cursor();
-        stackWatermark.finish_processing();
-    }
-    DecObserver();
-    MutatorUnlock();
-    return began;
-}
-
 bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
     MutatorLock();
@@ -988,42 +940,10 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
     }
     MutatorUnlock();
-    std::set<BaseObject*> rootSet;
-    std::stack<BaseObject*> rootStack;
-    HeapSlotVisitor refVisitor = [&rootSet, &rootStack, this, young](HeapSlot<>& refFieldAddr) {
-        // The containing object is stack allocated, so metadata exposes this word as a root slot.
-        RootSlot& rootField = RootSlotAt(
-            static_cast<void*>(&refFieldAddr)); // Stack-object field metadata denotes a root word.
-        BaseObject* obj = PlainRootObject(rootField.LoadPlain());
-        if (PushHeapRoot(rootField, young)) {
-
-            DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
-        } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            if (IsHeaderedStackObject(obj)) {
-                CheckAndPush(obj, rootSet, rootStack);
-            } else {
-                PushHeaderlessRecordField(obj, "GcPhaseEnum.ref.headerless", young);
-            }
-        }
-    };
-
-    RootVisitor visitor = [&rootSet, &rootStack, this, &refVisitor, young](ObjectRef& root) {
-        BaseObject* obj = PlainRootObject(root.LoadPlain());
-        if (PushHeapRoot(root, young)) {
-
-            DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
-        } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            if (IsHeaderedStackObject(obj)) {
-                CheckAndPush(obj, rootSet, rootStack);
-            } else {
-                PushHeaderlessRecordField(obj, "GcPhaseEnum.root.headerless", young);
-            }
-        }
-        while (!rootStack.empty()) {
-            BaseObject* obj = rootStack.top();
-            rootStack.pop();
-            obj->ForEachRefField(refVisitor);
-        }
+    RootVisitor visitor = [this, young](ObjectRef& root) {
+        VisitHeapRootSlots(root, [young](ObjectRef& slot) {
+            (void)PushHeapRoot(slot, young);
+        });
     };
     RootVisitor invisibleRootVisitor = [young](ObjectRef& root) {
         (void)PushHeapRoot(root, young, false);
@@ -1033,20 +953,10 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
         VisitHeapReferences(visitor, visitor, derivedVisitor, visitor, invisibleRootVisitor, young);
         return true;
     }
-    // The concurrent stack-scan leg now carries the same derived visitor as the
-    // non-epoch leg above. It used to take a RootVisitor only, so stack-map
-    // base/derived pairs were dropped and an object reachable only through an
-    // interior pointer would not be marked -- introot's hang, where an array whose
-    // only root was RawArray+8 went unmarked and its region was reclaimed under it.
-    // ZGC marks base and derived together in the oopmap walk (zMark.cpp:691-692
-    // ZUncoloredRoot::mark).
-    //
-    // The required epoch handshake always carries the stack traversal; young
-    // and old marking share this stack-watermark path.
     size_t frames = 0;
     (void)bySelf;
-    bool scanned = DrainStackWatermark(
-        visitor, invisibleRootVisitor, stackScanEpoch, &derivedVisitor, frames, young);
+    bool scanned = StackWatermarkSet::finish_processing(*this, visitor, invisibleRootVisitor, stackScanEpoch,
+                                                        &derivedVisitor, frames);
     if (scannedFrames != nullptr) {
         *scannedFrames = frames;
     }
@@ -1149,8 +1059,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     ForwardLocalFinalizers(collector);
     size_t frames = 0;
     const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
-    if (!DrainStackWatermark(visitor, visitor, epoch, &derivedPtrVisitor, frames, false)) {
-        // Complete under the phase handshake before publishing mutatorPhase.
+    if (!StackWatermarkSet::finish_processing(*this, visitor, visitor, epoch, &derivedPtrVisitor, frames)) {
         VisitHeapReferences(visitor, derivedPtrVisitor);
     }
 }

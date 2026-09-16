@@ -4,6 +4,7 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include <algorithm>
@@ -93,10 +94,14 @@ void HeapIterator::Push(BaseObject* object, const ObjectVisitor& objectVisitor)
     context.push(object);
 }
 
-void HeapIterator::Fields(BaseObject* object, bool visitReferents, const FieldVisitor& visitor)
+void HeapIterator::Follow(BaseObject* object, const FieldVisitor& visitor)
 {
+    if (object->GetTypeInfo()->IsRawArray() && object->GetComponentTypeInfo()->IsRef()) {
+        FollowArray(static_cast<MArray*>(object));
+        return;
+    }
     const uintptr_t referent = reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE;
-    if (object->IsWeakRef() && visitReferents) {
+    if (object->IsWeakRef() && visitWeaks) {
         visitor(object, HeapSlotAt<>(referent));
     }
     auto fields = [&](RefField<>& field) {
@@ -107,15 +112,6 @@ void HeapIterator::Fields(BaseObject* object, bool visitReferents, const FieldVi
     };
     ZBasicOopIterateClosure<decltype(fields)> closure(fields);
     ZIterator::oop_iterate(object, &closure);
-}
-
-void HeapIterator::Follow(BaseObject* object, const FieldVisitor& visitor)
-{
-    if (object->GetTypeInfo()->IsRawArray() && object->GetComponentTypeInfo()->IsRef()) {
-        FollowArray(static_cast<MArray*>(object));
-    } else {
-        Fields(object, visitWeaks, visitor);
-    }
 }
 
 void HeapIterator::FollowArray(MArray* object)
@@ -143,7 +139,13 @@ void HeapIterator::ColoredRootOopClosure<Weak>::do_root(NativeSlot& root)
     if (context.fieldVisitor != nullptr && *context.fieldVisitor) {
         (*context.fieldVisitor)(nullptr, &root, raw(root.GetFieldValue()));
     }
-    BaseObject* object = Weak ? ZBarrier::ReadStaticRef(root) : ZBarrier::ReadStaticRef(root);
+    BaseObject* object = nullptr;
+    if constexpr (Weak) {
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+        object = to_object(safe(*reinterpret_cast<zaddress_unsafe*>(&root)));
+    } else {
+        object = ZBarrier::ReadStaticRef(root);
+    }
     context.push(object);
 }
 

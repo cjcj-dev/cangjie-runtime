@@ -83,7 +83,7 @@ public:
     bool start_processing_impl(Mutator& mutator, void* context, uint64_t epoch, size_t totalFrames,
                                const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor);
     void process(const FrameInfo& frame, Mutator& mutator, void* context, const RootVisitor& visitor,
-                 const DerivedPtrVisitor* derivedPtrVisitor);
+                 const DerivedPtrVisitor* derivedPtrVisitor, RegSlotsMap& regSlotsMap);
     ThreadLocalAllocStats& stats() { return allocStats; }
 
 private:
@@ -93,6 +93,14 @@ private:
     std::atomic<uint64_t> stackGeneration;
     ThreadLocalAllocStats allocStats;
 };
+class StackWatermarkSet {
+public:
+    static bool finish_processing(Mutator& mutator, const RootVisitor& visitor,
+                                  const RootVisitor& invisibleRootVisitor, uint64_t epoch,
+                                  const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames,
+                                  void* context = nullptr);
+};
+
 } // namespace MapleRuntime
 
 #endif
