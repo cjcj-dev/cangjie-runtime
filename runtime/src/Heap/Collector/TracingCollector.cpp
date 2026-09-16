@@ -178,7 +178,7 @@ void TracingCollector::DumpRoots(LogType logType)
             return;
         }
         // StaticRootTable keeps the referent live while DumpRoots inspects it.
-        auto obj = Heap::GetBarrier().ReadStaticRef(ref);
+        auto obj = ZBarrier::ReadStaticRef(ref);
         if (obj == nullptr) {
             return;
         }

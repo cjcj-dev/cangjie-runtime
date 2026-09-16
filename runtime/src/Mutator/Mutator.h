@@ -84,6 +84,7 @@ public:
     // Called when a mutator starts and finishes, respectively.
     void Init()
     {
+        gcData.Attach(this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
         observerCnt = 0;
         mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
@@ -100,6 +101,9 @@ public:
 
     ~Mutator()
     {
+        // Wait for target inventory users while the lock and roots are still
+        // alive, before any Mutator member destruction can begin.
+        gcData.Detach();
         tid = 0;
         stackBoundAddr = nullptr;
 
@@ -117,6 +121,8 @@ public:
         return mutator;
     }
 
+    ThreadGCData& GetGCData() { return gcData; }
+    const ThreadGCData& GetGCData() const { return gcData; }
     void ResetMutator();
 
     static Mutator* GetMutator() noexcept;
@@ -620,12 +626,8 @@ public:
         if (rememberedSet == nullptr) {
             rememberedSet = &Heap::GetHeap().GetRememberedSet();
         }
-        // Other OS threads are flushed by the handshake owner inventory.
-        if (flushStoreBarrier && Mutator::GetMutator() == this) {
-            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-            if (tls->gcData != nullptr && rememberedSet->IsInitialized()) {
-                tls->gcData->storeBarrierBuffer.Flush(*rememberedSet);
-            }
+        if (flushStoreBarrier && rememberedSet->IsInitialized()) {
+            gcData.storeBarrierBuffer->Flush();
         }
     }
 
@@ -676,6 +678,7 @@ private:
     // Indicate the state of mutator's phase transition
     std::atomic<GCPhaseTransitionState> transitionState = { NO_TRANSITION };
     ObjectRef rawObject{};
+    ThreadGCData gcData;
     std::list<ObjectRef> nativeFrameRoots;
 
     NativeRootHandles localFinalizers;

@@ -8,6 +8,7 @@ set(SRC_LIST
     "z/zHeap.cpp"
     "z/zInitialize.cpp"
     "z/zGlobals.cpp"
+    "z/zThreadLocalData.cpp"
     "z/workerThread.cpp"
     "z/zTask.cpp"
     "z/zWorkers.cpp"
@@ -18,6 +19,13 @@ set(SRC_LIST
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+if (WINDOWS_FLAG MATCHES 1)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/windows)
+elseif (MACOS_FLAG MATCHES 1)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/bsd)
+else()
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/linux)
+endif()
 add_subdirectory(Allocator)
 add_subdirectory(Barrier)
 add_subdirectory(Collector)

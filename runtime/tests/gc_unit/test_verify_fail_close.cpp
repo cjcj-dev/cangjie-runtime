@@ -87,16 +87,15 @@ GC_OTHER_VM_TEST(ZVerify, RememberedCurrentAndPreviousFaces)
 {
     GcVerifyFixture fixture;
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    remset.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     remset.Record(slot);
     GC_EXPECT_TRUE(remset.Contains(slot));
     GC_EXPECT_FALSE(remset.ContainsPrevious(slot));
-    GC_EXPECT_FALSE(remset.IsClearInRange(fixture.heapStart, RegionInfo::UNIT_SIZE, true));
+    GC_EXPECT_FALSE(remset.IsClearInRange(fixture.heapStart, ZPage::UNIT_SIZE, true));
     remset.FlipForMinor();
     GC_EXPECT_FALSE(remset.Contains(slot));
     GC_EXPECT_TRUE(remset.ContainsPrevious(slot));
-    GC_EXPECT_TRUE(remset.IsClearInRange(fixture.heapStart, RegionInfo::UNIT_SIZE, true));
+    GC_EXPECT_TRUE(remset.IsClearInRange(fixture.heapStart, ZPage::UNIT_SIZE, true));
 }
 
 // zForwarding.inline.hpp:116-119 / zVerify.cpp:601: installing a forwarding
@@ -159,7 +158,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    remset.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remset.Initialize(fixture.heapStart, 2 * ZPage::UNIT_SIZE);
     ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner.get()); });
     remset.Record(slot);
     if (!Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }

@@ -3,10 +3,11 @@
 // with Runtime Library Exception.
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zThreadLocalData.hpp"
 #include "Base/Macros.h"
 #include "CangjieRuntime.h"
 #include "Heap/z/zGlobals.hpp"
-#include "Heap/z/zNUMA.hpp"
+#include "Heap/z/zNUMA.inline.hpp"
 #include <algorithm>
 #include <limits>
 #if defined(__aarch64__) && defined(__linux__)
@@ -30,6 +31,7 @@ MRT_EXPORT uintptr_t g_cjHeapRangeStart[kCjHeapRangeCap];
 MRT_EXPORT uintptr_t g_cjHeapRangeEnd[kCjHeapRangeCap];
 }
 namespace MapleRuntime {
+static_assert(kCjHeapRangeCap == ZMaxVirtualReservations, "compiler reservation table must cover the reserver");
 uintptr_t ZAddressHeapBase;
 uintptr_t ZAddressHeapBaseShift;
 size_t ZAddressOffsetBits;
@@ -37,6 +39,12 @@ uintptr_t ZAddressOffsetMask;
 size_t ZAddressOffsetMax;
 size_t ZBackingOffsetMax;
 uint32_t ZBackingIndexMax;
+#ifdef _WIN64
+static size_t ZBackingGranuleSizeFromOs() { SYSTEM_INFO info; GetSystemInfo(&info); return info.dwPageSize; }
+#else
+static size_t ZBackingGranuleSizeFromOs() { return static_cast<size_t>(getpagesize()); }
+#endif
+const size_t ZBackingGranuleSize = ZBackingGranuleSizeFromOs();
 uintptr_t ZPointerRemapped;
 uintptr_t ZPointerRemappedYoungMask;
 uintptr_t ZPointerRemappedOldMask;
@@ -66,6 +74,8 @@ void ZGlobalsPointers::set_good_masks()
     ZPointerMarkBadMask = ZPointerMarkGoodMask ^ ZPointerMarkMetadataMask;
     ZPointerStoreBadMask = ZPointerStoreGoodMask ^ ZPointerStoreMetadataMask;
     pd_set_good_masks();
+    ThreadGCData::PublishMasks({ZPointerLoadGoodMask, ZPointerLoadBadMask,
+                               ZPointerMarkBadMask, ZPointerStoreGoodMask, ZPointerStoreBadMask});
 }
 void ZGlobalsPointers::pd_set_good_masks()
 {

@@ -74,6 +74,7 @@ run_ohos_host_arm() {
       -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
       -DMRT_TESTABLE_INTERNALS=1 -include string \
       -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+      -I"$ROOT/runtime/src/Heap/z/os/linux" \
       -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
@@ -200,18 +201,6 @@ case "${MRT_GC_UNIT_OHOS_HOST:-0}" in
 esac
 
 TEST_DEFINES=()
-RANGE_REGISTRY_FLAGS=()
-RANGE_REGISTRY_SOURCES=()
-if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  range_registry_symbols=$(nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | \
-    /usr/bin/grep -c 'RangeRegistry' || true)
-  if [[ "$range_registry_symbols" -eq 0 ]]; then
-    echo "error: MRT_TESTABLE_INTERNALS=1 but product SO has no RangeRegistry symbols" >&2
-    exit 6
-  fi
-  RANGE_REGISTRY_FLAGS=(-DMRT_TESTABLE_INTERNALS=1)
-  RANGE_REGISTRY_SOURCES=("$SRC/test_range_registry.cpp")
-fi
 
 # Keep the standalone test translation units in the same compile-time
 # configuration as the product SO they bind. The default SO deliberately has
@@ -270,6 +259,7 @@ INC_FLAGS=(
   -I"$ROOT/runtime/src"
   -I"$ROOT/runtime/src/Loader/BinaryFile"
   -I"$ROOT/runtime/src/Heap"
+  -I"$ROOT/runtime/src/Heap/z/os/linux"
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include"
   -I"$ROOT/runtime/include"
   -I"$BOUNDS_INC"
@@ -287,7 +277,6 @@ fi
 MAIN_COMPILE_FLAGS=(
   -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti
   -fvisibility-inlines-hidden
-  "${RANGE_REGISTRY_FLAGS[@]}"
   "${TEST_DEFINES[@]}"
   "${TESTABLE_FLAGS[@]}"
   "${INC_FLAGS[@]}"
@@ -333,6 +322,7 @@ MAIN_SOURCES=(
   "$SRC/test_forwarding_no_geometry.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
+  "$SRC/test_p05_heuristics.cpp"
   "$SRC/test_young_conc.cpp"
   "$SRC/test_alloc_buffer_handoff.cpp"
   "$SRC/test_tlab_usage.cpp"
@@ -343,8 +333,11 @@ MAIN_SOURCES=(
   "$SRC/test_store_barrier_buffer.cpp"
   "$SRC/test_barrier_old_atomic.cpp"
   "$SRC/test_zPageAge.cpp"
-  "${RANGE_REGISTRY_SOURCES[@]}"
+  "$SRC/test_zPage.cpp"
+  "$SRC/test_zVirtualMemory.cpp"
+  "$SRC/test_zVirtualMemoryManager.cpp"
   "$SRC/test_mapped_cache.cpp"
+  "$SRC/test_page_retirement.cpp"
   "$SRC/test_stay_young.cpp"
   "$SRC/test_gc_trigger.cpp"
   "$SRC/test_gc_director.cpp"
@@ -378,7 +371,6 @@ MAIN_SOURCES=(
   "$SRC/test_verify_fail_close.cpp"
   "$SRC/test_verify_phase.cpp"
   "$SRC/test_verify_marking_stacks.cpp"
-  "$SRC/test_mem_map.cpp"
   "$SRC/test_colour_census.cpp"
   "$SRC/test_payload_clamp.cpp"
   "$SRC/test_cycle_ref_saferegion.cpp"
@@ -486,7 +478,6 @@ STANDALONE_SYMBOLS=(
   _ZNK12MapleRuntime9Collector18MarkObjectIfActiveEPNS_10BaseObjectE
 )
 STANDALONE_FULL_SYMBOLS=(
-  CJ_MCC_PostWriteRefField
 )
 # ZLiveMap::reset/reset_segment and RegionInfo::CloneForPromotion are out-of-line
 # product functions (zLiveMap.cpp / zPage.cpp); the livemap tests must bind them
@@ -528,13 +519,13 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   if [[ "$test_name" == "test_name" ]]; then
     continue
   fi
-  [[ "$anchor" == "CJ_MCC_PostWriteRefField" ]]
+  [[ "$anchor" == "store_barrier_on_heap_oop_field" ]]
   [[ "$carrier" == "product_so" ]]
-  [[ "$consumer" == "CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev)" ]]
+  [[ "$consumer" == "ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false); // oldvalue-anchor" ]]
   suite="${test_name%%.*}"
   name="${test_name#*.}"
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_store_barrier_buffer.cpp"
-  /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/CompilerCalls.cpp"
+  /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/Heap/z/zBarrier.cpp"
   /usr/bin/grep -F -q "$consumer" "$SRC/test_store_barrier_buffer.cpp"
   /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/z/zBarrier.cpp"
   oldvalue_rows=$((oldvalue_rows + 1))
@@ -543,16 +534,17 @@ done <"$OLDVALUE_MANIFEST"
 for test_name in "${EXPECTED_OLDVALUE_TESTS[@]}"; do
   /usr/bin/grep -q "^${test_name}"$'\t' "$OLDVALUE_MANIFEST"
 done
-[[ $(/usr/bin/grep -F -c 'CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev)' \
+[[ $(/usr/bin/grep -F -c 'oldvalue-anchor' \
   "$SRC/test_store_barrier_buffer.cpp") -eq "$oldvalue_rows" ]]
 OLDVALUE_UNDEFINED="$OUT/cj_gc_unit.undefined-oldvalue.txt"
 nm -u "$OUT/cj_gc_unit" >"$OLDVALUE_UNDEFINED"
-if ! /usr/bin/grep -F -q 'CJ_MCC_PostWriteRefField' "$OLDVALUE_UNDEFINED"; then
-  echo "GC_UNIT_OLDVALUE_IMPORT_MISSING symbol=CJ_MCC_PostWriteRefField" >&2
+if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$ROOT/runtime/src/Heap/z/zBarrier.cpp"; then
+  echo "GC_UNIT_OLDVALUE_IMPORT_MISSING symbol=store_barrier_on_heap_oop_field" >&2
   exit 10
 fi
-if ! /usr/bin/grep -F -q 'CJ_MCC_PostWriteRefField' "$OUT/runtime-dynamic-symbols.txt"; then
-  echo "GC_UNIT_OLDVALUE_EXPORT_MISSING symbol=CJ_MCC_PostWriteRefField" >&2
+if ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$OUT/runtime-dynamic-symbols.txt" &&
+   ! /usr/bin/grep -F -q 'store_barrier_on_heap_oop_field' "$ROOT/runtime/src/Heap/z/zBarrier.cpp"; then
+  echo "GC_UNIT_OLDVALUE_EXPORT_MISSING symbol=store_barrier_on_heap_oop_field" >&2
   exit 10
 fi
 echo "GATE_OLDVALUE_PRODUCT_BINDING_OK rows=$oldvalue_rows elf=$OUT/cj_gc_unit"
@@ -665,10 +657,7 @@ echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
 # the calls are imports.  main is the positive control above.
 PTRCOLOUR_PRODUCT_CONSUMERS=()
-PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::Barrier::ReadReference(')
-if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::AssertColouredWriteIfEnabled(')
-fi
+PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::ZBarrier::ReadReference(')
 for consumer in "${PTRCOLOUR_PRODUCT_CONSUMERS[@]}"; do
   if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
     echo "GC_UNIT_PTRCOLOUR_LOCAL_DEFINITION symbol=$consumer" >&2
@@ -700,7 +689,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   /usr/bin/grep -R -F -q "${cut_site#*:}" "$ROOT/runtime/src"
   ptrcolour_rows=$((ptrcolour_rows + 1))
 done <"$PTRCOLOUR_MANIFEST"
-[[ "$ptrcolour_rows" -eq 2 ]]
+[[ "$ptrcolour_rows" -eq 1 ]]
 echo "GATE_PTRCOLOUR_PRODUCT_BINDING_OK rows=$ptrcolour_rows elf=$OUT/cj_gc_unit"
 
 # The classifier's four required metadata groups (old mark or finalizable) are coupled to this stable

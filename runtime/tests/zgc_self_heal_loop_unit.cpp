@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// Positive control for the ported OpenJDK ZBarrier::self_heal loop
+// Positive control for the ported OpenJDK ZZBarrier::self_heal loop
 // (ObjectModel/RefField.h, from zBarrier.inline.hpp:72-110).
 //
 // Why this exists: survival_dense exercises the port 56 times per run and every
@@ -27,11 +27,32 @@
 
 #include "ObjectModel/RefField.h"
 
-using MapleRuntime::HealSite;
 using MapleRuntime::HeapSlotAt;
 using MapleRuntime::MAddress;
 using MapleRuntime::raw;
 using MapleRuntime::zpointer;
+
+template<typename FastPath>
+void ProbeSelfHeal(MapleRuntime::HeapSlot<false>& slot, zpointer ptr, zpointer healPtr, FastPath fast_path,
+                   bool allow_null)
+{
+    if (!allow_null && MapleRuntime::is_null_any(healPtr) && !MapleRuntime::is_null_any(ptr)) {
+        return;
+    }
+    if (fast_path(ptr) || !fast_path(healPtr)) {
+        return;
+    }
+    for (;;) {
+        zpointer prev = zpointer::null;
+        if (slot.CompareExchange(ptr, healPtr, std::memory_order_relaxed, std::memory_order_relaxed, &prev)) {
+            return;
+        }
+        if (fast_path(prev)) {
+            return;
+        }
+        ptr = prev;
+    }
+}
 
 namespace {
 
@@ -90,9 +111,9 @@ private:
 void CaseUncontended()
 {
     MAddress word = kPtr;
-    MapleRuntime::ZgcSelfHeal(HeapSlotAt<false>(&word), MapleRuntime::to_zpointer(kPtr),
-                              MapleRuntime::to_zpointer(kHeal),
-                              ScriptedFastPath(&word, 0, 0), HealSite::TraceReadReference);
+    auto slot = HeapSlotAt<false>(&word);
+    ProbeSelfHeal(slot, MapleRuntime::to_zpointer(kPtr), MapleRuntime::to_zpointer(kHeal),
+                  ScriptedFastPath(&word, 0, 0), false);
     Expect("uncontended -> healed", word, kHeal);
 }
 
@@ -102,9 +123,9 @@ void CaseUncontended()
 void CaseLostCasThenUpgrade()
 {
     MAddress word = kOther1;
-    MapleRuntime::ZgcSelfHeal(HeapSlotAt<false>(&word), MapleRuntime::to_zpointer(kPtr),
-                              MapleRuntime::to_zpointer(kHeal),
-                              ScriptedFastPath(&word, 0, kOther2), HealSite::TraceReadReference);
+    auto slot = HeapSlotAt<false>(&word);
+    ProbeSelfHeal(slot, MapleRuntime::to_zpointer(kPtr), MapleRuntime::to_zpointer(kHeal),
+                  ScriptedFastPath(&word, 0, kOther2), false);
     // Two lost CASes (kOther1 then kOther2), then the third lands. The point is not
     // that it retried -- it is that the slot ends on the heal value rather than on
     // whatever the other writer left.
@@ -117,9 +138,9 @@ void CaseLostCasThenUpgrade()
 void CaseFastPathExit()
 {
     MAddress word = kOther1;
-    MapleRuntime::ZgcSelfHeal(HeapSlotAt<false>(&word), MapleRuntime::to_zpointer(kPtr),
-                              MapleRuntime::to_zpointer(kHeal),
-                              ScriptedFastPath(&word, kOther1, 0), HealSite::TraceReadReference);
+    auto slot = HeapSlotAt<false>(&word);
+    ProbeSelfHeal(slot, MapleRuntime::to_zpointer(kPtr), MapleRuntime::to_zpointer(kHeal),
+                  ScriptedFastPath(&word, kOther1, 0), false);
     Expect("fast-path prev -> no write", word, kOther1);
 }
 
@@ -127,9 +148,8 @@ void CaseFastPathExit()
 void CaseNullHealRefused()
 {
     MAddress word = kPtr;
-    MapleRuntime::ZgcSelfHeal(HeapSlotAt<false>(&word), MapleRuntime::to_zpointer(kPtr),
-                              zpointer::null, ScriptedFastPath(&word, 0, 0),
-                              HealSite::TraceReadReference);
+    auto slot = HeapSlotAt<false>(&word);
+    ProbeSelfHeal(slot, MapleRuntime::to_zpointer(kPtr), zpointer::null, ScriptedFastPath(&word, 0, 0), false);
     Expect("null heal -> refused", word, kPtr);
 }
 

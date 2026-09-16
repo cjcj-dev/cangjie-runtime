@@ -13,6 +13,7 @@
 #include <vector>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "zunittest.hpp"
 #include "Heap/z/zCPU.inline.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zStat.hpp"
@@ -27,7 +28,7 @@ using namespace MapleRuntime::GcUnit;
 GC_OTHER_VM_TEST(SharedSmallPage, AtomicBoundsPreserveTop)
 {
     GcHeapFixture fixture;
-    RegionInfo* page = fixture.region0;
+    ZPage* page = fixture.region0;
     const uintptr_t start = page->GetRegionStart();
     page->SetRegionAllocPtr(start);
     const size_t capacity = page->GetRegionSize();
@@ -44,7 +45,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AtomicBoundsPreserveTop)
 GC_OTHER_VM_TEST(SharedSmallPage, AtomicReservationsDoNotOverlap)
 {
     GcHeapFixture fixture;
-    RegionInfo* page = fixture.region0;
+    ZPage* page = fixture.region0;
     page->SetRegionAllocPtr(page->GetRegionStart());
     constexpr size_t threads = 4;
     constexpr size_t perThread = 8;
@@ -77,22 +78,20 @@ namespace {
 // A synthetic, single-caller heap, using the product page allocator and page
 // table. There are no registered mutators; retire_pages has a quiescent world.
 struct SharedPageFixture {
-    MemMap* map;
+    // The RegionManager (mapped caches keep entries in heap memory) must be
+    // destroyed before the mapping: declare it last.
+    std::unique_ptr<ZTestRegionHeap> heap;
     RegionManager manager;
     SharedPageFixture()
     {
         // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
         constexpr size_t units = 64;
-        const size_t metadata = RegionManager::GetMetadataSize(units);
-        map = MemMap::MapMemory(metadata + units * RegionInfo::UNIT_SIZE, metadata);
-        GC_EXPECT_TRUE(map != nullptr);
         HeapParam params{};
-        params.regionSize = RegionInfo::UNIT_SIZE / KB;
+        params.regionSize = ZPage::UNIT_SIZE / KB;
         params.exemptionThreshold = 0.8;
-        manager.Initialize(units, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, params, 0.5);
+        heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
     }
-    ~SharedPageFixture() { MemMap::DestroyMemMap(map); }
 };
 
 class CPUAffinity {
@@ -136,11 +135,11 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     auto& manager = fixture.manager;
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    RegionInfo* pages[kPageAgeCount]{};
+    ZPage* pages[kPageAgeCount]{};
     for (PageAge age : kPageAgeRangeAll) {
         const uintptr_t address = manager.AllocSharedObject(16, age, true);
         GC_EXPECT_TRUE(address != 0);
-        RegionInfo* page = RegionInfo::GetRegionInfoAt(address);
+        ZPage* page = Heap::page(address);
         pages[untype(age)] = page;
         GC_EXPECT_EQ(page->BirthSequence(), page->GetSnapshotEpoch());
         GC_EXPECT_TRUE(page->IsAllocating());
@@ -154,36 +153,36 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
             GC_EXPECT_TRUE(pages[previous] != page);
         }
     }
-    RegionInfo* eden = pages[untype(PageAge::eden)];
+    ZPage* eden = pages[untype(PageAge::eden)];
     const size_t remaining = eden->GetRegionSize() - 32;
     GC_EXPECT_EQ(manager.AllocSharedObject(remaining, PageAge::eden, true), eden->GetRegionStart() + 32);
     const uintptr_t refilled = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(refilled != 0);
-    GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(refilled) != eden);
+    GC_EXPECT_TRUE(Heap::page(refilled) != eden);
     manager.RetireSharedPages(kPageAgeRangeYoung);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     const uintptr_t retired = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(retired != 0);
-    auto* retiredPage = RegionInfo::GetRegionInfoAt(retired);
+    auto* retiredPage = Heap::page(retired);
     std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=young birth=%llu owner=%llu\n",
         static_cast<unsigned long long>(retiredPage->BirthSequence()),
         static_cast<unsigned long long>(retiredPage->GetSnapshotEpoch()));
     GC_EXPECT_TRUE(retiredPage->IsAllocating());
-    GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(retired) != RegionInfo::GetRegionInfoAt(refilled));
-    RegionInfo* old = pages[untype(PageAge::old)];
+    GC_EXPECT_TRUE(Heap::page(retired) != Heap::page(refilled));
+    ZPage* old = pages[untype(PageAge::old)];
     GC_EXPECT_EQ(manager.AllocSharedObject(16, PageAge::old, true), old->GetRegionStart() + 32);
     GC_EXPECT_TRUE(old->IsAllocating());
     manager.RetireSharedPages(kPageAgeRangeOld);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     const uintptr_t newOld = manager.AllocSharedObject(16, PageAge::old, true);
     GC_EXPECT_TRUE(newOld != 0);
-    auto* newOldPage = RegionInfo::GetRegionInfoAt(newOld);
+    auto* newOldPage = Heap::page(newOld);
     std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=old birth=%llu owner=%llu\n",
         static_cast<unsigned long long>(newOldPage->BirthSequence()),
         static_cast<unsigned long long>(newOldPage->GetSnapshotEpoch()));
     GC_EXPECT_TRUE(newOldPage->IsAllocating());
     GC_EXPECT_TRUE(old->IsRelocatable());
-    GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(newOld) != old);
+    GC_EXPECT_TRUE(Heap::page(newOld) != old);
 }
 
 // ZHeap::account_alloc_page / is_small_eden_page (zHeap.cpp:229-237).
@@ -197,13 +196,13 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
         const uintptr_t address = manager.AllocSharedObject(16, age, true);
         GC_EXPECT_TRUE(address != 0);
         if (age == PageAge::eden) {
-            expected += RegionInfo::GetRegionInfoAt(address)->GetRegionSize();
+            expected += Heap::page(address)->GetRegionSize();
         }
     }
     const uintptr_t large = manager.AllocSharedObject(manager.GetLargeObjectThreshold() + 16,
                                                       PageAge::eden, true);
     GC_EXPECT_TRUE(large != 0);
-    GC_EXPECT_TRUE(!RegionInfo::GetRegionInfoAt(large)->IsSmallRegion());
+    GC_EXPECT_TRUE(!Heap::page(large)->IsSmallRegion());
     GC_EXPECT_TRUE(expected != 0);
     manager.ResetTLABUsage();
     GC_EXPECT_EQ(manager.GetTLABUsed(), expected);
@@ -230,7 +229,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
     GC_EXPECT_TRUE(manager.objectAllocators[untype(PageAge::eden)]->sharedSmallPage.get(static_cast<uint32_t>(cpuA)) ==
-                   RegionInfo::GetRegionInfoAt(first));
+                   Heap::page(first));
 
     affinity.Select(cpuB);
     // Fast path: the affinity entry for cpuA still names this thread.
@@ -252,8 +251,8 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     GC_EXPECT_EQ(ZCPU::id(), cpuB);
     const uintptr_t second = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(second != 0);
-    GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(first) != RegionInfo::GetRegionInfoAt(second));
+    GC_EXPECT_TRUE(Heap::page(first) != Heap::page(second));
     GC_EXPECT_TRUE(manager.objectAllocators[untype(PageAge::eden)]->sharedSmallPage.get(static_cast<uint32_t>(cpuB)) ==
-                   RegionInfo::GetRegionInfoAt(second));
+                   Heap::page(second));
 }
 #endif

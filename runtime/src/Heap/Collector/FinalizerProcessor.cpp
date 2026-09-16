@@ -33,7 +33,7 @@ static BaseObject* LoadFinalizerGood(NativeSlot& slot)
 {
     // FinalizerProcessor is part of the mutator set. Route this retained root through the public
     // runtime load exit so resolution, root healing and the fail-closed postcondition stay one path.
-    return Heap::GetBarrier().ReadStaticRef(slot);
+    return ZBarrier::ReadStaticRef(slot);
 }
 
 // Note: can only be called by FinalizerProcessor thread
@@ -384,7 +384,7 @@ void FinalizerProcessor::SetBeforeFinalizableIdleCheckForTest(BeforeFinalizableI
 void FinalizerProcessor::EnqueueFinalizableForTest(BaseObject* obj)
 {
     NativeSlot root(zpointer::null);
-    Heap::GetBarrier().WriteStaticRef(root, obj);
+    ZBarrier::WriteStaticRef(root, obj);
     {
         std::lock_guard<std::mutex> l(listLock);
         NativeSlot* slot = strongStorage.Allocate();
@@ -446,7 +446,7 @@ NativeSlot* FinalizerProcessor::AllocateFinalizerHandle(BaseObject* obj)
 {
     std::lock_guard<std::mutex> l(listLock);
     NativeSlot* slot = weakStorage.Allocate();
-    Heap::GetBarrier().WriteStaticRef(*slot, obj);
+    ZBarrier::WriteStaticRef(*slot, obj);
     return slot;
 }
 
@@ -454,7 +454,7 @@ void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
 {
     std::lock_guard<std::mutex> l(listLock);
     NativeSlot* slot = weakStorage.Allocate();
-    Heap::GetBarrier().WriteStaticRef(*slot, obj);
+    ZBarrier::WriteStaticRef(*slot, obj);
     finalizers.push_back(slot);
 }
 

@@ -11,8 +11,13 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <new>
+#include <sys/mman.h>
+
+#include "Base/Log.h"
 #include "Base/Panic.h"
-#include "Heap/z/zVirtualMemoryManager.hpp"
+#include "Base/SysCall.h"
+#include "Heap/Allocator/AllocUtil.h"
 
 #define DEBUG_DEQUE false
 #if DEBUG_DEQUE
@@ -22,6 +27,36 @@
 #endif
 
 namespace MapleRuntime {
+// Committed anonymous mapping backing the deques below. ZGC has no deque of
+// this kind; this is old-directory residue that leaves with CartesianTree.
+class DequeMapping {
+public:
+    static DequeMapping* MapMemory(size_t size, const char* tag)
+    {
+        void* base = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK_DETAIL(base != MAP_FAILED, "%s: mmap of %zu bytes failed", tag, size);
+        MRT_PRCTL(base, size, tag);
+        return new (std::nothrow) DequeMapping(base, size);
+    }
+
+    static void DestroyMemMap(DequeMapping*& mapping) noexcept
+    {
+        if (mapping != nullptr) {
+            (void)munmap(mapping->base, mapping->size);
+            delete mapping;
+            mapping = nullptr;
+        }
+    }
+
+    void* GetBaseAddr() const { return base; }
+    void* GetCurrEnd() const { return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + size); }
+
+private:
+    DequeMapping(void* mappedBase, size_t mappedSize) : base(mappedBase), size(mappedSize) {}
+    void* base;
+    size_t size;
+};
+
 // this deque is single-use, meaning we can use it, then after a while,
 // we can discard its whole content
 // under this assumption, clearing this data structure is really fast
@@ -37,15 +72,12 @@ public:
     void Init(size_t mapSize)
     {
         static_assert(VAL_SIZE == sizeof(void*), "invalid val type");
-        MemMap::Option opt = MemMap::DEFAULT_OPTIONS;
-        opt.tag = "maple_alloc_ros_sud";
-        opt.reqBase = nullptr;
-        memMap = MemMap::MapMemory(mapSize, mapSize, opt);
+        memMap = DequeMapping::MapMemory(mapSize, "maple_alloc_ros_sud");
         beginAddr = reinterpret_cast<MAddress>(memMap->GetBaseAddr());
         endAddr = reinterpret_cast<MAddress>(memMap->GetCurrEnd());
         Clear();
     }
-    void Init(MemMap& other)
+    void Init(DequeMapping& other)
     {
         // init from another sud, that is, the two suds share the same mem map
         static_assert(VAL_SIZE == sizeof(void*), "invalid val type");
@@ -54,8 +86,8 @@ public:
         endAddr = reinterpret_cast<MAddress>(memMap->GetCurrEnd());
         Clear();
     }
-    void Fini() noexcept { MemMap::DestroyMemMap(memMap); }
-    MemMap& GetMemMap() { return *memMap; }
+    void Fini() noexcept { DequeMapping::DestroyMemMap(memMap); }
+    DequeMapping& GetMemMap() { return *memMap; }
     bool Empty() const { return topAddr < frontAddr; }
     void Push(ValType v)
     {
@@ -90,7 +122,7 @@ public:
     }
 
 private:
-    MemMap* memMap = nullptr;
+    DequeMapping* memMap = nullptr;
     MAddress beginAddr = 0;
     MAddress frontAddr = 0;
     MAddress topAddr = 0;
@@ -190,15 +222,12 @@ public:
         static_assert(align >= alignof(Slot), "invalid align");
         static_assert(allocSize % align == 0, "size not aligned");
 
-        MemMap::Option opt = MemMap::DEFAULT_OPTIONS;
-        opt.tag = "maplert_alloc";
-        opt.reqBase = nullptr;
-        memMap = MemMap::MapMemory(mapSize, mapSize, opt);
+        memMap = DequeMapping::MapMemory(mapSize, "maplert_alloc");
         currAddr = reinterpret_cast<MAddress>(memMap->GetBaseAddr());
         endAddr = reinterpret_cast<MAddress>(memMap->GetCurrEnd());
     }
 
-    void Fini() noexcept { MemMap::DestroyMemMap(memMap); }
+    void Fini() noexcept { DequeMapping::DestroyMemMap(memMap); }
 
     void* Allocate()
     {
@@ -225,7 +254,7 @@ private:
     Slot* head = nullptr;
     MAddress currAddr = 0;
     MAddress endAddr = 0;
-    MemMap* memMap = nullptr;
+    DequeMapping* memMap = nullptr;
 };
 } // namespace MapleRuntime
 

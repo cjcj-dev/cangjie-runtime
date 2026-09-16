@@ -16,7 +16,7 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 void InstallReceipt(GcHeapFixture& heap, MAddress from, MAddress to)
 {
-    Heap::GetHeap().GetRememberedSet().Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     heap.InstallPageOwner(heap.region0);
     auto publication = ForwardingTable::EnsurePublicationBeforeCopy(heap.region0, from);
     GC_EXPECT_TRUE(static_cast<bool>(publication));
@@ -36,36 +36,17 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, generation) != nullptr);
 }
 
-GC_TEST(ForwardingNoGeometry, InstalledReceiptSurvivesPageReleaseUntilSetReset)
-{
-    GcHeapFixture heap;
-    const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(heap.obj1);
-    const Generation generation = heap.region0->GetOwnerGeneration();
-    InstallReceipt(heap, from, to);
-    auto owner = ForwardingTable::RetainPageOwner(heap.region0);
-    GC_EXPECT_TRUE(static_cast<bool>(owner));
-    owner->release_page();
-    owner->mark_done();
-    const auto result = ForwardingTable::LookupTo(from, generation);
-    GC_EXPECT_TRUE(result.answer == ForwardingTable::ToAnswer::ArmedHit);
-    GC_EXPECT_EQ(result.to, to);
-    ForwardingTable::ResetRelocationSet(generation);
-    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, generation) == nullptr);
-    GC_EXPECT_TRUE(ForwardingTable::LookupTo(from, generation).answer == ForwardingTable::ToAnswer::Unarmed);
-}
-
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct MutatorPublishTestAccess {
-    static BaseObject* RelocateInner(WCollector& collector, BaseObject* from, RegionInfo* page)
+    static BaseObject* RelocateInner(WCollector& collector, BaseObject* from, ZPage* page)
     {
         return collector.RelocateObjectInner(from, page);
     }
-    static BaseObject* ForwardImpl(WCollector& collector, BaseObject* from, RegionInfo* page)
+    static BaseObject* ForwardImpl(WCollector& collector, BaseObject* from, ZPage* page)
     {
         collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
-        RegionInfo::RetainScope lease(page);
+        ZPage::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
         return collector.ForwardObjectImpl(from, page, lease);
     }

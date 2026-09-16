@@ -17,6 +17,7 @@
 
 #include "Base/CString.h"
 #include "Base/Log.h"
+#include <cstring>
 #include "Base/TimeUtils.h"
 
 namespace MapleRuntime {
@@ -58,10 +59,44 @@ uint64_t Uncommitter::ParseDelayNs(const char* env)
     return kDefaultDelayNs;
 }
 
+static std::atomic<uint64_t>& UncommitDelayNsStorage()
+{
+    static std::atomic<uint64_t> delayNs{ Uncommitter::ParseDelayNs(std::getenv("cjUncommitDelay")) };
+    return delayNs;
+}
+
+static std::atomic<bool>& UncommitFlagStorage()
+{
+    static std::atomic<bool> enabled{ [] {
+        const char* env = std::getenv("cjUncommit");
+        return env == nullptr || std::strcmp(env, "0") != 0;
+    }() };
+    return enabled;
+}
+
 uint64_t Uncommitter::DelayNs()
 {
-    static const uint64_t delayNs = ParseDelayNs(std::getenv("cjUncommitDelay"));
-    return delayNs;
+    return UncommitDelayNsStorage().load(std::memory_order_relaxed);
+}
+
+bool Uncommitter::ZUncommit()
+{
+    return UncommitFlagStorage().load(std::memory_order_relaxed);
+}
+
+void Uncommitter::SetZUncommit(bool enabled)
+{
+    UncommitFlagStorage().store(enabled, std::memory_order_relaxed);
+}
+
+size_t Uncommitter::ZUncommitDelay()
+{
+    return static_cast<size_t>(DelayNs() / SECOND_TO_NANO_SECOND);
+}
+
+void Uncommitter::SetZUncommitDelay(size_t seconds)
+{
+    UncommitDelayNsStorage().store(static_cast<uint64_t>(seconds) * SECOND_TO_NANO_SECOND, std::memory_order_relaxed);
 }
 
 size_t Uncommitter::ChunkLimit(size_t maxCapacity)
@@ -163,7 +198,8 @@ bool Uncommitter::Activate()
 size_t Uncommitter::Uncommit()
 {
     RegionManager& regions = static_cast<RegionSpace&>(partition).GetRegionManager();
-    PageMemory memory;
+    ZArray<ZVirtualMemory> flushedVmems;
+    size_t flushed = 0;
     {
         // zUncommitter.cpp:367: join before taking the allocation owner.
         // Allocation/cancel and cache claim must not observe separate owners.
@@ -176,31 +212,32 @@ size_t Uncommitter::Uncommit()
         const size_t retain = MinCapacity(regions.pageAllocatorUsed, kGcTriggerYoungFixedBytes);
         const size_t release = committed > retain ? committed - retain : 0;
         const size_t flush = std::min({release, toUncommit, ChunkLimit(partition.GetMaxCapacity())});
-        // Cache age selection belongs to A02c; capacity is A02p's backing ledger.
-        const uint64_t idleBefore = cycleStart > DelayNs() ? cycleStart - DelayNs() : 0;
-        if (!regions.freeRegionManager.TakeUncommitMemory(flush, idleBefore, memory)) {
+        // zUncommitter.cpp:395: flush memory from the mapped cache for uncommit.
+        flushed = regions.freeRegionManager.RemoveForUncommit(flush, &flushedVmems);
+        if (flushed == 0) {
             Cancel();
             return 0;
         }
     }
 
-    // zUncommitter.cpp:409: system operations run outside the allocator owner
-    // and safepoint participation; the claimed extent is not allocatable.
-    const size_t completed = RegionInfo::ReleaseUnitsDeferred(memory.index, memory.units);
+    // zUncommitter.cpp:405-411: unmap and uncommit flushed memory outside the
+    // allocator owner and safepoint participation; the claimed extents are not
+    // allocatable.
+    for (const ZVirtualMemory vmem : flushedVmems) {
+        const uint32_t partitionId = regions.freeRegionManager.PartitionIdOf(vmem);
+        regions.freeRegionManager.unmap_virtual(vmem);
+        regions.freeRegionManager.uncommit_physical(vmem);
+        regions.freeRegionManager.free_physical(vmem, partitionId);
+        regions.freeRegionManager.free_virtual(vmem, partitionId);
+    }
 
     {
-        // zUncommitter.cpp:415: rejoin, then publish the actual backing prefix
-        // and return the extent under the same owner that performed the claim.
+        // zUncommitter.cpp:413-420: rejoin, adjust claimed and capacity.
         ScopedObjectAccess participation;
         std::lock_guard<std::mutex> guard(regions.pageAllocatorMutex);
-        const size_t released = RegionInfo::PublishUnitsRelease(memory.index, completed);
-        regions.freeRegionManager.ReturnUncommitMemory(memory);
-        if (released != 0) {
-            RegisterUncommit(released);
-        } else if (!canceled) {
-            Cancel();
-        }
-        return released;
+        regions.freeRegionManager.UncommitFlushed(flushed);
+        RegisterUncommit(flushed);
+        return flushed;
     }
 }
 

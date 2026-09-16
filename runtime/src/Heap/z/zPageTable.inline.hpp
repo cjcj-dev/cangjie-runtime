@@ -6,7 +6,6 @@
 
 #pragma once
 #include "Heap/z/zPageTable.hpp"
-
 #include "Heap/z/zIndexDistributor.inline.hpp"
 
 namespace MapleRuntime {
@@ -14,22 +13,21 @@ template<typename T>
 inline ZPageTableParallelIterator<T>::ZPageTableParallelIterator(const ZGranuleMap<T>& table)
     : table(table), distributor(static_cast<int>(ZIndexDistributor::get_count(table.size())))
 {}
-}
 
-namespace MapleRuntime {
 template<typename T>
 template<typename Function>
 inline void ZPageTableParallelIterator<T>::do_pages(Function function)
 {
-        distributor.do_indices([&](int index) {
-            T page = table.at(static_cast<size_t>(index));
-            if (page != T()) {
-                const size_t startIndex = (page->GetRegionStart() - table.base()) / table.granule();
-                if (static_cast<size_t>(index) == startIndex) {
-                    return function(page);
-                }
+    distributor.do_indices([&](int index) {
+        T page = table.at(static_cast<size_t>(index));
+        if (page != T()) {
+            const size_t startIndex = (page->GetRegionStart() - table.base()) / table.granule();
+            if (static_cast<size_t>(index) == startIndex) {
+                return function(page);
             }
-            return true;
-        });
-    }
+        }
+        return true;
+    });
 }
+
+} // namespace MapleRuntime

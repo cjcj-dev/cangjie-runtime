@@ -62,25 +62,13 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
 };
 
-class InstalledBarrierScope {
-public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
-    {
-        Heap::barrierPtr = &barrier;
-    }
-    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
-
-private:
-    Barrier* previous;
-};
-
 struct LoadFcFixture {
-    LoadFcFixture() : barrier(collector, rememberedSet), installed(barrier)
+    LoadFcFixture()
     {
-        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         auto& heapRemset = Heap::GetHeap().GetRememberedSet();
         if (!heapRemset.initialized) {
-            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         }
         heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj0) + 128);
         heap.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj1) + 128);
@@ -97,8 +85,6 @@ struct LoadFcFixture {
     GcHeapFixture heap;
     NoAnswerCollector collector;
     RememberedSet rememberedSet;
-    Barrier barrier;
-    InstalledBarrierScope installed;
     RefField<false>* field = nullptr;
 };
 

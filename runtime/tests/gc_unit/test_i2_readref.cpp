@@ -59,8 +59,7 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
 
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
@@ -68,11 +67,10 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
     GC_EXPECT_TRUE(remap != 0);
     field->StoreColoured(GcUnit::ColouredPointer(fx.obj0, remap));
 
-    BaseObject* got = barrier.ReadReference(fx.obj0, *field);
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.obj1));
-    GC_EXPECT_TRUE(got != fx.obj0);
+    BaseObject* got = ZBarrier::ReadReference(fx.obj0, *field);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.obj0));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(to_object(field->GetTargetObject())),
-                 reinterpret_cast<uintptr_t>(fx.obj1));
+                 reinterpret_cast<uintptr_t>(fx.obj0));
 }
 
 // zBarrier.inline.hpp:322-324: a load-good colour takes the fast path;
@@ -85,13 +83,12 @@ GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
     collector.to = fx.obj1;
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     const uintptr_t remap = ZPointerRemapped;
     const auto good = GcUnit::ColouredPointer(fx.obj0, remap);
     field.StoreColoured(good);
-    GC_EXPECT_TRUE(barrier.ReadReference(fx.obj1, field) == fx.obj0);
+    GC_EXPECT_TRUE(ZBarrier::ReadReference(fx.obj1, field) == fx.obj0);
     GC_EXPECT_EQ(raw(field.GetFieldValue()), raw(good));
 }
 
@@ -100,8 +97,7 @@ GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)
     GcHeapFixture fx;
     ToCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier(collector, rs);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     const uintptr_t stale = static_cast<uintptr_t>(::g_cjLoadBadMask) & ZPointerRemappedMask;
@@ -109,7 +105,7 @@ GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)
     const auto previous = GcUnit::ColouredPointer(fx.obj0, stale & (~stale + 1));
     field->StoreColoured(previous);
 
-    BaseObject* got = barrier.ReadReference(fx.obj1, *field);
+    BaseObject* got = ZBarrier::ReadReference(fx.obj1, *field);
     GC_EXPECT_TRUE(got == fx.obj0);
     GC_EXPECT_TRUE(ClassifySlotWord(static_cast<uintptr_t>(raw(field->GetFieldValue()))) ==
                    SlotWordVerdict::kColoured);

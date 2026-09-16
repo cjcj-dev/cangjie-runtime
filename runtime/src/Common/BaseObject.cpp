@@ -25,22 +25,6 @@ namespace MapleRuntime {
 // ZGC: zBarrier.inline.hpp:448-450, 692-706 (store-good barrier path).
 template void HeapSlot<false>::StoreColoured(zpointer, std::memory_order);
 
-void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
-{
-#if defined(MRT_DEBUG) && MRT_DEBUG == 1
-    if (LIKELY(!Heap::IsHeapAddress(slot))) {
-        return;
-    }
-    // ZGC zAddress.inline.hpp:423-427: slot validity is a debug assertion.
-    const SlotWordVerdict verdict = ClassifySlotWord(newVal);
-    CHECK_DETAIL(verdict != SlotWordVerdict::kIllegal,
-                 "full-colour heap write rejected: slot=%p value=%#zx", slot, newVal);
-#else
-    (void)slot;
-    (void)newVal;
-#endif
-}
-
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -196,15 +180,14 @@ void BaseObject::OnFinalizerCreated()
 
 bool BaseObject::IsInTraceRegion() const
 {
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<Uptr>(this));
+    ZPage* region = Heap::page(reinterpret_cast<Uptr>(this));
     MRT_ASSERT(region != nullptr, "region is nullptr");
     return region->IsTraceRegion();
 }
 
 bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> oldRef, const RefField<> newRef)
 {
-    if (HealSlot(field, oldRef.GetFieldValue(), newRef.GetFieldValue(),
-                 HealSite::BaseObjectCompareExchangeRefField, HealNull::Allow)) {
+    if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
         DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
         return true;
     }

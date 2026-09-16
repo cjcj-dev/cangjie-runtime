@@ -18,6 +18,7 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zUncoloredRoot.hpp"
 #include "ObjectModel/RefField.inline.h"
 #if defined(MRT_GC_UNIT_TESTS)
 #include "ObjectModel/MArray.h"
@@ -196,6 +197,14 @@ void Mutator::ResetMutator()
     if (!localFinalizers.empty()) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
     }
+    // Exit publishes the logical owner's private work before scheduler
+    // unbinding can expose another owner through this OS TLS binding.
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& remembered = Heap::GetHeap().GetRememberedSet();
+    if (remembered.IsInitialized()) {
+        gcData.storeBarrierBuffer->Flush();
+    }
+    (void)collector.FlushGCDataMarkProducers(gcData);
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
     // BeginCatch would have performed, or the guard stays expanded with nothing left to
@@ -887,7 +896,7 @@ static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
     // before this mark pass (ZUncoloredRoot::make_load_good's current-color arm).
     BaseObject* current = object;
     collector.PublishThreadRoot(current, young, follow);
-    HealRoot(root, from_object(current), HealSite::MutatorMarkRoot);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return true;
 }
 
@@ -922,7 +931,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
     BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
     CHECK_DETAIL(toObj != nullptr, "preforward headerless missing winner oldObj=%p", oldObj);
     if (oldObj != toObj) {
-        HealRoot(field, from_object(toObj), HealSite::MutatorPreForwardHeaderlessRecord);
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&field), ZPointerLoadGoodMask);
     }
 }
 
@@ -1078,7 +1087,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
 inline void Mutator::ForwardLocalFinalizers(Collector&)
 {
     for (NativeSlot& root : localFinalizers) {
-        (void)Heap::GetBarrier().ReadStaticRef(root);
+        (void)ZBarrier::ReadStaticRef(root);
     }
 }
 
@@ -1118,7 +1127,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward stack field missing winner oldObj=%p", oldObj);
-            HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&rootField), ZPointerLoadGoodMask);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
                 CheckAndPush(oldObj, rootSet, rootStack);
@@ -1140,7 +1149,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             }
             // interiorstart: a livemap-driven "recover the base of an interior root" branch
             // stood here and has been deleted -- it read IsOwnerSurvivedObject as a start
-            // predicate when MarkBits makes it a coverage predicate (RegionInfo.h AdmitForRoute
+            // predicate when MarkBits makes it a coverage predicate (ZPage.h AdmitForRoute
             // states this), so the base it recovered was the last covered slot of the *previous*
             // object.  Measured on this workload: root offset 29368, "base" 29360, which is 40
             // bytes inside a 48-byte object at 29320.  The root itself reads rootSurvived=0
@@ -1150,7 +1159,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             // live object start, or the collector is already wrong.
             BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
-            HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         } else if (oldObj != nullptr) {
             if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
                 if (IsHeaderedStackObject(oldObj)) {

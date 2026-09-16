@@ -10,6 +10,7 @@
 
 #include "Heap/z/zServiceability.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <vector>
@@ -18,6 +19,10 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zPageType.hpp"
+#include "Heap/Allocator/RegionListTypes.hpp"
+#include "Heap/z/zPageFwd.hpp"
 #include "Common/BaseObject.h"
 #include "RuntimeConfig.h"
 
@@ -30,6 +35,7 @@ extern uintptr_t g_cjHeapRangeStart[];
 extern uintptr_t g_cjHeapRangeEnd[];
 }
 namespace MapleRuntime {
+class ZPageTable;
 class OopStorage;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
@@ -44,7 +50,6 @@ public:
 #ifdef MRT_TESTABLE_INTERNALS
     static size_t GetStaticRootCountForTesting();
 #endif
-    static Barrier& GetBarrier() { return *barrierPtr; }
     virtual RememberedSet& GetRememberedSet() = 0;
 
 
@@ -100,6 +105,16 @@ public:
     }
 
     static bool IsHeapAddress(const void* addr) { return IsHeapAddress(reinterpret_cast<MAddress>(addr)); }
+
+    static ZPage* page(MAddress addr);
+    static bool is_in(MAddress addr);
+    static bool is_young(MAddress addr);
+    static bool is_old(MAddress addr);
+    static ZPageTable& page_table();
+    static ZPage* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
+                                  bool allowSaferegion = true, bool clearPayload = true,
+                                  PageAge age = PageAge::eden);
+    static void free_page(ZPage* page);
 
 
     void DumpHeap(HeapDumpKind kind);
@@ -186,19 +201,19 @@ public:
     }
 
     virtual ~Heap() {}
-    static Barrier* barrierPtr;
     static MAddress heapCurrentEnd;
 
 private:
     static void PublishCompilerHeapRanges()
     {
-        constexpr unsigned kCap = 8;
+        constexpr unsigned kCap = kCjHeapRangeCap;
+        CHECK_DETAIL(heapReservations.size() <= kCap,
+                     "compiler heap range capacity exceeded: %zu > %u", heapReservations.size(), kCap);
         for (unsigned i = 0; i < kCap; ++i) {
             g_cjHeapRangeStart[i] = 0;
             g_cjHeapRangeEnd[i] = 0;
         }
-        const unsigned n = static_cast<unsigned>(
-            heapReservations.size() < kCap ? heapReservations.size() : kCap);
+        const unsigned n = static_cast<unsigned>(heapReservations.size());
         g_cjHeapRangeCount = n;
         for (unsigned i = 0; i < n; ++i) {
             g_cjHeapRangeStart[i] = heapReservations[i].start;

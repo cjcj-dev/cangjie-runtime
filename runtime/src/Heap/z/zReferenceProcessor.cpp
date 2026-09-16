@@ -123,7 +123,7 @@ bool ReferenceProcessor::IsFinalizable(BaseObject* reference)
     if (reference == nullptr || !Heap::IsHeapAddress(reference)) {
         return false;
     }
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(reference));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(reference));
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
@@ -143,7 +143,7 @@ ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithRe
     if (!Heap::IsHeapAddress(referent)) {
         return { false, false, referent };
     }
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(referent));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(referent));
     if (region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion()) {
         if (region->is_object_strongly_live(from_object(referent))) {
             return { false, false, referent };
@@ -158,8 +158,7 @@ ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithRe
         g_beforeWeakCleanCasForTest();
     }
 #endif
-    if (HealSlot(referentField, observed, to_zpointer(0), HealSite::BarrierWeakClean,
-                 HealNull::Allow, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    if (referentField.CompareExchange(observed, to_zpointer(0))) {
         return { true, false, nullptr };
     }
 

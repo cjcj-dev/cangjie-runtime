@@ -4,69 +4,46 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// ZGC zAddressSpaceLimit.cpp:33-47. os::reserve_memory_limit() is the
+// RLIMIT_AS soft limit (os_posix.cpp); MaxVirtMemFraction is the HotSpot
+// flag default 2 (no flag system here, PLAN infra I15).
 
-#include "Heap/z/zVirtualMemoryManager.hpp"
+#include "Heap/z/zAddressSpaceLimit.hpp"
 
-#include <algorithm>
+#include <cstdint>
 #include <limits>
-#include <new>
-#include <utility>
-#if defined(__linux__)
 #include <sys/resource.h>
-#include <sys/syscall.h>
-#include <sys/vfs.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <linux/falloc.h>
-#include <cerrno>
-#elif !defined(_WIN64)
-#include <sys/resource.h>
-#endif
-#ifdef _WIN64
-#include <errhandlingapi.h>
-#include <handleapi.h>
-#include <memoryapi.h>
-#include <sysinfoapi.h>
-#endif
 
-#include "Base/Log.h"
+#include "Base/Globals.h"
 #include "Base/LogFile.h"
-#include "Base/Panic.h"
-#include "Base/SysCall.h"
-
-#include "Heap/z/zVirtualMemory.inline.hpp"
+#include "Heap/z/zAddress.hpp"
 
 namespace MapleRuntime {
-AddressSpaceBudget AddressSpaceBudget::Seal(size_t available, size_t safeFraction)
-{
-    AddressSpaceBudget budget;
-    if (safeFraction == 0) {
-        return budget;
-    }
-    budget.availableBytes = available;
-    budget.safeBytes = available / safeFraction;
-    budget.sealed = true;
-    return budget;
+
+static const size_t MaxVirtMemFraction = 2;
+
+static size_t reserve_memory_limit() {
+  struct rlimit rlim;
+  if (getrlimit(RLIMIT_AS, &rlim) != 0 || rlim.rlim_cur == RLIM_INFINITY) {
+    return std::numeric_limits<size_t>::max();
+  }
+  return static_cast<size_t>(rlim.rlim_cur);
 }
 
-AddressSpaceBudget AddressSpaceBudget::SealProcessBudget()
-{
-#ifdef _WIN64
-    MEMORYSTATUSEX status{};
-    status.dwLength = sizeof(status);
-    if (GlobalMemoryStatusEx(&status) == 0) {
-        return Seal(0, kDefaultSafeFraction);
-    }
-    return Seal(static_cast<size_t>(status.ullTotalVirtual), kDefaultSafeFraction);
-#else
-    struct rlimit limit {};
-    if (getrlimit(RLIMIT_AS, &limit) != 0) {
-        return Seal(0, kDefaultSafeFraction);
-    }
-    const size_t available = limit.rlim_cur == RLIM_INFINITY ? std::numeric_limits<size_t>::max()
-                                                             : static_cast<size_t>(limit.rlim_cur);
-    return Seal(available, kDefaultSafeFraction);
-#endif
+size_t ZAddressSpaceLimit::heap() {
+  // Allow the heap to occupy 50% of the address space
+  const size_t limit = reserve_memory_limit() / MaxVirtMemFraction;
+  return AlignUp(limit, ZBackingGranuleSize);
 }
 
+void ZAddressSpaceLimit::print_limits() {
+  const size_t limit = reserve_memory_limit();
+
+  if (limit == std::numeric_limits<size_t>::max()) {
+    VLOG(REPORT, "Address Space Size: unlimited");
+  } else {
+    VLOG(REPORT, "Address Space Size: limited (%zuM)", limit / MB);
+  }
 }
+
+} // namespace MapleRuntime

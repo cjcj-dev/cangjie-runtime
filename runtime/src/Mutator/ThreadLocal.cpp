@@ -23,7 +23,15 @@ thread_local CleanThreadLocalData cleaner;
 
 void ThreadLocalData::SetMutator(Mutator* newMutator)
 {
+    ThreadLocal::InitializeCleaner();
     mutator = newMutator;
+    if (newMutator != nullptr) {
+        auto& data = newMutator->GetGCData();
+        data.Attach(newMutator, nullptr, data.invisibleRoot);
+        gcData = &data;
+    } else {
+        gcData = nativeGCData;
+    }
 #ifdef INTERPRETER_ENABLED
     interpreterCJThreadData = newMutator != nullptr ? newMutator->interpreterCJThreadData : nullptr;
 #endif
@@ -38,21 +46,14 @@ ThreadLocalData* ThreadLocal::GetThreadLocalData()
 ThreadGCData& ThreadLocal::GetGCData()
 {
     ThreadLocalData* tls = GetThreadLocalData();
-    if (tls->gcData == nullptr) {
-        tls->gcData = new ThreadGCData();
-        InitializeCleaner();
-    }
+    CHECK_DETAIL(tls->gcData != nullptr, "GC producer must have an attached logical owner");
     return *tls->gcData;
 }
 
 MarkThreadLocalStacks& ThreadLocal::GetMarkStacks(MarkDomain& domain)
 {
     const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
-    auto& stacks = GetGCData().markStacks[index];
-    if (stacks == nullptr) {
-        stacks = std::make_unique<MarkThreadLocalStacks>(64);
-    }
-    return *stacks;
+    return GetGCData().markStacks[index];
 }
 
 bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain)
@@ -60,22 +61,39 @@ bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain)
     if (tls == nullptr || tls->gcData == nullptr) {
         return false;
     }
-    const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
-    auto& stacks = tls->gcData->markStacks[index];
-    return stacks != nullptr && stacks->Flush(domain.Stripes(), true);
+    return tls->gcData->FlushMarkStacks(domain);
 }
 
 void ThreadLocal::FlushCurrentThreadMarkStacks()
 {
-    if (GetThreadLocalData()->gcData != nullptr) {
-        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-        (void)collector.FlushThreadMarkProducers(GetThreadLocalData());
+    ThreadLocalData* tls = GetThreadLocalData();
+    auto empty = [](const ThreadGCData* data) {
+        return data == nullptr || (data->markStacks[0].IsEmpty() && data->markStacks[1].IsEmpty() &&
+                                    data->storeBarrierBuffer->IsEmpty());
+    };
+    // Native workers can exist before the heap collector is bound and after
+    // it is detached. An idle owner has no publication to perform. Pending
+    // stacks, buffered stores, or an allocation-context producer still take
+    // the collector path; never use collector absence to discard work.
+    if (tls->buffer == nullptr && empty(tls->gcData) && empty(tls->nativeGCData)) {
+        return;
+    }
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    (void)collector.FlushThreadMarkProducers(tls);
+    if (tls->nativeGCData != nullptr && tls->nativeGCData != tls->gcData) {
+        (void)collector.FlushGCDataMarkProducers(*tls->nativeGCData);
     }
 }
 
 void ThreadLocal::InitializeCleaner()
 {
     (void)cleaner;
+    ThreadLocalData* tls = GetThreadLocalData();
+    cleaner.nativeData.Attach(nullptr, tls, nullptr);
+    tls->nativeGCData = &cleaner.nativeData;
+    if (tls->mutator == nullptr) {
+        tls->gcData = tls->nativeGCData;
+    }
 }
 
 CleanThreadLocalData::CleanThreadLocalData()
@@ -104,8 +122,11 @@ CleanThreadLocalData::~CleanThreadLocalData()
         MutatorManager::Instance().UnregisterMarkFlushThread(local);
         ThreadLocal::FlushCurrentThreadMarkStacks();
     }
-    delete local->gcData;
+    nativeData.Detach();
+    // gcData may borrow a parked/migrating Mutator. The cleaner owns only
+    // nativeData, whose member destructor runs after this body.
     local->gcData = nullptr;
+    local->nativeGCData = nullptr;
     if (cache != nullptr) {
         delete reinterpret_cast<ThreadCache*>(cache);
     }
@@ -136,13 +157,15 @@ extern "C" void MCC_CheckThreadLocalDataOffset()
 #ifdef INTERPRETER_ENABLED
     static_assert(offsetof(ThreadLocalData, interpreterCJThreadData) == sizeof(void*) * 7 + sizeof(uint64_t) * 2,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
-    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 12 + sizeof(uint64_t) * 2,
+    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 13 + sizeof(uint64_t) * 2,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #else
-    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 11 + sizeof(uint64_t) * 2,
+    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 13 + sizeof(uint64_t) * 2,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #endif
 #else
+    static_assert(offsetof(ThreadLocalData, gcData) == sizeof(void*) * 12,
+                  "GC data binding offset must match the LLVM barrier lowering ABI");
     static_assert(offsetof(ThreadLocalData, tid) == sizeof(void*) * 7,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
     static_assert(offsetof(ThreadLocalData, foreignCJThread) == sizeof(void*) * 8,
@@ -150,10 +173,10 @@ extern "C" void MCC_CheckThreadLocalDataOffset()
 #ifdef INTERPRETER_ENABLED
     static_assert(offsetof(ThreadLocalData, interpreterCJThreadData) == sizeof(void*) * 9,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
-    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 13,
+    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 14,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #else
-    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 12,
+    static_assert(sizeof(ThreadLocalData) == sizeof(void*) * 14,
                   "need to modify the offset of this value in llvm-project and cjthread at the same time");
 #endif
 #endif

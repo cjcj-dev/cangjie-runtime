@@ -6,6 +6,8 @@
 
 set(SRC_LIST
     "../z/zBarrier.cpp"
+    "../z/zBarrierSet.cpp"
+    "../z/zUncoloredRoot.cpp"
     "../z/zRememberedSet.cpp"
     "../z/zStoreBarrierBuffer.cpp"
 )

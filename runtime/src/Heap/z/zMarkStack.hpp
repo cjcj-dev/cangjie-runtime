@@ -21,11 +21,11 @@
 #include "Heap/z/zMarkCache.hpp"
 
 #include "Heap/z/zMarkContext.hpp"
+#include "Heap/z/zPageFwd.hpp"
 
 namespace MapleRuntime {
 
 class BaseObject;
-class RegionInfo;
 
 // ZGC zMarkStack.hpp:35-54. A chunk is single-owner while it is being
 // filled/drained and becomes immutable while linked on a shared stripe.
@@ -152,7 +152,7 @@ private:
 
 class MarkThreadLocalStacks {
 public:
-    explicit MarkThreadLocalStacks(size_t stripeCount);
+    explicit MarkThreadLocalStacks(size_t stripeCount = 64);
     ~MarkThreadLocalStacks();
     MarkThreadLocalStacks(const MarkThreadLocalStacks&) = delete;
     MarkThreadLocalStacks& operator=(const MarkThreadLocalStacks&) = delete;

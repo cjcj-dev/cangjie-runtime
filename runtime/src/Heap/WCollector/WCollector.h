@@ -173,13 +173,15 @@ public:
     void PublishThreadRoot(BaseObject* object, bool young, bool follow);
     bool FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* domain);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
+    bool FlushGCDataMarkProducers(ThreadGCData& data, MarkDomain* domain);
+    bool FlushGCDataMarkProducers(ThreadGCData& data);
     MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
     void MarkYoungRootObject(BaseObject* object) const override;
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const override;
-    bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo) override;
+    bool ResurrectObject(BaseObject* obj, size_t offset, ZPage* regionInfo) override;
 
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
     void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack, bool finalizable = false) const;
@@ -289,7 +291,7 @@ public:
         if (const MAddress to = forwarding->find(from)) {
             return reinterpret_cast<BaseObject*>(to);
         }
-        RegionInfo::RetainScope lease{ForwardingTable::Owner(forwarding)};
+        ZPage::RetainScope lease{ForwardingTable::Owner(forwarding)};
         if (lease.ok()) {
             if (BaseObject* to = TryMutatorRelocate(obj, lease)) return to;
         }
@@ -324,7 +326,7 @@ public:
         // underflowed the from region's count and gave C a payload the young cycle
         // was about to relocate.
         if (obj != nullptr) {
-            RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            ZPage* ghost = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
                 const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(ghost->GetOwnerGeneration()));
                 if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
@@ -353,7 +355,7 @@ public:
 
     // lonefrom: "is this object being relocated in this cycle" must not be asked as
     // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
-    // from-list with TakeHeadRegion(RegionType::LONE_FROM_REGION) (RegionManager.cpp:1638), so a
+    // from-list with TakeHeadRegion() (RegionManager.cpp:1638), so a
     // region is retyped the moment relocation of it starts.  IsFromRegion() tests FROM_REGION
     // alone -- IsLoneFromRegion() is a separate predicate -- so for the whole window in which a
     // region is actually being evacuated, its objects answer "not from".
@@ -396,7 +398,7 @@ public:
             // regions retain a NORMAL route and no forwarding face, and must
             // not be classified as relocation-set addresses merely because
             // their address falls inside that span (zGeneration.cpp:254).
-            RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             return region != nullptr &&
                 (region->FromPageLiveMap() != nullptr ||
                  ForwardingTable::RetainPageOwner(region).get() != nullptr ||
@@ -404,7 +406,7 @@ public:
         }
         // filter const string object.
         if (Heap::IsHeapAddress(obj)) {
-            auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
+            auto regionInfo = Heap::page(reinterpret_cast<uintptr_t>(obj));
             if (kLoneFromIsFrom && regionInfo->IsLoneFromRegion()) {
                 // Arm self-check: a null result from this change is only readable if the branch is
                 // known to fire.  Powers of two, so a hot predicate cannot flood the log.
@@ -424,7 +426,7 @@ public:
     {
         // filter const string object.
         if (Heap::IsHeapAddress(obj)) {
-            return RegionInfo::InGhostFromRegion(obj);
+            return ZPage::InGhostFromRegion(obj);
         }
 
         return false;
@@ -432,7 +434,7 @@ public:
 
     bool IsUnmovableFromObject(BaseObject* obj) const override;
 
-    BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region) const
+    BaseObject* GetForwardPointer(BaseObject* fromObj, ZPage* region) const
     {
         // ZRelocate::forward_object consumes only the installed CAS winner.
         auto owner = ForwardingTable::RetainPageOwner(region);
@@ -471,17 +473,17 @@ public:
 protected:
     void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
                               const ForwardingProvenance& provenance) const;
-    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
-                                  const RegionInfo::RetainScope& lease);
+    BaseObject* ForwardObjectImpl(BaseObject* obj, ZPage* ghostFromRegion,
+                                  const ZPage::RetainScope& lease);
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
-    BaseObject* RelocateObjectInner(BaseObject* obj, RegionInfo* copyPage);
+    BaseObject* RelocateObjectInner(BaseObject* obj, ZPage* copyPage);
     void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
     // retain the from-region, relocate the object on this thread, release. Returns the
     // to-version, or nullptr when the owning copier must supply the receipt.
-    BaseObject* TryMutatorRelocate(BaseObject* from, RegionInfo::RetainScope& lease) const;
+    BaseObject* TryMutatorRelocate(BaseObject* from, ZPage::RetainScope& lease) const;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
 
@@ -706,7 +708,7 @@ protected:
 
 private:
     using MinorObjectSet = std::unordered_set<BaseObject*>;
-    using MinorRegionSet = std::unordered_set<RegionInfo*>;
+    using MinorRegionSet = std::unordered_set<ZPage*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
 
@@ -729,7 +731,7 @@ private:
                              WorkStack& workStack, bool finalizable) const;
 
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
-                                  HealSite site, HealNull allowNull = HealNull::Disallow) const;
+                                  bool allowNull = false) const;
     BaseObject* ResolveMinorReference(RefField<>& field,
                                      const ScopedStopTheWorld* stw = nullptr) const;
     BaseObject* ResolveMinorReference(RootSlot& root,

@@ -908,7 +908,7 @@ static void* GetAnnotations(Uptr annotationMethod, TypeInfo* arrayTi)
 #else
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
-    Heap::GetBarrier().WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
+    ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
     return obj;
 }

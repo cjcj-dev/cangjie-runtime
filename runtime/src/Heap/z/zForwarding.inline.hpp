@@ -70,7 +70,7 @@ inline size_t ZForwarding::nentries(size_t objectCountUpperBound)
 
 namespace MapleRuntime {
 inline ZForwarding* ZForwarding::alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              RegionInfo* page, RegionLifeId pageLifeId ,
+                              ZPage* page, RegionLifeId pageLifeId ,
                               ForwardingAllocator* arena )
     {
         const size_t n = nentries(liveObjects);
@@ -236,7 +236,7 @@ inline
 }
 
 namespace MapleRuntime {
-inline ZForwarding::ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
+inline ZForwarding::ZForwarding(ZPage* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
                 RegionLifeId pageLifeId)
         : _start(start),
           _size(regionSize),

@@ -1,552 +1,327 @@
-#include "Heap/z/zAddress.hpp"
-#include <cstring>
-#include "Heap/z/zVirtualMemory.inline.hpp"
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// ZGC zVirtualMemoryManager.cpp:39-358. ZNMT registration has no counterpart
+// (no native memory tracker, PLAN infra I16). ZForceDiscontiguousHeapReservations
+// is a HotSpot debug flag and is not carried.
 
-#include "Heap/z/zVirtualMemoryManager.hpp"
+#include "Heap/z/zVirtualMemoryManager.inline.hpp"
 
 #include <algorithm>
-#include <limits>
-#include <new>
-#include <utility>
-#if defined(__linux__)
-#include <sys/resource.h>
-#include <sys/syscall.h>
-#include <sys/vfs.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <linux/falloc.h>
-#include <cerrno>
-#elif !defined(_WIN64)
-#include <sys/resource.h>
-#endif
-#ifdef _WIN64
-#include <errhandlingapi.h>
-#include <handleapi.h>
-#include <memoryapi.h>
-#include <sysinfoapi.h>
-#endif
 
+#include "Base/Globals.h"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Base/Panic.h"
-#include "Base/SysCall.h"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zValue.inline.hpp"
+#include "Heap/z/zAddressSpaceLimit.hpp"
+#include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zNUMA.inline.hpp"
+#include "Heap/z/zVirtualMemory.inline.hpp"
 
 namespace MapleRuntime {
-// C++14 default arguments bind this option by reference (metadata mapping).
-constexpr MemMap::Option MemMap::DEFAULT_OPTIONS;
 
-namespace {
+ZVirtualMemoryReserver::ZVirtualMemoryReserver(size_t size)
+  : _registry(),
+    _reserved(reserve(size)) {}
 
-class NativeMemMapBackend final : public MemMapBackend {
-public:
-    void* Reserve(void* requested, size_t size, unsigned int flags, const char* tag, bool exact) override
-    {
-#ifdef _WIN64
-        (void)flags;
-        (void)tag;
-        (void)exact;
-        return VirtualAlloc(requested, size, MEM_RESERVE, PAGE_NOACCESS);
-#else
-        int mmapFlags = static_cast<int>(flags);
-#if defined(MAP_FIXED_NOREPLACE)
-        if (exact) {
-            mmapFlags |= MAP_FIXED_NOREPLACE;
-        }
-#endif
-#if defined(__APPLE__)
-        int fd = -1;
-        if (IsCangjieHeapTag(tag)) {
-            mmapFlags &= ~MAP_NORESERVE;
-            fd = VM_MAKE_TAG(CANGJIE_HEAP_VM_TAG);
-        }
-        void* result = mmap(requested, size, PROT_NONE, mmapFlags, fd, 0);
-#else
-        void* result = mmap(requested, size, PROT_NONE, mmapFlags, -1, 0);
-#endif
-        if (result == MAP_FAILED) {
-            return nullptr;
-        }
-        if (exact && result != requested) {
-            (void)munmap(result, size);
-            return nullptr;
-        }
-#if !defined(__APPLE__)
-        (void)madvise(result, size, MADV_NOHUGEPAGE);
-        MRT_PRCTL(result, size, tag);
-#endif
-#if defined(__linux__)
-        // zPhysicalMemoryBacking_linux.cpp: create_fd/fallocate/map. Each
-        // reservation owns its backing file; offsets survive decommit.
-        const int fd = static_cast<int>(syscall(SYS_memfd_create, "cangjie-heap", 1U));
-        struct statfs backingStat {};
-        if (fd < 0 || ftruncate(fd, static_cast<off_t>(size)) != 0 || fstatfs(fd, &backingStat) != 0 ||
-            backingStat.f_bsize <= 0 || ALLOC_UTIL_PAGE_SIZE % backingStat.f_bsize != 0) {
-            if (fd >= 0) { close(fd); }
-            munmap(result, size);
-            return nullptr;
-        }
-        std::lock_guard<std::mutex> lock(filesMutex);
-        files.push_back(BackingFile{ reinterpret_cast<uintptr_t>(result), size, fd,
-                                     static_cast<size_t>(backingStat.f_bsize) });
-#endif
-        return result;
-#endif
-    }
+void ZVirtualMemoryReserver::initialize_partition_registry(ZVirtualMemoryRegistry* partition_registry, size_t size) {
+  assert(partition_registry->is_empty());
 
-    size_t Commit(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) override
-    {
-        const size_t committed = CommitBacking(addr, size, prot, numaNode, bindNuma);
-        if (committed != 0) { CHECK(MapBacking(addr, addr, committed, prot)); }
-        return committed;
-    }
+  // Registers the Windows callbacks
+  pd_register_callbacks(partition_registry);
 
-    size_t CommitBacking(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) override
-    {
-#ifdef _WIN64
-        (void)prot;
-        (void)numaNode;
-        (void)bindNuma;
-        return VirtualAlloc(addr, size, MEM_COMMIT, PAGE_READWRITE) != nullptr ? size : 0;
-#elif defined(__linux__)
-        std::lock_guard<std::mutex> lock(filesMutex);
-        const BackingFile* file = FindFile(addr, size);
-        if (file == nullptr) { return 0; }
-        // zPhysicalMemoryBacking_linux.cpp:627: policy applies while allocating
-        // backing, and is restored afterwards. NUMA preference is not a strict
-        // binding requirement: an unavailable preferred node can fall back.
-        if (bindNuma && numaNode < kMaxNumaNodes) {
-            unsigned long mask = 1UL << numaNode;
-            if (syscall(SYS_set_mempolicy, kMpolPreferred, &mask, kMaxNumaNodes) != 0) {
-                LOG(RTLOG_WARNING, "backing NUMA preference failed: %d", errno);
-            }
-        }
-        const size_t offset = reinterpret_cast<uintptr_t>(addr) - file->start;
-        const size_t committed = CommitFile(*file, offset, size);
-        if (bindNuma) {
-            if (syscall(SYS_set_mempolicy, kMpolPreferred, nullptr, 0UL) != 0) {
-                LOG(RTLOG_WARNING, "backing NUMA preference reset failed: %d", errno);
-            }
-        }
-        (void)prot;
-        return committed;
-#else
-        (void)numaNode;
-        (void)bindNuma;
-        return mprotect(addr, size, prot) == 0 ? size : 0;
-#endif
-    }
+  _registry.transfer_from_low(partition_registry, size);
 
-    bool CanRemapBacking() const override
-    {
-#if defined(__linux__)
-        return true;
-#else
-        return false;
-#endif
-    }
-
-    bool MapBacking(void* addr, void* backing, size_t size, int prot) override
-    {
-#if defined(__linux__)
-        std::lock_guard<std::mutex> lock(filesMutex);
-        const BackingFile* file = FindFile(backing, size);
-        if (file == nullptr) { return false; }
-        const size_t offset = reinterpret_cast<uintptr_t>(backing) - file->start;
-        return mmap(addr, size, prot, MAP_SHARED | MAP_FIXED, file->fd, offset) == addr;
-#else
-        (void)size;
-        (void)prot;
-        return addr == backing;
-#endif
-    }
-
-    bool UnmapBacking(void* addr, size_t size) override
-    {
-#if defined(__linux__)
-        return mmap(addr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_NORESERVE,
-                    -1, 0) == addr;
-#else
-        (void)addr;
-        (void)size;
-        return true;
-#endif
-    }
-
-    bool Protect(void* addr, size_t size, int prot) override
-    {
-#ifdef _WIN64
-        DWORD oldProtect = 0;
-        DWORD newProtect = PAGE_NOACCESS;
-        if ((prot & MemMap::PROT_EXEC) != 0) {
-            newProtect = (prot & MemMap::PROT_WRITE) != 0 ? PAGE_EXECUTE_READWRITE : PAGE_EXECUTE_READ;
-        } else if ((prot & MemMap::PROT_WRITE) != 0) {
-            newProtect = PAGE_READWRITE;
-        } else if ((prot & MemMap::PROT_READ) != 0) {
-            newProtect = PAGE_READONLY;
-        }
-        return VirtualProtect(addr, size, newProtect, &oldProtect) != 0;
-#else
-        return mprotect(addr, size, prot) == 0;
-#endif
-    }
-
-    size_t Release(void* addr, size_t size, uint32_t numaNode) override
-    {
-        (void)numaNode;
-#ifdef _WIN64
-        return VirtualFree(addr, size, MEM_DECOMMIT) != 0 ? size : 0;
-#elif defined(__APPLE__)
-        return madvise(addr, size, MADV_FREE) == 0 ? size : 0;
-#elif defined(__linux__)
-        std::lock_guard<std::mutex> lock(filesMutex);
-        const BackingFile* file = FindFile(addr, size);
-        if (file == nullptr) { return 0; }
-        const size_t offset = reinterpret_cast<uintptr_t>(addr) - file->start;
-        const int error = Fallocate(*file, true, offset, size);
-        if (error != 0) {
-            LOG(RTLOG_ERROR, "failed to uncommit backing: %d", error);
-            return 0;
-        }
-        return size;
-#else
-        return madvise(addr, size, MADV_DONTNEED) == 0 ? size : 0;
-#endif
-    }
-
-    bool Unreserve(void* addr, size_t size) override
-    {
-#ifdef _WIN64
-        (void)size;
-        return VirtualFree(addr, 0, MEM_RELEASE) != 0;
-#else
-        if (munmap(addr, size) != 0) { return false; }
-#if defined(__linux__)
-        std::lock_guard<std::mutex> lock(filesMutex);
-        for (auto it = files.begin(); it != files.end(); ++it) {
-            if (it->start == reinterpret_cast<uintptr_t>(addr) && it->size == size) {
-                close(it->fd);
-                files.erase(it);
-                break;
-            }
-        }
-#endif
-        return true;
-#endif
-    }
-
-private:
-#if defined(__linux__)
-    struct BackingFile { uintptr_t start; size_t size; int fd; size_t blockSize; };
-    std::mutex filesMutex;
-    std::vector<BackingFile> files;
-    // z_fallocate_supported: capability cached under filesMutex, not an option.
-    bool fallocateSupported{ true };
-
-    const BackingFile* FindFile(void* addr, size_t size) const
-    {
-        const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
-        for (const auto& file : files) {
-            if (start >= file.start && start - file.start <= file.size &&
-                size <= file.size - (start - file.start)) { return &file; }
-        }
-        return nullptr;
-    }
-
-    static int FillHoleCompat(const BackingFile& file, size_t offset, size_t size)
-    {
-        // zPhysicalMemoryBacking_linux.cpp:468: ordinary memfd pages use pwrite
-        // to allocate each backing block without relying on madvise or touching
-        // a mapping whose backing allocation has not yet succeeded.
-        const uint8_t data = 0;
-        for (size_t pos = offset; pos < offset + size; pos += file.blockSize) {
-            const ssize_t written = pwrite(file.fd, &data, sizeof(data), static_cast<off_t>(pos));
-            if (written == -1) { return errno; }
-            if (written != static_cast<ssize_t>(sizeof(data))) { return EIO; }
-        }
-        return 0;
-    }
-
-    int FillHole(const BackingFile& file, size_t offset, size_t size)
-    {
-        // zPhysicalMemoryBacking_linux.cpp:509: only unsupported fallocate
-        // selects compatibility allocation; other errors reach the caller.
-        if (fallocateSupported) {
-            if (fallocate(file.fd, 0, static_cast<off_t>(offset), static_cast<off_t>(size)) == 0) {
-                return 0;
-            }
-            const int error = errno;
-            if (error != ENOSYS && error != EOPNOTSUPP) { return error; }
-            fallocateSupported = false;
-        }
-        return FillHoleCompat(file, offset, size);
-    }
-
-    int Fallocate(const BackingFile& file, bool punchHole, size_t offset, size_t size)
-    {
-        int error;
-        if (punchHole) {
-            const int mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
-            error = fallocate(file.fd, mode, static_cast<off_t>(offset), static_cast<off_t>(size)) == 0
-                ? 0 : errno;
-        } else {
-            error = FillHole(file, offset, size);
-        }
-        // zPhysicalMemoryBacking_linux.cpp:559-592: split interrupted ranges
-        // at backing block boundaries, for both commit and uncommit.
-        if (error == EINTR && size > file.blockSize) {
-            const size_t firstSize = AllocUtilRndUp(size / 2, file.blockSize);
-            const int firstError = Fallocate(file, punchHole, offset, firstSize);
-            if (firstError != 0) { return firstError; }
-            return Fallocate(file, punchHole, offset + firstSize, size - firstSize);
-        }
-        return error;
-    }
-
-    bool CommitFileRange(const BackingFile& file, size_t offset, size_t size)
-    {
-        // zPhysicalMemoryBacking_linux.cpp:598: ordinary-page errors are
-        // reported to commit_default, which can retain a successful prefix.
-        const int error = Fallocate(file, false, offset, size);
-        if (error != 0) {
-            LOG(RTLOG_ERROR, "failed to commit backing: %d", error);
-            return false;
-        }
-        return true;
-    }
-
-    size_t CommitFile(const BackingFile& file, size_t offset, size_t size)
-    {
-        // zPhysicalMemoryBacking_linux.cpp:639: whole range, then binary
-        // subdivision retaining every successful granule-aligned prefix.
-        if (CommitFileRange(file, offset, size)) { return size; }
-        size_t start = 0;
-        size_t end = size;
-        for (;;) {
-            const size_t length = AllocUtilRndDown((end - start) / 2,
-                                                  static_cast<size_t>(ALLOC_UTIL_PAGE_SIZE));
-            if (length == 0) { return start; }
-            if (CommitFileRange(file, offset + start, length)) {
-                start += length;
-            } else {
-                end -= length;
-            }
-        }
-    }
-
-#endif
-};
-
-NativeMemMapBackend& NativeBackend()
-{
-    static NativeMemMapBackend backend;
-    return backend;
+  // Set the limits according to the virtual memory given to this partition
+  partition_registry->anchor_limits();
 }
 
-} // namespace
+void ZVirtualMemoryReserver::unreserve(const ZVirtualMemory& vmem) {
+  const zaddress_unsafe addr = ZOffset::address_unsafe(vmem.start());
 
-bool ReservationRegistry::Insert(MemoryRange range)
-{
-    if (range.IsNull() || AddOverflows(range.start, range.size)) {
-        return false;
-    }
-    auto pos = std::lower_bound(ranges.begin(), ranges.end(), range.start,
-        [](const MemoryRange& left, uintptr_t start) { return left.start < start; });
-    if (pos != ranges.begin() && (pos - 1)->End() > range.start) {
-        return false;
-    }
-    if (pos != ranges.end() && range.End() > pos->start) {
-        return false;
-    }
-    ranges.insert(pos, range);
-    return true;
+  // Unreserve address space
+  pd_unreserve(addr, vmem.size());
 }
 
-bool ReservationRegistry::Contains(uintptr_t start, size_t size) const
-{
-    if (start == 0 || size == 0 || AddOverflows(start, size)) {
-        return false;
-    }
-    const uintptr_t end = start + size;
-    uintptr_t cursor = start;
-    for (const MemoryRange& range : ranges) {
-        if (range.End() <= cursor) {
-            continue;
-        }
-        if (range.start > cursor) {
-            return false;
-        }
-        cursor = std::min(end, range.End());
-        if (cursor == end) {
-            return true;
-        }
-    }
+void ZVirtualMemoryReserver::unreserve_all() {
+  for (ZVirtualMemory vmem; _registry.unregister_first(&vmem);) {
+    unreserve(vmem);
+  }
+}
+
+bool ZVirtualMemoryReserver::is_empty() const {
+  return _registry.is_empty();
+}
+
+bool ZVirtualMemoryReserver::is_contiguous() const {
+  return _registry.is_contiguous();
+}
+
+size_t ZVirtualMemoryReserver::reserved() const {
+  return _reserved;
+}
+
+zoffset_end ZVirtualMemoryReserver::highest_available_address_end() const {
+  return _registry.peak_high_address_end();
+}
+
+size_t ZVirtualMemoryReserver::reserve_discontiguous(zoffset start, size_t size, size_t min_range) {
+  if (size < min_range) {
+    // Too small
+    return 0;
+  }
+
+  assert(size % ZBackingGranuleSize == 0);
+
+  if (reserve_contiguous(start, size)) {
+    return size;
+  }
+
+  const size_t half = size / 2;
+  if (half < min_range) {
+    // Too small
+    return 0;
+  }
+
+  // Divide and conquer
+  const size_t first_part = AlignDown(half, ZBackingGranuleSize);
+  const size_t second_part = size - first_part;
+  const size_t first_size = reserve_discontiguous(start, first_part, min_range);
+  const size_t second_size = reserve_discontiguous(start + first_part, second_part, min_range);
+  return first_size + second_size;
+}
+
+size_t ZVirtualMemoryReserver::calculate_min_range(size_t size) {
+  // Don't try to reserve address ranges smaller than 1% of the requested size.
+  // This avoids an explosion of reservation attempts in case large parts of the
+  // address space is already occupied.
+  return AlignUp(size / ZMaxVirtualReservations, ZBackingGranuleSize);
+}
+
+size_t ZVirtualMemoryReserver::reserve_discontiguous(size_t size) {
+  const size_t min_range = calculate_min_range(size);
+  uintptr_t start = 0;
+  size_t reserved = 0;
+
+  // Reserve size somewhere between [0, ZAddressOffsetMax)
+  while (reserved < size && start < ZAddressOffsetMax) {
+    const size_t remaining = std::min(size - reserved, ZAddressOffsetMax - start);
+    reserved += reserve_discontiguous(to_zoffset(start), remaining, min_range);
+    start += remaining;
+  }
+
+  return reserved;
+}
+
+bool ZVirtualMemoryReserver::reserve_contiguous(zoffset start, size_t size) {
+  assert(size % ZBackingGranuleSize == 0);
+
+  // Reserve address views
+  const zaddress_unsafe addr = ZOffset::address_unsafe(start);
+
+  // Reserve address space
+  if (!pd_reserve(addr, size)) {
     return false;
+  }
+
+  // Register the memory reservation
+  _registry.register_range({start, size});
+
+  return true;
 }
 
-size_t ReservationRegistry::TotalSize() const
-{
-    size_t total = 0;
-    for (const MemoryRange& range : ranges) {
-        total += range.size;
+bool ZVirtualMemoryReserver::reserve_contiguous(size_t size) {
+  // Allow at most 8192 attempts spread evenly across [0, ZAddressOffsetMax)
+  const size_t unused = ZAddressOffsetMax - size;
+  const size_t increment = std::max(AlignUp(unused / 8192, ZBackingGranuleSize), ZBackingGranuleSize);
+
+  for (uintptr_t start = 0; start + size <= ZAddressOffsetMax; start += increment) {
+    if (reserve_contiguous(to_zoffset(start), size)) {
+      // Success
+      return true;
     }
-    return total;
+  }
+
+  // Failed
+  return false;
 }
 
-bool MemMap::IsValidRange(uintptr_t start, size_t size)
-{
-    return start != 0 && size != 0 && !AddOverflows(start, size);
+size_t ZVirtualMemoryReserver::reserve(size_t size) {
+  // Register Windows callbacks
+  pd_register_callbacks(&_registry);
+
+  if (size == 0) {
+    // Nothing to reserve (~ZVirtualMemoryManager builds an empty reserver
+    // to hand address space back)
+    return 0;
+  }
+
+  // Reserve address space
+
+  // Prefer a contiguous address space
+  if (reserve_contiguous(size)) {
+    return size;
+  }
+
+  // Fall back to a discontiguous address space
+  return reserve_discontiguous(size);
 }
 
-// ZVirtualMemoryReserver::reserve_contiguous, zVirtualMemoryManager.cpp:169-203.
-// Native metadata mappings keep their native address domain; heap reservations
-// and each fallback segment use the same bounded heap-address search.
-static void* ReserveHeapAddress(MemMapBackend& backend, size_t size, const MemMap::Option& opt)
-{
-    if (size > ZAddressOffsetMax) { return nullptr; }
-    const uintptr_t end = ZAddressHeapBase + ZAddressOffsetMax;
-    if (opt.reqBase != nullptr) {
-        const uintptr_t start = reinterpret_cast<uintptr_t>(opt.reqBase);
-        if (start < ZAddressHeapBase || start > end - size) { return nullptr; }
-        return backend.Reserve(opt.reqBase, size, opt.flags, opt.tag, true);
-    }
-    const size_t granule = size_t(1) << 21;
-    const size_t unused = ZAddressOffsetMax - size;
-    const size_t increment = std::max(AllocUtilRndUp(unused / 8192, granule), granule);
-    for (uintptr_t offset = 0; offset <= unused; offset += increment) {
-        void* requested = reinterpret_cast<void*>(raw(ZOffset::address_unsafe(to_zoffset(offset))));
-        void* result = backend.Reserve(requested, size, opt.flags, opt.tag, true);
-        if (result == requested) { return result; }
-        if (result != nullptr) { (void)backend.Unreserve(result, size); }
-    }
-    return nullptr;
+ZVirtualMemoryManager::ZVirtualMemoryManager(size_t max_capacity)
+  : _partition_registries(),
+    _multi_partition_registry(),
+    _is_multi_partition_enabled(false),
+    _initialized(false) {
+
+  assert(max_capacity <= ZAddressOffsetMax);
+
+  ZAddressSpaceLimit::print_limits();
+
+  const size_t limit = std::min(ZAddressOffsetMax, ZAddressSpaceLimit::heap());
+
+  const size_t desired_for_partitions = max_capacity * ZVirtualToPhysicalRatio;
+  // Multi-partition address space (ZNUMA::count() > 1) is A03n.
+  const size_t desired_for_multi_partition = 0;
+
+  const size_t desired = desired_for_partitions + desired_for_multi_partition;
+  const size_t requested = desired <= limit
+      ? desired
+      : std::min(desired_for_partitions, limit);
+
+  // Reserve virtual memory for the heap
+  ZVirtualMemoryReserver reserver(requested);
+
+  const size_t reserved = reserver.reserved();
+  const bool is_contiguous = reserver.is_contiguous();
+
+  VLOG(REPORT, "Reserved Space: limit %zuM, desired %zuM, requested %zuM", limit / MB, desired / MB, requested / MB);
+
+  if (reserved < max_capacity) {
+    LOG(RTLOG_ERROR, "Failed to reserve %zuM address space for Cangjie heap", max_capacity / MB);
+    reserver.unreserve_all();
+    return;
+  }
+
+  // Set ZAddressOffsetMax to the highest address end available after reservation
+  ZAddressOffsetMax = untype(reserver.highest_available_address_end());
+
+  const size_t size_for_partitions = std::min(reserved, desired_for_partitions);
+
+  // Divide size_for_partitions virtual memory over the NUMA nodes
+  initialize_partitions(&reserver, size_for_partitions);
+
+  // Set up multi-partition or unreserve the surplus memory
+  if (desired_for_multi_partition > 0 && reserved == desired) {
+    // Enough left to setup the multi-partition memory reservation
+    reserver.initialize_partition_registry(&_multi_partition_registry, desired_for_multi_partition);
+    _is_multi_partition_enabled = true;
+  } else {
+    // Failed to reserve enough memory for multi-partition, unreserve unused memory
+    reserver.unreserve_all();
+  }
+
+  assert(reserver.is_empty());
+
+  VLOG(REPORT, "Reserved Space Type: %s/%s/%s",
+       (is_contiguous ? "Contiguous" : "Discontiguous"),
+       (requested == desired ? "Unrestricted" : "Restricted"),
+       (reserved == desired ? "Complete" : ((reserved < desired_for_partitions) ? "Degraded"  : "NUMA-Degraded")));
+  VLOG(REPORT, "Reserved Space Size: %zuM", reserved / MB);
+
+  // Successfully initialized
+  _initialized = true;
 }
 
-MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
-                            const AddressSpaceBudget& budget, const NumaTopology& topology,
-                            MemMapBackend& osBackend, size_t fallbackSegmentSize)
-{
-    if (reqSize == 0 || initSize > reqSize || !budget.IsSealed() || !topology.IsSealed() ||
-        reqSize > std::numeric_limits<size_t>::max() - (ALLOC_UTIL_PAGE_SIZE - 1)) {
-        return nullptr;
+ZVirtualMemoryManager::~ZVirtualMemoryManager() {
+  // Hand the reserved address space back. ZGC keeps its heap for the whole
+  // VM lifetime; gtests here construct and destroy managers.
+  ZVirtualMemoryReserver reserver(0);
+  uint32_t partition_id;
+  ZPerNUMAIterator<ZVirtualMemoryRegistry> iter(&_partition_registries);
+  for (ZVirtualMemoryRegistry* registry; iter.next(&registry, &partition_id);) {
+    for (ZVirtualMemory vmem; registry->unregister_first(&vmem);) {
+      reserver.unreserve(vmem);
     }
-    const size_t mappedSize = AllocUtilRndUp<size_t>(reqSize, ALLOC_UTIL_PAGE_SIZE);
-    if (!budget.Allows(mappedSize)) {
-        return nullptr;
-    }
-
-    ReservationRegistry registry;
-    const bool heapDomain = std::strcmp(opt.tag, "cangjie_heap") == 0;
-    void* base = heapDomain ? ReserveHeapAddress(osBackend, mappedSize, opt)
-                            : osBackend.Reserve(opt.reqBase, mappedSize, opt.flags, opt.tag, opt.reqBase != nullptr);
-    if (base != nullptr) {
-        if (!registry.Insert(MemoryRange{ reinterpret_cast<uintptr_t>(base), mappedSize })) {
-            (void)osBackend.Unreserve(base, mappedSize);
-            return nullptr;
-        }
-    } else {
-        if (opt.reqBase != nullptr) {
-            return nullptr;
-        }
-        size_t segmentSize = std::min(fallbackSegmentSize, mappedSize);
-        segmentSize = AllocUtilRndDown(segmentSize, static_cast<size_t>(ALLOC_UTIL_PAGE_SIZE));
-        if (segmentSize == 0) {
-            segmentSize = ALLOC_UTIL_PAGE_SIZE;
-        }
-        size_t reserved = 0;
-        while (reserved < mappedSize) {
-            const size_t currentSize = std::min(segmentSize, mappedSize - reserved);
-            void* segment = heapDomain ? ReserveHeapAddress(osBackend, currentSize, opt)
-                                       : osBackend.Reserve(nullptr, currentSize, opt.flags, opt.tag, false);
-            if (segment == nullptr ||
-                !registry.Insert(MemoryRange{ reinterpret_cast<uintptr_t>(segment), currentSize })) {
-                if (segment != nullptr) {
-                    (void)osBackend.Unreserve(segment, currentSize);
-                }
-                for (const MemoryRange& range : registry.Ranges()) {
-                    (void)osBackend.Unreserve(reinterpret_cast<void*>(range.start), range.size);
-                }
-                return nullptr;
-            }
-            reserved += currentSize;
-        }
-        base = reinterpret_cast<void*>(registry.Ranges().front().start);
-    }
-
-    NumaPartitionRegistry partitions;
-    if (!partitions.Initialize(registry, topology)) {
-        for (const MemoryRange& range : registry.Ranges()) {
-            (void)osBackend.Unreserve(reinterpret_cast<void*>(range.start), range.size);
-        }
-        return nullptr;
-    }
-
-    MemMap* memMap = new (std::nothrow) MemMap(base, initSize, mappedSize, opt.prot, std::move(registry),
-                                               std::move(partitions), osBackend, topology.Count() > 1);
-    if (memMap == nullptr) {
-        // Placement new failed before ownership transferred.
-        for (const MemoryRange& range : registry.Ranges()) {
-            (void)osBackend.Unreserve(reinterpret_cast<void*>(range.start), range.size);
-        }
-        return nullptr;
-    }
-    const size_t initialCommit = opt.protAll ? mappedSize : initSize;
-    if (initialCommit != 0) {
-        const size_t committed = memMap->CommitMemory(base, initialCommit);
-        if (committed != initialCommit) {
-            // Commit proceeds partition by partition.  If only a prefix was
-            // committed, release exactly that prefix before tearing down the
-            // reservation so allocation failure leaves no hidden side effect.
-            if (committed != 0) {
-                (void)memMap->ReleaseMemory(base, committed);
-            }
-            delete memMap;
-            return nullptr;
-        }
-    }
-    return memMap;
+  }
+  for (ZVirtualMemory vmem; _multi_partition_registry.unregister_first(&vmem);) {
+    reserver.unreserve(vmem);
+  }
 }
 
-MemMap* MemMap::MapMemory(size_t reqSize, size_t initSize, const Option& opt)
-{
-    const AddressSpaceBudget budget = AddressSpaceBudget::SealProcessBudget();
-    const NumaTopology topology = NumaTopology::SealProcessTopology();
-    return MapMemory(reqSize, initSize, opt, budget, topology);
-}
+void ZVirtualMemoryManager::initialize_partitions(ZVirtualMemoryReserver* reserver, size_t size_for_partitions) {
+  assert(size_for_partitions % ZBackingGranuleSize == 0);
 
-MemMap* MemMap::MapMemory(size_t reqSize, size_t initSize, const Option& opt,
-                         const AddressSpaceBudget& budget, const NumaTopology& topology)
-{
-    MemMap* memMap = TryMapMemory(reqSize, initSize, opt, budget, topology, NativeBackend());
-    CHECK_DETAIL(memMap != nullptr, "MemMap::MapMemory failed reqSize: %zu initSize: %zu budget: %zu",
-                 reqSize, initSize, budget.SafeBytes());
-    return memMap;
-}
+  const uint32_t numa_count = _partition_registries.count();
 
-MemMap::MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, ReservationRegistry&& registry,
-               NumaPartitionRegistry&& partitions, MemMapBackend& osBackend, bool shouldBindNuma)
-    : memBaseAddr(baseAddr), memCurrSize(initSize), memMappedSize(mappedSize), commitProt(prot),
-      reservationRegistry(std::move(registry)), numaPartitions(std::move(partitions)), backend(&osBackend),
-      bindNuma(shouldBindNuma)
-{
-    memCurrEndAddr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(memBaseAddr) + memCurrSize);
-    memMappedEndAddr = reinterpret_cast<void*>(reservationRegistry.Ranges().back().End());
-}
+  // If the capacity consist of less granules than the number of partitions
+  // some partitions will be empty. Distribute these shares on the none empty
+  // partitions.
+  const uint32_t first_empty_numa_id = std::min(static_cast<uint32_t>(size_for_partitions / ZBackingGranuleSize), numa_count);
+  const uint32_t ignore_count = numa_count - first_empty_numa_id;
 
-MemMap::~MemMap()
-{
-    for (const MemoryRange& range : reservationRegistry.Ranges()) {
-        if (!backend->Unreserve(reinterpret_cast<void*>(range.start), range.size)) {
-            LOG(RTLOG_ERROR, "MemMap unreserve failed at %p size %zu", reinterpret_cast<void*>(range.start), range.size);
-        }
+  // Install reserved memory into registry(s)
+  uint32_t numa_id;
+  ZPerNUMAIterator<ZVirtualMemoryRegistry> iter(&_partition_registries);
+  for (ZVirtualMemoryRegistry* registry; iter.next(&registry, &numa_id);) {
+    if (numa_id == first_empty_numa_id) {
+      break;
     }
-    memBaseAddr = nullptr;
-    memCurrEndAddr = nullptr;
-    memMappedEndAddr = nullptr;
+
+    // Calculate how much reserved memory this partition gets
+    const size_t reserved_for_partition = NumaTopology::calculate_share(numa_id, size_for_partitions, ZBackingGranuleSize, ignore_count);
+
+    // Transfer reserved memory
+    reserver->initialize_partition_registry(registry, reserved_for_partition);
+  }
 }
+
+bool ZVirtualMemoryManager::is_initialized() const {
+  return _initialized;
+}
+
+ZVirtualMemoryRegistry& ZVirtualMemoryManager::registry(uint32_t partition_id) {
+  return _partition_registries.get(partition_id);
+}
+
+const ZVirtualMemoryRegistry& ZVirtualMemoryManager::registry(uint32_t partition_id) const {
+  return _partition_registries.get(partition_id);
+}
+
+zoffset ZVirtualMemoryManager::lowest_available_address(uint32_t partition_id) const {
+  return registry(partition_id).peek_low_address();
+}
+
+void ZVirtualMemoryManager::insert(const ZVirtualMemory& vmem, uint32_t partition_id) {
+  assert(partition_id == lookup_partition_id(vmem));
+  registry(partition_id).insert(vmem);
+}
+
+void ZVirtualMemoryManager::insert_multi_partition(const ZVirtualMemory& vmem) {
+  _multi_partition_registry.insert(vmem);
+}
+
+size_t ZVirtualMemoryManager::remove_from_low_many_at_most(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out) {
+  return registry(partition_id).remove_from_low_many_at_most(size, vmems_out);
+}
+
+ZVirtualMemory ZVirtualMemoryManager::remove_from_low(size_t size, uint32_t partition_id) {
+  return registry(partition_id).remove_from_low(size);
+}
+
+ZVirtualMemory ZVirtualMemoryManager::remove_from_low_multi_partition(size_t size) {
+  return _multi_partition_registry.remove_from_low(size);
+}
+
+void ZVirtualMemoryManager::insert_and_remove_from_low_many(const ZVirtualMemory& vmem, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out) {
+  registry(partition_id).insert_and_remove_from_low_many(vmem, vmems_out);
+}
+
+ZVirtualMemory ZVirtualMemoryManager::insert_and_remove_from_low_exact_or_many(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_in_out) {
+  return registry(partition_id).insert_and_remove_from_low_exact_or_many(size, vmems_in_out);
+}
+
 } // namespace MapleRuntime

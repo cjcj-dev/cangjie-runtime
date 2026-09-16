@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Eth: region young-age / generation face (JDK test_zPageAge spirit, no GPL).
-// Product: RegionInfo::SetYoungAge / GetYoungAge / IsYoungRegion / MAX_YOUNG_AGE.
+// Product: ZPage::SetYoungAge / GetYoungAge / IsYoungRegion / MAX_YOUNG_AGE.
 // We are a generational GC; age bits had zero unit coverage before this file.
 
 #include <cstdint>
@@ -20,24 +20,24 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(RegionAge, YoungAgeRoundTrip)
 {
     GcHeapFixture fx;
-    RegionInfo* r = fx.region0;
-    r->SetYoungAge(0);
+    ZPage* r = fx.region0;
+    r->reset(PageAge::old);
     GC_EXPECT_EQ(r->GetYoungAge(), 0u);
-    r->SetYoungAge(1);
+    r->reset(PageAge::eden);
     GC_EXPECT_EQ(r->GetYoungAge(), 1u);
-    r->SetYoungAge(14);
+    r->reset(PageAge::survivor14);
     GC_EXPECT_EQ(r->GetYoungAge(), 14u);
     // Promote-style clear used by product after tenuring (RegionManager promote paths).
-    r->SetYoungAge(0);
+    r->reset(PageAge::old);
     GC_EXPECT_EQ(r->GetYoungAge(), 0u);
 }
 
 GC_TEST(RegionAge, MaxYoungAgeBound)
 {
     GcHeapFixture fx;
-    GC_EXPECT_TRUE(RegionInfo::MAX_YOUNG_AGE >= 14u);
-    fx.region0->SetYoungAge(RegionInfo::MAX_YOUNG_AGE);
-    GC_EXPECT_EQ(fx.region0->GetYoungAge(), static_cast<unsigned>(RegionInfo::MAX_YOUNG_AGE));
+    GC_EXPECT_TRUE(ZPage::MAX_YOUNG_AGE >= 14u);
+    fx.region0->reset(PageAge::survivor14);
+    GC_EXPECT_EQ(fx.region0->GetYoungAge(), static_cast<unsigned>(ZPage::MAX_YOUNG_AGE));
 }
 
 GC_TEST(RegionAge, YoungFlagIndependentOfAge)
@@ -46,9 +46,9 @@ GC_TEST(RegionAge, YoungFlagIndependentOfAge)
     // Fixture regions start as THREAD_LOCAL (not necessarily young-flagged).
     // Age storage must round-trip regardless of young flag bit.
     uint8_t before = fx.region0->GetYoungAge();
-    fx.region0->SetYoungAge(3);
+    fx.region0->reset(static_cast<PageAge>(3));
     GC_EXPECT_EQ(fx.region0->GetYoungAge(), 3u);
-    fx.region0->SetYoungAge(before);
+    fx.region0->reset(static_cast<PageAge>(before == 0 ? untype(PageAge::old) : before));
 }
 
 // generation_id is set at PrepareForwardable from IsYoungRegion — header contract.

@@ -13,45 +13,58 @@
 #include <cstdint>
 #include <cstdlib>
 #include <new>
+#include <utility>
 
 #include "Base/Globals.h"
+#include "Base/Panic.h"
 #include "Common/TypeDef.h"
 #include "Common/ColourEncoding.h"
 
 #include "Heap/z/zIndexDistributor.hpp"
 namespace MapleRuntime {
 
-// zIndexDistributor.inline.hpp:100-320. Three 16-way claim levels lead to
-// power-of-two leaf segments; stealing descends through the same claim tree.
 // zGranuleMap.hpp:31-61 + zGranuleMap.inline.hpp:37-103
 // Indexed by (addr - base) / granule. T is a pointer type stored atomically.
+// ZGC ZGranuleMap(size_t max_offset) allocates in the constructor.
 template <typename T>
 class ZGranuleMap {
 public:
-    ZGranuleMap() : _size(0), _map(nullptr), _base(0), _heapSize(0), _granule(0) {}
-
-    bool Initialize(MAddress base, size_t heapSize, size_t granule)
+    ZGranuleMap(size_t max_offset, MAddress base, size_t granule)
+        : _size(0), _map(nullptr), _base(base), _heapSize(max_offset), _granule(granule)
     {
-        if (_map != nullptr) {
-            return _base == base && _heapSize == heapSize && _granule == granule;
-        }
-        // zPageTable.cpp:37-42 sizes the map by the highest available offset,
-        // including reservation holes, rather than by reserved capacity.
-        if (granule == 0 || heapSize == 0 || base % granule != 0 || heapSize % granule != 0 ||
-            !IsRepresentableLow48Range(base, heapSize)) {
-            return false;
-        }
-        const size_t n = heapSize / granule;
+        CHECK(granule != 0 && max_offset != 0 && base % granule == 0 && max_offset % granule == 0);
+        CHECK(IsRepresentableLow48Range(base, max_offset));
+        const size_t n = max_offset / granule;
         auto* map = static_cast<std::atomic<T>*>(std::calloc(n, sizeof(std::atomic<T>)));
-        if (map == nullptr) {
-            return false;
-        }
+        CHECK(map != nullptr);
         _map = map;
         _size = n;
-        _base = base;
-        _heapSize = heapSize;
-        _granule = granule;
-        return true;
+    }
+
+    ZGranuleMap(const ZGranuleMap&) = delete;
+    ZGranuleMap& operator=(const ZGranuleMap&) = delete;
+
+    ZGranuleMap(ZGranuleMap&& other) noexcept
+        : _size(other._size), _map(other._map), _base(other._base), _heapSize(other._heapSize),
+          _granule(other._granule)
+    {
+        other._map = nullptr;
+        other._size = 0;
+    }
+
+    ZGranuleMap& operator=(ZGranuleMap&& other) noexcept
+    {
+        if (this != &other) {
+            std::free(_map);
+            _size = other._size;
+            _map = other._map;
+            _base = other._base;
+            _heapSize = other._heapSize;
+            _granule = other._granule;
+            other._map = nullptr;
+            other._size = 0;
+        }
+        return *this;
     }
 
     ~ZGranuleMap()
@@ -60,24 +73,8 @@ public:
         _map = nullptr;
     }
 
-    void Reset()
-    {
-        std::free(_map);
-        _map = nullptr;
-        _size = 0;
-        _base = 0;
-        _heapSize = 0;
-        _granule = 0;
-    }
-#if defined(MRT_GC_UNIT_TESTS)
-    void ResetForTest() { Reset(); }
-#endif
-
     bool Ready() const { return _map != nullptr; }
 
-    // Sole MAddress -> zoffset gate for this heap address space. The upper
-    // bound is exclusive: an offset at heapSize is not an address that this
-    // map may turn into an array access.
     bool offset_for_address(MAddress addr, zoffset* result) const
     {
         if (!Ready() || addr < _base) {
@@ -99,28 +96,18 @@ public:
 
     void put(zoffset offset, size_t size, T value);
 
-    bool compare_exchange(zoffset offset, T& expected, T desired);
-
-    T exchange(zoffset offset, T value);
+    const T* addr(zoffset offset) const;
+    T* addr(zoffset offset);
 
     size_t granule() const;
     size_t size() const;
     MAddress base() const;
 
-    template<typename Function>
-    void visit_unique(Function function) const
-    {
-        T last{};
-        for (size_t i = 0; i < _size; ++i) {
-            T value = at(i);
-            if (value != T() && value != last) {
-                function(value);
-                last = value;
-            }
-        }
-    }
-
     T at(size_t index) const;
+
+    T get_acquire(zoffset offset) const;
+    void release_put(zoffset offset, T value);
+    void release_put(zoffset offset, size_t size, T value);
 
 private:
     size_t index_for_offset(zoffset offset) const;
@@ -133,8 +120,6 @@ private:
 };
 
 } // namespace MapleRuntime
-
-#include "Heap/z/zPageTable.hpp"
 
 #include "Heap/z/zGranuleMap.inline.hpp"
 

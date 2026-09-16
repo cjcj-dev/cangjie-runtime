@@ -225,7 +225,7 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
         TypeInfo* componentTypeInfo = mArray->GetComponentTypeInfo();
         if (componentTypeInfo->IsPrimitiveType()) {
             dumpObject.tag = TAG_PRIMITIVE_ARRAY_DUMP;
-            auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+            auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
             if (regionInfo->IsLargeRegion()) {
                 dumpObject.tag = TAG_LARGE_PRIMITIVE_ARRAY_DUMP;
             } else if (regionInfo->IsUnmovableFromRegion()) {
@@ -234,7 +234,7 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
             dumpObjects.push_back(dumpObject);
         } else if (componentTypeInfo->IsStructType()) {
             dumpObject.tag = TAG_STRUCT_ARRAY_DUMP;
-            auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+            auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
             if (regionInfo->IsLargeRegion()) {
                 dumpObject.tag = TAG_LARGE_STRUCT_ARRAY_DUMP;
             } else if (regionInfo->IsUnmovableFromRegion()) {
@@ -247,7 +247,7 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
                    componentTypeInfo->IsArrayType() ||
                    componentTypeInfo->IsInterface()) {
                 dumpObject.tag = TAG_OBJECT_ARRAY_DUMP;
-                auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+                auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
                 if (regionInfo->IsLargeRegion()) {
                     dumpObject.tag = TAG_LARGE_OBJECT_ARRAY_DUMP;
                 } else if (regionInfo->IsUnmovableFromRegion()) {
@@ -259,7 +259,7 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
         }
     } else if (obj->GetTypeInfo()->IsVaildType()) {
         dumpObject.tag = TAG_INSTANCE_DUMP;
-        auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        auto regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
         if (regionInfo->IsPinnedRegion()) {
             dumpObject.tag = TAG_PINNED_INSTANCE_DUMP;
         } else if (regionInfo->IsLargeRegion()) {
@@ -360,7 +360,7 @@ void CjHeapData::ProcessRootLocal()
 void CjHeapData::ProcessRootGlobal()
 {
     NativeSlotVisitor visitor = [this](NativeSlot& root) {
-        BaseObject* obj = Heap::GetBarrier().ReadStaticRef(root);
+        BaseObject* obj = ZBarrier::ReadStaticRef(root);
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return;
         }
@@ -393,7 +393,7 @@ void CjHeapData::ProcessRootFinalizer()
             return;
         }
         // FinalizerProcessor holds listLock while exposing each retained root.
-        BaseObject* obj = Heap::GetBarrier().ReadStaticRef(objRef);
+        BaseObject* obj = ZBarrier::ReadStaticRef(objRef);
         DumpObject dumpObject = { obj, TAG_ROOT_UNKNOWN, 0, 0 };
         dumpObjects.push_back(dumpObject);
     };

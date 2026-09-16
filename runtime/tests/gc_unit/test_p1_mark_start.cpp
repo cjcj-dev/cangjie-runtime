@@ -52,7 +52,7 @@ extern "C" int p1MarkStartExercise()
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<uintptr_t>(storage), sizeof(storage));
     auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
-    RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    ZPage* page = Heap::page(reinterpret_cast<MAddress>(object));
     Expect(page->IsAllocating(), "real_allocation_has_current_birth");
     std::printf("P1_ALLOCATED page=%p birth=%llu owner_sequence=%llu\n", page,
                 static_cast<unsigned long long>(page->BirthSequence()),
@@ -93,8 +93,8 @@ extern "C" int p1MarkStartExercise()
                 size_t buffers = 0;
                 Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
                     ++buffers;
-                    const auto empty = [](RegionInfo* region) {
-                        return region == nullptr || region == RegionInfo::NullRegion();
+                    const auto empty = [](ZPage* region) {
+                        return region == nullptr || region == ZPage::NullRegion();
                     };
                     retired = retired && empty(buffer.GetRegion()) && empty(buffer.GetPreparedRegion());
                 });

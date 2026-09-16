@@ -30,12 +30,15 @@
 
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/z/zThreadLocalData.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zUncoloredRoot.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -118,11 +121,11 @@ bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
 
     // zRelocate.cpp:385-390: a lookup miss after the membership probe is a legal
     // concurrent outcome (ghost dispel), so re-resolve from authoritative state
-    // instead of using a pointer that this race can leave null. GetRegionInfoAt
+    // instead of using a pointer that this race can leave null. Heap::page
     // itself CHECKs (early-stop) on a genuine no-owner invariant break.
-    RegionInfo* regionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj));
+    ZPage* regionInfo = ZPage::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj));
     if (regionInfo == nullptr) {
-        regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
+        regionInfo = Heap::page(reinterpret_cast<uintptr_t>(obj));
     }
     return regionInfo->IsUnmovableFromRegion();
 }
@@ -155,8 +158,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         // R7：写回必须经规范色单产地，禁 plain RefField<>(toObj)。
         // expected 仍是 observed-raw（oldRef.GetFieldValue()）；模板 = GetAndTryTagRefField。
         RefField<> tmpField = GetAndTryTagRefField(toObj);
-        if (HealSlot(field, oldRef.GetFieldValue(), tmpField.GetFieldValue(),
-                     HealSite::WCollectorTryUpdateRefField)) {
+        if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
                      obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
@@ -217,8 +219,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         // TRUST_STATE_KILL_PLAN Phase 1: API retained, but HeapSlot write-back is current colour
         // (not plain). Read path no longer calls this; residual callers must not re-install trust.
         RefField<> newRef = GetAndTryTagRefField(target);
-        if (HealSlot(field, oldRef.GetFieldValue(), newRef.GetFieldValue(),
-                     HealSite::WCollectorTryUntagRefField)) {
+        if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
                      &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
@@ -247,7 +248,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
         const MAddress mappedAddr = ForwardingTable::FindTo(reinterpret_cast<MAddress>(oldObj), generation);
         if (mappedAddr != 0) {
             BaseObject* mapped = reinterpret_cast<BaseObject*>(mappedAddr);
-            HealRoot(root, from_object(mapped), HealSite::WCollectorForwardRawGhost);
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
             return mapped;
         }
@@ -265,11 +266,11 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
                 reinterpret_cast<uintptr_t>(&root),
                 ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
         }
-        HealRoot(root, from_object(toVersion), HealSite::WCollectorForwardRawGhost);
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
     } else {
-        HealRoot(root, from_object(oldObj), HealSite::WCollectorNormalizeRawRoot);
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     }
 
     return oldObj;
@@ -283,7 +284,7 @@ void WCollector::RemapYoungRoots()
     // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
     const auto remset = Heap::GetHeap().GetRememberedSet().Snapshot();
     for (MAddress slot : remset) {
-        RegionInfo* page = RegionInfo::TryGetRegionInfoAt(slot);
+        ZPage* page = Heap::page(slot);
         if (page == nullptr || !page->IsValidRegion() || page->IsFreeRegion() ||
             page->IsGarbageRegion() || page->IsYoungRegion()) {
             continue;
@@ -296,15 +297,14 @@ void WCollector::RemapYoungRoots()
             continue;
         }
         RefField<> current = ColourResolvedRefField(resolved, provenance);
-        bool healed = HealSlot(field, observed.GetFieldValue(), current.GetFieldValue(),
-                               HealSite::WCollectorRemapYoungRoots);
+        bool healed = field.CompareExchange(observed.GetFieldValue(), current.GetFieldValue());
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteRemapYoungRootsTestReceipt(field, raw(observed.GetFieldValue()), healed, ZPointer::is_store_good(field.GetFieldValue()));
 #else
         (void)healed;
 #endif
     }
-    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+    VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
     RootVisitor visitor = [this](ObjectRef& root) {
         const zaddress_unsafe observed = root.LoadPlain();
         // ZGeneration::remap_object (zGeneration.inline.hpp:142-151): only
@@ -382,8 +382,9 @@ bool WCollector::Preforward()
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
         MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
-        // zGeneration.cpp:old relocate_start flips only the old remap epoch.
-        // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
+        ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+            data.storeBarrierBuffer->install_base_pointers();
+        });
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         StartRelocationTasks(GCCycleGeneration::OLD);
@@ -393,7 +394,7 @@ bool WCollector::Preforward()
     manager.DrainForwardFromRegions<Generation::Old>();
     ZWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
     const std::function<void()> families[] = {
-        [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); }); },
+        [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
         [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
             ForwardUpdateRawRef(root, Generation::Old);
         }, {}); },
@@ -439,7 +440,7 @@ std::atomic<size_t> g_minorRefCasOk{ 0 };
 // Livemap the route reads for this region: the from-page carrier's map when
 // one is published, otherwise the page's own (zForwarding.hpp:44-110 keeps
 // the whole from ZPage; only its livemap is retained here).
-static ZLiveMap* RouteLiveMap(RegionInfo* region, ZGenerationId& id)
+static ZLiveMap* RouteLiveMap(ZPage* region, ZGenerationId& id)
 {
     const ZForwarding::FromPageView* from = region->GetFromPageView();
     if (from != nullptr) {
@@ -448,7 +449,7 @@ static ZLiveMap* RouteLiveMap(RegionInfo* region, ZGenerationId& id)
         return from->livemap;
     }
     id = region->generation_id();
-    return region->livemap();
+    return &region->livemap();
 }
 
 void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
@@ -465,7 +466,7 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
@@ -505,7 +506,7 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     if (isGhost) {
         region->BindFromPageLiveMapIfNull();
     }
-    ZLiveMap* live = region->livemap();
+    ZLiveMap* live = &region->livemap();
     ZLiveMap* ghost = region->FromPageLiveMap();
     if (ghost != nullptr && ghost != live) {
         // MarkObject already maintained live bytes on the live face; ghost paint is
@@ -538,9 +539,9 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
         return false;
     }
     EnsureRouteDomainMembership(collector, obj);
-    RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
-        region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        region = Heap::page(reinterpret_cast<MAddress>(obj));
     }
     if (region == nullptr || !region->IsYoungRegion()) {
         return false;
@@ -571,7 +572,7 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
 // pre-encoded RefField: this controlled entry applies the current heap colour here.
 // On CAS fail, accept the peer's update (major TryUpdateRefFieldImpl shape).
 bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
-                                          HealSite site, HealNull allowNull) const
+                                          bool allowNull) const
 {
     BaseObject* object = to_object(target);
     if (object != nullptr) {
@@ -592,7 +593,10 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
     if (loadGood(observed)) {
         return true;
     }
-    const bool healed = ZgcSelfHeal(field, observed, desired, loadGood, site, allowNull);
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&field), observed, desired,
+                        allowNull);
+    const bool healed = true;
     if (healed) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
@@ -621,10 +625,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
     CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    const HealSite site = IsOldPointer(observed)
-        ? HealSite::WCollectorMinorResolveOldForward
-        : HealSite::WCollectorMinorResolveLoadGoodForward;
-    (void)CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), site);
+    (void)CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), false);
     return resolved;
 }
 BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
@@ -645,7 +646,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
     CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    HealRoot(root, from_object(resolved), HealSite::WCollectorResolveRootLoadGoodForward);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return resolved;
 }
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
@@ -663,8 +664,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         Heap::IsHeapAddress(observedTarget) && Heap::IsHeapAddress(knownBase)) {
         const MAddress targetAddress = reinterpret_cast<MAddress>(observedTarget);
         const MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
-        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(targetAddress);
-        RegionInfo* baseRegion = RegionInfo::TryGetRegionInfoAt(baseAddress);
+        ZPage* targetRegion = Heap::page(targetAddress);
+        ZPage* baseRegion = Heap::page(baseAddress);
         const bool baseValid = targetAddress > baseAddress && targetRegion == baseRegion;
         if (!baseValid) {
             return false;
@@ -682,8 +683,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         const MAddress oldVal = raw(oldField.GetFieldValue());
         const MAddress interiorAddress = reinterpret_cast<MAddress>(resolvedBase) + offset;
         if (oldVal != interiorAddress) {
-            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), resolvedBase, offset,
-                                             HealSite::WCollectorMinorFixInteriorForward);
+            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), resolvedBase, offset);
         }
         return true;
     }
@@ -698,7 +698,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // already CollectRegion'd (ClearUnits). Prefer silent null over UAF; CAS so
     // concurrent fix peers can win. Pre-evac H3 samples the prior cycle's residue —
     // nulling here clears it before the next VERIFY_HEAP inventory.
-    // Criterion: RegionInfo::IsFreeRegion|IsGarbageRegion at this Fix call (file:line).
+    // Criterion: ZPage::IsFreeRegion|IsGarbageRegion at this Fix call (file:line).
     if (ScrubMinorFreeTarget(field, target, true)) {
         return true;
     }
@@ -707,7 +707,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // resolveto: Resolve already rewrote FROM→TO. TO sits in a Compacted ghost
     // (in-place pack). Forward/Admit indexes liveInfo0 by from-offset — feeding TO
     // misses → leave-alone. Keep the already-installed to.
-    RegionInfo* targetRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+    ZPage* targetRegion = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
     const bool compactDestination = targetRegion != nullptr &&
         targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
     const bool alreadyTo = (target != oldObj) || compactDestination;
@@ -723,10 +723,9 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     if (current == nullptr) {
         // zBarrier.inline.hpp:294-343 never publishes a null substitute for a
         // non-null reference whose forwarding lookup missed. The current thread
-        // must finish relocation (or fail closed); HealSlot's null arm is not a
+        // must finish relocation (or fail closed); a null CAS is not a
         // substitute for an unresolved product.
-        (void)HealSlot(field, field.GetFieldValue(), zpointer::null,
-                       HealSite::WCollectorMinorFixForwardNull, HealNull::Disallow);
+        (void)field.CompareExchange(field.GetFieldValue(), zpointer::null);
         Collector::FailClosedLoad(
             "WCollector::FixMinorEvacuatedSlot.unresolved", target,
             static_cast<uintptr_t>(raw(field.GetFieldValue())),
@@ -745,8 +744,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     if (oldVal == newVal) {
         return false;
     }
-    if (HealSlot(field, to_zpointer(oldVal), to_zpointer(newVal),
-                 HealSite::WCollectorMinorFixForwarded)) {
+    if (field.CompareExchange(to_zpointer(oldVal), to_zpointer(newVal))) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -771,7 +769,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
     BaseObject* oldObj = to_object(to_zaddress(oldValue));
     // resolveto: Resolve already remapped FROM→TO. Do not Admit the to-address
     // against the from-offset bitmap (offpast same-target probe: sameObj=0).
-    RegionInfo* targetRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+    ZPage* targetRegion = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
     const bool compactDestination = targetRegion != nullptr &&
         targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
     const bool alreadyTo = (target != oldObj) || compactDestination;
@@ -801,7 +799,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             "WCollector::FixMinorEvacuatedSlot", provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
-            HealRoot(root, from_object(viaTable), HealSite::WCollectorFixRootForwarded);
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
             return true;
         }
         Collector::FailClosedLoad(
@@ -813,7 +811,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
         return false;
     }
-    HealRoot(root, from_object(current), HealSite::WCollectorFixRootForwarded);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return true;
 }
 
@@ -842,7 +840,7 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
         (void)FixMinorEvacuatedSlot(root, stw);
     };
     VisitStrongPlainRoots(rawRootVisitor, {});
-    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+    VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
 
 }
 
@@ -953,6 +951,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
+                ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+                    data.storeBarrierBuffer->install_base_pointers();
+                });
                 ZGlobalsPointers::flip_young_relocate_start();
                 ZVerify::OnColorFlip();
             }
@@ -1028,7 +1029,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER(ZStatPhases::PYoungEvacFinish);
         {
         // Select flip-promoted pages; field iteration runs after world release.
-        for (RegionInfo* region : minorCandidateRegions) {
+        for (ZPage* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
                 // markwater2: allocating pages never entered the route plan
                 // (zGeneration.cpp:211-213). Leave them young on unmovableFrom.
@@ -1041,7 +1042,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     !ShouldPromoteAge(region->GetYoungAge(), GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold)) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
                         manager.EnlistStayYoungSurvivor(region);
-                    } else if (region->GetRegionType() != RegionInfo::RegionType::RECENT_FULL_REGION) {
+                    } else if (!(region->OnNamedList("recent full regions"))) {
                         RegionManager::FinishStayYoungInPlace(region);
                     }
                     continue;
@@ -1092,7 +1093,8 @@ static BaseObject* RemapPromotedField(Collector& collector, RefField<>& field, z
                  "promotion remap must preserve a non-null reference");
     // ZAddress::load_good: upgrade remap bits without claiming a marking epoch.
     const zpointer healed = ZAddress::load_good(from_object(target), observed);
-    ZgcSelfHeal(field, observed, healed, loadGood, HealSite::WCollectorMinorResolveLoadGoodForward);
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&field), observed, healed, false);
     return target;
 }
 
@@ -1116,7 +1118,7 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
             ZForwarding* forwarding = ZPointer::is_load_good(value.GetFieldValue()) ? nullptr :
                 ForwardingTable::GetCovering(address, Generation::Young);
             const MAddress to = forwarding == nullptr ? address : forwarding->find(address);
-            if (to == 0 || RegionInfo::GetRegionInfoAt(to)->IsYoungRegion()) {
+            if (to == 0 || Heap::page(to)->IsYoungRegion()) {
                 remset.Record(reinterpret_cast<MAddress>(&field));
                 return;
             }
@@ -1131,7 +1133,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 {
     // zRelocate.cpp:1257-1306. Producers have finished before the worker gang
     // starts; pages and their livemaps stay alive until it joins.
-    std::vector<RegionInfo::PromotionPage*> pages;
+    std::vector<ZPage::PromotionPage*> pages;
     {
         std::lock_guard<std::mutex> lock(flipPromotedMutex);
         for (const auto& page : flipPromotedPages) {
@@ -1140,18 +1142,18 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
     }
     class PageTask final : public ZTask {
     public:
-        PageTask(const std::vector<RegionInfo::PromotionPage*>& pages, const std::function<void(RefField<>&)>& remember)
+        PageTask(const std::vector<ZPage::PromotionPage*>& pages, const std::function<void(RefField<>&)>& remember)
             : ZTask("ZRelocateRemsetFlipPromotedPagesTask"), iter(pages.data(), pages.size()), remember(remember) {}
         void work() override
         {
             // zArray.hpp:104 ZArrayParallelIterator: workers claim promoted pages.
-            for (RegionInfo::PromotionPage* page; iter.next(&page);) {
+            for (ZPage::PromotionPage* page; iter.next(&page);) {
                 page->ObjectIterate([&](BaseObject* object) {
                     RefFieldVisitor remapAndRemember = [&](RefField<>& field) {
                         const zpointer observed = field.GetFieldValue();
                         BaseObject* target = RemapPromotedField(Heap::GetHeap().GetCollector(), field, observed);
                         if (target != nullptr && Heap::IsHeapAddress(target) &&
-                            RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
+                            Heap::page(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
                             // RegionManager owns access to the remset producer.
                             remember(field);
                         }
@@ -1163,7 +1165,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
             }
         }
     private:
-        ZArrayParallelIterator<RegionInfo::PromotionPage*> iter;
+        ZArrayParallelIterator<ZPage::PromotionPage*> iter;
         const std::function<void(RefField<>&)> remember;
     } task(pages, [](RefField<>& field) {
         Heap::GetHeap().GetRememberedSet().Record(reinterpret_cast<MAddress>(&field));
@@ -1218,7 +1220,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 enum class CompactedMissClass : uint8_t { kReceiptOwed, kAlreadyToStart, kAlreadyToInterior,
                                           kAbandonedTail };
 
-static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* obj)
+static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
 {
     const MAddress addr = reinterpret_cast<MAddress>(obj);
     const MAddress start = region->GetRegionStart();
@@ -1292,14 +1294,14 @@ static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* 
 //
 // The three pieces map one-to-one onto machinery that already exists here:
 //
-//   forwarding->retain_page(&_queue)   ->  RegionInfo::TryLockReadFromRegion()
+//   forwarding->retain_page(&_queue)   ->  ZPage::TryLockReadFromRegion()
 //   relocate_object_inner(...)         ->  ForwardObjectImpl(obj, forwarding), whose
 //                                          ForwardObjectExclusive does RouteObject (= ZGC's
 //                                          alloc_object_for_relocation, except our
 //                                          to-address is pre-planned so it cannot fail for
 //                                          want of memory), CopyObject (= object_copy_disjoint)
 //                                          and UnlockObject(FORWARDED) (= forwarding->insert)
-//   forwarding->release_page()         ->  RegionInfo::UnlockReadFromRegion()
+//   forwarding->release_page()         ->  ZPage::UnlockReadFromRegion()
 //
 // TryForwardObject (below) already composes exactly these three, which is why this is a reuse
 // and not a second implementation. What was missing was a caller on the mutator's remap
@@ -1320,7 +1322,7 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ForwardingTable::
     if (MutatorManager::Instance().WorldStopped() && !owner->is_done()) {
         // #498: without return barriers roots are completed eagerly. There is
         // no concurrent page worker in this pause; reuse its in-place task.
-        RegionInfo* page = owner->page();
+        ZPage* page = owner->page();
         if (owner->table_generation() == static_cast<uint8_t>(Generation::Young)) {
             manager.ForwardClaimedPage<Generation::Young>(page, owner, false, true);
         } else {
@@ -1335,7 +1337,7 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ForwardingTable::
     return reinterpret_cast<BaseObject*>(owner->find(from));
 }
 
-BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainScope& lease) const
+BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease) const
 {
     // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
     // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
@@ -1389,7 +1391,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
             return current;
         }
         const MAddress currentAddr = reinterpret_cast<MAddress>(current);
-        RegionInfo* currentRegion = RegionInfo::GetGhostFromRegionAt(currentAddr);
+        ZPage* currentRegion = ZPage::GetGhostFromRegionAt(currentAddr);
         if (currentRegion != nullptr && currentRegion->IsCompactRouteDestination(currentAddr) &&
             Collector::JudgeHandOutTarget(current) == HandVerdict::Usable) {
             // Dense in-place destinations share the from page's address range.
@@ -1445,9 +1447,9 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
         // A missing receipt is not a terminal miss while the from-region is
         // retained: the current thread completes relocation before publishing
         // the healed value (zBarrier.inline.hpp:294-343).
-        RegionInfo* ghost = currentRegion;
+        ZPage* ghost = currentRegion;
         if (ghost == nullptr) {
-            RegionInfo* live = RegionInfo::TryGetRegionInfoAt(currentAddr);
+            ZPage* live = Heap::page(currentAddr);
             if (live != nullptr && live->IsCompacted()) {
                 const CompactedMissClass cls = ClassifyCompactedMiss(live, current);
                 if (cls == CompactedMissClass::kAlreadyToStart &&
@@ -1481,7 +1483,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
                 provenance.fieldOffset,
                 static_cast<void*>(current), static_cast<void*>(live),
-                live != nullptr ? static_cast<unsigned>(live->GetRegionType()) : 0xffu,
+                live != nullptr ? 0u : 0xffu,
                 live != nullptr ? static_cast<unsigned>(live->generation_id()) : 0xffu,
                 lookup.currentMembership ? 1u : 0u, static_cast<size_t>(lookup.tableId),
                 static_cast<unsigned>(lookup.answer),
@@ -1520,7 +1522,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
             // relocate_or_remap; that is not a missing identity receipt.
             if (Collector::JudgeHandOutTarget(current) == HandVerdict::Usable &&
                 !current->IsForwarded() &&
-                RegionInfo::GetGhostFromRegionAt(currentAddr) == nullptr) {
+                ZPage::GetGhostFromRegionAt(currentAddr) == nullptr) {
                 return current;
             }
             FailClosedLoad("WCollector::ResolveStoreValue.missing-identity", current, 0, provenance);
@@ -1540,7 +1542,7 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj, Generation generation)
     // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
-        RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
         BaseObject* waited = WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(region));
         if (waited != nullptr) {
             return waited;
@@ -1565,19 +1567,19 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj, Generation generation)
     // source memory, then retain, allocate/copy/CAS, release, and wait on failure.
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) return nullptr;
     if (BaseObject* winner = FindToVersion(obj, generation).found()) return winner;
-    RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) return nullptr;
     const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) return nullptr;
-    RegionInfo::RetainScope lease(region);
+    ZPage::RetainScope lease(region);
     if (!lease.ok()) return WaitForPageForwarding(obj, lease.HoldForwarding());
     BaseObject* winner = ForwardObjectImpl(obj, region, lease);
     lease.Release();
     return winner != nullptr ? winner : WaitForPageForwarding(obj, lease.HoldForwarding());
 }
 
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
-                                          const RegionInfo::RetainScope& lease)
+BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, ZPage* ghostFromRegion,
+                                          const ZPage::RetainScope& lease)
 {
     if (!lease.covers(ghostFromRegion)) {
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
@@ -1601,11 +1603,11 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
             return toObj;
         }
     }
-    RegionInfo* page = ghostFromRegion;
+    ZPage* page = ghostFromRegion;
     if (page == nullptr) {
-        page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        page = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
         if (page == nullptr) {
-            page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+            page = Heap::page(reinterpret_cast<MAddress>(obj));
         }
     }
     return RelocateObjectInner(obj, page);
@@ -1613,9 +1615,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
 {
-    RegionInfo* page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    ZPage* page = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (page == nullptr) {
-        page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        page = Heap::page(reinterpret_cast<MAddress>(obj));
     }
     if (page == nullptr) {
         return nullptr;
@@ -1628,14 +1630,14 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
     if (from == nullptr || to == nullptr || from == to) {
         return;
     }
-    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+    ZPage* toRegion = Heap::page(reinterpret_cast<MAddress>(to));
     if (toRegion == nullptr || toRegion->IsYoungRegion()) {
         return;
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    RegionInfo* fromRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from));
+    ZPage* fromRegion = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from));
     if (fromRegion == nullptr) {
-        fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(from));
+        fromRegion = Heap::page(reinterpret_cast<MAddress>(from));
     }
     if (fromRegion != nullptr && !fromRegion->IsYoungRegion()) {
         const size_t sz = RegionSpace::GetAllocSize(*to);
@@ -1648,7 +1650,7 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
 
 }
 
-BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPage)
+BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, ZPage* copyPage)
 {
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = ForwardingTable::LookupForwarding(fromAddr, ForwardingTable::RetainPageOwner(copyPage).get()).to) {
@@ -1695,7 +1697,7 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPag
             copyPage == nullptr ? 0 : copyPage->ForwardingRefCount());
     }
     if (result != toObj) {
-        if (RegionInfo* dest = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj))) {
+        if (ZPage* dest = Heap::page(reinterpret_cast<MAddress>(toObj))) {
             (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
         }
     }
@@ -1755,13 +1757,12 @@ void RegionManager::ForwardFromRegions(ZWorkers& workers)
 }
 
 template<Generation G>
-void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed, bool inPlace)
+void RegionManager::ForwardClaimedPage(ZPage* region, ForwardingTable::Owner owner, bool claimed, bool inPlace)
 {
     if (!owner || (!claimed && !owner->claim())) return;
     ZForwardingLife::PageWorkScope work(owner.get());
     if (inPlace) {
-        (void)fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                             RegionInfo::RegionType::LONE_FROM_REGION);
+        (void)fromRegionList.TryDeleteRegion(region);
         owner->set_in_place();
         CompactRegion(region);
     } else {
@@ -1778,7 +1779,7 @@ void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owne
 
 
 namespace {
-void WaitCopiedObjectsUnlocked(RegionInfo* region)
+void WaitCopiedObjectsUnlocked(ZPage* region)
 {
     if (region == nullptr || region->IsFreeRegion()) {
         return;
@@ -1787,7 +1788,7 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
 }
 
 template<typename Fn>
-void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPtr, Fn&& fn)
+void ForEachLiveObjectStart(ZPage* region, MAddress start, MAddress allocPtr, Fn&& fn)
 {
     // ZPage::object_iterate (zPage.inline.hpp:319-331) over the original page's
     // livemap: the from-page carrier's map when published, else the page's own.
@@ -1811,7 +1812,7 @@ void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPt
 // geometry are not receipts: kept/in-place survivors must have an explicit
 // from->from entry in the same active/retired table. Keep this check at the
 // producer boundary so a receipt-less publication fails loudly.
-bool VerifyRelocatedPage(RegionInfo* region, const char* site)
+bool VerifyRelocatedPage(ZPage* region, const char* site)
 {
     // zRelocate.cpp:1006: verify before MarkForwardingDone/reset releases the
     // source livemap. ForwardRegion's outer return is too late for this check.
@@ -1826,7 +1827,7 @@ bool VerifyRelocatedPage(RegionInfo* region, const char* site)
 }
 } // namespace
 
-void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
+void RegionManager::ParkUnmovableFromRegion(ZPage* region)
 {
     // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
     // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
@@ -1834,19 +1835,18 @@ void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
     // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
     // rehome below so the garbage list cannot name a non-GARBAGE region.
     if (region != nullptr && region->IsGarbageRegion()) {
-        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+        garbageRegionList.TryDeleteRegion(region);
     }
-    unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    unmovableFromRegionList.PrependRegion(region);
 }
 
-void RegionManager::ExemptFromRegion(RegionInfo* region)
+void RegionManager::ExemptFromRegion(ZPage* region)
 {
     ParkUnmovableFromRegion(region);
 }
 
 namespace {
-bool IncompleteRouteUnpublished(RegionInfo* region)
+bool IncompleteRouteUnpublished(ZPage* region)
 {
     if (region == nullptr || region->IsFreeRegion()) {
         return false;
@@ -1861,8 +1861,8 @@ bool IncompleteRouteUnpublished(RegionInfo* region)
 void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
 {
     // zRelocate.cpp:1041-1047: relocate() does not return with a half-copied page.
-    std::vector<RegionInfo*> snap;
-    auto push = [&snap](RegionInfo* region) {
+    std::vector<ZPage*> snap;
+    auto push = [&snap](ZPage* region) {
         if (region != nullptr) {
             snap.push_back(region);
         }
@@ -1881,7 +1881,7 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
     size_t finished = 0;
     size_t kept = 0;
 
-    for (RegionInfo* region : snap) {
+    for (ZPage* region : snap) {
         if (!IncompleteRouteUnpublished(region)) {
             continue;
         }
@@ -1890,16 +1890,14 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
             continue;
         }
         if (region->IsGarbageRegion()) {
-            garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                              RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+            garbageRegionList.TryDeleteRegion(region);
             ExemptFromRegion(region);
             ++kept;
             continue;
         }
         const bool wasFrom = region->IsFromRegion();
         if (wasFrom) {
-            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                           RegionInfo::RegionType::LONE_FROM_REGION);
+            fromRegionList.TryDeleteRegion(region);
         }
         const bool canForward = region->IsLoneFromRegion() ||
             (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()));
@@ -1915,8 +1913,7 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
             }
         }
         if (region->IsFromRegion()) {
-            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                           RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+            fromRegionList.TryDeleteRegion(region);
         }
         if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
             ExemptFromRegion(region);
@@ -1937,7 +1934,7 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
             keptTot);
     }
 
-    for (RegionInfo* region : snap) {
+    for (ZPage* region : snap) {
         if (region == nullptr || region->IsFreeRegion()) {
             continue;
         }
@@ -1946,7 +1943,7 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
                      "— cycle-end from-page not in {FORWARDED,COMPACTED,Exempt-kept}",
                      region, region->GetRegionStart(), static_cast<unsigned>(region->RelocateObserve()),
                      static_cast<unsigned>(region->IsForwardingDone()),
-                     static_cast<unsigned>(region->GetRegionType()), (region->is_marked() ? region->live_bytes() : 0));
+                     0u, (region->is_marked() ? region->live_bytes() : 0));
     }
 }
 
@@ -1957,7 +1954,7 @@ void RegionManager::CollectFromSpaceGarbage()
     // must not be merged into garbage. ZGC free_page never runs while the page
     // is in the relocation set (zGeneration.cpp:216-221).
     static std::atomic<size_t> g_fromGarbageSkip{ 0 };
-    RegionInfo* region = fromRegionList.TakeHeadRegion();
+    ZPage* region = fromRegionList.TakeHeadRegion();
     while (region != nullptr) {
         const bool complete = region->IsForwardingDone();
         if (!complete) {
@@ -1973,12 +1970,12 @@ void RegionManager::CollectFromSpaceGarbage()
         } else {
 #if defined(__OHOS__)
             if (region->IsGhostFromRegion()) {
-                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+                garbageRegionList.PrependRegion(region);
             } else {
                 ReclaimRegion(region);
             }
 #else
-            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            garbageRegionList.PrependRegion(region);
 #endif
         }
         region = fromRegionList.TakeHeadRegion();
@@ -1999,7 +1996,7 @@ void RegionManager::ForwardFromRegions()
 }
 
 
-bool RegionManager::RelocateClaimedPage(RegionInfo* region)
+bool RegionManager::RelocateClaimedPage(ZPage* region)
 {
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
     MAddress regionStart = region->GetRegionStart();
@@ -2027,7 +2024,7 @@ bool RegionManager::RelocateClaimedPage(RegionInfo* region)
     return true;
 }
 
-void RegionManager::CompactRegion(RegionInfo* region)
+void RegionManager::CompactRegion(ZPage* region)
 {
     auto owner = ForwardingTable::RetainPageOwner(region);
     ZForwardingLife::PageWorkScope work(owner.get(),
@@ -2041,7 +2038,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
-        (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), region->GetRegionType());
+        (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), 0u);
     MAddress regionLimit = region->GetRegionAllocPtr();
     ForwardingTable::Publication publication =
         ForwardingTable::EnsurePublicationBeforeCopy(region, regionStart);
@@ -2066,7 +2063,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
         if (toAge == PageAge::old) {
             region->PromoteYoungRegion();
         } else {
-            region->SetYoungAge(untype(toAge));
+            region->reset(toAge);
         }
     }
     // ZPage::reset(to_age): only the actual in-place destination is born anew.
@@ -2118,30 +2115,23 @@ void RegionManager::CompactRegion(RegionInfo* region)
     RehomeCompactedInPlaceRegion(region);
 }
 
-void RegionManager::EnlistCompactedRegionForAllocator(RegionInfo* region)
+void RegionManager::EnlistCompactedRegionForAllocator(ZPage* region)
 {
     if (region == nullptr) {
         return;
     }
-    const RegionInfo::RegionType type = region->GetRegionType();
     bool claimed = false;
-    if (type == RegionInfo::RegionType::FROM_REGION) {
-        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                                 RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    if (region->IsFromRegion()) {
+        claimed = fromRegionList.TryDeleteRegion(region);
+    } else if (region->IsLoneFromRegion()) {
         claimed = true;
-    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                                    RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION ||
-               type == RegionInfo::RegionType::RECENT_FULL_REGION) {
-        // Already owned by the allocator list, or the concurrent stay-young
-        // path won and made it collector-visible. Both are complete states.
+    } else if (region->IsGarbageRegion()) {
+        claimed = garbageRegionList.TryDeleteRegion(region);
+    } else if (region->IsThreadLocalRegion() || region->OnNamedList("recent full regions")) {
         return;
     }
     if (claimed) {
-        tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        tlRegionList.PrependRegion(region);
     }
 }
 
@@ -2163,39 +2153,34 @@ void RegionManager::EnlistCompactedRegionForAllocator(RegionInfo* region)
 //
 // Same shape as the stay-young survivor that had to be re-homed earlier in this cycle: the work
 // finished, and nothing put the region back where the next cycle looks.
-void RegionManager::RehomeCompactedInPlaceRegion(RegionInfo* region)
+void RegionManager::RehomeCompactedInPlaceRegion(ZPage* region)
 {
     if (region == nullptr) {
         return;
     }
-    const RegionInfo::RegionType type = region->GetRegionType();
     bool claimed = false;
-    if (type == RegionInfo::RegionType::FROM_REGION) {
-        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                                 RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+    if (region->IsFromRegion()) {
+        claimed = fromRegionList.TryDeleteRegion(region);
+    } else if (region->IsLoneFromRegion()) {
         claimed = true;
-    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                                    RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION) {
-        claimed = tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
-                                               RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::RECENT_FULL_REGION) {
+    } else if (region->IsGarbageRegion()) {
+        claimed = garbageRegionList.TryDeleteRegion(region);
+    } else if (region->IsThreadLocalRegion()) {
+        claimed = tlRegionList.TryDeleteRegion(region);
+    } else if (region->OnNamedList("recent full regions")) {
         return;
     }
     if (!claimed) {
         return;
     }
-    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+    recentFullRegionList.PrependRegion(region);
     RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
 
 
 namespace {
-bool StayYoungThisCycle(RegionInfo* region)
+bool StayYoungThisCycle(ZPage* region)
 {
     if (!kPageAgeAdaptiveTenuring) {
         return false;
@@ -2206,15 +2191,15 @@ bool StayYoungThisCycle(RegionInfo* region)
 
 } // namespace
 
-void RegionManager::BumpYoungSurvivorAge(RegionInfo* region)
+void RegionManager::BumpYoungSurvivorAge(ZPage* region)
 {
     uint8_t next = region->GetYoungAge();
     if (next < untype(PageAge::survivor14)) {
-        region->SetYoungAge(static_cast<uint8_t>(next + 1));
+        region->reset(static_cast<PageAge>(next + 1));
     }
 }
 
-void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
+void RegionManager::FinishStayYoungInPlace(ZPage* region, bool advanceAge)
 {
     if (advanceAge) {
         BumpYoungSurvivorAge(region);
@@ -2227,47 +2212,34 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
     // page task does not revoke forwarding-table membership.
 }
 
-void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region, bool advanceAge)
+void RegionManager::EnlistStayYoungSurvivor(ZPage* region, bool advanceAge)
 {
     FinishStayYoungInPlace(region, advanceAge);
     // evac_finish calls this on FROM regions still linked in fromRegionList.
     // PrependRegion overwrites next/prev without unlinking — later
     // CollectFromSpaceGarbage MergeRegionList walks a chain that now points
     // into recentFull, and DeleteRegionLocked SEGVs (r13=0, +0x14).
-    const RegionInfo::RegionType type = region->GetRegionType();
     bool claimed = false;
-    if (type == RegionInfo::RegionType::FROM_REGION) {
-        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                                 RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        // TakeHeadRegion already unlinked it (RegionManager.cpp:1712). Type still
-        // LONE_FROM until Prepend; kLoneFromIsFrom readers would keep treating it
-        // as from-space if we skipped the store (WCollector.h:495).
-        region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+    if (region->IsFromRegion()) {
+        claimed = fromRegionList.TryDeleteRegion(region);
+    } else if (region->IsLoneFromRegion()) {
         claimed = true;
-    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                                    RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION) {
-        // CompactRegion's ownership tail may win first. Transfer that completed
-        // allocator-list state instead of either abandoning the survivor there
-        // or linking the node into two lists.
-        claimed = tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
-                                               RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::RECENT_FULL_REGION) {
-        // RouteRegion's compact-in-place fallback already re-homed this region.
-        // A second Prepend while it is the list head sets both links to itself.
+    } else if (region->IsGarbageRegion()) {
+        claimed = garbageRegionList.TryDeleteRegion(region);
+    } else if (region->IsThreadLocalRegion()) {
+        claimed = tlRegionList.TryDeleteRegion(region);
+    } else if (region->OnNamedList("recent full regions")) {
         return;
     }
     if (!claimed) {
         return;
     }
-    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+    recentFullRegionList.PrependRegion(region);
     RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
 template<Generation G>
-void RegionManager::ForwardRegion(RegionInfo* region)
+void RegionManager::ForwardRegion(ZPage* region)
 {
     // zRelocate.cpp:993-1003. The owner outlives source-page retirement, so
     // the after check reads the forwarding table and destination objects only.
@@ -2282,11 +2254,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     } verifyAfterRelocation { verifyForwarding.get() };
 
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
-        (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
+        (region->IsRoutingState() || region->IsCompacted())), "region type %u", 0u);
 
     DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
-        region->GetRegionType(), (region->is_marked() ? region->live_bytes() : 0));
+        0u, (region->is_marked() ? region->live_bytes() : 0));
 
     bool youngRegion = region->IsYoungRegion();
     if (youngRegion && !GenerationMayRelocateYoung(G)) {
@@ -2461,10 +2433,10 @@ template void RegionManager::StartForwardFromRegions<Generation::Young>(ZWorkers
 template void RegionManager::StartForwardFromRegions<Generation::Old>(ZWorkers&);
 template void RegionManager::DrainForwardFromRegions<Generation::Young>();
 template void RegionManager::DrainForwardFromRegions<Generation::Old>();
-template void RegionManager::ForwardClaimedPage<Generation::Young>(RegionInfo*, ForwardingTable::Owner, bool, bool);
-template void RegionManager::ForwardClaimedPage<Generation::Old>(RegionInfo*, ForwardingTable::Owner, bool, bool);
-template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
-template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
+template void RegionManager::ForwardClaimedPage<Generation::Young>(ZPage*, ForwardingTable::Owner, bool, bool);
+template void RegionManager::ForwardClaimedPage<Generation::Old>(ZPage*, ForwardingTable::Owner, bool, bool);
+template void RegionManager::ForwardRegion<Generation::Young>(ZPage*);
+template void RegionManager::ForwardRegion<Generation::Old>(ZPage*);
 
 } // namespace MapleRuntime
 
@@ -2506,7 +2478,7 @@ void RelocationRequestQueue::BeginWorkers(size_t workers)
 
 RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(void* region, MAddress from)
 {
-    auto owner = ForwardingTable::RetainPageOwner(static_cast<RegionInfo*>(region));
+    auto owner = ForwardingTable::RetainPageOwner(static_cast<ZPage*>(region));
     CHECK_DETAIL(!owner || owner->covers(from), "relocation request outside forwarding from=%#zx", from);
     return Add(std::move(owner));
 }

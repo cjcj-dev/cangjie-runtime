@@ -1,0 +1,13 @@
+# slot test0 acquired 2026-09-15T23:12:26+08:00
+7373:[==========] 705 tests from 103 test suites ran.
+7374:[  PASSED  ] 702 tests.
+7375:[  FAILED  ] 3 tests, listed below:
+7376:[  FAILED  ] NativeRootCurrent.MajorSeed
+7377:[  FAILED  ] ZVirtualMemoryManagerTest.test_insert_merges_neighbours
+7378:[  FAILED  ] ColourCensus.PlainWriteFunnelFailsClosed
+--- NativeRootCurrent.MajorSeed
+  wf_P04_cut1/testable/runtime/tests/gc_unit/test_native_root_current.cpp:242: EXPECT_EQ failed: enumerated (==1) vs minor (==0)
+--- ZVirtualMemoryManagerTest.test_insert_merges_neighbours
+  wf_P04_cut1/testable/runtime/tests/gc_unit/test_zVirtualMemoryManager.cpp:227: EXPECT failed: _registry->is_contiguous()
+--- ColourCensus.PlainWriteFunnelFailsClosed
+  wf_P04_cut1/testable/runtime/tests/gc_unit/test_colour_census.cpp:31: EXPECT failed: WIFSIGNALED(status)

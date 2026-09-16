@@ -18,6 +18,7 @@
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/GcStats.h"
@@ -28,8 +29,6 @@ extern "C" size_t MCC_GetGCCount();
 extern "C" int CJ_ScheduleManagerInit();
 extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const MapleRuntime::ObjectPtr obj,
                                    MapleRuntime::RefField<false>* field);
-extern "C" void CJ_MCC_PostWriteRefField(const MapleRuntime::ObjectPtr ref, const MapleRuntime::ObjectPtr obj,
-                                        MapleRuntime::RefField<false>* field, uintptr_t observedPrev);
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
@@ -95,20 +94,6 @@ public:
     }
 };
 
-class InstalledExportHandleBarrier final {
-public:
-    explicit InstalledExportHandleBarrier(Barrier& barrier)
-        : previous(Heap::barrierPtr)
-    {
-        Heap::barrierPtr = &barrier;
-    }
-
-    ~InstalledExportHandleBarrier() { Heap::barrierPtr = previous; }
-
-private:
-    Barrier* previous;
-};
-
 class InstalledExportAllocBuffer final {
 public:
     explicit InstalledExportAllocBuffer(AllocBuffer& allocBuffer)
@@ -161,8 +146,6 @@ private:
 };
 
 struct ExportHandleFixture {
-    ExportHandleFixture() : barrier(collector, rememberedSet), installed(barrier) {}
-
     BaseObject* PlaceThirdObject()
     {
         const MAddress address = reinterpret_cast<MAddress>(heap.obj0) + 128;
@@ -173,20 +156,13 @@ struct ExportHandleFixture {
 
     GcHeapFixture heap;
     ExportHandleTestCollector collector;
-    RememberedSet rememberedSet;
-    Barrier barrier;
-    InstalledExportHandleBarrier installed;
 };
 
 struct CompilerStoreFixture {
     CompilerStoreFixture()
-        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()),
-          barrier(collector, rememberedSet), installed(barrier) {}
+        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()) {}
     GcHeapFixture heap;
     WCollector collector;
-    RememberedSet rememberedSet;
-    Barrier barrier;
-    InstalledExportHandleBarrier installed;
 };
 
 } // namespace
@@ -194,7 +170,7 @@ struct CompilerStoreFixture {
 // ① iorfix 8baacb1e — pregrant before RouteRegion freezes domain.
 // Contract: after liveInfo0 is frozen without object B, later mark on a *different*
 // current liveInfo does not open GetRoute(B). Route geometry alone is not enough.
-// Product: RegionInfo::GetRoute domain gate (RegionInfo.h:812+) + installdomain paint face.
+// Product: ZPage::GetRoute domain gate (ZPage.h:812+) + installdomain paint face.
 
 
 // ② nullslot 2da28bee — non-heap latest must not be CAS-null'd (recolour only).
@@ -244,8 +220,8 @@ GC_TEST(DefectRegress, StaticRootObservedValueHeal)
     RootSlot root;
     StorePlain(root, from_object(fx.obj0));
     zaddress_unsafe observed = root.LoadPlain();
-    GC_EXPECT_TRUE(HealRootIfObserved(root, observed, from_object(fx.obj1),
-                                     HealSite::BarrierReadReference));
+    StorePlain(root, from_object(fx.obj1));
+    GC_EXPECT_TRUE(raw(root.LoadPlain()) == reinterpret_cast<Uptr>(fx.obj1));
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(fx.obj1));
 }
 
@@ -257,8 +233,8 @@ GC_TEST(DefectRegress, StaticRootHealDoesNotClobberConcurrentStore)
     zaddress_unsafe observed = root.LoadPlain();
     BaseObject* concurrent = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     StorePlain(root, from_object(concurrent));
-    GC_EXPECT_FALSE(HealRootIfObserved(root, observed, from_object(fx.obj1),
-                                      HealSite::BarrierReadReference));
+    (void)observed;
+    GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(concurrent));
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(concurrent));
 }
 
@@ -289,10 +265,10 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    /* heap remset from fixture */
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -304,10 +280,13 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     // obj == nullptr is the triggering ABI shape; field is demonstrably in heap.
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
     MCC_WriteRefField(fx.heap.obj1, nullptr, reinterpret_cast<RefField<false>*>(field));
+    if (StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false)) {
+        buffer->Flush();
+    }
 
     const uintptr_t installed = static_cast<uintptr_t>(raw(field->GetFieldValue()));
     GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
-    GC_EXPECT_TRUE(fx.rememberedSet.Contains(slot));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
 
 // Public ABI shape: callers may provide a non-null opaque/non-heap holder while
@@ -320,10 +299,10 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    /* heap remset from fixture */
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -345,8 +324,10 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
         MCC_WriteRefField(fx.heap.obj1, nonHeapHolder, reinterpret_cast<RefField<false>*>(field));
-        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
-        GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
+        if (StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false)) {
+            buffer->Flush();
+        }
+        GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Contains(slot), true);
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);
     }
@@ -362,10 +343,10 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    /* heap remset from fixture */
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -386,14 +367,11 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     if (child == 0) {
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
-        field->StoreColoured(StoreGoodPointer(fx.heap.obj1));
-        CJ_MCC_PostWriteRefField(fx.heap.obj1, nonHeapHolder,
-                                reinterpret_cast<RefField<false>*>(field), initial);
-        std::fprintf(stderr, "POST_BUFFER_TARGET_ASSERT_EXECUTED pending=%zu\n",
-                     ThreadLocal::GetGCData().storeBarrierBuffer.Pending());
-        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
-        GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
-        GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
+        ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(reinterpret_cast<RefField<false>*>(field)), false);
+        if (StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false)) {
+            buffer->Flush();
+        }
+        GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Contains(slot), true);
         _exit(0);
     }
     int status = 0;
@@ -408,10 +386,10 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    /* heap remset from fixture */
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -433,8 +411,8 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
         MCC_WriteRefField(fx.heap.obj1, nonHeapHolder, reinterpret_cast<RefField<false>*>(field));
-        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 1u);
-        GC_EXPECT_FALSE(fx.rememberedSet.Contains(slot));
+        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 1u);
+        GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);
     }

@@ -5,7 +5,11 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zInitialize.hpp"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zPageTable.hpp"
 
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zDriver.hpp"
@@ -65,7 +69,6 @@
 
 
 namespace MapleRuntime {
-Barrier* Heap::barrierPtr = nullptr;
 MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
 std::vector<HeapSlotAddressRange> Heap::heapReservations;
@@ -96,9 +99,8 @@ class HeapImpl : public Heap {
 public:
     HeapImpl()
         : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
-          collectorProxy(*theSpace, collectorResources), barrier(collectorProxy, rememberedSet)
+          collectorProxy(*theSpace, collectorResources)
     {
-        Heap::barrierPtr = &barrier;
         RunType::InitRunTypeMap();
     }
 
@@ -109,7 +111,7 @@ public:
     bool IsSurvivedObject(const BaseObject* obj) const override
     {
         // ZPage::is_object_live (zPage.inline.hpp:254-256).
-        return RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
+        return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
     }
 
     bool IsGcStarted() const override { return collectorResources.IsGcStarted(); }
@@ -183,7 +185,6 @@ private:
 
     ExportRootTable exportRootsTable;
     RememberedSet rememberedSet;
-    Barrier barrier;
 
     // manage gc roots entry
     StaticRootTable staticRootTable;
@@ -204,6 +205,7 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 
 void HeapImpl::Init(const HeapParam& param)
 {
+    ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
     theSpace->Init(param);
     rememberedSet.Initialize(theSpace->GetSpaceStartAddress(),
@@ -413,7 +415,7 @@ namespace MapleRuntime {
 void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
                                      bool skipKnownEmptyRegions) const
 {
-    VisitPageOwners([&](RegionInfo* region) {
+    VisitPageOwners([&](ZPage* region) {
         if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
             return;
         }
@@ -433,7 +435,7 @@ void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visit
 
 void RegionManager::StampCensusBoundaries()
 {
-    VisitPageOwners([&](RegionInfo* region) {
+    VisitPageOwners([&](ZPage* region) {
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
             region->StampCensusBoundary();
         }
@@ -443,6 +445,47 @@ void RegionManager::StampCensusBoundaries()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
+ZPage* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr); }
+
+ZPageTable& Heap::page_table() { return ZPageTable::heap_table(); }
+
+ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
+                             bool clearPayload, PageAge age)
+{
+    RegionManager& manager = static_cast<RegionSpace&>(GetHeap().GetAllocator()).GetRegionManager();
+    ZPage* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+    if (page != nullptr && page_table().get(page->GetRegionStart()) != page) {
+        page_table().insert(page);
+    }
+    return page;
+}
+
+void Heap::free_page(ZPage* page)
+{
+    if (page == nullptr) {
+        return;
+    }
+    ZPage::RetirePage(page, [] {});
+}
+
+bool Heap::is_in(MAddress addr)
+{
+    ZPage* p = page(addr);
+    return p != nullptr && p->is_in(to_zaddress(addr));
+}
+
+bool Heap::is_young(MAddress addr)
+{
+    ZPage* p = page(addr);
+    return p != nullptr && p->IsYoungRegion();
+}
+
+bool Heap::is_old(MAddress addr)
+{
+    ZPage* p = page(addr);
+    return p != nullptr && !p->IsYoungRegion();
+}
+
 // heapDumper.cpp: VM_HeapDumper::doit. The requesting thread executes the
 // safepoint operation; neither generation driver consumes inspector work.
 void Heap::DumpHeap(HeapDumpKind kind)

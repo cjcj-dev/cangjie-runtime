@@ -8,7 +8,7 @@
 #include "Heap/z/zMarkCache.hpp"
 #include "Heap/z/zPage.hpp"
 namespace MapleRuntime {
-void MarkLiveCache::IncLive(RegionInfo* region, size_t bytes)
+void MarkLiveCache::IncLive(ZPage* region, size_t bytes)
 {
     CHECK_DETAIL(region != nullptr, "cannot cache live bytes for a null region");
     const size_t index = (region->GetRegionStart() >> shift) & (CACHE_SIZE - 1);

@@ -125,7 +125,7 @@ Generation Collector::ObjectGeneration(BaseObject* object) const
 {
     const MAddress address = reinterpret_cast<MAddress>(object);
     // ZHeap::is_young uses the current page, including after promotion.
-    return RegionInfo::GetRegionInfoAt(address)->GetOwnerGeneration();
+    return Heap::page(address)->GetOwnerGeneration();
 }
 
 BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const
@@ -176,11 +176,11 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
     const ForwardingTable::NeverInstalledSnapshot snapshot =
         ForwardingTable::CaptureNeverInstalledSnapshot(address);
 
-    RegionInfo* region = (target != nullptr && Heap::IsHeapAddress(target))
-        ? RegionInfo::TryGetRegionInfoAt(address)
+    ZPage* region = (target != nullptr && Heap::IsHeapAddress(target))
+        ? Heap::page(address)
         : nullptr;
     const MAddress regionStart = region == nullptr ? 0 : region->GetRegionStart();
-    const unsigned regionType = region == nullptr ? 0xffu : static_cast<unsigned>(region->GetRegionType());
+    const unsigned regionType = region == nullptr ? 0xffu : static_cast<unsigned>(0u);
     const unsigned generation = region == nullptr ? 0xffu : static_cast<unsigned>(region->generation_id());
     const uint64_t currentEpoch = region == nullptr ? 0 : region->GetSnapshotEpoch();
     const RegionLifeId currentLife = region == nullptr ? 0 : region->GetRegionLifeId();
@@ -268,8 +268,8 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
 {
     const HandVerdict verdict = JudgeHandOutTarget(target);
     const MAddress from = target != nullptr ? reinterpret_cast<MAddress>(target) : 0;
-    RegionInfo* region = (from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader)
-        ? RegionInfo::TryGetRegionInfoAt(from)
+    ZPage* region = (from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader)
+        ? Heap::page(from)
         : nullptr;
     const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
     const ForwardingTable::LookupResult lookup = canLookup
@@ -300,7 +300,7 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
                  provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
                  provenance.fieldOffset, static_cast<void*>(target),
                  static_cast<void*>(region),
-                 region != nullptr ? static_cast<unsigned>(region->GetRegionType()) : 0xffu,
+                 region != nullptr ? static_cast<unsigned>(0u) : 0xffu,
                  region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
                  lookup.currentMembership ? 1u : 0u,
                  static_cast<size_t>(lookup.tableId),

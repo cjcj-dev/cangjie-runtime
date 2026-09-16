@@ -4,106 +4,131 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef MRT_ALLOC_RANGE_REGISTRY_H
-#define MRT_ALLOC_RANGE_REGISTRY_H
+// ZGC zRangeRegistry.hpp:36-148.
 
+#pragma once
 #include <cstddef>
-#include <cstdint>
-#include <mutex>
-#include <vector>
+#include "Heap/z/zLock.hpp"
+
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zArray.hpp"
+#include "Heap/z/zList.hpp"
 
 namespace MapleRuntime {
 
-// A half-open address interval. A zero-sized range is the null result returned
-// when a claim cannot be satisfied.
-class Range {
-public:
-    Range() = default;
-    Range(uintptr_t start, size_t size);
-
-    bool IsNull() const;
-    bool IsValid() const;
-    uintptr_t Start() const;
-    uintptr_t End() const;
-    size_t Size() const;
-
-    bool Contains(const Range& other) const;
-    bool AdjacentTo(const Range& other) const;
-
-    bool GrowFromFront(size_t size);
-    bool GrowFromBack(size_t size);
-    Range ShrinkFromFront(size_t size);
-    Range ShrinkFromBack(size_t size);
-
-    Range Partition(size_t offset, size_t partitionSize) const;
-    Range FirstPart(size_t splitOffset) const;
-    Range LastPart(size_t splitOffset) const;
-
-    bool operator==(const Range& other) const;
-    bool operator!=(const Range& other) const;
+template <typename Range>
+class ZRangeRegistry {
+  friend class ZVirtualMemoryManagerTest;
 
 private:
-    uintptr_t start{ 0 };
-    size_t size{ 0 };
+  // The node type for the list of Ranges
+  class Node;
+
+public:
+  using offset     = typename Range::offset;
+  using offset_end = typename Range::offset_end;
+
+  typedef void (*CallbackPrepare)(const Range& range);
+  typedef void (*CallbackResize)(const Range& from, const Range& to);
+
+  struct Callbacks {
+    CallbackPrepare _prepare_for_hand_out;
+    CallbackPrepare _prepare_for_hand_back;
+    CallbackResize  _grow;
+    CallbackResize  _shrink;
+
+    Callbacks();
+  };
+
+private:
+  mutable ZLock      _lock;
+  ZList<Node>        _list;
+  Callbacks          _callbacks;
+  Range              _limits;
+
+  void move_into(const Range& range);
+
+  void insert_inner(const Range& range);
+  void register_inner(const Range& range);
+
+  void grow_from_front(Range* range, size_t size);
+  void grow_from_back(Range* range, size_t size);
+
+  Range shrink_from_front(Range* range, size_t size);
+  Range shrink_from_back(Range* range, size_t size);
+
+  Range remove_from_low_inner(size_t size);
+  Range remove_from_low_at_most_inner(size_t size);
+
+  size_t remove_from_low_many_at_most_inner(size_t size, ZArray<Range>* out);
+
+  bool check_limits(const Range& range) const;
+
+public:
+  ZRangeRegistry();
+  ~ZRangeRegistry();
+
+  void register_callbacks(const Callbacks& callbacks);
+
+  void register_range(const Range& range);
+  bool unregister_first(Range* out);
+
+  bool is_empty() const;
+  bool is_contiguous() const;
+
+  void anchor_limits();
+  bool limits_contain(const Range& range) const;
+
+  offset peek_low_address() const;
+  offset_end peak_high_address_end() const;
+
+  void insert(const Range& range);
+
+  void insert_and_remove_from_low_many(const Range& range, ZArray<Range>* out);
+  Range insert_and_remove_from_low_exact_or_many(size_t size, ZArray<Range>* in_out);
+
+  Range remove_from_low(size_t size);
+  Range remove_from_low_at_most(size_t size);
+  size_t remove_from_low_many_at_most(size_t size, ZArray<Range>* out);
+  Range remove_from_high(size_t size);
+
+  void transfer_from_low(ZRangeRegistry* other, size_t size);
 };
 
-// Sorted ownership ledger for address intervals. Successful insertion keeps
-// the ledger disjoint and coalesces every adjacent pair. Claims are first-fit
-// from the selected address end, matching ZRangeRegistry's low/high variants.
-class RangeRegistry {
-public:
-    using PrepareCallback = void (*)(const Range& range, void* context);
-    using ResizeCallback = void (*)(const Range& from, const Range& to, void* context);
-
-    struct Callbacks {
-        PrepareCallback prepareForHandOut{ nullptr };
-        PrepareCallback prepareForHandBack{ nullptr };
-        ResizeCallback grow{ nullptr };
-        ResizeCallback shrink{ nullptr };
-        void* context{ nullptr };
-    };
-
-    RangeRegistry() = default;
-    ~RangeRegistry() = default;
-
-    RangeRegistry(const RangeRegistry&) = delete;
-    RangeRegistry(RangeRegistry&&) = delete;
-    RangeRegistry& operator=(const RangeRegistry&) = delete;
-    RangeRegistry& operator=(RangeRegistry&&) = delete;
-
-    // Callbacks run while the registry lock is held and must not re-enter this
-    // registry. RegisterRange is for initial ownership and does not emit the
-    // hand-back callback; Insert represents ownership being handed back.
-    void RegisterCallbacks(const Callbacks& callbacks);
-    bool RegisterRange(const Range& range);
-    bool Insert(const Range& range);
-
-    Range ClaimLow(size_t size);
-    Range ClaimHigh(size_t size);
-
-    bool IsEmpty() const;
-    bool IsContiguous() const;
-    bool Contains(const Range& range) const;
-    size_t TotalSize() const;
-    std::vector<Range> Snapshot() const;
+template <typename Range>
+class ZRangeRegistry<Range>::Node {
+  friend class ZList<Node>;
 
 private:
-    bool InsertLocked(const Range& range, bool prepareForHandBack);
-    void GrowFromFrontLocked(Range& range, size_t size);
-    void GrowFromBackLocked(Range& range, size_t size);
-    Range ShrinkFromFrontLocked(Range& range, size_t size);
-    Range ShrinkFromBackLocked(Range& range, size_t size);
-    void PrepareForHandOutLocked(const Range& range) const;
+  using offset     = typename Range::offset;
+  using offset_end = typename Range::offset_end;
 
-    mutable std::mutex lock;
-    std::vector<Range> ranges;
-    Callbacks callbacks;
+  Range           _range;
+  ZListNode<Node> _node;
+
+public:
+  Node(offset start, size_t size)
+    : _range(start, size),
+      _node() {}
+
+  Node(const Range& other)
+    : Node(other.start(), other.size()) {}
+
+  Range* range() {
+    return &_range;
+  }
+
+  offset start() const {
+    return _range.start();
+  }
+
+  offset_end end() const {
+    return _range.end();
+  }
+
+  size_t size() const {
+    return _range.size();
+  }
 };
 
 } // namespace MapleRuntime
-
-#ifndef MRT_TESTABLE_INTERNALS
-#include "Heap/z/zRangeRegistry.inline.hpp"
-#endif
-
-#endif // MRT_ALLOC_RANGE_REGISTRY_H
