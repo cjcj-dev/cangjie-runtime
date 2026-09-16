@@ -235,7 +235,7 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
     auto& young = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
     CHECK(young.IsPhaseMark());
     if (is_null(address)) return address;
-    if (RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+    if (Heap::page(raw(address))->IsYoungRegion()) {
         young.MarkObject<false, true, true, false>(address);
         return address;
     }
@@ -252,7 +252,7 @@ zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
     auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
     CHECK(old.IsPhaseMark());
     if (is_null(address)) return address;
-    if (!RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+    if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, false>(address);
         return address;
     }
@@ -266,7 +266,7 @@ zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
     auto& young = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
     CHECK(old.IsPhaseMark() || young.IsPhaseMark());
     if (is_null(address)) return address;
-    if (!RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+    if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, true>(address);
         return address;
     }
@@ -280,7 +280,7 @@ zaddress ZBarrier::MarkFinalizableFromOldSlowPath(zaddress address)
     auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
     CHECK(old.IsPhaseMark() || Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).IsPhaseMark());
     if (is_null(address)) return address;
-    if (!RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+    if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, true>(address);
         return address;
     }
@@ -334,7 +334,7 @@ zaddress ZBarrier::blocking_keep_alive_on_weak_slow_path(zaddress addr)
     if (!Heap::IsHeapAddress(target)) {
         return addr;
     }
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
     if (region->IsYoungRegion()) {
         Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
         return addr;
@@ -354,7 +354,7 @@ zaddress ZBarrier::blocking_keep_alive_on_phantom_slow_path(zaddress addr)
     if (!Heap::IsHeapAddress(target)) {
         return addr;
     }
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
     if (region->IsYoungRegion()) {
         Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
         return addr;

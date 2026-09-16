@@ -104,7 +104,7 @@ void StoreBarrierBuffer::on_new_phase_relocate(size_t i)
 void StoreBarrierBuffer::on_new_phase_remember(size_t i)
 {
     const MAddress p = buffer[i].p;
-    if (!Heap::IsHeapAddress(p) || RegionInfo::GetRegionInfoAt(p)->IsYoungRegion()) {
+    if (!Heap::IsHeapAddress(p) || Heap::page(p)->IsYoungRegion()) {
         return;
     }
     const uintptr_t lastMarkYoung = lastProcessedColor & (ZPointerMarkedYoung0 | ZPointerMarkedYoung1);
@@ -134,7 +134,7 @@ void StoreBarrierBuffer::on_new_phase_mark(size_t i)
     }
     const MAddress p = entry.p;
     if (is_old_mark() && stored_during_old_mark() && Heap::IsHeapAddress(p) &&
-        !RegionInfo::GetRegionInfoAt(p)->IsYoungRegion()) {
+        !Heap::page(p)->IsYoungRegion()) {
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
         Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
     }

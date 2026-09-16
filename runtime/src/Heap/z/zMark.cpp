@@ -523,7 +523,7 @@ void TracingCollector::DiscoverFinalizableRoot(NativeSlot& slot) const
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
     object = ValidateCurrentValue(object, provenance);
     if (object == nullptr) return;
-    auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
     auto& processor = collectorResources.GetFinalizerProcessor().GetReferenceProcessor();
     const auto status = processor.DiscoverReference(object, ReferenceType::FINAL);

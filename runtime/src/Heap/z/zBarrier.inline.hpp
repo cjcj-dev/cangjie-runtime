@@ -100,7 +100,7 @@ inline zpointer ZBarrier::ColorStoreGood(zaddress address, zpointer)
 
 inline zpointer ZBarrier::ColorRemsetGood(zaddress address, zpointer previous)
 {
-    if (is_null(address) || RegionInfo::GetRegionInfoAt(raw(address))->IsYoungRegion()) {
+    if (is_null(address) || Heap::page(raw(address))->IsYoungRegion()) {
         return ColorMarkGood(address, previous);
     }
     return ColorMarkYoungGood(address, previous);
