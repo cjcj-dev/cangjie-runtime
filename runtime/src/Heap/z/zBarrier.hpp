@@ -81,6 +81,11 @@ public:
     static void mark_and_remember(volatile zpointer* p, zaddress addr);
     static void store_barrier_on_heap_oop_field(volatile zpointer* p, bool heal);
     static void store_barrier_on_native_oop_field(volatile zpointer* p, bool heal);
+    static zaddress load_barrier_on_oop_field(volatile zpointer* p);
+    static zaddress load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static void load_barrier_on_oop_array(volatile zpointer* p, size_t length);
 
     static void WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref);
     static void WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen);

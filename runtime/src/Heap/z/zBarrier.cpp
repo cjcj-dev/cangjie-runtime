@@ -838,4 +838,34 @@ void ZBarrier::store_barrier_on_native_oop_field(volatile zpointer* p, bool heal
     NativeStoreBarrier<false>(field, heal);
 }
 
+zaddress ZBarrier::load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
+    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Strong));
+}
+
+zaddress ZBarrier::load_barrier_on_oop_field(volatile zpointer* p)
+{
+    return load_barrier_on_oop_field_preloaded(p, load_atomic(p));
+}
+
+zaddress ZBarrier::load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
+    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Weak));
+}
+
+zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
+    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Phantom));
+}
+
+void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
+{
+    for (size_t i = 0; i < length; ++i) {
+        (void)load_barrier_on_oop_field(p + i);
+    }
+}
+
 } // namespace MapleRuntime
