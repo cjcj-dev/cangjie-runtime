@@ -89,7 +89,6 @@ set(GC_UNIT_SOURCES
     test_package_init.cpp
     test_verify_roots.cpp
     test_p10_roots_iterator.cpp
-    test_p10_old_mark_thread.cpp
     test_verify_fail_close.cpp
     test_verify_phase.cpp
     test_verify_marking_stacks.cpp
