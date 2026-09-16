@@ -1631,7 +1631,7 @@ bool ZMark::HandshakeFlush(ZMark* domain)
                 if (entry.second->bufferLive.load(std::memory_order_acquire) == 0) {
                     continue;
                 }
-                if (FlushTlsMarkProducers(entry.first, domain)) {
+                if (FlushThreadLocal(entry.first, domain)) {
                     flushed = true;
                 }
             }
@@ -1639,7 +1639,7 @@ bool ZMark::HandshakeFlush(ZMark* domain)
         ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator*, ThreadLocalData*) {
             flushed = FlushTargetGCData(data, domain) || flushed;
         });
-        flushed = FlushTlsMarkProducers(ThreadLocal::GetThreadLocalData(), domain) || flushed;
+        flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain) || flushed;
         return flushed;
     }
 
@@ -1649,7 +1649,7 @@ bool ZMark::HandshakeFlush(ZMark* domain)
             : HandshakeClosure("ZMarkFlushStacks"), domain_(d), flushed_(false) {}
         void do_thread(ThreadLocalData* tls) override
         {
-            if (FlushTlsMarkProducers(tls, domain_)) {
+            if (FlushThreadLocal(tls, domain_)) {
                 flushed_ = true;
             }
         }
@@ -1672,7 +1672,7 @@ bool ZMark::HandshakeFlush(ZMark* domain)
         }
         target->MutatorUnlock();
     });
-    flushed = FlushTlsMarkProducers(ThreadLocal::GetThreadLocalData(), domain) || flushed;
+    flushed = FlushThreadLocal(ThreadLocal::GetThreadLocalData(), domain) || flushed;
     if (cl.flushed()) {
         flushed = true;
     }
@@ -1697,12 +1697,12 @@ bool ZMark::Flush()
 
 bool ZMark::Flush(ThreadLocalData* tls)
 {
-    return FlushTlsMarkProducers(tls, this);
+    return FlushThreadLocal(tls, this);
 }
 
 bool ZMark::FlushThread(ThreadLocalData* tls)
 {
-    return FlushTlsMarkProducers(tls, nullptr);
+    return FlushThreadLocal(tls, nullptr);
 }
 
 bool ZMark::FlushAllGenerations()
