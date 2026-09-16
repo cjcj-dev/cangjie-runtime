@@ -11,12 +11,30 @@
 #include <atomic>
 
 #include "CjScheduler.h"
-#include "Base/AtomicSpinLock.h"
 #include "Common/BaseObject.h"
+#include "Common/OopStorage.h"
+#include "Common/WeakHandle.h"
 #include "sema.h"
 #include "waitqueue.h"
 
 namespace MapleRuntime {
+struct NativeWaitSet {
+    Waitqueue wq;
+    WeakHandle object;
+    std::atomic<int> busy{ 0 };
+    NativeWaitSet* next{ nullptr };
+};
+
+struct NativeMutexWait {
+    Sema sema;
+    WeakHandle object;
+    std::atomic<int> busy{ 0 };
+    NativeMutexWait* next{ nullptr };
+};
+
+OopStorage& SyncWeakOopStorage();
+void SyncRetireDead();
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,15 +46,11 @@ struct CJFuture {
 #else
     long long int data[4]; // 4: occupied by _thread(1)/result(1)/executeFn(2)
 #endif
-    // Reader/writer functions of `completeFlag` (i.e., MCC_FutureIsComplete/FutureSetComplete)
-    // are used as callbacks of runtime functions, they will be executed with atomicity.
-    // So the variable is not an atomic type.
     std::atomic<bool> completeFlag;
     std::atomic<int> isWaitQueueInit;
-    Waitqueue wq;
-    AtomicSpinLock spinLock;
+    NativeWaitSet* waitNative;
 
-    static constexpr size_t SYNC_OBJECT_SIZE = 168; // the size of future object with typeinfo header
+    static constexpr size_t SYNC_OBJECT_SIZE = 168;
 };
 
 struct CJMutex {
@@ -44,13 +58,11 @@ struct CJMutex {
 #ifdef __arm__
     uint32_t padding;
 #endif
-    // atomic int64_t whose size should comfort to `MRT_GetCurrentThreadID`
     std::atomic<int64_t> ownerThreadId;
-    // `ownCount` is always accessed when the mutex is held, so it can be non-atomic.
     uint64_t ownCount;
-    std::atomic<int64_t> state; // includes waiter couter, locked, starve, spin
+    std::atomic<int64_t> state;
     bool isSemaInit;
-    Sema sema;
+    NativeMutexWait* waitNative;
 };
 
 struct CJMonitor {
@@ -58,13 +70,9 @@ struct CJMonitor {
 #ifdef __arm__
     uint32_t padding;
 #endif
-    // Managed heap ref field (std.sync Monitor.mutex). Must be HeapSlot so colour
-    // is visible and reads go through Barrier::ReadReference — bare CJMutex* made
-    // the type system blind (GetUnitIdxAt_OOB via AddRawPointerObject; see
-    // reports/REPORT-traceuncolour.md). Layout stays one machine word.
     HeapSlot<> mutexPtr;
     bool isWaitQueueInit;
-    Waitqueue wq;
+    NativeWaitSet* waitNative;
 };
 
 struct CJWaitQueue {
@@ -73,7 +81,7 @@ struct CJWaitQueue {
     uint32_t padding;
 #endif
     bool isWaitQueueInit;
-    Waitqueue wq;
+    NativeWaitSet* waitNative;
 };
 
 struct CJMultiConditionMonitor {
