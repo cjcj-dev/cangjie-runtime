@@ -139,37 +139,30 @@ template<bool atomic>
 void ZBarrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
                             ReferenceStrength strength)
 {
-    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    RefField<> previous(observed);
-    auto fastPath = [heal, strength](zpointer word) {
-        RefField<> value(word);
-        return ZPointer::is_store_good(value.GetFieldValue()) ||
-            (strength == ReferenceStrength::Strong && !heal && is_null(word));
-    };
-    if (fastPath(observed)) {
-        return;
-    }
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    BaseObject* target = Heap::GetHeap().GetCollector().make_load_good(previous, provenance);
+    (void)obj;
+    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
+    const zpointer prev = load_atomic(p);
     if (strength != ReferenceStrength::Strong) {
-        // ZZBarrier::no_keep_alive_heap_store_slow_path (zBarrier.cpp:266-270).
-        const MAddress address = reinterpret_cast<MAddress>(&field);
-        if (Heap::IsHeapAddress(address) && !RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
-            Heap::GetHeap().GetRememberedSet().Record(address, true);
-        }
+        auto slow = [p](zaddress addr) {
+            remember(p);
+            return addr;
+        };
+        barrier(is_store_good_fast_path, slow, ColorStoreGood, nullptr, prev, false);
         return;
     }
-    if (heal) {
-        // ZZBarrier::heap_store_slow_path(..., heal=true) does not buffer.
-        Heap::GetHeap().GetCollector().MarkObjectIfActive(target);
-        const MAddress address = reinterpret_cast<MAddress>(&field);
-        if (Heap::IsHeapAddress(address) && !RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
-            Heap::GetHeap().GetRememberedSet().Record(address, true);
+    auto slow = [p, prev, heal](zaddress addr) {
+        StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(heal);
+        if (buffer != nullptr) {
+            buffer->Add(reinterpret_cast<MAddress>(p), prev, Heap::GetHeap().GetRememberedSet());
+        } else {
+            mark_and_remember(p, addr);
         }
-        const zpointer good = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(target)))));
-        ZgcSelfHeal(field, observed, good, fastPath, HealSite::BarrierReadReference);
+        return addr;
+    };
+    if (heal) {
+        barrier(is_store_good_fast_path, slow, ColorStoreGood, p, prev, false);
     } else {
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), target, observed);
+        barrier(is_store_good_or_null_fast_path, slow, ColorStoreGood, nullptr, prev, false);
     }
 }
 
@@ -231,21 +224,18 @@ void ZBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAd
 template<bool atomic>
 void ZBarrier::NativeStoreBarrier(RefField<atomic>& field, bool heal)
 {
-    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    auto fastPath = [heal](zpointer word) {
-        RefField<> value(word);
-        return ZPointer::is_store_good(value.GetFieldValue()) || (!heal && is_null(word));
+    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
+    const zpointer prev = load_atomic(p);
+    auto slow = [](zaddress addr) {
+        if (!is_null(addr)) {
+            Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+        }
+        return addr;
     };
-    if (fastPath(observed)) {
-        return;
-    }
-    RefField<> previous(observed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
-    BaseObject* target = Heap::GetHeap().GetCollector().make_load_good(previous, provenance);
-    Heap::GetHeap().GetCollector().MarkObjectIfActive(target);
     if (heal) {
-        const zpointer good = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(target)))));
-        ZgcSelfHeal(field, observed, good, fastPath, HealSite::BarrierReadReference);
+        barrier(is_store_good_fast_path, slow, ColorStoreGood, p, prev, false);
+    } else {
+        barrier(is_store_good_or_null_fast_path, slow, ColorStoreGood, nullptr, prev, false);
     }
 }
 

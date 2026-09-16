@@ -245,9 +245,24 @@ inline void ZBarrier::assert_transition_monotonicity(zpointer oldPtr, zpointer n
 inline void ZBarrier::self_heal(ZBarrierFastPath fast_path, volatile zpointer* p, zpointer ptr, zpointer heal_ptr,
                                bool allow_null)
 {
+    if (!allow_null && is_null_assert_load_good(heal_ptr) && !is_null_any(ptr)) {
+        return;
+    }
+    if (fast_path(ptr) || !fast_path(heal_ptr)) {
+        return;
+    }
     auto& field = *reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p));
-    ZgcSelfHeal(field, ptr, heal_ptr, fast_path, HealSite::BarrierReadReference,
-                allow_null ? HealNull::Allow : HealNull::Disallow);
+    for (;;) {
+        assert_transition_monotonicity(ptr, heal_ptr);
+        zpointer prev = zpointer::null;
+        if (field.CompareExchange(ptr, heal_ptr, std::memory_order_relaxed, std::memory_order_relaxed, &prev)) {
+            return;
+        }
+        if (fast_path(prev)) {
+            return;
+        }
+        ptr = prev;
+    }
 }
 
 template<typename SlowPath>
