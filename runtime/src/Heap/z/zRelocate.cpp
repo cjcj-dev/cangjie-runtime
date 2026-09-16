@@ -1309,7 +1309,7 @@ static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
 // address as an alternate result.
 BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const
 {
-    if (!owner || ZForwardingLife::CurrentPageWork() == owner.get()) return nullptr;
+    if (!owner || ZForwardingLife::CurrentPageWork() == owner) return nullptr;
     const MAddress from = reinterpret_cast<MAddress>(obj);
     if (const MAddress found = owner->find(from)) {
         return reinterpret_cast<BaseObject*>(found);
@@ -1750,7 +1750,7 @@ template<Generation G>
 void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed, bool inPlace)
 {
     if (!owner || (!claimed && !owner->claim())) return;
-    ZForwardingLife::PageWorkScope work(owner.get());
+    ZForwardingLife::PageWorkScope work(owner);
     if (inPlace) {
         (void)fromRegionList.TryDeleteRegion(region);
         owner->set_in_place();
@@ -1764,7 +1764,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
     owner->detach_page();
     owner->mark_done();
     // From here on only forwarding/queue state may be touched.
-    (void)relocationRequestQueue.Complete(owner.get());
+    (void)relocationRequestQueue.Complete(owner);
 }
 
 

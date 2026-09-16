@@ -10,7 +10,7 @@
 namespace MapleRuntime {
 
 class ZForwarding;
-class ZGeneration;
+class GenerationCycle;
 class ZPage;
 class ZPageAllocator;
 class ZRelocationSetSelector;
@@ -23,7 +23,7 @@ class ZRelocationSet {
     friend class ZRelocationSetInstallTask;
 
 private:
-    ZGeneration* _generation;
+    GenerationCycle* _generation;
     ZForwardingAllocator _allocator;
     ZForwarding** _forwardings;
     size_t _nforwardings;
@@ -35,14 +35,14 @@ private:
     ZWorkers* workers() const;
 
 public:
-    explicit ZRelocationSet(ZGeneration* generation);
+    explicit ZRelocationSet(GenerationCycle* generation);
 
     size_t nforwardings() const { return _nforwardings; }
 
     void install(const ZRelocationSetSelector* selector);
     void install_from_regions(RegionList& regions);
     void reset(ZPageAllocator* page_allocator);
-    ZGeneration* generation() const { return _generation; }
+    GenerationCycle* generation() const { return _generation; }
     ZArray<ZPage*>* flip_promoted_pages() { return &_flip_promoted_pages; }
     ZArray<ZPage*>* relocate_promoted_pages() { return &_relocate_promoted_pages; }
 

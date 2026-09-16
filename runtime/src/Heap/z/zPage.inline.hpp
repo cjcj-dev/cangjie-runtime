@@ -763,7 +763,7 @@ inline bool ZPage::ClaimForwarding()
 inline void ZPage::MarkForwardingDone()
     {
         auto owner = forwarding_for_page(this);
-        if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();
+        if (owner && ZForwardingLife::CurrentPageWork() != owner) owner->mark_done();
     }
 
 inline bool ZPage::IsForwardingDone() const

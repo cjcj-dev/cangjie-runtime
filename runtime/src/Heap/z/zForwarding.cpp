@@ -65,7 +65,7 @@ ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Reti
         return;
     }
     const int32_t before = owner->ref_count().load(std::memory_order_acquire);
-    const bool borrowed = ZForwardingLife::CurrentPageWork() == owner.get();
+    const bool borrowed = ZForwardingLife::CurrentPageWork() == owner;
     if (before == 0 || (!borrowed && !owner->claim())) {
         owner->detach_page();
     } else if (before > 0) {

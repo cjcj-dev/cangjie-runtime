@@ -132,7 +132,7 @@ void RegionManager::ResetFlipPromotedPages()
     flipPromotedPages.clear();
 }
 
-ZRelocationSet::ZRelocationSet(ZGeneration* generation)
+ZRelocationSet::ZRelocationSet(GenerationCycle* generation)
     : _generation(generation),
       _allocator(),
       _forwardings(nullptr),
