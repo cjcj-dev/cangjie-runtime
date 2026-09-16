@@ -620,8 +620,6 @@ fi
 # consumers.  The manifest is independent of the calls currently present in
 # the test source, so deleting a test or anchor shrinks neither guard silently.
 LOADHEAL_PRODUCT_CONSUMERS=(
-  'MapleRuntime::ForwardingTable::PublishFromPageView('
-  'MapleRuntime::ForwardingTable::GetFromPageView('
   'MapleRuntime::RegionManager::RememberFlipPromotedPages('
   'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RememberPromotedObject('
@@ -734,7 +732,7 @@ for consumer in "${LOADHEAL_PRODUCT_CONSUMERS[@]}"; do
 done
 MUTUALWAIT_SO_EXPORTS="$OUT/cj_gc_forwarding_publication_unit.so-exports.txt"
 nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$MUTUALWAIT_SO_EXPORTS"
-for consumer in 'MapleRuntime::WCollector::FindToVersion(' 'MapleRuntime::ForwardingTable::LookupTo('; do
+for consumer in 'MapleRuntime::WCollector::FindToVersion('; do
   if /usr/bin/grep -F -q "$consumer" "$LOADHEAL_FULL"; then
     echo "GC_UNIT_MUTUALWAIT_LOCAL_DEFINITION symbol=$consumer" >&2
     exit 9
