@@ -34,17 +34,14 @@ uintptr_t ZValueStorage<S>::alloc(size_t size)
     _top = addr + size;
 
     if (_top < _end) {
-        // Success
         return addr;
     }
 
-    // Allocate new block of memory
     const size_t block_alignment = Offset;
-    const size_t block_size = Offset * S::count();
+    const size_t block_size = Offset * (S::count() == 0 ? uint32_t{1} : S::count());
     _top = ZUtils::alloc_aligned_unfreeable(block_alignment, block_size);
     _end = _top + Offset;
 
-    // Retry allocation
     return alloc(size);
 }
 
