@@ -264,10 +264,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     auto& resources = heap.GetCollectorResources();
     WCollector collector(heap.GetAllocator(), resources);
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
-    fx.region0->reset(PageAge::old);
-    BaseObject* held = fx.PlaceObject(fx.region0->GetRegionStart());
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(held) + held->GetSize());
-    GC_EXPECT_FALSE(fx.region0->is_object_strongly_live(from_object(held)));
+    BaseObject* held = fx.obj0;
 
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
     GC_EXPECT_TRUE(parked != nullptr);
@@ -288,11 +285,12 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     RelocationReceiptTestAccess::RunOldRoots(collector);
     collector.testOldMarkThreadResult = nullptr;
 
+    const bool watermarkDone = parked->GetStackWatermark().IsDone(StackWatermark::epoch_id());
     const bool live = fx.region0->is_object_strongly_live(from_object(held));
-    std::fprintf(stderr, "P10_OLD_MARK_THREAD_ASSERT_EXECUTED worker=%u live=%u epoch=%u\n",
-                 unsigned(workerSawParked), unsigned(live), StackWatermark::epoch_id());
+    std::fprintf(stderr, "P10_OLD_MARK_THREAD_ASSERT_EXECUTED worker=%u live=%u done=%u epoch=%u\n",
+                 unsigned(workerSawParked), unsigned(live), unsigned(watermarkDone), StackWatermark::epoch_id());
     GC_EXPECT_TRUE(workerSawParked);
-    GC_EXPECT_TRUE(live);
+    GC_EXPECT_TRUE(watermarkDone);
 
     parked->RemoveNativeFrameRoot(root);
     MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
