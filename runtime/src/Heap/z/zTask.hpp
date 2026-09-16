@@ -4,13 +4,16 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// gc/z/zTask.hpp:24-59
-#pragma once
+#ifndef MRT_GC_Z_ZTASK_HPP
+#define MRT_GC_Z_ZTASK_HPP
+
 #include <cstdint>
 
 #include "Heap/z/workerThread.hpp"
 
 namespace MapleRuntime {
+// zTask.hpp:30-51. A ZTask embeds the WorkerTask adapter; work() takes no
+// argument and reads WorkerThread::worker_id() where a worker index is needed.
 class ZTask {
 private:
     class Task : public WorkerTask {
@@ -26,7 +29,7 @@ private:
     Task _worker_task;
 
 public:
-    ZTask(const char* name);
+    explicit ZTask(const char* name);
     virtual ~ZTask() = default;
 
     const char* name() const;
@@ -35,9 +38,11 @@ public:
     virtual void work() = 0;
 };
 
+// zTask.hpp:53-57
 class ZRestartableTask : public ZTask {
 public:
-    ZRestartableTask(const char* name);
+    explicit ZRestartableTask(const char* name);
     virtual void resize_workers(uint32_t nworkers);
 };
 } // namespace MapleRuntime
+#endif // MRT_GC_Z_ZTASK_HPP

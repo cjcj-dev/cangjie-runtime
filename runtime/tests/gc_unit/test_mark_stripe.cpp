@@ -14,6 +14,9 @@
 
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zTask.hpp"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zStat.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -251,7 +254,7 @@ GC_TEST(MarkStripe, GlobalStealReportsEmptyAfterDrain)
     GC_EXPECT_TRUE(stripe.StealStack(smr, 0) == nullptr);
 }
 
-// Product entry: GCWorkers dispatches a ZTask, which pops published stacks.
+// Product entry: ZWorkers dispatches a ZTask, which pops published stacks.
 // Read the retirement result in the same worker slot before coordinator free.
 GC_TEST(MarkingSMR, WorkerPopRetiresInCurrentSlot)
 {
@@ -282,8 +285,9 @@ GC_TEST(MarkingSMR, WorkerPopRetiresInCurrentSlot)
             pending[id] = smr.pending_count();
         }
     } task(smr, stripes);
-    GCWorkers workers(GCWorkers::Generation::OLD, count);
-    workers.Run(task);
+    ZStatWorkers stats;
+    ZWorkers workers(GCCycleGeneration::OLD, count, &stats);
+    workers.run(&task);
     for (uint32_t id = 0; id < count; ++id) {
         GC_EXPECT_NE(task.popped[id], uintptr_t{0});
     }

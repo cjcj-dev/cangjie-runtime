@@ -76,6 +76,13 @@ public:
         // Match CollectorResources::Init before entering either driver:
         // ZGC zInitialize.cpp:63 initializes statistics before zDriver at :69.
         ZStat::Initialize();
+        // zGeneration.cpp:129: every generation owns a ZWorkers; the driver
+        // hands each request's worker count to it (zDriver.cpp:166-176).
+        for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+            if (collector.GetGenerationCycle(generation).Workers() == nullptr) {
+                collector.GetGenerationCycle(generation).InitializeWorkers(1);
+            }
+        }
         resources.testCollector = &collector;
         resources.GetMinorDriverPort().Reset();
         resources.GetMajorDriverPort().Reset();

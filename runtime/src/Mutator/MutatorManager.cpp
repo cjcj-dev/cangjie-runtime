@@ -21,6 +21,7 @@
 #include "Handshake.h"
 #include "Mutator.inline.h"
 #include "schedule.h"
+#include "Loader/PackageInit.h"
 #include "CpuProfiler/CpuProfiler.h"
 
 namespace MapleRuntime {
@@ -152,6 +153,7 @@ void MutatorManager::TransitMutatorToExit()
 {
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
+    PackageInitTable::OwnerExit();
     RecordEpochHandshakeExitTransition();
     mutator->MutatorLock();
     mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_EXITING);

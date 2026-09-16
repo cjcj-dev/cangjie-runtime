@@ -109,11 +109,6 @@ struct RelocationReceiptTestAccess {
         }
     }
 
-    static void BindRuntimeWorkers(CollectorResources& resources, RuntimeWorkers* threadPool)
-    {
-        resources.runtimeWorkers = threadPool;
-    }
-
     static void FlipYoungMarkForNativeBarrier(WCollector& collector)
     {
         ZGlobalsPointers::flip_young_mark_start();
@@ -357,8 +352,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(first);
@@ -391,7 +384,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
 
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 }
 
@@ -415,8 +407,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
@@ -444,7 +434,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
 
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 }
 
@@ -469,8 +458,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
@@ -507,7 +494,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
 
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 }
 
@@ -532,8 +518,6 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
@@ -563,7 +547,6 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
 
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 }
 
@@ -582,8 +565,6 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
@@ -605,7 +586,6 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
 
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 }
 

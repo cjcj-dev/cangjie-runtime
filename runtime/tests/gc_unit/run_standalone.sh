@@ -268,6 +268,7 @@ fi
 INC_FLAGS=(
   -I"$SRC"
   -I"$ROOT/runtime/src"
+  -I"$ROOT/runtime/src/Loader/BinaryFile"
   -I"$ROOT/runtime/src/Heap"
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include"
   -I"$ROOT/runtime/include"
@@ -291,6 +292,10 @@ MAIN_COMPILE_FLAGS=(
   "${TESTABLE_FLAGS[@]}"
   "${INC_FLAGS[@]}"
 )
+# A real second image for package-cache generation and code-identity tests.
+"$CXX" "${MAIN_COMPILE_FLAGS[@]}" -fPIC -shared "$SRC/package_init_image.cpp" \
+  -o "$OUT/libcj_package_init_fixture.so" > "$OUT/package-init-image-build.log" 2>&1 &
+PACKAGE_INIT_IMAGE_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
@@ -347,6 +352,7 @@ MAIN_SOURCES=(
   "$SRC/test_uncommitter.cpp"
   "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_gc_thread_pool.cpp"
+  "$SRC/test_zWorkers.cpp"
 
   "$SRC/test_exempt_unlock.cpp"
   "$SRC/test_isfromreg.cpp"
@@ -364,6 +370,7 @@ MAIN_SOURCES=(
   "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
+  "$SRC/test_package_init.cpp"
   "$SRC/test_verify_roots.cpp"
   "$SRC/test_verify_fail_close.cpp"
   "$SRC/test_verify_phase.cpp"
@@ -455,6 +462,7 @@ if [[ $main_link_rc -ne 0 || $publication_link_rc -ne 0 ]]; then
   echo "GC_UNIT_LINK_FAIL main_rc=$main_link_rc publication_rc=$publication_link_rc" >&2
   exit 2
 fi
+wait "$PACKAGE_INIT_IMAGE_PID"
 echo "GC_UNIT_COMPILE_PARALLEL jobs=$BUILD_JOBS tus=$((${#MAIN_SOURCES[@]} + ${#PUBLICATION_SOURCES[@]}))"
 # Capture the just-linked test identity before any case is executed.
 sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \

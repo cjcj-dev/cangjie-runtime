@@ -53,22 +53,23 @@ extern "C" uintptr_t MRT_StopGCWork()
     return 0;
 }
 
-void* CollectorResources::MinorDriverThreadEntry(void* arg)
+// zDriver.cpp:118-127,319-328: each driver names itself and starts in its
+// constructor; run_thread is the request loop (zDriver.cpp:201-225,463-488)
+// and terminate closes the port so the loop's receive returns (:227-231).
+ZDriver::ZDriver(CollectorResources& resources, GCDriverKind kind) : resources(resources), kind(kind)
 {
-    auto* resources = reinterpret_cast<CollectorResources*>(arg);
-    MRT_ASSERT(resources != nullptr, "MinorDriverThreadEntry arg=nullptr");
-    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
-    resources->RunDriverLoop(GCDriverKind::MINOR);
-    return nullptr;
+    set_name(kind == GCDriverKind::MINOR ? "ZDriverMinor" : "ZDriverMajor");
+    create_and_start();
 }
 
-void* CollectorResources::MajorDriverThreadEntry(void* arg)
+void ZDriver::run_thread()
 {
-    auto* resources = reinterpret_cast<CollectorResources*>(arg);
-    MRT_ASSERT(resources != nullptr, "MajorDriverThreadEntry arg=nullptr");
-    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
-    resources->RunDriverLoop(GCDriverKind::MAJOR);
-    return nullptr;
+    resources.RunDriverLoop(kind);
+}
+
+void ZDriver::terminate()
+{
+    (kind == GCDriverKind::MINOR ? resources.minorDriverPort : resources.majorDriverPort).Stop();
 }
 
 void CollectorResources::Init()
@@ -82,7 +83,8 @@ void CollectorResources::Init()
     const uint64_t now = TimeUtil::NanoSeconds();
     collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).CycleStats().Initialize(now);
     collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).CycleStats().Initialize(now);
-    statistics.Start();
+    // zHeap.cpp: ZHeap owns _stat; its constructor starts the thread.
+    statistics = new ZStat();
     StartGCThreads();
     finalizerProcessor.Start();
     StringDedup::Instance().Start();
@@ -102,39 +104,46 @@ void CollectorResources::Fini()
     majorDriverPort.Stop();
 }
 
+// zCollectedHeap.cpp:96-110 ZCollectedHeap::stop. Each ZThread::terminate
+// closes its own wait (director monitor, driver port); a driver's port stop
+// is also the shutdown acknowledgement for synchronous callers.
 void CollectorResources::StopGCWork()
 {
     finalizerProcessor.Stop();
-    {
-        std::lock_guard<std::mutex> lock(directorMutex);
-        directorStopped = true;
-        directorCondition.notify_all();
-    }
-    // Close both ports before joining either driver.  This is the shutdown
-    // acknowledgement for synchronous callers: WaitForAck observes stopped
-    // and returns immediately instead of enqueueing into an abandoned queue.
-    minorDriverPort.Stop();
-    majorDriverPort.Stop();
+    // zCollectedHeap.cpp:314-319 gc_threads_do order: director, major driver,
+    // minor driver, stat. StringDedup is not a ZGC thread and stops last.
     StopGCThreads();
+    if (statistics != nullptr) {
+        statistics->stop();
+        delete statistics;
+        statistics = nullptr;
+    }
     StringDedup::Instance().Stop();
-    statistics.Stop();
 }
 
-// Usually called from main thread, wait for collector thread to exit.
+// zCollectedHeap.cpp:96-110 ZCollectedHeap::stop: every ConcurrentGCThread
+// is stopped through ConcurrentGCThread::stop (should_terminate ->
+// stop_service -> ZThread::terminate -> wait for termination).
 void CollectorResources::StopGCThreads()
 {
     if (gcThreadRunning.load(std::memory_order_acquire) == false) {
         return;
     }
-    int ret = ::pthread_join(directorThread, nullptr);
-    CHECK_E(UNLIKELY(ret != 0), "::pthread_join(director) in StopGCThreads() return %d", ret);
-    ret = ::pthread_join(minorDriverThread, nullptr);
-    CHECK_E(UNLIKELY(ret != 0), "::pthread_join(minor) in StopGCThreads() return %d", ret);
-    ret = ::pthread_join(majorDriverThread, nullptr);
-    CHECK_E(UNLIKELY(ret != 0), "::pthread_join(major) in StopGCThreads() return %d", ret);
-    // Drivers have joined; no new safepoint work can be submitted.
-    delete runtimeWorkers;
-    runtimeWorkers = nullptr;
+    // zCollectedHeap.cpp:106 ZAbort::abort(): cancel in-flight collections
+    // before any GC thread is asked to terminate.
+    minorDriverPort.Abort().Request();
+    majorDriverPort.Abort().Request();
+    for (ZThread* thread : { static_cast<ZThread*>(director), static_cast<ZThread*>(majorDriver),
+                             static_cast<ZThread*>(minorDriver) }) {
+        thread->stop();
+    }
+    delete director;
+    delete minorDriver;
+    delete majorDriver;
+    director = nullptr;
+    minorDriver = nullptr;
+    majorDriver = nullptr;
+    // Drivers have terminated; no worker task can be submitted any more.
     collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).StopWorkers();
     collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).StopWorkers();
     gcThreadRunning.store(false, std::memory_order_release);
@@ -172,25 +181,18 @@ void CollectorResources::CompleteDriverRequest(GCDriverPort& port)
 void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup)
 {
     const bool isYoung = reason == GC_REASON_YOUNG;
-    GCWorkers* workers = collector.GetGenerationCycle(isYoung
-        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD).Workers();
-#if defined(MRT_GC_UNIT_TESTS)
-    if (workers == nullptr) {
-        collector.RunGarbageCollection(index, reason);
-        return;
-    }
-#endif
-    ZStatCycle& cycle = collector.GetGenerationCycle(isYoung
-        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD).CycleStats();
-    const auto before = workers->GetSnapshot();
+    GenerationCycle& generation = collector.GetGenerationCycle(isYoung
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+    ZStatCycle& cycle = generation.CycleStats();
     const uint64_t start = TimeUtil::NanoSeconds();
     const ZYoungType type = collector.GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType();
+    // zGeneration.cpp:381,388: at_start/at_end(stat_workers, should_record_stats)
+    // bracket the collection; the parallel share is read from ZStatWorkers.
     const bool recordStats = !isYoung || type == ZYoungType::minor || type == ZYoungType::major_partial_roots;
-    if (recordStats) cycle.AtStart(start, before.elapsedNanos, before.workerNanos);
+    cycle.AtStart(start);
     collector.RunGarbageCollection(index, reason);
-    const auto after = workers->GetSnapshot();
     const uint64_t end = TimeUtil::NanoSeconds();
-    if (recordStats) cycle.AtEnd(end, after.elapsedNanos, after.workerNanos, warmup);
+    cycle.AtEnd(end, generation.StatWorkers(), warmup, recordStats);
     (isYoung ? ZStatPhases::YoungGeneration : ZStatPhases::OldGeneration).RegisterEnd(end - start);
 }
 
@@ -230,11 +232,11 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     const uint32_t youngCount = request.youngWorkers == 0 ? concurrentGcThreadCount : request.youngWorkers;
     const uint32_t oldCount = request.oldWorkers == 0 ? concurrentGcThreadCount : request.oldWorkers;
     const bool warmup = request.warmup;
-    if (collector->GetGenerationCycle(GCCycleGeneration::YOUNG).Workers() != nullptr) {
-        collector->GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->SetActiveWorkers(youngCount);
-        if (request.reason != GC_REASON_YOUNG) {
-            collector->GetGenerationCycle(GCCycleGeneration::OLD).Workers()->SetActiveWorkers(oldCount);
-        }
+    // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
+    // selected worker counts into each generation's ZWorkers.
+    collector->GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->set_active_workers(youngCount);
+    if (request.reason != GC_REASON_YOUNG) {
+        collector->GetGenerationCycle(GCCycleGeneration::OLD).Workers()->set_active_workers(oldCount);
     }
 
     // zDriver.cpp:416-436: full causes preclean with promote-all, then
@@ -365,8 +367,8 @@ void CollectorResources::StartGCThreads()
     if (gcThreadRunning.compare_exchange_strong(expected, true, std::memory_order_acquire) == false) {
         return;
     }
-    // Initialize the heap-owned runtime set and both generation sets.
-    if (runtimeWorkers == nullptr) {
+    // Initialize both generation worker sets.
+    if (collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).Workers() == nullptr) {
         unsigned int activeProcessorCount = std::thread::hardware_concurrency();
         bool affinityDetected = false;
 #if defined(__linux__) || defined(hongmeng)
@@ -390,57 +392,27 @@ void CollectorResources::StartGCThreads()
         CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
         const size_t heapWorkers = maxHeap / 50 / regionBytes;
         const uint64_t cpus = activeProcessorCount;
-        gcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
-            std::min<size_t>((cpus * 3 + 4) / 5, heapWorkers)));
         concurrentGcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
             std::min<size_t>((cpus + 3) / 4, heapWorkers)));
         // zArguments.cpp:67-81: ConcGCThreads is the per-generation maximum and
         // sizes every ZPerWorker (zValue.inline.hpp:108-110); set before workers.
         ConcGCThreads = static_cast<uint32_t>(concurrentGcThreadCount);
         VLOG(REPORT,
-             "runtime worker count %d, concurrent gc thread count %d, "
-             "active processor count %u, affinity detected %d, region bytes %zu",
-             gcThreadCount, concurrentGcThreadCount, activeProcessorCount, affinityDetected,
-             regionBytes);
-        // zRuntimeWorkers.cpp:29-39: use the full parallel budget; the
-        // coordinating driver is not one of the task participants.
-        runtimeWorkers = new RuntimeWorkers(gcThreadCount);
+             "concurrent gc thread count %d, active processor count %u, affinity detected %d, region bytes %zu",
+             concurrentGcThreadCount, activeProcessorCount, affinityDetected, regionBytes);
 
         // zArguments.cpp:67-99, zWorkers.cpp:45-64: each generation uses
         // the concurrent budget as its maximum and initial active count.
-        // GCWorkers counts participants, excluding the coordinating driver.
+        // ZWorkers counts participants, excluding the coordinating driver.
         collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(concurrentGcThreadCount);
         collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(concurrentGcThreadCount);
-
     }
 
-    // ZGC shape: two independent drivers, each consuming only its generation
-    // port. The major driver also owns the legacy non-GC control queue.
-    if (::pthread_create(&minorDriverThread, nullptr, CollectorResources::MinorDriverThreadEntry, this) != 0) {
-        MRT_ASSERT(0, "pthread_create minor driver failed!");
-    }
-    if (::pthread_create(&majorDriverThread, nullptr, CollectorResources::MajorDriverThreadEntry, this) != 0) {
-        minorDriverPort.Stop();
-        (void)::pthread_join(minorDriverThread, nullptr);
-        MRT_ASSERT(0, "pthread_create major driver failed!");
-    }
-    if (::pthread_create(&directorThread, nullptr, CollectorResources::DirectorThreadEntry, this) != 0) {
-        MRT_ASSERT(0, "pthread_create director failed!");
-    }
-    // set thread name.
-#ifdef __WIN64
-    int ret = pthread_setname_np(majorDriverThread, "gc-major-driver");
-    CHECK_E(UNLIKELY(ret != 0), "pthread_setname_np() in CollectorResources::StartGCThreads() return %d rather than 0",
-            ret);
-#endif
-}
-
-int32_t CollectorResources::GetGCThreadCount(const bool isConcurrent) const
-{
-    if (runtimeWorkers == nullptr) {
-        return 1;
-    }
-    return isConcurrent ? concurrentGcThreadCount : gcThreadCount;
+    // zHeap.cpp / zCollectedHeap.cpp:65-71: the two drivers and the director
+    // are ZThreads that start in their constructors.
+    minorDriver = new ZDriver(*this, GCDriverKind::MINOR);
+    majorDriver = new ZDriver(*this, GCDriverKind::MAJOR);
+    director = new ZDirector(*this);
 }
 
 
@@ -451,7 +423,7 @@ CollectorResources::CollectorResources(CollectorProxy& proxy) : collectorProxy(p
 }
 
 namespace MapleRuntime {
-GCWorkers& CollectorResources::GetWorkers(GCCycleGeneration generation) const
+ZWorkers& CollectorResources::GetWorkers(GCCycleGeneration generation) const
 {
     return *collectorProxy.GetGenerationCycle(generation).Workers();
 }
@@ -501,7 +473,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     if (port.Abort().Poll()) {
         // The phase owner already joined any submitted work. Keep mark and
         // forwarding storage alive for driver shutdown; skip normal reclaim.
-        GetWorkers(generation).SetInactive();
+        GetWorkers(generation).set_inactive();
         cycle.End();
         return;
     }

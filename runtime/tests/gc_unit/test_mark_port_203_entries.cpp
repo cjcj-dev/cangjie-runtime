@@ -135,14 +135,12 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct MarkPort203TestAccess {
-    static void Bind(CollectorResources& resources, TracingCollector* collector, RuntimeWorkers* pool, int32_t count = 1)
+    static void Bind(CollectorResources& resources, TracingCollector* collector, int32_t count = 1)
     {
         if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);
         }
         resources.collectorProxy.currentCollector = collector;
-        resources.runtimeWorkers = pool;
-        resources.gcThreadCount = count;
         resources.concurrentGcThreadCount = count;
     }
     static void Collect(WCollector& collector, bool major)
@@ -316,8 +314,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RuntimeWorkers pool(helpers + 1u);
-    MarkPort203TestAccess::Bind(resources, &collector, &pool, static_cast<int32_t>(helpers + 1));
+    MarkPort203TestAccess::Bind(resources, &collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
         collector.GetGenerationCycle(generation).InitializeWorkers(helpers + 1);
@@ -420,7 +417,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
         collector.GetGenerationCycle(generation).StopWorkers();
     }
-    MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
+    MarkPort203TestAccess::Bind(resources, nullptr);
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",
                  variant, arrayMarked, markedChildren, objects, static_cast<size_t>(bytes), expectedBytes);
     GC_EXPECT_EQ(markedChildren, expectedChildren);

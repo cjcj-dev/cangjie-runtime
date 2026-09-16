@@ -4,268 +4,159 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
-#include "Heap/z/zWorkers.hpp"
-
-#if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
-#include <sys/resource.h>
-#endif
-#include <sched.h>
-#include <chrono>
+#include "Heap/z/zWorkers.inline.hpp"
 
 #include "Base/Log.h"
-#include "Base/Panic.h"
-#include "Base/SysCall.h"
-#include "Mutator/MutatorManager.h"
-#include "securec.h"
-#if defined(CANGJIE_TSAN_SUPPORT)
-#include "Sanitizer/SanitizerInterface.h"
-#endif
+#include "Base/LogFile.h"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zStat.hpp"
+#include "Heap/z/zTask.hpp"
 
 namespace MapleRuntime {
-GCWorkers::GCWorkers(Generation gen, uint32_t count, int32_t prior)
-    : generation(gen), capacity(count), priority(prior), activeWorkers(count)
+// zWorkers.cpp:33-43
+static const char* workers_name(GCCycleGeneration id)
 {
-    CheckCount(count);
-    threads.resize(capacity);
-    pthread_attr_t attr;
-    CHECK_PTHREAD_CALL(pthread_attr_init, (&attr), "GCWorkers");
-    CHECK_PTHREAD_CALL(pthread_attr_setstacksize, (&attr, 512 * 1024), "GCWorkers");
-    for (uint32_t id = 0; id < capacity; ++id) {
-        Worker& worker = threads[id];
-        worker.owner = this;
-        worker.id = id;
-        CHECK_PTHREAD_CALL(pthread_create, (&worker.thread, &attr, WorkerEntry, &worker), "GCWorkers");
-#ifdef __WIN64
-        CHECK_PTHREAD_CALL(pthread_setname_np,
-            (worker.thread, generation == Generation::YOUNG ? "GCWorkerYoung" : "GCWorkerOld"), "GCWorkers");
-#endif
+    return (id == GCCycleGeneration::YOUNG) ? "ZWorkerYoung" : "ZWorkerOld";
+}
+
+static const char* generation_name(GCCycleGeneration id)
+{
+    return (id == GCCycleGeneration::YOUNG) ? "Young" : "Old";
+}
+
+// zWorkers.cpp:45-65
+ZWorkers::ZWorkers(GCCycleGeneration id, uint32_t max_nworkers, ZStatWorkers* stats)
+    : _workers(workers_name(id), max_nworkers),
+      _generation_name(generation_name(id)),
+      _resize_lock(),
+      _requested_nworkers(0),
+      _is_active(false),
+      _stats(stats)
+{
+    LOG(RTLOG_INFO, "GC Workers for %s Generation: %u (static)", _generation_name, _workers.max_workers());
+
+    // Initialize worker threads
+    _workers.initialize_workers();
+    _workers.set_active_workers(_workers.max_workers());
+    if (_workers.active_workers() != _workers.max_workers()) {
+        CHECK_DETAIL(false, "Failed to create ZWorkers");
     }
-    CHECK_PTHREAD_CALL(pthread_attr_destroy, (&attr), "GCWorkers");
 }
 
-GCWorkers::~GCWorkers() { Stop(); }
-
-void GCWorkers::CheckCount(uint32_t workers) const
+bool ZWorkers::is_active() const
 {
-    CHECK_DETAIL(workers > 0 && workers <= capacity, "GCWorkers count outside [1, capacity]");
+    return _is_active;
 }
 
-void GCWorkers::CheckOpen() const
+uint32_t ZWorkers::active_workers() const
 {
-    CHECK_DETAIL(!closing, "GCWorkers is closing");
+    return _workers.active_workers();
 }
 
-void* GCWorkers::WorkerEntry(void* argument)
+void ZWorkers::set_active_workers(uint32_t nworkers)
 {
-    Worker& worker = *static_cast<Worker*>(argument);
-    GCWorkers& owner = *worker.owner;
-    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
-    const char* name = owner.generation == Generation::YOUNG ? "GCWorkerYoung" : "GCWorkerOld";
-#ifdef __APPLE__
-    CHECK_PTHREAD_CALL(pthread_setname_np, (name), "GCWorkers");
-#elif defined(__linux__) || defined(hongmeng)
-    CHECK_PTHREAD_CALL(prctl, (PR_SET_NAME, name), "GCWorkers");
-    RuntimeWorkers::SetThreadPriority(MapleRuntime::GetTid(), owner.priority);
-#else
-    (void)name;
-#endif
-    owner.WorkerLoop(worker.id);
-#if defined(CANGJIE_TSAN_SUPPORT)
-    Sanitizer::TsanDetachNativeThread();
-#endif
-    return nullptr;
+    VLOG(REPORT, "Using %u Workers for %s Generation", nworkers, _generation_name);
+    std::lock_guard<std::mutex> locker(_resize_lock);
+    _workers.set_active_workers(nworkers);
 }
 
-void GCWorkers::WorkerLoop(uint32_t id)
+void ZWorkers::set_active()
 {
-    uint64_t observedBatch = 0;
-    std::unique_lock<std::mutex> lock(mutex);
+    std::lock_guard<std::mutex> locker(_resize_lock);
+    _is_active = true;
+    _requested_nworkers.store(0, std::memory_order_relaxed);
+}
+
+void ZWorkers::set_inactive()
+{
+    std::lock_guard<std::mutex> locker(_resize_lock);
+    _is_active = false;
+}
+
+// zWorkers.cpp:92-106
+void ZWorkers::run(ZTask* task)
+{
+    VLOG(GCPHASE, "Executing %s using %s with %u workers", task->name(), _workers.name(), active_workers());
+
+    {
+        std::lock_guard<std::mutex> locker(_resize_lock);
+        _stats->at_start(active_workers());
+    }
+
+    _workers.run_task(task->worker_task());
+
+    {
+        std::lock_guard<std::mutex> locker(_resize_lock);
+        _stats->at_end();
+    }
+}
+
+// zWorkers.cpp:108-124
+void ZWorkers::run(ZRestartableTask* task)
+{
     for (;;) {
-        dispatched.wait(lock, [&] { return shutdown || batch != observedBatch; });
-        if (shutdown) {
+        // Run task
+        run(static_cast<ZTask*>(task));
+
+        std::lock_guard<std::mutex> locker(_resize_lock);
+        const uint32_t requested = _requested_nworkers.load(std::memory_order_relaxed);
+        if (requested == 0) {
+            // Task completed
             return;
         }
-        observedBatch = batch;
-        if (id >= runningWorkers) {
-            continue;
-        }
-        WorkerTask* task = currentTask;
-        // workerThread.cpp:68-73: set the thread-local worker id, then run
-        // under the gc id the task captured at construction.
-        WorkerThread::set_worker_id(id);
-        GCIdMark gcId(task->gc_id());
-        lock.unlock();
-#if defined(CANGJIE_TSAN_SUPPORT)
-        Sanitizer::TsanAttachNativeThread();
-        TsanPosCtrlMaybeRace(id);
-#endif
-        task->work(id);
-        // ZMarkTask::work: publish both generations before reporting completion.
-        ThreadLocal::FlushCurrentThreadMarkStacks();
-        lock.lock();
-        --remainingWorkers;
-        if (remainingWorkers == 0) {
-            completed.notify_all();
-        }
+
+        // Restart task with requested number of active workers
+        _workers.set_active_workers(requested);
+        task->resize_workers(active_workers());
+        _requested_nworkers.store(0, std::memory_order_relaxed);
     }
 }
 
-// coordinatorMutex protects the complete run, including resize callbacks.
-// mutex is released while waiting, so worker polls and external requests work.
-void GCWorkers::RunBatch(WorkerTask& task)
+// zWorkers.cpp:126-137
+void ZWorkers::run_all(ZTask* task)
 {
-    // The coordinating GC thread cannot publish while waiting for this batch.
-    ThreadLocal::FlushCurrentThreadMarkStacks();
-    std::unique_lock<std::mutex> lock(mutex);
-    currentTask = &task;
-    runningWorkers = activeWorkers;
-    remainingWorkers = runningWorkers;
-    ++batch;
-    const auto start = std::chrono::steady_clock::now();
-    dispatched.notify_all();
-    completed.wait(lock, [&] { return remainingWorkers == 0; });
-    const uint64_t duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now() - start).count();
-    elapsedNanos += duration;
-    workerNanos += duration * runningWorkers;
-    ++completedBatches;
-    runningWorkers = 0;
-    currentTask = nullptr;
+    // Get and set number of active workers
+    const uint32_t prev_active_workers = _workers.active_workers();
+    _workers.set_active_workers(_workers.max_workers());
+
+    // Execute task using all workers
+    VLOG(GCPHASE, "Executing %s using %s with %u workers", task->name(), _workers.name(), active_workers());
+    _workers.run_task(task->worker_task());
+
+    // Restore number of active workers
+    _workers.set_active_workers(prev_active_workers);
 }
 
-void GCWorkers::Run(ZTask& task)
+void ZWorkers::threads_do(const std::function<void(WorkerThread*)>& tc) const
 {
-    std::lock_guard<std::mutex> coordinator(coordinatorMutex);
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CheckOpen();
+    _workers.threads_do(tc);
+}
+
+std::mutex* ZWorkers::resizing_lock()
+{
+    return &_resize_lock;
+}
+
+// zWorkers.cpp:147-166
+void ZWorkers::request_resize_workers(uint32_t nworkers)
+{
+    DCHECK(nworkers != 0);
+
+    std::lock_guard<std::mutex> locker(_resize_lock);
+
+    if (_requested_nworkers.load(std::memory_order_relaxed) == nworkers) {
+        // Already requested
+        return;
     }
-    RunBatch(*task.worker_task());
-}
 
-void GCWorkers::Run(ZRestartableTask& task)
-{
-    std::lock_guard<std::mutex> coordinator(coordinatorMutex);
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CheckOpen();
+    if (_workers.active_workers() == nworkers) {
+        // Already the right amount of threads
+        return;
     }
-    for (;;) {
-        RunBatch(*task.worker_task());
-        uint32_t applied;
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            if (requestedWorkers == 0) {
-                return;
-            }
-            activeWorkers = requestedWorkers;
-            requestedWorkers = 0;
-            applied = activeWorkers;
-        }
-        task.resize_workers(applied);
-    }
-}
 
-void GCWorkers::RunAll(ZTask& task)
-{
-    std::lock_guard<std::mutex> coordinator(coordinatorMutex);
-    uint32_t previous;
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CheckOpen();
-        previous = activeWorkers;
-        activeWorkers = capacity;
-    }
-    RunBatch(*task.worker_task());
-    std::lock_guard<std::mutex> lock(mutex);
-    activeWorkers = previous;
-}
+    VLOG(REPORT, "Adjusting Workers for %s Generation: %u -> %u", _generation_name, _workers.active_workers(),
+         nworkers);
 
-void GCWorkers::SetActiveWorkers(uint32_t workers)
-{
-    CheckCount(workers);
-    std::lock_guard<std::mutex> coordinator(coordinatorMutex);
-    std::lock_guard<std::mutex> lock(mutex);
-    CheckOpen();
-    activeWorkers = workers;
+    _requested_nworkers.store(nworkers, std::memory_order_relaxed);
 }
-
-void GCWorkers::SetActive()
-{
-    std::lock_guard<std::mutex> coordinator(coordinatorMutex);
-    std::lock_guard<std::mutex> lock(mutex);
-    CheckOpen();
-    cycleActive = true;
-    requestedWorkers = 0;
-}
-
-void GCWorkers::SetInactive()
-{
-    std::lock_guard<std::mutex> coordinator(coordinatorMutex);
-    std::lock_guard<std::mutex> lock(mutex);
-    cycleActive = false;
-}
-
-uint32_t GCWorkers::ActiveWorkers() const { return GetSnapshot().activeWorkers; }
-bool GCWorkers::IsActive() const { return GetSnapshot().cycleActive; }
-
-void GCWorkers::RequestResize(uint32_t workers)
-{
-    CheckCount(workers);
-    std::lock_guard<std::mutex> lock(mutex);
-    if (!closing && workers != activeWorkers && workers != requestedWorkers) {
-        requestedWorkers = workers;
-    }
-}
-
-bool GCWorkers::ShouldWorkerResize() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return requestedWorkers != 0;
-}
-
-GCWorkers::Snapshot GCWorkers::GetSnapshot() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return { generation, capacity, activeWorkers, runningWorkers, remainingWorkers, requestedWorkers,
-             cycleActive, closing, stopped, batch, completedBatches, elapsedNanos, workerNanos };
-}
-
-void GCWorkers::ThreadsDo(const std::function<void(pthread_t)>& visitor)
-{
-    std::lock_guard<std::mutex> coordinator(coordinatorMutex);
-    if (!stopped) {
-        for (const Worker& worker : threads) {
-            visitor(worker.thread);
-        }
-    }
-}
-
-void GCWorkers::Stop()
-{
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        closing = true;
-    }
-    std::lock_guard<std::mutex> coordinator(coordinatorMutex);
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (stopped) {
-            return;
-        }
-        shutdown = true;
-        cycleActive = false;
-        requestedWorkers = 0;
-        dispatched.notify_all();
-    }
-    for (Worker& worker : threads) {
-        CHECK_PTHREAD_CALL(pthread_join, (worker.thread, nullptr), "GCWorkers");
-    }
-    std::lock_guard<std::mutex> lock(mutex);
-    stopped = true;
-}
-
-// zRuntimeWorkers.cpp:29-48; workerThread.cpp:41-80, run_task joins
-// the borrowed task before returning to the safepoint coordinator.
-}
+} // namespace MapleRuntime
