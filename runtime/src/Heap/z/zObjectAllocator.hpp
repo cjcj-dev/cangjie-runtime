@@ -70,7 +70,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 #if defined(__EULER__)
         needUnitCount = maxUnitCountPerPinnedRegion;
 #endif
-        ZPage* region = Heap::alloc_page(needUnitCount, ZPageType::small, false, true, true, PageAge::old);
+        ZPage* region = Heap::alloc_page(needUnitCount, ZPageType::small);
         if (region == nullptr) {
             return 0;
         }

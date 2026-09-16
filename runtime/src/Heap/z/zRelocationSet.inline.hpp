@@ -68,9 +68,6 @@ inline void RegionManager::PrepareFromRegionList()
         fromRegionList.VisitAllRegions([](ZPage* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
                  region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd());
-            if (region->IsGhostFromRegion()) {
-                return;
-            }
             region->PrepareForwardableRegion<G>();
             // ZGC installs the page and its forwarding record as one relocation-set
             // operation (zRelocationSet.cpp:91-96).  Keep the equivalent invariant
