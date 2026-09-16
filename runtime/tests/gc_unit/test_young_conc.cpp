@@ -1007,8 +1007,8 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
                     cycle.PublishPhase(GC_PHASE_TRACE);
                     fn(&cycle, from_object(fx.obj0));
-                    MarkDomain& domain = young ? *publication.collector.YoungMarkDomain()
-                                              : *publication.collector.MajorMarkDomain();
+                    ZMark& domain = young ? *publication.collector.YoungMark()
+                                              : *publication.collector.MajorMark();
                     ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
                     MarkStackEntry entry;
                     size_t entries = 0;
@@ -1065,7 +1065,7 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
     GcHeapFixture fx;
     MarkPublicationFixture publication;
     auto& cycle = publication.collector.GetGenerationCycle(GCCycleGeneration::OLD);
-    auto& domain = *publication.collector.MajorMarkDomain();
+    auto& domain = *publication.collector.MajorMark();
     fx.region0->reset(PageAge::old);
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Old);

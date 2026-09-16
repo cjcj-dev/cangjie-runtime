@@ -532,8 +532,8 @@ public:
         if (!claimed.exchange(true)) exercise();
         // Same GC-worker tail protocol as MarkOldRootsTask. The field entry
         // produced these entries; the test never supplies mark/current output.
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.MajorMarkDomain());
-        Expect(collector.MajorMarkDomain()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.MajorMark());
+        Expect(collector.MajorMark()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
     }
 private:
     WCollector& collector;
@@ -621,9 +621,9 @@ extern "C" int p2SlowFieldInputExercise()
         };
         const bool before = bit();
         P2FieldInputTask task(collector, [&] {
-            auto& youngStacks = collector.YoungMarkDomain()->Stacks();
+            auto& youngStacks = collector.YoungMark()->Stacks();
             const size_t youngBefore = youngStacks.Population();
-            const size_t oldBefore = collector.MajorMarkDomain()->Stacks().Population();
+            const size_t oldBefore = collector.MajorMark()->Stacks().Population();
             TracingCollector::WorkStack work;
             inputTask = true;
             collector.TraceRefField(strongHolder, Slot(strongHolder), work, false);
@@ -634,7 +634,7 @@ extern "C" int p2SlowFieldInputExercise()
             collector.TraceRefField(finalHolder, Slot(finalHolder, 1), work, true);
             inputTask = false;
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
-            Expect(collector.MajorMarkDomain()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
+            Expect(collector.MajorMark()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
         });
         collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->Run(task);
         Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");

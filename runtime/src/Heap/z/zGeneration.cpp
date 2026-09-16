@@ -71,14 +71,14 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, mark);
     }
 #endif
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, mark);
     }
 #endif
 
@@ -103,7 +103,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, mark);
     }
 #endif
     {
@@ -114,13 +114,13 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, mark);
     }
 #endif
     collector.StartYoungMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRemembered, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRemembered, mark);
     }
 #endif
     {
@@ -129,7 +129,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete, mark);
     }
 #endif
     return stats;
@@ -142,14 +142,14 @@ void GenerationCycle::StartOldMark(WCollector& collector)
     CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Begin, mark);
     }
 #endif
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, mark);
     }
 #endif
     auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
@@ -160,7 +160,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
     space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, mark);
     }
 #endif
     {
@@ -172,13 +172,13 @@ void GenerationCycle::StartOldMark(WCollector& collector)
     PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, mark);
     }
 #endif
     collector.StartOldMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (TracingCollector::testMarkStartState) {
-        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete, markDomain);
+        TracingCollector::testMarkStartState(generation, MarkStartPoint::Complete, mark);
     }
 #endif
 }
@@ -362,7 +362,7 @@ void WCollector::DoYoungGarbageCollection()
     auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER(ZStatPhases::PYoungRootEnum);
-        (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
+        (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMark.get());
         VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
@@ -382,9 +382,9 @@ void WCollector::DoYoungGarbageCollection()
             workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
         }, stackScanEpoch);
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *youngMarkDomain);
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *youngMark);
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yAfterRootTestReceipt(youngMarkDomain->Stacks().Population());
+        NoteY2yAfterRootTestReceipt(youngMark->Stacks().Population());
 #endif
     };
     // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent
@@ -778,12 +778,12 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
 bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
-    MarkStripeSet& stripes = majorMarkDomain->Stripes();
+    MarkStripeSet& stripes = majorMark->Stripes();
     ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
     ZVerify::BeforeZOperation();
     NoteMarkTerminatePause();
     const size_t before = stripes.Population();
-    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMark.get());
     const size_t after = stripes.Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
     if (!workStack.empty() || !stripes.IsEmpty()) {
@@ -798,7 +798,7 @@ bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRoo
     if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
         return false;
     }
-    MarkingStacks::VerifyAllEmpty(*majorMarkDomain);
+    MarkingStacks::VerifyAllEmpty(*majorMark);
     oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
     ZVerify::AfterMark();
     collectorResources.BlockResurrection();
@@ -806,7 +806,7 @@ bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRoo
     return true;
 }
 
-bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
+bool TracingCollector::FlushMarkProducers(ZMark* domain)
 {
     bool flushed = domain != nullptr ? domain->TryTerminateFlush() :
         MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);

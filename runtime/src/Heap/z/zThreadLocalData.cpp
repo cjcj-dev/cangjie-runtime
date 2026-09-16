@@ -74,7 +74,7 @@ void ThreadGCData::Attach(Mutator* owner, ThreadLocalData* nativeOwner, zaddress
     registry.owners.emplace(this, std::make_unique<DataOwners::Owner>(this, owner, nativeOwner));
 }
 
-bool ThreadGCData::FlushMarkStacks(MarkDomain& domain)
+bool ThreadGCData::FlushMarkStacks(ZMark& domain)
 {
     const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
     return markStacks[index].Flush(domain.Stripes(), true);

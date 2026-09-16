@@ -169,13 +169,13 @@ public:
     void MarkNewObject(BaseObject* obj) override;
     void StartYoungMarkWork();
     void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
-    bool PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain);
+    bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
     void PublishThreadRoot(BaseObject* object, bool young, bool follow);
-    bool FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* domain);
+    bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
-    bool FlushGCDataMarkProducers(ThreadGCData& data, MarkDomain* domain);
+    bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
-    MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
+    ZMark* YoungMark() const { return youngMark.get(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
     void MarkYoungRootObject(BaseObject* object) const override;
 
@@ -810,7 +810,7 @@ private:
     CrossRefHandler cycleRefHandlerForTest = nullptr;
 #endif
 
-    std::unique_ptr<MarkDomain> youngMarkDomain;
+    std::unique_ptr<ZMark> youngMark;
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint64_t minorTotalRuns = 0;

@@ -6,13 +6,13 @@
 #include <cstddef>
 #include <cstdint>
 namespace MapleRuntime {
-class MarkDomain;
+class ZMark;
 namespace MarkingStacks {
 enum class MarkingGeneration : uint8_t { MAJOR, YOUNG };
 // zMark.cpp:104,601,982,1022-1038: an empty stack at the product boundary.
 void VerifyEmpty(size_t pending);
 // zMark.cpp:1022: thread-private stacks followed by shared stripes.
-void VerifyAllEmpty(MarkDomain& domain);
+void VerifyAllEmpty(ZMark& domain);
 }
 }
 #endif
@@ -38,8 +38,7 @@ void VerifyAllEmpty(MarkDomain& domain);
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zAddress.hpp"
-
-
+#include "Heap/z/zMarkingSMR.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
 
 namespace MapleRuntime {
@@ -47,29 +46,26 @@ namespace MapleRuntime {
 class MarkStripeSet;
 class ZWorkers;
 
-// ZGC zMarkTerminate.inline.hpp:43-125.
-
-
-class MarkDomain;
-
-class MarkEngine {
+// Per-generation mark ownership (zMark.hpp:42-124, zMark.cpp:80-92).
+class ZMark {
+    friend class ZMarkTask;
 public:
-    enum class Result { Completed, Partial, Aborted };
+    static constexpr bool Resurrect = true;
+    static constexpr bool DontResurrect = false;
+    static constexpr bool GCThread = true;
+    static constexpr bool AnyThread = false;
+    static constexpr bool Follow = true;
+    static constexpr bool DontFollow = false;
+    static constexpr bool Strong = false;
+    static constexpr bool Finalizable = true;
 
+    enum class Result { Completed, Partial, Aborted };
     using Process = std::function<void(const MarkStackEntry&)>;
 
-    static Result FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
-                             MarkTerminate& terminate, size_t workerId, bool partial,
-                             const Process& process, std::atomic<size_t>* stealSuccess = nullptr,
-                             std::atomic<size_t>* stealFailure = nullptr, MarkDomain* domain = nullptr);
-};
-
-// Per-generation mark ownership (zMark.cpp:80, zGeneration.hpp:70, zThreadLocalData.hpp:43).
-class MarkDomain {
-public:
-    explicit MarkDomain(size_t capacity, MarkingStacks::MarkingGeneration generation);
+    explicit ZMark(size_t capacity, MarkingStacks::MarkingGeneration generation);
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
     void MarkObject(zaddress address);
+    void Start();
     void PrepareWork(size_t nworkers);
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
@@ -78,26 +74,39 @@ public:
     bool PollStop();
     MarkStripeSet& Stripes() { return stripes; }
     MarkTerminate& Terminate() { return terminate; }
-    MarkingSMR& Smr() { return *smr; }
+    MarkingSMR& Smr() { return smr; }
     MarkThreadLocalStacks& Stacks();
     size_t NWorkers() const { return nworkers; }
     size_t TargetNStripes() const { return targetNStripes; }
+    bool Flush();
     bool FlushStacks();
     bool TryTerminateFlush();
     bool TryProactiveFlush(size_t workerId);
     bool TryEnd();
+    void Free();
     MarkingStacks::MarkingGeneration Generation() const { return generation; }
 
+    static Result FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
+                             MarkTerminate& terminate, size_t workerId, bool partial,
+                             const Process& process, std::atomic<size_t>* stealSuccess = nullptr,
+                             std::atomic<size_t>* stealFailure = nullptr, ZMark* domain = nullptr);
+
 private:
+    size_t CalculateNStripes(size_t nworkers) const;
     void EnsureWorkers(size_t nworkers);
 
+    MarkingSMR smr;
+    MarkStripeSet stripes;
+    MarkTerminate terminate;
+    std::atomic<size_t> workNProactiveFlush{0};
+    std::atomic<size_t> workNTerminateFlush{0};
+    size_t nproactiveflush = 0;
+    size_t nterminateflush = 0;
+    size_t ntrycomplete = 0;
+    size_t ncontinue = 0;
     size_t nworkers = 0;
     size_t targetNStripes = 0;
     MarkingStacks::MarkingGeneration generation;
-    MarkStripeSet stripes;
-    MarkTerminate terminate;
-    std::unique_ptr<MarkingSMR> smr;
-    size_t proactiveFlushes = 0;
     ZWorkers* gcWorkers = nullptr;
     ZAbort* abortToken = nullptr;
 };
@@ -270,7 +279,7 @@ public:
     explicit TracingCollector(Allocator& allocator, CollectorResources& resources);
 
     ~TracingCollector() override = default;
-    MarkDomain* MajorMarkDomain() const { return majorMarkDomain.get(); }
+    ZMark* MajorMark() const { return majorMark.get(); }
     virtual void PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex);
     virtual void PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex);
 
@@ -306,7 +315,7 @@ public:
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
     static std::function<void()> testOldMarkStarted;
-    static std::function<void(GCCycleGeneration, MarkStartPoint, const MarkDomain*)> testMarkStartState;
+    static std::function<void(GCCycleGeneration, MarkStartPoint, const ZMark*)> testMarkStartState;
     static std::function<void()> testYoungMarkCompleted;
     static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
 #endif
@@ -458,7 +467,7 @@ protected:
     bool fixReferences = false;
 
     std::atomic<size_t> markedObjectCount = { 0 };
-    std::unique_ptr<MarkDomain> majorMarkDomain;
+    std::unique_ptr<ZMark> majorMark;
     std::mutex externMtx;
     // ZGC zUncoloredRoot.hpp:46-49: uncolored roots keep their color in
     // the container. A current address must not be interpreted as a from-key.
@@ -539,7 +548,7 @@ protected:
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool FlushMarkProducers(MarkDomain* domain);
+    bool FlushMarkProducers(ZMark* domain);
     void ProcessOldNonStrongReferences(WorkStack& workStack);
     void ProcessExportRoots(WorkStack& foreignRootsSet);
 

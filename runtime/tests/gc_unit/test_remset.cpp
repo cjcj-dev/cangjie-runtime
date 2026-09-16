@@ -108,7 +108,7 @@ struct RemsetRearmTestAccess {
         // Mark work now belongs to the generation domain, not the obsolete
         // caller staging vector. Only dispose fixture-owned pending work here;
         // real follow/termination is covered by p2FieldBarrierExercise.
-        auto& domain = *collector.YoungMarkDomain();
+        auto& domain = *collector.YoungMark();
         auto& stacks = domain.Stacks();
         const size_t work = stacks.Population();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {

@@ -61,7 +61,7 @@ extern "C" int p1MarkStartExercise()
     std::array<StartState, 2> state {};
     bool youngComplete = false;
     TracingCollector::testMarkStartState = [&](GCCycleGeneration generation, MarkStartPoint point,
-                                               const MarkDomain* domain) {
+                                               const ZMark* domain) {
         const size_t index = generation == GCCycleGeneration::YOUNG ? 0 : 1;
         auto& before = state[index];
         const auto snapshot = collector.GetCycleSnapshot(generation);

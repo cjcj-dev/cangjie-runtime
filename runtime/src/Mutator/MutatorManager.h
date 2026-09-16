@@ -165,7 +165,7 @@ public:
     // Visit all mutators, hold mutatorListLock firstly
     void VisitAllMutators(MutatorVisitor func);
     void VisitAllMutatorsExceptFinalizer(MutatorVisitor func);
-    bool HandshakeFlushMarkProducers(class MarkDomain* domain);
+    bool HandshakeFlushMarkProducers(class ZMark* domain);
     // Waiting driver/finalizer threads service the same M4 operation queue.
     bool MarkFlushHandshakeActive() const { return Handshake::Current().has_operation(); }
     bool AcknowledgeMarkFlushForCurrentThread();

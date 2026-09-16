@@ -205,7 +205,7 @@ void* Exercise(void*)
     // ProcessExportRoots consumes, so a witness is observed here only if its
     // family scan published it.
     tracing.testOldMarkStarted = [&]() {
-        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*tracing.MajorMarkDomain());
+        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*tracing.MajorMark());
         size_t expected = 0;
         bool included = true;
         Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {

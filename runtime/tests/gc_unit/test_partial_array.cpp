@@ -64,8 +64,8 @@ struct PartialArrayTestAccess {
     static void ReadPublished(WCollector& collector, TracingCollector::WorkStack& result)
     {
         auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
-        auto& domain = heap.MajorMarkDomain() != nullptr ? *heap.MajorMarkDomain()
-                                                         : *collector.MajorMarkDomain();
+        auto& domain = heap.MajorMark() != nullptr ? *heap.MajorMark()
+                                                         : *collector.MajorMark();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
             if (auto* stack = domain.Stacks().StealLocal(stripe)) {
                 while (!stack->IsEmpty()) result.push_back(stack->Pop());

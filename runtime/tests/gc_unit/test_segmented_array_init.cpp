@@ -846,7 +846,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool targetLive = productLive(targetPage, target);
     const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty();
     auto& productCollector = static_cast<WCollector&>(collector);
-    MarkDomain* domain = productCollector.YoungMarkDomain();
+    ZMark* domain = productCollector.YoungMark();
     const size_t pendingBefore = domain->Stripes().Population() + domain->Stacks().Population();
     holder->OnFinalizerCreated();
     const size_t pendingAfter = domain->Stripes().Population() + domain->Stacks().Population();

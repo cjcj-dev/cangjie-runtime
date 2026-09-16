@@ -340,7 +340,7 @@ struct LoadHealDeliveryTestAccess {
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots,
                                       currentMinorRoots, false, &consumed, &stats);
-        auto& domain = *collector.YoungMarkDomain();
+        auto& domain = *collector.YoungMark();
         auto& stacks = domain.Stacks();
         const size_t work = stacks.Population();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {

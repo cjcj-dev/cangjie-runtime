@@ -684,7 +684,7 @@ void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 
 namespace {
 
-bool FlushTargetGCData(ThreadGCData& data, MarkDomain* domain)
+bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
 {
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     auto& remembered = Heap::GetHeap().GetRememberedSet();
@@ -695,7 +695,7 @@ bool FlushTargetGCData(ThreadGCData& data, MarkDomain* domain)
                              : collector.FlushGCDataMarkProducers(data, domain);
 }
 
-bool FlushTlsMarkProducers(ThreadLocalData* tls, MarkDomain* domain)
+bool FlushTlsMarkProducers(ThreadLocalData* tls, ZMark* domain)
 {
     if (tls == nullptr) {
         return false;
@@ -921,7 +921,7 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
     return pending;
 }
 
-bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
+bool MutatorManager::HandshakeFlushMarkProducers(ZMark* domain)
 {
     bool flushed = false;
     if (WorldStopped()) {
@@ -946,7 +946,7 @@ bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
 
     class MarkFlushHandshakeClosure : public HandshakeClosure {
     public:
-        explicit MarkFlushHandshakeClosure(MarkDomain* d)
+        explicit MarkFlushHandshakeClosure(ZMark* d)
             : HandshakeClosure("ZMarkFlushStacks"), domain_(d), flushed_(false) {}
         void do_thread(ThreadLocalData* tls) override
         {
@@ -956,7 +956,7 @@ bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
         }
         bool flushed() const { return flushed_.load(std::memory_order_relaxed); }
     private:
-        MarkDomain* domain_;
+        ZMark* domain_;
         std::atomic<bool> flushed_;
     } cl(domain);
     Heap::GetHeap().GetFinalizerProcessor().Notify();

@@ -63,11 +63,11 @@ struct RelocationReceiptTestAccess {
     }
     static size_t PendingYoungRootWork(WCollector& collector)
     {
-        return ThreadLocal::GetMarkStacks(*collector.youngMarkDomain).Population();
+        return ThreadLocal::GetMarkStacks(*collector.youngMark).Population();
     }
     static void DrainYoungRootWork(WCollector& collector)
     {
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.youngMarkDomain);
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.youngMark);
         TracingCollector::WorkStack work;
         std::vector<BaseObject*> reachable;
         WCollector::MinorSlotSet slots;
@@ -227,7 +227,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     };
     collector.testOldMarkStarted = [&]() {
         observed = true;
-        enumerated |= RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), to);
+        enumerated |= RootPublicationSnapshot::Contains(*collector.MajorMark(), to);
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testOldMarkStarted = nullptr;
@@ -329,7 +329,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     resources.GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
     bool published = false;
     collector.testOldMarkStarted = [&]() {
-        published |= RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), fixture.obj0);
+        published |= RootPublicationSnapshot::Contains(*collector.MajorMark(), fixture.obj0);
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testOldMarkStarted = nullptr;

@@ -101,7 +101,7 @@ void* RunMajorCycle(void*)
     // foreign stack), so the cycle-owner family scan is what publishes it.
     collector.testOldMarkStarted = [handle, &collector]() {
         BaseObject* current = Heap::GetHeap().GetExportObject(handle);
-        const bool found = RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), current);
+        const bool found = RootPublicationSnapshot::Contains(*collector.MajorMark(), current);
         gMajorRootObserved.store(found, std::memory_order_relaxed);
         std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
                     static_cast<void*>(current), static_cast<unsigned>(found));

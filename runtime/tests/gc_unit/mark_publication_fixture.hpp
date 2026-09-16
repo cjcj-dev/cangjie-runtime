@@ -46,7 +46,7 @@ struct MarkPublicationFixture {
         resources.collectorProxy.currentCollector = previousCollector;
         current = previousFixture;
     }
-    template<class Visitor> void DrainDomain(MarkDomain& domain, Visitor&& visitor)
+    template<class Visitor> void DrainDomain(ZMark& domain, Visitor&& visitor)
     {
         GcUnit::WorkerFixture worker;
         // ZMark::flush publishes the mutator's partial stack before workers drain it.
@@ -60,7 +60,7 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void DrainOld(Visitor&& visitor)
     {
-        DrainDomain(*collector.majorMarkDomain, std::forward<Visitor>(visitor));
+        DrainDomain(*collector.majorMark, std::forward<Visitor>(visitor));
     }
     bool FollowYoung(TracingCollector::WorkStack& work, std::vector<BaseObject*>& reached)
     {
@@ -74,17 +74,17 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void Drain(Visitor&& visitor)
     {
-        DrainDomain(*collector.youngMarkDomain, visitor);
-        DrainDomain(*collector.majorMarkDomain, visitor);
+        DrainDomain(*collector.youngMark, visitor);
+        DrainDomain(*collector.majorMark, visitor);
     }
     template<class Stack> void DrainObjects(Stack& stack)
     {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
-    size_t YoungPending() const { return collector.youngMarkDomain->Stripes().Population() +
-        collector.youngMarkDomain->Stacks().Population(); }
-    size_t OldPending() const { return collector.majorMarkDomain->Stripes().Population() +
-        collector.majorMarkDomain->Stacks().Population(); }
+    size_t YoungPending() const { return collector.youngMark->Stripes().Population() +
+        collector.youngMark->Stacks().Population(); }
+    size_t OldPending() const { return collector.majorMark->Stripes().Population() +
+        collector.majorMark->Stacks().Population(); }
 };
 template<class Stack> void DrainPublishedMarkObjects(Stack& stack)
 {

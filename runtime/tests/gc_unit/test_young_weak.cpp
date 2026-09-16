@@ -663,11 +663,11 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager manager;
     WeakClosureTestRuntime runtime(manager);
-    MarkDomain old(64, MarkingStacks::MarkingGeneration::MAJOR);
-    MarkDomain young(64, MarkingStacks::MarkingGeneration::YOUNG);
-    for (MarkDomain* domain : {&old, &young}) {
-        MarkDomain& current = *domain;
-        MarkDomain& other = domain == &old ? young : old;
+    ZMark old(64, MarkingStacks::MarkingGeneration::MAJOR);
+    ZMark young(64, MarkingStacks::MarkingGeneration::YOUNG);
+    for (ZMark* domain : {&old, &young}) {
+        ZMark& current = *domain;
+        ZMark& other = domain == &old ? young : old;
         auto& stacks = ThreadLocal::GetMarkStacks(current);
         stacks.Push(current.Stripes(), 0,
                     MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);

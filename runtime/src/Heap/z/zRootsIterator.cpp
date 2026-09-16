@@ -309,7 +309,7 @@ void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 {
     (void)workStack;
-    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMark.get());
 }
 
 void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)

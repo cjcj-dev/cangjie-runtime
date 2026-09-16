@@ -16,7 +16,7 @@
 #include "Heap/Collector/GcRequest.h"
 namespace MapleRuntime {
 class RememberedSet;
-class MarkDomain;
+class ZMark;
 enum class zaddress : Uptr;
 struct TenuringInputs;
 // Per-generation execution state. The snapshot lock publishes cycle identity
@@ -41,7 +41,7 @@ class GenerationCycle {
 public:
     explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
     GCCycleSnapshot Snapshot() const;
-    void BindMarkDomain(MarkDomain* domain) { markDomain = domain; }
+    void BindMark(ZMark* domain) { mark = domain; }
     bool IsPhaseMark() const;
     double FragmentationLimit() const;
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
@@ -81,7 +81,7 @@ private:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
 #endif
-    MarkDomain* markDomain = nullptr;
+    ZMark* mark = nullptr;
     const GCCycleGeneration generation;
     std::unique_ptr<ZWorkers> workers;
     GCStats stats;

@@ -13,7 +13,7 @@
 #include "Heap/z/zMarkStack.hpp"
 
 namespace MapleRuntime {
-// Test-side, read-only copy of what a MarkDomain has actually published.
+// Test-side, read-only copy of what a ZMark has actually published.
 // zMarkStack.hpp names this struct as a friend of MarkStripeStack,
 // MarkStripeStackList and MarkStripe; the product itself has no observer
 // (ZGC zMarkStack.hpp:35-54 keeps the chunk single-owner while filled and
@@ -39,7 +39,7 @@ struct RootPublicationSnapshot {
         }
     }
 
-    static void Visit(MarkDomain& domain, const Visitor& visit)
+    static void Visit(ZMark& domain, const Visitor& visit)
     {
         for (size_t i = 0; i < domain.Stripes().Count(); ++i) {
             const MarkStripe& stripe = domain.Stripes().At(i);
@@ -48,14 +48,14 @@ struct RootPublicationSnapshot {
         }
     }
 
-    static bool Contains(MarkDomain& domain, const BaseObject* object)
+    static bool Contains(ZMark& domain, const BaseObject* object)
     {
         bool found = false;
         Visit(domain, [&](const MarkStackEntry& entry) { found = found || to_object(ZOffset::address(to_zoffset(entry.object_address()))) == object; });
         return found;
     }
 
-    static std::set<BaseObject*> Objects(MarkDomain& domain)
+    static std::set<BaseObject*> Objects(ZMark& domain)
     {
         std::set<BaseObject*> objects;
         Visit(domain, [&](const MarkStackEntry& entry) { objects.insert(to_object(ZOffset::address(to_zoffset(entry.object_address())))); });
