@@ -983,19 +983,11 @@ void WCollector::StartYoungMarkWork()
 
 void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
 {
-    const GCCycleSnapshot young = GetCycleSnapshot(GCCycleGeneration::YOUNG);
-    if (!young.active || (young.phase != GC_PHASE_ENUM && young.phase != GC_PHASE_TRACE &&
-                          young.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
+    if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    if (!Heap::IsHeapAddress(object) || IsMarkedObject<Generation::Young>(object)) {
-        return;
-    }
-    CHECK_DETAIL(youngMark != nullptr, "young mark domain must start before publication");
-    MarkStripeSet& stripes = youngMark->Stripes();
-    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*youngMark);
-    publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-                     MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, true, false), true);
+    const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+        .MarkObjectIfActive<false, false, true, false>(from_object(object));
 }
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
@@ -1425,27 +1417,15 @@ void TracingCollector::StartOldMarkWork()
 
 void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
 {
-    const GCCycleSnapshot old = GetCycleSnapshot(GCCycleGeneration::OLD);
-    if (!old.active || (old.phase != GC_PHASE_ENUM && old.phase != GC_PHASE_TRACE &&
-                        old.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
-        return;
-    }
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    const bool marked = gcThread ? MarkObject(object) : IsMarkedObject<Generation::Old>(object);
-    if (marked) {
-        return;
+    auto& cycle = const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::OLD));
+    if (gcThread) {
+        cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
+    } else {
+        cycle.MarkObjectIfActive<false, false, true, false>(from_object(object));
     }
-    // ZMark::mark_object marks before publishing GC-thread work. The entry
-    // carries FollowOnly so old workers still traverse an already marked root.
-    CHECK_DETAIL(majorMark != nullptr, "old mark domain must start before publication");
-    MarkStripeSet& stripes = majorMark->Stripes();
-    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*majorMark);
-    publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
-                     gcThread ? MarkStackEntry(untype(ZAddress::offset(from_object(object))), false, false, true, false)
-                              : MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, true, false),
-                     true);
 }
 
 size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
