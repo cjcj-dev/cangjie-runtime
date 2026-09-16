@@ -314,8 +314,8 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     GC_EXPECT_EQ(newCount, 0u);
 }
 
-// A2: an empty holder must never create the pBase=null pending form that skips
-// relocation remap.  The product barrier discharges it immediately.
+// ZGC store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706) keys on the
+// field address, not the holder. A null obj with a heap slot still buffers (p,prev).
 GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
 {
     GcHeapFixture fx;
@@ -331,21 +331,21 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    field.StoreColoured(StoreBadPointer(fx.obj0));
+    const zpointer prev = StoreBadPointer(fx.obj0);
+    field.StoreColoured(prev);
 
     barrier.WriteReference(nullptr, field, fx.obj1);
 
-    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 0u);
-    GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
-    std::vector<BaseObject*> marked;
-    markFixture.DrainObjects(marked);
-    GC_EXPECT_EQ(marked.size(), 1u);
-    GC_EXPECT_TRUE(marked[0] == fx.obj0);
+    StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    GC_EXPECT_EQ(buf.Pending(), 1u);
+    if (buf.Pending() == 1u) {
+        GC_EXPECT_EQ(buf.buffer[buf.current].p, reinterpret_cast<MAddress>(&field));
+        GC_EXPECT_EQ(raw(buf.buffer[buf.current].prev), raw(prev));
+    }
     std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
 
-// B2: a non-null non-heap holder has the same immediate discipline as null;
-// it is never interpreted as a relocatable managed base.
+// ZGC: holder identity is not a store-buffer key; heap field p is buffered.
 GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 {
     GcHeapFixture fx;
@@ -361,7 +361,8 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    field.StoreColoured(StoreBadPointer(fx.obj0));
+    const zpointer prev = StoreBadPointer(fx.obj0);
+    field.StoreColoured(prev);
     alignas(8) unsigned char nativeStorage[128] {};
     BaseObject* nonHeapHolder = fx.PlaceObject(reinterpret_cast<MAddress>(nativeStorage));
     GC_EXPECT_TRUE(nonHeapHolder != nullptr);
@@ -369,12 +370,12 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 
     barrier.WriteReference(nonHeapHolder, field, fx.obj1);
 
-    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 0u);
-    GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
-    std::vector<BaseObject*> marked;
-    markFixture.DrainObjects(marked);
-    GC_EXPECT_EQ(marked.size(), 1u);
-    GC_EXPECT_TRUE(marked[0] == fx.obj0);
+    StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
+    GC_EXPECT_EQ(buf.Pending(), 1u);
+    if (buf.Pending() == 1u) {
+        GC_EXPECT_EQ(buf.buffer[buf.current].p, reinterpret_cast<MAddress>(&field));
+        GC_EXPECT_EQ(raw(buf.buffer[buf.current].prev), raw(prev));
+    }
     std::fprintf(stderr, "TARGET_HOLDER_MARK_AND_REMEMBER_EXECUTED\n");
 }
 
@@ -540,7 +541,7 @@ GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_TRUE(rs.Contains(slot));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 #if defined(MRT_GC_UNIT_TESTS)
     GC_EXPECT_EQ(events.size(), 2u);
     GC_EXPECT_EQ(events[0], StoreBarrierFlushEvent::PREVIOUS_RETIRED);
@@ -565,7 +566,7 @@ GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
     DrainPublishedMarkObjects(retired);
 
     GC_EXPECT_TRUE(retired.empty());
-    GC_EXPECT_TRUE(rs.Contains(slot));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
 
 GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
@@ -587,7 +588,7 @@ GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
     GC_EXPECT_TRUE(marked.empty());
-    GC_EXPECT_TRUE(rs.Contains(slot));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
     GC_EXPECT_TRUE(buf.IsEmpty());
 }
 
@@ -621,11 +622,11 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
                  "retired_receipts=%zu current=%zu slot_remembered=%u\n",
                  static_cast<size_t>(raw(previous)), static_cast<unsigned>(GCPhase::GC_PHASE_TRACE),
                  static_cast<size_t>(colour), retired.size(), buf.Current(),
-                 static_cast<unsigned>(rs.Contains(slot)));
+                 static_cast<unsigned>(Heap::GetHeap().GetRememberedSet().Contains(slot)));
     std::fflush(stderr);
     GC_EXPECT_TRUE(retired.empty());
     GC_EXPECT_EQ(buf.Current(), StoreBarrierBuffer::Capacity());
-    GC_EXPECT_TRUE(rs.Contains(slot));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 #if defined(MRT_GC_UNIT_TESTS)
     GC_EXPECT_EQ(events.size(), 2u);
     GC_EXPECT_EQ(events[0], StoreBarrierFlushEvent::PREVIOUS_INVALID);
@@ -653,7 +654,7 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
     GC_EXPECT_TRUE(marked.empty());
-    GC_EXPECT_FALSE(rs.Contains(slot));
+    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
     GC_EXPECT_TRUE(buf.IsEmpty());
 }
 #endif
@@ -680,7 +681,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_TRUE(!rs.Contains(slot));
+    GC_EXPECT_TRUE(!Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
 
 GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
@@ -705,7 +706,7 @@ GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
     markFixture.DrainObjects(marked);
     GC_EXPECT_EQ(marked.size(), 1u);
     GC_EXPECT_TRUE(marked[0] == fx.obj1);
-    GC_EXPECT_TRUE(rs.Contains(slot) && rs.Contains(currentSlot));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot) && Heap::GetHeap().GetRememberedSet().Contains(currentSlot));
 }
 
 GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
@@ -731,7 +732,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     DrainPublishedMarkObjects(retired);
 
     GC_EXPECT_TRUE(retired.empty());
-    GC_EXPECT_TRUE(rs.Contains(SlotAt(fx, 12)));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(SlotAt(fx, 12)));
 }
 
 GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
@@ -850,7 +851,7 @@ GC_TEST(StoreBuf, MarkEndSnapshotLeavesCurrentForNextMinor)
     buf.Flush(rs);
     std::unordered_set<MAddress> markEnd = rs.Snapshot();
     GC_EXPECT_TRUE(markEnd.count(slot) == 1);
-    GC_EXPECT_TRUE(rs.Contains(slot));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
     GC_EXPECT_EQ(rs.Size(), 1u);
 }
 
@@ -964,7 +965,7 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
             } else {
                 barrier.WriteReference(fx.obj0, field, fx.obj1);
             }
-            GC_EXPECT_EQ(rs.Contains(reinterpret_cast<MAddress>(&field)), weak);
+            GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)), weak);
             GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == fx.obj1);
         }
     }
@@ -1059,6 +1060,6 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     marking.DrainObjects(marked);
     GC_EXPECT_TRUE(marked.empty());
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
-    GC_EXPECT_FALSE(rs.Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
     GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj1));
 }
