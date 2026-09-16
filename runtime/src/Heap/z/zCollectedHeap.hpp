@@ -69,6 +69,14 @@ public:
     {
         return generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
     }
+    GenerationCycle& GetGenerationCycle(Generation generation)
+    {
+        return GetGenerationCycle(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+    }
+    const GenerationCycle& GetGenerationCycle(Generation generation) const
+    {
+        return GetGenerationCycle(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+    }
 
     virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
     {

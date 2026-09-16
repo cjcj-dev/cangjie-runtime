@@ -216,8 +216,8 @@ inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
         return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
     }
     const MAddress address = untype(RefField<>(ptr).GetTargetObject());
-    if (ForwardingTable::get(address, Generation::Young) != nullptr) {
-        CHECK(ForwardingTable::get(address, Generation::Old) == nullptr);
+    if (Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).forwarding_table().get(address) != nullptr) {
+        CHECK(Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).forwarding_table().get(address) == nullptr);
         return &collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
     }
     return &collector.GetGenerationCycle(GCCycleGeneration::OLD);

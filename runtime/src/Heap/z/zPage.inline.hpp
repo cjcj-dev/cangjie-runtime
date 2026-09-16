@@ -13,6 +13,7 @@
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zVirtualMemory.inline.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 
 namespace MapleRuntime {
 
@@ -40,7 +41,7 @@ inline const ZLiveMap& ZPage::livemap() const
 
 inline ZForwarding* ZPage::GetFromPageCarrier() const
     {
-        ZForwarding* carrier = ForwardingTable::RetainPageOwner(this).get();
+        ZForwarding* carrier = Heap::GetHeap().GetCollector().GetGenerationCycle(GetOwnerGeneration()).forwarding_table().get(GetRegionStart());
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 
