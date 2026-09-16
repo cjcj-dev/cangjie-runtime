@@ -66,12 +66,12 @@ struct RelocationReceiptTestAccess {
     static void RunOldRoots(WCollector& collector) { collector.DoOldRoots(); }
     static size_t PendingYoungRootWork(WCollector& collector)
     {
-        return ThreadLocal::GetMarkStacks(*collector.youngMarkDomain).Population();
+        return ThreadLocal::GetMarkStacks(*collector.YoungMark()).Population();
     }
     static void DrainYoungRootWork(WCollector& collector)
     {
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.youngMarkDomain);
-        TracingCollector::WorkStack work;
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.YoungMark());
+        WorkStack work;
         std::vector<BaseObject*> reachable;
         WCollector::MinorSlotSet slots;
         WCollector::MinorSlotSet weak;
@@ -230,7 +230,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     };
     collector.testOldMarkStarted = [&]() {
         observed = true;
-        enumerated |= RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), to);
+        enumerated |= RootPublicationSnapshot::Contains(*collector.MajorMark(), to);
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testOldMarkStarted = nullptr;
@@ -371,7 +371,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     resources.GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
     bool published = false;
     collector.testOldMarkStarted = [&]() {
-        published |= RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), fixture.obj0);
+        published |= RootPublicationSnapshot::Contains(*collector.MajorMark(), fixture.obj0);
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testOldMarkStarted = nullptr;
@@ -419,7 +419,7 @@ void CheckRootStorageSegments(unsigned family)
     size_t otherConsumed = 0;
     bool valuesValid = true;
     struct ResetObserver {
-        ~ResetObserver() { TracingCollector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
     } reset;
     collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* slot) {
         if ((generation == GCCycleGeneration::OLD) != (family == 0)) { return; }
@@ -489,7 +489,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     NativeSlot* addedSlot = nullptr;
     bool newSlotVisited = false;
     struct ResetObserver {
-        ~ResetObserver() { TracingCollector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
     } reset;
     collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* slot) {
         if (generation != GCCycleGeneration::YOUNG || slot == nullptr) { return; }

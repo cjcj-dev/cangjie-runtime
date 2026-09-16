@@ -55,6 +55,7 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData);
 using MutatorVisitor = std::function<void(Mutator&)>;
 
 class MutatorManager {
+    friend class ZMark;
 public:
     MutatorManager() {}
     ~MutatorManager()
@@ -141,7 +142,6 @@ public:
     // Visit all mutators, hold mutatorListLock firstly
     void VisitAllMutators(MutatorVisitor func);
     void VisitAllMutatorsExceptFinalizer(MutatorVisitor func);
-    bool HandshakeFlushMarkProducers(class MarkDomain* domain);
     // Waiting driver/finalizer threads service the same M4 operation queue.
     bool MarkFlushHandshakeActive() const { return Handshake::Current().has_operation(); }
     bool AcknowledgeMarkFlushForCurrentThread();

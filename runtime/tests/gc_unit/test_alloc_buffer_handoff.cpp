@@ -92,7 +92,7 @@ constexpr size_t kBurst = 200000;
 GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
 {
     GcHeapFixture fx;
-    MarkDomain domain(64, MarkingStacks::MarkingGeneration::YOUNG);
+    ZMark domain(64, MarkingStacks::MarkingGeneration::YOUNG);
     domain.PrepareWork(1);
     auto& producer = domain.Stacks();
     producer.Push(domain.Stripes(), 0, MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, true, false), true);
@@ -116,7 +116,7 @@ GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
 GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact)
 {
     GcHeapFixture fx;
-    MarkDomain domain(64, MarkingStacks::MarkingGeneration::YOUNG);
+    ZMark domain(64, MarkingStacks::MarkingGeneration::YOUNG);
     domain.PrepareWork(1);
     AllocBuffer first;
     AllocBuffer second;

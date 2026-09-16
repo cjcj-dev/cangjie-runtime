@@ -28,7 +28,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"

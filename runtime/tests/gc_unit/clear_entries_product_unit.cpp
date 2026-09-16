@@ -86,7 +86,7 @@ struct RelocationReceiptTestAccess {
         GC_EXPECT_TRUE(region == nullptr || region->GetRegionListOwner() == nullptr);
     }
 
-    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);
@@ -328,7 +328,7 @@ struct LoadHealDeliveryTestAccess {
         collector.StartYoungMarkWork();
         collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         ZGlobalsPointers::flip_young_mark_start();
-        WCollector::WorkStack workStack = collector.NewWorkStack();
+        WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
@@ -340,7 +340,7 @@ struct LoadHealDeliveryTestAccess {
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots,
                                       currentMinorRoots, false, &consumed, &stats);
-        auto& domain = *collector.YoungMarkDomain();
+        auto& domain = *collector.YoungMark();
         auto& stacks = domain.Stacks();
         const size_t work = stacks.Population();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {

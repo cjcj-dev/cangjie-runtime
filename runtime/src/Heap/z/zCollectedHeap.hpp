@@ -38,7 +38,7 @@ enum CollectorType {
 class Collector {
 public:
     Collector();
-    virtual ~Collector() = default;
+    virtual ~Collector();
 
     static const char* GetGCPhaseName(GCPhase phase);
 

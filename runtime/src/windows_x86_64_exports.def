@@ -1728,8 +1728,6 @@ EXPORTS
     _ZN12MapleRuntime20PrintSignalStackInfoD0Ev @1936
     _ZN12MapleRuntime20PrintSignalStackInfoD2Ev @1937
     _ZN12MapleRuntime20g_installDomainGrantE @1948 DATA
-    _ZN12MapleRuntime21ConcurrentMarkingWorkD0Ev @1951
-    _ZN12MapleRuntime21ConcurrentMarkingWorkD2Ev @1952
     _ZN12MapleRuntime21ScopedEnterSaferegionC2Eb @1954
     _ZN12MapleRuntime22CompressedStackMapHead15GetStackMapHeadEyRKNSt3__18functionIFvNS_23PrologueRegisterClosure4TypeEjEEEPy @1955
     _ZN12MapleRuntime22IsHaveCommandInjectionERKNS_7CStringE @1960
@@ -2792,7 +2790,6 @@ EXPORTS
     _ZTVN12MapleRuntime18StackGrowStackInfoE @3181 DATA
     _ZTVN12MapleRuntime19SigHandlerFrameinfoE @3182 DATA
     _ZTVN12MapleRuntime20PrintSignalStackInfoE @3183 DATA
-    _ZTVN12MapleRuntime21ConcurrentMarkingWorkE @3184 DATA
     _ZTVN12MapleRuntime6CJFileE @3186 DATA
     _ZTVN12MapleRuntime6GCTaskE @3187 DATA
     _ZTVN12MapleRuntime7BarrierE @3188 DATA

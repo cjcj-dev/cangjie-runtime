@@ -243,7 +243,7 @@ bool ReferenceProcessor::Empty() const
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
@@ -251,7 +251,7 @@ namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
 extern std::atomic<size_t> g_weakDiscoveryCount;
 #endif
-void TracingCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
+void CopyCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
 {
     HeapSlot<>& referentField =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);

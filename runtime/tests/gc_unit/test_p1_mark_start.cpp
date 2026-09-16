@@ -60,8 +60,8 @@ extern "C" int p1MarkStartExercise()
 
     std::array<StartState, 2> state {};
     bool youngComplete = false;
-    TracingCollector::testMarkStartState = [&](GCCycleGeneration generation, MarkStartPoint point,
-                                               const MarkDomain* domain) {
+    CopyCollector::testMarkStartState = [&](GCCycleGeneration generation, MarkStartPoint point,
+                                               const ZMark* domain) {
         const size_t index = generation == GCCycleGeneration::YOUNG ? 0 : 1;
         auto& before = state[index];
         const auto snapshot = collector.GetCycleSnapshot(generation);
@@ -128,7 +128,7 @@ extern "C" int p1MarkStartExercise()
     collector.RequestGC(GC_REASON_YOUNG, false);
     const auto youngAfter = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const auto oldAfter = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
-    TracingCollector::testMarkStartState = nullptr;
+    CopyCollector::testMarkStartState = nullptr;
     Expect(oldAfterMajor.sequence > oldBefore.sequence, "major_request_started_old");
     Expect(oldAfter.sequence == oldAfterMajor.sequence, "minor_preserves_old_identity");
     Expect(state[0].starts == youngAfter.sequence - youngBefore.sequence && state[0].starts != 0,

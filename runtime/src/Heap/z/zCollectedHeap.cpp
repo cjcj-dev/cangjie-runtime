@@ -23,6 +23,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Mutator/Mutator.h"
 #include "TypeInfoManager.h"
 
@@ -31,6 +32,8 @@ namespace {
 const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
                                        "Smooth Collector" };
 }
+
+Collector::~Collector() = default;
 
 void Collector::MarkObjectIfActive(BaseObject* object) const
 {

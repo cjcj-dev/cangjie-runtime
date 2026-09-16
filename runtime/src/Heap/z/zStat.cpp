@@ -723,13 +723,13 @@ ZStatHeapStats ZStatHeap::Stats() const
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 
 namespace MapleRuntime {
-void TracingCollector::UpdateGCStats()
+void CopyCollector::UpdateGCStats()
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     GCStats& gcStats = GetGCStats();

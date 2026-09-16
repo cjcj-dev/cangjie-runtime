@@ -117,16 +117,16 @@ GC_TEST(MarkStripe, SmrHazardPreventsAbaReuse)
     GC_EXPECT_TRUE(head.compare_exchange_strong(expected, tail, std::memory_order_relaxed));
     MapleRuntime::GcUnit::WorkerFixture reclaimWorker(1);
     smr.free_node(first);
-    smr.reclaim();
-    GC_EXPECT_EQ(smr.pending_count(), static_cast<size_t>(1));
+    MarkingSMRTestAccess::reclaim(smr);
+    GC_EXPECT_EQ(MarkingSMRTestAccess::pending_count(smr), static_cast<size_t>(1));
 
     replacement->SetNext(tail);
     head.store(replacement, std::memory_order_release);
     GC_EXPECT_NE(reinterpret_cast<uintptr_t>(head.load(std::memory_order_acquire)),
                  reinterpret_cast<uintptr_t>(observed));
     hazard->store(nullptr, std::memory_order_release);
-    smr.reclaim();
-    GC_EXPECT_EQ(smr.pending_count(), static_cast<size_t>(0));
+    MarkingSMRTestAccess::reclaim(smr);
+    GC_EXPECT_EQ(MarkingSMRTestAccess::pending_count(smr), static_cast<size_t>(0));
 
     delete replacement;
     delete tail;
@@ -282,7 +282,7 @@ GC_TEST(MarkingSMR, WorkerPopRetiresInCurrentSlot)
                 MarkStripeStack::Destroy(stack);
             }
             hazards[id] = smr.hazard_ptr();
-            pending[id] = smr.pending_count();
+            pending[id] = MarkingSMRTestAccess::pending_count(smr);
         }
     } task(smr, stripes);
     ZStatWorkers stats;

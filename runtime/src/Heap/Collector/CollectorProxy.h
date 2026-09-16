@@ -85,7 +85,7 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override { return currentCollector->ShouldIgnoreRequest(request); }
 
-    TracingCollector& GetCurrentCollector() const { return *currentCollector; }
+    CopyCollector& GetCurrentCollector() const { return *currentCollector; }
 
     FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {
@@ -164,7 +164,7 @@ public:
 
 private:
     // supported collector set
-    TracingCollector* currentCollector = nullptr;
+    CopyCollector* currentCollector = nullptr;
     WCollector wCollector;
 };
 } // namespace MapleRuntime

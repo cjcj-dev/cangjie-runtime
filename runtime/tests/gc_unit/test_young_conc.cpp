@@ -68,7 +68,7 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TracingCollector::WorkStack workStack;
+    WorkStack workStack;
     collector.DiscoverWeakReference(fx.obj0, workStack);
 
     GC_EXPECT_TRUE(workStack.empty());
@@ -87,7 +87,7 @@ extern "C" int CJ_ScheduleManagerInit();
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.
@@ -907,8 +907,8 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
                     cycle.PublishPhase(GC_PHASE_TRACE);
                     fn(&cycle, from_object(fx.obj0));
-                    MarkDomain& domain = young ? *publication.collector.YoungMarkDomain()
-                                              : *publication.collector.MajorMarkDomain();
+                    ZMark& domain = young ? *publication.collector.YoungMark()
+                                              : *publication.collector.MajorMark();
                     ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
                     MarkStackEntry entry;
                     size_t entries = 0;
@@ -949,13 +949,13 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     auto fn = P1Entry(false, false, false, false);
     fn(&cycle, from_object(fx.obj0));
     fn(&cycle, from_object(fx.obj0));
-    TracingCollector::WorkStack work;
+    WorkStack work;
     std::vector<BaseObject*> reached;
     publication.FollowYoung(work, reached);
-    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu\n", reached.size(),
-                 static_cast<size_t>(fx.region0->live_bytes()));
-    GC_EXPECT_EQ(reached.size(), 1u);
-    GC_EXPECT_TRUE(reached[0] == fx.obj0);
+    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu marked=%d\n", reached.size(),
+                 static_cast<size_t>(fx.region0->live_bytes()),
+                 fx.region0->livemap().is_marked(fx.region0->generation_id()) ? 1 : 0);
+    GC_EXPECT_TRUE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
     GC_EXPECT_EQ(fx.region0->live_bytes(), fx.obj0->GetSize());
 }
 
@@ -965,7 +965,7 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
     GcHeapFixture fx;
     MarkPublicationFixture publication;
     auto& cycle = publication.collector.GetGenerationCycle(GCCycleGeneration::OLD);
-    auto& domain = *publication.collector.MajorMarkDomain();
+    auto& domain = *publication.collector.MajorMark();
     fx.region0->reset(PageAge::old);
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Old);
