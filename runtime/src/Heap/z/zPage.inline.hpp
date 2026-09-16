@@ -642,7 +642,7 @@ inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     }
 
     template<Generation G>
-    inline void ZPage::PrepareForwardableRegion()
+inline void ZPage::PrepareForwardableRegion()
     {
         CHECK(IsFromRegion());
         CHECK(is_small());
