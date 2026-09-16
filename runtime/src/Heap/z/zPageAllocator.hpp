@@ -42,12 +42,12 @@ struct PageMemory {
 // One object represents one blocked allocation.  It is deliberately owned by
 // the allocator caller; the queue only retains the pointer until a terminal
 // answer is published.
-class AllocationStallRequest {
+class ZPageAllocation {
 public:
-    AllocationStallRequest(size_t size, uint8_t role, bool physical, bool clear)
+    ZPageAllocation(size_t size, uint8_t role, bool physical, bool clear)
         : size(size), role(role), physical(physical), clear(clear) {}
-    AllocationStallRequest(const AllocationStallRequest&) = delete;
-    AllocationStallRequest& operator=(const AllocationStallRequest&) = delete;
+    ZPageAllocation(const ZPageAllocation&) = delete;
+    ZPageAllocation& operator=(const ZPageAllocation&) = delete;
 
     size_t GetSize() const { return size; }
     uint8_t GetRole() const { return role; }
@@ -69,7 +69,7 @@ public:
 
 private:
     friend class AllocationStallQueue;
-    friend class ZList<AllocationStallRequest>;
+    friend class ZList<ZPageAllocation>;
 
     const size_t size;
     uint64_t sequence{ 0 };
@@ -80,8 +80,9 @@ private:
     // zPageAllocator.cpp:420-421 ZPageAllocation: ZFuture<bool> _stall_result
     // and the ZListNode that links it on the allocator's stalled list.
     ZFuture<bool> stallResult;
-    ZListNode<AllocationStallRequest> _node;
+    ZListNode<ZPageAllocation> _node;
 };
+using AllocationStallRequest = ZPageAllocation;
 
 // Allocator-owned FIFO.  Enqueue returns true only for the transition from
 // empty to non-empty, giving the first waiter ownership of the GC request.
@@ -90,7 +91,7 @@ public:
     explicit AllocationStallQueue(std::mutex& owner) : mutex(owner) {}
 
     // The allocator holds the same owner across claim failure and enqueue.
-    bool EnqueueLocked(AllocationStallRequest& request)
+    bool EnqueueLocked(ZPageAllocation& request)
     {
         const bool requestGc = !gcInProgress;
         gcInProgress = true;
@@ -115,17 +116,17 @@ public:
         return lastSequence;
     }
 
-    size_t SatisfyAvailable(const std::function<bool(AllocationStallRequest&)>& claim)
+    size_t SatisfyAvailable(const std::function<bool(ZPageAllocation&)>& claim)
     {
         std::lock_guard<std::mutex> lock(mutex);
         return SatisfyAvailableLocked(claim);
     }
 
-    size_t SatisfyAvailableLocked(const std::function<bool(AllocationStallRequest&)>& claim)
+    size_t SatisfyAvailableLocked(const std::function<bool(ZPageAllocation&)>& claim)
     {
         size_t satisfied = 0;
         while (!requests.is_empty()) {
-            AllocationStallRequest* request = requests.first();
+            ZPageAllocation* request = requests.first();
             if (!claim(*request)) {
                 break;
             }
@@ -144,7 +145,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex);
         while (!requests.is_empty() && requests.first()->sequence <= boundary) {
-            AllocationStallRequest* request = requests.first();
+            ZPageAllocation* request = requests.first();
             requests.remove_first();
             request->Satisfy(false);
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
@@ -170,7 +171,7 @@ public:
 private:
     std::mutex& mutex;
     // zPageAllocator.hpp:165 ZList<ZPageAllocation> _stalled.
-    ZList<AllocationStallRequest> requests;
+    ZList<ZPageAllocation> requests;
     uint64_t lastSequence{ 0 };
     bool gcInProgress{ false };
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
@@ -314,17 +315,18 @@ private:
 
     // ZPartition (zPageAllocator.hpp:57-141): numa id, mapped cache and the
     // capacity account; virtual/physical memory is reached through the managers.
-    struct Partition {
+    class ZPartition {
+    public:
         uint32_t numaId;
         ZMappedCache cache;
         size_t capacity{ 0 };
         size_t claimed{ 0 };
         size_t used{ 0 };
         size_t currentMaxCapacity{ 0 };
-        explicit Partition(uint32_t id) : numaId(id) {}
-        // ZPartition::available (zPageAllocator.cpp:644-646).
+        explicit ZPartition(uint32_t id) : numaId(id) {}
         size_t available() const { return currentMaxCapacity - used - claimed; }
     };
+    using Partition = ZPartition;
     void InsertCommitted(Partition& partition, UnitIndex index, UnitCount count);
     void FreeMemory(UnitIndex index, UnitCount count);
     mutable std::mutex cacheMutex;
@@ -369,6 +371,7 @@ private:
 #include "Common/RunType.h"
 
 #include "Heap/z/zDeferredConstructed.hpp"
+#include "Heap/z/zLock.hpp"
 #include "Heap/z/zRangeRegistry.hpp"
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zTask.hpp"
@@ -802,12 +805,16 @@ private:
     struct PerAgeObjectAllocator {
         explicit PerAgeObjectAllocator(PageAge pageAge);
         const PageAge age;
+        const bool usePerCpuSharedSmallPages;
         ZPerCPU<ZPage*> sharedSmallPage;
+        ZContended<ZPage*> sharedMediumPage;
+        ZLock mediumPageAllocLock;
         std::atomic<ZPage*> pinnedPage{nullptr};
 
-        // zObjectAllocator.hpp:48-49
         ZPage** shared_small_page_addr();
         ZPage* const* shared_small_page_addr() const;
+        ZPage** shared_medium_page_addr();
+        ZPage* const* shared_medium_page_addr() const;
     };
     ZPage* AllocateSharedPage(size_t units, ZPageType role, PageAge age, bool nonBlocking);
     void UndoSharedPage(ZPage* page);

@@ -61,6 +61,7 @@ set(GC_UNIT_SOURCES
     test_gc_director.cpp
     test_gc_request_sync.cpp
     test_allocation_stall_queue.cpp
+    test_p05_heuristics.cpp
 
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp

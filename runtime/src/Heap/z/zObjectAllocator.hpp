@@ -24,6 +24,16 @@ inline ZPage* const* RegionManager::PerAgeObjectAllocator::shared_small_page_add
     return sharedSmallPage.addr();
 }
 
+inline ZPage** RegionManager::PerAgeObjectAllocator::shared_medium_page_addr()
+{
+    return sharedMediumPage.addr();
+}
+
+inline ZPage* const* RegionManager::PerAgeObjectAllocator::shared_medium_page_addr() const
+{
+    return sharedMediumPage.addr();
+}
+
 // zObjectAllocator.cpp:219-221
 inline RegionManager::PerAgeObjectAllocator* RegionManager::allocator(PageAge age)
 {
