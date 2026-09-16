@@ -864,6 +864,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     ZWorkers& workersSet = GetWorkers(GCCycleGeneration::YOUNG);
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
     ZMark& domain = youngCycle.Mark();
+    (void)PublishHandshakeMarkWork(workStack, &domain);
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, false);
     workersSet.run(&task);
@@ -919,8 +920,10 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
 #endif
     (void)youngCycle.Mark().Flush();
     (void)youngCycle.Mark().Flush(ThreadLocal::GetThreadLocalData());
+    (void)PublishHandshakeMarkWork(workStack, &youngCycle.Mark());
     do {
-        if (!youngCycle.Mark().Stripes().IsEmpty() || !youngCycle.Mark().Stacks().IsEmpty()) {
+        if (!workStack.empty() || !youngCycle.Mark().Stripes().IsEmpty() ||
+            !youngCycle.Mark().Stacks().IsEmpty()) {
             if (windowStats != nullptr) {
                 ++windowStats->closureCalls;
             }
@@ -938,7 +941,7 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
     const size_t before = youngCycle.Mark().Stripes().Population();
-    (void)workStack;
+    (void)PublishHandshakeMarkWork(workStack, &youngCycle.Mark());
     const bool ended = youngCycle.Mark().TryEnd();
     const size_t after = youngCycle.Mark().Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
@@ -1493,6 +1496,12 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (entry.mark() && wasMarked) {
             return;
         }
+#if defined(MRT_TESTABLE_INTERNALS)
+        {
+            const std::vector<BaseObject*> observed{ object };
+            ObserveMarkClosureForTest(&observed);
+        }
+#endif
         if (!object->HasRefField() || !entry.follow()) {
             return;
         }

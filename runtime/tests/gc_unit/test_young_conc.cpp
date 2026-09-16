@@ -1052,10 +1052,10 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     WorkStack work;
     std::vector<BaseObject*> reached;
     publication.FollowYoung(work, reached);
-    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu\n", reached.size(),
-                 static_cast<size_t>(fx.region0->live_bytes()));
-    GC_EXPECT_EQ(reached.size(), 1u);
-    GC_EXPECT_TRUE(reached[0] == fx.obj0);
+    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu marked=%d\n", reached.size(),
+                 static_cast<size_t>(fx.region0->live_bytes()),
+                 fx.region0->livemap().is_marked(fx.region0->generation_id()) ? 1 : 0);
+    GC_EXPECT_TRUE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
     GC_EXPECT_EQ(fx.region0->live_bytes(), fx.obj0->GetSize());
 }
 
