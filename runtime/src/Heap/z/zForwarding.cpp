@@ -262,6 +262,11 @@ void ZForwardingLife::detach_page(std::atomic<int32_t>& refCount)
 
 namespace MapleRuntime {
 ZPage* ZForwarding::page() const { return _page; }
+
+bool ZForwarding::page_life_current() const
+{
+    return _page != nullptr && _page->GetRegionLifeId() == _page_life_id;
+}
 }
 
 namespace MapleRuntime {
