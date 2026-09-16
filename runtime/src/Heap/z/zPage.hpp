@@ -142,6 +142,8 @@ public:
     bool is_relocatable() const { return IsRelocatable(); }
 
     ZPageType type() const { return _type; }
+    PageAge age() const { return _age; }
+    bool is_young() const { return IsYoungRegion(); }
     bool is_small() const { return _type == ZPageType::small; }
     bool is_medium() const { return _type == ZPageType::medium; }
     bool is_large() const { return _type == ZPageType::large; }

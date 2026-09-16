@@ -47,8 +47,163 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "Sync/Sync.h"
+#include "Heap/z/zRelocationSetSelector.inline.hpp"
+#include "Heap/z/zForwarding.inline.hpp"
 
 namespace MapleRuntime {
+
+ZRelocationSetSelectorGroupStats::ZRelocationSetSelectorGroupStats() = default;
+
+ZRelocationSetSelectorGroup::ZRelocationSetSelectorGroup(const char* name, ZPageType page_type, size_t max_page_size,
+                                                         size_t object_size_limit, double fragmentation_limit)
+    : _name(name),
+      _page_type(page_type),
+      _max_page_size(max_page_size),
+      _object_size_limit(object_size_limit),
+      _fragmentation_limit(fragmentation_limit),
+      _page_fragmentation_limit(static_cast<size_t>(max_page_size * (fragmentation_limit / 100.0))),
+      _live_pages(),
+      _not_selected_pages(),
+      _forwarding_entries(0),
+      _stats()
+{}
+
+bool ZRelocationSetSelectorGroup::is_disabled()
+{
+    return _page_type == ZPageType::medium && !ZPageSizeMediumEnabled;
+}
+
+bool ZRelocationSetSelectorGroup::is_selectable()
+{
+    return _page_type != ZPageType::large;
+}
+
+size_t ZRelocationSetSelectorGroup::partition_index(const ZPage* page) const
+{
+    const size_t partitionSize = page->size() >> NumPartitionsShift;
+    if (partitionSize == 0) {
+        return 0;
+    }
+    const size_t index = page->live_bytes() / partitionSize;
+    return index < static_cast<size_t>(NumPartitions) ? index : static_cast<size_t>(NumPartitions - 1);
+}
+
+void ZRelocationSetSelectorGroup::semi_sort()
+{
+    int partitions[NumPartitions] = {};
+    ZArrayIterator<ZPage*> iter1(&_live_pages);
+    for (ZPage* page; iter1.next(&page);) {
+        partitions[partition_index(page)]++;
+    }
+    int finger = 0;
+    for (int i = 0; i < NumPartitions; i++) {
+        const int slots = partitions[i];
+        partitions[i] = finger;
+        finger += slots;
+    }
+    const int npages = _live_pages.length();
+    ZArray<ZPage*> sorted_live_pages(npages, npages, nullptr);
+    ZArrayIterator<ZPage*> iter2(&_live_pages);
+    for (ZPage* page; iter2.next(&page);) {
+        const size_t index = partition_index(page);
+        const int dest = partitions[index]++;
+        sorted_live_pages.at_put(dest, page);
+    }
+    _live_pages.swap(&sorted_live_pages);
+}
+
+void ZRelocationSetSelectorGroup::select_inner()
+{
+    const int npages = _live_pages.length();
+    int selected_from = 0;
+    int selected_to = 0;
+    size_t selected_forwarding_entries = 0;
+    size_t from_live_bytes = 0;
+    size_t from_forwarding_entries = 0;
+    size_t live_bytes_per_age[kPageAgeCount] = {};
+    size_t npages_per_age[kPageAgeCount] = {};
+    semi_sort();
+    const double denom = static_cast<double>(_max_page_size - _object_size_limit);
+    for (int from = 1; from <= npages; from++) {
+        ZPage* const page = _live_pages.at(from - 1);
+        const size_t page_live_bytes = page->live_bytes();
+        from_live_bytes += page_live_bytes;
+        from_forwarding_entries += ZForwarding::nentries(page->live_objects());
+        live_bytes_per_age[untype(page->age())] += page_live_bytes;
+        npages_per_age[untype(page->age())] += 1;
+        const int to = denom <= 0.0 ? from : static_cast<int>(std::ceil(static_cast<double>(from_live_bytes) / denom));
+        const int diff_from = from - selected_from;
+        const int diff_to = to - selected_to;
+        const double percentToOfFrom =
+            (diff_from != 0) ? (static_cast<double>(diff_to) / static_cast<double>(diff_from) * 100.0) : 0.0;
+        const double diff_reclaimable = 100.0 - percentToOfFrom;
+        if (diff_reclaimable > _fragmentation_limit) {
+            selected_from = from;
+            selected_to = to;
+            selected_forwarding_entries = from_forwarding_entries;
+        }
+    }
+    size_t rejected_live_bytes_per_age[kPageAgeCount] = {};
+    size_t rejected_npages_per_age[kPageAgeCount] = {};
+    for (int i = selected_from; i < _live_pages.length(); i++) {
+        ZPage* const page = _live_pages.at(i);
+        if (page->is_young()) {
+            _not_selected_pages.append(page);
+        }
+        rejected_live_bytes_per_age[untype(page->age())] += page->live_bytes();
+        rejected_npages_per_age[untype(page->age())] += 1;
+    }
+    _live_pages.trunc_to(selected_from);
+    _forwarding_entries = selected_forwarding_entries;
+    for (uint32_t i = 0; i < kPageAgeCount; ++i) {
+        _stats[i]._relocate = live_bytes_per_age[i] - rejected_live_bytes_per_age[i];
+        _stats[i]._npages_selected = npages_per_age[i] - rejected_npages_per_age[i];
+    }
+    (void)selected_to;
+}
+
+void ZRelocationSetSelectorGroup::select()
+{
+    if (is_disabled()) {
+        return;
+    }
+    if (is_selectable()) {
+        select_inner();
+    } else {
+        const int npages = _live_pages.length();
+        for (int from = 1; from <= npages; from++) {
+            _not_selected_pages.append(_live_pages.at(from - 1));
+        }
+    }
+}
+
+ZRelocationSetSelector::ZRelocationSetSelector(double fragmentation_limit)
+    : _small("Small", ZPageType::small, ZPageSizeSmall, ZObjectSizeLimitSmall, fragmentation_limit),
+      _medium("Medium", ZPageType::medium, ZPageSizeMediumMax, ZObjectSizeLimitMedium, fragmentation_limit),
+      _large("Large", ZPageType::large, 0, 0, fragmentation_limit),
+      _empty_pages()
+{}
+
+void ZRelocationSetSelector::select()
+{
+    _large.select();
+    _medium.select();
+    _small.select();
+}
+
+ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const
+{
+    ZRelocationSetSelectorStats stats;
+    for (PageAge age : kPageAgeRangeAll) {
+        const uint32_t i = untype(age);
+        stats._small[i] = _small.stats(age);
+        stats._medium[i] = _medium.stats(age);
+        stats._large[i] = _large.stats(age);
+    }
+    stats._has_relocatable_pages = total() > 0 ? 1 : 0;
+    return stats;
+}
+
 void RegionManager::ReassembleFromSpace()
 {
     fromRegionList.MergeRegionList(unmovableFromRegionList);
@@ -302,10 +457,8 @@ size_t RegionManager::ExemptFromRegions()
     size_t oldFromBytes = fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
     std::vector<ZPage*> snapshot;
     fromRegionList.VisitAllRegions([&snapshot](ZPage* r) { snapshot.push_back(r); });
-    std::vector<RelocRegionDesc> descs;
-    std::vector<ZPage*> descRegions;
-    descs.reserve(snapshot.size());
-    descRegions.reserve(snapshot.size());
+    ZRelocationSetSelector selector(
+        Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).FragmentationLimit());
     for (ZPage* fromRegion : snapshot) {
         // ZGeneration::select_relocation_set (zGeneration.cpp:211-213).
         if (!fromRegion->IsRelocatable()) {
@@ -422,37 +575,31 @@ size_t RegionManager::ExemptFromRegions()
             floatingGarbage += (del->GetRegionSize() - liveBytes);
             continue;
         }
-        RelocRegionDesc d;
-        d.liveBytes = liveBytes;
-        d.capacity = fromRegion->GetRegionSize();
-        d.kind = fromRegion->IsLargeRegion() ? RelocRegionKind::Large : RelocRegionKind::Small;
-        d.id = static_cast<uint32_t>(descs.size());
-        d.allocating = fromRegion->IsAllocating();
-        descs.push_back(d);
-        descRegions.push_back(fromRegion);
-    }
-    const RelocSelectResult selected = SelectRelocationSet(descs,
-        Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).FragmentationLimit());
-    std::vector<char> keep(descs.size(), 0);
-    for (uint32_t id : selected.selectedIds) {
-        if (id < keep.size()) {
-            keep[id] = 1;
+        if (fromRegion->is_marked()) {
+            selector.register_live_page(fromRegion);
+        } else {
+            selector.register_empty_page(fromRegion);
         }
     }
-    for (size_t i = 0; i < descs.size(); ++i) {
-        if (keep[i] != 0) {
-            continue;
+    selector.select();
+    auto exemptNotSelected = [&](const ZArray<ZPage*>* pages) {
+        if (pages == nullptr) {
+            return;
         }
-        ZPage* del = descRegions[i];
-        DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by relocsel: %zu units, %zu live bytes", del,
-            del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
-            del->GetUnitCount(), descs[i].liveBytes);
-        if (!ClaimFromRegion(fromRegionList, del, "cset-relocsel")) {
-            continue;
+        for (int i = 0; i < pages->length(); ++i) {
+            ZPage* del = pages->at(i);
+            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) not selected", del, del->GetRegionStart(),
+                 del->GetRegionAllocatedSize(), del->GetRegionEnd(), del->GetUnitCount());
+            if (!ClaimFromRegion(fromRegionList, del, "cset-relocsel")) {
+                continue;
+            }
+            ExemptFromRegion(del);
+            floatingGarbage += (del->GetRegionSize() - del->live_bytes());
         }
-        ExemptFromRegion(del);
-        floatingGarbage += (del->GetRegionSize() - descs[i].liveBytes);
-    }
+    };
+    exemptNotSelected(selector.not_selected_small());
+    exemptNotSelected(selector.not_selected_medium());
+    exemptNotSelected(selector.not_selected_large());
 
     size_t newFromBytes = fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
     size_t exemptedFromBytes = unmovableFromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;

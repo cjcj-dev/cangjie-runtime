@@ -203,6 +203,17 @@ inline zpointer ZBarrier::load_atomic(volatile zpointer* p)
     return reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p))->GetFieldValue(std::memory_order_relaxed);
 }
 
+inline zaddress ZBarrier::promote_slow_path(zaddress addr)
+{
+    return addr;
+}
+
+inline void ZBarrier::promote_barrier_on_young_oop_field(volatile zpointer* p)
+{
+    const zpointer o = load_atomic(p);
+    barrier(is_store_good_fast_path, promote_slow_path, ColorStoreGood, p, o);
+}
+
 inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
 {
     CHECK_DETAIL(!ZPointer::is_load_good(ptr), "load-good reference does not need remap");

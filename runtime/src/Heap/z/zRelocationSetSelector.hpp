@@ -107,11 +107,109 @@ inline bool ShouldPromoteAge(uint8_t youngAge, uint32_t tenuringThreshold)
 #include <cstdint>
 #include <vector>
 
+#include "Heap/z/zArray.hpp"
+#include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zPageType.hpp"
+
 namespace MapleRuntime {
 
-// RegionManager::MAX_UNIT_COUNT_PER_REGION * UNIT_SIZE (128KB) — no medium tier.
+class ZPage;
+
+class ZRelocationSetSelectorGroupStats {
+    friend class ZRelocationSetSelectorGroup;
+private:
+    size_t _npages_candidates = 0;
+    size_t _total = 0;
+    size_t _live = 0;
+    size_t _empty = 0;
+    size_t _npages_selected = 0;
+    size_t _relocate = 0;
+public:
+    ZRelocationSetSelectorGroupStats();
+    size_t npages_candidates() const;
+    size_t total() const;
+    size_t live() const;
+    size_t empty() const;
+    size_t npages_selected() const;
+    size_t relocate() const;
+};
+
+class ZRelocationSetSelectorStats {
+    friend class ZRelocationSetSelector;
+private:
+    ZRelocationSetSelectorGroupStats _small[kPageAgeCount];
+    ZRelocationSetSelectorGroupStats _medium[kPageAgeCount];
+    ZRelocationSetSelectorGroupStats _large[kPageAgeCount];
+    size_t _has_relocatable_pages = 0;
+public:
+    const ZRelocationSetSelectorGroupStats& small(PageAge age) const;
+    const ZRelocationSetSelectorGroupStats& medium(PageAge age) const;
+    const ZRelocationSetSelectorGroupStats& large(PageAge age) const;
+    bool has_relocatable_pages() const;
+};
+
+class ZRelocationSetSelectorGroup {
+private:
+    static constexpr int NumPartitionsShift = 11;
+    static constexpr int NumPartitions = int(1) << NumPartitionsShift;
+
+    const char* const _name;
+    const ZPageType _page_type;
+    const size_t _max_page_size;
+    const size_t _object_size_limit;
+    const double _fragmentation_limit;
+    const size_t _page_fragmentation_limit;
+    ZArray<ZPage*> _live_pages;
+    ZArray<ZPage*> _not_selected_pages;
+    size_t _forwarding_entries;
+    ZRelocationSetSelectorGroupStats _stats[kPageAgeCount];
+
+    bool is_disabled();
+    bool is_selectable();
+    size_t partition_index(const ZPage* page) const;
+    void semi_sort();
+    void select_inner();
+    bool pre_filter_page(const ZPage* page, size_t live_bytes) const;
+
+public:
+    ZRelocationSetSelectorGroup(const char* name, ZPageType page_type, size_t max_page_size,
+                                size_t object_size_limit, double fragmentation_limit);
+    void register_live_page(ZPage* page);
+    void register_empty_page(ZPage* page);
+    void select();
+    const ZArray<ZPage*>* selected_pages() const;
+    const ZArray<ZPage*>* not_selected_pages() const;
+    size_t forwarding_entries() const;
+    const ZRelocationSetSelectorGroupStats& stats(PageAge age) const;
+};
+
+class ZRelocationSetSelector {
+private:
+    ZRelocationSetSelectorGroup _small;
+    ZRelocationSetSelectorGroup _medium;
+    ZRelocationSetSelectorGroup _large;
+    ZArray<ZPage*> _empty_pages;
+    size_t total() const;
+    size_t empty() const;
+    size_t relocate() const;
+public:
+    explicit ZRelocationSetSelector(double fragmentation_limit);
+    void register_live_page(ZPage* page);
+    void register_empty_page(ZPage* page);
+    bool should_free_empty_pages(int bulk) const;
+    const ZArray<ZPage*>* empty_pages() const;
+    void clear_empty_pages();
+    void select();
+    const ZArray<ZPage*>* selected_small() const;
+    const ZArray<ZPage*>* selected_medium() const;
+    const ZArray<ZPage*>* not_selected_small() const;
+    const ZArray<ZPage*>* not_selected_medium() const;
+    const ZArray<ZPage*>* not_selected_large() const;
+    size_t forwarding_entries() const;
+    ZRelocationSetSelectorStats stats() const;
+};
+
 inline constexpr size_t kRelocationMaxSmallRegionBytes = 128 * 1024;
-// Analog of ZObjectSizeLimitSmall relative to the group max page (1/8).
 inline constexpr size_t kRelocationObjectSizeLimit = 16 * 1024;
 
 enum class RelocRegionKind : uint8_t { Small = 0, Large = 1 };
@@ -121,8 +219,6 @@ struct RelocRegionDesc {
     size_t capacity = 0;
     RelocRegionKind kind = RelocRegionKind::Small;
     uint32_t id = 0;
-    // ZGC zGeneration.cpp:211-213: !is_relocatable pages are never registered.
-    // is_allocating is the page birth-sequence predicate (zPage.inline.hpp:180-185).
     bool allocating = false;
 };
 
@@ -130,10 +226,8 @@ struct RelocSelectResult {
     std::vector<uint32_t> selectedIds;
 };
 
-// ZRelocationSetSelectorGroup::pre_filter_page (zRelocationSetSelector.inline.hpp:75-104)
 inline bool PreFilterRelocRegion(const RelocRegionDesc& page, double fragmentationLimit)
 {
-    // zGeneration.cpp:211-213: allocating pages are not relocatable candidates.
     if (page.allocating) {
         return false;
     }
@@ -149,15 +243,11 @@ inline bool PreFilterRelocRegion(const RelocRegionDesc& page, double fragmentati
     return garbage > pageFragLimit;
 }
 
-// ZRelocationSetSelectorGroup::partition_index / semi_sort
-// (zRelocationSetSelector.cpp:70-112, zRelocationSetSelector.hpp:81-82).
 inline constexpr size_t kRelocationNumPartitionsShift = 11;
 inline constexpr size_t kRelocationNumPartitions = size_t{1} << kRelocationNumPartitionsShift;
 
 inline size_t RelocationPartitionIndex(const RelocRegionDesc& page)
 {
-    // Region capacities are system-page multiples, not necessarily powers of two.
-    // Division retains ZGC's per-page partition width without requiring log2i_exact.
     const size_t partitionSize = page.capacity >> kRelocationNumPartitionsShift;
     assert(partitionSize != 0);
     const size_t index = page.liveBytes / partitionSize;
@@ -171,14 +261,12 @@ inline void SemiSortRelocationPages(std::vector<RelocRegionDesc>& pages)
     for (const RelocRegionDesc& page : pages) {
         ++partitions[RelocationPartitionIndex(page)];
     }
-
     size_t finger = 0;
     for (size_t& partition : partitions) {
         const size_t slots = partition;
         partition = finger;
         finger += slots;
     }
-
     std::vector<RelocRegionDesc> sorted(pages.size());
     for (const RelocRegionDesc& page : pages) {
         sorted[partitions[RelocationPartitionIndex(page)]++] = page;
@@ -186,7 +274,6 @@ inline void SemiSortRelocationPages(std::vector<RelocRegionDesc>& pages)
     pages.swap(sorted);
 }
 
-// ZRelocationSetSelectorGroup::select_inner (zRelocationSetSelector.cpp:114-196)
 inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>& pages, double fragmentationLimit)
 {
     RelocSelectResult out;
@@ -198,13 +285,11 @@ inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>&
         }
     }
     SemiSortRelocationPages(live);
-
     const int npages = static_cast<int>(live.size());
     int selectedFrom = 0;
     int selectedTo = 0;
     size_t fromLiveBytes = 0;
     const double denom = static_cast<double>(kRelocationMaxSmallRegionBytes - kRelocationObjectSizeLimit);
-
     for (int from = 1; from <= npages; ++from) {
         fromLiveBytes += live[static_cast<size_t>(from - 1)].liveBytes;
         const int to = static_cast<int>(std::ceil(static_cast<double>(fromLiveBytes) / denom));
@@ -218,7 +303,6 @@ inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>&
             selectedTo = to;
         }
     }
-
     out.selectedIds.reserve(static_cast<size_t>(selectedFrom));
     for (int i = 0; i < selectedFrom; ++i) {
         out.selectedIds.push_back(live[static_cast<size_t>(i)].id);

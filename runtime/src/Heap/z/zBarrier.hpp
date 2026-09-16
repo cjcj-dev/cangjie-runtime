@@ -172,6 +172,8 @@ public:
     static zaddress blocking_keep_alive_on_phantom_slow_path(zaddress addr);
     static zaddress blocking_load_barrier_on_phantom_slow_path(zaddress addr);
     static zpointer ColorLoadGood(zaddress address, zpointer previous);
+    static zaddress promote_slow_path(zaddress addr);
+    static void promote_barrier_on_young_oop_field(volatile zpointer* p);
 };
 
 } // namespace MapleRuntime
