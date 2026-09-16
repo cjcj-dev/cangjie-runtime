@@ -15,8 +15,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
-#include <sys/syscall.h>
-#include <unistd.h>
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
@@ -267,12 +265,7 @@ void ZPhysicalMemoryManager::map(const ZVirtualMemory& vmem, uint32_t numa_id) c
   // large pages with more than one NUMA node. A03n (static ZNUMA) owns the
   // numa_id → node conversion; the sealed topology supplies it until then.
   if (ZPerNUMAStorage::count() > 1 && ZLargePages::is_explicit()) {
-    constexpr int kMpolBind = 2;
-    constexpr int kMpolMfMove = 1;
-    constexpr unsigned long kMaxNumaNodes = sizeof(unsigned long) * 8;
-    const uint32_t node = NumaTopology::SealProcessTopology().NodeAt(numa_id);
-    unsigned long mask = node < kMaxNumaNodes ? (1UL << node) : 0UL;
-    (void)syscall(SYS_mbind, (void*)untype(addr), size, kMpolBind, &mask, kMaxNumaNodes, kMpolMfMove);
+    NumaTopology::numa_make_local(reinterpret_cast<void*>(untype(addr)), size, numa_id);
   }
 }
 

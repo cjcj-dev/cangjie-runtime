@@ -7,16 +7,8 @@
 #include "Heap/z/zNUMA.inline.hpp"
 
 #include <algorithm>
-#if defined(__linux__)
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
 
 namespace MapleRuntime {
-namespace {
-constexpr unsigned long kMaxNumaNodes = sizeof(unsigned long) * 8;
-constexpr int kMpolMemsAllowed = 2;
-}
 
 NumaTopology NumaTopology::Seal(const std::vector<uint32_t>& nodeIds)
 {
@@ -29,23 +21,6 @@ NumaTopology NumaTopology::Seal(const std::vector<uint32_t>& nodeIds)
     }
     topology.sealed = true;
     return topology;
-}
-
-NumaTopology NumaTopology::SealProcessTopology()
-{
-    std::vector<uint32_t> nodes;
-#if defined(__linux__) && defined(SYS_get_mempolicy)
-    unsigned long mask = 0;
-    const long rc = syscall(SYS_get_mempolicy, nullptr, &mask, kMaxNumaNodes, nullptr, kMpolMemsAllowed);
-    if (rc == 0) {
-        for (uint32_t node = 0; node < kMaxNumaNodes; ++node) {
-            if ((mask & (1UL << node)) != 0) {
-                nodes.push_back(node);
-            }
-        }
-    }
-#endif
-    return Seal(nodes);
 }
 
 bool NumaTopology::Contains(uint32_t node) const

@@ -8,8 +8,6 @@
 
 #include "Heap/z/zLargePages.hpp"
 
-#include <unistd.h>
-
 #include "Base/Globals.h"
 #include "Base/LogFile.h"
 
@@ -18,20 +16,8 @@ namespace MapleRuntime {
 ZLargePages::State ZLargePages::_state;
 bool ZLargePages::_os_enforced_transparent_mode;
 
-static size_t physical_memory() {
-  const long pages = sysconf(_SC_PHYS_PAGES);
-  const long page_size = sysconf(_SC_PAGESIZE);
-  if (pages <= 0 || page_size <= 0) {
-    return 0;
-  }
-  return static_cast<size_t>(pages) * static_cast<size_t>(page_size);
-}
-
 void ZLargePages::initialize() {
   pd_initialize();
-
-  const size_t memory = physical_memory();
-  VLOG(REPORT, "Memory: %zuM", memory / MB);
   VLOG(REPORT, "Large Page Support: %s", to_string());
 }
 

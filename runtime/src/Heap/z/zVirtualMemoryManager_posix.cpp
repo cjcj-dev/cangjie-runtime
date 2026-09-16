@@ -22,8 +22,10 @@ void ZVirtualMemoryReserver::pd_register_callbacks(ZVirtualMemoryRegistry* regis
 
 bool ZVirtualMemoryReserver::pd_reserve(zaddress_unsafe addr, size_t size) {
   int flags = MAP_ANONYMOUS|MAP_PRIVATE|MAP_NORESERVE;
-#if defined(__linux__) && defined(MAP_FIXED_NOREPLACE)
+#ifdef LINUX
+#ifdef MAP_FIXED_NOREPLACE
   flags |= MAP_FIXED_NOREPLACE;
+#endif
 #endif
 
   void* const res = mmap((void*)untype(addr), size, PROT_NONE, flags, -1, 0);

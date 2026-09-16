@@ -21,6 +21,8 @@ public:
 
     static size_t calculate_share(uint32_t numa_id, size_t total, size_t granule, uint32_t ignore_count = 0);
 
+    static void numa_make_local(void* addr, size_t size, uint32_t numa_id);
+
     bool IsSealed() const { return sealed; }
     size_t Count() const;
     uint32_t NodeAt(size_t index) const { return nodes[index]; }
