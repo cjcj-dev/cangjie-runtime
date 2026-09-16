@@ -818,8 +818,7 @@ bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsS
 
 bool CopyCollector::FlushMarkProducers(ZMark* domain)
 {
-    bool flushed = domain != nullptr ? domain->TryTerminateFlush() :
-        (void)ZMark::FlushAllGenerations();
+    bool flushed = domain != nullptr ? domain->TryTerminateFlush() : ZMark::FlushAllGenerations();
     if (domain != nullptr) {
         flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
     }

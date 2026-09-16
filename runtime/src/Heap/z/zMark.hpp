@@ -403,7 +403,7 @@ public:
     Allocator& GetAllocator() const { return theAllocator; }
 
 
-    void RunGarbageCollection(uint64_t, GCReason) override = 0;
+    MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
     virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
 
     void TransitionToGCPhase(const GCPhase phase, const bool, bool young = false)
