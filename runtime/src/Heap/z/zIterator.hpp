@@ -61,6 +61,20 @@ public:
     void do_oop(RefField<>* field) override { _function(*field); }
 };
 
+class ObjectClosure {
+public:
+    virtual ~ObjectClosure() = default;
+    virtual void do_object(BaseObject* object) = 0;
+};
+
+template <typename Function>
+class ZObjectClosure : public ObjectClosure {
+    Function function;
+public:
+    explicit ZObjectClosure(Function function) : function(function) {}
+    void do_object(BaseObject* object) override { function(object); }
+};
+
 // The runtime's type-erased field visitor is also used by promotion workers.
 // Keep those instantiations in the product so callers link the same entry.
 extern template void ZIterator::oop_iterate_safe<ZBasicOopIterateClosure<RefFieldVisitor>>(

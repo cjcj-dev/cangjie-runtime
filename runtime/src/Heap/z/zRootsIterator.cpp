@@ -20,9 +20,13 @@
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
+#include "Mutator/Mutator.h"
 
 
 namespace MapleRuntime {
+HandleMark::HandleMark(Mutator& mutator) : mutator(mutator), mark(mutator.NativeFrameRootCount()) {}
+HandleMark::~HandleMark() { mutator.PopNativeFrameRootsTo(mark); }
+
 void ResetSkippedStackMapCounts();
 void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
                        const Mutator& mutator);
@@ -67,18 +71,11 @@ void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
 void StaticRootTable::VisitRoots(const NativeSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
-    U32 gcRootsSize = 0;
-    std::unordered_set<NativeSlot*> visitedSet;
     for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
-        gcRootsSize = iter->second;
+        U32 gcRootsSize = iter->second;
         StaticRootArray* array = iter->first;
         for (USize i = 0; i < gcRootsSize; i++) {
-            NativeSlot* root = array->content[i];
-            // make sure to visit each static root only once time.
-            if (!visitedSet.insert(root).second) {
-                continue;
-            }
-            visitor(*root);
+            visitor(*array->content[i]);
         }
     }
 }
@@ -114,14 +111,11 @@ void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 
 
 namespace MapleRuntime {
-void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
-                                       Mutator& mutator)
+void TracingCollector::Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
+                               RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-    // HotSpot frame::oops_do_internal (frame.cpp:1166-1177) dispatches only
-    // frames with managed metadata to oop-map scanning. Native callbacks
-    // expose managed references through handles, not a Cangjie stack map.
 #ifdef __APPLE__
     if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
 #else
@@ -132,53 +126,22 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    DLOG(ENUM, "visit frame 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
-    auto gcInfo = GCInfoNode::BuildNodeForTrace(startIP, frameIP, frame.mFrame.GetFA());
-    auto slotDebugFunc = [&gcInfo](SlotBias off, BaseObject* root) {
-        if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
-            gcInfo.InsertSlotRoots<true>(off, root);
-        } else {
-            gcInfo.InsertSlotRoots<false>(off, root);
-        }
-    };
-    auto regDebugFunc = [&gcInfo](RegisterNum i, const BaseObject* root) {
-        if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
-            gcInfo.InsertRegRoot<true>(i, root);
-        } else {
-            gcInfo.InsertRegRoot<false>(i, root);
-        }
-    };
-#else
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
-#endif
-
-    // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
-    // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
-    RootVisitor slotVisitor = visitor;
-    RootVisitor regVisitor = visitor;
-
+    DerivedPtrVisitor derived =
+        derivedPtrVisitor != nullptr ? *derivedPtrVisitor : Mutator::MakeDerivedRootVisitor(visitor);
     if (heapMap.IsValid()) {
-        auto derived = Mutator::MakeDerivedRootVisitor(visitor);
         heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
-        heapMap.VisitSlotRoots(slotVisitor, slotDebugFunc);
-        if (!heapMap.VisitRegRoots(regVisitor, regDebugFunc, regSlotsMap)) {
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-            mutator.PushFrameInfoForTrace(gcInfo);
-#endif
+        heapMap.VisitSlotRoots(visitor, slotDebugFunc);
+        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
     } else {
         RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
     }
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    mutator.PushFrameInfoForTrace(gcInfo);
-#endif
     heapMap.RecordCalleeSaved(regSlotsMap);
-
 }
 
 
@@ -208,77 +171,7 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
 
 
 namespace MapleRuntime {
-void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
-                                                  const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                                  const FrameInfo& frame, Mutator& mutator, bool young)
-{
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
-}
 
-void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
-                                                  const RootVisitor& slotRootVisitor,
-                                                  const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                                  const FrameInfo& frame, Mutator& mutator, bool young)
-{
-    ElfUnloadQuiescence::ReadScope metadataReader;
-    uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-    // HotSpot frame::oops_do_internal (frame.cpp:1166-1177) dispatches only
-    // frames with managed metadata to oop-map scanning. Native callbacks
-    // expose managed references through handles, not a Cangjie stack map.
-#ifdef __APPLE__
-    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
-#else
-    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
-#endif
-        return;
-    }
-    uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
-    uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-    StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    auto infoNode = GCInfoNodeForFix::BuildNodeForFix(startIP, frameIP, frame.mFrame.GetFA());
-    auto slotDebugFunc = [&infoNode](SlotBias off, const BaseObject* root) {
-        if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
-            infoNode.InsertSlotRoots<true>(off, root);
-        } else {
-            infoNode.InsertSlotRoots<false>(off, root);
-        }
-    };
-    auto regDebugFunc = [&infoNode](RegisterNum i, const BaseObject* root) {
-        if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
-            infoNode.InsertRegRoot<true>(i, root);
-        } else {
-            infoNode.InsertRegRoot<false>(i, root);
-        }
-    };
-    auto derivedPtrDebugFunc = [&infoNode](BasePtrType basePtr, DerivedPtrType derivedPtr) {
-        infoNode.InsertDerivedPtrRef(basePtr, derivedPtr);
-    };
-#else
-    RegDebugVisitor regDebugFunc = nullptr;
-    SlotDebugVisitor slotDebugFunc = nullptr;
-    DerivedPtrDebugVisitor derivedPtrDebugFunc = nullptr;
-#endif
-    DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
-    if (heapMap.IsValid()) {
-        heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
-        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap, young)) {
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-            mutator.PushFrameInfoForFix(infoNode);
-#endif
-            LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
-                reinterpret_cast<void*>(frameIP));
-        }
-        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc, young);
-    } else {
-        RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
-    }
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    mutator.PushFrameInfoForFix(infoNode);
-#endif
-    heapMap.RecordCalleeSaved(regSlotsMap);
-}
 
 void TracingCollector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
 {
@@ -306,26 +199,7 @@ void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 
 
 
-void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
-{
-    (void)workStack;
-    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
-}
 
-void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
-{
-    VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
-
-        EnumRefFieldRoot(root, foreignRootsSet);
-    });
-}
-void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
-{
-    ScopedEntryTrace trace("CJRT_GC_ENUM");
-    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD));
-    MergeMutatorRoots(workStack);
-    EnumAllExportRoots(foreignRootsSet);
-}
 
 
 } // namespace MapleRuntime
@@ -392,12 +266,29 @@ void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) co
     roots.Apply(visitor);
 }
 
-OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers)
-    : states{{{collector.StrongRootStorage(), workers}}} {}
+OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers,
+                                                         ZGenerationIdOptional generation)
+    : states{{{collector.StrongRootStorage(), workers}}}, generation(generation)
+{
+    (void)this->generation;
+}
 
-OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers)
+OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers,
+                                                     ZGenerationIdOptional generation)
     : states{{{collector.WeakFinalizerRootStorage(), workers},
-              {Heap::GetHeap().GetExportRootStorage(), workers}}} {}
+              {Heap::GetHeap().GetExportRootStorage(), workers}}}, generation(generation) {}
+
+void OopStorageSetIteratorWeak::report_num_dead()
+{
+    numDead = 0;
+    for (auto& state : states) {
+        state.OopsDo([&](NativeSlot& slot) {
+            if (is_null(slot.GetTargetObject())) {
+                ++numDead;
+            }
+        });
+    }
+}
 
 void OopStorageSetIteratorStrong::Apply(const NativeSlotVisitor& visitor)
 {
@@ -419,15 +310,39 @@ void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)
 
 void RootsIteratorStrongColored::Apply(const NativeSlotVisitor& visitor)
 {
-    strong.Apply(visitor);
-    statics.Apply(visitor);
+    NativeSlotVisitor copy = visitor;
+    strong.apply(&copy);
+    statics.apply(&copy);
 }
 
 void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
 {
-    strong.Apply(visitor);
-    weak.Apply(visitor);
-    statics.Apply(visitor);
+    NativeSlotVisitor copy = visitor;
+    strong.apply(&copy);
+    weak.apply(&copy);
+    statics.apply(&copy);
+}
+
+JavaThreadsIterator::JavaThreadsIterator(ZGenerationIdOptional generation)
+    : claimed(0), generation(generation)
+{
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) { threads.push_back(&mutator); });
+}
+
+uint32_t JavaThreadsIterator::claim()
+{
+    return __atomic_fetch_add(&claimed, 1u, __ATOMIC_RELAXED);
+}
+
+void JavaThreadsIterator::Apply(const std::function<void(Mutator&)>& visitor)
+{
+    for (;;) {
+        const uint32_t index = claim();
+        if (index >= threads.size()) {
+            return;
+        }
+        visitor(*threads[index]);
+    }
 }
 
 void TracingCollector::VisitStrongPlainRoots(

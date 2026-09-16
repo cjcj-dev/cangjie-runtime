@@ -401,7 +401,6 @@ bool MRT_NewForeignCJThread()
     if (ThreadLocal::IsCJProcessor() || ThreadLocal::GetMutator() != nullptr) {
         return false;
     }
-    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
     TRACE_START("CJRT_INVOKE_CJTASK");
     ScheduleHandle scheduler = nullptr;
     if (ThreadLocal::GetForeignCJThread() == nullptr) {
@@ -438,8 +437,6 @@ bool MRT_NewForeignCJThread()
     }
     mutator->InitForeignCJThread();
     mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
-    // dynjoin (乙): foreign attach during active epoch is born-clean exclude.
-    mutatorManager.ExcludeNewMutatorFromActiveEpoch(*mutator);
     mutatorManager.MutatorManagementRUnlock();
     // N2C stubs call MRT_LeaveSaferegion next (all N2CStub.S); mirror MRT_PreRunManagedCode.
     if (UNLIKELY(mutatorManager.SyncTriggered())) {
@@ -536,7 +533,6 @@ static void FiniAndFreeFinalizerScheduler(ScheduleHandle scheduler)
 
 void* NewFinalizerCJThread()
 {
-    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
     // prepare foreign scheduler
     ScheduleHandle scheduler = nullptr;
     auto runtime = reinterpret_cast<MapleRuntime::CangjieRuntime*>(&MapleRuntime::Runtime::Current());
@@ -580,7 +576,6 @@ void* NewFinalizerCJThread()
     MutatorManager::Instance().BindMutator(*mutator);
     ThreadLocal::SetMutator(mutator);
     mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
-    MutatorManager::Instance().ExcludeNewMutatorFromActiveEpoch(*mutator);
     MutatorManager::Instance().MutatorManagementRUnlock();
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
     // Managed-entry setup may block on sync/STW, so do not hold the mutator

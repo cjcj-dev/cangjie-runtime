@@ -560,7 +560,7 @@ void* RunSegmentedCase(void* rawMode)
             : ctx.majorWatermarkDone;
         if (requireWatermarkDone) {
             // The residual-fallback contract is intentionally marked unreachable
-            // for this product path: RunEpochHandshake and the closing consumer
+            // for this product path: stack-watermark finish_processing and the closing consumer
             // share one epoch, and Mutator::DrainStackWatermark pairs TryBegin
             // with Finish before Mark.cpp reads IsDone(epoch). This observes the
             // product expression without rewriting its result in a callback.
