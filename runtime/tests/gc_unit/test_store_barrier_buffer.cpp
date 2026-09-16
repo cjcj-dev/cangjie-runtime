@@ -950,11 +950,10 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
             Mutator mutator;
             InstalledMutatorScope mutatorScope(mutator);
             HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-            const zpointer rawNull = StoreGoodPointer(nullptr);
-            field.StoreColoured(rawNull);
+            field.StoreColoured(zpointer::null);
             if (preloaded) {
                 field.StoreColoured(StoreGoodPointer(fx.obj1));
-                barrier.PostWriteReference(fx.obj0, field, fx.obj1, rawNull);
+                barrier.PostWriteReference(fx.obj0, field, fx.obj1, zpointer::null);
             } else {
                 barrier.WriteReference(fx.obj0, field, fx.obj1);
             }
