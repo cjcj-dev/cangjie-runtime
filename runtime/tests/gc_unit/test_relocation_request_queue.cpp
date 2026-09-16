@@ -51,7 +51,7 @@ struct PageQueueFixture {
     void Complete()
     {
         owner->mark_done();
-        (void)queue.Complete(owner.get());
+        (void)queue.Complete(owner);
     }
 };
 
@@ -128,7 +128,7 @@ GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
     bool timedOut = false;
     (void)f.queue.WaitUntil(request.request, 1, &timedOut);
     GC_EXPECT_TRUE(context.entered);
-    GC_EXPECT_TRUE(context.observed == f.owner.get());
+    GC_EXPECT_TRUE(context.observed == f.owner);
     GC_EXPECT_TRUE(timedOut);
     GC_EXPECT_FALSE(context.mutatorSafe);
     GC_EXPECT_FALSE(context.handshakeSafe);
@@ -163,7 +163,7 @@ GC_TEST(RelocationPageQueue, TwoObjectsShareOnePageClaim)
     std::thread b([&] { if (f.queue.PruneAndClaim()) ++winners; });
     a.join(); b.join();
     GC_EXPECT_EQ(winners.load(), 1U);
-    GC_EXPECT_TRUE(first.request->page_forwarding() == f.owner.get());
+    GC_EXPECT_TRUE(first.request->page_forwarding() == f.owner);
     f.Complete();
     GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
 }
@@ -208,7 +208,7 @@ GC_TEST(RelocationPageQueue, DoneBeforeEnqueueNeedsNoWorker)
     bool timedOut = true;
     (void)f.queue.WaitUntil(request.request, 1, &timedOut);
     GC_EXPECT_FALSE(timedOut);
-    GC_EXPECT_TRUE(request.request->page_forwarding() == f.owner.get());
+    GC_EXPECT_TRUE(request.request->page_forwarding() == f.owner);
 }
 
 GC_TEST(RelocationPageQueue, ClosedGenerationRejectsUnownedWork)

@@ -31,6 +31,7 @@ private:
 
 ZForwardingTable& generation_forwarding_table(Generation generation);
 ZForwarding* forwarding_for_page(const ZPage* page);
+inline ZForwarding* forwarding_for_page(const ZPage* page, MAddress) { return forwarding_for_page(page); }
 MAddress forwarding_find(Generation generation, MAddress from);
 
 } // namespace MapleRuntime

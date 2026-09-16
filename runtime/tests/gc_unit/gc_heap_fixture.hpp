@@ -41,11 +41,12 @@
 
 namespace MapleRuntime {
 
-inline void InitFwdTables(MAddress start, size_t size, size_t unit)
+inline bool InitFwdTables(MAddress start, size_t size, size_t unit)
 {
     auto& collector = Heap::GetHeap().GetCollector();
     collector.GetGenerationCycle(Generation::Young).forwarding_table().initialize(size, start, unit);
     collector.GetGenerationCycle(Generation::Old).forwarding_table().initialize(size, start, unit);
+    return true;
 }
 
 inline bool BeginForwardingArena(Generation generation, RegionList& regions)
@@ -57,6 +58,11 @@ inline bool BeginForwardingArena(Generation generation, RegionList& regions)
 struct FwdLookup {
     MAddress to{ 0 };
     enum Answer : uint8_t { ArmedHit, ArmedMiss, Unarmed } answer{ Unarmed };
+    uint32_t tableId{ 0 };
+    uint64_t fromPageEpoch{ 0 };
+    RegionLifeId fromPageLifeId{ 0 };
+    bool forwardingSnapshotValid{ false };
+    MAddress carrierStart{ 0 };
 };
 inline MAddress UNUSED_InsertMapping(ZForwarding* forwarding, MAddress from, MAddress to)
 {
@@ -91,7 +97,15 @@ inline bool UNUSED_PublishFromPageView(ZPage* region, Args&&... args)
     return true;
 }
 struct UNUSED_Snap {
+    struct Carrier {
+        uintptr_t tableId{ 0 };
+        uint8_t tableGeneration{ 0 };
+        MAddress start{ 0 };
+    };
     size_t carrierCount{ 0 };
+    size_t carrierTotal{ 0 };
+    bool carrierOverflow{ false };
+    Carrier carriers[4]{};
 };
 inline UNUSED_Snap UNUSED_Snapshot(MAddress) { return {}; }
 

@@ -369,7 +369,7 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::CLAIMED);
     owner->release_page();
     owner->mark_done();
-    GC_EXPECT_EQ(queue.Complete(owner.get()), 1U);
+    GC_EXPECT_EQ(queue.Complete(owner), 1U);
     GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::COMPLETED);
 }
 
@@ -396,7 +396,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     const bool pending = !owner->is_done() && answer.load(std::memory_order_acquire) == 0;
     owner->release_page();
     owner->mark_done();
-    (void)queue.Complete(owner.get());
+    (void)queue.Complete(owner);
     const bool closed = queue.SynchronizePoll().workersDone;
     worker.join(); waiter.join();
     GC_EXPECT_TRUE(pending);
