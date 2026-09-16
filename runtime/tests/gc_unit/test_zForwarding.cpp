@@ -246,8 +246,8 @@ GC_TEST(ZForwardingEntries, CoversRecordsRegionSpan)
 
 GC_TEST(ZForwardingEntries, CapacityArithmeticDoesNotWrap)
 {
-    GC_EXPECT_EQ(ZForwarding::nentries(0), size_t(2));
-    GC_EXPECT_EQ(ZForwarding::nentries(3), size_t(8));
+    GC_EXPECT_EQ(ZForwarding::nentries(size_t(0)), size_t(2));
+    GC_EXPECT_EQ(ZForwarding::nentries(size_t(3)), size_t(8));
     GC_EXPECT_EQ(ZForwarding::nentries(size_t(1) << 31), size_t(1) << 32);
     GC_EXPECT_EQ(ZForwarding::nentries(UINT32_MAX), size_t(1) << 33);
     const size_t maxPower = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
@@ -264,7 +264,7 @@ GC_TEST(ZForwardingEntries, CapacityArithmeticDoesNotWrap)
 GC_TEST(ZForwardingEntries, ArenaOwnerOutlivesForwardings)
 {
     size_t bytes;
-    GC_EXPECT_TRUE(ZForwarding::AttachedArray::allocation_size(ZForwarding::nentries(4), &bytes));
+    GC_EXPECT_TRUE(ZForwarding::AttachedArray::allocation_size(ZForwarding::nentries(size_t(4)), &bytes));
     size_t budget = 0;
     GC_EXPECT_TRUE(ForwardingAllocator::add_to_budget(bytes, &budget));
     GC_EXPECT_TRUE(ForwardingAllocator::add_to_budget(bytes, &budget));

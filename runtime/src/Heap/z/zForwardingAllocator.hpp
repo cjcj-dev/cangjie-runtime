@@ -14,6 +14,7 @@ namespace MapleRuntime {
 class ZForwardingAllocator {
 public:
     ZForwardingAllocator();
+    explicit ZForwardingAllocator(size_t size) : ZForwardingAllocator() { reset(size); }
     ~ZForwardingAllocator();
     ZForwardingAllocator(const ZForwardingAllocator&) = delete;
     ZForwardingAllocator& operator=(const ZForwardingAllocator&) = delete;

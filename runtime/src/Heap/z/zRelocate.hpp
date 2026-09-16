@@ -18,6 +18,7 @@
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zForwarding.hpp"
 
 namespace MapleRuntime {
 
