@@ -12,6 +12,7 @@
 #include "Heap/z/zSafeDelete.inline.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zVirtualMemory.inline.hpp"
 
 namespace MapleRuntime {
 
