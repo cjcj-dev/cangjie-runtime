@@ -1,0 +1,37 @@
+{
+  "final8-producer": {
+    "file": "runtime/src/Heap/z/zMark.cpp",
+    "expected_sha256": "ce78afe4bde1672e63ee3f1c135385f7bf9837d1ead20e03ec99fabde1c1c7ea",
+    "restored_sha256": "ce78afe4bde1672e63ee3f1c135385f7bf9837d1ead20e03ec99fabde1c1c7ea",
+    "equal": true,
+    "status": ""
+  },
+  "final8-field": {
+    "file": "runtime/src/Heap/z/zBarrier.cpp",
+    "expected_sha256": "52a2c5664a806589790432012f0abc29b61ace960aa377c3a8070ab31aa68ab8",
+    "restored_sha256": "52a2c5664a806589790432012f0abc29b61ace960aa377c3a8070ab31aa68ab8",
+    "equal": true,
+    "status": ""
+  },
+  "final8-duplicate": {
+    "file": "runtime/src/Heap/z/zReferenceProcessor.cpp",
+    "expected_sha256": "c868cae9cfeb2508b63698f0e0c369987b029ffeee0c0b2473f3aa29493dc4db",
+    "restored_sha256": "c868cae9cfeb2508b63698f0e0c369987b029ffeee0c0b2473f3aa29493dc4db",
+    "equal": true,
+    "status": ""
+  },
+  "remset8-producer": {
+    "file": "runtime/src/Heap/z/zStoreBarrierBuffer.cpp",
+    "expected_sha256": "867874aabd1e611d2cfbcca7de4803e2252d44418f3c95207c5b0a70649b317a",
+    "restored_sha256": "d71746500d0c7885e520d49619d867a044448dc4ff0b6557e37452ffd21ce97a",
+    "equal": false,
+    "status": " M runtime/src/Heap/z/zStoreBarrierBuffer.cpp\n"
+  },
+  "remset8-consumer": {
+    "file": "runtime/src/Heap/z/zGeneration.cpp",
+    "expected_sha256": "68f243972357b0d8410ab2e15b71b569705ef8f5150f9ad0dd7c025e8ac37f47",
+    "restored_sha256": "2e54b1a8a87f770cf7104d66dec7277f4e8690fb595e6d73dbb94df6a3570596",
+    "equal": false,
+    "status": " M runtime/src/Heap/z/zGeneration.cpp\n"
+  }
+}

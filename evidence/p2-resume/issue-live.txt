@@ -1,0 +1,143 @@
+Blocked-by: cjcj#48
+Created-by: cangjie-runtime#577
+Domain: ① correctness
+Blocked-by: cangjie-runtime#608
+Blocked-by: cangjie-runtime#606
+Blocked-by: cangjie-runtime#596
+
+## 主控派发说明（0915 09:42）：实现书全文（来自 #577 累计归并 r5673213697，reports/REPORT-sym_cangjie_runtime_577_synthesize_r5673213697.md）
+⭐ 用户令「不要等价，要形态一致」：与 ZGC 同一分路点/函数分解/数据形态才算 ✅；同一分支/PR 返工；⛔ 不放宽 CHECK；⛔ 不向调查留口。基线＝派发时 cjcjdev/main（≥ c3973505c1，含 #588/#597/#595/#599）。分路点所有者：#596 young colored-root 屏障链＋登记生产端；#599（已合）iterator skip；#603 root task/storage；#577 P3 根/种子路由（Blocked-by #596）。
+
+### 坐标、证据与签发范围（共用）
+## 总实现书：坐标、证据与签发范围
+
+坐标基于 `396404e8dd6f104ba2a41ef41116afc07db5ff9a`；指定仓 `/root/cj_build/cangjie_runtime` 的 cjcjdev/main 独立回读 rc=0。诊断源码按该 SHA 经 git show 归档于本棒 `evidence/source/`，各次 rc/sha256 在 `source-check.json`。下文 C=`/root/cj_build/cangjie_runtime/runtime/src/`，Z=`/root/cj_build/reference/jdk/src/hotspot/share/gc/z/`；短锚必须按此前缀展开，实施前按交付基线重新定位。scratch 为非 git 文档目录，不制造候选产品提交。
+
+本书归并已接受规格，不声称产品已实现。八点均保留为(a)。原“功能等价”“枚举集合对应”“水位基础设施例外”全部撤销；下面基础设施事实不授予 mark 形态✅。测试和切刀均为未来实施规格，本轮只做 read，不登记为运行通过。
+
+输入优先级：最新用户形态令及本轮追加 > 逐片已接受的唯一规格 > 旧探索草案。累计依据为 `/root/cj_build/reports/` 下：点1 `REPORT-sym_cangjie_runtime_578_explore_r5666685117.md`；点2/3 `REPORT-sym_cangjie_runtime_577_synthesize_r5669271732.md`、`r5669876616.md`；点4/5 `REPORT-sym_cangjie_runtime_577_explore_r5670272639.md`、`REPORT-sym_cangjie_runtime_577_synthesize_r5670480722.md`；点6 `REPORT-sym_cangjie_runtime_577_explore_r5671545055.md`、`REPORT-sym_cangjie_runtime_577_synthesize_r5671866502.md`；点7 `REPORT-sym_cangjie_runtime_577_explore_r5672668860.md`、`REPORT-sym_cangjie_runtime_577_synthesize_r5672771859.md`；点8 `REPORT-sym_cangjie_runtime_577_explore_r5672999524.md`、`REPORT-sym_cangjie_runtime_577_synthesize_r5673140313.md`。其中点2/3第二份完整路径为 `/root/cj_build/reports/REPORT-sym_cangjie_runtime_577_synthesize_r5669876616.md`。
+
+
+### 不变量（共用，只此三条）
+## 不变量（各包共用，只此三条）
+
+1. old mark域的对象图只含current old对象；old→young字段由remset接管，根/种子按其屏障合同路由。
+2. young对象mark位只由young mark入口/消费者写；分配期隐式live不构造另一条显式mark/follow生产链。
+3. 保留现有fail-closed CHECK及输入身份、相位、owner/domain的资格边界；不可通过过滤、提前返回或删检查掩盖非法输入。
+
+
+### 包依赖与分路点所有者
+## 包依赖与分路点所有者
+
+包切分是同一个问题的实施顺序，不能各自宣称整条#577已修。P1→P2；P3依赖P1/P2及#596交付的输入资格Q。P1/P2立即签发为两个Implement条目；仅#577的P3保留Synthesize并Blocked-by #596。P2触及共享barrier时按#596已交内容接回同一fast/slow/color公共层；分路点归属固定，不增设#596作为P1/P2的整包准入依赖。#603已经Blocked-by #596，接入#577最终根路由；#577不反向等待#603完成，避免依赖环。P3与#603的共享文件不得同时落两套闭包/RootSet补丁：P3交mark barrier/slot接口，#603交task/storage接线；最终内容核检验全部共同消费者。
+
+| 所有者 | 拥有的分路点 | #577的边界 |
+|---|---|---|
+| #596 | AllColored统一young-good closure→barrier fast/slow/color→make_load_good→mark_if_young；注册finalizer在young枚举的生产消费链 | 复用其colored槽链，不另造finalizer visitor、不在根表先滤代；P1提供统一域入口，P2只接field from-young，P3只接old/root及finalizable seed |
+| #599 | full/range与FollowObjectReferences的invisible payload skip及真实iterator测试入口 | #577只保证invisible DontFollow位与consumer语义；不修改其到访掩码、不补重复栈扫描 |
+| #603 | old StrongColored→StrongUncolored / young AllColored→AllUncolored task、iterator并行状态、自有strong/weak块槽存储、外部静态ABI adapter | #577拥有barrier内解析/代路由及mark域；#603拥有根任务中closure的调用和槽权威存储。不得由#577另迁一份storage，不得由#603改本条路由 |
+| #571② / #595 已合入 | static NativeSlot remap/无色heap拒绝；RemapYoungRoots selected-generation raw/derived资格 | 按内容保留。禁止再次修static；禁止把#595局部Young no-forwarding扩大成任意无色值放行 |
+| #588 已合入 | alloc-black专属producer/ledger/参数族/收据删除 | 不恢复、不重做。P1只修剩余birth-seq/mark入口/旧槽分配形态 |
+| Q 输入资格（advisor A2已并入#596） | C1–C4实际写槽/历史色保存恢复、value/export stage与重叠键 | P3只接已获证slot+历史color/current合同；当前书不授权其实施者补探索或造历史色 |
+
+依据：`/root/cj_build/reports/REPORT-sym_cangjie_runtime_596_synthesize_r5672384855.md` 实现书；`REPORT-sym_cangjie_runtime_599_synthesize_r5671496059.md` 实现书；`REPORT-sym_cangjie_runtime_603_synthesize_r5672620877.md:83` 起及advisor A。这些是并行条目的交付输入，不当作共享协调面现行文档。
+
+
+### P2 任务书
+## P2 可直接派实现任务书：字段两代屏障与remset接管
+
+ROLE=implement；依赖P1，涉及#596共享屏障内容先核后接。仅对象字段（包括old finalizable字段）及young字段major-roots分路；不改线程根/value输入资格。
+
+唯一分解：mark上下文在对象/数组字段闭包选old/young field barrier；Barrier::barrier保留observed zpointer和原槽，fast→make_load_good(zpointer)得到current zaddress→对应slow_path→color→self_heal。old Strong用mark_from_old，old Finalizable用mark_finalizable_from_old；两者young返回null，不mark/follow/heal。young字段用mark_from_young：young目标进young；old目标仅major_full/partial_roots进old，否则仍返回current供store-good heal。不得把普通根套用这条major-roots门。Z锚为zMark.cpp:198-205/306，zBarrier.inline.hpp:626-683，zBarrier.cpp:158-203/234-250，self_heal :72-79。
+
+C入口与调用链：zMark.cpp:202 TraceRefField，:344数组范围，:391 struct成员，:408对象字段；young :943/:968残余/filtered生产改接from-young屏障。删除两臂Old query→MarkAndFollow、单独ColourResolvedRefField/HealSlot/staging对象生产；删除young字段调用MarkOldObjectIfActive的散落分路，统一进对应slow_path。校验current须在判代之前，既有失败资格保持。
+
+remset责任：C zRemembered.cpp:115/173起、zRememberedSet与store-buffer旧→young生产继续接管；Z zRemembered.cpp:578-593 scan_field调用remset_barrier（zBarrier.inline.hpp:681-684：mark_young slow＋color_remset_good）、必要时重新remember并在mark-start flip，:461-563 scan-and-follow。本条不重做#452/#469的登记/消费/晋升补录，但必须把实际store→记槽→flip/previous→scan_field→young mark的调用表随补丁交付；不得以“remset在”替代接线。新判代不删除正常old→young槽，young周期是其live责任方。
+
+同批移植测试T5：以真实store建立old holder→young child（child→sentinel），取消其他强根，old Strong/Finalizable field扫描均无child对象条目、无child字段follow、原槽此次不heal；随后真实young remset扫描必须到child/sentinel并按该屏障合同更新槽。阳性old→old在相同入口mark/follow；young字段→old分major-roots与非major，后者不mark old但仍heal。故障注入恢复old-field young发布或heal，仅红相应断言；断真实remset消费使接管断言红，old→old对照仍成立。必须使用old标记坏色路径检验slow分路；另保留fast合法路径，不能通过强制每次慢路掩盖错误。不要在未验证current之前按FROM页代滤掉目标。
+
+
+### 测试接线、红臂自查与交付要求（全部包）
+## 测试接线、红臂自查与交付要求（全部包）
+
+所有T1–T8均为同批移植/复用的产品测试规格，不是本轮运行结果。测试名可以按仓内命名惯例细化，断言、入口、轴与切刀目标不得减。每包先机械导出生产点/consumer调用清单到真实相位/注册/分配入口，列消费者分支及预计红项集合；按集合差验回归，不设全目录固定PASS数。
+
+三条红臂自查必须明确回答：①是否自己重编或拼一份被测组件（不得替代真实产品SO）；②是否手工把中间mark/current/发现状态喂给下游（不得冒充producer接线）；③删掉基线真实产品调用测试仍绿吗（若仍绿先找合法旁路/根，不能加假CHECK凑红）。负向“无位图写/无发布/无follow”都必须有相同入口的阳性对照，并记录程序启动rc和实际到达目标断言；启动失败、超时、早先CHECK不能当精确红。
+
+区分语义回退刀与基线承重点刀：删候选allocating判断、恢复错误路由属于regression.diff，不能假称基线行。基线cut.diff从实际对应场景选：P1/P2在已登记相位PushYoungObject内现有产品mark/发布调用（C zMark.cpp:733/743/747）或DoYoungGarbageCollection的真实路径，P2 remset接管向上追DoYoungGarbageCollection；P3 finalizer在ProcessOldNonStrongReferences的DoResurrection(workStack)（C zGeneration.cpp:668），栈根在DrainStackWatermark的VisitRawObjects（C Mutator.cpp:955/978）。至少一刀断在顺序表consumer且在基线逐字存在；实现者须按实际入口验证精确红与控制集，不把此静态候选刀列表写成已执行证明。
+
+常态证据执行时：绿/回退/断线/恢复同一构型同一测试ELF和runner，刀只改对应产品SO；产物生成时捕获runtime+bounds SO sha256/血缘与ELF；记录每臂rc、目标断言、源码/构建时间、核域及两端uptime。entry_cut_check必须以该包真实基线和候选SHA验证，非零不送审。跨文件邻棒瞬态切刀只在隔离树，前后hash相同、最终diff恢复。
+
+本轮统一协议§5处于形态期：其最低交付为两侧对应表、删除清单、限定作用域删除检索与双构型构建rc；本任务另外要求在书中给出上述同批测试/精确转红设计，不能把设计冒充已跑，也不能用形态期例外削弱#596等既有专项运行合同。具体包若执行红臂按完整接线/三臂身份协议交证据，不以性能门否决结构装置。构建与测量全部kkk2，`ulimit -c 0`，两构型固定 `/root/cj_build/ops/bin/kkk2_build_two.sh <树> <lane>`；default/testable独立并行、-j取nproc实际192；独立故障臂并行，记录实际jobs/臂数/wall，load>150才降并发。最终独立Review，不自审，不碰main。
+
+
+### 基础设施差异事实表（不标形态 ✅）
+## 基础设施差异事实表（不标形态✅）
+
+| 事实与C锚 | ZGC锚 | 仅允许保留的边界 |
+|---|---|---|
+| C stack-object/headerless/String记录能在栈内包含heap字段，Mutator.cpp:889-923/1010-1046；RootSlot存无色字，RefField.h:367-384 | zUncoloredRoot.hpp:34-52 / inline.hpp:38-68 | 非heap/有头stack/无头record分类与真实物理槽适配；不豁免历史color、先解析后路由、同槽heal |
+| C协程可搬栈、缺return statepoint；zStackWatermark.hpp:17-30、Mutator.cpp:970-995整栈处理 | zStackWatermark.cpp:164-214 | 可保留逻辑frame索引及eager握手；“整栈扫完”本身不是历史色来源证明，不关闭Q |
+| C export外部所有权图，zMark.cpp:1562-1608；公开句柄index/generation，zRootsIterator.hpp:55-110 | zMark.cpp:797-836通用根；zMark.inline.hpp:61-82只管GC活性去重 | 保留#534 B10 foreign ownership生命周期，GC根槽与mark必须迁同形；不能把整个export当免改 |
+| C直接登记带终结器对象到local/native表，BaseObject.cpp:179-189、FinalizerProcessor.cpp:436-456 | Java Finalizer holder→referent，/root/cj_build/reference/jdk/src/java.base/share/classes/java/lang/ref/Finalizer.java:46-57；zReferenceProcessor.cpp:157-189 | 保留语言终结执行/登记生命周期；注册slot存储归#603，young消费归#596，mark路由与分配资格不豁免 |
+| C pinned独立NewPinnedObject与资源清理，ObjectModel/MObject.cpp:28-37、zPageAllocator.cpp:784-798 | zCollectedHeap.cpp:275-281 JNICritical pin不是另造对象 | 仅保留地址稳定/资源生命周期；不得保留旧槽复用相位显式mark后门 |
+| C静态根为外部NativeSlot* ABI，zRootsIterator.hpp:19-21、cpp:65-83 | zRootsIterator.cpp:159-163、shared OopStorage持有槽 | 原址更新/外部注册注销责任；#603已有advisor A，不能shadow-copy替代权威槽 |
+
+
+
+
+## 主控派发说明：依赖（0915 09:5x）
+P2 依赖 P1（#606：MarkDomain::MarkObject<…> 统一每代入口）与 #596 公共 fast/slow/color 层；两者合入前本条只交设计（调用表 + 测试设计，TRIAGED，⛔ 不写产品码、不另造入口）；合入后重派实现轮。红臂按派发常态条款从严。
+
+## 主控输入登记（0915 12:16，来源 #606 实现棒 r5674249495 041513Z）
+P1 专用托管 runner（真实 MObject::NewObject + export 根 + RequestGC USER/YOUNG，候选 7a3032d2 = main fb7d5282 + P1）在每代 mark-start 全部 P1 断言 PASS 后，old trace 命中 `TraceRefField` fail-closed：`current raw value required`，holder_kind=heap_ref，target StateWord=3（FORWARDED），rc=134，N=3 一致（kkk2:/root/sym_cangjie_runtime_606_implement_r5674249495-final0/p1-managed-build-run.log）。这是 P2（字段 from-old/from-young 屏障与 remset 交接）范围的故障输入：old 字段 trace 读到已转发 from 的 raw 值 ⇒ 按 ZGC 字段屏障形态（mark_barrier_on_oop_field / remap 后再 mark）处置；⛔ 不放宽 CHECK。#606 交付把它记为已知红绑定本条。
+
+
+
+## 主控范围注记（GPT-6 Q2=A）：Finalizable 颜色族归 #608；本条本轮只做独立的字段屏障/remset 部分并留 finalizable 占位（TRIAGED），#608 合入后重派接 old Finalizable slow/color 与测试/精确转红。
+
+Delivery-ref: cangjie-runtime|sym/607-implement-r5676391102|ec8acc48fffd6badb68c6736ee25907216359fc5
+<!-- sym-body: 5676391102 -->
+
+
+## 主控收口（0915 16:16）：TRIAGED 部分交付（remset 四臂闭环；old 字段已知红归 #608/#618；Finalizable 待 #608）按裁定属预期，⛔ 不是止损；Status 由 Blocked 改回 Implement，Blocked-by #608 挡派，#608 合入后重派补齐。
+
+
+## 0916 公共API接续合同
+
+保留现行P01后补old Finalizable slow/color及测试的授权，接续F/原PR#631；不等待P08后才动。用P01最终颜色/槽域与current资格，若P02已合则用其live API，完成Strong/Finalizable old→young不mark/follow/heal与真实young remset接管、young→old major/nonmajor轴。P08将来迁公共漏斗须保留这些分路/测试；不能复制F旧MarkBarrier恢复被P01删掉的literal启发式、不能把Finalizable降成Strong。
+
+依据：`/root/cj_build/reports/REPORT-release002_overlap_plan_0916.md` 的双方固定hunk与API所有者表。原保存候选/PR及必要验收保留，后合者不得整文件覆盖先合机制。
+
+
+## 0916 kkk2资源协调
+
+沿现有共用槽锁执行：runtime两构型构建使用 `/root/cj_build/ops/bin/wf_kkk2.sh build <工作树> <lane>`（内部仍调用同一份kkk2_build_two.sh）；LLVM/std等自定义构建通过该脚本 `bsh <lane> '<远端命令>'`。构建批次共用2个槽，测试共用3个槽；unit/sh子命令和 `cjops windows` 核域预约仍需遵守。不要绕过槽锁另起同一构建；等待构建时先做不依赖结果的源码/报告整理。共享SDK禁止改，产物使用本棒独立目录并保留旧证据。
+
+
+
+## 0916 Finalizable mark期生产接缝归属
+
+本轮保留完整字段范围并借入最小mark期finalizable producer；具体执行书REPORT-release002_finalizable_phase_0916.md §3–§5。
+
+依据：/root/cj_build/reports/REPORT-release002_finalizable_phase_0916.md（现役manifest），主控答复：/root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_607_implement_r5684610492-20260915T172100Z.md。不增加反向Blocked-by。
+# 主控裁定：#607同批借入最小mark期finalizable生产接缝
+
+你的相位反证成立。独立归并已核实际caller，裁定为你提出的第一条方向：**保留#607完整字段范围，同批接入mark期finalizable发现/根发布/字段follow的最小生产接缝**。不放宽IsPhaseMark CHECK、不改phase、不把Finalizable降Strong、不保留新旧字段双路。#577显式等待#607，不能反向添加该依赖；不让本包长等整个P13。
+
+现役可直接执行书：`/root/cj_build/reports/REPORT-release002_finalizable_phase_0916.md` §3–§5（已登记manifest）。关键范围：
+- 在old mark活跃的原roots/mark合法worker任务中，使用原登记NativeSlot/weakStorage入口发现；原AllocateFinalizerHandle已进storage，RegisterFinalizers只splice，不新建对象权威表。
+- 以finalizable根/种子barrier发布，字段继续走本包独立Finalizable-from-old；根和字段变体不混用，young保持#596原保活/remset责任。
+- 同周期一次discovery，不能以“未Strong”作去重；Finalizable先发现后Strong升级必须保留，最终non-strong按最终Strong/live分类，不提前入队。
+- 标记完成前，原MarkDomain的flush/drain/try_end必须覆盖新生产的对象/partial/TLS工作；不在MARK_COMPLETE后再follow，也不靠反复重扫所有登记补漏。
+- 删除non-strong的DoResurrection生产/follow及其无消费者旧函数；保留分类/清理/rendezvous/unblock/enqueue。对扫描后新分配登记与旧对象延迟登记，沿原#596/#606/#577的分开责任证明，不能一概延后或把全registry强化成Strong root。
+
+这是必要的几个接线函数前移，不授权重写全ReferenceProcessor、ZPerWorker、全根族或全ZMark。#622保留完整处理器/worker迁移，#577保留其余根路由，#616保留Mark重组/终止；主控将写清它们消费并保留本接缝。测试补实际注册→mark内字段follow→分类/入队，以及重复发现/Strong升级/后注册边界的确定性证据；已有目标测试优先复用，前置phase CHECK退出不能当目标转红。继续原分支WIP→闭合后DONE/Review。
+
+你后续172829Z给的非heap current真实输入已另交只读定位；本答复不批准恢复P01已删literal启发式或非heap早退。可继续你已说明的简化真实main隔离，保留原失败输入及backtrace/maps/符号身份，不为绕过该输入改mark/current状态。
+
+
+## 0916 真实String输入producer前置
+
+编译器字面量producer由cjcj#48独立Implement承接，正常heap数组/模块缓存/根发布，保留native bytes与metadata；不在本条恢复literal/nonheap字段早退。当前已在飞#607继续mark期finalizable接缝与其余独立工作，最终DONE/独审前须消费该包已放行的compiler/受影响std及ELF并重验原合同。新依赖不撤销当前实现、不重开已完成P01，也不将原输入前置失败记为字段机制精确红。
+

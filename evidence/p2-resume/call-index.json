@@ -1,0 +1,44 @@
+[
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "TraceRefField|MarkBarrierOnOldOopField|MarkBarrierOnYoungOopField|RemsetBarrierOnOopField|DiscoverFinalizableRoot|MarkFinalizableBarrierOnRoot",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "stdout": "runtime/src/Heap/WCollector/WCollector.h:185:    void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack, bool finalizable = false) const;\nruntime/src/Heap/z/zBarrier.hpp:50:    void MarkFinalizableBarrierOnRoot(NativeSlot& field) const;\nruntime/src/Heap/z/zBarrier.hpp:51:    void MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable) const;\nruntime/src/Heap/z/zBarrier.hpp:52:    void MarkBarrierOnYoungOopField(RefField<>& field) const;\nruntime/src/Heap/z/zBarrier.hpp:53:    zaddress RemsetBarrierOnOopField(RefField<>& field) const;\nruntime/src/Heap/z/zBarrier.inline.hpp:116:inline void Barrier::MarkFinalizableBarrierOnRoot(NativeSlot& field) const\nruntime/src/Heap/z/zBarrier.inline.hpp:125:inline void Barrier::MarkBarrierOnOldOopField(BaseObject* holder, RefField<>& field, bool finalizable) const\nruntime/src/Heap/z/zBarrier.inline.hpp:145:inline void Barrier::MarkBarrierOnYoungOopField(RefField<>& field) const\nruntime/src/Heap/z/zBarrier.inline.hpp:158:inline zaddress Barrier::RemsetBarrierOnOopField(RefField<>& field) const\nruntime/src/Heap/z/zCollectedHeap.hpp:178:    // Volume alone cannot answer whether a *particular* stale slot was ever visited -- TraceRefField\nruntime/src/Heap/z/zMark.cpp:195:void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack&, bool finalizable) const\nruntime/src/Heap/z/zMark.cpp:197:    Heap::GetBarrier().MarkBarrierOnOldOopField(obj, field, finalizable);\nruntime/src/Heap/z/zMark.cpp:214:        TraceRefField(holder, addr[i], workStack, finalizable);\nruntime/src/Heap/z/zMark.cpp:261:            TraceRefField(holder, HeapSlotAt<>(slot), workStack, finalizable);\nruntime/src/Heap/z/zMark.cpp:278:        TraceRefField(obj, field, workStack, finalizable);\nruntime/src/Heap/z/zMark.cpp:527:void TracingCollector::DiscoverFinalizableRoot(NativeSlot& slot) const\nruntime/src/Heap/z/zMark.cpp:540:    barrier.MarkFinalizableBarrierOnRoot(slot);\nruntime/src/Heap/z/zMark.cpp:601:                         [this](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {\nruntime/src/Heap/z/zMark.cpp:937:            Heap::GetBarrier().MarkBarrierOnYoungOopField(field);\nruntime/src/Heap/z/zMark.hpp:538:    void DiscoverFinalizableRoot(NativeSlot& slot) const;\nruntime/src/Heap/z/zRemembered.cpp:180:        BaseObject* target = to_object(Heap::GetBarrier().RemsetBarrierOnOopField(HeapSlotAt<>(slot)));\nruntime/src/windows_x86_64_exports.def:2198:    _ZNK12MapleRuntime10WCollector13TraceRefFieldEPNS_10BaseObjectERNS_8HeapSlotILb0EEERNS_9MarkStackIS2_EE @2426\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "RescanRememberedSet\\(|rs.Record\\(remapped.p|finalizerRoots.OopsDo|FlushMarkStacks|TryEndOldMark",
+      "--",
+      "runtime/src/Heap/z"
+    ],
+    "rc": 0,
+    "stdout": "runtime/src/Heap/z/zGeneration.cpp:386:        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *youngMarkDomain);\nruntime/src/Heap/z/zGeneration.cpp:472:        RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,\nruntime/src/Heap/z/zGeneration.cpp:780:bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)\nruntime/src/Heap/z/zGeneration.cpp:1220:    while (!TryEndOldMark(workStack, foreignRootsSet)) {\nruntime/src/Heap/z/zMark.cpp:569:        finalizerRoots.OopsDo(finalizable);\nruntime/src/Heap/z/zMark.cpp:579:        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);\nruntime/src/Heap/z/zMark.cpp:645:        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);\nruntime/src/Heap/z/zMark.cpp:1261:    return ThreadLocal::FlushMarkStacks(tls, *domain) || published;\nruntime/src/Heap/z/zMark.cpp:1784:    return ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *this);\nruntime/src/Heap/z/zMark.hpp:543:    bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);\nruntime/src/Heap/z/zRemembered.cpp:158:void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,\nruntime/src/Heap/z/zStoreBarrierBuffer.cpp:99:        rs.Record(remapped.p, true);\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "DoResurrection|TraceFinalizableRefField|WCollectorTraceRefField",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 0,
+    "stdout": "runtime/src/windows_x86_64_exports.def:1623:    _ZN12MapleRuntime16TracingCollector14DoResurrectionERNS_9MarkStackIPNS_10BaseObjectEEE @1755\n",
+    "stderr": ""
+  }
+]

@@ -1,0 +1,159 @@
+# slot test0 acquired 2026-09-16T03:51:33+08:00
+# slot test1 acquired 2026-09-16T03:51:33+08:00
+# slot test2 acquired 2026-09-16T03:51:33+08:00
+qualified-closure green 0 10
+P2_ASSERT finalizable_independent_strong_follow_control PASS
+['P2_CLOSURE_RESULT failures=0 target_stage=complete']
+qualified-slow green 0 23
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT slow_old_controls_publish_real_entries PASS
+P2_ASSERT slow_input_legal_fast_controls_reached PASS
+P2_ASSERT slow_old_strong_control_followed_by_product PASS
+P2_ASSERT slow_old_final_control_followed_by_product PASS
+['P2_SLOW_RESULT failures=0 strong=1 final=1 strong_follow=1 final_follow=1']
+qualified-full green 0 62
+P2_ASSERT independent_young_root_control PASS
+P2_ASSERT real_finalizable_old_control_reached PASS
+P2_ASSERT real_old_old_control_reached PASS
+['P2_RESULT failures=0 remset=3 follow=3 old_old=1 old_young=0']
+# slot test0 acquired 2026-09-16T03:51:33+08:00
+# slot test1 acquired 2026-09-16T03:51:33+08:00
+# slot test2 acquired 2026-09-16T03:51:33+08:00
+qualified-closure final9-field 3 9
+P2_ASSERT finalizable_field_child_live FAIL
+P2_ASSERT finalizable_field_sentinel_live FAIL
+P2_ASSERT finalizable_field_child_not_strong FAIL
+P2_ASSERT finalizable_independent_strong_follow_control PASS
+['P2_CLOSURE_RESULT failures=3 target_stage=mark_end']
+qualified-slow slow9-strong 2 20
+P2_ASSERT strong_young_slow_no_object_result FAIL
+P2_ASSERT strong_young_slow_does_not_heal FAIL
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT slow_old_controls_publish_real_entries PASS
+P2_ASSERT slow_input_legal_fast_controls_reached PASS
+['P2_SLOW_RESULT failures=2 target_stage=field_result']
+# slot test0 acquired 2026-09-16T03:51:34+08:00
+# slot test1 acquired 2026-09-16T03:51:34+08:00
+qualified-full young9-major 1 62
+P2_ASSERT independent_young_root_control PASS
+P2_ASSERT young_old_major_marks FAIL
+P2_ASSERT real_finalizable_old_control_reached PASS
+P2_ASSERT real_old_old_control_reached PASS
+['P2_RESULT failures=1 remset=3 follow=3 old_old=1 old_young=0']
+# slot test2 acquired 2026-09-16T03:51:34+08:00
+qualified-slow slow9-final 2 20
+P2_ASSERT final_young_slow_no_object_result FAIL
+P2_ASSERT final_young_slow_does_not_heal FAIL
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT slow_old_controls_publish_real_entries PASS
+P2_ASSERT slow_input_legal_fast_controls_reached PASS
+['P2_SLOW_RESULT failures=2 target_stage=field_result']
+qualified-closure restored 0 10
+P2_ASSERT finalizable_independent_strong_follow_control PASS
+['P2_CLOSURE_RESULT failures=0 target_stage=complete']
+# slot test0 acquired 2026-09-16T03:51:34+08:00
+# slot test1 acquired 2026-09-16T03:51:34+08:00
+qualified-full restored 0 62
+P2_ASSERT independent_young_root_control PASS
+P2_ASSERT real_finalizable_old_control_reached PASS
+P2_ASSERT real_old_old_control_reached PASS
+['P2_RESULT failures=0 remset=3 follow=3 old_old=1 old_young=0']
+# slot test2 acquired 2026-09-16T03:51:34+08:00
+qualified-slow slow9-publish 2 20
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT slow_old_fields_do_not_publish_young_entries FAIL
+P2_ASSERT slow_old_controls_publish_real_entries PASS
+P2_ASSERT slow_old_fields_do_not_write_young_bitmap FAIL
+P2_ASSERT slow_input_legal_fast_controls_reached PASS
+['P2_SLOW_RESULT failures=2 target_stage=field_result']
+qualified-array-final green 0 7
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=0 finalizable=1 fields=1041 expected=1041 range_target=1']
+# slot test0 acquired 2026-09-16T03:51:35+08:00
+# slot test1 acquired 2026-09-16T03:51:35+08:00
+qualified-minor green 0 27
+P2_ASSERT independent_young_root_control PASS
+['P2_RESULT failures=0 remset=2 follow=2 old_old=0 old_young=0']
+# slot test2 acquired 2026-09-16T03:51:35+08:00
+qualified-slow restored 0 23
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT strong_old_slow_current_control PASS
+P2_ASSERT final_old_slow_current_control PASS
+P2_ASSERT slow_old_controls_publish_real_entries PASS
+P2_ASSERT slow_input_legal_fast_controls_reached PASS
+P2_ASSERT slow_old_strong_control_followed_by_product PASS
+P2_ASSERT slow_old_final_control_followed_by_product PASS
+['P2_SLOW_RESULT failures=0 strong=1 final=1 strong_follow=1 final_follow=1']
+qualified-array-final array9-partial 2 7
+P2_ASSERT array_full_and_range_visit_all_fields FAIL
+P2_ASSERT array_range_target_reached FAIL
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=2 finalizable=1 fields=510 expected=1041 range_target=0']
+# slot test0 acquired 2026-09-16T03:51:35+08:00
+# slot test1 acquired 2026-09-16T03:51:35+08:00
+qualified-minor remset9-producer 2 5
+P2_ASSERT remset_retains_child_first_cycle FAIL
+P2_ASSERT remset_retains_sentinel_first_cycle FAIL
+P2_ASSERT independent_young_root_control PASS
+['P2_RESULT failures=2 target_stage=first_cycle']
+# slot test2 acquired 2026-09-16T03:51:35+08:00
+qualified-array-final restored 0 7
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=0 finalizable=1 fields=1041 expected=1041 range_target=1']
+qualified-array green 0 7
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=0 finalizable=0 fields=1041 expected=1041 range_target=1']
+# slot test0 acquired 2026-09-16T03:51:35+08:00
+# slot test1 acquired 2026-09-16T03:51:35+08:00
+qualified-minor remset9-consumer 2 5
+P2_ASSERT remset_retains_child_first_cycle FAIL
+P2_ASSERT remset_retains_sentinel_first_cycle FAIL
+P2_ASSERT independent_young_root_control PASS
+['P2_RESULT failures=2 target_stage=first_cycle']
+# slot test2 acquired 2026-09-16T03:51:35+08:00
+qualified-array array9-partial 2 7
+P2_ASSERT array_full_and_range_visit_all_fields FAIL
+P2_ASSERT array_range_target_reached FAIL
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=2 finalizable=0 fields=453 expected=1041 range_target=0']
+qualified-struct green 0 7
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=0 finalizable=0 fields=2082 expected=2082 range_target=1']
+# slot test1 acquired 2026-09-16T03:51:36+08:00
+# slot test0 acquired 2026-09-16T03:51:36+08:00
+qualified-minor rearm9 2 19
+P2_ASSERT independent_young_root_control PASS
+P2_ASSERT remset_retains_child_next_cycle FAIL
+P2_ASSERT remset_retains_sentinel_next_cycle FAIL
+['P2_RESULT failures=2 remset=1 follow=1 old_old=0 old_young=0']
+# slot test2 acquired 2026-09-16T03:51:36+08:00
+qualified-array restored 0 7
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=0 finalizable=0 fields=1041 expected=1041 range_target=1']
+qualified-struct-final green 0 7
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=0 finalizable=1 fields=2082 expected=2082 range_target=1']
+# slot test1 acquired 2026-09-16T03:51:36+08:00
+# slot test0 acquired 2026-09-16T03:51:36+08:00
+qualified-minor restored 0 27
+P2_ASSERT independent_young_root_control PASS
+['P2_RESULT failures=0 remset=2 follow=2 old_old=0 old_young=0']
+qualified-struct array9-partial 0 7
+P2_ASSERT array_independent_strong_control PASS
+['P2_ARRAY_RESULT failures=0 finalizable=0 fields=2082 expected=2082 range_target=1']
+qualified-registration green 0 20
+
+['P2_REGISTRATION_RESULT failures=0 discovered=3 enqueued=3']

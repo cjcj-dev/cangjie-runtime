@@ -1,0 +1,4 @@
+LANE=sym_cangjie_runtime_607_implement_r5684610492
+ROLE=implement
+补充真实测试输入：P01 abi-final-green私有复制compiler+std，候选07856fbad产品双构型rc0。旧P2托管runner真正启动，首young在目标断言前rc134。gdb kkk2:/root/sym_cangjie_runtime_607_implement_r5684610492-build3/managed/backtrace.log:#7-17 定位正常heap字段经FollowObjectReferences→MarkBarrierOnYoungOopField→MarkBarrier→MarkFromYoungSlowPath，make_load_good返回current非heap 0x555555643c70，observed=0xaaaaaac878e1510，GetRegionInfoAt fail-closed。P01 deleted literal启发式不能恢复，本棒保留CHECK。
+公共API接续合同要求field不恢复运行期非heap literal早退；请明确这个实际输入由P01/编译器producer何处提供槽域分类，或允许的正式分类适配入口。正在以相同真实GC建图简化托管main（去spawn业务闭包）隔离该不依赖字段机制的输入，不改变mark/current状态。

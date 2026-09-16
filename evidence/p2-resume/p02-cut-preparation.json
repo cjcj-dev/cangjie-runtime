@@ -1,0 +1,57 @@
+[
+  {
+    "arm": "slow9-strong",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "slow9-final",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "slow9-publish",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "young9-major",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "rearm9",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "array9-partial",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "final9-producer",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "final9-field",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "final9-duplicate",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "remset9-producer",
+    "rc": 0,
+    "stderr": ""
+  },
+  {
+    "arm": "remset9-consumer",
+    "rc": 0,
+    "stderr": ""
+  }
+]
