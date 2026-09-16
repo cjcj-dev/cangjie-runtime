@@ -289,7 +289,8 @@ struct GcHeapFixture {
         // Some life-clock tests intentionally keep several fixtures alive.
         // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
-        if (ZPage::heapStartAddress == heapStart) {
+        if (ZPage::heapStartAddress == heapStart &&
+            Heap::GetHeap().GetGCPhase(GCCycleGeneration::YOUNG) != GCPhase::GC_PHASE_UNDEF) {
             Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
             Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).reset_relocation_set();
         }

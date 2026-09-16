@@ -34,7 +34,7 @@ ZRelocateQueue& generation_relocate_queue()
 
 ZForwarding* forwarding_for_page(const ZPage* page)
 {
-    if (page == nullptr) {
+    if (page == nullptr || page->GetRegionStart() == 0) {
         return nullptr;
     }
     return generation_forwarding_table(page->GetOwnerGeneration()).get(page->GetRegionStart());

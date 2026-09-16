@@ -41,7 +41,11 @@ inline const ZLiveMap& ZPage::livemap() const
 
 inline ZForwarding* ZPage::GetFromPageCarrier() const
     {
-        ZForwarding* carrier = Heap::GetHeap().GetCollector().GetGenerationCycle(GetOwnerGeneration()).forwarding_table().get(GetRegionStart());
+        const MAddress start = GetRegionStart();
+        if (start == 0) {
+            return nullptr;
+        }
+        ZForwarding* carrier = Heap::GetHeap().GetCollector().GetGenerationCycle(GetOwnerGeneration()).forwarding_table().get(start);
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 
