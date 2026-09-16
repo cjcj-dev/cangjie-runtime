@@ -1598,7 +1598,9 @@ bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
                              : collector.FlushGCDataMarkProducers(data, domain);
 }
 
-bool FlushTlsMarkProducers(ThreadLocalData* tls, ZMark* domain)
+} // namespace
+
+bool ZMark::FlushThreadLocal(ThreadLocalData* tls, ZMark* domain)
 {
     if (tls == nullptr) {
         return false;
@@ -1617,7 +1619,6 @@ bool FlushTlsMarkProducers(ThreadLocalData* tls, ZMark* domain)
     return (domain == nullptr ? collector.FlushThreadMarkProducers(tls)
                               : collector.FlushThreadMarkProducers(tls, domain)) || published;
 }
-} // namespace
 
 bool ZMark::HandshakeFlush(ZMark* domain)
 {

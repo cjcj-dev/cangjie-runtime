@@ -104,6 +104,7 @@ private:
     size_t CalculateNStripes(size_t nworkers) const;
     void EnsureWorkers(size_t nworkers);
     static bool HandshakeFlush(ZMark* domain);
+    static bool FlushThreadLocal(ThreadLocalData* tls, ZMark* domain);
 
     MarkingSMR smr;
     MarkStripeSet stripes;
