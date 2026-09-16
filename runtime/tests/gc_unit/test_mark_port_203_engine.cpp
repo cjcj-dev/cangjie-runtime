@@ -209,6 +209,7 @@ GC_TEST(MarkPort203Engine, LeaveUnblocksTryTerminateWaiter)
     std::atomic<bool> waiting{ false };
     std::atomic<bool> finished{ false };
     std::thread waiter([&]() {
+        SuspendibleThreadSetJoiner stsJoiner;
         waiting.store(true, std::memory_order_release);
         GC_EXPECT_TRUE(terminate.TryTerminate(stripes, stripes.NStripes()));
         finished.store(true, std::memory_order_release);
@@ -217,6 +218,7 @@ GC_TEST(MarkPort203Engine, LeaveUnblocksTryTerminateWaiter)
         std::this_thread::yield();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    SuspendibleThreadSetJoiner stsJoiner;
     terminate.Leave();
     waiter.join();
     GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
@@ -295,6 +297,7 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     ZAbort abort;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
+    SuspendibleThreadSetJoiner stsJoiner;
     ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
     domain.BindAbort(&abort);
     domain.PrepareWork(1);
