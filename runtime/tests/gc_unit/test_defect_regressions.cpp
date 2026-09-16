@@ -159,7 +159,7 @@ private:
 };
 
 struct ExportHandleFixture {
-    ExportHandleFixture() : barrier(collector, rememberedSet), installed(barrier) {}
+    ExportHandleFixture() : barrier(), installed(barrier) {}
 
     BaseObject* PlaceThirdObject()
     {
@@ -179,7 +179,7 @@ struct ExportHandleFixture {
 struct CompilerStoreFixture {
     CompilerStoreFixture()
         : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()),
-          barrier(collector, rememberedSet), installed(barrier) {}
+          barrier(), installed(barrier) {}
     GcHeapFixture heap;
     WCollector collector;
     RememberedSet rememberedSet;
@@ -243,7 +243,7 @@ GC_TEST(DefectRegress, StaticRootObservedValueHeal)
     StorePlain(root, from_object(fx.obj0));
     zaddress_unsafe observed = root.LoadPlain();
     GC_EXPECT_TRUE(HealRootIfObserved(root, observed, from_object(fx.obj1),
-                                     HealSite::BarrierReadReference));
+                                     HealSite::BarrierCompareAndSwapReference));
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(fx.obj1));
 }
 
@@ -256,7 +256,7 @@ GC_TEST(DefectRegress, StaticRootHealDoesNotClobberConcurrentStore)
     BaseObject* concurrent = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     StorePlain(root, from_object(concurrent));
     GC_EXPECT_FALSE(HealRootIfObserved(root, observed, from_object(fx.obj1),
-                                      HealSite::BarrierReadReference));
+                                      HealSite::BarrierCompareAndSwapReference));
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(concurrent));
 }
 

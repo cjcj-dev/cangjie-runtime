@@ -572,7 +572,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_FALSE(rs.Contains(slot));
-    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false)));
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
 
@@ -653,7 +653,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier idle(collector, rs);
+    Barrier idle;
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     idle.WriteReference(fx.obj0, *field, fx.obj1);

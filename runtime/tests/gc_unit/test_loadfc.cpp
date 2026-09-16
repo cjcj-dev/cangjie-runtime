@@ -75,7 +75,7 @@ private:
 };
 
 struct LoadFcFixture {
-    LoadFcFixture() : barrier(collector, rememberedSet), installed(barrier)
+    LoadFcFixture() : barrier(), installed(barrier)
     {
         rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
         auto& heapRemset = Heap::GetHeap().GetRememberedSet();

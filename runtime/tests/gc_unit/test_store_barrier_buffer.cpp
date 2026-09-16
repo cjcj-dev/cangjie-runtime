@@ -1005,7 +1005,7 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const zpointer previous = StoreGoodPointer(fx.obj0);
     field.StoreColoured(StoreGoodPointer(fx.obj1));
-    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false));
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
     std::vector<BaseObject*> marked;
     marking.DrainObjects(marked);
     GC_EXPECT_TRUE(marked.empty());

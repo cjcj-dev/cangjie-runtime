@@ -62,7 +62,7 @@ private:
 };
 
 struct PayloadFixture {
-    PayloadFixture() : barrier(collector, rememberedSet), installed(barrier)
+    PayloadFixture() : barrier(), installed(barrier)
     {
         rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
         auto& heapRemset = Heap::GetHeap().GetRememberedSet();

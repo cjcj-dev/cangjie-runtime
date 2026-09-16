@@ -391,6 +391,7 @@ uintptr_t OneLoadBadRemap()
 
 class ResolveBarrier final {
 public:
+    ResolveBarrier() = default;
     ResolveBarrier(Collector&, RememberedSet&) {}
 
     BaseObject* Resolve(BaseObject* from) const
