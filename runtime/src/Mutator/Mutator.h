@@ -37,6 +37,7 @@ extern "C" MRT_EXPORT bool MRT_CheckRuntimeFinished();
 class BaseObject;
 
 class Mutator {
+    friend class StackWatermark;
 public:
     // flag which indicates the reason why mutator should suspend. flag is set by some external thread.
     enum SuspensionType : uint32_t {
