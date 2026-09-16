@@ -167,6 +167,10 @@ public:
 
     static zaddress relocate_or_remap(zaddress_unsafe addr, ZGenerationId generation);
     static zaddress remap(zaddress_unsafe addr, ZGenerationId generation);
+    static zaddress load_good_slow_path(zaddress addr);
+    static zaddress blocking_keep_alive_on_weak_slow_path(zaddress addr);
+    static zaddress blocking_keep_alive_on_phantom_slow_path(zaddress addr);
+    static zpointer ColorLoadGood(zaddress address, zpointer previous);
 };
 
 using Barrier = ZBarrier;

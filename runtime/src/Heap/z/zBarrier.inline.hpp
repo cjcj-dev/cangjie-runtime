@@ -20,18 +20,9 @@ namespace MapleRuntime {
 // word until after marking: the color operation needs its old-generation bits.
 template<typename SlowPath>
 inline zaddress ZBarrier::MarkBarrier(MarkFastPath fast, SlowPath slow, MarkColor color,
-                                 RefField<>& field, zpointer observed, const ForwardingProvenance& provenance)
+                                 RefField<>& field, zpointer observed, const ForwardingProvenance&)
 {
-    if (fast(observed)) {
-        return RefField<>(observed).GetTargetObject();
-    }
-    RefField<> value(observed);
-    const zaddress loadGood = from_object(Heap::GetHeap().GetCollector().ValidateCurrentValue(
-        Heap::GetHeap().GetCollector().make_load_good(value, provenance), provenance));
-    const zaddress good = slow(loadGood);
-    const zpointer colored = color(good, observed);
-    ZgcSelfHeal(field, observed, colored, fast, HealSite::BarrierReadReference);
-    return good;
+    return barrier(fast, slow, color, reinterpret_cast<volatile zpointer*>(&field), observed, false);
 }
 
 // ZZBarrier::mark_if_young, zBarrier.inline.hpp:763-767. Native literal roots

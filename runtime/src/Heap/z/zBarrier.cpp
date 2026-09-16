@@ -344,48 +344,72 @@ void ZBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size
 }
 
 // ZZBarrier::barrier and weak/phantom slow paths, zBarrier.inline.hpp:319-343,484-565.
+zaddress ZBarrier::load_good_slow_path(zaddress addr)
+{
+    return addr;
+}
+
+zaddress ZBarrier::blocking_keep_alive_on_weak_slow_path(zaddress addr)
+{
+    if (is_null(addr)) {
+        return zaddress::null;
+    }
+    BaseObject* target = to_object(addr);
+    if (!Heap::IsHeapAddress(target)) {
+        return addr;
+    }
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (region->IsYoungRegion()) {
+        Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
+        return addr;
+    }
+    if (!region->is_object_strongly_live(addr)) {
+        return zaddress::null;
+    }
+    return addr;
+}
+
+zaddress ZBarrier::blocking_keep_alive_on_phantom_slow_path(zaddress addr)
+{
+    if (is_null(addr)) {
+        return zaddress::null;
+    }
+    BaseObject* target = to_object(addr);
+    if (!Heap::IsHeapAddress(target)) {
+        return addr;
+    }
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (region->IsYoungRegion()) {
+        Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
+        return addr;
+    }
+    if (!region->is_object_live(addr)) {
+        return zaddress::null;
+    }
+    return addr;
+}
+
+zpointer ZBarrier::ColorLoadGood(zaddress address, zpointer previous)
+{
+    return ZAddress::load_good(address, previous);
+}
+
 template<bool atomic>
 BaseObject* ZBarrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpointer observed,
                                  ReferenceStrength strength)
 {
-    auto fastPath = [strength](zpointer word) {
-        RefField<> value(word);
-        return strength == ReferenceStrength::Strong
-            ? ZPointer::is_load_good_or_null(to_zpointer(raw(word)))
-            : ZPointer::is_mark_good(value.GetFieldValue());
-    };
-    RefField<> value(observed);
-    if (fastPath(observed)) {
-        return to_object(value.GetTargetObject());
+    (void)obj;
+    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
+    if (strength == ReferenceStrength::Strong) {
+        return to_object(barrier(is_load_good_or_null_fast_path, &ZBarrier::load_good_slow_path,
+                                 ColorLoadGood, p, observed, false));
     }
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    BaseObject* target = Heap::GetHeap().GetCollector().make_load_good(value, provenance);
-    CHECK_DETAIL(target != nullptr || !(!is_null_any(to_zpointer(raw(observed)))),
-                 "load barrier relocation must preserve a non-null reference");
-    if (strength != ReferenceStrength::Strong && target != nullptr && Heap::IsHeapAddress(target)) {
-        // Only the shared resurrection rendezvous publishes the blocked window.
-        if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (region->IsYoungRegion()) {
-                Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
-            } else {
-                const zaddress targetAddr = from_object(target);
-                const bool stronglyLive = region->is_object_strongly_live(targetAddr);
-                const bool live = stronglyLive || (strength == ReferenceStrength::Phantom &&
-                                                   region->is_object_live(targetAddr));
-                if (!live) {
-                    return nullptr; // A load never clears a referent (ZZBarrier::self_heal).
-                }
-            }
-        } else {
-            Heap::GetHeap().GetCollector().MarkObjectIfActive(target);
-        }
+    if (strength == ReferenceStrength::Weak) {
+        return to_object(barrier(is_mark_good_fast_path, &ZBarrier::blocking_keep_alive_on_weak_slow_path,
+                                 ColorMarkGood, p, observed, false));
     }
-    const zpointer healed = strength == ReferenceStrength::Strong
-        ? ZAddress::load_good(from_object(target), observed)
-        : ZAddress::mark_good(from_object(target), observed);
-    ZgcSelfHeal(field, observed, healed, fastPath, HealSite::BarrierReadReference);
-    return target;
+    return to_object(barrier(is_mark_good_fast_path, &ZBarrier::blocking_keep_alive_on_phantom_slow_path,
+                             ColorMarkGood, p, observed, false));
 }
 
 BaseObject* ZBarrier::ReadReference(BaseObject* obj, RefField<false>& field)

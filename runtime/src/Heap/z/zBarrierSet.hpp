@@ -17,6 +17,9 @@ public:
     static zaddress oop_load_in_heap(volatile zpointer* p);
     static void oop_store_in_heap(volatile zpointer* p, zaddress value);
     static zaddress oop_xchg_in_heap(volatile zpointer* p, zaddress value);
+    static zaddress oop_copy_one_barriers(volatile zpointer* dst, volatile zpointer* src);
+    static void oop_copy_one(volatile zpointer* dst, volatile zpointer* src);
+    static void oop_clear_one(volatile zpointer* dst);
 };
 
 class ZBarrierSetRuntime {
@@ -38,4 +41,6 @@ public:
     static void* load_barrier_on_oop_array_addr();
 };
 } // namespace MapleRuntime
+
+#include "Heap/z/zBarrierSet.inline.hpp"
 #endif
