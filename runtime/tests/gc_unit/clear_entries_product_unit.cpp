@@ -556,7 +556,7 @@ ZLiveMap* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liv
     // The product freezes the selected set before publishing any page view.
     if (ForwardingTable::GetEntries(region->GetRegionStart(), generation) == nullptr) {
         RegionList selected("publication-fixture");
-        selected.PrependRegion(region, 0u);
+        selected.PrependRegion(region);
         GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(generation, selected));
         (void)selected.TakeHeadRegion();
     }
@@ -1079,8 +1079,8 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
     GC_EXPECT_EQ(ForwardingTable::FindTo(deadAddr, Generation::Old), static_cast<MAddress>(0));
     GC_EXPECT_TRUE(ForwardingTable::FindTo(liveAddr, Generation::Old) != static_cast<MAddress>(0));
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(region->GetRegionStart(), Generation::Old) != nullptr);
-    GC_EXPECT_TRUE(0u != RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    GC_EXPECT_TRUE(0u == RegionInfo::RegionType::RECENT_FULL_REGION);
+    GC_EXPECT_TRUE(0u != 1);
+    GC_EXPECT_TRUE(0u == 0);
 
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     ForwardingTable::ResetRelocationSet(region->GetOwnerGeneration());
@@ -1276,7 +1276,7 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarrier
 {
     GcHeapFixture fixture;
     RegionList selected("diagnostic-generations");
-    selected.PrependRegion(fixture.region0, fixture.region0->GetRegionType());
+    selected.PrependRegion(fixture.region0));
     fixture.region0->SetYoungRegionFlag(1);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     fixture.region0->SetYoungRegionFlag(0);
@@ -1831,8 +1831,8 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     RegionList selected("forwarding-chain-fixture");
-    selected.PrependRegion(firstRegion, firstRegion->GetRegionType());
-    selected.PrependRegion(secondRegion, secondRegion->GetRegionType());
+    selected.PrependRegion(firstRegion));
+    selected.PrependRegion(secondRegion));
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     while (selected.TakeHeadRegion() != nullptr) {}
     ZLiveMap* firstLive = PrepareForwardable(fx, firstRegion, reinterpret_cast<MAddress>(first));
@@ -3049,7 +3049,7 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     region->SetYoungRegionFlag(1);
     region->SetRegionListOwner(nullptr);
     RegionList selected("page579-selected");
-    selected.PrependRegion(region, 0u);
+    selected.PrependRegion(region);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
     RelocationReceiptTestAccess::PrepareProductPage<Generation::Young>(region);

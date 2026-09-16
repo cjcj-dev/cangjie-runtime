@@ -34,7 +34,7 @@ struct GcVerifyFixture : GcHeapFixture {
         // preparing a source page or verifying its forwarding entries.
         region0->SetRegionListOwner(nullptr);
         RegionList selected("verify-source");
-        selected.PrependRegion(region0, region0->GetRegionType());
+        selected.PrependRegion(region0));
         CHECK(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
         (void)selected.TakeHeadRegion();
         region0->PrepareForwardableRegion<Generation::Old>();

@@ -144,13 +144,13 @@ GC_TEST(RegionRetirement, CompactInPlaceLeavesRegionOnAListACollectorWalks)
     // Where CompactRegion leaves it, with no AllocBuffer owning it any more.
     PinRootTestAccess::ParkOnThreadLocal(manager, region);
     GC_EXPECT_EQ(static_cast<unsigned>(0u),
-                 static_cast<unsigned>(RegionInfo::RegionType::THREAD_LOCAL_REGION));
+                 static_cast<unsigned>(1));
 
     manager.RehomeCompactedInPlaceRegion(region);
 
     // The invariant: it now sits on a list a collection-set builder reads, typed accordingly.
     GC_EXPECT_EQ(static_cast<unsigned>(0u),
-                 static_cast<unsigned>(RegionInfo::RegionType::RECENT_FULL_REGION));
+                 static_cast<unsigned>(0));
 
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
     GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));

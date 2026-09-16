@@ -58,7 +58,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         const uintptr_t end = first->GetRegionEnd();
         const auto life = first->GetRegionLifeId();
         const auto index = first->GetUnitIdx();
-        const auto type = first->GetRegionType();
+        const auto type = first->OnNamedList("from regions");
         const size_t capacity = manager.GetCommittedCapacity();
         size_t retired = 0;
         auto retire = [&] {
@@ -91,7 +91,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
                 }
             }
             if (first->GetRegionEnd() != end || first->GetRegionLifeId() != life ||
-                first->GetRegionType() != type || first->IsFreeRegion()) {
+                first->OnNamedList("from regions") != type || first->IsFreeRegion()) {
                 result = 24;
             }
             // Memory stays out of the cache and committed while an iterator

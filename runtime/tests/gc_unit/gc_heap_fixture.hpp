@@ -262,10 +262,10 @@ struct GcHeapFixture {
             RegionList selected("fixture-forwardings");
             const Generation generation = region->GetOwnerGeneration();
             if (region0->GetOwnerGeneration() == generation) {
-                selected.PrependRegion(region0, region0->GetRegionType());
+                selected.PrependRegion(region0));
             }
             if (region1->GetOwnerGeneration() == generation) {
-                selected.PrependRegion(region1, region1->GetRegionType());
+                selected.PrependRegion(region1));
             }
             CHECK(ForwardingTable::BeginForwardingArena(generation, selected));
             while (selected.TakeHeadRegion() != nullptr) {}

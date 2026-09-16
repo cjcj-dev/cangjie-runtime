@@ -80,10 +80,10 @@ GC_TEST(StayYoung, AgeClampsAtSurvivor14)
 // Product EnlistStayYoungSurvivor must not leave LONE_FROM (kLoneFromIsFrom).
 GC_TEST(StayYoung, EnlistTypeMustNotStayLoneFrom)
 {
-    GC_EXPECT_TRUE(RegionInfo::RegionType::RECENT_FULL_REGION !=
-                   RegionInfo::RegionType::LONE_FROM_REGION);
-    GC_EXPECT_TRUE(RegionInfo::RegionType::RECENT_FULL_REGION !=
-                   RegionInfo::RegionType::FROM_REGION);
+    GC_EXPECT_TRUE(0 !=
+                   int::LONE_FROM_REGION);
+    GC_EXPECT_TRUE(0 !=
+                   int::FROM_REGION);
 }
 
 // regionType shares regionStateBitField with ghost/young/age. A plain read of the
@@ -100,8 +100,8 @@ GC_TEST(StayYoung, GarbageTypeSurvivesGhostAndAgeCas)
     GC_EXPECT_TRUE(r->IsGarbageRegion());
     GC_EXPECT_TRUE(r->IsGhostFromRegion());
     GC_EXPECT_EQ(r->GetYoungAge(), 3u);
-    GC_EXPECT_EQ(static_cast<unsigned>(r->GetRegionType()),
-                 static_cast<unsigned>(RegionInfo::RegionType::GARBAGE_REGION));
+    GC_EXPECT_EQ(static_cast<unsigned>(r->OnNamedList("from regions")),
+                 static_cast<unsigned>(int::GARBAGE_REGION));
     r->SetInGhostRegion(0);
     GC_EXPECT_TRUE(r->IsGarbageRegion());
     GC_EXPECT_TRUE(!r->IsGhostFromRegion());
