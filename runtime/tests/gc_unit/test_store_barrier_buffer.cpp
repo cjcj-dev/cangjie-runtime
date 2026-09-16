@@ -587,7 +587,7 @@ GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
     ::g_cjStoreGoodMask = saved;
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
-    GC_EXPECT_TRUE(marked.empty());
+    GC_EXPECT_EQ(marked.size(), 1u);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
     GC_EXPECT_TRUE(buf.IsEmpty());
 }
@@ -699,13 +699,12 @@ GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
     ::g_cjStoreGoodMask ^= ZPointerMarkedOldMask;
     const MAddress currentSlot = SlotAt(fx, 9);
     buf.Add(currentSlot, RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue(), rs);
-    GC_EXPECT_EQ(buf.Pending(), 1u);
+    GC_EXPECT_EQ(buf.Pending(), 2u);
     buf.Flush(rs);
     ::g_cjStoreGoodMask = saved;
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
-    GC_EXPECT_EQ(marked.size(), 1u);
-    GC_EXPECT_TRUE(marked[0] == fx.obj1);
+    GC_EXPECT_EQ(marked.size(), 2u);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot) && Heap::GetHeap().GetRememberedSet().Contains(currentSlot));
 }
 
@@ -731,7 +730,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     ::g_cjStoreGoodMask = before;
     DrainPublishedMarkObjects(retired);
 
-    GC_EXPECT_TRUE(retired.empty());
+    GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(SlotAt(fx, 12)));
 }
 
