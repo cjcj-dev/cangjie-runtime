@@ -23,7 +23,7 @@
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
-class Barrier;
+class ZBarrier;
 class WCollector;
 class RegionManager;
 class StoreBarrierBuffer;
@@ -125,7 +125,7 @@ public:
 #endif
 
 private:
-    friend class Barrier;
+    friend class ZBarrier;
     friend class WCollector;
     friend class RegionManager;
     friend class StoreBarrierBuffer;
