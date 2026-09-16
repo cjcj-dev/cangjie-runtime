@@ -60,11 +60,13 @@ struct IsFromRegTestAccess {
     }
     static bool TryClaimFrom(RegionManager& manager, RegionInfo* region, int newType)
     {
-        return manager.fromRegionList.TryDeleteRegion(region, int::FROM_REGION, newType);
+        (void)newType;
+        return manager.fromRegionList.TryDeleteRegion(region);
     }
     static bool TryClaimGarbage(RegionManager& manager, RegionInfo* region, int newType)
     {
-        return manager.garbageRegionList.TryDeleteRegion(region, int::GARBAGE_REGION, newType);
+        (void)newType;
+        return manager.garbageRegionList.TryDeleteRegion(region);
     }
 };
 
@@ -76,14 +78,11 @@ GC_TEST(IsFromReg, TryDeleteFromFailsAfterPinRetype)
     RegionManager manager;
     IsFromRegTestAccess::ParkFrom(manager, fx.region0);
     GC_EXPECT_TRUE(fx.region0->IsFromRegion());
-    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0,
-                                                     int::RAW_POINTER_PINNED_REGION));
+    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0, 0));
     manager.rawPointerPinnedRegionList.PrependRegion(fx.region0);
     GC_EXPECT_FALSE(fx.region0->IsFromRegion());
-    GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0,
-                                                      int::GARBAGE_REGION));
-    GC_EXPECT_EQ(static_cast<unsigned>(fx.region0->OnNamedList("from regions")),
-                 static_cast<unsigned>(int::RAW_POINTER_PINNED_REGION));
+    GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0, 0));
+    GC_EXPECT_FALSE(fx.region0->IsFromRegion());
     GC_EXPECT_TRUE(IsFromRegTestAccess::OnPinned(manager, fx.region0));
     GC_EXPECT_FALSE(IsFromRegTestAccess::OnFrom(manager, fx.region0));
 }
@@ -93,15 +92,10 @@ GC_TEST(IsFromReg, UnlistedGarbageClaimIsRefusedUntilPrepend)
     GcHeapFixture fx;
     RegionManager manager;
     IsFromRegTestAccess::ParkFrom(manager, fx.region0);
-    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0,
-                                                     int::GARBAGE_REGION));
-    GC_EXPECT_EQ(static_cast<unsigned>(fx.region0->OnNamedList("from regions")),
-                 static_cast<unsigned>(int::GARBAGE_REGION));
-    GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0,
-                                                         int::RAW_POINTER_PINNED_REGION));
+    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0, 0));
+    GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0, 0));
     IsFromRegTestAccess::ParkGarbage(manager, fx.region0);
-    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0,
-                                                        int::RAW_POINTER_PINNED_REGION));
+    GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0, 0));
     manager.rawPointerPinnedRegionList.PrependRegion(fx.region0);
     GC_EXPECT_TRUE(IsFromRegTestAccess::OnPinned(manager, fx.region0));
     GC_EXPECT_FALSE(IsFromRegTestAccess::OnGarbage(manager, fx.region0));

@@ -230,7 +230,7 @@ GC_TEST(ZForwardingTable, SameAddressHasIndependentGenerationMaps)
 {
     GcHeapFixture fixture;
     RegionList selected("same-address-generations");
-    selected.PrependRegion(fixture.region0));
+    selected.PrependRegion(fixture.region0);
     fixture.region0->SetYoungRegionFlag(1);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     fixture.region0->SetYoungRegionFlag(0);
@@ -263,7 +263,7 @@ GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
 
     fixture.region0->SetYoungRegionFlag(1);
     RegionList selected("replacement-page-forwarding");
-    selected.PrependRegion(fixture.region0));
+    selected.PrependRegion(fixture.region0);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     auto* young = ForwardingTable::get(fixture.heapStart, Generation::Young);
     GC_EXPECT_TRUE(young != nullptr && young != old);
