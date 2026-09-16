@@ -6,7 +6,7 @@
 
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 
-#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"

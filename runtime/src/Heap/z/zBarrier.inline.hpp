@@ -230,7 +230,7 @@ inline zaddress ZBarrier::make_load_good(zpointer ptr)
         return zaddress::null;
     }
     if (ZPointer::is_load_good_or_null(ptr)) {
-        return from_object(RefField<>(ptr).GetTargetObject());
+        return RefField<>(ptr).GetTargetObject();
     }
     return relocate_or_remap(to_zaddress_unsafe(raw(ptr)), remap_generation(ptr));
 }
@@ -241,7 +241,7 @@ inline zaddress ZBarrier::make_load_good_no_relocate(zpointer ptr)
         return zaddress::null;
     }
     if (ZPointer::is_load_good_or_null(ptr)) {
-        return from_object(RefField<>(ptr).GetTargetObject());
+        return RefField<>(ptr).GetTargetObject();
     }
     return remap(to_zaddress_unsafe(raw(ptr)), remap_generation(ptr));
 }
@@ -264,7 +264,7 @@ inline zaddress ZBarrier::barrier(ZBarrierFastPath fast_path, SlowPath slow_path
                                   volatile zpointer* p, zpointer o, bool allow_null)
 {
     if (fast_path(o)) {
-        return from_object(RefField<>(o).GetTargetObject());
+        return RefField<>(o).GetTargetObject();
     }
     const zaddress load_good_addr = make_load_good(o);
     const zaddress good_addr = slow_path(load_good_addr);
