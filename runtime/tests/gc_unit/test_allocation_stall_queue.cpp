@@ -54,7 +54,7 @@ private:
 class OneUnitStallFixture {
 private:
     StallTestRuntime runtime;
-    RegionInfo* capacity{ nullptr };
+    ZPage* capacity{ nullptr };
 
 public:
     // The RegionManager (mapped caches keep entries in heap memory) must be
@@ -68,7 +68,7 @@ public:
         ZStat::Initialize();
         constexpr size_t units = 1;
         HeapParam heapParam {};
-        heapParam.regionSize = RegionInfo::UNIT_SIZE / 1024;
+        heapParam.regionSize = ZPage::UNIT_SIZE / 1024;
         heapParam.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
         capacity = manager.TakeRegion(1, ZPageType::small, false, false);
@@ -76,7 +76,7 @@ public:
 
     void PublishCapacity()
     {
-        RegionInfo* region = capacity;
+        ZPage* region = capacity;
         capacity = nullptr;
         manager.ReclaimRegion(region);
     }
@@ -111,7 +111,7 @@ void RunWaiter(RegionManager& manager, std::atomic<size_t>& claimed)
     Mutator mutator;
     mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     ThreadLocal::SetMutator(&mutator);
-    RegionInfo* region = manager.TakeRegion(1, ZPageType::small);
+    ZPage* region = manager.TakeRegion(1, ZPageType::small);
     claimed.store(region == nullptr ? 0 : region->GetUnitCount(), std::memory_order_release);
     ThreadLocal::SetMutator(nullptr);
 }
@@ -189,7 +189,7 @@ GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
 GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
 {
     OneUnitStallFixture fixture;
-    RegionInfo* competing = nullptr;
+    ZPage* competing = nullptr;
     bool supplied = false;
     fixture.manager.SetAllocationStallTestHooks(
         [](RegionManager&) {},

@@ -101,7 +101,7 @@ struct RelocationReceiptTestAccess {
         collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
         auto& remembered = Heap::GetHeap().GetRememberedSet();
         if (!remembered.IsInitialized()) {
-            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         }
         // ZDriver::gc_major runs the young roots collection before old marking.
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
@@ -253,8 +253,8 @@ private:
 };
 
 struct ValueRootRoute {
-    RegionInfo* source = nullptr;
-    RegionInfo* destination = nullptr;
+    ZPage* source = nullptr;
+    ZPage* destination = nullptr;
     BaseObject* from = nullptr;
     BaseObject* to = nullptr;
 };
@@ -301,7 +301,7 @@ bool IsValueRootMarked(const ValueRootRoute& route)
 }
 
 struct WeakGraph {
-    explicit WeakGraph(GcHeapFixture& fixture, RegionInfo* region, RegionInfo* targetRegion = nullptr)
+    explicit WeakGraph(GcHeapFixture& fixture, ZPage* region, ZPage* targetRegion = nullptr)
         : fx(fixture), owner(region), targetOwner(targetRegion == nullptr ? region : targetRegion)
     {
         std::memset(weakTypeStorage, 0, sizeof(weakTypeStorage));
@@ -339,13 +339,13 @@ struct WeakGraph {
 
     bool IsMarked(BaseObject* object) const
     {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         return region->is_object_strongly_live(from_object(object));
     }
 
     GcHeapFixture& fx;
-    RegionInfo* owner;
-    RegionInfo* targetOwner;
+    ZPage* owner;
+    ZPage* targetOwner;
     BaseObject* strongRoot = nullptr;
     BaseObject* weak = nullptr;
     BaseObject* referent = nullptr;
@@ -382,7 +382,7 @@ struct ExportForeignGraph {
     }
 
     GcHeapFixture& fx;
-    RegionInfo* owner;
+    ZPage* owner;
     BaseObject* root = nullptr;
     BaseObject* foreign = nullptr;
     alignas(TypeInfo) unsigned char foreignTypeStorage[sizeof(TypeInfo)];
@@ -412,7 +412,7 @@ void RunYoungWeakVariant(size_t helpers)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(graph.child);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = resources.IsGcStarted();
@@ -474,7 +474,7 @@ void RunYoungWeakRemsetFlow()
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    rememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, rememberedSet);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
     referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ ZPointerMarkedYoungMask));
@@ -542,7 +542,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.child);
     if (runtimeEntry) {
-        Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+        Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
         space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
         space.GetRegionManager().AddRawPointerObject(graph.weak);
         space.GetRegionManager().AddRawPointerObject(graph.referent);
@@ -773,7 +773,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);
     space.GetRegionManager().AddRawPointerObject(route.to);
     Heap::GetHeap().GetRememberedSet().Initialize(
-        fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
 
     const bool startedBefore = resources.IsGcStarted();

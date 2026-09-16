@@ -443,14 +443,14 @@ bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     const MIndex arraySize = CalculateArraySize(kLargeRefLength, RefField<>::GetSize());
     const size_t unitCount =
-        (static_cast<size_t>(arraySize) + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
+        (static_cast<size_t>(arraySize) + ZPage::UNIT_SIZE - 1) / ZPage::UNIT_SIZE;
 
     if (source == AllocationSource::INACTIVE) {
         ctx.dirtyAddress = manager.GetInactiveZone();
         return true;
     }
 
-    RegionInfo* prepared = manager.TakeRegion(
+    ZPage* prepared = manager.TakeRegion(
         unitCount, ZPageType::large, false, true, true);
     if (prepared == nullptr) {
         return false;
@@ -474,7 +474,7 @@ bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx
         // range (zMappedCache.cpp:92-119); dirtying cached memory must stay
         // clear of it. The yield check reads the first two segments only, so
         // dirty those (plus the array header that precedes the payload).
-        const size_t dirtyBytes = std::min(unitCount * RegionInfo::UNIT_SIZE,
+        const size_t dirtyBytes = std::min(unitCount * ZPage::UNIT_SIZE,
                                            2 * static_cast<size_t>(MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE) + 64);
         std::memset(reinterpret_cast<void*>(ctx.dirtyAddress), ctx.dirtyByte, dirtyBytes);
     }
@@ -687,7 +687,7 @@ struct LargePageIdentityObservation {
     inline static size_t publications = 0;
     static void Published(MArray* array)
     {
-        RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(array));
+        ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(array));
         publishedYoung = page->IsYoungRegion();
         publishedAge = page->GetYoungAge();
         ++publications;
@@ -711,7 +711,7 @@ void* RunLargePageIdentityCase(void* rawNative)
                      LargePageIdentityObservation::publications);
         return reinterpret_cast<void*>(2);
     }
-    RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(array));
+    ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(array));
     const bool young = LargePageIdentityObservation::publishedYoung;
     const uint8_t age = LargePageIdentityObservation::publishedAge;
     std::fprintf(stderr, "LARGE_PAGE_YOUNG_ASSERT_EXECUTED native=%d published_young=%d "
@@ -730,7 +730,7 @@ struct LargeYoungClosureResult {
     static void Observe(const std::vector<BaseObject*>* objects)
     {
         if (objects == nullptr || target == nullptr) return;
-        RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
+        ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(target));
         ++observations;
         live |= page->is_object_strongly_live(from_object(target));
         for (BaseObject* object : *objects) followed |= object == target;
@@ -745,7 +745,7 @@ void* RunLargeYoungClosureCase(void*)
     MArray* target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     Heap::GetBarrier().WriteReference(holder, field, target);
-    const bool holderYoung = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
+    const bool holderYoung = Heap::page(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
     const U64 holderRoot = Heap::GetHeap().RegisterExportRoot(holder);
     LargeYoungClosureResult::target = target;
     LargeYoungClosureResult::live = false;
@@ -797,7 +797,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool existing = reinterpret_cast<uintptr_t>(rawExisting) != 0;
     // ZPage::is_object_strongly_live (zPage.inline.hpp:258-260): the page
     // predicate over the product-owned livemap.
-    auto productLive = [](RegionInfo* page, const BaseObject* object) {
+    auto productLive = [](ZPage* page, const BaseObject* object) {
         return page->is_object_strongly_live(from_object(object));
     };
     auto& heap = Heap::GetHeap();
@@ -805,7 +805,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     Mutator* mutator = Mutator::GetMutator();
     MArray* beforeSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     const U64 beforeSmallRoot = heap.RegisterExportRoot(beforeSmall);
-    RegionInfo* beforeSmallPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(beforeSmall));
+    ZPage* beforeSmallPage = Heap::page(reinterpret_cast<uintptr_t>(beforeSmall));
     MArray* target = existing ? MCC_NewArray8(GetByteArrayTypeInfos().array, 16) : nullptr;
     const U64 targetRoot = target != nullptr ? heap.RegisterExportRoot(target) : 0;
     MarkAllocationWindow::entered = false;
@@ -828,7 +828,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     }
     mutator->SetManagedContext(true);
     MArray* afterSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
-    RegionInfo* afterSmallPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(afterSmall));
+    ZPage* afterSmallPage = Heap::page(reinterpret_cast<uintptr_t>(afterSmall));
     const bool retiredTLAB = afterSmallPage != beforeSmallPage && afterSmallPage->IsAllocating();
     std::fprintf(stderr, "P1_TLAB_RETIRE_ASSERT_EXECUTED different=%d birth=%llu owner=%llu\n",
                  afterSmallPage != beforeSmallPage,
@@ -839,8 +839,8 @@ void* RunMarkAllocationCase(void* rawExisting)
     const U64 holderRoot = heap.RegisterExportRoot(holder);
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     Heap::GetBarrier().WriteReference(holder, field, target);
-    RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
-    RegionInfo* targetPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
+    ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(holder));
+    ZPage* targetPage = Heap::page(reinterpret_cast<uintptr_t>(target));
     const bool implicit = page->IsAllocating();
     const bool live = productLive(page, holder);
     const bool targetLive = productLive(targetPage, target);
@@ -867,7 +867,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     TracingCollector::testYoungMarkCompleted = [&, target, productLive]() {
         const auto markEnd = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
         if (markEnd.sequence != during.sequence) return;
-        RegionInfo* endPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
+        ZPage* endPage = Heap::page(reinterpret_cast<uintptr_t>(target));
         markEndTargetLive = productLive(endPage, target);
         ++markEndObservations;
         std::fprintf(stderr, "MARK_ALLOC_MARK_END_ASSERT_EXECUTED sequence=%llu phase=%u live=%d\n",
@@ -888,7 +888,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     SetMarkClosureObserverForTest(nullptr);
     TracingCollector::testYoungMarkCompleted = nullptr;
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
-    page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
+    page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
     BaseObject* completedTarget = Heap::GetBarrier().ReadReference(holder, completedField);
     // The request includes relocation. Check the actual field result here;
@@ -927,7 +927,7 @@ void ObservePinnedAllocationWindow()
 uint64_t pinnedAcquiredBirth = 0;
 bool pinnedAcquiredWindow = false;
 
-void PausePinnedPageBeforeInstall(RegionInfo* page)
+void PausePinnedPageBeforeInstall(ZPage* page)
 {
     pinnedAcquiredBirth = page->BirthSequence();
     auto* mutator = Mutator::GetMutator();
@@ -961,9 +961,9 @@ void* RunPinnedPublicationCase(void*)
     const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
     MObject* fresh = MObject::NewPinnedObject(type, size);
     RegionManager::testPinnedPageAcquired = nullptr;
-    auto* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
+    auto* page = Heap::page(reinterpret_cast<uintptr_t>(fresh));
     MObject* next = MObject::NewPinnedObject(type, size);
-    const bool reused = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(next)) == page;
+    const bool reused = Heap::page(reinterpret_cast<uintptr_t>(next)) == page;
     const bool current = page->IsAllocating();
     const bool advanced = page->GetSnapshotEpoch() > pinnedAcquiredBirth;
     const bool noMark = !page->is_marked();
@@ -998,8 +998,8 @@ void* RunPinnedMarkStartCase(void*)
     const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
     MObject* first = MObject::NewPinnedObject(type, size);
     MObject* second = MObject::NewPinnedObject(type, size);
-    RegionInfo* before = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(first));
-    const bool reused = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(second)) == before;
+    ZPage* before = Heap::page(reinterpret_cast<uintptr_t>(first));
+    const bool reused = Heap::page(reinterpret_cast<uintptr_t>(second)) == before;
     const U64 root = heap.RegisterExportRoot(first);
     MarkAllocationWindow::entered = false;
     MarkAllocationWindow::released = false;
@@ -1021,7 +1021,7 @@ void* RunPinnedMarkStartCase(void*)
     }
     mutator->SetManagedContext(true);
     MObject* fresh = MObject::NewPinnedObject(type, size);
-    RegionInfo* after = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
+    ZPage* after = Heap::page(reinterpret_cast<uintptr_t>(fresh));
     const bool current = after->IsAllocating();
     const bool different = after != before;
     const bool noMark = !after->is_marked();
@@ -1054,14 +1054,14 @@ void* RunPinnedBirthCase(void*)
     const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
     MObject* dead = MObject::NewPinnedObject(type, size);
     MObject* survivor = MObject::NewPinnedObject(type, size);
-    RegionInfo* oldPage = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(dead));
-    const bool shared = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(survivor)) == oldPage;
+    ZPage* oldPage = Heap::page(reinterpret_cast<uintptr_t>(dead));
+    const bool shared = Heap::page(reinterpret_cast<uintptr_t>(survivor)) == oldPage;
     const U64 root = heap.RegisterExportRoot(survivor);
     mutator->SetManagedContext(false);
     heap.GetCollector().RequestGC(GC_REASON_USER, false);
     mutator->SetManagedContext(true);
     MObject* fresh = MObject::NewPinnedObject(type, size);
-    RegionInfo* page = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(fresh));
+    ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(fresh));
     const bool fromNewPage = page != oldPage;
     const bool noExplicitMark = !page->is_marked();
     const bool allocating = page->IsAllocating();

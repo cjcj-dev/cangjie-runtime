@@ -31,9 +31,9 @@ namespace MapleRuntime {
 namespace {
 
 
-bool RegionIsInRelocationSet(const RegionInfo* reg)
+bool RegionIsInRelocationSet(const ZPage* reg)
 {
-    if (reg == nullptr || reg == RegionInfo::NullRegion()) {
+    if (reg == nullptr || reg == ZPage::NullRegion()) {
         return false;
     }
     if (reg->IsFromRegion() || reg->IsLoneFromRegion()) {
@@ -99,7 +99,7 @@ void AllocBuffer::Init()
 {
     static_assert(offsetof(AllocBuffer, tlRegion) == 0,
                   "need to modify the offset of this value in llvm-project at the same time");
-    tlRegion = RegionInfo::NullRegion();
+    tlRegion = ZPage::NullRegion();
     ThreadLocal::InitializeCleaner();
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     manager.InitializeTLAB(*this);
@@ -120,11 +120,11 @@ void AllocBuffer::Fini()
 }
 
 // ThreadLocalAllocBuffer::fill (threadLocalAllocBuffer.cpp:201).
-void AllocBuffer::SetRegion(RegionInfo* region)
+void AllocBuffer::SetRegion(ZPage* region)
 {
     RetireTLAB(false);
     tlRegion = region;
-    if (region == nullptr || region == RegionInfo::NullRegion()) {
+    if (region == nullptr || region == ZPage::NullRegion()) {
         return;
     }
     const size_t capacity = region->GetAvailableSize();
@@ -136,7 +136,7 @@ void AllocBuffer::SetRegion(RegionInfo* region)
 // before returning the region, rather than counting only the C++ slow path.
 void AllocBuffer::RetireTLAB(bool gcWaste)
 {
-    if (tlRegion == nullptr || tlRegion == RegionInfo::NullRegion()) {
+    if (tlRegion == nullptr || tlRegion == ZPage::NullRegion()) {
         return;
     }
     const size_t waste = tlRegion->GetAvailableSize();
@@ -145,7 +145,7 @@ void AllocBuffer::RetireTLAB(bool gcWaste)
     } else {
         tlabStatistics.refillWaste += waste;
     }
-    tlRegion = RegionInfo::NullRegion();
+    tlRegion = ZPage::NullRegion();
 }
 
 void AllocBuffer::ClearRegion()
@@ -157,7 +157,7 @@ void AllocBuffer::ClearRegion()
 // The page allocator returns whole units; its limit is also unit-aligned.
 size_t AllocBuffer::ComputeTLABSize(size_t objectSize, size_t maxSize) const
 {
-    if (objectSize > maxSize || maxSize < RegionInfo::UNIT_SIZE) {
+    if (objectSize > maxSize || maxSize < ZPage::UNIT_SIZE) {
         return 0;
     }
     constexpr size_t targetRefills = 50; // 100 / (2 * TLABWasteTargetPercent)
@@ -166,7 +166,7 @@ size_t AllocBuffer::ComputeTLABSize(size_t objectSize, size_t maxSize) const
     size_t desired = desiredTLABSize.load(std::memory_order_relaxed);
     desired = desired > (maxSize >> steps) ? maxSize : desired << steps;
     const size_t size = desired > maxSize - objectSize ? maxSize : desired + objectSize;
-    return AlignUp(std::max(size, RegionInfo::UNIT_SIZE), RegionInfo::UNIT_SIZE);
+    return AlignUp(std::max(size, ZPage::UNIT_SIZE), ZPage::UNIT_SIZE);
 }
 
 // ThreadLocalAllocBuffer::accumulate_and_reset_statistics (cpp:78).
@@ -178,8 +178,8 @@ void AllocBuffer::ResizeTLAB(size_t capacity, double fallbackFraction, size_t ma
         fraction = fallbackFraction;
     }
     const size_t allocation = static_cast<size_t>(fraction * capacity);
-    const size_t desired = std::min(std::max(allocation / targetRefills, RegionInfo::UNIT_SIZE), maxSize);
-    desiredTLABSize.store(AlignUp(desired, RegionInfo::UNIT_SIZE), std::memory_order_relaxed);
+    const size_t desired = std::min(std::max(allocation / targetRefills, ZPage::UNIT_SIZE), maxSize);
+    desiredTLABSize.store(AlignUp(desired, ZPage::UNIT_SIZE), std::memory_order_relaxed);
 }
 
 MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
@@ -193,7 +193,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // csetalloc: never bump into a region already in the relocation set.
     // Mirror pin path's "no reuse after POST_TRACE" rule (RegionManager.cpp free-list).
     // If tlRegion was reclassified to FROM while we still hold it, retire and slow-path.
-    if (UNLIKELY(tlRegion != RegionInfo::NullRegion() && RegionIsInRelocationSet(tlRegion))) {
+    if (UNLIKELY(tlRegion != ZPage::NullRegion() && RegionIsInRelocationSet(tlRegion))) {
         // FROM/LONE_FROM are already off tlRegionList — only drop the local shortcut.
         // Still-THREAD_LOCAL but routing: flush to recentFull so it can be handled by GC lists.
         if (tlRegion->IsThreadLocalRegion()) {
@@ -205,7 +205,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         ClearRegion();
     }
 
-    if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
+    if (LIKELY(tlRegion != ZPage::NullRegion())) {
         addr = tlRegion->Alloc(totalSize);
     }
 
@@ -215,7 +215,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
 
     if (addr != 0) {
         // The slow path can allocate outside the TLAB in a shared CPU page.
-        RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(addr);
+        ZPage* reg = Heap::page(addr);
         // twoflags: POST_TRACE+ allocs have no mark/isTrace coverage — stamp CSet exclusion.
         // TRACE-phase new regions already get isTraceRegion (implicit black). Do not stamp
         // TRACE (would exclude most young regions until next major → minor starvation).
@@ -240,7 +240,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     }
 
     // allocate from thread local region
-    if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
+    if (LIKELY(tlRegion != ZPage::NullRegion())) {
         if (UNLIKELY(RegionIsInRelocationSet(tlRegion))) {
             if (tlRegion->IsThreadLocalRegion()) {
                 manager.RemoveThreadLocalRegion(tlRegion);
@@ -265,7 +265,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
 
     // now region must be null. If a region has been ready, then use it and tell gc-assitant thread to prepare
     // a new region, or take a new one.
-    RegionInfo* r  = preparedRegion.load(std::memory_order_acquire);
+    ZPage* r  = preparedRegion.load(std::memory_order_acquire);
     if (r != nullptr && r->GetAvailableSize() >= totalSize) {
         preparedRegion.store(nullptr, std::memory_order_release);
         if (UNLIKELY(RegionIsInRelocationSet(r))) {
@@ -294,7 +294,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     }
     // tlRegion may be set in PreforwardPhase handler while allocating region.
     // Null region means tlRegion is not set.
-    if (tlRegion == RegionInfo::NullRegion()) {
+    if (tlRegion == ZPage::NullRegion()) {
         SetRegion(r);
         return r->Alloc(totalSize);
     }
@@ -315,7 +315,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
 
 MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
 {
-    RegionInfo* region = tlRawPointerRegions.GetHeadRegion();
+    ZPage* region = tlRawPointerRegions.GetHeadRegion();
     if (region != nullptr) {
         MAddress allocAddr = region->Alloc(totalSize);
         if (allocAddr != 0) {
@@ -323,7 +323,7 @@ MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
         }
     }
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    size_t needUnitNum = AlignUp(totalSize, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
+    size_t needUnitNum = AlignUp(totalSize, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
     if (totalSize <= manager.GetThreadLocalRegionSize()) {
         region = Heap::alloc_page(needUnitNum, ZPageType::small);
         if (region == nullptr) {
@@ -382,15 +382,15 @@ void AllocBuffer::CommitRawPointerRegions()
 namespace MapleRuntime {
 void AllocBuffer::FlushRegion()
 {
-    if (LIKELY(tlRegion != RegionInfo::NullRegion()) && tlRegion != nullptr) {
+    if (LIKELY(tlRegion != ZPage::NullRegion()) && tlRegion != nullptr) {
         RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
         RegionManager& manager = theAllocator.GetRegionManager();
         manager.RemoveThreadLocalRegion(tlRegion);
         manager.EnlistFullThreadLocalRegion(tlRegion);
         ClearRegion();
     }
-    RegionInfo* prepared = preparedRegion.load();
-    if (LIKELY(prepared != RegionInfo::NullRegion()) && prepared != nullptr) {
+    ZPage* prepared = preparedRegion.load();
+    if (LIKELY(prepared != ZPage::NullRegion()) && prepared != nullptr) {
         RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
         RegionManager& manager = theAllocator.GetRegionManager();
         manager.RemoveThreadLocalRegion(prepared);

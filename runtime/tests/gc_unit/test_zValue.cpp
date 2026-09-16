@@ -85,7 +85,7 @@ GC_TEST(ZValue, per_worker_slot_count_follows_conc_gc_threads)
 }
 
 #if defined(__linux__)
-// Product wiring: PerAgeObjectAllocator::sharedSmallPage is a ZPerCPU<RegionInfo*>
+// Product wiring: PerAgeObjectAllocator::sharedSmallPage is a ZPerCPU<ZPage*>
 // (zObjectAllocator.hpp:41); retire_pages clears every CPU slot (set_all,
 // zObjectAllocator.cpp:198-203).
 GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
@@ -93,7 +93,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     ZStat::Initialize();
     constexpr size_t units = 64;
     HeapParam params{};
-    params.regionSize = RegionInfo::UNIT_SIZE / KB;
+    params.regionSize = ZPage::UNIT_SIZE / KB;
     params.exemptionThreshold = 0.8;
     std::unique_ptr<ZTestRegionHeap> heap;
     RegionManager manager;
@@ -110,7 +110,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
     const uint32_t cpu = ZCPU::id();
-    GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == RegionInfo::GetRegionInfoAt(first));
+    GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == Heap::page(first));
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         if (other != cpu) {
             GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);

@@ -59,7 +59,7 @@ void RegionList::DumpRegionList(const char* msg)
 {
     DLOG(REGION, "dump region list %s", msg);
     std::lock_guard<std::mutex> lock(listMutex);
-    for (RegionInfo *region = listHead; region != nullptr; region = region->GetNextRegion()) {
+    for (ZPage *region = listHead; region != nullptr; region = region->GetNextRegion()) {
         DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) units [%zu+%zu, %zu) type %u prev %p next %p", region,
             region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
             region->GetUnitIdx(), region->GetUnitCount(), region->GetUnitIdx() + region->GetUnitCount(),
@@ -82,19 +82,19 @@ void FreeRegionManager::Initialize(UnitCount regionCnt, ZVirtualMemoryManager& v
         partitions.emplace_back(new Partition(numaId));
         Partition& partition = *partitions.back();
         partition.currentMaxCapacity =
-            NumaTopology::calculate_share(numaId, maxCapacity, RegionInfo::UNIT_SIZE);
+            NumaTopology::calculate_share(numaId, maxCapacity, ZPage::UNIT_SIZE);
     }
 }
 
 ZVirtualMemory FreeRegionManager::VirtualMemoryOf(UnitIndex index, UnitCount count)
 {
-    const uintptr_t address = RegionInfo::GetUnitAddress(index);
-    return ZVirtualMemory(ZAddress::offset(to_zaddress_unsafe(address)), count * RegionInfo::UNIT_SIZE);
+    const uintptr_t address = ZPage::GetUnitAddress(index);
+    return ZVirtualMemory(ZAddress::offset(to_zaddress_unsafe(address)), count * ZPage::UNIT_SIZE);
 }
 
 FreeRegionManager::UnitIndex FreeRegionManager::UnitIndexOf(const ZVirtualMemory& vmem)
 {
-    const size_t index = RegionInfo::FindUnitIndex(untype(ZOffset::address_unsafe(vmem.start())));
+    const size_t index = ZPage::FindUnitIndex(untype(ZOffset::address_unsafe(vmem.start())));
     CHECK(index != std::numeric_limits<uint32_t>::max());
     return static_cast<UnitIndex>(index);
 }
@@ -208,7 +208,7 @@ void FreeRegionManager::InsertCommitted(Partition& partition, UnitIndex index, U
 {
     // The reverse metadata array describes cached units as free (P05 keeps
     // the descriptor state machine; ZGC destroys the ZPage instead).
-    RegionInfo::InitFreeRegion(index, count);
+    ZPage::InitFreeRegion(index, count);
     partition.cache.insert(VirtualMemoryOf(index, count));
 }
 
@@ -255,7 +255,7 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
     CHECK(num != 0 && num <= UINT32_MAX);
-    const size_t size = num * RegionInfo::UNIT_SIZE;
+    const size_t size = num * ZPage::UNIT_SIZE;
     for (size_t visited = 0; visited < partitions.size(); ++visited) {
         const size_t selected = (nextPartition + visited) % partitions.size();
         Partition& partition = *partitions[selected];
@@ -291,7 +291,7 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
         memory.partition = static_cast<uint32_t>(selected);
         memory.committed = harvested == size;
         memory.virtualClaimed = false;
-        memory.harvestedUnits = harvested / RegionInfo::UNIT_SIZE;
+        memory.harvestedUnits = harvested / ZPage::UNIT_SIZE;
         // increase_used
         partition.used += size;
         nextPartition = (selected + 1) % partitions.size();
@@ -307,8 +307,8 @@ bool FreeRegionManager::PreparePageMemory(PageMemory& memory)
     if (memory.virtualClaimed) { return true; }
     std::lock_guard<std::mutex> lock(cacheMutex);
     const uint32_t partitionId = memory.partition;
-    const size_t size = memory.units * RegionInfo::UNIT_SIZE;
-    const size_t harvested = memory.harvestedUnits * RegionInfo::UNIT_SIZE;
+    const size_t size = memory.units * ZPage::UNIT_SIZE;
+    const size_t harvested = memory.harvestedUnits * ZPage::UNIT_SIZE;
     if (harvested == 0) {
         // Just try to claim virtual memory
         const ZVirtualMemory vmem = claim_virtual(size, partitionId);
@@ -357,7 +357,7 @@ bool FreeRegionManager::PreparePageMemory(PageMemory& memory)
 // alloc_page_inner (zPageAllocator.cpp:1470-1515): claim_physical_for_increased_capacity
 // (:1761-1780), commit_and_map_single_partition (:1792-1806), map_committed
 // (:1878-1887), cleanup_failed_commit_single_partition (:1906-1932), create_page.
-RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageType role,
+ZPage* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageType role,
                                                      bool expectPhysicalMem, bool clearPayload, size_t& committedUnits,
                                                      PageAge age)
 {
@@ -373,7 +373,7 @@ RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageTy
     if (!fromCache) {
         // The vmem was built from harvested memory and/or increased capacity.
         const ZVirtualMemory vmem = VirtualMemoryOf(idx, num);
-        const size_t alreadyCommitted = memory.harvestedUnits * RegionInfo::UNIT_SIZE;
+        const size_t alreadyCommitted = memory.harvestedUnits * ZPage::UNIT_SIZE;
         const ZVirtualMemory nonCommitted = vmem.last_part(alreadyCommitted);
 
         size_t committed = 0;
@@ -383,10 +383,10 @@ RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageTy
 
             // Commit memory for the increased capacity
             committed = commit_physical(nonCommitted, partitionId);
-            CHECK(committed <= nonCommitted.size() && committed % RegionInfo::UNIT_SIZE == 0);
+            CHECK(committed <= nonCommitted.size() && committed % ZPage::UNIT_SIZE == 0);
         }
         const size_t totalCommitted = alreadyCommitted + committed;
-        committedUnits = totalCommitted / RegionInfo::UNIT_SIZE;
+        committedUnits = totalCommitted / ZPage::UNIT_SIZE;
 
         // Map all the committed memory
         const ZVirtualMemory committedVmem = vmem.first_part(totalCommitted);
@@ -411,9 +411,9 @@ RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageTy
         memory.committed = true;
     }
     if ((fromCache || memory.harvestedUnits != 0) && clearPayload) {
-        RegionInfo::ClearUnits(idx, num);
+        ZPage::ClearUnits(idx, num);
     }
-    RegionInfo* region = RegionInfo::InitRegion(idx, num, role, age);
+    ZPage* region = ZPage::InitRegion(idx, num, role, age);
     if (!fromCache) {
         PrehandleReleasedUnit(clearPayload, idx, num);
     }
@@ -427,7 +427,7 @@ void FreeRegionManager::FreeMemoryAllocFailed(PageMemory& memory)
 {
     std::lock_guard<std::mutex> lock(cacheMutex);
     Partition& partition = *partitions.at(memory.partition);
-    const size_t size = memory.units * RegionInfo::UNIT_SIZE;
+    const size_t size = memory.units * ZPage::UNIT_SIZE;
     // Only decrease the overall used and not the generation used,
     // since the allocation failed and generation used wasn't bumped.
     CHECK(partition.used >= size);
@@ -454,7 +454,7 @@ FreeRegionManager::UnitCount FreeRegionManager::GetDirtyUnitCount() const
     for (const auto& partition : partitions) {
         bytes += partition->capacity - partition->used - partition->claimed;
     }
-    return static_cast<UnitCount>(bytes / RegionInfo::UNIT_SIZE);
+    return static_cast<UnitCount>(bytes / ZPage::UNIT_SIZE);
 }
 
 void FreeRegionManager::PrintCacheOn() const
@@ -499,7 +499,7 @@ void FreeRegionManager::UncommitFlushed(size_t flushed)
 
 void RegionManager::SetMaxUnitCountForRegion(size_t regionSize)
 {
-    maxUnitCountPerRegion = regionSize * KB / RegionInfo::UNIT_SIZE;
+    maxUnitCountPerRegion = regionSize * KB / ZPage::UNIT_SIZE;
 }
 
 void RegionManager::SetMaxUnitCountForPinnedRegion(size_t regionSize)
@@ -513,7 +513,7 @@ void RegionManager::SetMaxUnitCountForPinnedRegion(size_t regionSize)
     // The minimum region size is system page size, measured in KB.
     size_t minSize = MapleRuntime::MRT_PAGE_SIZE / KB;
     if (size >= minSize && size <= regionSize) {
-        maxUnitCountPerPinnedRegion = size * KB / RegionInfo::UNIT_SIZE;
+        maxUnitCountPerPinnedRegion = size * KB / ZPage::UNIT_SIZE;
     } else {
         LOG(RTLOG_ERROR, "Unsupported cjPinnedRegionSize parameter. Valid cjPinnedRegionSize"
             "range is [%zuKB, %zuKB].\n", minSize, regionSize);
@@ -587,9 +587,9 @@ ZVirtualMemory RegionManager::ReservedAddressSpan(const ZVirtualMemoryManager& v
 // and compiler slot-domain table also need the actual reservation boundaries.
 // Borrow/return the initial free ranges before any page can be claimed; do not
 // retain a second runtime registry or replace holes with an address envelope.
-std::vector<RegionInfo::UnitSegment> RegionManager::ReservedSegments(ZVirtualMemoryManager& virtualMemory)
+std::vector<ZPage::UnitSegment> RegionManager::ReservedSegments(ZVirtualMemoryManager& virtualMemory)
 {
-    std::vector<RegionInfo::UnitSegment> segments;
+    std::vector<ZPage::UnitSegment> segments;
     for (uint32_t partitionId = 0; partitionId < ZPerNUMAStorage::count(); ++partitionId) {
         ZArray<ZVirtualMemory> ranges;
         virtualMemory.remove_from_low_many_at_most(ZAddressOffsetMax, partitionId, &ranges);
@@ -598,8 +598,8 @@ std::vector<RegionInfo::UnitSegment> RegionManager::ReservedSegments(ZVirtualMem
             virtualMemory.insert(range, partitionId);
         }
     }
-    std::sort(segments.begin(), segments.end(), [](const RegionInfo::UnitSegment& a,
-                                                  const RegionInfo::UnitSegment& b) {
+    std::sort(segments.begin(), segments.end(), [](const ZPage::UnitSegment& a,
+                                                  const ZPage::UnitSegment& b) {
         return a.start < b.start;
     });
     return segments;
@@ -612,16 +612,16 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     // nUnit is the max capacity in units; the metadata spans the reserved
     // address range (ZVirtualToPhysicalRatio times larger).
     const ZVirtualMemory span = ReservedAddressSpan(virtualMemory);
-    const std::vector<RegionInfo::UnitSegment> segments = ReservedSegments(virtualMemory);
-    const size_t spanUnits = RegionInfo::IndexedUnitCount(segments);
+    const std::vector<ZPage::UnitSegment> segments = ReservedSegments(virtualMemory);
+    const size_t spanUnits = ZPage::IndexedUnitCount(segments);
     const size_t metadataSize = GetMetadataSize(spanUnits);
     this->regionInfoStart = regionInfoAddr;
     this->regionHeapStart = segments.front().start;
     this->regionHeapEnd = segments.back().End();
     heapUnitCount = nUnit;
-    CHECK(nUnit * RegionInfo::UNIT_SIZE <= span.size());
+    CHECK(nUnit * ZPage::UNIT_SIZE <= span.size());
     // zPageTable.cpp:37-52: address tables cover the highest available end.
-    CHECK(ForwardingTable::Initialize(regionHeapStart, regionHeapEnd - regionHeapStart, RegionInfo::UNIT_SIZE));
+    CHECK(ForwardingTable::Initialize(regionHeapStart, regionHeapEnd - regionHeapStart, ZPage::UNIT_SIZE));
     this->inactiveZone = regionHeapStart;
     SetMaxUnitCountForRegion(heapParam.regionSize);
     SetMaxUnitCountForPinnedRegion(heapParam.regionSize);
@@ -631,14 +631,14 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     SetCacheRatio(0.0, 1.0, 1.0);
 #endif
     // propagate region heap layout
-    RegionInfo::InitializeSegments(regionInfoAddr + metadataSize, segments);
-    freeRegionManager.Initialize(nUnit, virtualMemory, physicalMemory, nUnit * RegionInfo::UNIT_SIZE);
+    ZPage::InitializeSegments(regionInfoAddr + metadataSize, segments);
+    freeRegionManager.Initialize(nUnit, virtualMemory, physicalMemory, nUnit * ZPage::UNIT_SIZE);
     this->exemptedRegionThreshold = heapParam.exemptionThreshold;
     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
          regionHeapStart, regionHeapEnd, nUnit);
 }
 
-void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
+void RegionManager::ScrubRememberedSetForRegion(ZPage* region)
 {
     if (region == nullptr) {
         return;
@@ -650,12 +650,12 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
 
 
 
-void RegionManager::ReclaimRegion(RegionInfo* region)
+void RegionManager::ReclaimRegion(ZPage* region)
 {
-    RegionInfo::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
+    ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
 }
 
-void RegionManager::ReclaimRetiredRegion(RegionInfo* region)
+void RegionManager::ReclaimRetiredRegion(ZPage* region)
 {
     // convert "I traced the paths" into a machine check, but none of the designs proved the
     // caller enumeration and five of the six ReclaimRegion callers have already detached the
@@ -671,7 +671,7 @@ void RegionManager::ReclaimRetiredRegion(RegionInfo* region)
     // must not re-scan O(N) under remset mutex.
 
     {
-        RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_DIRTY);
+        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_DIRTY);
     }
     region->InitFreeUnits();
     ReturnPageMemory(PageMemory{ unitIndex, num, 0, true });
@@ -718,7 +718,7 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
 
 void RegionManager::ReturnPageMemory(const PageMemory& memory)
 {
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(memory.index));
+    ZPage* region = Heap::page(ZPage::GetUnitAddress(memory.index));
     if (region != nullptr) {
         CHECK(region->GetUnitIdx() == memory.index && region->GetUnitCount() == memory.units);
         // Only materialized page geometry is retired. Its allocation-time
@@ -727,7 +727,7 @@ void RegionManager::ReturnPageMemory(const PageMemory& memory)
         const size_t units = memory.units;
         const uint32_t partition = memory.partition;
         const bool committed = memory.committed;
-        RegionInfo::RetirePage(region, [this, region, index, units, partition, committed] {
+        ZPage::RetirePage(region, [this, region, index, units, partition, committed] {
             region->InitFreeUnits();
             ReturnRetiredPageMemory(PageMemory{index, units, partition, committed});
         });
@@ -750,7 +750,7 @@ void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory, bool allow
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
     CHECK(memory.committed);
     freeRegionManager.AddGarbageUnits(memory.index, memory.units, allowSaferegion);
-    const size_t bytes = memory.units * RegionInfo::UNIT_SIZE;
+    const size_t bytes = memory.units * ZPage::UNIT_SIZE;
     CHECK(pageAllocatorUsed >= bytes);
     pageAllocatorUsed -= bytes;
     allocationStallQueue.SatisfyAvailableLocked([this](AllocationStallRequest& request) {
@@ -772,19 +772,19 @@ void RegionManager::SatisfyStalledAllocations()
 bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
 {
     const size_t size = request.GetSize();
-    const size_t num = size / RegionInfo::UNIT_SIZE;
+    const size_t num = size / ZPage::UNIT_SIZE;
     PageMemory& memory = request.Memory();
     if (!freeRegionManager.ClaimPageMemory(num, memory)) { return false; }
     pageAllocatorUsed += size;
     return true;
 }
 
-void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
+void RegionManager::ReclaimRegionToMarkQuarantine(ZPage* region)
 {
-    RegionInfo::RetirePage(region, [this, region] { ReclaimRetiredRegionToMarkQuarantine(region); });
+    ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegionToMarkQuarantine(region); });
 }
 
-void RegionManager::ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region)
+void RegionManager::ReclaimRetiredRegionToMarkQuarantine(ZPage* region)
 {
     // routedest: census only, see ReclaimRegion.
     size_t num = region->GetUnitCount();
@@ -792,24 +792,24 @@ void RegionManager::ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region)
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
     {
-        RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_MARK_QUARANTINE);
+        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_MARK_QUARANTINE);
     }
     region->InitFreeUnits();
     ScopedEnterSaferegion enterSaferegion(true);
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
     freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
-    CHECK(pageAllocatorUsed >= num * RegionInfo::UNIT_SIZE);
-    pageAllocatorUsed -= num * RegionInfo::UNIT_SIZE;
+    CHECK(pageAllocatorUsed >= num * ZPage::UNIT_SIZE);
+    pageAllocatorUsed -= num * ZPage::UNIT_SIZE;
 }
 
-size_t RegionManager::ReleaseRegion(RegionInfo* region)
+size_t RegionManager::ReleaseRegion(ZPage* region)
 {
     const size_t size = region->GetRegionSize();
-    RegionInfo::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
+    ZPage::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
     return size;
 }
 
-void RegionManager::ReleaseRetiredRegion(RegionInfo* region)
+void RegionManager::ReleaseRetiredRegion(ZPage* region)
 {
     // routedest: census only, see ReclaimRegion.
 
@@ -825,7 +825,7 @@ void RegionManager::ReleaseRetiredRegion(RegionInfo* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
     {
-        RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RELEASE_REGION);
+        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RELEASE_REGION);
     }
     region->InitFreeUnits();
     // ZPageAllocator::free_page (zPageAllocator.cpp:2083-2165): freed memory
@@ -836,7 +836,7 @@ void RegionManager::ReleaseRetiredRegion(RegionInfo* region)
 
 void RegionManager::PromoteAllRegions()
 {
-    VisitPageOwners([&](RegionInfo* region) {
+    VisitPageOwners([&](ZPage* region) {
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
             if (region->IsYoungRegion()) {
                 region->PromoteYoungRegion();
@@ -848,11 +848,11 @@ void RegionManager::PromoteAllRegions()
     });
 }
 
-RegionInfo* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
+ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
                                       bool allowSaferegion, bool clearPayload, PageAge age)
 {
     // check for allocation since we do not want gc threads and mutators do any harm to each other.
-    size_t size = num * RegionInfo::UNIT_SIZE;
+    size_t size = num * ZPage::UNIT_SIZE;
     // routefix: RequestForRegion may sleep; under ROUTING keep the critical section short.
     if (allowSaferegion) {
         RequestForRegion(size);
@@ -860,7 +860,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhy
 
 #if !defined(__OHOS__)
     size_t gatedBytes = 0;
-    RegionInfo* garbage = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
+    ZPage* garbage = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
     if (garbage != nullptr) {
         ReclaimRegion(garbage);
     }
@@ -883,13 +883,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhy
     }
     if (claimed) {
         size_t committedUnits = 0;
-        RegionInfo* region = freeRegionManager.MaterializePageMemory(
+        ZPage* region = freeRegionManager.MaterializePageMemory(
             request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedUnits, age);
         if (request.Memory().virtualClaimed) {
             // The address is known only after materialization; keep the existing
             // diagnostic envelope update under its allocator lock.
             std::lock_guard<std::mutex> lock(pageAllocatorMutex);
-            const uintptr_t end = RegionInfo::GetUnitAddress(request.Memory().index) + size;
+            const uintptr_t end = ZPage::GetUnitAddress(request.Memory().index) + size;
             inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), end), std::memory_order_release);
         }
         if (region == nullptr) {
@@ -922,7 +922,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhy
     return nullptr;
 }
 
-size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
+size_t RegionManager::CollectFreePinnedSlots(ZPage* region)
 {
     // pinroot: raw-pointer pin is a liveness hold — do not free any slot while count > 0.
     // AddRawPointerObject only bumps this counter (no mark bit / root set); reclaim must honour it.
@@ -953,7 +953,7 @@ size_t RegionManager::CollectPinnedGarbage()
         freePinnedSlotLists.Clear();
     }
     size_t garbageSize = 0;
-    RegionInfo* region = oldPinnedRegionList.GetHeadRegion();
+    ZPage* region = oldPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
         // pinroot: whole-region reclaim also ignores pins; skip while any raw pointer holds.
         if (region->GetRawPointerObjectCount() > 0) {
@@ -962,7 +962,7 @@ size_t RegionManager::CollectPinnedGarbage()
             continue;
         }
         if (region->IsKnownEmpty()) {
-            RegionInfo* del = region;
+            ZPage* del = region;
             region = region->GetNextRegion();
             oldPinnedRegionList.DeleteRegion(del);
 
@@ -984,17 +984,17 @@ size_t RegionManager::CollectPinnedGarbage()
 size_t RegionManager::CollectLargeGarbage()
 {
     size_t garbageSize = 0;
-    RegionInfo* region = oldLargeRegionList.GetHeadRegion();
+    ZPage* region = oldLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
         // for large region, the object is the page start (zPage.inline.hpp:254-256).
         if (!region->is_object_live(to_zaddress(region->GetRegionStart()))) {
             DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
                  region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
-            RegionInfo* del = region;
+            ZPage* del = region;
             region = region->GetNextRegion();
             oldLargeRegionList.DeleteRegion(del);
-            if (del->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
+            if (del->GetRegionSize() > ZPage::LARGE_OBJECT_RELEASE_THRESHOLD) {
                 garbageSize += ReleaseRegion(del);
             } else {
 
@@ -1009,14 +1009,14 @@ size_t RegionManager::CollectLargeGarbage()
 }
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-void RegionManager::DumpRegionInfo() const
+void RegionManager::DumpZPage() const
 {
     if (!ENABLE_LOG(ALLOC)) {
         return;
     }
-    VisitPageOwners([&](RegionInfo* region) {
+    VisitPageOwners([&](ZPage* region) {
         if (!region->IsFreeRegion()) {
-            region->DumpRegionInfo(ALLOC);
+            region->DumpZPage(ALLOC);
         }
     });
 }
@@ -1026,30 +1026,30 @@ void RegionManager::DumpRegionStats(const char* msg) const
 {
     size_t totalSize = GetHeapCapacity();
     VLOG(REPORT, "heap backing capacity %zu bytes", GetCommittedCapacity());
-    size_t totalUnits = totalSize / RegionInfo::UNIT_SIZE;
-    size_t activeSize = GetActiveUnitCount() * RegionInfo::UNIT_SIZE;
-    size_t activeUnits = activeSize / RegionInfo::UNIT_SIZE;
+    size_t totalUnits = totalSize / ZPage::UNIT_SIZE;
+    size_t activeSize = GetActiveUnitCount() * ZPage::UNIT_SIZE;
+    size_t activeUnits = activeSize / ZPage::UNIT_SIZE;
 
     size_t tlRegions = tlRegionList.GetRegionCount();
     size_t tlUnits = tlRegionList.GetUnitCount();
-    size_t tlSize = tlUnits * RegionInfo::UNIT_SIZE;
+    size_t tlSize = tlUnits * ZPage::UNIT_SIZE;
     size_t allocTLSize = tlRegionList.GetAllocatedSize();
 
     size_t fromRegions = fromRegionList.GetRegionCount();
     size_t fromUnits = fromRegionList.GetUnitCount();
-    size_t fromSize = fromUnits * RegionInfo::UNIT_SIZE;
+    size_t fromSize = fromUnits * ZPage::UNIT_SIZE;
     size_t allocFromSize = fromRegionList.GetAllocatedSize();
 
     size_t unmovableRegions = unmovableFromRegionList.GetRegionCount();
     size_t unmovableUnits = unmovableFromRegionList.GetUnitCount();
-    size_t unmovableSize = unmovableUnits * RegionInfo::UNIT_SIZE;
+    size_t unmovableSize = unmovableUnits * ZPage::UNIT_SIZE;
     size_t allocUnmovableSize = unmovableFromRegionList.GetAllocatedSize();
 
     size_t keptRegions = 0;
     size_t keptUnits = 0;
     size_t keptSize = 0;
     size_t keptLive = 0;
-    auto censusKept = [&keptRegions, &keptUnits, &keptSize, &keptLive](RegionInfo* region) {
+    auto censusKept = [&keptRegions, &keptUnits, &keptSize, &keptLive](ZPage* region) {
         if (region == nullptr || !region->IsForwardingDone()) {
             return;
         }
@@ -1067,42 +1067,42 @@ void RegionManager::DumpRegionStats(const char* msg) const
 
     size_t recentFullRegions = recentFullRegionList.GetRegionCount();
     size_t recentFullUnits = recentFullRegionList.GetUnitCount();
-    size_t recentFullSize = recentFullUnits * RegionInfo::UNIT_SIZE;
+    size_t recentFullSize = recentFullUnits * ZPage::UNIT_SIZE;
     size_t allocRecentFullSize = recentFullRegionList.GetAllocatedSize();
     RecentFullAccounting::Report(recentFullRegions, recentFullSize);
 
     size_t garbageRegions = garbageRegionList.GetRegionCount();
     size_t garbageUnits = garbageRegionList.GetUnitCount();
-    size_t garbageSize = garbageUnits * RegionInfo::UNIT_SIZE;
+    size_t garbageSize = garbageUnits * ZPage::UNIT_SIZE;
     size_t allocGarbageSize = garbageRegionList.GetAllocatedSize();
 
     size_t pinnedRegions = oldPinnedRegionList.GetRegionCount();
     size_t pinnedUnits = oldPinnedRegionList.GetUnitCount();
-    size_t pinnedSize = pinnedUnits * RegionInfo::UNIT_SIZE;
+    size_t pinnedSize = pinnedUnits * ZPage::UNIT_SIZE;
     size_t allocPinnedSize = oldPinnedRegionList.GetAllocatedSize();
 
     size_t recentPinnedRegions = recentPinnedRegionList.GetRegionCount();
     size_t recentPinnedUnits = recentPinnedRegionList.GetUnitCount();
-    size_t recentPinnedSize = recentPinnedUnits * RegionInfo::UNIT_SIZE;
+    size_t recentPinnedSize = recentPinnedUnits * ZPage::UNIT_SIZE;
     size_t allocRecentPinnedSize = recentPinnedRegionList.GetAllocatedSize();
 
     size_t rawPointerPinnedRegions = rawPointerPinnedRegionList.GetRegionCount();
     size_t rawPointerPinnedUnits = rawPointerPinnedRegionList.GetUnitCount();
-    size_t rawPointerPinnedSize = rawPointerPinnedUnits * RegionInfo::UNIT_SIZE;
+    size_t rawPointerPinnedSize = rawPointerPinnedUnits * ZPage::UNIT_SIZE;
     size_t allocRawPointerPinnedSize = rawPointerPinnedRegionList.GetAllocatedSize();
 
     size_t largeRegions = oldLargeRegionList.GetRegionCount();
     size_t largeUnits = oldLargeRegionList.GetUnitCount();
-    size_t largeSize = largeUnits * RegionInfo::UNIT_SIZE;
+    size_t largeSize = largeUnits * ZPage::UNIT_SIZE;
     size_t allocLargeSize = oldLargeRegionList.GetAllocatedSize();
 
     size_t recentlargeRegions = recentLargeRegionList.GetRegionCount();
     size_t recentlargeUnits = recentLargeRegionList.GetUnitCount();
-    size_t recentLargeSize = recentlargeUnits * RegionInfo::UNIT_SIZE;
+    size_t recentLargeSize = recentlargeUnits * ZPage::UNIT_SIZE;
     size_t allocRecentLargeSize = recentLargeRegionList.GetAllocatedSize();
 
     size_t allHeapSize = GetHeapCapacity();
-    size_t allUnits = allHeapSize / RegionInfo::UNIT_SIZE;
+    size_t allUnits = allHeapSize / ZPage::UNIT_SIZE;
     size_t inactiveUnits = GetInactiveUnitCount();
 
     size_t usedUnitCount = GetUsedUnitCount();
@@ -1111,10 +1111,10 @@ void RegionManager::DumpRegionStats(const char* msg) const
     // partition account (current_max_capacity - capacity).
     size_t virtualUnits = GetInactiveUnitCount();
     size_t dirtyUnits = freeRegionManager.GetDirtyUnitCount();
-    size_t dirtySize = dirtyUnits * RegionInfo::UNIT_SIZE;
+    size_t dirtySize = dirtyUnits * ZPage::UNIT_SIZE;
 
     size_t totalUnitCount = usedUnitCount + garbageUnits + dirtyUnits;
-    size_t totalObjSize = usedObjSize + garbageSize + dirtyUnits * RegionInfo::UNIT_SIZE;
+    size_t totalObjSize = usedObjSize + garbageSize + dirtyUnits * ZPage::UNIT_SIZE;
 
     double objectCapacity = (allHeapSize > 0) ? static_cast<double>(totalObjSize) / allHeapSize : 0.0;
     double unitCapacity = (allUnits > 0) ? static_cast<double>(totalUnitCount) / allUnits : 0.0;
@@ -1131,7 +1131,7 @@ void RegionManager::DumpRegionStats(const char* msg) const
 
     DUMP_REGION_STATS_LOG("\ttotal units: %zu (%zu B)", totalUnits, totalSize);
     DUMP_REGION_STATS_LOG("\tactive units: %zu (%zu B)", activeUnits, activeSize);
-    DUMP_REGION_STATS_LOG("\tinactive units: %zu (%zu B)", inactiveUnits, inactiveUnits * RegionInfo::UNIT_SIZE);
+    DUMP_REGION_STATS_LOG("\tinactive units: %zu (%zu B)", inactiveUnits, inactiveUnits * ZPage::UNIT_SIZE);
 
     DUMP_REGION_STATS_LOG("\ttl-regions %zu: %zu units (%zu B, alloc %zu)", tlRegions,  tlUnits, tlSize, allocTLSize);
     DUMP_REGION_STATS_LOG("\tfrom-regions %zu: %zu units (%zu B, alloc %zu)", fromRegions,  fromUnits, fromSize,
@@ -1156,11 +1156,11 @@ void RegionManager::DumpRegionStats(const char* msg) const
     DUMP_REGION_STATS_LOG("\trecent large-object regions %zu: %zu units (%zu B, alloc %zu)",
                           recentlargeRegions, recentlargeUnits, recentLargeSize, allocRecentLargeSize);
     DUMP_REGION_STATS_LOG("\tused summary: usedUnits %zu (%zu B), usedObjSize %zu B",
-                          usedUnitCount, usedUnitCount * RegionInfo::UNIT_SIZE, usedObjSize);
+                          usedUnitCount, usedUnitCount * ZPage::UNIT_SIZE, usedObjSize);
 
     DUMP_REGION_STATS_LOG("\tuncommitted capacity: %zu units (%zu B)",
-                          virtualUnits, virtualUnits * RegionInfo::UNIT_SIZE);
-    DUMP_REGION_STATS_LOG("\tdirty units: %zu (%zu B)", dirtyUnits, dirtyUnits * RegionInfo::UNIT_SIZE);
+                          virtualUnits, virtualUnits * ZPage::UNIT_SIZE);
+    DUMP_REGION_STATS_LOG("\tdirty units: %zu (%zu B)", dirtyUnits, dirtyUnits * ZPage::UNIT_SIZE);
     freeRegionManager.PrintCacheOn();
 
     DUMP_REGION_STATS_LOG("\tgarbage+dirty summary: garbageUnits %zu (%zu B, allocObj %zu), dirtyUnits %zu (%zu B)",
@@ -1262,7 +1262,7 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     CHECK_DETAIL(CheckedMulSize(vmHeapParam.heapSize, size_t{1024}, heapSize),
                  "heap size overflows bytes before reservation: heapSizeKB=%zu", vmHeapParam.heapSize);
     const size_t unitNum = RegionManager::GetHeapUnitCount(heapSize);
-    const size_t maxCapacity = unitNum * RegionInfo::UNIT_SIZE;
+    const size_t maxCapacity = unitNum * ZPage::UNIT_SIZE;
 
     // ZPageAllocator::ZPageAllocator (zPageAllocator.cpp:1201-1260): the
     // virtual memory manager reserves ZVirtualToPhysicalRatio times the max
@@ -1289,8 +1289,8 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     // the payload reservations (zPage metadata lives outside virtual memory).
     // It is committed lazily by the kernel: only units that ever become pages
     // touch their descriptor.
-    const std::vector<RegionInfo::UnitSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
-    metadata.size = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(segments));
+    const std::vector<ZPage::UnitSegment> segments = RegionManager::ReservedSegments(*virtualMemory);
+    metadata.size = RegionManager::GetMetadataSize(ZPage::IndexedUnitCount(segments));
     void* const metadataBase =
         mmap(nullptr, metadata.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     CHECK_DETAIL(metadataBase != MAP_FAILED, "failed to map %zu bytes of region metadata", metadata.size);

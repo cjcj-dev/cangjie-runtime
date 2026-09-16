@@ -44,7 +44,7 @@ void RememberedSet::Initialize(MAddress start, size_t size)
     heapSize = size;
     bitCount = (size + kFieldBytes - 1) / kFieldBytes;
     wordCount = (bitCount + kBitsPerWord - 1) / kBitsPerWord;
-    const size_t pages = (heapSize + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
+    const size_t pages = (heapSize + ZPage::UNIT_SIZE - 1) / ZPage::UNIT_SIZE;
     pageMapWordCount = (pages + kBitsPerWord - 1) / kBitsPerWord;
     for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
         rememberedPages[buffer].reset(new (std::nothrow) std::atomic<uint64_t>[pageMapWordCount]);
@@ -250,10 +250,10 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
 
     size_t consumed = 0;
     VisitRememberedPages(scanBuffer, [&](size_t page) {
-        const size_t firstWord = page * RegionInfo::UNIT_SIZE / (kBitsPerWord * kFieldBytes);
+        const size_t firstWord = page * ZPage::UNIT_SIZE / (kBitsPerWord * kFieldBytes);
         const size_t endWord = std::min(wordCount,
-            (page + 1) * RegionInfo::UNIT_SIZE / (kBitsPerWord * kFieldBytes));
-        const MAddress pageStart = heapStart + page * RegionInfo::UNIT_SIZE;
+            (page + 1) * ZPage::UNIT_SIZE / (kBitsPerWord * kFieldBytes));
+        const MAddress pageStart = heapStart + page * ZPage::UNIT_SIZE;
         if (!shouldScanPage(pageStart)) {
             return;
         }
@@ -346,9 +346,9 @@ std::unordered_set<MAddress> RememberedSet::Snapshot() const
     size_t buffer = activeBuffer.load(std::memory_order_acquire);
     records.reserve(recordCounts[buffer].load(std::memory_order_relaxed));
     VisitRememberedPages(buffer, [&](size_t page) {
-        const size_t firstWord = page * RegionInfo::UNIT_SIZE / (kBitsPerWord * kFieldBytes);
+        const size_t firstWord = page * ZPage::UNIT_SIZE / (kBitsPerWord * kFieldBytes);
         const size_t endWord = std::min(wordCount,
-            (page + 1) * RegionInfo::UNIT_SIZE / (kBitsPerWord * kFieldBytes));
+            (page + 1) * ZPage::UNIT_SIZE / (kBitsPerWord * kFieldBytes));
         for (size_t wordIdx = firstWord; wordIdx < endWord; ++wordIdx) {
             uint64_t word = bitmaps[buffer][wordIdx].load(std::memory_order_relaxed);
             while (word != 0) {
@@ -494,9 +494,9 @@ size_t RememberedSet::ClearBuffer(size_t buffer)
             ++flipDirtyWordTouches;
         }
 #endif
-        const size_t firstWord = page * RegionInfo::UNIT_SIZE / (kBitsPerWord * kFieldBytes);
+        const size_t firstWord = page * ZPage::UNIT_SIZE / (kBitsPerWord * kFieldBytes);
         const size_t endWord = std::min(wordCount,
-            (page + 1) * RegionInfo::UNIT_SIZE / (kBitsPerWord * kFieldBytes));
+            (page + 1) * ZPage::UNIT_SIZE / (kBitsPerWord * kFieldBytes));
         for (size_t word = firstWord; word < endWord; ++word) {
 #if defined(MRT_GC_UNIT_TESTS)
             if (flipTouchAccountingActive) {

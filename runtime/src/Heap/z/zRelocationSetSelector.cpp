@@ -56,14 +56,14 @@ void RegionManager::ReassembleFromSpace()
 
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
     region->inc_live(1, obj->GetSize());
 }
 
 namespace {
 // ZGenerationPagesIterator + ZPage::is_relocatable (zGeneration.cpp:209-213).
 // Existing intrusive allocation lists are the Cangjie page-table adapter.
-bool IsOldRelocationCandidate(const RegionInfo* region)
+bool IsOldRelocationCandidate(const ZPage* region)
 {
     return region->GetOwnerGeneration() == Generation::Old && region->IsRelocatable();
 }
@@ -73,9 +73,9 @@ void RegionManager::AssembleSmallGarbageCandidates()
 {
     // The young collection and old selection share the physical FROM list.
     // Establish the old selector's input here, before cleanup or forwarding.
-    RegionInfo* region = fromRegionList.GetHeadRegion();
+    ZPage* region = fromRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* next = region->GetNextRegion();
         if (!IsOldRelocationCandidate(region)) {
             fromRegionList.DeleteRegion(region);
             ParkUnmovableFromRegion(region);
@@ -83,9 +83,9 @@ void RegionManager::AssembleSmallGarbageCandidates()
         region = next;
     }
     auto select = [this](RegionList& list, bool recent) {
-        RegionInfo* region = list.GetHeadRegion();
+        ZPage* region = list.GetHeadRegion();
         while (region != nullptr) {
-            RegionInfo* next = region->GetNextRegion();
+            ZPage* next = region->GetNextRegion();
             if (IsOldRelocationCandidate(region) && !region->IsNotRelocatableThisCycle()) {
                 list.DeleteRegion(region);
                 if (recent) RecentFullAccounting::Dequeue(1, region->GetUnitCount());
@@ -101,9 +101,9 @@ void RegionManager::AssembleSmallGarbageCandidates()
 
 void RegionManager::AssembleLargeGarbageCandidates()
 {
-    RegionInfo* region = oldLargeRegionList.GetHeadRegion();
+    ZPage* region = oldLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* next = region->GetNextRegion();
         if (!IsOldRelocationCandidate(region)) {
             oldLargeRegionList.DeleteRegion(region);
             recentLargeRegionList.PrependRegion(region);
@@ -112,7 +112,7 @@ void RegionManager::AssembleLargeGarbageCandidates()
     }
     region = recentLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* next = region->GetNextRegion();
         if (IsOldRelocationCandidate(region)) {
             recentLargeRegionList.DeleteRegion(region);
             oldLargeRegionList.PrependRegion(region);
@@ -154,9 +154,9 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
-    RegionInfo* region = oldPinnedRegionList.GetHeadRegion();
+    ZPage* region = oldPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* next = region->GetNextRegion();
         if (!IsOldRelocationCandidate(region)) {
             oldPinnedRegionList.DeleteRegion(region);
             recentPinnedRegionList.PrependRegion(region);
@@ -165,7 +165,7 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
     region = recentPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* next = region->GetNextRegion();
         if (IsOldRelocationCandidate(region)) {
             recentPinnedRegionList.DeleteRegion(region);
             oldPinnedRegionList.PrependRegion(region);
@@ -174,7 +174,7 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
     region = oldPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* next = region->GetNextRegion();
         if (collectAll && region->GetRawPointerObjectCount() > 0) {
             oldPinnedRegionList.DeleteRegion(region);
             rawPointerPinnedRegionList.PrependRegion(region);
@@ -183,14 +183,14 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
 }
 
-YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
+YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor)
 {
     PublishTLABStatistics();
     YoungCollectionStats stats;
     uint64_t subStart = TimeUtil::NanoSeconds();
-    RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
+    ZPage* oldRegion = fromRegionList.GetHeadRegion();
     while (oldRegion != nullptr) {
-        RegionInfo* next = oldRegion->GetNextRegion();
+        ZPage* next = oldRegion->GetNextRegion();
         ++stats.fromVisited;
         stats.fromVisitedUnits += oldRegion->GetUnitCount();
         fromRegionList.DeleteRegion(oldRegion);
@@ -200,9 +200,9 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     stats.reparkNs = TimeUtil::NanoSeconds() - subStart;
 
     subStart = TimeUtil::NanoSeconds();
-    RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
+    ZPage* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* next = region->GetNextRegion();
         ++stats.unmovableVisited;
         stats.unmovableVisitedUnits += region->GetUnitCount();
         if (!region->IsYoungRegion()) {
@@ -236,7 +236,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     subStart = TimeUtil::NanoSeconds();
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* next = region->GetNextRegion();
         ++stats.recentFullVisited;
         stats.recentFullVisitedUnits += region->GetUnitCount();
         if (!region->IsYoungRegion()) {
@@ -266,7 +266,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     return stats;
 }
 
-void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
+void RemoveRegionLocked(RegionList* regionList, ZPage* region)
 {
     regionList->DeleteRegionLocked(region);
 }
@@ -275,7 +275,7 @@ namespace {
 // PINNED after ExemptFromRegions snapshots the list (RegionManager.h:507;
 // CI face del->IsFromRegion at post_trace). ZGC skips !is_relocatable
 // (zGeneration.cpp:211-213); a lost claim is the same skip, not a relaxed CHECK.
-bool ClaimFromRegion(RegionList& fromList, RegionInfo* del, const char* site)
+bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
 {
     if (fromList.TryDeleteRegion(del)) {
         return true;
@@ -299,14 +299,14 @@ size_t RegionManager::ExemptFromRegions()
 {
     size_t forwardBytes = 0;
     size_t floatingGarbage = 0;
-    size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
-    std::vector<RegionInfo*> snapshot;
-    fromRegionList.VisitAllRegions([&snapshot](RegionInfo* r) { snapshot.push_back(r); });
+    size_t oldFromBytes = fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
+    std::vector<ZPage*> snapshot;
+    fromRegionList.VisitAllRegions([&snapshot](ZPage* r) { snapshot.push_back(r); });
     std::vector<RelocRegionDesc> descs;
-    std::vector<RegionInfo*> descRegions;
+    std::vector<ZPage*> descRegions;
     descs.reserve(snapshot.size());
     descRegions.reserve(snapshot.size());
-    for (RegionInfo* fromRegion : snapshot) {
+    for (ZPage* fromRegion : snapshot) {
         // ZGeneration::select_relocation_set (zGeneration.cpp:211-213).
         if (!fromRegion->IsRelocatable()) {
             if (ClaimFromRegion(fromRegionList, fromRegion, "allocating")) {
@@ -321,7 +321,7 @@ size_t RegionManager::ExemptFromRegions()
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->IsAllocating() && !fromRegion->IsYoungRegion()) {
-            RegionInfo* del = fromRegion;
+            ZPage* del = fromRegion;
             const unsigned rs = static_cast<unsigned>(del->RelocateObserve());
             const unsigned ke = del->IsKnownEmpty() ? 1u : 0u;
             size_t residual = 0;
@@ -411,7 +411,7 @@ size_t RegionManager::ExemptFromRegions()
             continue;
         }
         if (rawPtrCnt > 0) {
-            RegionInfo* del = fromRegion;
+            ZPage* del = fromRegion;
             DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), liveBytes, rawPtrCnt);
@@ -443,7 +443,7 @@ size_t RegionManager::ExemptFromRegions()
         if (keep[i] != 0) {
             continue;
         }
-        RegionInfo* del = descRegions[i];
+        ZPage* del = descRegions[i];
         DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by relocsel: %zu units, %zu live bytes", del,
             del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
             del->GetUnitCount(), descs[i].liveBytes);
@@ -454,8 +454,8 @@ size_t RegionManager::ExemptFromRegions()
         floatingGarbage += (del->GetRegionSize() - descs[i].liveBytes);
     }
 
-    size_t newFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
-    size_t exemptedFromBytes = unmovableFromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
+    size_t newFromBytes = fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
+    size_t exemptedFromBytes = unmovableFromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
     VLOG(REPORT, "exempt from-space: %zu B - %zu B -> %zu B, %zu B floating garbage, %zu B to forward",
          oldFromBytes, exemptedFromBytes, newFromBytes, floatingGarbage, forwardBytes);
     return newFromBytes - forwardBytes;

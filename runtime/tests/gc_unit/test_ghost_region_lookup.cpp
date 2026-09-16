@@ -35,7 +35,7 @@ int WaitChild(pid_t pid)
     return WIFEXITED(status) ? WEXITSTATUS(status) : -2;
 }
 
-[[maybe_unused]] void RetireGhostAfterLookup(RegionInfo* region)
+[[maybe_unused]] void RetireGhostAfterLookup(ZPage* region)
 {
     region->SetInGhostRegion(0);
 }
@@ -54,7 +54,7 @@ int RunIsUnmovableChild(bool armRetireHook)
     fx.region0->SetInGhostRegion(1);
 #if defined(MRT_GC_UNIT_TESTS)
     if (armRetireHook) {
-        RegionInfo::SetGhostLookupTestHook(RetireGhostAfterLookup);
+        ZPage::SetGhostLookupTestHook(RetireGhostAfterLookup);
     }
 #else
     (void)armRetireHook;
@@ -64,8 +64,8 @@ int RunIsUnmovableChild(bool armRetireHook)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     const bool unmovable = collector.IsUnmovableFromObject(fx.obj0);
 #if defined(MRT_GC_UNIT_TESTS)
-    const bool oneLookup = !armRetireHook || RegionInfo::GhostLookupTestHookCalls() == 1;
-    const bool retired = !armRetireHook || !RegionInfo::InGhostFromRegion(fx.obj0);
+    const bool oneLookup = !armRetireHook || ZPage::GhostLookupTestHookCalls() == 1;
+    const bool retired = !armRetireHook || !ZPage::InGhostFromRegion(fx.obj0);
     _exit(unmovable && oneLookup && retired ? 0 : 3);
 #else
     _exit(unmovable ? 0 : 3);

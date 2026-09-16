@@ -24,7 +24,7 @@ MAddress RemapPendingField(const StoreBarrierEntry& entry, uintptr_t color)
     if (entry.pBase == nullptr) {
         return entry.p;
     }
-    const GCPhase phase = Heap::GetHeap().GetGCPhase(RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(entry.pBase))->IsYoungRegion()
+    const GCPhase phase = Heap::GetHeap().GetGCPhase(Heap::page(reinterpret_cast<MAddress>(entry.pBase))->IsYoungRegion()
         ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return entry.p;
@@ -57,7 +57,7 @@ void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, Remembe
     StoreBarrierEntry remapped = entry;
     remapped.p = RemapPendingField(entry, lastProcessedColor);
     const bool oldSlot = Heap::IsHeapAddress(remapped.p) &&
-        !RegionInfo::GetRegionInfoAt(remapped.p)->IsYoungRegion();
+        !Heap::page(remapped.p)->IsYoungRegion();
     const GCCycleSnapshot old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     const bool oldMark = old.active && (old.phase == GC_PHASE_ENUM || old.phase == GC_PHASE_TRACE ||
                                        old.phase == GC_PHASE_CLEAR_SATB_BUFFER);
@@ -92,7 +92,7 @@ void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, Remembe
             };
             BaseObject* object = collector.make_load_good(field, provenance);
             if (object != nullptr && Heap::IsHeapAddress(object) &&
-                RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
+                Heap::page(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
                 collector.MarkYoungObjectIfActive(object);
             }
         }

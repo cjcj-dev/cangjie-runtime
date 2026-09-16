@@ -271,8 +271,8 @@ GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
         fixture.region0, fixture.region0->livemap(), fixture.region0->GetSnapshotEpoch(),
         fixture.region0->GetRegionAllocPtr(), 0, static_cast<uint8_t>(Generation::Young),
         0, fixture.region0->GetRegionLifeId()));
-    RegionInfo::RetainScope oldSource{ForwardingTable::Owner(old)};
-    RegionInfo::RetainScope newSource{fixture.region0};
+    ZPage::RetainScope oldSource{ForwardingTable::Owner(old)};
+    ZPage::RetainScope newSource{fixture.region0};
     GC_EXPECT_FALSE(oldSource.ok());
     GC_EXPECT_TRUE(oldSource.forwarding() == old);
     GC_EXPECT_TRUE(newSource.ok());
@@ -288,7 +288,7 @@ GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
 GC_TEST(ZForwardingRemembered, PublishedFieldsConsumedOnce)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
     const MAddress field = heap.heapStart + sizeof(void*);
     fwd->relocated_remembered_fields_register(field);
     fwd->relocated_remembered_fields_publish();
@@ -307,7 +307,7 @@ GC_TEST(ZForwardingRemembered, PublishedFieldsConsumedOnce)
 GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
     GC_EXPECT_TRUE(fwd->retain_page());
     fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
@@ -333,7 +333,7 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
             marking ? GCPhase::GC_PHASE_TRACE : GCPhase::GC_PHASE_IDLE);
         collector.PublishGenerationPhase(GCCycleGeneration::OLD,
             marking ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_TRACE);
-        auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+        auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
         fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
         fwd->relocated_remembered_fields_after_relocate();
         fwd->release_page();
@@ -359,7 +359,7 @@ void RememberedWaitEntered(ZForwarding*)
 GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
 {
     GcHeapFixture heap;
-    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
     rememberedWaitEntered.store(false);

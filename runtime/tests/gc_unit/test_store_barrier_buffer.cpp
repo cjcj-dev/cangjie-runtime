@@ -176,7 +176,7 @@ GC_TEST(StoreBuf, EntryCarriesPairedPrevAndInstallColour)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
     const zpointer prev = RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue();
@@ -197,7 +197,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     fx.region1->SetYoungRegionFlag(1);
 
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
@@ -264,7 +264,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     fx.region1->SetYoungRegionFlag(1);
 
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
@@ -323,7 +323,7 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
@@ -353,7 +353,7 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
@@ -395,7 +395,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
 
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     Barrier barrier(collector, rs);
     InstalledBarrierScope installedBarrier(barrier);
@@ -472,7 +472,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     fx.region1->SetYoungRegionFlag(1);
 
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     Barrier barrier(collector, rs);
     AllocBuffer alloc;
@@ -521,7 +521,7 @@ GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
@@ -553,7 +553,7 @@ GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -573,7 +573,7 @@ GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
@@ -596,7 +596,7 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
@@ -639,7 +639,7 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
@@ -664,7 +664,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
     MarkPublicationFixture markFixture;
     fx.region1->SetYoungRegionFlag(1);
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
@@ -688,7 +688,7 @@ GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
@@ -713,7 +713,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
@@ -739,7 +739,7 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
@@ -765,7 +765,7 @@ GC_TEST(StoreBuf, PhaseFlipLeavesOnePreviousAndOneCurrentSlot)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress previousSlot = SlotAt(fx, 8);
     const MAddress currentSlot = SlotAt(fx, 9);
@@ -790,7 +790,7 @@ GC_TEST(StoreBuf, FullAutoFlushKeepsEveryEntry)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const size_t n = StoreBarrierBuffer::Capacity() + 1;
     for (size_t i = 0; i < n; ++i) {
@@ -813,7 +813,7 @@ GC_TEST(StoreBuf, UnflushedPendingInvisibleToDrain)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
     buf.Add(slot, zpointer::null, rs);
@@ -829,7 +829,7 @@ GC_TEST(StoreBuf, FlushBeforeRelocateSnapshotPublishesPending)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
     buf.Add(slot, zpointer::null, rs);
@@ -843,7 +843,7 @@ GC_TEST(StoreBuf, MarkEndSnapshotLeavesCurrentForNextMinor)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 11);
     buf.Add(slot, zpointer::null, rs);
@@ -859,7 +859,7 @@ GC_TEST(StoreBuf, FlushBeforeMinorDoesNotLoseEdges)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const size_t n = 7;
     for (size_t i = 0; i < n; ++i) {
@@ -879,7 +879,7 @@ GC_TEST(StoreBuf, ThreadExitFlushRedeems)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 9);
     buf.Add(slot, zpointer::null, rs);
@@ -894,7 +894,7 @@ GC_TEST(StoreBuf, ReRememberDoesNotFightBuffer)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 10);
     buf.Add(slot, zpointer::null, rs);
@@ -953,7 +953,7 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
                 fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
             }
             RememberedSet rs;
-            rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+            rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
             StoreBufferCollector collector;
             Barrier barrier(collector, rs);
             HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -977,7 +977,7 @@ GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
     GcHeapFixture fx;
     StoreBufferCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, rs);
     HeapSlot<true> native(zpointer::null);
     barrier.AtomicWriteReference(nullptr, native, nullptr, std::memory_order_seq_cst);
@@ -999,7 +999,7 @@ GC_TEST(StoreBuf, BulkPreservesSourceStorageProtocol)
     GcHeapFixture fx;
     StoreBufferCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, rs);
     RootSlot local;
     StorePlain(local, from_object(fx.obj0));
@@ -1047,7 +1047,7 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     GcHeapFixture fx;
     MarkPublicationFixture marking;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
     Barrier barrier(collector, rs);
     InstalledBarrierScope installed(barrier);

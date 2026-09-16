@@ -31,7 +31,7 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
-    static void ParkFrom(RegionManager& manager, RegionInfo* region)
+    static void ParkFrom(RegionManager& manager, ZPage* region)
     {
         manager.fromRegionList.PrependRegion(region);
     }
@@ -82,8 +82,8 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
     PlaceOwnerObjects(fx);
     // Relocation may compact in place and transfer remembered slots.
     Heap::GetHeap().GetRememberedSet().Initialize(
-        fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
-    RegionInfo* region = fx.region0;
+        fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+    ZPage* region = fx.region0;
     region->SetRegionListOwner(nullptr);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
     // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
@@ -102,7 +102,7 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     // ForwardingTable::FindTo.  Build that exact active product state instead
     // of planting a retired table (which FindTo deliberately stopped scanning
     // when relocation-set reset was aligned with ZGC).
-    RegionInfo* region = fx.region0;
+    ZPage* region = fx.region0;
     region->SetRegionListOwner(nullptr);
     from = reinterpret_cast<MAddress>(fx.obj0);
     to = reinterpret_cast<MAddress>(fx.obj1);

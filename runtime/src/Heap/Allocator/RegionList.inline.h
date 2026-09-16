@@ -14,8 +14,8 @@ void RegionList::MergeRegionList(RegionList& srcList)
 {
     RegionList regionList("region list cache");
     srcList.MoveTo(regionList);
-    RegionInfo* head = regionList.GetHeadRegion();
-    RegionInfo* tail = regionList.GetTailRegion();
+    ZPage* head = regionList.GetHeadRegion();
+    ZPage* tail = regionList.GetTailRegion();
     if (head == nullptr) {
         return;
     }
@@ -29,18 +29,18 @@ void RegionList::MergeRegionList(RegionList& srcList)
         listHead->SetPrevRegion(tail);
         listHead = head;
     }
-    for (RegionInfo* node = head; node != nullptr; node = node->GetNextRegion()) {
+    for (ZPage* node = head; node != nullptr; node = node->GetNextRegion()) {
         node->SetRegionListOwner(this);
     }
 }
 
-void RegionList::PrependRegion(RegionInfo* region)
+void RegionList::PrependRegion(ZPage* region)
 {
     std::lock_guard<std::mutex> lock(listMutex);
     PrependRegionLocked(region);
 }
 
-void RegionList::PrependRegionLocked(RegionInfo* region)
+void RegionList::PrependRegionLocked(ZPage* region)
 {
     if (region == nullptr) {
         return;
@@ -65,13 +65,13 @@ void RegionList::PrependRegionLocked(RegionInfo* region)
     listHead = region;
 }
 
-void RegionList::DeleteRegionLocked(RegionInfo* del)
+void RegionList::DeleteRegionLocked(ZPage* del)
 {
     MRT_ASSERT(listHead != nullptr && listTail != nullptr, "illegal region list");
     CHECK_DETAIL(del != nullptr && del->GetRegionListOwner() == this, "region belongs to another list");
 
-    RegionInfo* pre = del->GetPrevRegion();
-    RegionInfo* next = del->GetNextRegion();
+    ZPage* pre = del->GetPrevRegion();
+    ZPage* next = del->GetNextRegion();
 
     del->SetNextRegion(nullptr);
     del->SetPrevRegion(nullptr);

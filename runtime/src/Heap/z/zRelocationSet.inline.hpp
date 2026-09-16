@@ -19,7 +19,7 @@ inline void RegionManager::PrepareFromRegionList()
         size_t markQuarantinedBytes = 0;
         ghostFromRegionList.VisitAllGhostRegions(
             [this, &retainedRegions, &retainedBytes, &markQuarantinedRegions,
-             &markQuarantinedBytes](RegionInfo* region) {
+             &markQuarantinedBytes](ZPage* region) {
             DLOG(REGION, "visit ghost from region %p@[%#zx, %#zx)", region, region->GetRegionStart(),
                  region->GetRegionEnd());
             // Count ghost garbage retention before dispel (historical GhostRetention metric).
@@ -65,7 +65,7 @@ inline void RegionManager::PrepareFromRegionList()
         // that producer contract; do not silently repair its input here.
         CHECK_DETAIL(ForwardingTable::BeginForwardingArena(G, fromRegionList),
                      "forwarding arena budget allocation failed");
-        fromRegionList.VisitAllRegions([](RegionInfo* region) {
+        fromRegionList.VisitAllRegions([](ZPage* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
                  region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd());
             region->PrepareForwardableRegion<G>();

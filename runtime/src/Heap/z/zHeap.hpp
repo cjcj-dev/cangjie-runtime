@@ -107,15 +107,15 @@ public:
 
     static bool IsHeapAddress(const void* addr) { return IsHeapAddress(reinterpret_cast<MAddress>(addr)); }
 
-    static RegionInfo* page(MAddress addr);
+    static ZPage* page(MAddress addr);
     static bool is_in(MAddress addr);
     static bool is_young(MAddress addr);
     static bool is_old(MAddress addr);
     static ZPageTable& page_table();
-    static RegionInfo* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
+    static ZPage* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
                                   bool allowSaferegion = true, bool clearPayload = true,
                                   PageAge age = PageAge::eden);
-    static void free_page(RegionInfo* page);
+    static void free_page(ZPage* page);
 
 
     void DumpHeap(HeapDumpKind kind);

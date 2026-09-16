@@ -177,7 +177,7 @@ private:
 };
 
 struct ArrayClosureResult {
-    RegionInfo* region = nullptr;
+    ZPage* region = nullptr;
     BaseObject* array = nullptr;
     const std::vector<BaseObject*>* children = nullptr;
     size_t markedChildren = 0;
@@ -237,12 +237,12 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     GcHeapFixture fx;
     // Install the synthetic payload reservation before publishing GC roots.
     Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     // An actual multi-unit page keeps all array slots in the mapped heap;
     // each subordinate unit resolves back to the same owning region.
     // ZPageTable::remove/insert (zPageTable.cpp:44-65): retire before reuse.
-    RegionInfo::RetirePage(fx.region1, [] {});
-    fx.region1 = RegionInfo::InitRegion(1, 4, ZPageType::small);
+    ZPage::RetirePage(fx.region1, [] {});
+    fx.region1 = ZPage::InitRegion(1, 4, ZPageType::small);
     fx.region1->SetYoungRegionFlag(major ? 0 : 1);
     fx.region1->SetYoungAge(1);
     // The product allocates and owns this page's livemap (InitRegion ->
@@ -321,7 +321,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(children.back());
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     const size_t rootCount = commonRoot && helpers != 0 ? 17 * 64 : 1;
     std::vector<NativeSlot> rootSlots(rootCount, NativeSlot(zpointer::null));
     std::vector<NativeSlot*> roots(rootCount);

@@ -112,7 +112,7 @@ public:
     bool IsSurvivedObject(const BaseObject* obj) const override
     {
         // ZPage::is_object_live (zPage.inline.hpp:254-256).
-        return RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
+        return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
     }
 
     bool IsGcStarted() const override { return collectorResources.IsGcStarted(); }
@@ -416,7 +416,7 @@ namespace MapleRuntime {
 void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
                                      bool skipKnownEmptyRegions) const
 {
-    VisitPageOwners([&](RegionInfo* region) {
+    VisitPageOwners([&](ZPage* region) {
         if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
             return;
         }
@@ -436,7 +436,7 @@ void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visit
 
 void RegionManager::StampCensusBoundaries()
 {
-    VisitPageOwners([&](RegionInfo* region) {
+    VisitPageOwners([&](ZPage* region) {
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
             region->StampCensusBoundary();
         }
@@ -446,44 +446,44 @@ void RegionManager::StampCensusBoundaries()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-RegionInfo* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr); }
+ZPage* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr); }
 
 ZPageTable& Heap::page_table() { return ZPageTable::heap_table(); }
 
-RegionInfo* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
+ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age)
 {
     RegionManager& manager = static_cast<RegionSpace&>(GetHeap().GetAllocator()).GetRegionManager();
-    RegionInfo* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+    ZPage* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
     if (page != nullptr && page_table().get(page->GetRegionStart()) != page) {
         page_table().insert(page);
     }
     return page;
 }
 
-void Heap::free_page(RegionInfo* page)
+void Heap::free_page(ZPage* page)
 {
     if (page == nullptr) {
         return;
     }
-    RegionInfo::RetirePage(page, [] {});
+    ZPage::RetirePage(page, [] {});
 }
 
 bool Heap::is_in(MAddress addr)
 {
-    RegionInfo* p = page(addr);
+    ZPage* p = page(addr);
     return p != nullptr && p->is_in(to_zaddress(addr));
 }
 
 bool Heap::is_young(MAddress addr)
 {
-    RegionInfo* p = page(addr);
+    ZPage* p = page(addr);
     return p != nullptr && p->IsYoungRegion();
 }
 
 bool Heap::is_old(MAddress addr)
 {
-    RegionInfo* p = page(addr);
+    ZPage* p = page(addr);
     return p != nullptr && !p->IsYoungRegion();
 }
 

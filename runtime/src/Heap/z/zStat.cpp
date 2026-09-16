@@ -586,7 +586,7 @@ void ZStatMutatorAllocRate::update_sampling_granule()
         softMax = 256 * MB;
     }
     size_t granule = softMax / samplingHeapGranules;
-    const size_t unit = RegionInfo::UNIT_SIZE == 0 ? 4096 : RegionInfo::UNIT_SIZE;
+    const size_t unit = ZPage::UNIT_SIZE == 0 ? 4096 : ZPage::UNIT_SIZE;
     granule = AlignUp(granule, unit);
     if (granule == 0) {
         granule = unit;

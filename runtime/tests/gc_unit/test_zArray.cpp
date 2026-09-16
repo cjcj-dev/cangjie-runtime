@@ -374,7 +374,7 @@ GC_TEST(ZActivatedArray, unlocked_add_if_activated)
     GC_EXPECT_FALSE(array.is_activated());
 }
 
-// Product wiring: RegionInfo::RetirePage schedules on the page allocator's
+// Product wiring: ZPage::RetirePage schedules on the page allocator's
 // ZSafeDelete (zPageAllocator.cpp:2248-2250) and the page-owner walk brackets
 // safe destroy (zPageTable.cpp:83-98). A page retired during the walk is
 // retired exactly once, after the walk ends; outside a walk it is immediate.
@@ -383,9 +383,9 @@ GC_TEST(ZSafeDelete, page_retirement_defers_until_page_walk_ends)
     GcHeapFixture fx;
     std::atomic<int> retired{ 0 };
     int seenDuringWalk = -1;
-    RegionInfo::VisitPageOwners([&](RegionInfo* page) {
+    ZPage::VisitPageOwners([&](ZPage* page) {
         if (page == fx.region0) {
-            RegionInfo::RetirePage(page, [&] { retired.fetch_add(1); });
+            ZPage::RetirePage(page, [&] { retired.fetch_add(1); });
             seenDuringWalk = retired.load();
         }
     });
@@ -394,6 +394,6 @@ GC_TEST(ZSafeDelete, page_retirement_defers_until_page_walk_ends)
     // Target invariant: the deferred retirement ran once after the walk.
     GC_EXPECT_EQ(retired.load(), 1);
 
-    RegionInfo::RetirePage(fx.region1, [&] { retired.fetch_add(1); });
+    ZPage::RetirePage(fx.region1, [&] { retired.fetch_add(1); });
     GC_EXPECT_EQ(retired.load(), 2);
 }

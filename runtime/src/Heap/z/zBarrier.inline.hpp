@@ -39,7 +39,7 @@ inline void Barrier::MarkIfYoung(zaddress address) const
 {
     BaseObject* object = to_object(address);
     if (Heap::IsHeapAddress(object) &&
-        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
+        Heap::page(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
         MarkYoung(address);
     }
 }

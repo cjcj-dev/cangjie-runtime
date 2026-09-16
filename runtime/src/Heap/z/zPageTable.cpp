@@ -80,12 +80,12 @@ ZGenerationPagesIterator::ZGenerationPagesIterator(const ZPageTable* page_table,
     : _iterator(page_table), _generation_id(id), _page_allocator(page_allocator)
 {
     (void)_page_allocator;
-    RegionInfo::EnableSafeDestroy();
+    ZPage::EnableSafeDestroy();
 }
 
 ZGenerationPagesIterator::~ZGenerationPagesIterator()
 {
-    RegionInfo::DisableSafeDestroy();
+    ZPage::DisableSafeDestroy();
 }
 
 bool ZGenerationPagesIterator::next(ZPage** page)
@@ -104,12 +104,12 @@ ZGenerationPagesParallelIterator::ZGenerationPagesParallelIterator(const ZPageTa
                                                                    ZPageAllocator* page_allocator)
     : _iterator(page_table->map()), _generation_id(id), _page_allocator(page_allocator)
 {
-    RegionInfo::EnableSafeDestroy();
+    ZPage::EnableSafeDestroy();
 }
 
 ZGenerationPagesParallelIterator::~ZGenerationPagesParallelIterator()
 {
-    RegionInfo::DisableSafeDestroy();
+    ZPage::DisableSafeDestroy();
 }
 
 } // namespace MapleRuntime

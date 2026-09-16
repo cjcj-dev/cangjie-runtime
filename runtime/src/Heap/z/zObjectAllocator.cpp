@@ -50,7 +50,7 @@
 
 namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
-void (*RegionManager::testPinnedPageAcquired)(RegionInfo*) = nullptr;
+void (*RegionManager::testPinnedPageAcquired)(ZPage*) = nullptr;
 #endif
 // ThreadLocalAllocBuffer::initial_desired_size (cpp:265): a new thread
 // starts with the published allocation fraction instead of a fixed extent.
@@ -113,17 +113,17 @@ RegionManager::PerAgeObjectAllocator::PerAgeObjectAllocator(PageAge pageAge)
     : age(pageAge), sharedSmallPage(nullptr) {}
 
 // zHeap.cpp:229: shared-page TLAB accounting includes only small eden pages.
-static bool IsSmallEdenPage(const RegionInfo* page)
+static bool IsSmallEdenPage(const ZPage* page)
 {
     return page->IsSmallRegion() && page->IsYoungRegion() &&
            page->GetYoungAge() == static_cast<uint8_t>(untype(PageAge::eden));
 }
 
 // ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
-RegionInfo* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
+ZPage* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
                                              PageAge age, bool nonBlocking)
 {
-    RegionInfo* page = Heap::alloc_page(units, role, false, !nonBlocking, true, age);
+    ZPage* page = Heap::alloc_page(units, role, false, !nonBlocking, true, age);
     if (page == nullptr) { return nullptr; }
     page->SetYoungRegionFlag(age != PageAge::old);
     page->SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
@@ -143,7 +143,7 @@ RegionInfo* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
 
 // ZObjectAllocator::PerAge::undo_alloc_page: this unpublished candidate was
 // never used by a caller. Undo its page charge, not a TLAB's ownership.
-void RegionManager::UndoSharedPage(RegionInfo* page)
+void RegionManager::UndoSharedPage(ZPage* page)
 {
     recentFullRegionList.DeleteRegion(page);
     RecentFullAccounting::Dequeue(1, page->GetUnitCount());
@@ -152,7 +152,7 @@ void RegionManager::UndoSharedPage(RegionInfo* page)
     }
     // ZHeap::undo_alloc_page: remove the unused page-table entry and return
     // the extent without suspending a caller holding an unpublished object.
-    RegionInfo::RetirePage(page, [this, page] {
+    ZPage::RetirePage(page, [this, page] {
         const size_t units = page->GetUnitCount();
         const size_t index = page->GetUnitIdx();
         page->InitFreeUnits();
@@ -167,22 +167,22 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
     if (size > GetLargeObjectThreshold()) {
         // ZObjectAllocator::PerAge::alloc_large_object. This runtime has no
         // medium page class; objects above its small limit use dedicated pages.
-        const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
-        RegionInfo* page = AllocateSharedPage(units, ZPageType::large,
+        const size_t units = AlignUp(size, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
+        ZPage* page = AllocateSharedPage(units, ZPageType::large,
                                                allocator.age, nonBlocking);
         return page == nullptr ? 0 : page->Alloc(size);
     }
     // ZObjectAllocator::PerAge::shared_small_page_addr / alloc_small_object.
     // Keep this stable slot address across refill; a safepoint can retire its
     // value, and the compare-exchange below explicitly handles that case.
-    RegionInfo** const shared = allocator.shared_small_page_addr();
-    RegionInfo* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
+    ZPage** const shared = allocator.shared_small_page_addr();
+    ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
     uintptr_t addr = page == nullptr ? 0 : page->AtomicAlloc(size);
     if (addr != 0) { return addr; }
 
     // zObjectAllocator.cpp:78-116: allocate before publishing the candidate,
     // retry after retirement or exhaustion, and undo a losing page allocation.
-    RegionInfo* fresh = AllocateSharedPage(maxUnitCountPerRegion, ZPageType::small,
+    ZPage* fresh = AllocateSharedPage(maxUnitCountPerRegion, ZPageType::small,
                                            allocator.age, nonBlocking);
     if (fresh == nullptr) { return 0; }
     addr = fresh->Alloc(size);
@@ -211,7 +211,7 @@ void RegionManager::RetireSharedPages(PageAgeRange ages)
     }
 }
 
-RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem, bool youngRegion,
+ZPage* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem, bool youngRegion,
                                                    bool allowSaferegion)
 {
     // ZHeap::max_tlab_size / unsafe_max_tlab_alloc (zHeap.cpp:144-160):
@@ -219,8 +219,8 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
     if (size == 0 || size > GetThreadLocalRegionSize()) {
         return nullptr;
     }
-    const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
-    RegionInfo* region = Heap::alloc_page(units, ZPageType::small, expectPhysicalMem,
+    const size_t units = AlignUp(size, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
+    ZPage* region = Heap::alloc_page(units, ZPageType::small, expectPhysicalMem,
                                     allowSaferegion, true, youngRegion ? PageAge::eden : PageAge::old);
     if (region != nullptr) {
         {
@@ -245,7 +245,7 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
 // ZHeap::undo_alloc_page (zHeap.cpp:270): only a failed publication of
 // a newly allocated, unused backing region cancels its allocation charge.
 // GC retirement/reclamation is not an undo and must retain that cycle's usage.
-void RegionManager::UndoThreadLocalRegionAllocation(RegionInfo* region)
+void RegionManager::UndoThreadLocalRegionAllocation(ZPage* region)
 {
     CHECK(region != nullptr && region->IsEmpty() && region->IsThreadLocalRegion());
     if (region->IsYoungRegion()) {

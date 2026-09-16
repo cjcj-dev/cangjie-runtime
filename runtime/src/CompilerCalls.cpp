@@ -985,7 +985,7 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     StackManager::RecordLiteFrameInfos(frame, 4); // record 4 frames
     pinnedArrayRecorder.RemoveBtInfo(rawPtr, Mutator::GetMutator(), frame);
 #endif
-    auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(rawPtr));
+    auto regionInfo = Heap::page(reinterpret_cast<uintptr_t>(rawPtr));
     (void)regionInfo->DecRawPointerObjectCount();
     (void)CJThreadPreemptOffCntSub();
 }

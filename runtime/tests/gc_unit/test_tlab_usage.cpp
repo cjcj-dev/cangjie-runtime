@@ -32,9 +32,9 @@ GC_TEST(TLABUsage, BoundsAndDemand)
     AllocBuffer buffer;
     buffer.ClearRegion();
     std::fprintf(stderr, "TLAB_EMPTY_IDENTITY product=%p caller=%p\n",
-                 static_cast<void*>(buffer.GetRegion()), static_cast<void*>(RegionInfo::NullRegion()));
-    GC_EXPECT_TRUE(buffer.GetRegion() == RegionInfo::NullRegion());
-    const size_t unit = RegionInfo::UNIT_SIZE;
+                 static_cast<void*>(buffer.GetRegion()), static_cast<void*>(ZPage::NullRegion()));
+    GC_EXPECT_TRUE(buffer.GetRegion() == ZPage::NullRegion());
+    const size_t unit = ZPage::UNIT_SIZE;
     const size_t maximum = 32 * unit;
     GC_EXPECT_EQ(buffer.ComputeTLABSize(0, maximum), unit);
     GC_EXPECT_EQ(buffer.ComputeTLABSize(unit, maximum), 2 * unit);
@@ -95,13 +95,13 @@ GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
 {
     GcHeapFixture fixture;
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    RegionInfo* twoUnits = RegionInfo::InitRegion(2, 2, ZPageType::small);
+    ZPage* twoUnits = ZPage::InitRegion(2, 2, ZPageType::small);
     const size_t before = manager.GetYoungAllocatedSize();
     fixture.region0->SetYoungRegionFlag(1);
     twoUnits->SetYoungRegionFlag(1);
-    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, 3 * RegionInfo::UNIT_SIZE);
+    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, 3 * ZPage::UNIT_SIZE);
     twoUnits->SetYoungRegionFlag(0);
-    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, RegionInfo::UNIT_SIZE);
+    GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, ZPage::UNIT_SIZE);
     fixture.region0->SetYoungRegionFlag(0);
     GC_EXPECT_EQ(manager.GetYoungAllocatedSize(), before);
 }
@@ -125,12 +125,12 @@ void* AllocateThroughCycle(void*)
     const size_t initial = buffer->ComputeTLABSize(objectSize, maximum);
     size_t backingBytes = 0;
     size_t requestedBytes = 0;
-    RegionInfo* previous = nullptr;
+    ZPage* previous = nullptr;
     for (size_t bytes = 0; bytes < 2 * MB; bytes += objectSize) {
         if (MCC_NewObject(type, objectSize) == nullptr) {
             return reinterpret_cast<void*>(1);
         }
-        RegionInfo* current = buffer->GetRegion();
+        ZPage* current = buffer->GetRegion();
         if (current != previous) {
             backingBytes += current->GetRegionSize();
             previous = current;

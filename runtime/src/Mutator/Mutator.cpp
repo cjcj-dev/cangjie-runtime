@@ -1140,7 +1140,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             }
             // interiorstart: a livemap-driven "recover the base of an interior root" branch
             // stood here and has been deleted -- it read IsOwnerSurvivedObject as a start
-            // predicate when MarkBits makes it a coverage predicate (RegionInfo.h AdmitForRoute
+            // predicate when MarkBits makes it a coverage predicate (ZPage.h AdmitForRoute
             // states this), so the base it recovered was the last covered slot of the *previous*
             // object.  Measured on this workload: root offset 29368, "base" 29360, which is 40
             // bytes inside a 48-byte object at 29320.  The root itself reads rootSurvived=0

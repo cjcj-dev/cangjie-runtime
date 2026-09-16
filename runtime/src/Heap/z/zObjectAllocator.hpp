@@ -14,12 +14,12 @@
 namespace MapleRuntime {
 // zObjectAllocator.cpp:48-54 (per-CPU shared small pages are always in use;
 // ZHeuristics::use_per_cpu_shared_small_pages belongs to the allocator package).
-inline RegionInfo** RegionManager::PerAgeObjectAllocator::shared_small_page_addr()
+inline ZPage** RegionManager::PerAgeObjectAllocator::shared_small_page_addr()
 {
     return sharedSmallPage.addr();
 }
 
-inline RegionInfo* const* RegionManager::PerAgeObjectAllocator::shared_small_page_addr() const
+inline ZPage* const* RegionManager::PerAgeObjectAllocator::shared_small_page_addr() const
 {
     return sharedSmallPage.addr();
 }
@@ -34,7 +34,7 @@ inline RegionManager::PerAgeObjectAllocator* RegionManager::allocator(PageAge ag
 
 inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
 {
-    RegionInfo* page = allocator(PageAge::old)->pinnedPage.load(std::memory_order_acquire);
+    ZPage* page = allocator(PageAge::old)->pinnedPage.load(std::memory_order_acquire);
     return page == nullptr ? 0 : page->Alloc(size);
 }
 
@@ -60,7 +60,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 #if defined(__EULER__)
         needUnitCount = maxUnitCountPerPinnedRegion;
 #endif
-        RegionInfo* region = Heap::alloc_page(needUnitCount, ZPageType::small);
+        ZPage* region = Heap::alloc_page(needUnitCount, ZPageType::small);
         if (region == nullptr) {
             return 0;
         }
@@ -102,8 +102,8 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 
 inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
     {
-        size_t regionCount = (size + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
-        RegionInfo* region = Heap::alloc_page(regionCount, ZPageType::large,
+        size_t regionCount = (size + ZPage::UNIT_SIZE - 1) / ZPage::UNIT_SIZE;
+        ZPage* region = Heap::alloc_page(regionCount, ZPageType::large,
                                         false, true, clearPayload, PageAge::eden);
         if (region == nullptr) {
             return 0;
@@ -120,7 +120,7 @@ inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
         return addr;
     }
 
-inline void RegionManager::EnlistFullThreadLocalRegion(RegionInfo* region) noexcept
+inline void RegionManager::EnlistFullThreadLocalRegion(ZPage* region) noexcept
     {
         MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
 
@@ -136,7 +136,7 @@ inline void RegionManager::EnlistFullThreadLocalRegion(RegionInfo* region) noexc
         RecentFullAccounting::Enqueue(1, region->GetUnitCount());
     }
 
-inline void RegionManager::RemoveThreadLocalRegion(RegionInfo* region) noexcept
+inline void RegionManager::RemoveThreadLocalRegion(ZPage* region) noexcept
     {
         MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
         tlRegionList.DeleteRegion(region);

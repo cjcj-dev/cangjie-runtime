@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Eth: region young-age / generation face (JDK test_zPageAge spirit, no GPL).
-// Product: RegionInfo::SetYoungAge / GetYoungAge / IsYoungRegion / MAX_YOUNG_AGE.
+// Product: ZPage::SetYoungAge / GetYoungAge / IsYoungRegion / MAX_YOUNG_AGE.
 // We are a generational GC; age bits had zero unit coverage before this file.
 
 #include <cstdint>
@@ -20,7 +20,7 @@ using namespace MapleRuntime::GcUnit;
 GC_TEST(RegionAge, YoungAgeRoundTrip)
 {
     GcHeapFixture fx;
-    RegionInfo* r = fx.region0;
+    ZPage* r = fx.region0;
     r->SetYoungAge(0);
     GC_EXPECT_EQ(r->GetYoungAge(), 0u);
     r->SetYoungAge(1);
@@ -35,9 +35,9 @@ GC_TEST(RegionAge, YoungAgeRoundTrip)
 GC_TEST(RegionAge, MaxYoungAgeBound)
 {
     GcHeapFixture fx;
-    GC_EXPECT_TRUE(RegionInfo::MAX_YOUNG_AGE >= 14u);
-    fx.region0->SetYoungAge(RegionInfo::MAX_YOUNG_AGE);
-    GC_EXPECT_EQ(fx.region0->GetYoungAge(), static_cast<unsigned>(RegionInfo::MAX_YOUNG_AGE));
+    GC_EXPECT_TRUE(ZPage::MAX_YOUNG_AGE >= 14u);
+    fx.region0->SetYoungAge(ZPage::MAX_YOUNG_AGE);
+    GC_EXPECT_EQ(fx.region0->GetYoungAge(), static_cast<unsigned>(ZPage::MAX_YOUNG_AGE));
 }
 
 GC_TEST(RegionAge, YoungFlagIndependentOfAge)

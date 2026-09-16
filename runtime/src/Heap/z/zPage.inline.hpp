@@ -16,48 +16,48 @@
 
 namespace MapleRuntime {
 
-inline bool RegionInfo::IsCompacted() const
+inline bool ZPage::IsCompacted() const
     {
-        auto owner = ForwardingTable::RetainPageOwner(const_cast<RegionInfo*>(this));
+        auto owner = ForwardingTable::RetainPageOwner(const_cast<ZPage*>(this));
         return owner && owner->is_done() && owner->in_place();
     }
 
-inline bool RegionInfo::IsRoutingState()
+inline bool ZPage::IsRoutingState()
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
         return owner && owner->is_claimed() && !owner->is_done();
     }
 
-inline ZLiveMap* RegionInfo::livemap() const
+inline ZLiveMap* ZPage::livemap() const
 {
-    return __atomic_load_n(&metadata.livemap, std::memory_order_acquire);
+    return __atomic_load_n(&_scratch.livemap, std::memory_order_acquire);
 }
 
-inline ZForwarding* RegionInfo::GetFromPageCarrier() const
+inline ZForwarding* ZPage::GetFromPageCarrier() const
     {
         ZForwarding* carrier = ForwardingTable::RetainPageOwner(this).get();
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 
-inline bool RegionInfo::HasFromPageMetadata() const
+inline bool ZPage::HasFromPageMetadata() const
     {
         const ZForwarding::FromPageView* from = GetFromPageView();
         return from != nullptr && (from->lifeId == GetRegionLifeId());
     }
 
-inline ZLiveMap* RegionInfo::FromPageLiveMap() const
+inline ZLiveMap* ZPage::FromPageLiveMap() const
 {
     const ZForwarding::FromPageView* from = GetFromPageView();
     return from == nullptr ? nullptr : from->livemap;
 }
 
-inline Generation RegionInfo::GetRouteMarkGeneration() const
+inline Generation ZPage::GetRouteMarkGeneration() const
     {
         const ZForwarding::FromPageView* from = GetFromPageView();
         return from == nullptr ? GetOwnerGeneration() : static_cast<Generation>(from->owner);
     }
 
-inline bool RegionInfo::IsFromPageAllocating() const
+inline bool ZPage::IsFromPageAllocating() const
 {
     const ZForwarding::FromPageView* from = GetFromPageView();
     return from != nullptr && from->birthSequence == from->epoch;
@@ -65,7 +65,7 @@ inline bool RegionInfo::IsFromPageAllocating() const
 
 // The from page is read through the livemap the carrier retained; the page
 // identity (generation, geometry) is the one published with it.
-inline bool RegionInfo::IsFromPageSurvivedObject(size_t offset) const
+inline bool ZPage::IsFromPageSurvivedObject(size_t offset) const
     {
         const ZForwarding::FromPageView* from = GetFromPageView();
         if (from == nullptr) {
@@ -86,7 +86,7 @@ inline bool RegionInfo::IsFromPageSurvivedObject(size_t offset) const
         return map->get(id, bit_index(to_zaddress(GetRegionStart() + offset)));
     }
 
-inline bool RegionInfo::IsRouteSurvivedObject(size_t offset)
+inline bool ZPage::IsRouteSurvivedObject(size_t offset)
     {
         if (!HasFromPageMetadata()) {
             return is_object_live(to_zaddress(GetRegionStart() + offset));
@@ -94,7 +94,7 @@ inline bool RegionInfo::IsRouteSurvivedObject(size_t offset)
         return IsFromPageSurvivedObject(offset);
     }
 
-inline bool RegionInfo::IsRouteMarkedObject(size_t offset)
+inline bool ZPage::IsRouteMarkedObject(size_t offset)
     {
         const ZForwarding::FromPageView* from = GetFromPageView();
         if (from == nullptr) {
@@ -115,7 +115,7 @@ inline bool RegionInfo::IsRouteMarkedObject(size_t offset)
         return map->get(id, bit_index(to_zaddress(GetRegionStart() + offset)) + 1);
     }
 
-inline bool RegionInfo::IsRouteKnownEmpty()
+inline bool ZPage::IsRouteKnownEmpty()
     {
         const ZForwarding::FromPageView* from = GetFromPageView();
         if (from == nullptr) {
@@ -133,7 +133,7 @@ inline bool RegionInfo::IsRouteKnownEmpty()
         return map != nullptr && map->is_marked(id) && map->live_bytes() == 0;
     }
 
-inline void RegionInfo::BindFromPageLiveMapIfNull()
+inline void ZPage::BindFromPageLiveMapIfNull()
     {
         if (FromPageLiveMap() != nullptr) {
             return;
@@ -152,26 +152,26 @@ inline void RegionInfo::BindFromPageLiveMapIfNull()
                      "from-page forwarding carrier missing while binding live face region=%p", this);
     }
 
-inline void RegionInfo::StampCensusBoundary()
+inline void ZPage::StampCensusBoundary()
     {
         uintptr_t offset = GetRegionAllocPtr() - GetRegionStart();
-        metadata.censusBoundaryOffset =
+        _scratch.censusBoundaryOffset =
             static_cast<uint32_t>(std::min<uintptr_t>(offset, std::numeric_limits<uint32_t>::max()));
     }
 
 // zPage.cpp:42: _livemap(object_max_count()). Constructed once per page life.
-inline void RegionInfo::InitializeLiveMap()
+inline void ZPage::InitializeLiveMap()
     {
         CHECK(livemap() == nullptr);
         ZLiveMap* live = new ZLiveMap(object_max_count());
-        __atomic_store_n(&metadata.livemap, live, std::memory_order_release);
+        __atomic_store_n(&_scratch.livemap, live, std::memory_order_release);
     }
 
 // ---- ZPage livemap surface ----
 
 // zPage.inline.hpp:72-101 object_alignment_shift: large pages hold one object
 // at start; small pages use the minimum object alignment.
-inline int RegionInfo::object_alignment_shift() const
+inline int ZPage::object_alignment_shift() const
 {
     switch (type()) {
         case ZPageType::small:
@@ -185,13 +185,13 @@ inline int RegionInfo::object_alignment_shift() const
     }
 }
 
-inline size_t RegionInfo::object_alignment() const
+inline size_t ZPage::object_alignment() const
 {
     return size_t(1) << object_alignment_shift();
 }
 
 // zPage.inline.hpp:57-70 object_max_count.
-inline uint32_t RegionInfo::object_max_count() const
+inline uint32_t ZPage::object_max_count() const
 {
     if (type() == ZPageType::large) {
         return 1;
@@ -200,47 +200,47 @@ inline uint32_t RegionInfo::object_max_count() const
 }
 
 // zPage.inline.hpp:188-195 is_in: [start, top).
-inline bool RegionInfo::is_in(zaddress addr) const
+inline bool ZPage::is_in(zaddress addr) const
 {
     const MAddress address = raw(addr);
     return address >= GetRegionStart() && address < GetRegionAllocPtr();
 }
 
 // zPage.inline.hpp:223-226.
-inline bool RegionInfo::is_marked() const
+inline bool ZPage::is_marked() const
 {
     DCHECK_D(IsRelocatable(), "Invalid page state");
     return livemap()->is_marked(generation_id());
 }
 
 // zPage.inline.hpp:228-230.
-inline BitMap::idx_t RegionInfo::bit_index(zaddress addr) const
+inline BitMap::idx_t ZPage::bit_index(zaddress addr) const
 {
     return (GetAddressOffset(raw(addr)) >> object_alignment_shift()) * 2;
 }
 
 // zPage.inline.hpp:232-235.
-inline MAddress RegionInfo::offset_from_bit_index(BitMap::idx_t index) const
+inline MAddress ZPage::offset_from_bit_index(BitMap::idx_t index) const
 {
     const uintptr_t l_offset = ((index / 2) << object_alignment_shift());
     return GetRegionStart() + l_offset;
 }
 
 // zPage.inline.hpp:237-240.
-inline BaseObject* RegionInfo::object_from_bit_index(BitMap::idx_t index) const
+inline BaseObject* ZPage::object_from_bit_index(BitMap::idx_t index) const
 {
     return from_region_addr(offset_from_bit_index(index));
 }
 
 // zPage.inline.hpp:242-252.
-inline bool RegionInfo::is_live_bit_set(zaddress addr) const
+inline bool ZPage::is_live_bit_set(zaddress addr) const
 {
     DCHECK_D(IsRelocatable(), "Invalid page state");
     const BitMap::idx_t index = bit_index(addr);
     return livemap()->get(generation_id(), index);
 }
 
-inline bool RegionInfo::is_strong_bit_set(zaddress addr) const
+inline bool ZPage::is_strong_bit_set(zaddress addr) const
 {
     DCHECK_D(IsRelocatable(), "Invalid page state");
     const BitMap::idx_t index = bit_index(addr);
@@ -248,34 +248,34 @@ inline bool RegionInfo::is_strong_bit_set(zaddress addr) const
 }
 
 // zPage.inline.hpp:254-260: an allocating page is implicitly live.
-inline bool RegionInfo::is_object_live(zaddress addr) const
+inline bool ZPage::is_object_live(zaddress addr) const
 {
     return IsAllocating() || is_live_bit_set(addr);
 }
 
-inline bool RegionInfo::is_object_strongly_live(zaddress addr) const
+inline bool ZPage::is_object_strongly_live(zaddress addr) const
 {
     return IsAllocating() || is_strong_bit_set(addr);
 }
 
 // zPage.inline.hpp:262-282: marking-only readers.
-inline bool RegionInfo::is_object_marked_live(zaddress addr) const
+inline bool ZPage::is_object_marked_live(zaddress addr) const
 {
     return is_object_live(addr);
 }
 
-inline bool RegionInfo::is_object_marked_strong(zaddress addr) const
+inline bool ZPage::is_object_marked_strong(zaddress addr) const
 {
     return is_object_strongly_live(addr);
 }
 
-inline bool RegionInfo::is_object_marked(zaddress addr, bool finalizable) const
+inline bool ZPage::is_object_marked(zaddress addr, bool finalizable) const
 {
     return finalizable ? is_object_marked_live(addr) : is_object_marked_strong(addr);
 }
 
 // zPage.inline.hpp:284-294.
-inline bool RegionInfo::mark_object(zaddress addr, bool finalizable, bool& inc_live)
+inline bool ZPage::mark_object(zaddress addr, bool finalizable, bool& inc_live)
 {
     DCHECK_D(IsRelocatable(), "Invalid page state");
     DCHECK_D(is_in(addr), "Invalid address");
@@ -286,24 +286,24 @@ inline bool RegionInfo::mark_object(zaddress addr, bool finalizable, bool& inc_l
 }
 
 // zPage.inline.hpp:296-317.
-inline void RegionInfo::inc_live(uint32_t objects, size_t bytes)
+inline void ZPage::inc_live(uint32_t objects, size_t bytes)
 {
     livemap()->inc_live(objects, bytes);
 }
 
-inline uint32_t RegionInfo::live_objects() const
+inline uint32_t ZPage::live_objects() const
 {
     return livemap()->live_objects();
 }
 
-inline size_t RegionInfo::live_bytes() const
+inline size_t ZPage::live_bytes() const
 {
     return livemap()->live_bytes();
 }
 
 // zPage.inline.hpp:319-331.
 template <typename Function>
-inline void RegionInfo::object_iterate(Function function)
+inline void ZPage::object_iterate(Function function)
 {
     auto do_bit = [&](BitMap::idx_t index) -> bool {
         BaseObject* const obj = object_from_bit_index(index);
@@ -318,7 +318,7 @@ inline void RegionInfo::object_iterate(Function function)
 }
 
 // zPage.inline.hpp:371-386.
-inline MAddress RegionInfo::find_base_unsafe(MAddress p)
+inline MAddress ZPage::find_base_unsafe(MAddress p)
 {
     if (IsLargeRegion()) {
         return GetRegionStart();
@@ -337,25 +337,25 @@ inline MAddress RegionInfo::find_base_unsafe(MAddress p)
 }
 
 // zPage.inline.hpp:388-392.
-inline MAddress RegionInfo::find_base(MAddress p)
+inline MAddress ZPage::find_base(MAddress p)
 {
     DCHECK_D(is_marked(), "Should be marked");
     return find_base_unsafe(p);
 }
 
 // zPage.cpp:115-117.
-inline void RegionInfo::reset_livemap()
+inline void ZPage::reset_livemap()
 {
     livemap()->reset();
 }
 
-inline ALWAYS_INLINE size_t RegionInfo::GetAddressOffset(MAddress address) const
+inline ALWAYS_INLINE size_t ZPage::GetAddressOffset(MAddress address) const
     {
         DCHECK(GetRegionStart() <= address);
         return (address - GetRegionStart());
     }
 
-inline void RegionInfo::RetirePage(RegionInfo* region, std::function<void()> retire)
+inline void ZPage::RetirePage(ZPage* region, std::function<void()> retire)
     {
         CHECK(ZPageTable::heap_table().get(region->GetRegionStart()) == region);
         ZPageTable::heap_table().remove(region);
@@ -364,17 +364,17 @@ inline void RegionInfo::RetirePage(RegionInfo* region, std::function<void()> ret
         safeDestroy.schedule_delete(new PageRetirement{ std::move(retire) });
     }
 
-inline void RegionInfo::EnableSafeDestroy()
+inline void ZPage::EnableSafeDestroy()
     {
         safeDestroy.enable_deferred_delete();
     }
 
-inline void RegionInfo::DisableSafeDestroy()
+inline void ZPage::DisableSafeDestroy()
     {
         safeDestroy.disable_deferred_delete();
     }
 
-inline size_t RegionInfo::IndexedUnitCount(const std::vector<ZVirtualMemory>& ranges)
+inline size_t ZPage::IndexedUnitCount(const std::vector<ZVirtualMemory>& ranges)
     {
         std::vector<UnitSegment> segments;
         for (const ZVirtualMemory& range : ranges) {
@@ -383,7 +383,7 @@ inline size_t RegionInfo::IndexedUnitCount(const std::vector<ZVirtualMemory>& ra
         return IndexedUnitCount(segments);
     }
 
-inline size_t RegionInfo::IndexedUnitCount(const std::vector<UnitSegment>& segments)
+inline size_t ZPage::IndexedUnitCount(const std::vector<UnitSegment>& segments)
     {
         CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
         size_t count = 0;
@@ -399,7 +399,7 @@ inline size_t RegionInfo::IndexedUnitCount(const std::vector<UnitSegment>& segme
         return count - 1;
     }
 
-inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vector<ZVirtualMemory>& ranges)
+inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<ZVirtualMemory>& ranges)
     {
         std::vector<UnitSegment> segments;
         for (const ZVirtualMemory& range : ranges) {
@@ -408,7 +408,7 @@ inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vec
         InitializeSegments(metadataEnd, segments);
     }
 
-inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vector<UnitSegment>& segments)
+inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<UnitSegment>& segments)
     {
         totalUnitCount = IndexedUnitCount(segments);
         heapStartAddress = metadataEnd;
@@ -424,7 +424,7 @@ inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vec
                                                  segments.back().End() - segments.front().start, UNIT_SIZE));
     }
 
-inline size_t RegionInfo::FindUnitIndex(uintptr_t address)
+inline size_t ZPage::FindUnitIndex(uintptr_t address)
     {
         auto next = std::upper_bound(unitSegments.begin(), unitSegments.end(), address,
             [](uintptr_t addr, const UnitSegment& segment) { return addr < segment.start; });
@@ -436,7 +436,7 @@ inline size_t RegionInfo::FindUnitIndex(uintptr_t address)
             ? segment.firstIndex + (address - segment.start) / UNIT_SIZE : INVALID_IDX;
     }
 
-inline bool RegionInfo::ContainsUnitRange(uintptr_t start, size_t size)
+inline bool ZPage::ContainsUnitRange(uintptr_t start, size_t size)
     {
         for (const auto& segment : unitSegments) {
             if (start >= segment.start && start < segment.End() && size <= segment.End() - start) {
@@ -446,33 +446,26 @@ inline bool RegionInfo::ContainsUnitRange(uintptr_t start, size_t size)
         return false;
     }
 
-inline void RegionInfo::VisitPageOwners(const std::function<void(RegionInfo*)>& visitor)
+inline void ZPage::VisitPageOwners(const std::function<void(ZPage*)>& visitor)
     {
         // zPageTable.cpp:83-98: the iterator's lifetime brackets safe destroy,
         // including nested iteration and exceptional callback exits.
         SafeDestroyScope iteration;
         ZPageTableIterator iter(&ZPageTable::heap_table());
-        RegionInfo* page = nullptr;
+        ZPage* page = nullptr;
         while (iter.next(&page)) {
             visitor(page);
         }
     }
 
-inline ALWAYS_INLINE RegionInfo* RegionInfo::TryGetRegionInfoAt(uintptr_t allocAddr)
-    {
-        return ZPageTable::heap_table().get(allocAddr);
-    }
+inline ZPage* ZPage::GetZPage(uint32_t idx)
+{
+    return ZPageTable::heap_table().get(GetUnitAddress(idx));
+}
 
-inline RegionInfo* RegionInfo::GetRegionInfoAt(uintptr_t allocAddr)
+inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t allocAddr)
     {
-        RegionInfo* region = TryGetRegionInfoAt(allocAddr);
-        CHECK_DETAIL(region != nullptr, "heap address %#zx has no owning region", allocAddr);
-        return region;
-    }
-
-inline RegionInfo* RegionInfo::GetGhostFromRegionAt(uintptr_t allocAddr)
-    {
-        RegionInfo* region = TryGetRegionInfoAt(allocAddr);
+        ZPage* region = ZPageTable::heap_table().get(allocAddr);
         if (region == nullptr || !region->IsGhostFromRegion()) {
             return nullptr;
         }
@@ -482,7 +475,7 @@ inline RegionInfo* RegionInfo::GetGhostFromRegionAt(uintptr_t allocAddr)
         return region;
     }
 
-inline MAddress RegionInfo::GetUnitAddress(size_t idx)
+inline MAddress ZPage::GetUnitAddress(size_t idx)
     {
         CHECK(idx < totalUnitCount);
         for (const auto& segment : unitSegments) {
@@ -494,55 +487,55 @@ inline MAddress RegionInfo::GetUnitAddress(size_t idx)
         return 0;
     }
 
-inline void RegionInfo::InitFreeRegion(size_t unitIdx, size_t nUnit)
+inline void ZPage::InitFreeRegion(size_t unitIdx, size_t nUnit)
     {
         (void)unitIdx;
         (void)nUnit;
     }
 
-inline ZPageType RegionInfoTypeFor(size_t nUnit, ZPageType uclass)
+inline ZPageType ZPageTypeFor(size_t nUnit, ZPageType uclass)
 {
     if (uclass == ZPageType::large) {
         return ZPageType::large;
     }
-    const size_t bytes = nUnit * RegionInfo::UNIT_SIZE;
+    const size_t bytes = nUnit * ZPage::UNIT_SIZE;
     if (ZPageSizeMediumEnabled && bytes >= ZPageSizeMediumMin && bytes <= ZPageSizeMediumMax) {
         return ZPageType::medium;
     }
     return ZPageType::small;
 }
 
-inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass, PageAge age)
+inline ZPage* ZPage::InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass, PageAge age)
     {
         const MAddress start = GetUnitAddress(unitIdx);
-        ZPage* region = new ZPage(RegionInfoTypeFor(nUnit, uclass), age,
+        ZPage* region = new ZPage(ZPageTypeFor(nUnit, uclass), age,
                                             ZVirtualMemory(ZAddress::offset(to_zaddress_unsafe(start)),
                                                            nUnit * UNIT_SIZE));
         region->InitRegion(nUnit, uclass, age);
         return region;
     }
 
-inline RegionInfo* RegionInfo::InitRegionAt(uintptr_t addr, size_t nUnit, ZPageType uclass)
+inline ZPage* ZPage::InitRegionAt(uintptr_t addr, size_t nUnit, ZPageType uclass)
     {
-        size_t idx = RegionInfo::GetUnitIdxAt(addr);
+        size_t idx = ZPage::GetUnitIdxAt(addr);
         return InitRegion(idx, nUnit, uclass);
     }
 
-inline void RegionInfo::WaitCopiedBeforePayloadWipe(RegionInfo* region, const char* site)
+inline void ZPage::WaitCopiedBeforePayloadWipe(ZPage* region, const char* site)
     {
         if (region == nullptr) {
             return;
         }
         (void)site;
-        ZForwardingLife::WaitPageDone(region->metadata.fwdOwner.load(std::memory_order_acquire));
+        ZForwardingLife::WaitPageDone(region->_scratch.fwdOwner.load(std::memory_order_acquire));
     }
 
-inline void RegionInfo::ClearUnits(size_t idx, size_t cnt)
+inline void ZPage::ClearUnits(size_t idx, size_t cnt)
     {
-        uintptr_t unitAddress = RegionInfo::GetUnitAddress(idx);
-        size_t size = cnt * RegionInfo::UNIT_SIZE;
+        uintptr_t unitAddress = ZPage::GetUnitAddress(idx);
+        size_t size = cnt * ZPage::UNIT_SIZE;
         CHECK(ContainsUnitRange(unitAddress, size));
-        RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(unitAddress);
+        ZPage* wipeRegion = Heap::page(unitAddress);
         WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
 
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
@@ -551,27 +544,27 @@ inline void RegionInfo::ClearUnits(size_t idx, size_t cnt)
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 
-inline bool RegionInfo::IsEmpty() const
+inline bool ZPage::IsEmpty() const
     {
         MRT_ASSERT(IsSmallRegion(), "wrong region type");
         return GetRegionAllocPtr() == GetRegionStart();
     }
 
-inline size_t RegionInfo::GetRegionSize() const
+inline size_t ZPage::GetRegionSize() const
     {
         MAddress regionStart = GetRegionStart();
-        DCHECK(metadata.regionEnd > regionStart);
-        return metadata.regionEnd - regionStart;
+        DCHECK(_scratch.regionEnd > regionStart);
+        return _scratch.regionEnd - regionStart;
     }
 
-inline size_t RegionInfo::GetRegionSizeForDetachCheck() const
+inline size_t ZPage::GetRegionSizeForDetachCheck() const
     {
         const MAddress start = GetRegionStart();
-        const MAddress end = metadata.regionEnd;
+        const MAddress end = _scratch.regionEnd;
         return end > start && ContainsUnitRange(start, end - start) ? end - start : UNIT_SIZE;
     }
 
-inline size_t RegionInfo::GetGhostRegionSize() const
+inline size_t ZPage::GetGhostRegionSize() const
     {
         // The old extent follows the forwarding incarnation. If no carrier is
         // installed (idle/test setup), the only valid extent is the page's
@@ -580,15 +573,15 @@ inline size_t RegionInfo::GetGhostRegionSize() const
         return carrier == nullptr ? GetRegionSize() : carrier->size();
     }
 
-inline size_t RegionInfo::GetAvailableSize() const
+inline size_t ZPage::GetAvailableSize() const
     {
         MRT_ASSERT(IsSmallRegion(), "wrong region type");
         return GetRegionEnd() - GetRegionAllocPtr();
     }
 
-inline void RegionInfo::InitFreeUnits()
+inline void ZPage::InitFreeUnits()
     {
-        InitRegionInfo(GetUnitCount(), ZPageType::small, PageAge::old, false);
+        InitZPage(GetUnitCount(), ZPageType::small, PageAge::old, false);
     }
 
 
@@ -611,7 +604,7 @@ inline void RegionInfo::InitFreeUnits()
 
 
 
-inline bool RegionInfo::IsCompactRouteDestination(MAddress address) const
+inline bool ZPage::IsCompactRouteDestination(MAddress address) const
     {
         // The generation relocation set owns the sole from-to mapping.
         auto owner = ForwardingTable::RetainPageOwner(this);
@@ -623,7 +616,7 @@ inline bool RegionInfo::IsCompactRouteDestination(MAddress address) const
 
 
     template<Generation G>
-inline void RegionInfo::PublishFromPageMetadata()
+inline void ZPage::PublishFromPageMetadata()
     {
         const RegionLifeId life = GetRegionLifeId();
         CHECK_DETAIL(ForwardingTable::PublishFromPageView(
@@ -636,19 +629,19 @@ inline void RegionInfo::PublishFromPageMetadata()
     }
 
     template<Generation G>
-inline __attribute__((always_inline)) void RegionInfo::PublishForwardingCarrier()
+inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     {
         PublishFromPageMetadata<G>();
         SetInGhostRegion(1);
-        metadata.nextRegionIdx0 = metadata.nextRegionIdx;
+        _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
 
     template<Generation G>
-inline void RegionInfo::PrepareForwardableRegion()
+inline void ZPage::PrepareForwardableRegion()
     {
         CHECK(IsFromRegion());
         CHECK(is_small());
-        CHECK(metadata.inGhostFromRegion == 0);
+        CHECK(_scratch.inGhostFromRegion == 0);
         (void)IsForwardingDone();
         // The preceding generation reset removed its forwarding set.
         ClearRelocationResiduals();
@@ -686,19 +679,19 @@ inline void RegionInfo::PrepareForwardableRegion()
 
     }
 
-inline void RegionInfo::ClearGhostRegionBit()
+inline void ZPage::ClearGhostRegionBit()
     {
         if (IsGhostFromRegion()) {
             SetInGhostRegion(0);
         }
     }
 
-inline void RegionInfo::ClearGhostFromRegionBits()
+inline void ZPage::ClearGhostFromRegionBits()
     {
         SetInGhostRegion(0);
     }
 
-inline void RegionInfo::DispelGhostFromRegion()
+inline void ZPage::DispelGhostFromRegion()
     {
         // fwdinflight: this is one of the three edges that retire from-side route state, and
         // it is unconditional -- nothing here waits for a reader. ZGC's equivalent,
@@ -724,17 +717,17 @@ inline void RegionInfo::DispelGhostFromRegion()
         // only page-owned ghost/route state is reset in this body.
     }
 
-inline bool RegionInfo::IsGhostFromRegion() const
+inline bool ZPage::IsGhostFromRegion() const
     {
-        const bool ghost = metadata.regionStateBitField.GetAtomicValue(
+        const bool ghost = _scratch.regionStateBitField.GetAtomicValue(
             RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) != 0;
         if (!ghost) {
             return false;
         }
-        return __atomic_load_n(&metadata.ghostLifeId, __ATOMIC_ACQUIRE) == GetRegionLifeId();
+        return __atomic_load_n(&_scratch.ghostLifeId, __ATOMIC_ACQUIRE) == GetRegionLifeId();
     }
 
-inline void RegionInfo::AssertGhostClearedAfterReuse(size_t nUnit) const
+inline void ZPage::AssertGhostClearedAfterReuse(size_t nUnit) const
     {
         CHECK(!IsGhostFromRegion());
         size_t baseIdx = GetUnitIdx();
@@ -745,45 +738,45 @@ inline void RegionInfo::AssertGhostClearedAfterReuse(size_t nUnit) const
     }
 
 
-inline bool RegionInfo::RetainForwarding()
+inline bool ZPage::RetainForwarding()
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
         return owner && owner->retain_page();
     }
 
-inline void RegionInfo::ReleaseForwarding()
+inline void ZPage::ReleaseForwarding()
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
         CHECK(owner);
         owner->release_page();
     }
 
-inline bool RegionInfo::ClaimForwarding()
+inline bool ZPage::ClaimForwarding()
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
         return owner && owner->claim();
     }
 
-inline void RegionInfo::MarkForwardingDone()
+inline void ZPage::MarkForwardingDone()
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
         if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();
     }
 
-inline bool RegionInfo::IsForwardingDone() const
+inline bool ZPage::IsForwardingDone() const
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
         return owner && owner->is_done();
     }
 
 
-inline int32_t RegionInfo::ForwardingRefCount() const
+inline int32_t ZPage::ForwardingRefCount() const
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
         return owner ? owner->ref_count().load(std::memory_order_acquire) : 0;
     }
 
-inline bool RegionInfo::ForwardingClaimed() const
+inline bool ZPage::ForwardingClaimed() const
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
         return owner && owner->claimed().load(std::memory_order_acquire);
@@ -795,11 +788,11 @@ inline bool RegionInfo::ForwardingClaimed() const
 
 
 
-inline void RegionInfo::SetInGhostRegion(uint8_t flag)
+inline void ZPage::SetInGhostRegion(uint8_t flag)
     {
         const RegionLifeId life = GetRegionLifeId();
-        __atomic_store_n(&metadata.ghostLifeId, life, __ATOMIC_RELEASE);
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
+        __atomic_store_n(&_scratch.ghostLifeId, life, __ATOMIC_RELEASE);
+        _scratch.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
         if (flag != 0) {
         }
     }
@@ -808,28 +801,28 @@ inline void RegionInfo::SetInGhostRegion(uint8_t flag)
 // on the reused slot: the young livemap is parked for the carrier's readers
 // and the slot continues with a fresh map; readers see one or the other,
 // never a missing map.
-inline void RegionInfo::PromoteYoungRegion()
+inline void ZPage::PromoteYoungRegion()
     {
         CHECK_DETAIL(IsYoungRegion(), "cannot promote an old region %p", this);
-        CHECK_DETAIL(metadata.retiredLivemap == nullptr, "region %p promoted twice in one life", this);
+        CHECK_DETAIL(_scratch.retiredLivemap == nullptr, "region %p promoted twice in one life", this);
         ZLiveMap* fresh = new ZLiveMap(object_max_count());
         SetYoungRegionFlag(0);
         SetYoungAge(0);
         ResetPageSequence();
-        metadata.retiredLivemap = livemap();
-        __atomic_store_n(&metadata.livemap, fresh, std::memory_order_release);
+        _scratch.retiredLivemap = livemap();
+        __atomic_store_n(&_scratch.livemap, fresh, std::memory_order_release);
     }
 
-inline void RegionInfo::SetYoungAge(uint8_t age)
+inline void ZPage::SetYoungAge(uint8_t age)
     {
         CHECK(age <= MAX_YOUNG_AGE);
         _age = age == 0 ? PageAge::old : static_cast<PageAge>(age);
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH, age);
+        _scratch.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH, age);
     }
 
-inline uint8_t RegionInfo::GetYoungAge() const
+inline uint8_t ZPage::GetYoungAge() const
     {
-        return static_cast<uint8_t>(metadata.regionStateBitField.GetAtomicValue(
+        return static_cast<uint8_t>(_scratch.regionStateBitField.GetAtomicValue(
                                         RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH) >>
                                     RegionStateBitPos::YOUNG_AGE_FLAG);
     }
@@ -837,133 +830,133 @@ inline uint8_t RegionInfo::GetYoungAge() const
 
 
 // ZPage::is_allocating / is_relocatable (zPage.inline.hpp:180-186).
-inline bool RegionInfo::IsAllocating() const
+inline bool ZPage::IsAllocating() const
 {
     return BirthSequence() == GetSnapshotEpoch();
 }
 
-inline bool RegionInfo::IsRelocatable() const
+inline bool ZPage::IsRelocatable() const
 {
     return BirthSequence() < GetSnapshotEpoch();
 }
 
-inline int32_t RegionInfo::IncRawPointerObjectCount()
+inline int32_t ZPage::IncRawPointerObjectCount()
     {
-        int32_t oldCount = __atomic_fetch_add(&metadata.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
+        int32_t oldCount = __atomic_fetch_add(&_scratch.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
         CHECK_DETAIL(oldCount >= 0, "region %p has wrong raw pointer count %d", this);
         CHECK_DETAIL(oldCount < MAX_RAW_POINTER_COUNT, "inc raw-pointer-count overflow");
         return oldCount;
     }
 
-inline int32_t RegionInfo::DecRawPointerObjectCount()
+inline int32_t ZPage::DecRawPointerObjectCount()
     {
-        int32_t oldCount = __atomic_fetch_sub(&metadata.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
+        int32_t oldCount = __atomic_fetch_sub(&_scratch.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
         CHECK_DETAIL(oldCount > 0, "dec raw-pointer-count underflow, please check whether releaseRawData is overused.");
         return oldCount;
     }
 
-inline bool RegionInfo::CompareAndSwapRawPointerObjectCount(int32_t expectVal, int32_t newVal)
+inline bool ZPage::CompareAndSwapRawPointerObjectCount(int32_t expectVal, int32_t newVal)
     {
-        return __atomic_compare_exchange_n(&metadata.rawPointerObjectCount, &expectVal, newVal, false, __ATOMIC_SEQ_CST,
+        return __atomic_compare_exchange_n(&_scratch.rawPointerObjectCount, &expectVal, newVal, false, __ATOMIC_SEQ_CST,
                                            __ATOMIC_ACQUIRE);
     }
 
-inline uintptr_t RegionInfo::Alloc(size_t size)
+inline uintptr_t ZPage::Alloc(size_t size)
     {
         size_t limit = GetRegionEnd();
-        if (metadata.allocPtr + size <= limit) {
-            uintptr_t addr = metadata.allocPtr;
-            metadata.allocPtr += size;
+        if (_scratch.allocPtr + size <= limit) {
+            uintptr_t addr = _scratch.allocPtr;
+            _scratch.allocPtr += size;
             return addr;
         } else {
             return 0;
         }
     }
 
-inline uintptr_t RegionInfo::AtomicAlloc(size_t size)
+inline uintptr_t ZPage::AtomicAlloc(size_t size)
     {
         // zPage.inline.hpp:451-479: reject an out-of-page top before CAS.
         // Failed allocations must never move the published allocation frontier.
-        uintptr_t addr = __atomic_load_n(&metadata.allocPtr, __ATOMIC_ACQUIRE);
+        uintptr_t addr = __atomic_load_n(&_scratch.allocPtr, __ATOMIC_ACQUIRE);
         const uintptr_t limit = GetRegionEnd();
         for (;;) {
             if (addr > limit || size > limit - addr) {
                 return 0;
             }
             const uintptr_t next = addr + size;
-            if (__atomic_compare_exchange_n(&metadata.allocPtr, &addr, next, false,
+            if (__atomic_compare_exchange_n(&_scratch.allocPtr, &addr, next, false,
                                              __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
                 return addr;
             }
         }
     }
 
-inline bool RegionInfo::UndoAllocObjectAtomic(uintptr_t addr, size_t size)
+inline bool ZPage::UndoAllocObjectAtomic(uintptr_t addr, size_t size)
     {
         uintptr_t expected = addr + size;
-        return __atomic_compare_exchange_n(&metadata.allocPtr, &expected, addr, false, __ATOMIC_ACQ_REL,
+        return __atomic_compare_exchange_n(&_scratch.allocPtr, &expected, addr, false, __ATOMIC_ACQ_REL,
                                            __ATOMIC_ACQUIRE);
     }
 
-inline bool RegionInfo::IsPinnedRegion() const
+inline bool ZPage::IsPinnedRegion() const
     {
         return OnNamedList("old pinned regions") || OnNamedList("recent pinned regions");
     }
 
-inline RegionInfo* RegionInfo::GetPrevRegion() const
+inline ZPage* ZPage::GetPrevRegion() const
     {
-        if (UNLIKELY(metadata.prevRegionIdx == NULLPTR_IDX)) {
+        if (UNLIKELY(_scratch.prevRegionIdx == NULLPTR_IDX)) {
             return nullptr;
         }
-        return TryGetRegionInfoAt(GetUnitAddress(metadata.prevRegionIdx));
+        return ZPageTable::heap_table().get(GetUnitAddress(_scratch.prevRegionIdx));
     }
 
-inline void RegionInfo::SetPrevRegion(const RegionInfo* r)
+inline void ZPage::SetPrevRegion(const ZPage* r)
     {
         if (UNLIKELY(r == nullptr)) {
-            metadata.prevRegionIdx = NULLPTR_IDX;
+            _scratch.prevRegionIdx = NULLPTR_IDX;
             return;
         }
         size_t prevIdx = r->GetUnitIdx();
         MRT_ASSERT(prevIdx < NULLPTR_IDX, "exceeds the maximum limit for region info");
-        metadata.prevRegionIdx = static_cast<uint32_t>(prevIdx);
+        _scratch.prevRegionIdx = static_cast<uint32_t>(prevIdx);
     }
 
-inline RegionInfo* RegionInfo::GetNextRegion() const
+inline ZPage* ZPage::GetNextRegion() const
     {
-        if (UNLIKELY(metadata.nextRegionIdx == NULLPTR_IDX)) {
+        if (UNLIKELY(_scratch.nextRegionIdx == NULLPTR_IDX)) {
             return nullptr;
         }
-        DCHECK(metadata.nextRegionIdx < totalUnitCount);
-        return TryGetRegionInfoAt(GetUnitAddress(metadata.nextRegionIdx));
+        DCHECK(_scratch.nextRegionIdx < totalUnitCount);
+        return ZPageTable::heap_table().get(GetUnitAddress(_scratch.nextRegionIdx));
     }
 
-inline RegionInfo* RegionInfo::GetNextGhostRegion() const
+inline ZPage* ZPage::GetNextGhostRegion() const
     {
-        if (UNLIKELY(metadata.nextRegionIdx0 == NULLPTR_IDX)) {
+        if (UNLIKELY(_scratch.nextRegionIdx0 == NULLPTR_IDX)) {
             return nullptr;
         }
-        DCHECK(metadata.nextRegionIdx0 < totalUnitCount);
-        return TryGetRegionInfoAt(GetUnitAddress(metadata.nextRegionIdx0));
+        DCHECK(_scratch.nextRegionIdx0 < totalUnitCount);
+        return ZPageTable::heap_table().get(GetUnitAddress(_scratch.nextRegionIdx0));
     }
 
-inline void RegionInfo::SetNextRegion(const RegionInfo* r)
+inline void ZPage::SetNextRegion(const ZPage* r)
     {
         if (UNLIKELY(r == nullptr)) {
-            metadata.nextRegionIdx = NULLPTR_IDX;
+            _scratch.nextRegionIdx = NULLPTR_IDX;
             return;
         }
         size_t nextIdx = r->GetUnitIdx();
         MRT_ASSERT(nextIdx < NULLPTR_IDX, "exceeds the maximum limit for region info");
-        metadata.nextRegionIdx = static_cast<uint32_t>(nextIdx);
+        _scratch.nextRegionIdx = static_cast<uint32_t>(nextIdx);
     }
 
-inline bool RegionInfo::IsUnmovableFromRegion() const
+inline bool ZPage::IsUnmovableFromRegion() const
     {
         return OnNamedList("escaped from regions") || OnNamedList("raw pointer pinned regions");
     }
 
-inline bool RegionInfo::IsValidRegion() const
+inline bool ZPage::IsValidRegion() const
     {
         return is_small() || is_medium() || is_large();
     }
@@ -972,7 +965,7 @@ inline bool RegionInfo::IsValidRegion() const
 // page that was marked this cycle and has no live bytes is garbage. A page not
 // marked this cycle is not known empty here (kept for the selector's ZGC
 // convergence in the page-descriptor package).
-inline bool RegionInfo::IsKnownEmpty() const
+inline bool ZPage::IsKnownEmpty() const
     {
         if (IsAllocating()) {
             return false;
@@ -980,7 +973,7 @@ inline bool RegionInfo::IsKnownEmpty() const
         return is_marked() && live_bytes() == 0;
     }
 
-inline bool RegionInfo::IsKnownYoungEmpty() const
+inline bool ZPage::IsKnownYoungEmpty() const
     {
         if (IsAllocating()) {
             return false;
@@ -988,19 +981,19 @@ inline bool RegionInfo::IsKnownYoungEmpty() const
         return is_marked() && live_bytes() == 0;
     }
 
-inline bool RegionInfo::IsSafeKnownEmpty()
+inline bool ZPage::IsSafeKnownEmpty()
     {
         return IsKnownEmpty();
     }
 
-inline bool RegionInfo::IsSafeKnownYoungEmpty()
+inline bool ZPage::IsSafeKnownYoungEmpty()
     {
         return IsKnownYoungEmpty();
     }
-inline void RegionInfo::RemoveFromList()
+inline void ZPage::RemoveFromList()
     {
-        RegionInfo* prev = GetPrevRegion();
-        RegionInfo* next = GetNextRegion();
+        ZPage* prev = GetPrevRegion();
+        ZPage* next = GetNextRegion();
         if (prev != nullptr) {
             prev->SetNextRegion(next);
         }
@@ -1022,9 +1015,9 @@ inline void RegionInfo::RemoveFromList()
 
 
 
-inline void RegionInfo::BumpRegionLifeId()
+inline void ZPage::BumpRegionLifeId()
     {
-        RegionLifeId old = metadata.regionLifeId.load(std::memory_order_relaxed);
+        RegionLifeId old = _scratch.regionLifeId.load(std::memory_order_relaxed);
         for (;;) {
             if (UNLIKELY(old == std::numeric_limits<RegionLifeId>::max())) {
                 LOG(RTLOG_FATAL,
@@ -1032,17 +1025,17 @@ inline void RegionInfo::BumpRegionLifeId()
                     this, static_cast<unsigned long long>(old));
                 return;
             }
-            if (metadata.regionLifeId.compare_exchange_weak(old, old + 1, std::memory_order_release,
+            if (_scratch.regionLifeId.compare_exchange_weak(old, old + 1, std::memory_order_release,
                                                             std::memory_order_relaxed)) {
                 return;
             }
         }
     }
 
-inline void RegionInfo::InitRegionInfo(size_t nUnit, ZPageType uClass, PageAge age, bool live)
+inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool live)
     {
         CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
-        CHECK(TryGetRegionInfoAt(GetRegionStart()) == nullptr);
+        CHECK(ZPageTable::heap_table().get(GetRegionStart()) == nullptr);
         CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
 
         // Invalidate every old-life carrier before clearing any of its payload.
@@ -1050,34 +1043,34 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, ZPageType uClass, PageAge a
         // reject the old incarnation; there is no wraparound fallback.
         BumpRegionLifeId();
         {
-            uint8_t cur = __atomic_load_n(&metadata.regionLifeSequence, __ATOMIC_RELAXED);
+            uint8_t cur = __atomic_load_n(&_scratch.regionLifeSequence, __ATOMIC_RELAXED);
             uint8_t next = static_cast<uint8_t>((cur + 1) & 0x7f);
-            __atomic_store_n(&metadata.regionLifeSequence, next, __ATOMIC_RELEASE);
+            __atomic_store_n(&_scratch.regionLifeSequence, next, __ATOMIC_RELEASE);
         }
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         ForwardingTable::ClearPageOwner(this);
-        WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
+        WaitCopiedBeforePayloadWipe(this, "InitZPage");
         // ZPageAllocator::safe_destroy_page: the previous page life's livemap
         // (and a promotion's parked young map) goes with it (~ZPage / ~CHeapBitMap).
         delete livemap();
-        __atomic_store_n(&metadata.livemap, static_cast<ZLiveMap*>(nullptr), std::memory_order_release);
-        delete metadata.retiredLivemap;
-        metadata.retiredLivemap = nullptr;
+        __atomic_store_n(&_scratch.livemap, static_cast<ZLiveMap*>(nullptr), std::memory_order_release);
+        delete _scratch.retiredLivemap;
+        _scratch.retiredLivemap = nullptr;
         SetYoungRegionFlag(0);
-        metadata.allocPtr = GetRegionStart();
-        metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
+        _scratch.allocPtr = GetRegionStart();
+        _scratch.regionEnd = _scratch.allocPtr + nUnit * ZPage::UNIT_SIZE;
         // ZPage::reset(age), zPage.cpp:103-108: establish identity before page-table publication.
         SetYoungRegionFlag(age != PageAge::old);
         SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
         ResetPageSequence();
-        metadata.prevRegionIdx = NULLPTR_IDX;
-        metadata.nextRegionIdx = NULLPTR_IDX;
+        _scratch.prevRegionIdx = NULLPTR_IDX;
+        _scratch.nextRegionIdx = NULLPTR_IDX;
         // Ghost walk (PrepareFromRegionList) follows nextRegionIdx0. A reused
         // region that still named its previous-life successor kept a retired
         // from-space chain alive across InitRegion (RegionManager.h:782).
-        metadata.nextRegionIdx0 = NULLPTR_IDX;
-        metadata.regionListOwner.store(nullptr, std::memory_order_relaxed);
-        metadata.censusBoundaryOffset = 0;
+        _scratch.nextRegionIdx0 = NULLPTR_IDX;
+        _scratch.regionListOwner.store(nullptr, std::memory_order_relaxed);
+        _scratch.censusBoundaryOffset = 0;
 
         // routedest: this is the reuse edge named in the defect. TakeRegion has already run
         // ClearUnits over this payload; if a published route still names this region, the
@@ -1089,16 +1082,16 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, ZPageType uClass, PageAge a
         SetRegionListOwner(nullptr);
 
         SetInGhostRegion(0);
-        __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&_scratch.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         (void)uClass;
         if (live) {
             InitializeLiveMap();
         }
     }
 
-inline void RegionInfo::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)
+inline void ZPage::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)
     {
-        InitRegionInfo(nUnit, uClass, age, true);
+        InitZPage(nUnit, uClass, age, true);
         (void)nUnit;
     }
 
@@ -1106,52 +1099,52 @@ inline void RegionInfo::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)
 #endif
 
 namespace MapleRuntime {
-inline ZGenerationId RegionInfo::generation_id() const
+inline ZGenerationId ZPage::generation_id() const
 {
     return _generation_id;
 }
 }
 
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/ZPage.h"
 
 namespace MapleRuntime {
-inline Generation RegionInfo::GetOwnerGeneration() const
+inline Generation ZPage::GetOwnerGeneration() const
     {
         return IsYoungRegion() ? Generation::Young : Generation::Old;
     }
 }
 
 namespace MapleRuntime {
-inline bool RegionInfo::IsYoungRegion() const
+inline bool ZPage::IsYoungRegion() const
     {
         return generation_id() == ZGenerationId::young;
     }
 }
 
 namespace MapleRuntime {
-inline MAddress RegionInfo::GetRegionStart() const
+inline MAddress ZPage::GetRegionStart() const
 {
     if (!_virtual.is_null()) {
         return untype(ZOffset::address_unsafe(_virtual.start()));
     }
-    return metadata.allocPtr;
+    return _scratch.allocPtr;
 }
 }
 
 namespace MapleRuntime {
-inline MAddress RegionInfo::GetRegionEnd() const { return metadata.regionEnd; }
+inline MAddress ZPage::GetRegionEnd() const { return _scratch.regionEnd; }
 }
 
 namespace MapleRuntime {
-inline MAddress RegionInfo::GetRegionAllocPtr() const { return metadata.allocPtr; }
+inline MAddress ZPage::GetRegionAllocPtr() const { return _scratch.allocPtr; }
 }
 
 namespace MapleRuntime {
-inline bool RegionInfo::IsSmallRegion() const { return is_small(); }
+inline bool ZPage::IsSmallRegion() const { return is_small(); }
 }
 
 namespace MapleRuntime {
-inline bool RegionInfo::IsLargeRegion() const { return is_large(); }
+inline bool ZPage::IsLargeRegion() const { return is_large(); }
 }
 
 namespace MapleRuntime {

@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Minimal live-heap fixture for GC unit tests (HotSpot ZTest shape, no GPL code).
-// Plants RegionInfo unit table + Heap address range without InitCJRuntime.
+// Plants ZPage unit table + Heap address range without InitCJRuntime.
 
 #ifndef MRT_GC_HEAP_FIXTURE_HPP
 #define MRT_GC_HEAP_FIXTURE_HPP
@@ -20,7 +20,7 @@
 
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
-// RegionInfo::metadata and RegionSpace reserved span are private; unit tests
+// ZPage::metadata and RegionSpace reserved span are private; unit tests
 // need them to Init FDM without Heap::Init / InitCJRuntime.
 #define private public
 #include "Heap/z/zPage.hpp"
@@ -153,7 +153,7 @@ struct GcHeapFixture {
         EnsureZAddressDomain();
         ZStat::Initialize();
         const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
-        mappedSize = metadataSize + kUnits * RegionInfo::UNIT_SIZE;
+        mappedSize = metadataSize + kUnits * ZPage::UNIT_SIZE;
         // Reserve in the heap address domain and back it with a committed,
         // mapped backing file, as ZTest's address reserver and backing mocker do.
         heapMapping.reset(new ZTestHeapMapping(mappedSize));
@@ -161,21 +161,21 @@ struct GcHeapFixture {
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
         EnsureHeapRange(heapStart);
         // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
-        Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * RegionInfo::UNIT_SIZE}});
+        Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * ZPage::UNIT_SIZE}});
         for (Generation generation : {Generation::Young, Generation::Old}) {
             if (LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation).Sequence() == 0) {
                 AdvanceGeneration(generation);
             }
         }
-        RegionInfo::Initialize(kUnits, heapStart);
-        region0 = RegionInfo::InitRegion(0, 1, role);
-        region1 = RegionInfo::InitRegion(1, 1, ZPageType::small);
+        ZPage::Initialize(kUnits, heapStart);
+        region0 = ZPage::InitRegion(0, 1, role);
+        region1 = ZPage::InitRegion(1, 1, ZPageType::small);
         ZPageTable::heap_table().insert(region0);
         ZPageTable::heap_table().insert(region1);
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
         AdvanceGeneration(Generation::Old);
         AdvanceGeneration(Generation::Young);
-        ForwardingTable::Initialize(heapStart, kUnits * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
+        ForwardingTable::Initialize(heapStart, kUnits * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
         typeInfo = reinterpret_cast<TypeInfo*>(typeInfoStorage);
@@ -190,7 +190,7 @@ struct GcHeapFixture {
             reinterpret_cast<uintptr_t>(typeInfoStorage), sizeof(typeInfoStorage));
 
         obj0 = PlaceObject(heapStart + 64);
-        obj1 = PlaceObject(heapStart + RegionInfo::UNIT_SIZE + 64);
+        obj1 = PlaceObject(heapStart + ZPage::UNIT_SIZE + 64);
         region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + 64);
         region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + 64);
     }
@@ -201,19 +201,19 @@ struct GcHeapFixture {
         // boundary. Do not carry forwarding authority into a later fixture
         // whose mmap may reuse the same virtual range.
         // Some life-clock tests intentionally keep several fixtures alive.
-        // RegionInfo's unit map is process-global, so only the most recently
+        // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
-        if (RegionInfo::heapStartAddress == heapStart) {
+        if (ZPage::heapStartAddress == heapStart) {
             ForwardingTable::ResetRelocationSet(Generation::Young);
             ForwardingTable::ResetRelocationSet(Generation::Old);
         }
         // ~ZPage: the page livemaps go with the synthetic heap.
-        for (RegionInfo* region : {region0, region1}) {
+        for (ZPage* region : {region0, region1}) {
             if (region != nullptr) {
                 delete region->livemap();
-                region->metadata.livemap = nullptr;
-                delete region->metadata.retiredLivemap;
-                region->metadata.retiredLivemap = nullptr;
+                region->_scratch.livemap = nullptr;
+                delete region->_scratch.retiredLivemap;
+                region->_scratch.retiredLivemap = nullptr;
             }
         }
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
@@ -247,17 +247,17 @@ struct GcHeapFixture {
         if (space.GetMaxCapacity() == 0) {
             constexpr size_t kFdmUnits = 64;
             space.reservedStart = heapStart;
-            space.reservedEnd = heapStart + kFdmUnits * RegionInfo::UNIT_SIZE;
+            space.reservedEnd = heapStart + kFdmUnits * ZPage::UNIT_SIZE;
         }
         ready = true;
     }
 
-    // Legacy focused tests used to set RegionInfo's done word directly.
+    // Legacy focused tests used to set ZPage's done word directly.
     // Supply an independent carrier through the product installation API now;
     // this is fixture setup, not evidence of a complete GC entry path.
-    void InstallPageOwner(RegionInfo* region)
+    void InstallPageOwner(ZPage* region)
     {
-        if (region->metadata.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
+        if (region->_scratch.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
         if (ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration()) == nullptr) {
             RegionList selected("fixture-forwardings");
             const Generation generation = region->GetOwnerGeneration();
@@ -279,7 +279,7 @@ struct GcHeapFixture {
 
     // ZPage::mark_object followed by the caller's inc_live (zMark.cpp:405-425):
     // the fixture's stand-in for one marking step on an object of this page.
-    static bool MarkStrong(RegionInfo* region, BaseObject* object)
+    static bool MarkStrong(ZPage* region, BaseObject* object)
     {
         bool incLive = false;
         const bool marked = region->mark_object(from_object(object), false, incLive);
@@ -290,7 +290,7 @@ struct GcHeapFixture {
     }
 
     // mark_object(addr, finalizable = true): only the live bit of the pair.
-    static bool MarkFinalizable(RegionInfo* region, BaseObject* object)
+    static bool MarkFinalizable(ZPage* region, BaseObject* object)
     {
         bool incLive = false;
         const bool marked = region->mark_object(from_object(object), true, incLive);
@@ -304,8 +304,8 @@ struct GcHeapFixture {
     void* mapping = nullptr;
     size_t mappedSize = 0;
     MAddress heapStart = 0;
-    RegionInfo* region0 = nullptr;
-    RegionInfo* region1 = nullptr;
+    ZPage* region0 = nullptr;
+    ZPage* region1 = nullptr;
     BaseObject* obj0 = nullptr;
     BaseObject* obj1 = nullptr;
     alignas(TypeInfo) unsigned char typeInfoStorage[sizeof(TypeInfo)];

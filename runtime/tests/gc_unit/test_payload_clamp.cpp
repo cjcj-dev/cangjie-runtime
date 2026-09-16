@@ -64,10 +64,10 @@ private:
 struct PayloadFixture {
     PayloadFixture() : barrier(collector, rememberedSet), installed(barrier)
     {
-        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         auto& heapRemset = Heap::GetHeap().GetRememberedSet();
         if (!heapRemset.initialized) {
-            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         }
         heap.typeInfo->SetFlag(0);
         heap.typeInfo->SetInstanceSize(sizeof(uint64_t));

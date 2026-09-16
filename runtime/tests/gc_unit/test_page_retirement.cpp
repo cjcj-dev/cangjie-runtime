@@ -31,7 +31,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
     // This is a native fixture, not a scheduler-managed mutator thread.
     ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
     ZStat::Initialize();
-    const size_t unit = RegionInfo::UNIT_SIZE;
+    const size_t unit = ZPage::UNIT_SIZE;
     int result = 0;
     {
         // Destroyed in reverse order: the manager (mapped caches keep entries
@@ -49,8 +49,8 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         Heap::GetHeap().GetRememberedSet().Initialize(manager.GetRegionHeapStart(),
                                                     4 * unit * ZVirtualToPhysicalRatio);
         const auto role = ZPageType::small;
-        RegionInfo* first = manager.TakeRegion(2, role, false, false, false);
-        RegionInfo* second = manager.TakeRegion(2, role, false, false, false);
+        ZPage* first = manager.TakeRegion(2, role, false, false, false);
+        ZPage* second = manager.TakeRegion(2, role, false, false, false);
         if (first == nullptr || second == nullptr) {
             return 21;
         }
@@ -85,8 +85,8 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             // Every granule is withdrawn, including the last byte of a
             // multi-unit page. The descriptor still describes its old life.
             for (uintptr_t address = start; address < end; address += unit) {
-                if (RegionInfo::TryGetRegionInfoAt(address) != nullptr ||
-                    RegionInfo::TryGetRegionInfoAt(address + unit - 1) != nullptr) {
+                if (Heap::page(address) != nullptr ||
+                    Heap::page(address + unit - 1) != nullptr) {
                     result = 23;
                 }
             }
@@ -105,15 +105,15 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
             if (manager.TakeRegion(1, role, false, false, false) != nullptr) {
                 result = 26;
             }
-            if (RegionInfo::TryGetRegionInfoAt(second->GetRegionStart()) != second) {
+            if (Heap::page(second->GetRegionStart()) != second) {
                 result = 27;
             }
         };
-        manager.VisitPageOwners([&](RegionInfo* outer) {
+        manager.VisitPageOwners([&](ZPage* outer) {
             if (outer != first) {
                 return;
             }
-            manager.VisitPageOwners([&](RegionInfo* inner) {
+            manager.VisitPageOwners([&](ZPage* inner) {
                 if (inner != first) {
                     return;
                 }
@@ -140,9 +140,9 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         if (manager.GetDirtyUnitCount() != 2 || manager.GetCommittedCapacity() != capacity) {
             result = 30;
         }
-        RegionInfo* reused = manager.TakeRegion(2, role, false, false, false);
+        ZPage* reused = manager.TakeRegion(2, role, false, false, false);
         if (reused == nullptr || reused->GetRegionStart() != start ||
-            RegionInfo::TryGetRegionInfoAt(end - 1) != reused) {
+            Heap::page(end - 1) != reused) {
             result = 31;
         }
     }

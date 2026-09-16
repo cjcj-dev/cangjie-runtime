@@ -8,9 +8,9 @@
 #include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
-inline unsigned RegionInfo::RelocateObserve() const
+inline unsigned ZPage::RelocateObserve() const
     {
-        auto owner = ForwardingTable::RetainPageOwner(const_cast<RegionInfo*>(this));
+        auto owner = ForwardingTable::RetainPageOwner(const_cast<ZPage*>(this));
         if (!owner) {
             return 0;
         }
@@ -27,13 +27,13 @@ inline unsigned RegionInfo::RelocateObserve() const
         return v;
     }
 
-inline std::atomic<uint64_t>& RegionInfo::EnrolBeforeFlip()
+inline std::atomic<uint64_t>& ZPage::EnrolBeforeFlip()
     {
         static std::atomic<uint64_t> n{ 0 };
         return n;
     }
 
-inline std::atomic<uint64_t>& RegionInfo::EnrolAfterFlip()
+inline std::atomic<uint64_t>& ZPage::EnrolAfterFlip()
     {
         static std::atomic<uint64_t> n{ 0 };
         return n;

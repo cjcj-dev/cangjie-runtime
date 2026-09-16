@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Old-region residue (no ZGC counterpart). RegionList is the page-list form of
-// the unit-array descriptor allocator (RegionInfo/RegionManager); ZGC keeps
+// the unit-array descriptor allocator (ZPage/RegionManager); ZGC keeps
 // ZList<ZPage> (zList.hpp) inside ZPageAllocator/ZPageCache. It is deleted with
 // the old region mechanism (P03 independent ZPage descriptor, P05 page
 // allocator); the ZGC-shaped generic list lives in Heap/z/zList.hpp.
@@ -18,17 +18,17 @@
 namespace MapleRuntime {
 class RegionList {
 public:
-    friend void RemoveRegionLocked(RegionList*, RegionInfo*);
+    friend void RemoveRegionLocked(RegionList*, ZPage*);
     RegionList(const char* name) : listName(name) {}
 
-    void PrependRegion(RegionInfo* region);
-    void PrependRegionLocked(RegionInfo* region);
+    void PrependRegion(ZPage* region);
+    void PrependRegionLocked(ZPage* region);
 
     void MergeRegionList(RegionList& regionList);
 
     const char* GetListName() const { return listName; }
 
-    void DeleteRegion(RegionInfo* del)
+    void DeleteRegion(ZPage* del)
     {
         if (del == nullptr) {
             return;
@@ -38,7 +38,7 @@ public:
         DeleteRegionLocked(del);
     }
 
-    bool TryDeleteRegion(RegionInfo* del)
+    bool TryDeleteRegion(ZPage* del)
     {
         if (del == nullptr) {
             return false;
@@ -73,7 +73,7 @@ public:
         unitCount += nUnit;
     }
 
-    RegionInfo* GetHeadRegion() const { return listHead; }
+    ZPage* GetHeadRegion() const { return listHead; }
 
     void ClearList()
     {
@@ -83,13 +83,13 @@ public:
         unitCount = 0;
     }
 
-    RegionInfo* GetTailRegion() { return listTail; }
+    ZPage* GetTailRegion() { return listTail; }
 
-    RegionInfo* TakeHeadRegion()
+    ZPage* TakeHeadRegion()
     {
         std::lock_guard<std::mutex> lg(listMutex);
         if (listHead == nullptr) { return nullptr; }
-        RegionInfo* currentHead = listHead;
+        ZPage* currentHead = listHead;
         DeleteRegionLocked(currentHead);
         return currentHead;
     }
@@ -101,16 +101,16 @@ public:
     size_t GetAllocatedSize(bool count = false) const
     {
         if (!count) {
-            return GetUnitCount() * RegionInfo::UNIT_SIZE;
+            return GetUnitCount() * ZPage::UNIT_SIZE;
         }
         return CountAllocatedSize();
     }
 
-    void VisitAllRegions(const std::function<void(RegionInfo*)>& visitor) const
+    void VisitAllRegions(const std::function<void(ZPage*)>& visitor) const
     {
         std::lock_guard<std::mutex> lock(listMutex);
-        RegionInfo* node = listHead;
-        RegionInfo* next = node;
+        ZPage* node = listHead;
+        ZPage* next = node;
         while (node != nullptr) {
             next = node->GetNextRegion();
             visitor(node);
@@ -118,17 +118,17 @@ public:
         }
     }
 
-    void VisitAllGhostRegions(const std::function<void(RegionInfo*)>& visitor)
+    void VisitAllGhostRegions(const std::function<void(ZPage*)>& visitor)
     {
         // Snapshot next before the visitor. PrepareFromRegionList may
-        // ReclaimRegionToMarkQuarantine → InitRegionInfo, which clears
+        // ReclaimRegionToMarkQuarantine → InitZPage, which clears
         // nextRegionIdx0 (the ghost successor). Walking GetNextGhostRegion
         // after that truncates the chain; undispelled from-regions then
         // fail PrepareForwardableRegion CHECK(inGhostFromRegion==0).
         // Same shape as VisitAllRegions (RegionList.h:115-124).
-        RegionInfo* node = listHead;
+        ZPage* node = listHead;
         while (node != nullptr) {
-            RegionInfo* next = node->GetNextGhostRegion();
+            ZPage* next = node->GetNextGhostRegion();
             visitor(node);
             node = next;
         }
@@ -141,7 +141,7 @@ public:
     void ClearTraceRegionFlag()
     {
         std::lock_guard<std::mutex> lock(listMutex);
-        for (RegionInfo *node = listHead; node != nullptr; node = node->GetNextRegion()) {
+        for (ZPage *node = listHead; node != nullptr; node = node->GetNextRegion()) {
             (void)node;
         }
     }
@@ -152,7 +152,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(listMutex);
         targetList.AssignWith(*this);
-        for (RegionInfo* node = targetList.listHead; node != nullptr; node = node->GetNextRegion()) {
+        for (ZPage* node = targetList.listHead; node != nullptr; node = node->GetNextRegion()) {
             node->SetRegionListOwner(&targetList);
         }
         this->ClearList();
@@ -173,11 +173,11 @@ protected:
     mutable std::mutex listMutex;
     size_t regionCount = 0;
     size_t unitCount = 0;
-    RegionInfo* listHead = nullptr; // the start region for iteration, i.e., the first region
-    RegionInfo* listTail = nullptr; // help to merge region list
+    ZPage* listHead = nullptr; // the start region for iteration, i.e., the first region
+    ZPage* listTail = nullptr; // help to merge region list
     const char* listName = nullptr;
 private:
-    void DeleteRegionLocked(RegionInfo* del);
+    void DeleteRegionLocked(ZPage* del);
 
     void AssignWith(const RegionList& srcList)
     {
@@ -193,17 +193,17 @@ private:
     {
         size_t allocCnt = 0;
         std::lock_guard<std::mutex> lock(const_cast<RegionList*>(this)->listMutex);
-        for (RegionInfo* region = listHead; region != nullptr; region = region->GetNextRegion()) {
+        for (ZPage* region = listHead; region != nullptr; region = region->GetNextRegion()) {
             allocCnt += region->GetRegionAllocatedSize();
         }
         return allocCnt;
     }
 
 #ifdef MRT_DEBUG
-    void VerifyRegion(RegionInfo* region)
+    void VerifyRegion(ZPage* region)
     {
-        RegionInfo* prev = region->GetPrevRegion();
-        RegionInfo* next = region->GetNextRegion();
+        ZPage* prev = region->GetPrevRegion();
+        ZPage* next = region->GetNextRegion();
         if (prev != nullptr && prev->GetNextRegion() != region) {
             LOG(RTLOG_FATAL, "illegal region node");
         }
@@ -219,7 +219,7 @@ class RegionCache : public RegionList {
 public:
     RegionCache(const char* name) : RegionList(name) {}
 
-    bool TryPrependRegion(RegionInfo *region)
+    bool TryPrependRegion(ZPage *region)
     {
         std::lock_guard<std::mutex> lock(listMutex);
         if (active) {
@@ -238,7 +238,7 @@ public:
     void DeactivateRegionCache()
     {
         std::lock_guard<std::mutex> lock(listMutex);
-        for (RegionInfo *node = listHead; node != nullptr; node = node->GetNextRegion()) {
+        for (ZPage *node = listHead; node != nullptr; node = node->GetNextRegion()) {
             (void)node;
         }
         active = false;

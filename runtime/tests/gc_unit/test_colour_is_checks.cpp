@@ -130,7 +130,7 @@ GC_TEST(ValueSlotABI, StackScalarReadIsPlain)
 GC_TEST(ValueSlotABI, NullHolderHeapScalarStaysColored)
 {
     GcHeapFixture fixture;
-    Heap::GetHeap().GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     auto& slot = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj1) + TYPEINFO_PTR_SIZE);
     slot.StoreColoured(color_null());
     MCC_WriteRefField(fixture.obj0, nullptr, &slot);

@@ -103,11 +103,11 @@ public:
     // true when insertion succeeded, false otherwise
     // if [idx, idx + num) clashes with existing node, it fails
     // if num is 0U, it always fails
-    bool MergeInsert(Index idx, Count num, bool refreshRegionInfo)
+    bool MergeInsert(Index idx, Count num, bool refreshZPage)
     {
         lastUsedNs = TimeUtil::NanoSeconds();
         if (root == nullptr) {
-            root = new (nodeAllocator.Allocate()) Node(idx, num, refreshRegionInfo);
+            root = new (nodeAllocator.Allocate()) Node(idx, num, refreshZPage);
             CTREE_ASSERT(root != nullptr, "failed to allocate a new node");
             IncTotalCount(num);
             return true;
@@ -117,34 +117,34 @@ public:
             return false;
         }
 
-        return MergeInsertInternal(idx, num, refreshRegionInfo);
+        return MergeInsertInternal(idx, num, refreshZPage);
     }
 
     // find a node with at least 'num' units
-    bool TakeUnits(Count num, Index& idx, bool refreshRegionInfo = true)
+    bool TakeUnits(Count num, Index& idx, bool refreshZPage = true)
     {
         if (root == nullptr || num == 0) {
             return false;
         }
 
-        return TakeUnitsImpl(num, idx, refreshRegionInfo);
+        return TakeUnitsImpl(num, idx, refreshZPage);
     }
 
     // find the lowest-address node with at least 'num' units (for MAIN defragmentation)
-    bool TakeUnitsLowAddr(Count num, Index& idx, bool refreshRegionInfo = true)
+    bool TakeUnitsLowAddr(Count num, Index& idx, bool refreshZPage = true)
     {
         if (root == nullptr || num == 0) {
             return false;
         }
 
-        return TakeUnitsLowAddrImpl(num, idx, refreshRegionInfo);
+        return TakeUnitsLowAddrImpl(num, idx, refreshZPage);
     }
 
     struct Node {
-        Node(Index idx, Count num, bool refreshRegionInfo) : l(nullptr), r(nullptr), index(idx), count(num)
+        Node(Index idx, Count num, bool refreshZPage) : l(nullptr), r(nullptr), index(idx), count(num)
         {
-            if (refreshRegionInfo) {
-                RefreshFreeRegionInfo();
+            if (refreshZPage) {
+                RefreshFreeZPage();
             }
         }
 
@@ -158,24 +158,24 @@ public:
 
         inline Count GetCount() const { return count; }
 
-        inline void IncCount(Count num, bool refreshRegionInfo)
+        inline void IncCount(Count num, bool refreshZPage)
         {
             count += num;
-            if (refreshRegionInfo && count > 0) {
-                RefreshFreeRegionInfo();
+            if (refreshZPage && count > 0) {
+                RefreshFreeZPage();
             }
         }
 
         inline void ClearCount() { count = 0; }
 
-        inline void UpdateNode(Index idx, Count cnt, bool refreshRegionInfo)
+        inline void UpdateNode(Index idx, Count cnt, bool refreshZPage)
         {
             index = idx;
             count = cnt;
-            if (refreshRegionInfo && cnt > 0) {
+            if (refreshZPage && cnt > 0) {
                 // GetNextNeighborRegion in compact gc expects free-region metadata is always up-to-date.
-                // otherwise we can ignore refreshRegionInfo.
-                RefreshFreeRegionInfo();
+                // otherwise we can ignore refreshZPage.
+                RefreshFreeZPage();
             }
         }
 
@@ -186,7 +186,7 @@ public:
             return (count >= leftCount && count >= rightCount);
         }
 
-        void RefreshFreeRegionInfo();
+        void RefreshFreeZPage();
 
         Node* l;
         Node* r;
@@ -308,18 +308,18 @@ private:
         MERGE_ERROR        // error, operation aborted
     };
 
-    MergeResult MergeAt(Node& n, Index idx, Count num, bool refreshRegionInfo)
+    MergeResult MergeAt(Node& n, Index idx, Count num, bool refreshZPage)
     {
         Index endIdx = idx + num;
 
         // try to merge the inserted node to the right of n
         if (idx == n.GetIndex() + n.GetCount()) {
-            return MergeToRight(n, endIdx, num, refreshRegionInfo);
+            return MergeToRight(n, endIdx, num, refreshZPage);
         }
 
         // try to merge the inserted node to the left of n
         if (endIdx == n.GetIndex()) {
-            return MergeToLeft(n, idx, num, refreshRegionInfo);
+            return MergeToLeft(n, idx, num, refreshZPage);
         }
 
         return MergeResult::MERGE_MISS;
@@ -327,7 +327,7 @@ private:
 
     // merge free units to the right of the node. free units in the new merged node ends with endIdx,
     // and we should also try to merge the nearest right node to the new node if possible.
-    MergeResult MergeToRight(Node& n, Index endIdx, Count num, bool refreshRegionInfo)
+    MergeResult MergeToRight(Node& n, Index endIdx, Count num, bool refreshZPage)
     {
         // find the nearest right n of the new merged n which ends with endIdx.
         Node* parent = &n; // the parent of the *nearest* node.
@@ -348,11 +348,11 @@ private:
             }
         }
 
-        n.IncCount(num, refreshRegionInfo);
+        n.IncCount(num, refreshZPage);
         IncTotalCount(num);
 
         if (nearest != nullptr) {
-            n.IncCount(nearest->GetCount(), refreshRegionInfo);
+            n.IncCount(nearest->GetCount(), refreshZPage);
 
             // now the node doesn't have left child, so we can fast remove it.
             if (parent == &n) {
@@ -368,7 +368,7 @@ private:
 
     // merge free units to the left of the node n. free units in the new merged node starts with startIdx,
     // and we should also try to merge the nearest left node to the new merged node if possible.
-    MergeResult MergeToLeft(Node& n, Index startIdx, Count num, bool refreshRegionInfo)
+    MergeResult MergeToLeft(Node& n, Index startIdx, Count num, bool refreshZPage)
     {
         Node* parent = &n; // the parent of the *nearest* node.
         Node* nearest = n.l;
@@ -388,7 +388,7 @@ private:
             }
         }
 
-        n.UpdateNode(startIdx, n.GetCount() + num, refreshRegionInfo);
+        n.UpdateNode(startIdx, n.GetCount() + num, refreshZPage);
         IncTotalCount(num);
 
         if (nearest != nullptr) {
@@ -398,7 +398,7 @@ private:
             } else {
                 parent->r = nearest->l;
             }
-            n.UpdateNode(nearest->GetIndex(), n.GetCount() + nearest->GetCount(), refreshRegionInfo);
+            n.UpdateNode(nearest->GetIndex(), n.GetCount() + nearest->GetCount(), refreshZPage);
             nodeAllocator.Deallocate(nearest);
         }
         CTREE_CHECK_PARENT_AND_LCHILD(&n);
@@ -406,7 +406,7 @@ private:
     }
 
     // see the public MergeInsert()
-    bool MergeInsertInternal(Index idx, Count num, bool refreshRegionInfo);
+    bool MergeInsertInternal(Index idx, Count num, bool refreshZPage);
 
     // rotate the node and its left child to maintain heap property
     inline Node* RotateLeftChild(Node& n) const
@@ -426,13 +426,13 @@ private:
         return newRoot;
     }
 
-    bool TakeUnitsImpl(Count num, Index& idx, bool refershRegionInfo);
+    bool TakeUnitsImpl(Count num, Index& idx, bool refershZPage);
 
     // Best-fit with lowest-address tiebreaker.
     Node** FindBestFitLowAddrPtr(Node** nodePtr, Count num, Node** best);
 
     // Best-fit allocation with lowest-address tiebreaker.
-    bool TakeUnitsLowAddrImpl(Count num, Index& idx, bool refreshRegionInfo);
+    bool TakeUnitsLowAddrImpl(Count num, Index& idx, bool refreshZPage);
 
     bool AllocateLowestAddressFromNode(Node*& node, Count count, Index& index);
 

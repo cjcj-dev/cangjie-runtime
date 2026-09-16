@@ -26,10 +26,10 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct ExemptUnlockTestAccess {
-    static bool OnUnmovable(RegionManager& manager, const RegionInfo* region)
+    static bool OnUnmovable(RegionManager& manager, const ZPage* region)
     {
         bool found = false;
-        manager.unmovableFromRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
+        manager.unmovableFromRegionList.VisitAllRegions([&found, region](ZPage* r) {
             if (r == region) {
                 found = true;
             }
@@ -71,7 +71,7 @@ namespace {
 void ExerciseOverlappingCopy(intptr_t destinationDelta)
 {
     GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
+    ZPage* region = fx.region0;
     const MAddress fromAddress = region->GetRegionStart() + 128;
     BaseObject* from = fx.PlaceObject(fromAddress);
     constexpr size_t size = 0x18;

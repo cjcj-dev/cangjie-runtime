@@ -20,50 +20,50 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct IsFromRegTestAccess {
-    static void ParkFrom(RegionManager& manager, RegionInfo* region)
+    static void ParkFrom(RegionManager& manager, ZPage* region)
     {
         manager.fromRegionList.PrependRegion(region);
     }
-    static void ParkGarbage(RegionManager& manager, RegionInfo* region)
+    static void ParkGarbage(RegionManager& manager, ZPage* region)
     {
         manager.garbageRegionList.PrependRegion(region);
     }
-    static bool OnFrom(RegionManager& manager, const RegionInfo* region)
+    static bool OnFrom(RegionManager& manager, const ZPage* region)
     {
         bool found = false;
-        manager.fromRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
+        manager.fromRegionList.VisitAllRegions([&found, region](ZPage* r) {
             if (r == region) {
                 found = true;
             }
         });
         return found;
     }
-    static bool OnPinned(RegionManager& manager, const RegionInfo* region)
+    static bool OnPinned(RegionManager& manager, const ZPage* region)
     {
         bool found = false;
-        manager.rawPointerPinnedRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
+        manager.rawPointerPinnedRegionList.VisitAllRegions([&found, region](ZPage* r) {
             if (r == region) {
                 found = true;
             }
         });
         return found;
     }
-    static bool OnGarbage(RegionManager& manager, const RegionInfo* region)
+    static bool OnGarbage(RegionManager& manager, const ZPage* region)
     {
         bool found = false;
-        manager.garbageRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
+        manager.garbageRegionList.VisitAllRegions([&found, region](ZPage* r) {
             if (r == region) {
                 found = true;
             }
         });
         return found;
     }
-    static bool TryClaimFrom(RegionManager& manager, RegionInfo* region, int newType)
+    static bool TryClaimFrom(RegionManager& manager, ZPage* region, int newType)
     {
         (void)newType;
         return manager.fromRegionList.TryDeleteRegion(region);
     }
-    static bool TryClaimGarbage(RegionManager& manager, RegionInfo* region, int newType)
+    static bool TryClaimGarbage(RegionManager& manager, ZPage* region, int newType)
     {
         (void)newType;
         return manager.garbageRegionList.TryDeleteRegion(region);
@@ -107,7 +107,7 @@ GC_TEST(IsFromReg, TakeGarbageSkipsRawPointerHold)
     RegionManager manager;
     fx.region0->IncRawPointerObjectCount();
     IsFromRegTestAccess::ParkGarbage(manager, fx.region0);
-    RegionInfo* taken = manager.TakeReclaimableGarbageRegion();
+    ZPage* taken = manager.TakeReclaimableGarbageRegion();
     GC_EXPECT_TRUE(taken == nullptr);
     GC_EXPECT_TRUE(IsFromRegTestAccess::OnGarbage(manager, fx.region0));
     fx.region0->DecRawPointerObjectCount();
