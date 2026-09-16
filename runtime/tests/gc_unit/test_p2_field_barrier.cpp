@@ -104,6 +104,7 @@ extern "C" int p2FieldBarrierExercise()
     const U64 root = heap.RegisterExportRoot(holder);
     ZBarrier::WriteReference(holder, Slot(holder), oldChild);
     ZBarrier::WriteReference(holder, Slot(holder, 1), oldChild);
+    collector.RequestGC(GC_REASON_YOUNG, false);
     EnsureOld(holder, collector);
     EnsureOld(oldChild, collector);
     const bool finalizableCase = std::getenv("P2_FINALIZABLE") != nullptr;
