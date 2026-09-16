@@ -29,6 +29,7 @@ GC_TEST(ZPage, AllocPagePublishedInTable)
     GC_EXPECT_TRUE(page != nullptr);
     GC_EXPECT_TRUE(ZPageTable::heap_table().get(page->GetRegionStart()) == page);
     GC_EXPECT_TRUE(Heap::page(page->GetRegionStart()) == page);
+    page->reset_seqnum();
     GC_EXPECT_TRUE(page->is_allocating());
     GC_EXPECT_TRUE(!page->is_relocatable());
 }
@@ -47,6 +48,7 @@ GC_TEST(ZPage, AllocObjectRespectsAlignment)
 {
     GcHeapFixture fx;
     RegionInfo* page = fx.region0;
+    page->reset_seqnum();
     const uintptr_t addr = page->alloc_object(16);
     GC_EXPECT_TRUE(addr != 0);
     GC_EXPECT_EQ(addr % page->object_alignment(), 0u);
