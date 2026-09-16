@@ -103,7 +103,10 @@ inline size_t ZForwarding::size() const { return _size; }
 }
 
 namespace MapleRuntime {
-inline uintptr_t ZForwarding::index(MAddress from) const { return static_cast<uintptr_t>((from - _start) >> kAlignShift); }
+inline uintptr_t ZForwarding::index(MAddress from) const
+{
+    return static_cast<uintptr_t>((from - _start) >> _object_alignment_shift);
+}
 }
 
 namespace MapleRuntime {
@@ -140,13 +143,13 @@ namespace MapleRuntime {
 inline ForwardingEntry ZForwarding::find(uintptr_t fromIndex, ForwardingCursor* cursor) const
     {
         ForwardingEntry entry = first(fromIndex, cursor);
-        for (size_t probes = 0; probes < _entries.length() && entry.populated(); ++probes) {
+        while (entry.populated()) {
             if (entry.from_index() == fromIndex) {
                 return entry;
             }
             entry = next(cursor);
         }
-        return entry.populated() ? ForwardingEntry() : entry;
+        return entry;
     }
 }
 
