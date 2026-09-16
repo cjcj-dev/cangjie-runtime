@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
+#include "gc_worker_fixture.hpp"
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -10,6 +11,7 @@
 
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "gc_unittest.hpp"
 #include "b09_runtime_fixture.hpp"
@@ -26,6 +28,7 @@ MarkStackEntry Entry(size_t i)
 void DrainFollow(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, MarkTerminate& terminate,
                  size_t workerId, std::vector<size_t>& seen, bool partial)
 {
+    MapleRuntime::GcUnit::WorkerFixture workerThread(workerId);
     (void)MarkEngine::FollowWork(context, smr, stripes, terminate, workerId, partial,
                                  [&seen](const MarkStackEntry& entry) {
                                      seen.push_back(entry.partial_array_offset());
@@ -40,7 +43,8 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
         MarkTerminate terminate;
         terminate.Reset(workers);
         stripes.SetTerminate(&terminate);
-        MarkingSMR smr(workers);
+        MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
         MarkThreadLocalStacks seed(4);
         constexpr size_t count = 40;
         for (size_t i = 0; i < count; ++i) {
@@ -80,7 +84,8 @@ GC_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
     MarkTerminate terminate;
     terminate.Reset(1);
     stripes.SetTerminate(&terminate);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkThreadLocalStacks stacks(2);
     MarkContext context(1, 0, stripes, stacks);
     context.SetStripeId(0);
@@ -100,7 +105,8 @@ GC_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
 GC_TEST(MarkPort203Engine, OverflowPreferredOverPublished)
 {
     MarkStripeSet stripes(1);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkStripeStack* overflow = MarkStripeStack::Create(true);
     overflow->Push(Entry(1));
     MarkStripeStack* published = MarkStripeStack::Create(true);
@@ -132,7 +138,8 @@ GC_TEST(MarkPort203Engine, ShrinkingNStripesStillSeesHighSlotWork)
         }
     }
     GC_EXPECT_EQ(seenHigh, 1u);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkStripeStack* taken = stripes.At(3).StealStack(smr, 0);
     GC_EXPECT_TRUE(taken != nullptr);
     MarkStripeStack::Destroy(taken);
@@ -145,7 +152,8 @@ GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
     MarkTerminate terminate;
     terminate.Reset(1);
     stripes.SetTerminate(&terminate);
-    MarkingSMR smr(1);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkThreadLocalStacks stacks(1);
     MarkContext context(1, 0, stripes, stacks);
     std::vector<size_t> seen;
@@ -165,7 +173,8 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     MarkTerminate terminate;
     terminate.Reset(2);
     stripes.SetTerminate(&terminate);
-    MarkingSMR smr(2);
+    MapleRuntime::GcUnit::WorkerFixture workerFixture;
+    MarkingSMR smr;
     MarkThreadLocalStacks waiterStacks(2);
     MarkThreadLocalStacks producerStacks(2);
     MarkContext waiter(2, 0, stripes, waiterStacks);
@@ -227,6 +236,7 @@ GC_TEST(MarkPort203Engine, TrySetNStripesIsAtomicSnapshot)
 
 GC_TEST(MarkPort203Engine, DomainPrepareResizeKeepsCapacity)
 {
+    MapleRuntime::GcUnit::WorkerFixture domainWorker;
     MarkDomain domain(8, MarkingStacks::MarkingGeneration::YOUNG);
     domain.PrepareWork(2);
     GC_EXPECT_EQ(domain.Stripes().Count(), 8u);
@@ -256,6 +266,7 @@ GC_TEST(MarkPort203Engine, CrowdedRestoresNStripes)
 GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 {
     ZAbort abort;
+    MapleRuntime::GcUnit::WorkerFixture domainWorker;
     MarkDomain domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     domain.BindAbort(&abort);
     domain.PrepareWork(1);
@@ -265,15 +276,15 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     abort.Reset();
     GC_EXPECT_TRUE(!domain.PollStop());
 
-    GCWorkers workers(GCWorkers::Generation::YOUNG, 2);
-    workers.SetActive();
-    workers.SetActiveWorkers(1);
+    ZStatWorkers statWorkers;
+    ZWorkers workers(GCCycleGeneration::YOUNG, 2, &statWorkers);
+    workers.set_active();
+    workers.set_active_workers(1);
     domain.BindWorkers(&workers);
     domain.PrepareWork(1);
     GC_EXPECT_TRUE(!domain.PollStop());
-    workers.RequestResize(2);
+    workers.request_resize_workers(2);
     GC_EXPECT_TRUE(domain.PollStop());
-    workers.Stop();
 }
 
 // ZMark::drain/rebalance_work (zMark.cpp:468-485): stop following while
@@ -282,6 +293,7 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
 {
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     ZAbort abort;
+    MapleRuntime::GcUnit::WorkerFixture domainWorker;
     MarkDomain domain(4, MarkingStacks::MarkingGeneration::MAJOR);
     domain.BindAbort(&abort);
     domain.PrepareWork(1);

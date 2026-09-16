@@ -33,6 +33,7 @@
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
@@ -73,6 +74,8 @@
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zUtils.inline.hpp"
+#include "Heap/z/zArray.inline.hpp"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
@@ -354,7 +357,7 @@ void WCollector::StartRelocationTasks(GCCycleGeneration generation)
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
-    GCWorkers& workers = GetWorkers(generation);
+    ZWorkers& workers = GetWorkers(generation);
     if (generation == GCCycleGeneration::YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers);
     else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
@@ -388,8 +391,7 @@ bool WCollector::Preforward()
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     manager.DrainForwardFromRegions<Generation::Old>();
-    GCWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
-    std::atomic<unsigned> next{ 0 };
+    ZWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
     const std::function<void()> families[] = {
         [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); }); },
         [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
@@ -398,21 +400,21 @@ bool WCollector::Preforward()
         [&] { PreforwardDiscoveredExternObjects(Generation::Old); },
         [&] { PreforwardAllResurrectExportFromObjects(Generation::Old); }
     };
-    class RootsTask final : public GCWorkerTask {
+    // zArray.hpp:104 ZArrayParallelIterator: workers claim root families.
+    class RootsTask final : public ZTask {
     public:
-        RootsTask(const std::function<void()>* families, std::atomic<unsigned>& next)
-            : families(families), next(next) {}
-        void Work(uint32_t) override
+        RootsTask(const std::function<void()>* families, size_t count)
+            : ZTask("ZRelocateRootsTask"), iter(families, count) {}
+        void work() override
         {
-            for (unsigned i = next.fetch_add(1); i < 4; i = next.fetch_add(1)) {
-                families[i]();
+            for (std::function<void()> family; iter.next(&family);) {
+                family();
             }
         }
     private:
-        const std::function<void()>* families;
-        std::atomic<unsigned>& next;
-    } roots(families, next);
-    workers.Run(roots);
+        ZArrayParallelIterator<std::function<void()>> iter;
+    } roots(families, sizeof(families) / sizeof(families[0]));
+    workers.run(&roots);
     StringDedup::Instance().Remap();
     return true;
 }
@@ -879,24 +881,24 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
     };
     const bool doYoungFlip = true;
-    GCWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
+    ZWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
 
     std::vector<MAddress> remsetVec;
     remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
 
     // zRemembered.cpp:remap_current visits remembered slots. Stack completion
     // belongs to the phase watermark; it does not require a reachable-heap sweep.
-    auto remapRemembered = [&](GCWorkers& pool) {
-        std::atomic<size_t> next{ 0 };
-        class RememberedTask final : public GCWorkerTask {
+    auto remapRemembered = [&](ZWorkers& pool) {
+        // zArray.hpp:104 ZArrayParallelIterator over the remembered slots.
+        ZArrayParallelIterator<MAddress> slots(remsetVec.data(), remsetVec.size());
+        class RememberedTask final : public ZTask {
         public:
-            explicit RememberedTask(std::function<void()> body) : body(std::move(body)) {}
-            void Work(uint32_t) override { body(); }
+            explicit RememberedTask(std::function<void()> body) : ZTask("ZRemapRememberedTask"), body(std::move(body)) {}
+            void work() override { body(); }
         private:
             std::function<void()> body;
         } task([&] {
-            for (size_t i = next.fetch_add(1); i < remsetVec.size(); i = next.fetch_add(1)) {
-                MAddress slot = remsetVec[i];
+            for (MAddress slot; slots.next(&slot);) {
                 if (!Heap::IsHeapAddress(slot)) {
                     continue;
                 }
@@ -905,7 +907,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw());
             }
         });
-        pool.Run(task);
+        pool.run(&task);
     };
 
     // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
@@ -1125,7 +1127,7 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
     });
 }
 
-void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
+void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
 {
     // zRelocate.cpp:1257-1306. Producers have finished before the worker gang
     // starts; pages and their livemaps stay alive until it joins.
@@ -1136,14 +1138,15 @@ void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
             pages.push_back(page.get());
         }
     }
-    class PageTask final : public GCWorkerTask {
+    class PageTask final : public ZTask {
     public:
         PageTask(const std::vector<RegionInfo::PromotionPage*>& pages, const std::function<void(RefField<>&)>& remember)
-            : pages(pages), remember(remember) {}
-        void Work(uint32_t) override
+            : ZTask("ZRelocateRemsetFlipPromotedPagesTask"), iter(pages.data(), pages.size()), remember(remember) {}
+        void work() override
         {
-            for (size_t index = next.fetch_add(1); index < pages.size(); index = next.fetch_add(1)) {
-                pages[index]->ObjectIterate([&](BaseObject* object) {
+            // zArray.hpp:104 ZArrayParallelIterator: workers claim promoted pages.
+            for (RegionInfo::PromotionPage* page; iter.next(&page);) {
+                page->ObjectIterate([&](BaseObject* object) {
                     RefFieldVisitor remapAndRemember = [&](RefField<>& field) {
                         const zpointer observed = field.GetFieldValue();
                         BaseObject* target = RemapPromotedField(Heap::GetHeap().GetCollector(), field, observed);
@@ -1160,13 +1163,12 @@ void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
             }
         }
     private:
-        const std::vector<RegionInfo::PromotionPage*>& pages;
+        ZArrayParallelIterator<RegionInfo::PromotionPage*> iter;
         const std::function<void(RefField<>&)> remember;
-        std::atomic<size_t> next{0};
     } task(pages, [](RefField<>& field) {
         Heap::GetHeap().GetRememberedSet().Record(reinterpret_cast<MAddress>(&field));
     });
-    workers.Run(task);
+    workers.run(&task);
 }
 
 // permhole receiptization (steer1): RouteObject is geometric (ROUTED before Copy fills
@@ -1666,7 +1668,9 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPag
         copyPage, reinterpret_cast<MAddress>(obj));
     if (publication) {
         DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
-        CopyObject(*obj, *toObj, size);
+        // zRelocate.cpp:369: a fresh to-page copy is disjoint.
+        ZUtils::object_copy_disjoint(to_zaddress(reinterpret_cast<uintptr_t>(obj)),
+                                     to_zaddress(reinterpret_cast<uintptr_t>(toObj)), size);
         if (toObj != obj) {
             toObj->SetStateCode(ObjectState::NORMAL);
         }
@@ -1707,20 +1711,20 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPag
 namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
 template<Generation G>
-void ForwardTask<G>::Work(uint32_t)
+void ForwardTask<G>::work()
 {
     detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
 }
 #endif
 
 template<Generation G>
-void RegionManager::StartForwardFromRegions(GCWorkers& workers)
+void RegionManager::StartForwardFromRegions(ZWorkers& workers)
 {
     CHECK(!relocationStarted);
     relocationStarted = true;
     relocationDrained = false;
     relocationWorkers = &workers;
-    relocationRequestQueue.BeginWorkers(workers.ActiveWorkers());
+    relocationRequestQueue.BeginWorkers(workers.active_workers());
 }
 
 template<Generation G>
@@ -1735,11 +1739,11 @@ void RegionManager::DrainForwardFromRegions()
         return;
     }
     ForwardTask<G> task(*this, fromRegionList);
-    relocationWorkers->Run(task);
+    relocationWorkers->run(&task);
 }
 
 template<Generation G>
-void RegionManager::ForwardFromRegions(GCWorkers& workers)
+void RegionManager::ForwardFromRegions(ZWorkers& workers)
 {
     if (!relocationStarted) {
         StartForwardFromRegions<G>(workers);
@@ -2044,7 +2048,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
     CHECK_DETAIL(static_cast<bool>(publication),
                  "compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
                  region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
-    CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     region->SetRegionAllocPtr(regionStart);
     // ZGC zRelocate.cpp:838-861 start_in_place_relocation_prepare_remset: this page is its own
     // to-page, so its old remembered-set bits have to leave the face before the copy walk starts
@@ -2077,7 +2080,14 @@ void RegionManager::CompactRegion(RegionInfo* region)
         MAddress toAddress = region->Alloc(size);
         BaseObject* toObj = from_region_addr(toAddress);
         DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-        collector.CopyObject(*currentObj, *toObj, size);
+        // zRelocate.cpp:634-639: in-place relocation copies conjoint when the
+        // new object overlaps the old one, disjoint otherwise.
+        const zaddress fromAddr = to_zaddress(reinterpret_cast<uintptr_t>(currentObj));
+        if (toAddress + size > currentPtr) {
+            ZUtils::object_copy_conjoint(fromAddr, to_zaddress(toAddress), size);
+        } else {
+            ZUtils::object_copy_disjoint(fromAddr, to_zaddress(toAddress), size);
+        }
         toObj->SetStateCode(ObjectState::NORMAL);
         std::atomic_thread_fence(std::memory_order_release);
         const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
@@ -2439,16 +2449,16 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     }
 }
 
-template void RegionManager::ForwardFromRegions<Generation::Young>(GCWorkers&);
-template void RegionManager::ForwardFromRegions<Generation::Old>(GCWorkers&);
+template void RegionManager::ForwardFromRegions<Generation::Young>(ZWorkers&);
+template void RegionManager::ForwardFromRegions<Generation::Old>(ZWorkers&);
 template void RegionManager::ForwardFromRegions<Generation::Young>();
 template void RegionManager::ForwardFromRegions<Generation::Old>();
 #if defined(MRT_TESTABLE_INTERNALS)
 template class ForwardTask<Generation::Young>;
 template class ForwardTask<Generation::Old>;
 #endif
-template void RegionManager::StartForwardFromRegions<Generation::Young>(GCWorkers&);
-template void RegionManager::StartForwardFromRegions<Generation::Old>(GCWorkers&);
+template void RegionManager::StartForwardFromRegions<Generation::Young>(ZWorkers&);
+template void RegionManager::StartForwardFromRegions<Generation::Old>(ZWorkers&);
 template void RegionManager::DrainForwardFromRegions<Generation::Young>();
 template void RegionManager::DrainForwardFromRegions<Generation::Old>();
 template void RegionManager::ForwardClaimedPage<Generation::Young>(RegionInfo*, ForwardingTable::Owner, bool, bool);

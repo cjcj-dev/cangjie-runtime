@@ -71,4 +71,7 @@ constexpr size_t ZMarkPartialArrayMinSize = size_t(1) << ZMarkPartialArrayMinSiz
 constexpr size_t ZMarkPartialArrayMinLength = ZMarkPartialArrayMinSize / sizeof(MAddress);
 constexpr size_t ZMarkProactiveFlushMax = 10;
 constexpr uint64_t ZMarkCompleteTimeout = 200;
+// gc/shared/gc_globals.hpp ConcGCThreads (set once by zArguments.cpp:67-81 before any
+// ZPerWorker is constructed; here by CollectorResources::Init, zDriver.cpp).
+extern uint32_t ConcGCThreads;
 }

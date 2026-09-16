@@ -71,6 +71,10 @@
 
 .global _unwindPCForC2RStubStart
 _unwindPCForC2RStubStart:
+    CalleeSavedRegistersStub MCC_PackageInitBegin
+    CalleeSavedRegistersStub MCC_PackageInitComplete
+    CalleeSavedRegistersStub MCC_PackageInitFail
+    CalleeSavedRegistersStub MCC_PackageInitAbort
 
     .text
     .align 2

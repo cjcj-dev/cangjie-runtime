@@ -10,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <cstring>
+#include <thread>
 #include "CangjieRuntime.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -94,39 +95,118 @@ void ZStatCycle::Sequence::Add(double value)
     variance = 0.3 * (variance + 0.7 * difference * difference);
 }
 
+// zStat.cpp:1330-1405
+ZStatWorkers::ZStatWorkers()
+    : _stat_lock(), _active_workers(0), _start_of_last(0), _accumulated_duration(0), _accumulated_time(0) {}
+
+void ZStatWorkers::at_start(uint32_t active_workers)
+{
+    std::lock_guard<std::mutex> locker(_stat_lock);
+    _start_of_last = TimeUtil::NanoSeconds();
+    _active_workers = active_workers;
+}
+
+void ZStatWorkers::at_end()
+{
+    std::lock_guard<std::mutex> locker(_stat_lock);
+    const uint64_t now = TimeUtil::NanoSeconds();
+    const uint64_t duration = now - _start_of_last;
+    uint64_t time = duration;
+    for (uint32_t i = 1; i < _active_workers; ++i) {
+        time += duration;
+    }
+    _accumulated_time += time;
+    _accumulated_duration += duration;
+    _active_workers = 0;
+}
+
+double ZStatWorkers::accumulated_time()
+{
+    const uint32_t nworkers = _active_workers;
+    const uint64_t now = TimeUtil::NanoSeconds();
+    const uint64_t start = _start_of_last;
+    uint64_t time = _accumulated_time;
+    if (nworkers != 0) {
+        for (uint32_t i = 0; i < nworkers; ++i) {
+            time += now - start;
+        }
+    }
+    return static_cast<double>(time) / SECOND_TO_NANO_SECOND;
+}
+
+double ZStatWorkers::accumulated_duration()
+{
+    const uint64_t now = TimeUtil::NanoSeconds();
+    const uint64_t start = _start_of_last;
+    uint64_t duration = _accumulated_duration;
+    if (_active_workers != 0) {
+        duration += now - start;
+    }
+    return static_cast<double>(duration) / SECOND_TO_NANO_SECOND;
+}
+
+uint32_t ZStatWorkers::active_workers()
+{
+    return _active_workers;
+}
+
+double ZStatWorkers::get_and_reset_duration()
+{
+    std::lock_guard<std::mutex> locker(_stat_lock);
+    const double duration = static_cast<double>(_accumulated_duration) / SECOND_TO_NANO_SECOND;
+    _accumulated_duration = 0;
+    return duration;
+}
+
+double ZStatWorkers::get_and_reset_time()
+{
+    std::lock_guard<std::mutex> locker(_stat_lock);
+    const double time = static_cast<double>(_accumulated_time) / SECOND_TO_NANO_SECOND;
+    _accumulated_time = 0;
+    return time;
+}
+
+ZStatWorkersStats ZStatWorkers::stats()
+{
+    std::lock_guard<std::mutex> locker(_stat_lock);
+    return { accumulated_time(), accumulated_duration() };
+}
+
 void ZStatCycle::Initialize(uint64_t now)
 {
     std::lock_guard<std::mutex> guard(lock);
     start = end = now;
-    initialWorkerDuration = initialWorkerTime = 0;
     warmupCycles = 0;
     lastActiveWorkers = 1;
     serial = Sequence{};
     parallel = Sequence{};
 }
 
-void ZStatCycle::AtStart(uint64_t now, uint64_t workerDuration, uint64_t workerTime)
+// zStat.cpp:1237-1240
+void ZStatCycle::AtStart(uint64_t now)
 {
     std::lock_guard<std::mutex> guard(lock);
     start = now;
-    initialWorkerDuration = workerDuration;
-    initialWorkerTime = workerTime;
 }
 
-void ZStatCycle::AtEnd(uint64_t now, uint64_t workerDuration, uint64_t workerTime, bool warmup)
+// zStat.cpp:1242-1268
+void ZStatCycle::AtEnd(uint64_t now, ZStatWorkers* statWorkers, bool warmup, bool recordStats)
 {
     std::lock_guard<std::mutex> guard(lock);
     end = now;
     if (warmup && warmupCycles < 3) {
         ++warmupCycles;
     }
-    const uint64_t duration = now - start;
-    const uint64_t parallelDuration = workerDuration - initialWorkerDuration;
-    const uint64_t parallelTime = workerTime - initialWorkerTime;
-    serial.Add(static_cast<double>(duration - std::min(duration, parallelDuration)) / SECOND_TO_NANO_SECOND);
-    parallel.Add(static_cast<double>(parallelTime) / SECOND_TO_NANO_SECOND);
-    lastActiveWorkers = parallelDuration == 0 ? 1.0 :
-        static_cast<double>(parallelTime) / parallelDuration;
+    // Calculate serial and parallelizable GC cycle times
+    const double duration = static_cast<double>(now - start) / SECOND_TO_NANO_SECOND;
+    const double workersDuration = statWorkers->get_and_reset_duration();
+    const double workersTime = statWorkers->get_and_reset_time();
+    const double serialTime = duration - std::min(duration, workersDuration);
+    lastActiveWorkers = workersDuration > 0.0 ? workersTime / workersDuration : 1.0;
+    if (recordStats) {
+        serial.Add(serialTime);
+        parallel.Add(workersTime);
+    }
 }
 
 ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
@@ -158,21 +238,42 @@ ZStatCollectionStats ZStatCollection::Stats() const
     return counts;
 }
 
-GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                    RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers)
+namespace {
+// zDirector.cpp:651-678: read is_active and active_workers under the
+// resizing lock; an inactive generation contributes no worker count.
+struct WorkerResizeSample {
+    bool isActive;
+    uint32_t activeWorkers;
+};
+
+WorkerResizeSample SampleWorkerResizeStats(ZWorkers& workers)
 {
-    const auto youngState = youngWorkers.GetSnapshot();
-    const auto oldState = oldWorkers.GetSnapshot();
-    const uint32_t concurrentWorkers = youngState.capacity;
+    std::lock_guard<std::mutex> locker(*workers.resizing_lock());
+    if (!workers.is_active()) {
+        // If the workers are not active, it isn't safe to read stats
+        // from the stat_cycle, so return early.
+        return { false, 0 };
+    }
+    return { true, workers.active_workers() };
+}
+} // namespace
+
+GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
+                                    RegionManager& regions, ZWorkers& youngWorkers, ZWorkers& oldWorkers,
+                                    uint32_t workerCapacity)
+{
+    const WorkerResizeSample youngState = SampleWorkerResizeStats(youngWorkers);
+    const WorkerResizeSample oldState = SampleWorkerResizeStats(oldWorkers);
+    const uint32_t concurrentWorkers = workerCapacity;
     const auto rate = ZStatMutatorAllocRate::stats();
     const auto youngCycle = young.Stats(now);
     const auto oldCycle = old.Stats(now);
     GcTriggerInputs in;
     in.workerCapacity = concurrentWorkers;
-    in.youngWorkersActive = youngState.cycleActive;
-    in.oldWorkersActive = oldState.cycleActive;
-    in.activeYoungWorkers = youngState.cycleActive ? youngState.activeWorkers : 0;
-    in.activeOldWorkers = oldState.cycleActive ? oldState.activeWorkers : 0;
+    in.youngWorkersActive = youngState.isActive;
+    in.oldWorkersActive = oldState.isActive;
+    in.activeYoungWorkers = youngState.activeWorkers;
+    in.activeOldWorkers = oldState.activeWorkers;
     in.allocationStalling = regions.IsAllocationStalling();
     in.allocRateAvgBps = rate.avg;
     in.allocRatePredictBps = rate.predict;
@@ -220,6 +321,9 @@ GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZSta
 #include <unistd.h>
 #endif
 #include "Base/LogFile.h"
+#include "Heap/z/zCPU.inline.hpp"
+#include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zUtils.inline.hpp"
 
 namespace MapleRuntime {
 ZStatSampler* ZStatSampler::first = nullptr;
@@ -237,38 +341,12 @@ ZStatValue::ZStatValue(const char* group, const char* name, uint32_t id, size_t 
     stride += size;
 }
 
+// zStat.cpp:362-369: one cache-line aligned, unfreeable block of
+// ZCPU::count() * stride bytes.
 void ZStatValue::InitializeStorage()
 {
-    // Each CpuData is cache-line aligned; the entire per-CPU layout is resident.
-    stride = (stride + 63) & ~static_cast<size_t>(63);
-    // zUtils.inline.hpp:37-49: reserve padding and keep the aligned storage
-    // for process lifetime. This also works in the product's C++14 build.
-    const uintptr_t allocation = reinterpret_cast<uintptr_t>(std::malloc(stride * CpuCount() + 63));
-    CHECK_DETAIL(allocation != 0, "statistics storage allocation failed");
-    base = reinterpret_cast<char*>((allocation + 63) & ~static_cast<uintptr_t>(63));
-}
-
-size_t ZStatValue::CpuCount()
-{
-    static const size_t count = [] {
-#if defined(__linux__) || defined(hongmeng)
-        const long configured = sysconf(_SC_NPROCESSORS_CONF);
-        if (configured > 0) return static_cast<size_t>(configured);
-#endif
-        return static_cast<size_t>(std::max(1U, std::thread::hardware_concurrency()));
-    }();
-    return count;
-}
-
-size_t ZStatValue::CpuId()
-{
-#if defined(__linux__) || defined(hongmeng)
-    const int cpu = sched_getcpu();
-    if (cpu >= 0 && static_cast<size_t>(cpu) < CpuCount()) return static_cast<size_t>(cpu);
-#endif
-    // os_bsd.cpp:2260-2265 / os_linux.cpp:4987-5008: unsupported or invalid
-    // processor ids share CPU zero; all updates remain atomic.
-    return 0;
+    stride = AlignUp(stride, ZCacheLineSize);
+    base = reinterpret_cast<char*>(ZUtils::alloc_aligned_unfreeable(ZCacheLineSize, stride * ZCPU::count()));
 }
 
 ZStatSampler::ZStatSampler(const char* group, const char* name, ZStatUnit unit)
@@ -298,12 +376,12 @@ void ZStatSampler::Sort()
 
 void ZStatSampler::Initialize() const
 {
-    for (size_t i = 0; i < CpuCount(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
 }
 
 void ZStatSampler::Sample(uint64_t value) const
 {
-    auto& data = *CpuLocal<CpuData>(CpuId());
+    auto& data = *CpuLocal<CpuData>(ZCPU::id());
     data.nsamples.fetch_add(1, std::memory_order_relaxed);
     data.sum.fetch_add(value, std::memory_order_relaxed);
     uint64_t maximum = data.max.load(std::memory_order_relaxed);
@@ -313,7 +391,7 @@ void ZStatSampler::Sample(uint64_t value) const
 ZStatSamplerData ZStatSampler::CollectAndReset() const
 {
     ZStatSamplerData result;
-    for (size_t i = 0; i < CpuCount(); ++i) {
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) {
         auto& data = *CpuLocal<CpuData>(i);
         if (data.nsamples.load(std::memory_order_relaxed) != 0) {
             result.Add({data.nsamples.exchange(0, std::memory_order_relaxed),
@@ -332,18 +410,18 @@ ZStatCounter::ZStatCounter(const char* group, const char* name, ZStatUnit unit)
 
 void ZStatCounter::Initialize() const
 {
-    for (size_t i = 0; i < CpuCount(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
 }
 
 void ZStatCounter::Increment(uint64_t value) const
 {
-    CpuLocal<CpuData>(CpuId())->value.fetch_add(value, std::memory_order_relaxed);
+    CpuLocal<CpuData>(ZCPU::id())->value.fetch_add(value, std::memory_order_relaxed);
 }
 
 void ZStatCounter::SampleAndReset() const
 {
     uint64_t value = 0;
-    for (size_t i = 0; i < CpuCount(); ++i) {
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) {
         value += CpuLocal<CpuData>(i)->value.exchange(0, std::memory_order_relaxed);
     }
     sampler.Sample(value);
@@ -398,27 +476,24 @@ static void Print(const std::vector<ZStatSamplerHistory>& history)
     }
 }
 
-void ZStat::Start()
+// zStat.cpp:1022-1027
+ZStat::ZStat()
 {
     Initialize();
-    std::lock_guard<std::mutex> guard(lock);
-    stopped = false;
-    thread = std::thread(&ZStat::Run, this);
+    set_name("ZStat");
+    create_and_start();
 }
 
-void ZStat::Stop()
+// zStat.cpp:1093-1095: terminate wakes the sampling wait.
+void ZStat::terminate()
 {
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        stopped = true;
-        condition.notify_all();
-    }
-    if (thread.joinable()) thread.join();
+    std::lock_guard<std::mutex> guard(lock);
+    stopped = true;
+    condition.notify_all();
 }
 
-ZStat::~ZStat() { Stop(); }
-
-void ZStat::Run()
+// zStat.cpp:1070-1091
+void ZStat::run_thread()
 {
     std::vector<ZStatSamplerHistory> history(ZStatSampler::Count());
     const auto interval = std::chrono::seconds(1); // zStat.hpp: SampleHz = 1
@@ -486,7 +561,7 @@ const ZStatPhase MajorCollection("Major Collection", "Major Collection");
 } // namespace MapleRuntime
 
 #include "Base/AtomicSpinLock.h"
-#include "Heap/Collector/TruncatedSeq.h"
+#include "Base/TruncatedSeq.h"
 #include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
@@ -521,11 +596,10 @@ void ZStatMutatorAllocRate::update_sampling_granule()
 
 void ZStatMutatorAllocRate::initialize()
 {
+    // zStat.cpp:945-949: the sample windows are process-lifetime statics;
+    // initialize only stamps the last sample time and the granule.
     g_lastSampleTimeNs = TimeUtil::NanoSeconds();
     g_allocatedSinceSample.store(0, std::memory_order_relaxed);
-    g_samplesTime.reset();
-    g_samplesBytes.reset();
-    g_rate.reset();
     // zDirector.cpp:867 / zHeap.cpp:61 — SoftMaxHeapSize. Env missing or 0 ⇒ hard cap.
     // ParseSizeFromEnv returns KB, same as cjHeapSize.
     size_t hard = Heap::GetHeap().GetMaxCapacity();

@@ -15,5 +15,8 @@ set(SRC_LIST
     "../Heap/z/zStat.cpp"
     "../Heap/z/zServiceability.cpp"
 )
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" AND NOT WIN32)
+    list(APPEND SRC_LIST "Copy_aarch64.S")
+endif ()
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 add_library(Base STATIC ${SRC_LIST})

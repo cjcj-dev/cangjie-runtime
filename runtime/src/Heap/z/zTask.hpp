@@ -4,30 +4,45 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#ifndef MRT_GC_Z_ZTASK_HPP
+#define MRT_GC_Z_ZTASK_HPP
 
-#pragma once
+#include <cstdint>
 
-#include <atomic>
-#include <condition_variable>
-#include <functional>
-#include <mutex>
-#include <pthread.h>
-#include <vector>
-
-#include "Base/LogFile.h"
-#include "Base/Macros.h"
+#include "Heap/z/workerThread.hpp"
 
 namespace MapleRuntime {
-class GCWorkerTask {
+// zTask.hpp:30-51. A ZTask embeds the WorkerTask adapter; work() takes no
+// argument and reads WorkerThread::worker_id() where a worker index is needed.
+class ZTask {
+private:
+    class Task : public WorkerTask {
+    private:
+        ZTask* const _task;
+
+    public:
+        Task(ZTask* task, const char* name);
+
+        virtual void work(uint32_t worker_id);
+    };
+
+    Task _worker_task;
+
 public:
-    virtual ~GCWorkerTask() = default;
-    virtual void Work(uint32_t workerId) = 0;
+    explicit ZTask(const char* name);
+    virtual ~ZTask() = default;
+
+    const char* name() const;
+    WorkerTask* worker_task();
+
+    virtual void work() = 0;
 };
 
-class GCRestartableWorkerTask : public GCWorkerTask {
+// zTask.hpp:53-57
+class ZRestartableTask : public ZTask {
 public:
-    // Called only after every participant has returned its private work.
-    virtual void ResizeWorkers(uint32_t workers) = 0;
+    explicit ZRestartableTask(const char* name);
+    virtual void resize_workers(uint32_t nworkers);
 };
-
-}
+} // namespace MapleRuntime
+#endif // MRT_GC_Z_ZTASK_HPP

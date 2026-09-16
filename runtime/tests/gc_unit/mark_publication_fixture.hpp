@@ -1,6 +1,7 @@
 // Product mark-domain fixture: observes the real M3 stripe carrier.
 #ifndef MRT_MARK_PUBLICATION_FIXTURE_HPP
 #define MRT_MARK_PUBLICATION_FIXTURE_HPP
+#include "gc_worker_fixture.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
 #include "Heap/Collector/CollectorProxy.h"
 #include "gc_heap_fixture.hpp"
@@ -47,6 +48,7 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void DrainDomain(MarkDomain& domain, Visitor&& visitor)
     {
+        GcUnit::WorkerFixture worker;
         // ZMark::flush publishes the mutator's partial stack before workers drain it.
         ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
         MarkStackEntry entry;

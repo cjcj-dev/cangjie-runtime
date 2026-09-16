@@ -100,17 +100,6 @@ public:
         return b0 + b1 * num;
     }
 
-    void reset()
-    {
-        num_ = 0;
-        next_ = 0;
-        sum_ = 0.0;
-        sumOfSquares_ = 0.0;
-        for (int i = 0; i < kMaxLength; ++i) {
-            sequence_[i] = 0.0;
-        }
-    }
-
 private:
     double sequence_[kMaxLength];
     int length_;

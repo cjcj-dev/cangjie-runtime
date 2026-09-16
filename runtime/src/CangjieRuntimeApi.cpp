@@ -294,10 +294,21 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
     ScheduleSetToCurrentThread(scheduler);
 #if defined(__IOS__)
     auto* loader = MapleRuntime::LoaderManager::GetInstance()->GetLoader();
-    loader->VisitBaseFile([loader](MapleRuntime::BaseFile* file) {
-        loader->DoInitImage(file);
-        return true;
-    });
+    MapleRuntime::BaseFile* initFile = nullptr;
+    std::unique_ptr<MapleRuntime::ElfUnloadQuiescence::PendingTask> initPending;
+    {
+        MapleRuntime::ElfUnloadQuiescence::SharedTaskAdmissionScope admission;
+        loader->VisitBaseFile([&](MapleRuntime::BaseFile* file) {
+            std::vector<MapleRuntime::Uptr> entries;
+            file->GetGlobalInitFunc(entries);
+            if (!entries.empty()) {
+                initPending = std::make_unique<MapleRuntime::ElfUnloadQuiescence::PendingTask>(entries.front(), admission);
+                initFile = file;
+            }
+            return true;
+        });
+    }
+    if (initFile != nullptr) { loader->DoInitImage(initFile); }
 #endif
     return E_OK;
 }

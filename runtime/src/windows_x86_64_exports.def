@@ -2266,7 +2266,6 @@ EXPORTS
     _ZNK12MapleRuntime13CJThreadModel20GetReservedStackSizeEv @2542
     _ZNK12MapleRuntime13CJThreadModel22GetStackGuardCheckFlagEv @2543
     _ZNK12MapleRuntime13CartesianTree12GetNodeCountEv @2544
-    _ZNK12MapleRuntime13CopyCollector10CopyObjectERKNS_10BaseObjectERS1_y @2545
     _ZNK12MapleRuntime13EnumDebugInfo11GetEnumCtorEj @2546
     _ZNK12MapleRuntime13ExtensionData10GetOuterTiEPNS_8TypeInfoEy @2547
     _ZNK12MapleRuntime13ExtensionData20GetInterfaceTypeInfoEjPPNS_8TypeInfoE @2548
@@ -3127,3 +3126,11 @@ EXPORTS
     _ZN12MapleRuntime4Heap8DumpHeapENS_12HeapDumpKindE @1859
     g_cjLoadShift @3489 DATA
     g_cjMarkGoodMask @3490 DATA
+    MCC_PackageInitBegin @3491
+    MCC_PackageInitComplete @3492
+    MCC_PackageInitFail @3493
+    MCC_PackageInitAbort @3494
+    CJ_MCC_PackageInitBegin @3495
+    CJ_MCC_PackageInitComplete @3496
+    CJ_MCC_PackageInitFail @3497
+    CJ_MCC_PackageInitAbort @3498
