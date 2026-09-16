@@ -332,6 +332,7 @@ MAIN_SOURCES=(
   "$SRC/test_store_barrier_buffer.cpp"
   "$SRC/test_barrier_old_atomic.cpp"
   "$SRC/test_zPageAge.cpp"
+  "$SRC/test_zPage.cpp"
   "$SRC/test_zVirtualMemory.cpp"
   "$SRC/test_zVirtualMemoryManager.cpp"
   "$SRC/test_mapped_cache.cpp"

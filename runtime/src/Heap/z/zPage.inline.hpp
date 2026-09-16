@@ -588,6 +588,7 @@ inline size_t RegionInfo::GetAvailableSize() const
 
 inline void RegionInfo::InitFreeUnits()
     {
+        InitRegionInfo(GetUnitCount(), UnitRole::FREE_UNITS);
     }
 
 
