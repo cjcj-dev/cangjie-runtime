@@ -420,9 +420,7 @@ struct YoungCollectionStats {
 
 struct FreePinnedSlotLists {
     static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
-    static constexpr size_t SYNC_OBJECT_SIZE = CJFuture::SYNC_OBJECT_SIZE;
     SlotList freeAtomicSlotList;
-    SlotList freeSyncSlotList;
 
 private:
     friend class RegionManager;
@@ -431,8 +429,6 @@ private:
         switch (size) {
             case ATOMIC_OBJECT_SIZE:
                 return freeAtomicSlotList.PopFront(size);
-            case SYNC_OBJECT_SIZE:
-                return freeSyncSlotList.PopFront(size);
             default:
                 return 0;
         }
@@ -446,9 +442,6 @@ public:
             case ATOMIC_OBJECT_SIZE:
                 freeAtomicSlotList.PushFront(slot);
                 break;
-            case SYNC_OBJECT_SIZE:
-                freeSyncSlotList.PushFront(slot);
-                break;
             default:
                 return;
         }
@@ -457,7 +450,6 @@ public:
     void Clear()
     {
         freeAtomicSlotList.Clear();
-        freeSyncSlotList.Clear();
     }
 };
 

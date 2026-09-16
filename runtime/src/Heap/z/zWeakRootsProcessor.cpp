@@ -1,4 +1,5 @@
 #include "Heap/z/zWeakRootsProcessor.hpp"
+#include "Sync/Sync.h"
 #include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -45,5 +46,6 @@ void ZWeakRootsProcessor::process_weak_roots()
     auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     ZProcessWeakRootsTask task(collector, workers->active_workers());
     workers->run(&task);
+    SyncRetireDead();
 }
 } // namespace MapleRuntime

@@ -21,6 +21,7 @@
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "Mutator/Mutator.h"
+#include "Sync/Sync.h"
 
 
 namespace MapleRuntime {
@@ -168,6 +169,11 @@ OopStorage& CopyCollector::WeakFinalizerRootStorage() const
     return collectorResources.GetFinalizerProcessor().WeakRootStorage();
 }
 
+OopStorage& CopyCollector::SyncWeakRootStorage() const
+{
+    return SyncWeakOopStorage();
+}
+
 void CopyCollector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
 {
     VisitStaticRoots(visitor);
@@ -201,7 +207,8 @@ OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const CopyCollector& co
 OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const CopyCollector& collector, unsigned workers,
                                                      ZGenerationIdOptional generation)
     : states{{{collector.WeakFinalizerRootStorage(), workers},
-              {Heap::GetHeap().GetExportRootStorage(), workers}}}, generation(generation) {}
+              {Heap::GetHeap().GetExportRootStorage(), workers},
+              {collector.SyncWeakRootStorage(), workers}}}, generation(generation) {}
 
 void OopStorageSetIteratorWeak::report_num_dead()
 {

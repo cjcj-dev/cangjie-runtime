@@ -301,6 +301,7 @@ public:
     void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
     OopStorage& StrongRootStorage() const;
     OopStorage& WeakFinalizerRootStorage() const;
+    OopStorage& SyncWeakRootStorage() const;
     void VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const;
     void VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const;
     void VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const;

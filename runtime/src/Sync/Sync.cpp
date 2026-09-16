@@ -6,7 +6,11 @@
 
 
 #include "Sync.h"
+#include "Common/WeakHandle.inline.h"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.hpp"
 #include <atomic>
+#include <mutex>
 
 #include "Base/TimeUtils.h"
 #include "schedule.h"
@@ -25,6 +29,93 @@ static T CastToT(const void* ptr)
     return reinterpret_cast<T>(const_cast<void*>(ptr));
 }
 
+static OopStorage g_syncWeakStorage;
+static std::mutex g_syncNativeListMutex;
+static NativeWaitSet* g_waitSets = nullptr;
+static NativeMutexWait* g_mutexWaits = nullptr;
+
+OopStorage& SyncWeakOopStorage()
+{
+    return g_syncWeakStorage;
+}
+
+static void LinkWaitSet(NativeWaitSet* n)
+{
+    std::lock_guard<std::mutex> lg(g_syncNativeListMutex);
+    n->next = g_waitSets;
+    g_waitSets = n;
+}
+
+static void LinkMutexWait(NativeMutexWait* n)
+{
+    std::lock_guard<std::mutex> lg(g_syncNativeListMutex);
+    n->next = g_mutexWaits;
+    g_mutexWaits = n;
+}
+
+static void DestroyWaitSet(NativeWaitSet* n)
+{
+    pthread_mutex_destroy(&n->wq.mutex);
+    n->object.release(&g_syncWeakStorage);
+    delete n;
+}
+
+static void DestroyMutexWait(NativeMutexWait* n)
+{
+    pthread_mutex_destroy(&n->sema.queue.mutex);
+    n->object.release(&g_syncWeakStorage);
+    delete n;
+}
+
+void SyncRetireDead()
+{
+    std::lock_guard<std::mutex> lg(g_syncNativeListMutex);
+    NativeWaitSet** wpp = &g_waitSets;
+    while (*wpp != nullptr) {
+        NativeWaitSet* n = *wpp;
+        if (n->busy.load() == 0 && (n->object.is_null() || n->object.peek() == nullptr)) {
+            *wpp = n->next;
+            DestroyWaitSet(n);
+        } else {
+            wpp = &n->next;
+        }
+    }
+    NativeMutexWait** mpp = &g_mutexWaits;
+    while (*mpp != nullptr) {
+        NativeMutexWait* n = *mpp;
+        if (n->busy.load() == 0 && (n->object.is_null() || n->object.peek() == nullptr)) {
+            *mpp = n->next;
+            DestroyMutexWait(n);
+        } else {
+            mpp = &n->next;
+        }
+    }
+}
+
+static NativeWaitSet* AllocWaitSet(BaseObject* obj)
+{
+    NativeWaitSet* n = new NativeWaitSet();
+    if (MRT_NewWaitQueue(&n->wq) != 0) {
+        delete n;
+        return nullptr;
+    }
+    n->object = WeakHandle(&g_syncWeakStorage, obj);
+    LinkWaitSet(n);
+    return n;
+}
+
+static NativeMutexWait* AllocMutexWait(BaseObject* obj)
+{
+    NativeMutexWait* n = new NativeMutexWait();
+    if (MRT_NewSem(&n->sema) != 0) {
+        delete n;
+        return nullptr;
+    }
+    n->object = WeakHandle(&g_syncWeakStorage, obj);
+    LinkMutexWait(n);
+    return n;
+}
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -34,30 +125,26 @@ static constexpr int64_t INVALID_THREAD_ID = -1LL;
 void ReleaseNativeResource(BaseObject* obj)
 {
     TypeInfo* typeInfo = obj->GetTypeInfo();
-    // Future is a template, so only the first 24 characters are compared
     if (typeInfo->IsFutureClass()) {
-        int waitQueue = reinterpret_cast<CJFuture*>(obj)->isWaitQueueInit;
-        if (waitQueue == 1) {
-            pthread_mutex_destroy(&reinterpret_cast<CJFuture*>(obj)->wq.mutex);
-        }
+        NativeWaitSet* n = reinterpret_cast<CJFuture*>(obj)->waitNative;
+        reinterpret_cast<CJFuture*>(obj)->waitNative = nullptr;
+        reinterpret_cast<CJFuture*>(obj)->isWaitQueueInit.store(0);
+        (void)n;
         return;
     }
     if (typeInfo->IsMonitorClass()) {
-        if (reinterpret_cast<CJMonitor*>(obj)->isWaitQueueInit) {
-            pthread_mutex_destroy(&reinterpret_cast<CJMonitor*>(obj)->wq.mutex);
-        }
+        reinterpret_cast<CJMonitor*>(obj)->waitNative = nullptr;
+        reinterpret_cast<CJMonitor*>(obj)->isWaitQueueInit = false;
         return;
     }
     if (typeInfo->IsMutexClass()) {
-        if (reinterpret_cast<CJMutex*>(obj)->isSemaInit) {
-            pthread_mutex_destroy(&reinterpret_cast<CJMutex*>(obj)->sema.queue.mutex);
-        }
+        reinterpret_cast<CJMutex*>(obj)->waitNative = nullptr;
+        reinterpret_cast<CJMutex*>(obj)->isSemaInit = false;
         return;
     }
     if (typeInfo->IsWaitQueueClass()) {
-        if (reinterpret_cast<CJWaitQueue*>(obj)->isWaitQueueInit) {
-            pthread_mutex_destroy(&reinterpret_cast<CJWaitQueue*>(obj)->wq.mutex);
-        }
+        reinterpret_cast<CJWaitQueue*>(obj)->waitNative = nullptr;
+        reinterpret_cast<CJWaitQueue*>(obj)->isWaitQueueInit = false;
         return;
     }
 }
@@ -67,7 +154,7 @@ void MCC_FutureInit(void* ptr)
     CJFuture* future = reinterpret_cast<CJFuture*>(ptr);
     future->completeFlag = false;
     future->isWaitQueueInit = 0;
-    MemorySet(reinterpret_cast<uintptr_t>(&future->spinLock), sizeof(AtomicSpinLock), 0, sizeof(AtomicSpinLock));
+    future->waitNative = nullptr;
 }
 
 bool MCC_FutureIsComplete(void* ptr)
@@ -84,6 +171,16 @@ bool MCC_FutureIsComplete(void* ptr)
 #endif
 }
 
+static bool NativeFutureIsComplete(void* nativePtr)
+{
+    NativeWaitSet* n = reinterpret_cast<NativeWaitSet*>(nativePtr);
+    BaseObject* obj = n->object.resolve();
+    if (obj == nullptr) {
+        return true;
+    }
+    return MCC_FutureIsComplete(obj);
+}
+
 void MRT_FutureWait(const void* ptr, int64_t timeout)
 {
     CJFuture* future = CastToT<CJFuture*>(ptr);
@@ -94,7 +191,6 @@ void MRT_FutureWait(const void* ptr, int64_t timeout)
             break;
         }
         int oldWaitQueue = future->isWaitQueueInit.load();
-        // -1 indicates that another thread is creating a waitqueue.
         if (oldWaitQueue == -1) {
             continue;
         }
@@ -102,57 +198,65 @@ void MRT_FutureWait(const void* ptr, int64_t timeout)
             break;
         }
 
-        // Set waitQueuePtr to -1 while creating waitqueue
         if (future->isWaitQueueInit.compare_exchange_weak(oldWaitQueue, -1)) {
-            if (MRT_NewWaitQueue(reinterpret_cast<void*>(&future->wq)) != 0) {
+            NativeWaitSet* n = AllocWaitSet(from_native_ref(future));
+            if (n == nullptr) {
                 LOG(RTLOG_ERROR, "waitqueue init failed!\n");
                 future->isWaitQueueInit.store(0);
                 ++i;
                 continue;
             }
+            future->waitNative = n;
             future->isWaitQueueInit.store(1);
             break;
         }
     }
 
-    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(future));
-    MRT_SuspendWithTimeout(&future->wq, MCC_FutureIsComplete, future, timeout);
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(future));
+    NativeWaitSet* n = future->waitNative;
+    if (n == nullptr) {
+        return;
+    }
+    n->busy.fetch_add(1);
+    MRT_SuspendWithTimeout(&n->wq, NativeFutureIsComplete, n, timeout);
+    n->busy.fetch_sub(1);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
-    Sanitizer::TsanAcquire(future);
+    Sanitizer::TsanAcquire(n->object.resolve());
 #endif
 }
 
 void MCC_FutureNotifyAll(const void* ptr)
 {
     CJFuture* future = CastToT<CJFuture*>(ptr);
-    // This function will be called just before the cjthread completes.
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(future, Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif
     future->completeFlag.store(true);
     int waitQueue = future->isWaitQueueInit.load();
-    // Waitqueue hasn't been created or is being created.
     if (waitQueue == 0 || waitQueue == -1) {
         return;
     }
-
-    MRT_ResumeAll(&future->wq, NULL, future);
+    NativeWaitSet* n = future->waitNative;
+    if (n == nullptr) {
+        return;
+    }
+    MRT_ResumeAll(&n->wq, NULL, n);
 }
 
 int MCC_MutexInit(void* ptr)
 {
     CJMutex* mutex = reinterpret_cast<CJMutex*>(ptr);
-    int ret = MRT_NewSem(&mutex->sema);
-    if (ret != 0) {
+    NativeMutexWait* n = AllocMutexWait(from_native_ref(mutex));
+    if (n == nullptr) {
         mutex->isSemaInit = false;
-    } else {
-        mutex->isSemaInit = true;
-        mutex->ownerThreadId = INVALID_THREAD_ID;
-        mutex->ownCount = 0;
+        mutex->waitNative = nullptr;
+        return -1;
     }
-    return ret;
+    mutex->waitNative = n;
+    mutex->isSemaInit = true;
+    mutex->ownerThreadId = INVALID_THREAD_ID;
+    mutex->ownCount = 0;
+    return 0;
 }
 
 // LOCKED is used in llvm for mutex opt. Don't just modify it here.
@@ -283,9 +387,11 @@ static bool MCC_MutexLockSlowPathImpl(CJMutex* mutex, uint64_t count)
         if (firstWaitTime == 0) {
             firstWaitTime = TimeUtil::MicroSeconds();
         }
-        Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
-        MRT_SemAcquire(&mutex->sema, isPushToHead);
-        Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(mutex));
+        NativeMutexWait* waitNative = mutex->waitNative;
+        waitNative->busy.fetch_add(1);
+        MRT_SemAcquire(&waitNative->sema, isPushToHead);
+        mutex = reinterpret_cast<CJMutex*>(waitNative->object.resolve());
+        waitNative->busy.fetch_sub(1);
 
         // ========== After wake up ==============
         // If waiting too long, the current thread becomes starved
@@ -457,7 +563,7 @@ static void MRT_MutexUnlockImpl(const void* ptr, uint64_t count)
         // However, mutex is still considered locked because STARVING is set,
         // so, new coming threads will not acquire it.
         // Note 2: #waiters is not decreased.
-        MRT_SemRelease(&mutex->sema);
+        MRT_SemRelease(&mutex->waitNative->sema);
         return;
     }
     for (;;) {
@@ -475,7 +581,7 @@ static void MRT_MutexUnlockImpl(const void* ptr, uint64_t count)
             //  - however, ONLY one waited thread will be waked up by the current thread,
             // because no threads except the waked one can reset the spinning state.
             // Thus, mutex will not be starved until the following `release` is done.
-            MRT_SemRelease(&mutex->sema);
+            MRT_SemRelease(&mutex->waitNative->sema);
             return;
         }
         currState = mutex->state.load();
@@ -508,49 +614,46 @@ static bool MRT_MutexFullyUnlock(void* ptr)
 int MCC_WaitQueueForMonitorInit(void* ptr)
 {
     CJMonitor* monitor = reinterpret_cast<CJMonitor*>(ptr);
-    int ret = MRT_NewWaitQueue(&monitor->wq);
-    if (ret == 0) {
-        monitor->isWaitQueueInit = true;
-    } else {
+    NativeWaitSet* n = AllocWaitSet(from_native_ref(monitor));
+    if (n == nullptr) {
         monitor->isWaitQueueInit = false;
+        monitor->waitNative = nullptr;
+        return -1;
     }
-    return ret;
+    monitor->waitNative = n;
+    monitor->isWaitQueueInit = true;
+    return 0;
 }
 
 int MCC_WaitQueueInit(void* ptr)
 {
     CJWaitQueue* queue = reinterpret_cast<CJWaitQueue*>(ptr);
-    int ret = MRT_NewWaitQueue(&queue->wq);
-    if (ret == 0) {
-        queue->isWaitQueueInit = true;
-    } else {
+    NativeWaitSet* n = AllocWaitSet(from_native_ref(queue));
+    if (n == nullptr) {
         queue->isWaitQueueInit = false;
+        queue->waitNative = nullptr;
+        return -1;
     }
-    return ret;
+    queue->waitNative = n;
+    queue->isWaitQueueInit = true;
+    return 0;
 }
 
-bool MonitorWait(CJMutex* mutex, void* wq, int64_t timeout)
+bool MonitorWait(CJMutex* mutex, NativeWaitSet* wqNative, int64_t timeout)
 {
-    // WaitqueuePark rejects ns <= 0 before the unlock callback.
-    // Re-locking here would bump ownCount a second time and leak the hold.
     if (timeout <= 0) {
         return false;
     }
-    // 1. Keep the #mutex-hold before release the mutex.
-    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
+    NativeMutexWait* mutexNative = mutex->waitNative;
     uint64_t ownCount = mutex->ownCount;
-    // 2. Release and wait
-    bool wakeStatus = MRT_SuspendWithTimeout(wq, MRT_MutexFullyUnlock, mutex, timeout);
-    // 3. Hold the mutex again
+    mutexNative->busy.fetch_add(1);
+    wqNative->busy.fetch_add(1);
+    bool wakeStatus = MRT_SuspendWithTimeout(&wqNative->wq, MRT_MutexFullyUnlock, mutex, timeout);
+    mutex = reinterpret_cast<CJMutex*>(mutexNative->object.resolve());
     MRT_MutexFullyLock(mutex, ownCount);
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(mutex));
-    if (wakeStatus) {
-        // Notified by other threads
-        return true;
-    } else {
-        // Timeout
-        return false;
-    }
+    wqNative->busy.fetch_sub(1);
+    mutexNative->busy.fetch_sub(1);
+    return wakeStatus;
 }
 
 /**
@@ -569,11 +672,7 @@ bool MCC_MonitorWait(const void* ptr, int64_t timeout)
     BaseObject* mutexObj =
         ZBarrier::ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
     CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
-    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
-    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(monitor));
-    bool ret = MonitorWait(mutex, &monitor->wq, timeout);
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(mutex));
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(monitor));
+    bool ret = MonitorWait(mutex, monitor->waitNative, timeout);
     return ret;
 }
 
@@ -584,7 +683,7 @@ bool MCC_MonitorWait(const void* ptr, int64_t timeout)
 void MCC_MonitorNotify(const void* ptr)
 {
     MRT_ResumeOne(
-        &CastToT<CJMonitor*>(ptr)->wq, [](void*) { return false; }, NULL);
+        &CastToT<CJMonitor*>(ptr)->waitNative->wq, [](void*) { return false; }, NULL);
 }
 
 /**
@@ -594,7 +693,7 @@ void MCC_MonitorNotify(const void* ptr)
 void MCC_MonitorNotifyAll(const void* ptr)
 {
     MRT_ResumeAll(
-        &CastToT<CJMonitor*>(ptr)->wq, [](void*) { return false; }, NULL);
+        &CastToT<CJMonitor*>(ptr)->waitNative->wq, [](void*) { return false; }, NULL);
 }
 
 bool MCC_MultiConditionMonitorWait(const void* ptr, void* waitQueuePtr, int64_t timeout)
@@ -604,11 +703,7 @@ bool MCC_MultiConditionMonitorWait(const void* ptr, void* waitQueuePtr, int64_t 
     BaseObject* mutexObj =
         ZBarrier::ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
     CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
-    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
-    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(waitQueuePtr));
-    bool ret = MonitorWait(mutex, &CastToT<CJWaitQueue*>(waitQueuePtr)->wq, timeout);
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(mutex));
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(waitQueuePtr));
+    bool ret = MonitorWait(mutex, CastToT<CJWaitQueue*>(waitQueuePtr)->waitNative, timeout);
     return ret;
 }
 
@@ -619,7 +714,7 @@ bool MCC_MultiConditionMonitorWait(const void* ptr, void* waitQueuePtr, int64_t 
 void MCC_MultiConditionMonitorNotify(const void* ptr __attribute__((unused)), const void* waitQueuePtr)
 {
     MRT_ResumeOne(
-        &CastToT<CJWaitQueue*>(waitQueuePtr)->wq, [](void*) { return false; }, NULL);
+        &CastToT<CJWaitQueue*>(waitQueuePtr)->waitNative->wq, [](void*) { return false; }, NULL);
 }
 
 /**
@@ -629,7 +724,7 @@ void MCC_MultiConditionMonitorNotify(const void* ptr __attribute__((unused)), co
 void MCC_MultiConditionMonitorNotifyAll(const void* ptr __attribute__((unused)), const void* waitQueuePtr)
 {
     MRT_ResumeAll(
-        &CastToT<CJWaitQueue*>(waitQueuePtr)->wq, [](void*) { return false; }, NULL);
+        &CastToT<CJWaitQueue*>(waitQueuePtr)->waitNative->wq, [](void*) { return false; }, NULL);
 }
 
 bool MCC_IsThreadObjectInited()
