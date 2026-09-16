@@ -328,7 +328,7 @@ struct LoadHealDeliveryTestAccess {
         collector.StartYoungMarkWork();
         collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         ZGlobalsPointers::flip_young_mark_start();
-        WCollector::WorkStack workStack = collector.NewWorkStack();
+        WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;

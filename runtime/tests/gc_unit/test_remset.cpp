@@ -93,7 +93,7 @@ struct RemsetRearmTestAccess {
     static ConsumeResult ConsumePrevious(WCollector& collector, const std::unordered_set<MAddress>& previous,
                                           BaseObject* currentMinorRoot)
     {
-        WCollector::WorkStack workStack = collector.NewWorkStack();
+        WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
