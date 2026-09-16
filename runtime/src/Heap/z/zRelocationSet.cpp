@@ -150,8 +150,7 @@ void ZRelocationSet::install_from_regions(RegionList& regions)
     size_t budget = 0;
     regions.VisitAllRegions([&](ZPage* region) {
         ++n;
-        const size_t live = region->is_marked() ? region->live_objects() : (region->GetRegionSize() >> 3);
-        const size_t entries = ZForwarding::nentries(live);
+        const size_t entries = ZForwarding::nentries(region);
         size_t bytes = 0;
         (void)ZForwarding::AttachedArray::allocation_size(entries, &bytes);
         (void)ZForwardingAllocator::add_to_budget(bytes, &budget);
@@ -161,9 +160,7 @@ void ZRelocationSet::install_from_regions(RegionList& regions)
     _forwardings = static_cast<ZForwarding**>(_allocator.alloc(n * sizeof(ZForwarding*)));
     _nforwardings = 0;
     regions.VisitAllRegions([&](ZPage* region) {
-        const size_t live = region->is_marked() ? region->live_objects() : (region->GetRegionSize() >> 3);
-        ZForwarding* forwarding = ZForwarding::alloc(live, region->GetRegionStart(), ZAddressHeapBase,
-            region->GetRegionSize(), region, region->GetRegionLifeId(), &_allocator);
+        ZForwarding* forwarding = ZForwarding::alloc(&_allocator, region, region->age());
         _generation->forwarding_table().insert(forwarding);
         _forwardings[_nforwardings++] = forwarding;
     });

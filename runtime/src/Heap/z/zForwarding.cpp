@@ -7,6 +7,7 @@
 #include "Heap/z/zForwarding.hpp"
 
 #include "Heap/z/zPage.hpp"
+#include "Heap/z/zAddress.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 
@@ -19,6 +20,28 @@
 #include <vector>
 
 namespace MapleRuntime {
+
+uint32_t ZForwarding::nentries(const ZPage* page)
+{
+    return static_cast<uint32_t>(nentries(static_cast<size_t>(page->live_objects())));
+}
+
+ZForwarding* ZForwarding::alloc(ZForwardingAllocator* allocator, ZPage* page, PageAge to_age)
+{
+    const size_t n = nentries(page);
+    size_t size = 0;
+    if (!AttachedArray::allocation_size(n, &size)) {
+        return nullptr;
+    }
+    void* const addr = allocator->allocate(size);
+    if (addr == nullptr) {
+        return nullptr;
+    }
+    AttachedArray::initialize(addr, n);
+    return ::new (addr) ZForwarding(page, page->GetRegionStart(), ZAddressHeapBase, page->GetRegionSize(), n,
+                                    page->GetRegionLifeId(), page->age(), to_age,
+                                    static_cast<size_t>(page->object_alignment_shift()));
+}
 
 namespace {
 thread_local ZForwarding* currentPageWork = nullptr;
@@ -138,6 +161,30 @@ void ZForwarding::in_place_relocation_claim_page()
         std::unique_lock<std::mutex> lock(_ref_lock);
         _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
     }
+
+void ZForwarding::in_place_relocation_start(MAddress relocated_watermark)
+{
+    (void)relocated_watermark;
+    _in_place.store(true, std::memory_order_release);
+    _in_place_thread.store(std::this_thread::get_id(), std::memory_order_relaxed);
+    _in_place_top_at_start = _page != nullptr ? _page->GetRegionAllocPtr() : 0;
+}
+
+void ZForwarding::in_place_relocation_finish()
+{
+    if (_from_age == PageAge::old || _to_age != PageAge::old) {
+        if (_page != nullptr) {
+            _page->reset_livemap();
+        }
+    }
+    _in_place_thread.store(std::thread::id(), std::memory_order_relaxed);
+}
+
+bool ZForwarding::in_place_relocation_is_below_top_at_start(MAddress offset) const
+{
+    return _in_place_thread.load(std::memory_order_relaxed) == std::this_thread::get_id() &&
+           offset < _in_place_top_at_start;
+}
 }
 
 namespace MapleRuntime {

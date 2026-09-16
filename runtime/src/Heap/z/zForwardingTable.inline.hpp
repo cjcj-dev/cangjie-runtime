@@ -1,5 +1,6 @@
 #pragma once
 #include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zForwarding.hpp"
 
 namespace MapleRuntime {
 
@@ -22,6 +23,18 @@ inline ZForwarding* ZForwardingTable::get(MAddress addr) const
     }
     zoffset offset;
     return _map->offset_for_address(addr, &offset) ? _map->get(offset) : nullptr;
+}
+
+inline void ZForwardingTable::insert(ZForwarding* forwarding)
+{
+    const zoffset offset = static_cast<zoffset>(forwarding->start() - _map->base());
+    _map->put(offset, forwarding->size(), forwarding);
+}
+
+inline void ZForwardingTable::remove(ZForwarding* forwarding)
+{
+    const zoffset offset = static_cast<zoffset>(forwarding->start() - _map->base());
+    _map->put(offset, forwarding->size(), nullptr);
 }
 
 } // namespace MapleRuntime

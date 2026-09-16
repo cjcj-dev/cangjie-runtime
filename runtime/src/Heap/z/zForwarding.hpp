@@ -211,6 +211,8 @@ public:
     };
 
     static size_t nentries(size_t objectCountUpperBound);
+    static uint32_t nentries(const ZPage* page);
+    static ZForwarding* alloc(ZForwardingAllocator* allocator, ZPage* page, PageAge to_age);
 
     static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
                               ZPage* page, RegionLifeId pageLifeId = 0,
@@ -231,6 +233,10 @@ public:
     MAddress start() const;
     size_t size() const;
     size_t regionSize() const { return _size; }
+    size_t object_alignment_shift() const { return _object_alignment_shift; }
+    PageAge from_age() const { return _from_age; }
+    PageAge to_age() const { return _to_age; }
+    bool is_promotion() const { return _from_age != PageAge::old && _to_age == PageAge::old; }
     ZPage* page() const;
     RegionLifeId page_life_id() const { return _page_life_id; }
     uint8_t table_generation() const { return _table_generation; }
@@ -396,6 +402,9 @@ public:
     void mark_done();
     bool is_done() const;
     void in_place_relocation_claim_page();
+    void in_place_relocation_start(MAddress relocated_watermark);
+    void in_place_relocation_finish();
+    bool in_place_relocation_is_below_top_at_start(MAddress offset) const;
 
     std::atomic<int32_t>& ref_count() { return _ref_count; }
     std::atomic<bool>& claimed() { return _claimed; }
@@ -405,19 +414,24 @@ public:
 private:
     // zForwarding.inline.hpp:59-76
     ZForwarding(ZPage* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId);
+                RegionLifeId pageLifeId, PageAge from_age, PageAge to_age, size_t object_alignment_shift);
 
     const MAddress _start;
     const size_t _size;
     const MAddress _heapBase;
+    const size_t _object_alignment_shift;
     const AttachedArray _entries;
     ZPage* const _page;
+    const PageAge _from_age;
+    const PageAge _to_age;
     const RegionLifeId _page_life_id;
     // Monotonic per-region-span generation. Written before the table pointer is
     // published, then immutable for the table's lifetime.
     uint8_t _table_generation;
     std::atomic<bool> _claimed;
     std::atomic<bool> _in_place;
+    MAddress _in_place_top_at_start;
+    std::atomic<std::thread::id> _in_place_thread;
     mutable std::mutex _ref_lock;
     std::condition_variable _ref_changed;
     std::atomic<int32_t> _ref_count;

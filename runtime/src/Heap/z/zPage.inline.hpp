@@ -636,7 +636,6 @@ inline void ZPage::PublishFromPageMetadata()
 inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     {
         PublishFromPageMetadata<G>();
-        SetInGhostRegion(1);
         _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
 
