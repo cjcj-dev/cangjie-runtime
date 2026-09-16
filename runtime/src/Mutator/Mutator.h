@@ -540,12 +540,7 @@ public:
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
         RegisterCurrentMarkFlushThread();
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    void SetStoreBarrierRememberedSetForTest(RememberedSet* rememberedSet)
-    {
-        storeBarrierRememberedSet = rememberedSet;
-    }
-#endif
+
 
     bool IsForeignThreadExit() const
     {
@@ -570,11 +565,7 @@ public:
     void FlushStoreBarrierBuffer(bool flushStoreBarrier = true)
     {
         std::lock_guard<std::mutex> lg(mutatorLock);
-        RememberedSet* rememberedSet = storeBarrierRememberedSet;
-        if (rememberedSet == nullptr) {
-            rememberedSet = &Heap::GetHeap().GetRememberedSet();
-        }
-        if (flushStoreBarrier && rememberedSet->IsInitialized()) {
+        if (flushStoreBarrier) {
             gcData.storeBarrierBuffer->Flush();
         }
     }
@@ -652,7 +643,7 @@ private:
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
 
-    RememberedSet* storeBarrierRememberedSet = nullptr;
+
 
     StackWatermark stackWatermark;
 

@@ -55,6 +55,7 @@
 #endif
 
 #include "Heap/z/zLiveMap.hpp"
+#include "Heap/z/zRememberedSet.hpp"
 namespace MapleRuntime {
 class RegionList;
 
@@ -112,6 +113,7 @@ private:
     const ZVirtualMemory _virtual;
     volatile zoffset_end _top;
     ZLiveMap _livemap;
+    ZRememberedSet _remembered_set;
     bool _relocate_promoted;
 public:
     using Page = ZPage;
@@ -302,6 +304,32 @@ public:
     // (zaddress_unsafe::null).
     MAddress find_base_unsafe(MAddress p);
     MAddress find_base(MAddress p);
+
+    uintptr_t local_offset(MAddress addr) const { return GetAddressOffset(addr); }
+    MAddress global_offset(uintptr_t l_offset) const { return GetRegionStart() + l_offset; }
+
+    void remember(volatile zpointer* p);
+    bool is_remembered(volatile zpointer* p);
+    bool was_remembered(volatile zpointer* p);
+    void remset_alloc();
+    void clear_remset_bit_non_par_current(uintptr_t l_offset);
+    void clear_remset_range_non_par_current(uintptr_t l_offset, size_t size);
+    void swap_remset_bitmaps();
+    ZBitMap::ReverseIterator remset_reverse_iterator_previous();
+    ZRememberedSet::Iterator remset_iterator_limited_current(uintptr_t l_offset, size_t size);
+    ZRememberedSet::Iterator remset_iterator_limited_previous(uintptr_t l_offset, size_t size);
+    template<typename Function>
+    void oops_do_remembered(Function function);
+    template<typename Function>
+    void oops_do_remembered_in_live(Function function);
+    template<typename Function>
+    void oops_do_current_remembered(Function function);
+    bool is_remset_cleared_current() const;
+    bool is_remset_cleared_previous() const;
+    void verify_remset_cleared_current() const;
+    void verify_remset_cleared_previous() const;
+    void clear_remset_previous();
+    void* remset_current();
 
     void verify_live(uint32_t live_objects, size_t live_bytes, bool in_place) const;
 

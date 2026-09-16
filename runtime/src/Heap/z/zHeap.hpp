@@ -48,7 +48,7 @@ class CollectorResources;
 class Heap {
 public:
     static Heap& GetHeap();
-    virtual RememberedSet& GetRememberedSet() = 0;
+    ZRemembered& remembered();
 
 
     virtual void Init(const HeapParam& vmHeapParam) = 0;

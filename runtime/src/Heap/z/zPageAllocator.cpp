@@ -646,12 +646,7 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
 
 void RegionManager::ScrubRememberedSetForRegion(ZPage* region)
 {
-    if (region == nullptr) {
-        return;
-    }
-    MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
-    MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
-    (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
+    (void)region;
 }
 
 

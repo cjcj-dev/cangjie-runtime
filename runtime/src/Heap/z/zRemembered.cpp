@@ -4,47 +4,24 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
+#include "Heap/z/zRemembered.hpp"
+#include "Heap/z/zRemembered.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
-#include "Heap/z/zRelocationSet.hpp"
-#include "Heap/z/zVerify.hpp"
-#include "Heap/WCollector/WCollector.h"
-
-#include <array>
-#include <atomic>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <algorithm>
-#include <iterator>
-#include <limits>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
-#include <unistd.h>
-
-#include "Concurrency/Concurrency.h"
-#include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/z/zDirector.hpp"
-#include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/z/zWorkers.hpp"
-#include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Allocator/RegionSpace.h"
-#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/z/zAddress.inline.hpp"
-#include "Mutator/MutatorManager.h"
-#include "ObjectModel/MArray.inline.h"
-#include "UnwindStack/StackFrameCursor.h"
-#include "ObjectModel/RefField.inline.h"
-#include "TypeInfoManager.h"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zPageTable.hpp"
+#include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zVerify.hpp"
 #include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Common/BaseObject.h"
+
+#include <atomic>
 
 namespace MapleRuntime {
 
@@ -52,11 +29,6 @@ namespace MapleRuntime {
 #pragma GCC visibility push(hidden)
 #endif
 namespace WCollectorInternal {
-// ZGC zPage.inline.hpp:254-256: is_object_live = is_allocating || livemap.
-// zBarrier.inline.hpp:73-78: never heal a non-null slot with null.
-// 4fcf746a used IsMarkedObject<Old> only — post-flip to-space and young
-// holders have no Old face, so F3 / Resolve / Scrub planted null into live
-// Array slots (nwreclaim: pc_off=0x29589 mov 0x8(%rcx) rcx=0).
 bool HolderObjectIsLive(BaseObject* holder)
 {
     if (holder == nullptr || !Heap::IsHeapAddress(holder) || !holder->IsValidObject()) {
@@ -84,7 +56,6 @@ bool SlotHeldByLiveObject(const void* slot)
     if (region->IsAllocating()) {
         return true;
     }
-    // zRememberedSet.cpp:144-152 / zPage.inline.hpp:371-386 find_base.
     const MAddress base = region->find_base_unsafe(reinterpret_cast<MAddress>(slot));
     BaseObject* holder = base == 0 ? nullptr : from_region_addr(base);
     if (holder == nullptr || reinterpret_cast<MAddress>(slot) - reinterpret_cast<MAddress>(holder) >=
@@ -93,100 +64,269 @@ bool SlotHeldByLiveObject(const void* slot)
     }
     return HolderObjectIsLive(holder);
 }
-
 } // namespace WCollectorInternal
 #if defined(__GNUC__)
 #pragma GCC visibility pop
 #endif
-void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
+
+ZRemembered::FoundOld::FoundOld()
+    : _allocated_bitmap_0(), _allocated_bitmap_1(), _bitmaps{ nullptr, nullptr }, _current(0)
+{}
+
+void ZRemembered::FoundOld::ensure()
 {
-    struct Containing {
-        MAddress addr;
-        MAddress field;
-    };
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    ZRelocationSetIterator iter(&Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).relocation_set());
-    for (ZForwarding* forwarding; iter.next(&forwarding);) {
-        if (forwarding == nullptr) {
-            continue;
+    if (_allocated_bitmap_0) {
+        return;
+    }
+    const BitMap::idx_t bits = static_cast<BitMap::idx_t>(ZAddressOffsetMax >> ZGranuleSizeShift);
+    _allocated_bitmap_0.reset(new CHeapBitMap(bits, true));
+    _allocated_bitmap_1.reset(new CHeapBitMap(bits, true));
+    _bitmaps[0] = _allocated_bitmap_0.get();
+    _bitmaps[1] = _allocated_bitmap_1.get();
+}
+
+CHeapBitMap* ZRemembered::FoundOld::current_bitmap()
+{
+    ensure();
+    return _bitmaps[_current];
+}
+
+CHeapBitMap* ZRemembered::FoundOld::previous_bitmap()
+{
+    ensure();
+    return _bitmaps[_current ^ 1];
+}
+
+void ZRemembered::FoundOld::flip()
+{
+    ensure();
+    _current ^= 1;
+}
+
+void ZRemembered::FoundOld::clear_previous()
+{
+    previous_bitmap()->clear_range(0, previous_bitmap()->size());
+}
+
+void ZRemembered::FoundOld::register_page(ZPage* page)
+{
+    CHECK(!page->IsYoungRegion());
+    const BitMap::idx_t index =
+        static_cast<BitMap::idx_t>(untype(page->start()) >> ZGranuleSizeShift);
+    current_bitmap()->par_set_bit(index, std::memory_order_relaxed);
+}
+
+ZRemembered::ZRemembered() : _page_table(nullptr), _old_forwarding_table(nullptr), _page_allocator(nullptr), _found_old()
+{}
+
+void ZRemembered::bind(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table,
+                       ZPageAllocator* page_allocator)
+{
+    _page_table = page_table;
+    _old_forwarding_table = old_forwarding_table;
+    _page_allocator = page_allocator;
+}
+
+void ZRemembered::flip_found_old_sets()
+{
+    _found_old.flip();
+}
+
+void ZRemembered::clear_found_old_previous_set()
+{
+    _found_old.clear_previous();
+}
+
+void ZRemembered::register_found_old(ZPage* page)
+{
+    CHECK(!page->IsYoungRegion());
+    _found_old.register_page(page);
+}
+
+template<typename Function>
+void ZRemembered::oops_do_forwarded_via_containing(const std::vector<ZRememberedSetContaining>* array,
+                                                   Function function) const
+{
+    MAddress from_addr = 0;
+    MAddress to_addr = 0;
+    size_t object_size = 0;
+    for (const ZRememberedSetContaining containing : *array) {
+        if (from_addr != containing._addr) {
+            from_addr = containing._addr;
+            BaseObject* to = Heap::GetHeap().GetCollector().relocate_or_remap_object(
+                reinterpret_cast<BaseObject*>(from_addr), ZGenerationId::old);
+            to_addr = reinterpret_cast<MAddress>(to);
+            object_size = to != nullptr ? RegionSpace::GetAllocSize(*to) : 0;
         }
-        if (forwarding->retain_page(&generation_relocate_queue())) {
-            forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
-            std::vector<Containing> containing;
-            ZPage* page = forwarding->page();
-            remset.VisitPreviousInRange(forwarding->start(), forwarding->size(), [&](MAddress field) {
-                if (page == nullptr) {
-                    return;
-                }
-                const MAddress addr = page->find_base_unsafe(field);
-                if (addr == 0 || addr > field) {
-                    return;
-                }
-                containing.push_back(Containing{ addr, field });
-            });
-            forwarding->release_page();
-            MAddress cachedFrom = 0;
-            MAddress cachedTo = 0;
-            size_t cachedSize = 0;
-            for (const Containing& entry : containing) {
-                if (entry.addr != cachedFrom) {
-                    cachedFrom = entry.addr;
-                    BaseObject* from = reinterpret_cast<BaseObject*>(entry.addr);
-                    BaseObject* to = relocate_or_remap_object(from, ZGenerationId::old);
-                    CHECK_DETAIL(to != nullptr, "remembered containing object must be relocated");
-                    cachedTo = reinterpret_cast<MAddress>(to);
-                    cachedSize = RegionSpace::GetAllocSize(*to);
-                }
-                const uintptr_t fieldOffset = entry.field - entry.addr;
-                if (fieldOffset < cachedSize) {
-                    rememberedSlots.insert(cachedTo + fieldOffset);
-                }
-            }
-        } else {
-            // ref == 0 releases source bytes before PageWorkScope marks done.
-            // Consume the published fields only after that same page task completes.
-            ZForwarding::WaitPageDone(forwarding);
-            CHECK(forwarding->is_done());
-            forwarding->relocated_remembered_fields_apply_to_published([&](MAddress field) {
-                rememberedSlots.insert(field);
-            });
+        const uintptr_t field_offset = containing._field_addr - from_addr;
+        if (field_offset < object_size) {
+            function(reinterpret_cast<volatile zpointer*>(to_addr + field_offset));
         }
-        ZVerify::AfterScan(forwarding);
     }
 }
 
-void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
-                                     const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
-                                     const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
-                                      MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
-                                      MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
+bool ZRemembered::should_scan_page(ZPage* page) const
 {
-    (void)workStack;
-    (void)stw;
-    (void)reachableSlots;
-    (void)currentMinorRoots;
-    (void)fullYoungScan;
-    (void)interiorBasesOut;
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    // ZRemembered::scan_field (zRemembered.cpp:578-589): resolve/mark the
-    // field, then rearm precisely when its healed target remains young.
-    for (MAddress slot : rememberedSlots) {
-        if (LedgerCount(weakSlots, slot) != 0) {
-            // Weak fields continue in the reference-processing domain.
-            remset.Record(slot);
-            if (statsOut != nullptr) ++statsOut->skippedWeak;
-            continue;
-        }
-        BaseObject* target = to_object(ZBarrier::RemsetBarrierOnOopField(HeapSlotAt<>(slot)));
-        if (target == nullptr || !Heap::IsHeapAddress(target)) continue;
-        ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
-        if (!region->IsYoungRegion()) continue;
-        remset.Record(slot);
-        if (consumedOut != nullptr) consumedOut->insert(slot);
-        if (statsOut != nullptr) ++statsOut->consumed;
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kNone, true);
-#endif
+    Collector& collector = Heap::GetHeap().GetCollector();
+    const GCPhase phase = collector.GetGCPhase(GCCycleGeneration::OLD);
+    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+        return true;
+    }
+    ZForwarding* forwarding = collector.GetGenerationCycle(GCCycleGeneration::OLD).forwarding(
+        untype(ZOffset::address_unsafe(page->start())));
+    if (forwarding == nullptr) {
+        return true;
+    }
+    if (!forwarding->relocated_remembered_fields_is_concurrently_scanned()) {
+        return true;
+    }
+    return false;
+}
+
+bool ZRemembered::scan_page_and_clear_remset(ZPage* page) const
+{
+    Collector& collector = Heap::GetHeap().GetCollector();
+    const bool can_trust_live_bits =
+        page->is_relocatable() && collector.GetGCPhase(GCCycleGeneration::OLD) != GCPhase::GC_PHASE_ENUM &&
+        collector.GetGCPhase(GCCycleGeneration::OLD) != GCPhase::GC_PHASE_MARK;
+    bool result = false;
+    if (!can_trust_live_bits) {
+        page->oops_do_remembered([&](volatile zpointer* p) { result |= scan_field(p); });
+    } else if (page->is_marked()) {
+        page->oops_do_remembered_in_live([&](volatile zpointer* p) { result |= scan_field(p); });
+    }
+    if (!can_trust_live_bits || page->is_marked()) {
+        page->clear_remset_previous();
+    }
+    return result;
+}
+
+static void fill_containing(std::vector<ZRememberedSetContaining>* array, ZPage* page)
+{
+    ZRememberedSetContainingIterator iter(page);
+    for (ZRememberedSetContaining containing; iter.next(&containing);) {
+        array->push_back(containing);
     }
 }
+
+struct ZRememberedScanForwardingContext {
+    std::vector<ZRememberedSetContaining> _containing_array;
+};
+
+bool ZRemembered::scan_forwarding(ZForwarding* forwarding, void* context_void) const
+{
+    auto* context = static_cast<ZRememberedScanForwardingContext*>(context_void);
+    bool result = false;
+    if (forwarding->retain_page(&generation_relocate_queue())) {
+        forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
+        context->_containing_array.clear();
+        fill_containing(&context->_containing_array, forwarding->page());
+        forwarding->release_page();
+        oops_do_forwarded_via_containing(&context->_containing_array, [&](volatile zpointer* p) {
+            result |= scan_field(p);
+        });
+    } else {
+        forwarding->relocated_remembered_fields_apply_to_published([&](MAddress field) {
+            result |= scan_field(reinterpret_cast<volatile zpointer*>(field));
+        });
+    }
+    return result;
+}
+
+ZRemsetTableIterator::ZRemsetTableIterator(ZRemembered* remembered, bool previous)
+    : _remembered(remembered),
+      _bm(previous ? remembered->_found_old.previous_bitmap() : remembered->_found_old.current_bitmap()),
+      _page_table(remembered->_page_table),
+      _old_forwarding_table(remembered->_old_forwarding_table),
+      _claimed(0)
+{}
+
+bool ZRemsetTableIterator::next(ZRemsetTableEntry* entry_addr)
+{
+    BitMap::idx_t prev = __atomic_load_n(&_claimed, __ATOMIC_RELAXED);
+    for (;;) {
+        if (prev == _bm->size()) {
+            return false;
+        }
+        const BitMap::idx_t page_index = _bm->find_first_set_bit(prev);
+        if (page_index == _bm->size()) {
+            __atomic_compare_exchange_n(&_claimed, &prev, page_index, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
+            return false;
+        }
+        BitMap::idx_t expected = prev;
+        if (!__atomic_compare_exchange_n(&_claimed, &expected, page_index + 1, false, __ATOMIC_RELAXED,
+                                         __ATOMIC_RELAXED)) {
+            prev = expected;
+            continue;
+        }
+        ZForwarding* forwarding = nullptr;
+        Collector& collector = Heap::GetHeap().GetCollector();
+        const GCPhase phase = collector.GetGCPhase(GCCycleGeneration::OLD);
+        if (phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD) {
+            forwarding = _old_forwarding_table->at(page_index);
+        }
+        ZPage* page = _page_table->at(page_index);
+        if (page != nullptr && page->IsYoungRegion()) {
+            page = nullptr;
+        }
+        if (page == nullptr && forwarding == nullptr) {
+            prev = page_index + 1;
+            continue;
+        }
+        entry_addr->_forwarding = forwarding;
+        entry_addr->_page = page;
+        return true;
+    }
+}
+
+void ZRemembered::remap_current(ZRemsetTableIterator* iter)
+{
+    for (ZRemsetTableEntry entry; iter->next(&entry);) {
+        CHECK(entry._forwarding == nullptr);
+        CHECK(entry._page != nullptr);
+        entry._page->oops_do_current_remembered([](volatile zpointer* p) {
+            (void)ZBarrier::load_barrier_on_oop_field(p);
+        });
+    }
+}
+
+bool ZRemembered::scan_field(volatile zpointer* p) const
+{
+    RefField<>& field = *reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p));
+    const zaddress addr = ZBarrier::RemsetBarrierOnOopField(field);
+    if (!is_null(addr) && Heap::is_young(untype(addr))) {
+        remember(p);
+        return true;
+    }
+    return false;
+}
+
+void ZRemembered::flip()
+{
+    ZRememberedSet::flip();
+    flip_found_old_sets();
+}
+
+void ZRemembered::scan_and_follow(ZMark* mark)
+{
+    (void)mark;
+    ZPage::EnableSafeDestroy();
+    ZRememberedScanForwardingContext context;
+    ZRemsetTableIterator iter(this, true);
+    for (ZRemsetTableEntry entry; iter.next(&entry);) {
+        if (entry._forwarding != nullptr) {
+            (void)scan_forwarding(entry._forwarding, &context);
+            ZVerify::AfterScan(entry._forwarding);
+        }
+        if (entry._page != nullptr) {
+            if (should_scan_page(entry._page)) {
+                (void)scan_page_and_clear_remset(entry._page);
+            }
+            register_found_old(entry._page);
+        }
+    }
+    clear_found_old_previous_set();
+    ZPage::DisableSafeDestroy();
+}
+
 } // namespace MapleRuntime

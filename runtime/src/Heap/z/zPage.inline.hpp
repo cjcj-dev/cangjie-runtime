@@ -14,6 +14,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zVirtualMemory.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zRememberedSet.inline.hpp"
 
 namespace MapleRuntime {
 
@@ -351,6 +352,101 @@ inline MAddress ZPage::find_base(MAddress p)
 {
     DCHECK_D(is_marked(), "Should be marked");
     return find_base_unsafe(p);
+}
+
+inline void ZPage::remember(volatile zpointer* p)
+{
+    _remembered_set.set_current(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline bool ZPage::is_remembered(volatile zpointer* p)
+{
+    return _remembered_set.at_current(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline bool ZPage::was_remembered(volatile zpointer* p)
+{
+    return _remembered_set.at_previous(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline void ZPage::clear_remset_bit_non_par_current(uintptr_t l_offset)
+{
+    _remembered_set.unset_non_par_current(l_offset);
+}
+
+inline void ZPage::clear_remset_range_non_par_current(uintptr_t l_offset, size_t size)
+{
+    _remembered_set.unset_range_non_par_current(l_offset, size);
+}
+
+inline ZBitMap::ReverseIterator ZPage::remset_reverse_iterator_previous()
+{
+    return _remembered_set.iterator_reverse_previous();
+}
+
+inline ZRememberedSet::Iterator ZPage::remset_iterator_limited_current(uintptr_t l_offset, size_t size)
+{
+    return _remembered_set.iterator_limited_current(l_offset, size);
+}
+
+inline ZRememberedSet::Iterator ZPage::remset_iterator_limited_previous(uintptr_t l_offset, size_t size)
+{
+    return _remembered_set.iterator_limited_previous(l_offset, size);
+}
+
+inline bool ZPage::is_remset_cleared_current() const
+{
+    return _remembered_set.is_cleared_current();
+}
+
+inline bool ZPage::is_remset_cleared_previous() const
+{
+    return _remembered_set.is_cleared_previous();
+}
+
+inline void ZPage::verify_remset_cleared_current() const {}
+
+inline void ZPage::verify_remset_cleared_previous() const {}
+
+inline void ZPage::clear_remset_previous()
+{
+    _remembered_set.clear_previous();
+}
+
+inline void ZPage::swap_remset_bitmaps()
+{
+    _remembered_set.swap_remset_bitmaps();
+}
+
+inline void* ZPage::remset_current()
+{
+    return _remembered_set.current();
+}
+
+template<typename Function>
+inline void ZPage::oops_do_remembered(Function function)
+{
+    _remembered_set.iterate_previous([&](uintptr_t l_offset) {
+        function(reinterpret_cast<volatile zpointer*>(global_offset(l_offset)));
+    });
+}
+
+template<typename Function>
+inline void ZPage::oops_do_remembered_in_live(Function function)
+{
+    ZRememberedSetContainingInLiveIterator iter(this);
+    for (ZRememberedSetContaining containing; iter.next(&containing);) {
+        function(reinterpret_cast<volatile zpointer*>(containing._field_addr));
+    }
+    iter.print_statistics();
+}
+
+template<typename Function>
+inline void ZPage::oops_do_current_remembered(Function function)
+{
+    _remembered_set.iterate_current([&](uintptr_t l_offset) {
+        function(reinterpret_cast<volatile zpointer*>(global_offset(l_offset)));
+    });
 }
 
 // zPage.cpp:115-117.
@@ -1004,6 +1100,9 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         _scratch.allocPtr = GetRegionStart();
         _scratch.regionEnd = _scratch.allocPtr + nUnit * ZPage::UNIT_SIZE;
         reset(age);
+        if (age == PageAge::old && !_remembered_set.is_initialized()) {
+            remset_alloc();
+        }
         if (live) {
             reset_livemap();
         }

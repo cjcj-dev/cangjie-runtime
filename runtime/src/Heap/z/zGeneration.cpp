@@ -139,7 +139,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
 #endif
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
-        Heap::GetHeap().GetRememberedSet().FlipForMinor();
+        Heap::GetHeap().remembered().flip();
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
@@ -430,54 +430,9 @@ void WCollector::DoYoungGarbageCollection()
     if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
         return;
     }
-    const bool remsetConsumedLedgerElideActive = false;
-
-    if (rememberedSlots.empty()) {
-        // scan_and_follow (zRemembered.cpp:561-576): previous face as grey
-        // roots, mutators alive. Flip already happened under STW1.
-        ScanRelocatedRememberedFields(rememberedSlots);
-        MinorSlotSet pageSlots;
-        concWindow.remsetSlots =
-            Heap::GetHeap().GetRememberedSet().ScanPreviousForMinor(pageSlots);
-        for (MAddress slot : pageSlots) {
-            rememberedSlots.insert(slot);
-        }
-    }
-
-    MinorSlotSet liveRememberedSlots;
-    size_t liveRememberedCount = 0;
-    for (MAddress slot : rememberedSlots) {
-        if (LedgerCount(weakSlots, slot) == 0 &&
-            (!fullYoungScan ||
-             LedgerCount(reachableSlots, slot) != 0)) {
-            ++liveRememberedCount;
-            if (!remsetConsumedLedgerElideActive) {
-                liveRememberedSlots.insert(slot);
-            }
-        }
-    }
-    RemsetScanStats remsetStats;
-    remsetStats.recorded = rememberedSlots.size();
-    remsetStats.live = liveRememberedCount;
-    MinorSlotSet consumedSlots;
-    MinorInteriorBaseMap remsetInteriorBases;
     {
-        // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
         MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetRescan);
-        RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,
-                            fullYoungScan,
-                            remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
-                            &remsetInteriorBases, stw.get());
-    }
-
-    // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
-
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungMarkFromRemset);
-        ++concWindow.closureCalls;
-        concWindow.remsetSlots = remsetStats.consumed;
-        TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                          reachableSlotDomain);
+        Heap::GetHeap().remembered().scan_and_follow(MarkPtr());
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     // Deterministic T1->T2 export-root window: root enumeration has returned,
