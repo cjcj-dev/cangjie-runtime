@@ -191,7 +191,7 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
     PageQueueFixture f;
     f.Publish();
     f.owner->release_page();
-    GC_EXPECT_FALSE(f.owner->retain_page());
+    GC_EXPECT_FALSE(f.owner->retain_page(&f.queue));
     const auto answer = LookupTo(
         reinterpret_cast<MAddress>(f.heap.obj0), f.heap.region0->GetOwnerGeneration());
     GC_EXPECT_TRUE(answer.answer == FwdLookup::ArmedHit);

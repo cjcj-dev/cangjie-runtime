@@ -18,6 +18,7 @@
 #include "Heap/z/zAttachedArray.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zRelocate.hpp"
 #include "gc_unittest.hpp"
 #include "gc_heap_fixture.hpp"
 
@@ -142,7 +143,9 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
     GC_EXPECT_EQ(fwd->page_life_id(), static_cast<RegionLifeId>(7));
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
 
-    GC_EXPECT_TRUE(fwd->retain_page());
+    RelocationRequestQueue queue;
+    queue.BeginWorkers(1);
+    GC_EXPECT_TRUE(fwd->retain_page(&queue));
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 2);
     fwd->release_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
@@ -151,11 +154,11 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
     fwd->in_place_relocation_claim_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), -1);
     fwd->mark_done();
-    GC_EXPECT_FALSE(fwd->retain_page());
+    GC_EXPECT_FALSE(fwd->retain_page(&queue));
     GC_EXPECT_TRUE(fwd->is_done());
     fwd->release_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 0);
-    GC_EXPECT_FALSE(fwd->retain_page());
+    GC_EXPECT_FALSE(fwd->retain_page(&queue));
     fwd->Destroy();
 }
 
@@ -218,7 +221,7 @@ GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
 {
     GcHeapFixture heap;
     auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
-    GC_EXPECT_TRUE(fwd->retain_page());
+    GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue()));
     fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
     GC_EXPECT_TRUE(fwd->relocated_remembered_fields_is_concurrently_scanned());
@@ -277,7 +280,7 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     std::atomic<bool> returned{ false };
     bool retained = true;
     std::thread reader([&] {
-        retained = fwd->retain_page();
+        retained = fwd->retain_page(&generation_relocate_queue());
         returned.store(true, std::memory_order_release);
     });
     JoinGuard guard(reader);

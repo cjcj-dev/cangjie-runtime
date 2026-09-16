@@ -70,6 +70,7 @@ public:
     void BeginWorkers(size_t workers);
     EnqueueResult Add(void* owner, MAddress from);
     EnqueueResult Add(ZForwarding* forwarding);
+    void add_and_wait(ZForwarding* forwarding);
     MAddress Wait(const Handle& request);
 
     // Wait for the canonical forwarding completion. Always returns zero;

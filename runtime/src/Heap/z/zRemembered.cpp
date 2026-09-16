@@ -110,7 +110,7 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
         if (forwarding == nullptr) {
             continue;
         }
-        if (forwarding->retain_page()) {
+        if (forwarding->retain_page(&generation_relocate_queue())) {
             forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
             std::vector<Containing> containing;
             ZPage* page = forwarding->page();

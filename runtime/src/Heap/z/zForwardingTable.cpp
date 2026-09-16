@@ -3,6 +3,8 @@
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
+#include "Heap/z/zRelocate.hpp"
+#include "Heap/Allocator/RegionSpace.h"
 
 namespace MapleRuntime {
 
@@ -21,6 +23,11 @@ void ZForwardingTable::remove(ZForwarding* forwarding)
 ZForwardingTable& generation_forwarding_table(Generation generation)
 {
     return Heap::GetHeap().GetCollector().GetGenerationCycle(generation).forwarding_table();
+}
+
+RelocationRequestQueue& generation_relocate_queue()
+{
+    return static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetRelocationRequestQueue();
 }
 
 ZForwarding* forwarding_for_page(const ZPage* page)

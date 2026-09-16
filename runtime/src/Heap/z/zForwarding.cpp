@@ -8,7 +8,7 @@
 
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zAddress.hpp"
-#include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zRelocate.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 
 #include <cstdio>
@@ -105,7 +105,7 @@ bool ZForwarding::claim()
     return _claimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
 }
 
-bool ZForwarding::retain_page()
+bool ZForwarding::retain_page(RelocationRequestQueue* queue)
 {
     for (;;) {
         int32_t n = _ref_count.load(std::memory_order_acquire);
@@ -113,7 +113,7 @@ bool ZForwarding::retain_page()
             return false;
         }
         if (n < 0) {
-            WaitPageDone(this);
+            queue->add_and_wait(this);
             return false;
         }
         if (_ref_count.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -139,10 +139,13 @@ void ZForwarding::release_page()
         }
     }
 
-void ZForwarding::detach_page()
+ZPage* ZForwarding::detach_page()
 {
-        std::unique_lock<std::mutex> lock(_ref_lock);
-        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == 0; });
+        if (_ref_count.load(std::memory_order_acquire) != 0) {
+            std::unique_lock<std::mutex> lock(_ref_lock);
+            _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == 0; });
+        }
+        return _page;
     }
 
 void ZForwarding::mark_done()
@@ -157,13 +160,19 @@ bool ZForwarding::is_done() const
 
 void ZForwarding::in_place_relocation_claim_page()
 {
-        int32_t count = _ref_count.load(std::memory_order_relaxed);
-        do {
+        for (;;) {
+            int32_t count = _ref_count.load(std::memory_order_relaxed);
             CHECK(count > 0);
-        } while (!_ref_count.compare_exchange_weak(count, -count, std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed));
-        std::unique_lock<std::mutex> lock(_ref_lock);
-        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
+            if (!_ref_count.compare_exchange_weak(count, -count, std::memory_order_acq_rel,
+                                                  std::memory_order_relaxed)) {
+                continue;
+            }
+            if (count != 1) {
+                std::unique_lock<std::mutex> lock(_ref_lock);
+                _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
+            }
+            break;
+        }
     }
 
 void ZForwarding::in_place_relocation_start(MAddress relocated_watermark)

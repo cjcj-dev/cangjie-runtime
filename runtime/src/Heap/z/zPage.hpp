@@ -510,7 +510,7 @@ public:
         explicit RetainScope(ZPage* region) : RetainScope(forwarding_for_page(region)) {}
         explicit RetainScope(ZForwarding* forwarding)
             : owner(forwarding), region(owner ? owner->page() : nullptr),
-              retained(owner && owner->retain_page())
+              retained(owner && owner->retain_page(&generation_relocate_queue()))
         {
             CHECK(!retained || owner->page_life_current());
         }

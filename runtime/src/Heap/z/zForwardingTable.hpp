@@ -29,7 +29,9 @@ private:
     std::unique_ptr<ZGranuleMap<ZForwarding*>> _map;
 };
 
+class RelocationRequestQueue;
 ZForwardingTable& generation_forwarding_table(Generation generation);
+RelocationRequestQueue& generation_relocate_queue();
 ZForwarding* forwarding_for_page(const ZPage* page);
 inline ZForwarding* forwarding_for_page(const ZPage* page, MAddress) { return forwarding_for_page(page); }
 MAddress forwarding_find(Generation generation, MAddress from);

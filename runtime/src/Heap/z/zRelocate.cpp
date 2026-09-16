@@ -2497,6 +2497,13 @@ RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(ZForwarding* f
     return { request, true, true };
 }
 
+void RelocationRequestQueue::add_and_wait(ZForwarding* forwarding)
+{
+    const EnqueueResult result = Add(forwarding);
+    CHECK_DETAIL(result.accepted, "forwarding wait requires a page task");
+    (void)Wait(result.request);
+}
+
 MAddress RelocationRequestQueue::Wait(const Handle& request)
 {
     return WaitUntil(request);

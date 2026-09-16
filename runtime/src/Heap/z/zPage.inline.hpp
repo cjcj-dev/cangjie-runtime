@@ -737,7 +737,7 @@ inline void ZPage::AssertGhostClearedAfterReuse(size_t nUnit) const
 inline bool ZPage::RetainForwarding()
     {
         auto owner = forwarding_for_page(this);
-        return owner && owner->retain_page();
+        return owner && owner->retain_page(&generation_relocate_queue());
     }
 
 inline void ZPage::ReleaseForwarding()
