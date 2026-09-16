@@ -60,7 +60,7 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void DrainOld(Visitor&& visitor)
     {
-        DrainDomain(*collector.majorMark, std::forward<Visitor>(visitor));
+        DrainDomain(*collector.MajorMark(), std::forward<Visitor>(visitor));
     }
     bool FollowYoung(TracingCollector::WorkStack& work, std::vector<BaseObject*>& reached)
     {
@@ -74,17 +74,17 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void Drain(Visitor&& visitor)
     {
-        DrainDomain(*collector.youngMark, visitor);
-        DrainDomain(*collector.majorMark, visitor);
+        DrainDomain(*collector.YoungMark(), visitor);
+        DrainDomain(*collector.MajorMark(), visitor);
     }
     template<class Stack> void DrainObjects(Stack& stack)
     {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
-    size_t YoungPending() const { return collector.youngMark->Stripes().Population() +
-        collector.youngMark->Stacks().Population(); }
-    size_t OldPending() const { return collector.majorMark->Stripes().Population() +
-        collector.majorMark->Stacks().Population(); }
+    size_t YoungPending() const { return collector.YoungMark()->Stripes().Population() +
+        collector.YoungMark()->Stacks().Population(); }
+    size_t OldPending() const { return collector.MajorMark()->Stripes().Population() +
+        collector.MajorMark()->Stacks().Population(); }
 };
 template<class Stack> void DrainPublishedMarkObjects(Stack& stack)
 {

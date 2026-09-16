@@ -45,6 +45,7 @@ namespace MapleRuntime {
 
 class MarkStripeSet;
 class ZWorkers;
+class MarkContext;
 
 // Per-generation mark ownership (zMark.hpp:42-124, zMark.cpp:80-92).
 class ZMark {
@@ -66,9 +67,13 @@ public:
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
     void MarkObject(zaddress address);
     void Start();
+    void PrepareWork();
     void PrepareWork(size_t nworkers);
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
+    void MarkFollow(bool partial = false);
+    void FollowWorkComplete(bool partial);
+    void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);
     void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
     void BindAbort(ZAbort* token) { abortToken = token; }
     bool PollStop();
@@ -259,10 +264,8 @@ RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt();
 #endif
 
 class MarkingWork;
-class ConcurrentMarkingWork;
 class TracingCollector : public Collector {
-    friend MarkingWork;
-    friend ConcurrentMarkingWork;
+    friend class ZMarkTask;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
     friend struct GenerationCycleRootTestAccess;
@@ -279,7 +282,8 @@ public:
     explicit TracingCollector(Allocator& allocator, CollectorResources& resources);
 
     ~TracingCollector() override = default;
-    ZMark* MajorMark() const { return majorMark.get(); }
+    ZMark* MajorMark() { return oldCycle.MarkPtr(); }
+    const ZMark* MajorMark() const { return oldCycle.MarkPtr(); }
     virtual void PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex);
     virtual void PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex);
 
@@ -467,7 +471,6 @@ protected:
     bool fixReferences = false;
 
     std::atomic<size_t> markedObjectCount = { 0 };
-    std::unique_ptr<ZMark> majorMark;
     std::mutex externMtx;
     // ZGC zUncoloredRoot.hpp:46-49: uncolored roots keep their color in
     // the container. A current address must not be interpreted as a from-key.

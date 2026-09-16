@@ -175,7 +175,8 @@ public:
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
-    ZMark* YoungMark() const { return youngMark.get(); }
+    ZMark* YoungMark() { return youngCycle.MarkPtr(); }
+    const ZMark* YoungMark() const { return youngCycle.MarkPtr(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
     void MarkYoungRootObject(BaseObject* object) const override;
 
@@ -763,7 +764,7 @@ private:
     // ZMark::try_end sibling: called with mutators stopped; performs exactly one
     // local-buffer flush and reports whether concurrent-mark-continue is needed.
     bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
-    friend class YoungStripedMarkingWork;
+    friend class ZMarkTask;
     void ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots);
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
@@ -810,7 +811,6 @@ private:
     CrossRefHandler cycleRefHandlerForTest = nullptr;
 #endif
 
-    std::unique_ptr<ZMark> youngMark;
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint64_t minorTotalRuns = 0;

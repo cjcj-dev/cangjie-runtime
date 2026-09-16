@@ -39,9 +39,15 @@ using ZGeneration = GenerationCycle;
 
 class GenerationCycle {
 public:
-    explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
+    explicit GenerationCycle(GCCycleGeneration generation);
+    ~GenerationCycle();
+    GenerationCycle(const GenerationCycle&) = delete;
+    GenerationCycle& operator=(const GenerationCycle&) = delete;
     GCCycleSnapshot Snapshot() const;
-    void BindMark(ZMark* domain) { mark = domain; }
+    ZMark& Mark() { return *mark; }
+    const ZMark& Mark() const { return *mark; }
+    ZMark* MarkPtr() { return mark.get(); }
+    const ZMark* MarkPtr() const { return mark.get(); }
     bool IsPhaseMark() const;
     double FragmentationLimit() const;
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
@@ -81,7 +87,7 @@ private:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
 #endif
-    ZMark* mark = nullptr;
+    std::unique_ptr<ZMark> mark;
     const GCCycleGeneration generation;
     std::unique_ptr<ZWorkers> workers;
     GCStats stats;
