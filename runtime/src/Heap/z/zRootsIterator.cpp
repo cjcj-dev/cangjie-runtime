@@ -199,26 +199,7 @@ void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 
 
 
-void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
-{
-    (void)workStack;
-    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
-}
 
-void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
-{
-    VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
-
-        EnumRefFieldRoot(root, foreignRootsSet);
-    });
-}
-void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
-{
-    ScopedEntryTrace trace("CJRT_GC_ENUM");
-    DoOldRoots();
-    MergeMutatorRoots(workStack);
-    EnumAllExportRoots(foreignRootsSet);
-}
 
 
 } // namespace MapleRuntime

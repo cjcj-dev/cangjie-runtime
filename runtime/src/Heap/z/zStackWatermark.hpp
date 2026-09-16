@@ -1,22 +1,40 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
 #ifndef MRT_STACK_WATERMARK_H
 #define MRT_STACK_WATERMARK_H
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 
 #include "Base/Log.h"
+#include "Common/StackType.h"
+#include "Common/BaseObject.h"
+#include "StackMap/StackMapTypeDef.h"
+#include "Heap/z/zUncoloredRoot.hpp"
 
 namespace MapleRuntime {
 
-// ZGC StackWatermarkState: packed (epoch << 1) | done plus a watermark cursor.
-// Movable stacks keep a logical frame index and a generation (PLAN §5 infra).
+class Mutator;
+class AllocBuffer;
+struct FrameInfo;
+
+struct ThreadLocalAllocStats {
+    size_t retired = 0;
+};
+
+class StackWatermarkProcessOopClosure {
+public:
+    using RootFunction = void (*)(zaddress_unsafe*, uintptr_t);
+    static RootFunction select_function(void* context);
+    StackWatermarkProcessOopClosure(void* context, uintptr_t color);
+    void do_root(zaddress_unsafe* p);
+
+private:
+    RootFunction function;
+    uintptr_t color;
+};
+
 class StackWatermark {
 public:
     StackWatermark();
@@ -27,6 +45,7 @@ public:
         cursorIndex.store(0, std::memory_order_relaxed);
         frameCount.store(0, std::memory_order_relaxed);
         stackGeneration.store(0, std::memory_order_relaxed);
+        allocStats.retired = 0;
     }
 
     void OnStackGrow(intptr_t stackOffset)
@@ -45,33 +64,10 @@ public:
     static bool UnpackDone(uint32_t packed) { return (packed & 1u) != 0; }
     static uint32_t epoch_id();
 
-    bool TryBegin(uint64_t scanEpoch, size_t totalFrames)
-    {
-        CHECK_DETAIL(scanEpoch != 0, "[GCV2][stack-watermark] epoch must not be zero");
-        const uint32_t packed = state.load(std::memory_order_acquire);
-        if (UnpackDone(packed) && UnpackEpoch(packed) == static_cast<uint32_t>(scanEpoch)) {
-            return false;
-        }
-        if (!UnpackDone(packed) && UnpackEpoch(packed) == static_cast<uint32_t>(scanEpoch) && packed != 0) {
-            return false;
-        }
-        uint32_t expected = packed;
-        const uint32_t started = PackState(static_cast<uint32_t>(scanEpoch), false);
-        if (!state.compare_exchange_strong(expected, started, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            return false;
-        }
-        cursorIndex.store(0, std::memory_order_relaxed);
-        frameCount.store(totalFrames, std::memory_order_relaxed);
-        return true;
-    }
-
+    bool TryBegin(uint64_t scanEpoch, size_t totalFrames);
     void AdvanceTo(size_t index) { cursorIndex.store(index, std::memory_order_release); }
-
-    void Finish()
-    {
-        const uint32_t packed = state.load(std::memory_order_relaxed);
-        state.store(PackState(UnpackEpoch(packed), true), std::memory_order_release);
-    }
+    void Finish();
+    void finish_processing() { Finish(); }
 
     uint64_t GetEpoch() const { return UnpackEpoch(state.load(std::memory_order_acquire)); }
     size_t GetCursorIndex() const { return cursorIndex.load(std::memory_order_acquire); }
@@ -82,12 +78,21 @@ public:
     bool IsDone() const { return UnpackDone(state.load(std::memory_order_acquire)); }
     bool IsDone(uint64_t scanEpoch) const;
 
+    void process_head(Mutator& mutator, void* context, const RootVisitor& visitor,
+                      const RootVisitor& invisibleRootVisitor);
+    bool start_processing_impl(Mutator& mutator, void* context, uint64_t epoch, size_t totalFrames,
+                               const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor);
+    void process(const FrameInfo& frame, Mutator& mutator, void* context, const RootVisitor& visitor,
+                 const DerivedPtrVisitor* derivedPtrVisitor);
+    ThreadLocalAllocStats& stats() { return allocStats; }
+
 private:
     std::atomic<uint32_t> state;
     std::atomic<size_t> cursorIndex;
     std::atomic<size_t> frameCount;
     std::atomic<uint64_t> stackGeneration;
+    ThreadLocalAllocStats allocStats;
 };
 } // namespace MapleRuntime
 
-#endif // MRT_STACK_WATERMARK_H
+#endif

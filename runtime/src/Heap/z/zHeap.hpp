@@ -37,6 +37,7 @@ extern uintptr_t g_cjHeapRangeEnd[];
 namespace MapleRuntime {
 class ZPageTable;
 class OopStorage;
+class ObjectClosure;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
 class AllocBuffer;
@@ -115,6 +116,8 @@ public:
 
 
     void DumpHeap(HeapDumpKind kind);
+    void object_iterate(ObjectClosure* object_cl, bool visit_weaks);
+    void object_and_field_iterate_for_verify(ObjectClosure* object_cl, bool visit_weaks);
 
     virtual GCPhase GetGCPhase(GCCycleGeneration generation) const = 0;
     virtual void SetGCPhase(GCCycleGeneration generation, GCPhase phase) = 0;

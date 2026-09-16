@@ -384,17 +384,7 @@ void Mutator::VisitProcessedRoots(const RootVisitor& visitor)
 void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor)
 {
     MutatorLock();
-#if defined(MRT_GC_UNIT_TESTS)
-    RootVisitor observedInvisibleRootVisitor = [this, &invisibleRootVisitor](ObjectRef& root) {
-        NoteLargeArrayInitRootVisit(IsManagedContext() ? LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED
-                                                      : LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE,
-                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
-        invisibleRootVisitor(root);
-    };
-    const RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
-#else
     const RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
-#endif
     // A native/exclusive frame has no managed stack map, but its side roots are
     // independent of stack metadata and must remain visible. In particular an
     // incomplete large reference array can be published while a native helper
@@ -948,32 +938,16 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
 {
     scannedFrames = 0;
     MutatorLock();
-#if defined(MRT_GC_UNIT_TESTS)
-    RootVisitor observedInvisibleRootVisitor = [this, &invisibleRootVisitor](ObjectRef& root) {
-        NoteLargeArrayInitRootVisit(IsManagedContext() ? LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED
-                                                      : LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE,
-                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
-        invisibleRootVisitor(root);
-    };
-    const RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
-#else
     const RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
-#endif
     if (stackWatermark.IsDone(epoch)) {
         MutatorUnlock();
         return true;
     }
     if (!IsManagedContext()) {
-        bool began = stackWatermark.TryBegin(epoch, 0);
+        bool began = stackWatermark.start_processing_impl(*this, nullptr, epoch, 0, visitor,
+                                                          visitedInvisibleRootVisitor);
         if (began) {
-            VisitExceptionRoots(visitor);
-            VisitNativeFrameRoots(visitor);
-            VisitRawObjects(visitedInvisibleRootVisitor);
-            gcData.InstallMasks(ThreadGCData::PublishedMasks());
-            if (gcData.storeBarrierBuffer != nullptr) {
-                gcData.storeBarrierBuffer->on_new_phase();
-            }
-            stackWatermark.Finish();
+            stackWatermark.finish_processing();
         }
         MutatorUnlock();
         return began;
@@ -984,24 +958,22 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     }
 
     IncObserver();
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    CreateCurrentGCInfo();
-#endif
     StackFrameCursor cursor(uwContext);
-    bool began = stackWatermark.TryBegin(epoch, cursor.FrameCount());
+    bool began = stackWatermark.start_processing_impl(*this, nullptr, epoch, cursor.FrameCount(), visitor,
+                                                      visitedInvisibleRootVisitor);
     if (began) {
-        VisitExceptionRoots(visitor);
-        VisitNativeFrameRoots(visitor);
-        VisitRawObjects(visitedInvisibleRootVisitor);
-        gcData.InstallMasks(ThreadGCData::PublishedMasks());
-        if (gcData.storeBarrierBuffer != nullptr) {
-            gcData.storeBarrierBuffer->on_new_phase();
-        }
-        while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor, young)) {
+        while (!cursor.Done()) {
+            const FrameInfo* frame = cursor.CurrentFrame();
+            if (frame != nullptr) {
+                stackWatermark.process(*frame, *this, nullptr, visitor, derivedPtrVisitor);
+            }
+            if (!cursor.ProcessOne(visitor, *this, derivedPtrVisitor, young)) {
+                break;
+            }
             stackWatermark.AdvanceTo(cursor.Cursor());
         }
         scannedFrames = cursor.Cursor();
-        stackWatermark.Finish();
+        stackWatermark.finish_processing();
     }
     DecObserver();
     MutatorUnlock();

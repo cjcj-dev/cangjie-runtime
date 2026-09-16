@@ -24,6 +24,8 @@
 #include <mach/mach.h>
 #endif
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zHeapIterator.hpp"
+#include "Heap/z/zIterator.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -505,5 +507,17 @@ void Heap::DumpHeap(HeapDumpKind kind)
         default:
             CHECK(false);
     }
+}
+
+void Heap::object_iterate(ObjectClosure* object_cl, bool visit_weaks)
+{
+    HeapIterator iter(visit_weaks, false, 1);
+    iter.object_iterate([&](BaseObject* object) { object_cl->do_object(object); }, 0);
+}
+
+void Heap::object_and_field_iterate_for_verify(ObjectClosure* object_cl, bool visit_weaks)
+{
+    HeapIterator iter(visit_weaks, true, 1);
+    iter.object_and_field_iterate([&](BaseObject* object) { object_cl->do_object(object); }, {}, 0);
 }
 }

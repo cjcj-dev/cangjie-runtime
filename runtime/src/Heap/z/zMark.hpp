@@ -520,14 +520,10 @@ protected:
         return *(generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Workers();
     }
     // enum roots referenced by foreign languages.
-    void EnumAllExportRoots(RootSet& foreignRootsSet);
-    // let finalizerProcessor process finalizers, and mark resurrected if in light sync gc
     virtual void ProcessFinalizers() {}
     void DiscoverFinalizableRoot(NativeSlot& slot) const;
 
-    void MergeMutatorRoots(WorkStack& workStack);
     void DoOldRoots();
-    void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool FlushMarkProducers(MarkDomain* domain);

@@ -313,6 +313,9 @@ bool MutatorManager::ConcurrentStackScanEnabled()
 
 void MutatorManager::RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf)
 {
+    (void)mutator;
+    (void)epoch;
+    (void)bySelf;
     std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
     if (epoch != epochHandshakeActive.load(std::memory_order_acquire) ||
         !epochHandshakeAckedMutators.insert(&mutator).second) {
@@ -440,6 +443,8 @@ extern "C" MRT_EXPORT uint64_t MRT_RunEpochHandshake()
 {
     return MutatorManager::Instance().RunEpochHandshake("explicit", true).epoch;
 }
+
+
 
 void MutatorManager::AcquireMutatorManagementWLock()
 {

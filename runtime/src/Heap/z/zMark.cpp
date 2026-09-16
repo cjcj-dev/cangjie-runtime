@@ -358,11 +358,15 @@ void WCollector::TraceHeap()
     {
         MRT_PHASE_TIMER(ZStatPhases::PEnumRootsUpdateOldPointersWithin);
         if (concurrentStackScan) {
-            DoEnumeration(workStack, foreignStack);
+            DoOldRoots();
+            (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
+            VisitExportColoredRoots([&](NativeSlot& root) { EnumRefFieldRoot(root, foreignStack); });
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
             TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true, false);
-            DoEnumeration(workStack, foreignStack);
+            DoOldRoots();
+            (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
+            VisitExportColoredRoots([&](NativeSlot& root) { EnumRefFieldRoot(root, foreignStack); });
         }
     }
 
@@ -393,16 +397,7 @@ thread_local const char* gMinorRootOrigin = "unknown";
 void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                                      uint64_t stackScanEpoch)
 {
-#if defined(MRT_GC_UNIT_TESTS)
-    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
-        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_MARK,
-                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
-        invisibleRootVisitor(root);
-    };
-    RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
-#else
     RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
-#endif
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     RootVisitor checkedRawRootVisitor = [&remset, &rawRootVisitor](ObjectRef& root) {
@@ -419,9 +414,6 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
     VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
-#if defined(MRT_GC_UNIT_TESTS)
-        NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MINOR_MARK, &mutator, watermarkDone);
-#endif
         if (watermarkDone) {
             ++concurrentDone;
             return;
