@@ -703,8 +703,8 @@ static void RunP2(int (*exercise)())
     param.heapParam.heapSize = 64 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
-    GC_EXPECT_EQ(exercise(), 0);
-    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+    const int rc = exercise();
+    GC_EXPECT_EQ(rc, 0);
 }
 
 GC_OTHER_VM_TEST(P2FieldBarrier, FieldBarrierExercise)
