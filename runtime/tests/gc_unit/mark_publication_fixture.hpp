@@ -81,10 +81,14 @@ struct MarkPublicationFixture {
     {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
-    size_t YoungPending() const { return collector.YoungMark()->Stripes().Population() +
-        collector.YoungMark()->Stacks().Population(); }
-    size_t OldPending() const { return collector.MajorMark()->Stripes().Population() +
-        collector.MajorMark()->Stacks().Population(); }
+    size_t YoungPending() const {
+        auto* mark = const_cast<WCollector&>(collector).YoungMark();
+        return mark->Stripes().Population() + mark->Stacks().Population();
+    }
+    size_t OldPending() const {
+        auto* mark = const_cast<WCollector&>(collector).MajorMark();
+        return mark->Stripes().Population() + mark->Stacks().Population();
+    }
 };
 template<class Stack> void DrainPublishedMarkObjects(Stack& stack)
 {
