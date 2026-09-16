@@ -37,6 +37,9 @@
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zTask.hpp"
+#include "Heap/z/zForwardingEntry.hpp"
+#include "Heap/z/zArray.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -142,28 +145,90 @@ ZRelocationSet::ZRelocationSet(GenerationCycle* generation)
 
 ZWorkers* ZRelocationSet::workers() const { return _generation != nullptr ? _generation->Workers() : nullptr; }
 
-void ZRelocationSet::install(const ZRelocationSetSelector* selector) { (void)selector; }
+class ZRelocationSetInstallTask : public ZTask {
+private:
+    ZRelocationSet* _relocation_set;
+    ZForwardingAllocator* const _allocator;
+    ZForwarding** _forwardings;
+    const size_t _nforwardings;
+    const ZArray<ZPage*>* _small;
+    const ZArray<ZPage*>* _medium;
+    ZArrayIterator<ZPage*> _small_iter;
+    ZArrayIterator<ZPage*> _medium_iter;
+
+    void install(ZForwarding* forwarding, size_t index)
+    {
+        ZPage* const page = forwarding->page();
+        _relocation_set->generation()->forwarding_table().insert(forwarding);
+        (void)page;
+        _forwardings[index] = forwarding;
+    }
+
+public:
+    ZRelocationSetInstallTask(ZRelocationSet* relocation_set, const ZRelocationSetSelector* selector)
+        : ZTask("ZRelocationSetInstallTask"),
+          _relocation_set(relocation_set),
+          _allocator(&relocation_set->_allocator),
+          _forwardings(nullptr),
+          _nforwardings(static_cast<size_t>(selector->selected_small()->length()) +
+                        static_cast<size_t>(selector->selected_medium()->length())),
+          _small(selector->selected_small()),
+          _medium(selector->selected_medium()),
+          _small_iter(selector->selected_small()),
+          _medium_iter(selector->selected_medium())
+    {
+        const size_t relocation_set_size = _nforwardings * sizeof(ZForwarding*);
+        const size_t forwardings_size = _nforwardings * sizeof(ZForwarding);
+        const size_t forwarding_entries_size = selector->forwarding_entries() * sizeof(ZForwardingEntry);
+        _allocator->reset(relocation_set_size + forwardings_size + forwarding_entries_size);
+        _forwardings = static_cast<ZForwarding**>(_allocator->alloc(relocation_set_size));
+    }
+
+    virtual void work()
+    {
+        ZArray<ZPage*> relocate_promoted;
+        for (size_t page_index; _small_iter.next_index(&page_index);) {
+            ZPage* page = _small->at(static_cast<int>(page_index));
+            ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, page->age());
+            install(forwarding, static_cast<size_t>(_medium->length()) + page_index);
+            if (forwarding->is_promotion()) {
+                relocate_promoted.push(page);
+            }
+        }
+        for (size_t page_index; _medium_iter.next_index(&page_index);) {
+            ZPage* page = _medium->at(static_cast<int>(page_index));
+            ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, page->age());
+            install(forwarding, page_index);
+            if (forwarding->is_promotion()) {
+                relocate_promoted.push(page);
+            }
+        }
+        _relocation_set->register_relocate_promoted(relocate_promoted);
+    }
+
+    ZForwarding** forwardings() const { return _forwardings; }
+    size_t nforwardings() const { return _nforwardings; }
+};
+
+void ZRelocationSet::install(const ZRelocationSetSelector* selector)
+{
+    ZRelocationSetInstallTask task(this, selector);
+    if (ZWorkers* w = workers()) {
+        w->run(&task);
+    } else {
+        task.work();
+    }
+    _forwardings = task.forwardings();
+    _nforwardings = task.nforwardings();
+}
 
 void ZRelocationSet::install_from_regions(RegionList& regions)
 {
-    size_t n = 0;
-    size_t budget = 0;
+    ZRelocationSetSelector selector;
     regions.VisitAllRegions([&](ZPage* region) {
-        ++n;
-        const size_t entries = ZForwarding::nentries(region);
-        size_t bytes = 0;
-        (void)ZForwarding::AttachedArray::allocation_size(entries, &bytes);
-        (void)ZForwardingAllocator::add_to_budget(bytes, &budget);
+        selector.add_selected_small(region, ZForwarding::nentries(region));
     });
-    budget += n * sizeof(ZForwarding*);
-    _allocator.reset(budget);
-    _forwardings = static_cast<ZForwarding**>(_allocator.alloc(n * sizeof(ZForwarding*)));
-    _nforwardings = 0;
-    regions.VisitAllRegions([&](ZPage* region) {
-        ZForwarding* forwarding = ZForwarding::alloc(&_allocator, region, region->age());
-        _generation->forwarding_table().insert(forwarding);
-        _forwardings[_nforwardings++] = forwarding;
-    });
+    install(&selector);
 }
 
 void ZRelocationSet::reset(ZPageAllocator* page_allocator)
