@@ -46,16 +46,23 @@ struct PartialArrayTestAccess {
 
     static void StartFieldMark(WCollector& collector)
     {
-        GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, Heap::GetHeap().GetCollector());
-        collector.oldCycle.InitializeWorkers(1);
-        collector.oldCycle.Begin(0);
-        collector.StartOldMarkWork();
-        collector.oldCycle.PublishPhase(GC_PHASE_TRACE);
+        auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+        GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
+        auto arm = [](TracingCollector& c) {
+            c.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(1);
+            c.GetGenerationCycle(GCCycleGeneration::OLD).Begin(0);
+            c.StartOldMarkWork();
+            c.GetGenerationCycle(GCCycleGeneration::OLD).PublishPhase(GC_PHASE_TRACE);
+        };
+        arm(collector);
+        arm(heap);
     }
 
     static void ReadPublished(WCollector& collector, TracingCollector::WorkStack& result)
     {
-        auto& domain = *collector.MajorMarkDomain();
+        auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+        auto& domain = heap.MajorMarkDomain() != nullptr ? *heap.MajorMarkDomain()
+                                                         : *collector.MajorMarkDomain();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
             if (auto* stack = domain.Stacks().StealLocal(stripe)) {
                 while (!stack->IsEmpty()) result.push_back(stack->Pop());
