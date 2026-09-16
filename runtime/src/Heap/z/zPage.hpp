@@ -162,6 +162,7 @@ public:
     bool undo_alloc_object(uintptr_t addr, size_t size);
     bool undo_alloc_object_atomic(uintptr_t addr, size_t size);
     ZPage* reset(PageAge age);
+    PageAge age() const { return _age; }
 
     ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
 
@@ -195,7 +196,6 @@ public:
     static constexpr bool kEnrolTimeProbe = true;
     static std::atomic<uint64_t>& EnrolBeforeFlip();
     static std::atomic<uint64_t>& EnrolAfterFlip();
-    void NoteEnrolPhase();
 
     ZPage();
     static ZPage* NullRegion();
@@ -207,7 +207,8 @@ public:
 
     const ZForwarding::FromPageView* GetFromPageView() const
     {
-        return ForwardingTable::GetFromPageView(const_cast<ZPage*>(this));
+        ZForwarding* forwarding = forwarding_for_page(const_cast<ZPage*>(this));
+        return forwarding == nullptr ? nullptr : forwarding->from_page_view(GetRegionLifeId());
     }
 
     bool HasFromPageMetadata() const;
@@ -451,18 +452,11 @@ public:
     template<Generation G>
     void PublishFromPageMetadata();
 
-    // Product publication edge shared by forwarding and from-page liveness.
-    // Keep this in the ordinary product inline path: the operation is part of
-    // PrepareForwardableRegion, not a test-facing ABI surface.
     template<Generation G>
     __attribute__((always_inline)) inline void PublishForwardingCarrier();
 
-    template<Generation G>
-    void PrepareForwardableRegion();
-
     void ClearGhostRegionBit();
 
-    // dispel all units of this region.
     // inGhostFromRegion is the unique guard condition.
 
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
@@ -506,10 +500,10 @@ public:
     // released or claimed — the late reader must not touch from-side state.
     class RetainScope {
     public:
-        explicit RetainScope(ZPage* region) : RetainScope(ForwardingTable::RetainPageOwner(region)) {}
-        explicit RetainScope(ForwardingTable::Owner forwarding)
-            : owner(std::move(forwarding)), region(owner ? owner->page() : nullptr),
-              retained(owner && owner->retain_page())
+        explicit RetainScope(ZPage* region) : RetainScope(forwarding_for_page(region)) {}
+        explicit RetainScope(ZForwarding* forwarding)
+            : owner(forwarding), region(owner ? owner->page() : nullptr),
+              retained(owner && owner->retain_page(&generation_relocate_queue()))
         {
             CHECK(!retained || owner->page_life_current());
         }
@@ -523,8 +517,8 @@ public:
         }
         bool ok() const { return retained; }
         bool covers(ZPage* page) const { return retained && region == page; }
-        ZForwarding* forwarding() const { return owner.get(); }
-        ForwardingTable::Owner HoldForwarding() const { return owner; }
+        ZForwarding* forwarding() const { return owner; }
+        ZForwarding* HoldForwarding() const { return owner; }
 
         RetainScope(const RetainScope&) = delete;
         RetainScope& operator=(const RetainScope&) = delete;
@@ -532,7 +526,7 @@ public:
         RetainScope& operator=(RetainScope&&) = delete;
 
     private:
-        ForwardingTable::Owner owner;
+        ZForwarding* owner;
         ZPage* region;
         bool retained;
     };
@@ -549,7 +543,7 @@ public:
     // Next cycle must not treat last cycle's in-place done as this cycle's done.
     ZForwarding* PeekForwardingOwner() const
     {
-        return _scratch.fwdOwner.load(std::memory_order_acquire);
+        return forwarding_for_page(const_cast<ZPage*>(this));
     }
 
     int32_t CopyInflightWord() const
@@ -568,13 +562,13 @@ public:
     // zForwarding.cpp:110-181 in_place_relocation_claim_page + detach_page.
     class InPlaceClaimScope {
     public:
-        MRT_EXPORT InPlaceClaimScope(ZPage* region, ZForwardingLife::Retire site);
+        MRT_EXPORT InPlaceClaimScope(ZPage* region, ZForwarding::Retire site);
 
         ~InPlaceClaimScope()
         {
             if (!retiring) return;
             owner->release_page();
-            if (ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();
+            if (ZForwarding::CurrentPageWork() != owner) owner->mark_done();
         }
 
         InPlaceClaimScope(const InPlaceClaimScope&) = delete;
@@ -583,7 +577,7 @@ public:
         InPlaceClaimScope& operator=(InPlaceClaimScope&&) = delete;
 
     private:
-        ForwardingTable::Owner owner;
+        ZForwarding* owner;
         bool retiring{ false };
     };
 

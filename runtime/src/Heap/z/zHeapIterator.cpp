@@ -159,7 +159,7 @@ void HeapIterator::UncoloredRootOopClosure::do_root(ObjectRef& root)
 
 void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
 {
-    auto& collector = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     ColoredRootOopClosure<false> colored(*this, context);
     collector.VisitStrongColoredRoots([&](NativeSlot& root) { colored.do_root(root); });
     UncoloredRootOopClosure uncolored(*this, context);
@@ -175,7 +175,7 @@ void HeapIterator::push_weak_roots(const HeapIteratorContext& context)
     if (!visitWeaks) {
         return;
     }
-    auto& collector = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     ColoredRootOopClosure<true> colored(*this, context);
     collector.VisitWeakColoredRoots([&](NativeSlot& root) { colored.do_root(root); });
 }

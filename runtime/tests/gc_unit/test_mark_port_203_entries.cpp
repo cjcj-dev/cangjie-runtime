@@ -129,13 +129,13 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 #include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 
 extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct MarkPort203TestAccess {
-    static void Bind(CollectorResources& resources, TracingCollector* collector, int32_t count = 1)
+    static void Bind(CollectorResources& resources, CopyCollector* collector, int32_t count = 1)
     {
         if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);

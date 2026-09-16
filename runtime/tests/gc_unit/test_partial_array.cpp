@@ -19,7 +19,7 @@
 #include "Base/Globals.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
@@ -39,16 +39,16 @@ namespace MapleRuntime {
 
 struct PartialArrayTestAccess {
     static void Push(const WCollector& collector, RefField<>* addr, size_t length,
-                     TracingCollector::WorkStack& workStack)
+                     WorkStack& workStack)
     {
         collector.PushPartialArray(addr, length, workStack);
     }
 
     static void StartFieldMark(WCollector& collector)
     {
-        auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+        auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
         GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
-        auto arm = [](TracingCollector& c) {
+        auto arm = [](CopyCollector& c) {
             auto& old = c.GetGenerationCycle(GCCycleGeneration::OLD);
             old.InitializeWorkers(1);
             if (!old.Snapshot().active) {
@@ -61,11 +61,11 @@ struct PartialArrayTestAccess {
         arm(heap);
     }
 
-    static void ReadPublished(WCollector& collector, TracingCollector::WorkStack& result)
+    static void ReadPublished(WCollector& collector, WorkStack& result)
     {
-        auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
-        auto& domain = heap.MajorMarkDomain() != nullptr ? *heap.MajorMarkDomain()
-                                                         : *collector.MajorMarkDomain();
+        auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+        auto& domain = heap.MajorMark() != nullptr ? *heap.MajorMark()
+                                                         : *collector.MajorMark();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
             if (auto* stack = domain.Stacks().StealLocal(stripe)) {
                 while (!stack->IsEmpty()) result.push_back(stack->Pop());
@@ -204,7 +204,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     SlotBuf buf(MarkPartialArray::MIN_LENGTH);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TracingCollector::WorkStack workStack;
+    WorkStack workStack;
     RefField<>* const chunk = reinterpret_cast<RefField<>*>(buf.slots);
     for (size_t i = 0; i < MarkPartialArray::MIN_LENGTH; ++i) {
         chunk[i].StoreColoured(zpointer::null);

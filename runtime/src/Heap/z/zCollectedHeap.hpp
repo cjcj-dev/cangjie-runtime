@@ -38,7 +38,7 @@ enum CollectorType {
 class Collector {
 public:
     Collector();
-    virtual ~Collector() = default;
+    virtual ~Collector();
 
     static const char* GetGCPhaseName(GCPhase phase);
 
@@ -68,6 +68,14 @@ public:
     virtual const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const
     {
         return generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
+    }
+    GenerationCycle& GetGenerationCycle(Generation generation)
+    {
+        return GetGenerationCycle(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+    }
+    const GenerationCycle& GetGenerationCycle(Generation generation) const
+    {
+        return GetGenerationCycle(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     }
 
     virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const

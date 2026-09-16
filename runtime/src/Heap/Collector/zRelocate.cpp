@@ -70,7 +70,7 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"
@@ -176,9 +176,16 @@ void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before)
         return;
     }
     const uintptr_t after = raw(root.LoadPlain());
-    ZForwarding* old = ForwardingTable::get(before, Generation::Old);
+    if (before == 0) {
+        g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);
+        g_remapYoungRootsAfter.store(after, std::memory_order_relaxed);
+        g_remapYoungRootsResolvedAddress.store(after, std::memory_order_relaxed);
+        g_remapYoungRootsVisits.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    ZForwarding* old = generation_forwarding_table(Generation::Old).get(before);
     if (old != nullptr && !old->is_claimed() && !old->is_done() && old->find(before) == 0 &&
-        !ForwardingTable::EntriesArmed(before, Generation::Young) &&
+        !(generation_forwarding_table(Generation::Young).get(before) != nullptr) &&
         Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD) == GCPhase::GC_PHASE_POST_TRACE) {
         g_remapYoungRootsOldPendingVisits.fetch_add(1, std::memory_order_relaxed);
     }
@@ -243,7 +250,7 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"

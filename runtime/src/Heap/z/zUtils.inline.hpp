@@ -24,18 +24,14 @@ namespace MapleRuntime {
 // zUtils.inline.hpp:37-50
 inline uintptr_t ZUtils::alloc_aligned_unfreeable(size_t alignment, size_t size)
 {
-    const size_t padded_size = size + (alignment - 1);
-    void* const addr = std::malloc(padded_size);
-    if (addr == nullptr) {
-        LOG(RTLOG_FATAL, "ZGC alloc_aligned_unfreeable malloc failed (%zu bytes)", padded_size);
+    void* aligned_addr = nullptr;
+    if (alignment < sizeof(void*)) {
+        alignment = sizeof(void*);
     }
-    void* const aligned_addr =
-        reinterpret_cast<void*>((reinterpret_cast<uintptr_t>(addr) + (alignment - 1)) & ~(alignment - 1));
-
+    if (posix_memalign(&aligned_addr, alignment, size) != 0 || aligned_addr == nullptr) {
+        LOG(RTLOG_FATAL, "ZGC alloc_aligned_unfreeable posix_memalign failed (%zu bytes)", size);
+    }
     memset(aligned_addr, 0, size);
-
-    // Since free expects pointers returned by malloc, aligned_addr cannot be
-    // freed since it is most likely not the same as addr after alignment.
     return reinterpret_cast<uintptr_t>(aligned_addr);
 }
 

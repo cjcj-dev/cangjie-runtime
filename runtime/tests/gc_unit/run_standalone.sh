@@ -315,11 +315,9 @@ MAIN_SOURCES=(
   "$SRC/test_gctibzero.cpp"
   "$SRC/test_pinroot.cpp"
   "$SRC/test_followedge.cpp"
-  "$SRC/test_z_forwarding_life.cpp"
   "$SRC/test_colour_is_checks.cpp"
   "$SRC/test_remap_young_roots.cpp"
   "$SRC/test_zForwarding.cpp"
-  "$SRC/test_forwarding_no_geometry.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_p05_heuristics.cpp"
@@ -346,7 +344,6 @@ MAIN_SOURCES=(
   "$SRC/test_string_dedup.cpp"
   "$SRC/test_concurrent_gc_breakpoints.cpp"
   "$SRC/test_uncommitter.cpp"
-  "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_gc_thread_pool.cpp"
   "$SRC/test_zWorkers.cpp"
 
@@ -356,7 +353,6 @@ MAIN_SOURCES=(
   "$SRC/test_fillerobj.cpp"
   "$SRC/test_i2_readref.cpp"
   "$SRC/test_loadfc.cpp"
-  "$SRC/test_ghost_region_lookup.cpp"
   "$SRC/test_fnlz_roots.cpp"
   "$SRC/test_reference_processor.cpp"
   "$SRC/test_mark_stack_entry.cpp"
@@ -369,6 +365,8 @@ MAIN_SOURCES=(
   "$SRC/test_package_init.cpp"
   "$SRC/test_verify_roots.cpp"
   "$SRC/test_p10_roots_iterator.cpp"
+  "$SRC/test_weak_roots.cpp"
+  "$SRC/test_sync_native_wait.cpp"
   "$SRC/test_verify_fail_close.cpp"
   "$SRC/test_verify_phase.cpp"
   "$SRC/test_verify_marking_stacks.cpp"
@@ -575,7 +573,7 @@ REFERENCE_PROCESSOR_CONSUMERS=(
 )
 # The direct weak-discovery test in test_young_conc.cpp is testable-only.
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::TracingCollector::DiscoverWeakReference(')
+  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::CopyCollector::DiscoverWeakReference(')
 fi
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
@@ -621,8 +619,6 @@ fi
 # consumers.  The manifest is independent of the calls currently present in
 # the test source, so deleting a test or anchor shrinks neither guard silently.
 LOADHEAL_PRODUCT_CONSUMERS=(
-  'MapleRuntime::ForwardingTable::PublishFromPageView('
-  'MapleRuntime::ForwardingTable::GetFromPageView('
   'MapleRuntime::RegionManager::RememberFlipPromotedPages('
   'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RememberPromotedObject('
@@ -735,7 +731,7 @@ for consumer in "${LOADHEAL_PRODUCT_CONSUMERS[@]}"; do
 done
 MUTUALWAIT_SO_EXPORTS="$OUT/cj_gc_forwarding_publication_unit.so-exports.txt"
 nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$MUTUALWAIT_SO_EXPORTS"
-for consumer in 'MapleRuntime::WCollector::FindToVersion(' 'MapleRuntime::ForwardingTable::LookupTo('; do
+for consumer in 'MapleRuntime::WCollector::FindToVersion('; do
   if /usr/bin/grep -F -q "$consumer" "$LOADHEAL_FULL"; then
     echo "GC_UNIT_MUTUALWAIT_LOCAL_DEFINITION symbol=$consumer" >&2
     exit 9
@@ -772,9 +768,9 @@ echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
 if command -v nm >/dev/null 2>&1; then
   echo "=== BINDING_PROOF (undefined in binary that resolve via runtime) ==="
-  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo|RecordCrossGen|BindLiveInfo|GetRoute' || true
+  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|ZRelocateQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo|RecordCrossGen|BindLiveInfo|GetRoute' || true
   echo "=== RUNTIME_EXPORTS (product .so) ==="
-  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo8GetRoute|RecordCrossGenEdge' | head -40 || true
+  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|ZRelocateQueue|ReceiptAllowsForwarded|ZVerify|RouteInfo8GetRoute|RecordCrossGenEdge' | head -40 || true
 fi
 
 GC_UNIT_MAIN_ENV=''

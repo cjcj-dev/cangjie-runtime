@@ -558,7 +558,7 @@ GC_TEST(DefectRegress, GcCountExportReadsCollectionStarts)
 }
 
 // hunt-coll SUSPECT: raw-index reuse made double-remove + stale handle ABA.
-// Product: ExportRootTable generation-tagged handles (TracingCollector.h).
+// Product: ExportRootTable generation-tagged handles (CopyCollector.h).
 // Broken sibling is in red_proof.cpp (double-remove recycles the same index twice).
 GC_TEST(DefectRegress, ExportHandleDoubleRemoveNoAlias)
 {

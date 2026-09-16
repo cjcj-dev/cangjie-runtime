@@ -63,15 +63,18 @@ struct RelocationReceiptTestAccess {
         collector.StartOldMarkWork();
         collector.TraceHeap();
     }
-    static void RunOldRoots(WCollector& collector) { collector.DoOldRoots(); }
+    static void RunOldRoots(WCollector& collector)
+    {
+        collector.EnumAllCommonRoots(collector.GetWorkers(GCCycleGeneration::OLD));
+    }
     static size_t PendingYoungRootWork(WCollector& collector)
     {
-        return ThreadLocal::GetMarkStacks(*collector.youngMarkDomain).Population();
+        return ThreadLocal::GetMarkStacks(*collector.YoungMark()).Population();
     }
     static void DrainYoungRootWork(WCollector& collector)
     {
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.youngMarkDomain);
-        TracingCollector::WorkStack work;
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.YoungMark());
+        WorkStack work;
         std::vector<BaseObject*> reachable;
         WCollector::MinorSlotSet slots;
         WCollector::MinorSlotSet weak;
@@ -159,27 +162,14 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
     RegionList selected("native-root-relocation");
     selected.PrependRegion(region);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
-    // Invoke the explicit product instantiation, not a header-instantiated
-    // fixture copy of the forwarding publication mechanism.
-    using Prepare = void (*)(ZPage*);
-    void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    GC_EXPECT_TRUE(product != nullptr);
-    auto prepare = reinterpret_cast<Prepare>(dlsym(product,
-        "_ZN12MapleRuntime10ZPage24PrepareForwardableRegionILNS_10GenerationE0EEEvv"));
-    GC_EXPECT_TRUE(prepare != nullptr);
-    Dl_info identity{};
-    GC_EXPECT_TRUE(dladdr(reinterpret_cast<void*>(prepare), &identity) != 0 &&
-                   identity.dli_fname != nullptr && std::strstr(identity.dli_fname, "libcangjie-runtime.so") != nullptr);
-    prepare(region);
-    dlclose(product);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_PREFORWARD);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     manager.CompactRegion(region);
     region->MarkForwardingDone();
-    auto forwarding = ForwardingTable::RetainPageOwner(region);
+    auto forwarding = forwarding_for_page(region);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
@@ -217,7 +207,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
     collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
-    ForwardingTable::ResetRelocationSet(Generation::Young);
+    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
     // Observe the product's published old mark stacks after the root task
     // returned and before follow starts (testOldMarkStarted fires at the top
     // of DoTracing, after DoEnumeration). The slot visit is recorded too, so
@@ -230,7 +220,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     };
     collector.testOldMarkStarted = [&]() {
         observed = true;
-        enumerated |= RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), to);
+        enumerated |= RootPublicationSnapshot::Contains(*collector.MajorMark(), to);
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testOldMarkStarted = nullptr;
@@ -371,7 +361,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     resources.GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
     bool published = false;
     collector.testOldMarkStarted = [&]() {
-        published |= RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), fixture.obj0);
+        published |= RootPublicationSnapshot::Contains(*collector.MajorMark(), fixture.obj0);
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
     collector.testOldMarkStarted = nullptr;
@@ -419,7 +409,7 @@ void CheckRootStorageSegments(unsigned family)
     size_t otherConsumed = 0;
     bool valuesValid = true;
     struct ResetObserver {
-        ~ResetObserver() { TracingCollector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
     } reset;
     collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* slot) {
         if ((generation == GCCycleGeneration::OLD) != (family == 0)) { return; }
@@ -489,7 +479,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     NativeSlot* addedSlot = nullptr;
     bool newSlotVisited = false;
     struct ResetObserver {
-        ~ResetObserver() { TracingCollector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
     } reset;
     collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* slot) {
         if (generation != GCCycleGeneration::YOUNG || slot == nullptr) { return; }

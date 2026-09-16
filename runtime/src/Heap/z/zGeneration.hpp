@@ -9,14 +9,17 @@
 #include <mutex>
 #include <memory>
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zRelocationSet.hpp"
 namespace MapleRuntime {
 class RememberedSet;
-class MarkDomain;
+class ZMark;
 enum class zaddress : Uptr;
 struct TenuringInputs;
 // Per-generation execution state. The snapshot lock publishes cycle identity
@@ -39,9 +42,15 @@ using ZGeneration = GenerationCycle;
 
 class GenerationCycle {
 public:
-    explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
+    explicit GenerationCycle(GCCycleGeneration generation);
+    ~GenerationCycle();
+    GenerationCycle(const GenerationCycle&) = delete;
+    GenerationCycle& operator=(const GenerationCycle&) = delete;
     GCCycleSnapshot Snapshot() const;
-    void BindMarkDomain(MarkDomain* domain) { markDomain = domain; }
+    ZMark& Mark() { return *mark; }
+    const ZMark& Mark() const { return *mark; }
+    ZMark* MarkPtr() { return mark.get(); }
+    const ZMark* MarkPtr() const { return mark.get(); }
     bool IsPhaseMark() const;
     double FragmentationLimit() const;
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
@@ -56,6 +65,7 @@ public:
     void InitializeWorkers(uint32_t capacity);
     void StopWorkers();
     ZWorkers* Workers() const { return workers.get(); }
+    ZWeakRootsProcessor* WeakRootsProcessor() const { return weakRootsProcessor.get(); }
     GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
@@ -77,13 +87,19 @@ public:
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
     void End();
+    ZForwardingTable& forwarding_table() { return _forwarding_table; }
+    const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
+    ZRelocationSet& relocation_set() { return _relocation_set; }
+    ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
+    void reset_relocation_set();
 private:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
 #endif
-    MarkDomain* markDomain = nullptr;
+    std::unique_ptr<ZMark> mark;
     const GCCycleGeneration generation;
     std::unique_ptr<ZWorkers> workers;
+    std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
     GCStats stats;
     ZStatCycle cycleStats;
     // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
@@ -100,6 +116,8 @@ private:
     std::atomic<GCReason> reason { GC_REASON_USER };
     std::atomic<GCPhase> phase { GC_PHASE_IDLE };
     bool active = false;
+    ZForwardingTable _forwarding_table;
+    ZRelocationSet _relocation_set;
 };
 
 // zGeneration.cpp:489-497: type is scoped to one young collection.

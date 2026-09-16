@@ -49,26 +49,6 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-// enroltime: defined out of line so ZPage.h does not have to see Heap/GCPhase.
-void ZPage::NoteEnrolPhase()
-{
-    // Diagnostic-only. gc_unit fixtures never Heap::Init, so
-    // CollectorProxy::currentCollector is null and GetGCPhase would fault.
-    // CollectorResources is always constructed; IsGcStarted is false there.
-    if (!Heap::GetHeap().GetCollectorResources().IsGcStarted()) {
-        return;
-    }
-    const GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
-    const bool afterFlip = (phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD);
-    std::atomic<uint64_t>& counter = afterFlip ? EnrolAfterFlip() : EnrolBeforeFlip();
-    const uint64_t n = counter.fetch_add(1, std::memory_order_relaxed) + 1;
-    if ((n & (n - 1)) != 0) {
-        return;
-    }
-    LOG(RTLOG_ERROR, "[ENROLTIME] afterFlip=%d n=%lu phase=%d before=%lu after=%lu", afterFlip ? 1 : 0, n,
-        static_cast<int>(phase), EnrolBeforeFlip().load(std::memory_order_relaxed),
-        EnrolAfterFlip().load(std::memory_order_relaxed));
-}
 } // namespace MapleRuntime
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.

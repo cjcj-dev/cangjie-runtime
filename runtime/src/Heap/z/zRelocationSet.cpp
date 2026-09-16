@@ -6,6 +6,12 @@
 
 
 #include "Heap/WCollector/WCollector.h"
+#include "Heap/Allocator/RegionList.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zRelocationSet.hpp"
 
 #include <array>
 #include <atomic>
@@ -28,9 +34,12 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zTask.hpp"
+#include "Heap/z/zForwardingEntry.hpp"
+#include "Heap/z/zArray.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -68,7 +77,7 @@ void WCollector::PostTrace()
     // zGeneration.cpp:1042 / :1131-1133: old resets its own previous set
     // after non-strong processing and before select. Young tables stay
     // until young's ResetRelocationSet.
-    ForwardingTable::ResetRelocationSet(Generation::Old);
+    Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).reset_relocation_set();
     // ZGenerationOld::collect (zGeneration.cpp:1044): stop after reset,
     // before selecting the next relocation set.
     if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
@@ -124,6 +133,149 @@ void RegionManager::ResetFlipPromotedPages()
 {
     std::lock_guard<std::mutex> lock(flipPromotedMutex);
     flipPromotedPages.clear();
+}
+
+ZRelocationSet::ZRelocationSet(GenerationCycle* generation)
+    : _generation(generation),
+      _allocator(),
+      _forwardings(nullptr),
+      _nforwardings(0)
+{
+}
+
+ZWorkers* ZRelocationSet::workers() const { return _generation != nullptr ? _generation->Workers() : nullptr; }
+
+class ZRelocationSetInstallTask : public ZTask {
+private:
+    ZRelocationSet* _relocation_set;
+    ZForwardingAllocator* const _allocator;
+    ZForwarding** _forwardings;
+    const size_t _nforwardings;
+    const ZArray<ZPage*>* _small;
+    const ZArray<ZPage*>* _medium;
+    ZArrayIterator<ZPage*> _small_iter;
+    ZArrayIterator<ZPage*> _medium_iter;
+
+    void install(ZForwarding* forwarding, size_t index)
+    {
+        ZPage* const page = forwarding->page();
+        page->ClearRelocationResiduals();
+        _relocation_set->generation()->forwarding_table().insert(forwarding);
+        if (page->GetOwnerGeneration() == Generation::Young) {
+            page->PublishForwardingCarrier<Generation::Young>();
+        } else {
+            page->PublishForwardingCarrier<Generation::Old>();
+        }
+        _forwardings[index] = forwarding;
+    }
+
+public:
+    ZRelocationSetInstallTask(ZRelocationSet* relocation_set, const ZRelocationSetSelector* selector)
+        : ZTask("ZRelocationSetInstallTask"),
+          _relocation_set(relocation_set),
+          _allocator(&relocation_set->_allocator),
+          _forwardings(nullptr),
+          _nforwardings(static_cast<size_t>(selector->selected_small()->length()) +
+                        static_cast<size_t>(selector->selected_medium()->length())),
+          _small(selector->selected_small()),
+          _medium(selector->selected_medium()),
+          _small_iter(selector->selected_small()),
+          _medium_iter(selector->selected_medium())
+    {
+        const size_t relocation_set_size = _nforwardings * sizeof(ZForwarding*);
+        const size_t forwardings_size = _nforwardings * sizeof(ZForwarding);
+        const size_t forwarding_entries_size = selector->forwarding_entries() * sizeof(ZForwardingEntry);
+        _allocator->reset(relocation_set_size + forwardings_size + forwarding_entries_size);
+        _forwardings = static_cast<ZForwarding**>(_allocator->alloc(relocation_set_size));
+    }
+
+    virtual void work()
+    {
+        ZArray<ZPage*> relocate_promoted;
+        for (size_t page_index; _small_iter.next_index(&page_index);) {
+            ZPage* page = _small->at(static_cast<int>(page_index));
+            ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, page->age());
+            install(forwarding, static_cast<size_t>(_medium->length()) + page_index);
+            if (forwarding->is_promotion()) {
+                relocate_promoted.push(page);
+            }
+        }
+        for (size_t page_index; _medium_iter.next_index(&page_index);) {
+            ZPage* page = _medium->at(static_cast<int>(page_index));
+            ZForwarding* const forwarding = ZForwarding::alloc(_allocator, page, page->age());
+            install(forwarding, page_index);
+            if (forwarding->is_promotion()) {
+                relocate_promoted.push(page);
+            }
+        }
+        _relocation_set->register_relocate_promoted(relocate_promoted);
+    }
+
+    ZForwarding** forwardings() const { return _forwardings; }
+    size_t nforwardings() const { return _nforwardings; }
+};
+
+void ZRelocationSet::install(const ZRelocationSetSelector* selector)
+{
+    ZRelocationSetInstallTask task(this, selector);
+    if (ZWorkers* w = workers()) {
+        w->run(&task);
+    } else {
+        task.work();
+    }
+    _forwardings = task.forwardings();
+    _nforwardings = task.nforwardings();
+}
+
+void ZRelocationSet::install_from_regions(RegionList& regions)
+{
+    ZRelocationSetSelector selector;
+    regions.VisitAllRegions([&](ZPage* region) {
+        selector.add_selected_small(region, ZForwarding::nentries(region));
+    });
+    install(&selector);
+}
+
+void ZRelocationSet::reset(ZPageAllocator* page_allocator)
+{
+    (void)page_allocator;
+    ZRelocationSetIterator iter(this);
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        forwarding->~ZForwarding();
+    }
+    _nforwardings = 0;
+    _forwardings = nullptr;
+}
+
+void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
+{
+    std::lock_guard<std::mutex> locker(_promotion_lock);
+    for (int i = 0; i < pages.length(); ++i) {
+        _flip_promoted_pages.push(pages.at(i));
+    }
+}
+
+void ZRelocationSet::register_relocate_promoted(const ZArray<ZPage*>& pages)
+{
+    std::lock_guard<std::mutex> locker(_promotion_lock);
+    for (int i = 0; i < pages.length(); ++i) {
+        _relocate_promoted_pages.push(pages.at(i));
+    }
+}
+
+void ZRelocationSet::register_in_place_relocate_promoted(ZPage* page)
+{
+    std::lock_guard<std::mutex> locker(_promotion_lock);
+    _in_place_relocate_promoted_pages.push(page);
+}
+
+void GenerationCycle::reset_relocation_set()
+{
+    ZRelocationSetIterator iter(&_relocation_set);
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        _forwarding_table.remove(forwarding);
+    }
+    _relocation_set.reset(nullptr);
 }
 
 } // namespace MapleRuntime

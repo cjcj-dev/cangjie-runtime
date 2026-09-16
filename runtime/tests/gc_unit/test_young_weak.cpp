@@ -49,7 +49,7 @@ extern "C" int CJ_ScheduleManagerInit();
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.
@@ -278,18 +278,17 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(route.source, route.from));
     RegionList selected("old-source-value-root");
     selected.PrependRegion(route.source);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
-    route.source->PrepareForwardableRegion<Generation::Old>();
     route.from->SetStateCode(ObjectState::FORWARDED);
-    ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
+    ZForwarding* publication = forwarding_for_page(
         route.source, reinterpret_cast<MAddress>(route.from));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(
+    GC_EXPECT_EQ(UNUSED_InsertMapping(
                      publication, reinterpret_cast<MAddress>(route.from),
                      reinterpret_cast<MAddress>(route.to)),
                  reinterpret_cast<MAddress>(route.to));
-    GC_EXPECT_EQ(ForwardingTable::RetainPageOwner(route.source)->find(reinterpret_cast<MAddress>(route.from)),
+    GC_EXPECT_EQ(forwarding_for_page(route.source)->find(reinterpret_cast<MAddress>(route.from)),
                  reinterpret_cast<MAddress>(route.to));
 
     return route;
@@ -663,11 +662,11 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     MutatorManager manager;
     WeakClosureTestRuntime runtime(manager);
-    MarkDomain old(64, MarkingStacks::MarkingGeneration::MAJOR);
-    MarkDomain young(64, MarkingStacks::MarkingGeneration::YOUNG);
-    for (MarkDomain* domain : {&old, &young}) {
-        MarkDomain& current = *domain;
-        MarkDomain& other = domain == &old ? young : old;
+    ZMark old(64, MarkingStacks::MarkingGeneration::MAJOR);
+    ZMark young(64, MarkingStacks::MarkingGeneration::YOUNG);
+    for (ZMark* domain : {&old, &young}) {
+        ZMark& current = *domain;
+        ZMark& other = domain == &old ? young : old;
         auto& stacks = ThreadLocal::GetMarkStacks(current);
         stacks.Push(current.Stripes(), 0,
                     MarkStackEntry(uintptr_t(0x1000), true, true, true, false), true);
@@ -696,7 +695,7 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             MarkStripeStack* published = current.Stripes().At(0).StealStack(smr, 0);
             GC_EXPECT_TRUE(published != nullptr);
             MarkStripeStack::Destroy(published);
-            smr.reclaim();
+            MarkingSMRTestAccess::reclaim(smr);
             MarkingStacks::VerifyAllEmpty(current);
         }
     }
@@ -788,8 +787,8 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
-    ForwardingTable::ResetRelocationSet(Generation::Young);
-    const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
+    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
+    const auto afterCoverage = LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
     const bool independentAfterCoverage =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     std::fprintf(stderr,
@@ -850,7 +849,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
         // Pin the fixture objects while the real driver completes relocation.
         space.GetRegionManager().AddRawPointerObject(graph.root);
         if (secondRoot != nullptr) space.GetRegionManager().AddRawPointerObject(secondRoot);
-        TracingCollector::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
+        CopyCollector::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
             const auto paired = [&](const std::vector<ExportOwnershipTestObservation::Edge>& edges) {
                 return edges.size() == owners &&
                     std::count(edges.begin(), edges.end(), std::make_pair(graph.root, graph.foreign)) == 1 &&
@@ -880,7 +879,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
             }
         };
         RelocationReceiptTestAccess::RunMajorCollection(collector);
-        TracingCollector::testExportOwnershipResult = nullptr;
+        CopyCollector::testExportOwnershipResult = nullptr;
         driverCompleted = !collector.GetCycleSnapshot(GCCycleGeneration::OLD).active;
     } else {
         RelocationReceiptTestAccess::RunExportMajorMark(collector);
