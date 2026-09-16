@@ -947,6 +947,8 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
             rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
             StoreBufferCollector collector;
             Barrier barrier(collector, rs);
+            AllocBuffer alloc;
+            AllocBufferScope allocScope(alloc);
             Mutator mutator;
             InstalledMutatorScope mutatorScope(mutator);
             HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
