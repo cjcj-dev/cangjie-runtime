@@ -16,6 +16,7 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/RefField.h"
 
