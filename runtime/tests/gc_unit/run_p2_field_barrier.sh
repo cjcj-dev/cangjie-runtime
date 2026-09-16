@@ -13,6 +13,7 @@ mkdir -p "$OUT"
 "${CXX:-clang++}" -shared -fPIC -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   -fvisibility-inlines-hidden -DMRT_TESTABLE_INTERNALS=1 -DMRT_GC_UNIT_TESTS=1 \
   -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+  -I"$ROOT/runtime/src/Heap/z/os/linux" \
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
   -I"$ROOT/runtime/include" -I"$HEADERS/include" \
   -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
