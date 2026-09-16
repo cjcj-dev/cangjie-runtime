@@ -728,6 +728,26 @@ int CJFileLoader::UnloadLibrary(const char* libName)
     int ret = -1;
     Uptr imageAddress = 0;
     bool imageClosed = false;
+    LibNameToHandler handlerItStorage { baseName, handler, generation, true };
+    const LibNameToHandler* handlerIt = &handlerItStorage;
+#ifdef MRT_TESTABLE_INTERNALS
+    auto* previousUnload = binLoadApi.binUnload;
+    binLoadApi.binUnload = [](void* platformHandler) {
+        bool worldStopped = MutatorManager::Instance().WorldStopped();
+        bool holdsAdmission = ElfUnloadQuiescence::PublicHoldAcrossPlatformForTesting();
+        ElfUnloadQuiescence::NotePublicPlatformWaitForTesting(worldStopped, holdsAdmission);
+        ElfUnloadQuiescence::PausePublicPlatformForTesting();
+        if (ElfUnloadQuiescence::ConsumeFailedPlatformUnloadForTesting()) {
+            return -1;
+        }
+        return Os::Loader::UnloadBinaryFile(platformHandler);
+    };
+    struct RestoreUnload {
+        BinLoadApi& api;
+        int (*prev)(void*);
+        ~RestoreUnload() { api.binUnload = prev; }
+    } restoreUnload { binLoadApi, previousUnload };
+#endif
     if (LoaderManager::GetInstance()->GetInitStatus()) {
         BaseFile* baseFile = GetBaseFile(baseName);
         if (baseFile == nullptr) {
@@ -757,16 +777,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
             }
             (void)ElfUnloadQuiescence::BeginImageClosing(imageAddress);
             ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress, taskAdmission);
-#ifdef MRT_TESTABLE_INTERNALS
-            ElfUnloadQuiescence::NotePublicPlatformWaitForTesting(true, true);
-            ElfUnloadQuiescence::PausePublicPlatformForTesting();
-            if (ElfUnloadQuiescence::ConsumeFailedPlatformUnloadForTesting()) {
-                ElfUnloadQuiescence::AbortImageClosing(imageAddress);
-                rollbackHandler();
-                return -1;
-            }
-#endif
-            ret = binLoadApi.binUnload(handler);
+            ret = binLoadApi.binUnload(handlerIt->handler);
         } else {
             {
                 ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
@@ -784,35 +795,20 @@ int CJFileLoader::UnloadLibrary(const char* libName)
                 }
                 (void)ElfUnloadQuiescence::BeginImageClosing(imageAddress);
             }
-#ifdef MRT_TESTABLE_INTERNALS
-            bool worldStopped = MutatorManager::Instance().WorldStopped();
-            ElfUnloadQuiescence::NotePublicPlatformWaitForTesting(worldStopped, false);
-            ElfUnloadQuiescence::PausePublicPlatformForTesting();
-            if (ElfUnloadQuiescence::ConsumeFailedPlatformUnloadForTesting()) {
-                ElfUnloadQuiescence::AbortImageClosing(imageAddress);
-                rollbackHandler();
-                return -1;
-            }
-#endif
-            ret = binLoadApi.binUnload(handler);
+        ret = binLoadApi.binUnload(handlerIt->handler);
         }
         imageClosed = GetBaseFile(baseName) == nullptr || !ElfUnloadQuiescence::IsLinkedAddress(imageAddress);
     } else {
-#ifdef MRT_TESTABLE_INTERNALS
-        if (ElfUnloadQuiescence::ConsumeFailedPlatformUnloadForTesting()) {
-            rollbackHandler();
-            return -1;
-        }
-#endif
-        ret = binLoadApi.binUnload(handler);
+        ret = binLoadApi.binUnload(handlerIt->handler);
     }
 
     std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
-    auto handlerIt =
+    auto commitIt =
         std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName, generation](const LibNameToHandler& info) {
             return baseName == Os::Path::GetBaseName(info.baseName.Str()) && info.generation == generation;
         });
-    if (handlerIt == cjLibHandlers.end()) {
+    const bool shouldErase = imageClosed || (imageAddress == 0 && ret == 0);
+    if (commitIt == cjLibHandlers.end()) {
         if (imageAddress != 0) {
             if (imageClosed) {
                 ElfUnloadQuiescence::CommitImageClosing(imageAddress);
@@ -822,18 +818,15 @@ int CJFileLoader::UnloadLibrary(const char* libName)
         }
         return ret;
     }
-    if (imageClosed || ret == 0) {
+    if (shouldErase) {
         if (imageClosed) {
             ElfUnloadQuiescence::CommitImageClosing(imageAddress);
-            cjLibHandlers.erase(handlerIt);
-        } else {
-            handlerIt->closing = false;
-            if (imageAddress != 0) {
-                ElfUnloadQuiescence::AbortImageClosing(imageAddress);
-            }
+        } else if (imageAddress != 0) {
+            ElfUnloadQuiescence::AbortImageClosing(imageAddress);
         }
+        cjLibHandlers.erase(commitIt);
     } else {
-        handlerIt->closing = false;
+        commitIt->closing = false;
         if (imageAddress != 0) {
             ElfUnloadQuiescence::AbortImageClosing(imageAddress);
         }

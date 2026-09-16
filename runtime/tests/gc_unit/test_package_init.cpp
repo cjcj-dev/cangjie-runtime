@@ -1016,6 +1016,15 @@ GC_OTHER_VM_TEST(PackageInit, PlatformUnloadFailureRollsBack)
     Target("fail-handle-cleared", loader->GetLibraryHandleForTesting(uPath.c_str()) == nullptr);
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
+GC_TEST(PackageInit, PublicUnloadWithoutRuntimeInitErasesHandler)
+{
+    const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    Target("uninit-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
+    Target("uninit-handle-present", loader->GetLibraryHandleForTesting(uPath.c_str()) != nullptr);
+    Target("uninit-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
+    Target("uninit-handle-erased", loader->GetLibraryHandleForTesting(uPath.c_str()) == nullptr);
+}
 #endif
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {
