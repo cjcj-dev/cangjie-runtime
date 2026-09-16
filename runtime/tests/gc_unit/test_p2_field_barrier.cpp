@@ -130,6 +130,7 @@ extern "C" int p2FieldBarrierExercise()
     auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
     auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     auto* oldViaYoung = MObject::NewPinnedObject(leafType, 16);
+    EnsureOld(oldViaYoung, collector);
     ZBarrier::WriteReference(child, Slot(child), sentinel);
     ZBarrier::WriteReference(child, Slot(child, 1), oldViaYoung);
     ZBarrier::WriteReference(holder, Slot(holder), child);
