@@ -90,7 +90,7 @@ public:
     ZForwardingTable& forwarding_table() { return _forwarding_table; }
     const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
     ZRelocationSet& relocation_set() { return _relocation_set; }
-    ZForwarding* forwarding(MAddress addr) const { return _forwarding_table.get(addr); }
+    ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
     void reset_relocation_set();
 private:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)

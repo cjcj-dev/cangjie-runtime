@@ -1485,7 +1485,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 static_cast<void*>(current), static_cast<void*>(live),
                 live != nullptr ? 0u : 0xffu,
                 live != nullptr ? static_cast<unsigned>(live->generation_id()) : 0xffu,
-                generation_forwarding_table(generation).get(currentAddr) != nullptr ? 1u : 0u, 0zu,
+                (currentAddr != 0 && generation_forwarding_table(generation).get(currentAddr) != nullptr) ? 1u : 0u, 0zu,
                 0u,
                 0ull,
                 0ull,

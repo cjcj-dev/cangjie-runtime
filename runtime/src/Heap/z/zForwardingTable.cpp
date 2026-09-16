@@ -42,6 +42,9 @@ ZForwarding* forwarding_for_page(const ZPage* page)
 
 MAddress forwarding_find(Generation generation, MAddress from)
 {
+    if (from == 0) {
+        return 0;
+    }
     ZForwarding* forwarding = generation_forwarding_table(generation).get(from);
     return forwarding != nullptr ? forwarding->find(from) : 0;
 }

@@ -282,7 +282,7 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
                                          const ForwardingProvenance& provenance) const override
     {
-        if (!Heap::IsHeapAddress(obj)) return obj;
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) return obj;
         const MAddress from = reinterpret_cast<MAddress>(obj);
         const Generation ownerGeneration = generation == ZGenerationId::young
             ? Generation::Young : Generation::Old;

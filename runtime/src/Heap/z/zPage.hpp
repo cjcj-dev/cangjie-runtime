@@ -457,6 +457,8 @@ public:
 
     void ClearGhostRegionBit();
 
+    // inGhostFromRegion is the unique guard condition.
+
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.
     static std::atomic<size_t> dispelGhostCount;
@@ -744,7 +746,7 @@ private:
         uint32_t nextRegionIdx0;
         union {
             struct {
-                uint8_t unusedGhostPad : 1;
+                uint8_t inGhostFromRegion : 1;
             };
             AtomicBitField<uint16_t> regionStateBitField;
         };

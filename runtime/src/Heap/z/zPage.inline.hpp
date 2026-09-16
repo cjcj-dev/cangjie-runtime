@@ -472,9 +472,16 @@ inline ZPage* ZPage::GetZPage(uint32_t idx)
     return ZPageTable::heap_table().get(GetUnitAddress(idx));
 }
 
-inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t)
+inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t allocAddr)
     {
-        return nullptr;
+        ZPage* region = ZPageTable::heap_table().get(allocAddr);
+        if (region == nullptr || !region->IsGhostFromRegion()) {
+            return nullptr;
+        }
+#if defined(MRT_GC_UNIT_TESTS)
+        RunGhostLookupTestHook(region);
+#endif
+        return region;
     }
 
 inline MAddress ZPage::GetUnitAddress(size_t idx)
@@ -633,6 +640,7 @@ inline void ZPage::PublishFromPageMetadata()
 inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     {
         PublishFromPageMetadata<G>();
+        SetInGhostRegion(1);
         _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
 
@@ -676,7 +684,12 @@ inline void ZPage::DispelGhostFromRegion()
 
 inline bool ZPage::IsGhostFromRegion() const
     {
-        return false;
+        const bool ghost = _scratch.regionStateBitField.GetAtomicValue(
+            RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) != 0;
+        if (!ghost) {
+            return false;
+        }
+        return __atomic_load_n(&_scratch.ghostLifeId, __ATOMIC_ACQUIRE) == GetRegionLifeId();
     }
 
 inline void ZPage::AssertGhostClearedAfterReuse(size_t nUnit) const
@@ -740,8 +753,11 @@ inline bool ZPage::ForwardingClaimed() const
 
 
 
-inline void ZPage::SetInGhostRegion(uint8_t)
+inline void ZPage::SetInGhostRegion(uint8_t flag)
     {
+        const RegionLifeId life = GetRegionLifeId();
+        __atomic_store_n(&_scratch.ghostLifeId, life, __ATOMIC_RELEASE);
+        _scratch.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
     }
 
 // ZPage::clone_for_promotion + ZPage::reset(age) (zPage.cpp:64-72, 103-113)

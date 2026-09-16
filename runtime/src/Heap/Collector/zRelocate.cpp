@@ -176,6 +176,13 @@ void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before)
         return;
     }
     const uintptr_t after = raw(root.LoadPlain());
+    if (before == 0) {
+        g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);
+        g_remapYoungRootsAfter.store(after, std::memory_order_relaxed);
+        g_remapYoungRootsResolvedAddress.store(after, std::memory_order_relaxed);
+        g_remapYoungRootsVisits.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     ZForwarding* old = generation_forwarding_table(Generation::Old).get(before);
     if (old != nullptr && !old->is_claimed() && !old->is_done() && old->find(before) == 0 &&
         !(generation_forwarding_table(Generation::Young).get(before) != nullptr) &&

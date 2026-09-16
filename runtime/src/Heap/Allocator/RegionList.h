@@ -120,6 +120,12 @@ public:
 
     void VisitAllGhostRegions(const std::function<void(ZPage*)>& visitor)
     {
+        // Snapshot next before the visitor. PrepareFromRegionList may
+        // ReclaimRegionToMarkQuarantine → InitZPage, which clears
+        // nextRegionIdx0 (the ghost successor). Walking GetNextGhostRegion
+        // after that truncates the chain; undispelled from-regions then
+        // fail PrepareForwardableRegion CHECK(inGhostFromRegion==0).
+        // Same shape as VisitAllRegions (RegionList.h:115-124).
         ZPage* node = listHead;
         while (node != nullptr) {
             ZPage* next = node->GetNextGhostRegion();

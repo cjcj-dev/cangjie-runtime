@@ -18,9 +18,7 @@ inline ZForwarding* ZForwardingTable::at(size_t index) const
 
 inline ZForwarding* ZForwardingTable::get(MAddress addr) const
 {
-    if (addr == 0) {
-        return nullptr;
-    }
+    CHECK(addr != 0);
     if (_map == nullptr) {
         return nullptr;
     }
