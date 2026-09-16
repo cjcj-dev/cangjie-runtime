@@ -618,7 +618,7 @@ extern "C" int p2SlowFieldInputExercise()
         Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
         auto* page = Heap::page(reinterpret_cast<MAddress>(young));
         auto bit = [&] {
-            return page->livemap()->get(page->generation_id(), page->bit_index(from_object(young)) + 1);
+            return page->livemap().get(page->generation_id(), page->bit_index(from_object(young)) + 1);
         };
         const bool before = bit();
         P2FieldInputTask task(collector, [&] {
@@ -637,7 +637,7 @@ extern "C" int p2SlowFieldInputExercise()
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
             Expect(collector.MajorMarkDomain()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
         });
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->Run(task);
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->run(&task);
         Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");
         Expect(strongSlow == 1 && finalSlow == 1, "slow_input_both_field_entries_reached");
         Expect(strongFast == 1 && finalFast == 1, "slow_input_legal_fast_controls_reached");
