@@ -11,7 +11,6 @@
 
 namespace MapleRuntime {
 class ZPage;
-using RegionInfo = ZPage;
 class ZPageAllocator;
 
 template<typename T>

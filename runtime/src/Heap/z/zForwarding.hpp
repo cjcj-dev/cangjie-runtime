@@ -174,7 +174,7 @@ namespace MapleRuntime {
 
 using RegionLifeId = uint64_t;
 
-class RegionInfo;
+#include "Heap/z/zPageFwd.hpp"
 class ZLiveMap;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.

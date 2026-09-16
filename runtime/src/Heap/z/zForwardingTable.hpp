@@ -16,7 +16,7 @@
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
-class RegionInfo;
+#include "Heap/z/zPageFwd.hpp"
 class RegionList;
 class BaseObject;
 class ZLiveMap;

@@ -10,7 +10,7 @@
 #include <cstdint>
 
 namespace MapleRuntime {
-class RegionInfo;
+#include "Heap/z/zPageFwd.hpp"
 class MarkLiveCache {
 public:
     explicit MarkLiveCache(size_t stripeCount);

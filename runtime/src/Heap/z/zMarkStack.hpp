@@ -25,7 +25,7 @@
 namespace MapleRuntime {
 
 class BaseObject;
-class RegionInfo;
+#include "Heap/z/zPageFwd.hpp"
 
 // ZGC zMarkStack.hpp:35-54. A chunk is single-owner while it is being
 // filled/drained and becomes immutable while linked on a shared stripe.

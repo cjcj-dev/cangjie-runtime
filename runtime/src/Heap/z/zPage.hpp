@@ -9,6 +9,7 @@
 
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
+#include "Heap/z/zPageFwd.hpp"
 #include "Heap/Allocator/RegionListTypes.hpp"
 
 #include <algorithm>
@@ -870,7 +871,6 @@ private:
     static constexpr uint32_t NULLPTR_IDX = INVALID_IDX;
     UnitMetadata metadata;
 };
-using RegionInfo = ZPage;
 } // namespace MapleRuntime
 
 #include "Heap/z/zPage.inline.hpp"
