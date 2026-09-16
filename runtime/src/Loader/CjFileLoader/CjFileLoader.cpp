@@ -733,10 +733,12 @@ int CJFileLoader::UnloadLibrary(const char* libName)
 #ifdef MRT_TESTABLE_INTERNALS
     auto* previousUnload = binLoadApi.binUnload;
     binLoadApi.binUnload = [](void* platformHandler) {
-        bool worldStopped = MutatorManager::Instance().WorldStopped();
-        bool holdsAdmission = ElfUnloadQuiescence::PublicHoldAcrossPlatformForTesting();
-        ElfUnloadQuiescence::NotePublicPlatformWaitForTesting(worldStopped, holdsAdmission);
-        ElfUnloadQuiescence::PausePublicPlatformForTesting();
+        if (LoaderManager::GetInstance()->GetInitStatus()) {
+            bool worldStopped = MutatorManager::Instance().WorldStopped();
+            bool holdsAdmission = ElfUnloadQuiescence::PublicHoldAcrossPlatformForTesting();
+            ElfUnloadQuiescence::NotePublicPlatformWaitForTesting(worldStopped, holdsAdmission);
+            ElfUnloadQuiescence::PausePublicPlatformForTesting();
+        }
         if (ElfUnloadQuiescence::ConsumeFailedPlatformUnloadForTesting()) {
             return -1;
         }
