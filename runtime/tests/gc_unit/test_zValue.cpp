@@ -18,6 +18,7 @@
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zValue.inline.hpp"
 #include "gc_unittest.hpp"
+#include "zunittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -91,14 +92,12 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
 {
     ZStat::Initialize();
     constexpr size_t units = 64;
-    const size_t metadata = RegionManager::GetMetadataSize(units);
-    MemMap* map = MemMap::MapMemory(metadata + units * RegionInfo::UNIT_SIZE, metadata);
-    GC_EXPECT_TRUE(map != nullptr);
     HeapParam params{};
     params.regionSize = RegionInfo::UNIT_SIZE / KB;
     params.exemptionThreshold = 0.8;
+    std::unique_ptr<ZTestRegionHeap> heap;
     RegionManager manager;
-    manager.Initialize(units, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, params, 0.5);
+    heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
 
     auto& allocator = *manager.objectAllocators[untype(PageAge::eden)];
     GC_EXPECT_EQ(allocator.sharedSmallPage.count(), ZCPU::count());
@@ -123,6 +122,5 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);
     }
-    MemMap::DestroyMemMap(map);
 }
 #endif

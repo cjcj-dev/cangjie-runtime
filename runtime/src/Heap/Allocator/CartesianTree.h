@@ -42,10 +42,7 @@
 // the art of automatic memory management. Chapman and Hall/CRC, 2016.
 // This data structure doesn't guarantee the multi-thread safety, so the external invoker should take some
 // policy to avoid competition problems.
-#include "Heap/z/zMappedCache.hpp"
 namespace MapleRuntime {
-// zMappedCache.cpp: entries have one address index and non-owning size-class
-// lists. The allocator/cache owner supplies synchronization.
 class CartesianTree {
 public:
     using Index = uint32_t; // abstract index for free memory in tree node.

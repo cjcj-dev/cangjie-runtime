@@ -41,7 +41,7 @@
 #include "Heap/z/zSafeDelete.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/z/zVirtualMemoryManager.hpp"
+#include "Heap/z/zVirtualMemory.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 
 #include "Base/TimeUtils.h"
@@ -327,8 +327,10 @@ public:
     // be adjacent to payload reservations. Cache indices are dense within each
     // segment, with an unused index between segments to prevent coalescing.
     struct UnitSegment {
-        MemoryRange range;
+        uintptr_t start;
+        size_t size;
         size_t firstIndex;
+        uintptr_t End() const { return start + size; }
     };
 
     static std::vector<UnitSegment> unitSegments;
@@ -363,15 +365,19 @@ public:
 
     static void RetirePage(RegionInfo* region, std::function<void()> retire);
 
-    static size_t IndexedUnitCount(const std::vector<MemoryRange>& ranges);
+    static size_t IndexedUnitCount(const std::vector<ZVirtualMemory>& ranges);
+    static size_t IndexedUnitCount(const std::vector<UnitSegment>& segments);
 
-    static void Initialize(size_t nUnit, uintptr_t heapAddress, MemMap* memoryOwner = nullptr)
+    // Metadata over one unit range at an arbitrary native address (fixtures
+    // that build a heap outside the zoffset address domain).
+    static void Initialize(size_t nUnit, uintptr_t heapAddress)
     {
-        InitializeSegments(heapAddress, { MemoryRange{ heapAddress, nUnit * UNIT_SIZE } }, memoryOwner);
+        InitializeSegments(heapAddress, { UnitSegment{ heapAddress, nUnit * UNIT_SIZE, 0 } });
     }
 
-    static void InitializeSegments(uintptr_t metadataEnd, const std::vector<MemoryRange>& ranges,
-                                   MemMap* memoryOwner);
+    // Metadata over the reserved heap address ranges (zoffset domain).
+    static void InitializeSegments(uintptr_t metadataEnd, const std::vector<ZVirtualMemory>& ranges);
+    static void InitializeSegments(uintptr_t metadataEnd, const std::vector<UnitSegment>& segments);
 
     static size_t FindUnitIndex(uintptr_t address);
 
@@ -417,31 +423,6 @@ public:
     static void WaitCopiedBeforePayloadWipe(RegionInfo* region, const char* site);
 
     static void ClearUnits(size_t idx, size_t cnt);
-
-    static size_t CommitUnits(size_t idx, size_t cnt);
-
-    static size_t GetCommittedCapacity()
-    {
-        return UnitInfo::memoryOwner == nullptr ? 0 : UnitInfo::memoryOwner->GetCommittedSize();
-    }
-
-    static size_t GetCommittedUnitBytes(size_t idx, size_t cnt);
-
-    static void ReleaseUnits(size_t idx, size_t cnt);
-
-    static size_t ReleaseUnitsPartial(size_t idx, size_t cnt)
-    {
-        return ReleaseUnitsPartialImpl(idx, cnt, false);
-    }
-
-    static size_t ReleaseUnitsDeferred(size_t idx, size_t cnt)
-    {
-        return ReleaseUnitsPartialImpl(idx, cnt, true);
-    }
-
-    static size_t PublishUnitsRelease(size_t idx, size_t completed);
-
-    static size_t ReleaseUnitsPartialImpl(size_t idx, size_t cnt, bool deferred);
 
     BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }
 
@@ -892,7 +873,6 @@ private:
         // propgated from RegionManager
         static uintptr_t heapStartAddress; // exported ABI anchor: end of the reverse metadata array
         static size_t totalUnitCount;
-        static MemMap* memoryOwner;
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
 
         ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
@@ -912,8 +892,8 @@ private:
         {
             CHECK(idx < totalUnitCount);
             for (const auto& segment : unitSegments) {
-                if (idx >= segment.firstIndex && idx - segment.firstIndex < segment.range.size / UNIT_SIZE) {
-                    return segment.range.start + (idx - segment.firstIndex) * UNIT_SIZE;
+                if (idx >= segment.firstIndex && idx - segment.firstIndex < segment.size / UNIT_SIZE) {
+                    return segment.start + (idx - segment.firstIndex) * UNIT_SIZE;
                 }
             }
             LOG(RTLOG_FATAL, "unit index denotes a reservation boundary: %zu", idx);
@@ -986,7 +966,6 @@ private:
 
         void ClearUnit() { ClearUnits(GetUnitIdx(this), 1); }
 
-        void ReleaseUnit() { ReleaseUnits(GetUnitIdx(this), 1); }
 
         UnitMetadata& GetMetadata() { return metadata; }
 

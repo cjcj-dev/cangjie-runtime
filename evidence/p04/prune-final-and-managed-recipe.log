@@ -1,0 +1,86 @@
+Preserved staging and removed own reconstructible build objects: /root/sym_cangjie_runtime_610_implement_r5687426297-b2
+Preserved staging and removed own reconstructible build objects: /root/sym_cangjie_runtime_610_implement_r5687426297-cut3
+Preserved staging and removed own reconstructible build objects: /root/sym_cangjie_runtime_610_implement_r5687426297-cut7
+文件系统        大小  已用  可用 已用% 挂载点
+/dev/nvme0n1p5  443G  421G     0  100% /
+28M	/root/sym_cangjie_runtime_610_implement_r5687426297-b1
+499M	/root/sym_cangjie_runtime_610_implement_r5687426297-b2
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-cut1
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-cut2
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-cut3
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-cut4
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-cut5
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-cut6
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-cut7
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-green
+75M	/root/sym_cangjie_runtime_610_implement_r5687426297-llvm
+308M	/root/sym_cangjie_runtime_610_implement_r5687426297-restored
+#!/bin/bash
+set -u
+ulimit -c 0
+config=$1; cores=$2
+short=b4
+prefix=sym_cangjie_runtime_611_implement_r5686859544
+root=/root/$prefix
+linkroot=/root/$prefix
+src=$root/$config/runtime/tests/gc_unit
+out=$root/canonical3-$config
+lib=$root/$config/build/runtime-staging/lib/x86_64_Release
+linklib=$linkroot/$config/build/runtime-staging/lib/x86_64_Release
+mkdir -p "$out"
+export CXX="clang++ -ffile-prefix-map=$root=/usr/src/p06-arm -fdebug-prefix-map=$root=/usr/src/p06-arm -fmacro-prefix-map=$root=/usr/src/p06-arm"
+cd "$root"
+export CCACHE_BASEDIR="$root"
+export GC_UNIT_JOBS=192 GC_UNIT_BUILD_JOBS=192
+export GC_UNIT_OUT=$out GCV2_RUNTIME_LIB_DIR=$linklib GCV2_RUNTIME_OUTPUT_ROOT=$root/$config/build/runtime-staging
+export MRT_TESTABLE_INTERNALS=0
+[ "$config" = testable ] && export MRT_TESTABLE_INTERNALS=1
+uptime > "$out/uptime-before.txt"
+start=$SECONDS
+if [[ "$short" = cut-smr-* ]]; then
+  elfroot=$linkroot/canonical3-$config
+else
+  taskset -c "$cores" bash "$src/run_standalone.sh" > "$out/compile-run.log" 2>&1
+  echo "$?" > "$out/compile-run.rc"
+  elfroot=$out
+fi
+if [ ! -f "$elfroot/cj_gc_unit" ]; then
+  echo "CANONICAL short=$short config=$config BUILD_FAILED"
+  /usr/bin/grep -m 5 'error:' "$out/compile-run.log"
+  exit 2
+fi
+sha256sum "$elfroot/cj_gc_unit" "$elfroot/cj_gc_forwarding_publication_unit" > "$out/elf.sha256"
+sha256sum "$lib"/*.so > "$out/so.sha256"
+n=1
+[[ "$short" = b4 || "$short" = restored ]] && n=3
+for sample in $(seq 1 "$n"); do
+ (
+  run=$out/run-$sample
+  mkdir -p "$run"
+  uptime > "$run/uptime-before.txt"
+  env LD_LIBRARY_PATH="$lib" taskset -c "$cores" bash "$src/run_parallel_tests.sh" "$elfroot/cj_gc_unit" "$elfroot/cj_gc_forwarding_publication_unit" "$run" "$lib" > "$run/run.log" 2>&1
+  rc=$?; echo "$rc" > "$run/run.rc"
+  uptime > "$run/uptime-after.txt"
+  echo "CANONICAL short=$short config=$config sample=$sample rc=$rc"
+  /usr/bin/grep -E '^\[========\] [0-9]{2,} tests:|^\[  FAILED  \] [A-Za-z]|^GC_UNIT_INCOMPLETE' "$run/run.log" | tail -16
+ ) &
+done
+wait
+# Independent filters make the exact target line visible; full-suite causal
+# comparisons below use the same ELF and the same source runner.
+case "$short" in
+ cut-f1) filters='ZUtils.atomic_copy_preserves_bounds_and_offset ZUtils.atomic_copy_adjacent_ranges ZUtils.atomic_copy_rejects_invalid_parameters ZArray.insert_before_at_end_appends ZArray.elements_are_constructed_and_destroyed_exactly_once';;
+ cut-safe) filters='ZSafeDelete.deferred_delete_waits_for_disable ZSafeDelete.page_retirement_defers_until_page_walk_ends';;
+ cut-list2) filters='ZListTest.test_remove_middle_unlinks';;
+ cut-index) filters='ZIndexDistributorTest.test_claim_tree_claim_is_atomic ZIndexDistributorTest.test_claim_tree_concurrent_claims_are_accounted';;
+ cut-smr-*) filters='MarkingSMR.WorkerPopRetiresInCurrentSlot ZLiveMapTest.concurrent_first_mark_resets_once ZLiveMapPage.clone_for_promotion_keeps_original_livemap ZLiveMapPage.initialization_uses_current_page_role';;
+ *) filters='ZUtils.atomic_copy_preserves_bounds_and_offset ZUtils.atomic_copy_adjacent_ranges ZUtils.atomic_copy_rejects_invalid_parameters ZArray.insert_before_at_end_appends ZArray.elements_are_constructed_and_destroyed_exactly_once ZSafeDelete.deferred_delete_waits_for_disable ZSafeDelete.page_retirement_defers_until_page_walk_ends ZListTest.test_remove_middle_unlinks ZIndexDistributorTest.test_claim_tree_claim_is_atomic ZIndexDistributorTest.test_claim_tree_concurrent_claims_are_accounted MarkingSMR.WorkerPopRetiresInCurrentSlot ZLiveMapTest.concurrent_first_mark_resets_once ZLiveMapPage.clone_for_promotion_keeps_original_livemap ZLiveMapPage.initialization_uses_current_page_role';;
+esac
+for filter in $filters; do
+ env LD_LIBRARY_PATH="$lib" taskset -c "$cores" timeout 60s "$elfroot/cj_gc_unit" --gtest_filter="$filter" > "$out/filter-$filter.log" 2>&1
+ echo "$?" > "$out/filter-$filter.rc"
+done
+nm -C --defined-only "$lib/libcangjie-runtime.so" > "$out/product.nm"
+nm -C --defined-only "$elfroot/cj_gc_unit" > "$out/test.nm"
+echo "wall=$((SECONDS-start))" > "$out/wall.txt"
+uptime > "$out/uptime-after.txt"

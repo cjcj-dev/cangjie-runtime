@@ -1,0 +1,5 @@
+LANE=sym_cangjie_runtime_610_implement_r5687426297
+ROLE=implement
+PROGRESS=WIP
+
+纠正上一问容量边界的误述：刚定点读zHeap.hpp:192-206，PublishCompilerHeapRanges不是CHECK而是min(heapReservations.size(),8)静默截断。无实际运行结论。P04 ZMaxVirtualReservations=100，原P01 MemMap fallback最多8段；新管理器可产生更多段。真实段发布适配仍待裁，不能用包围区间掩盖缺段。此限额与编译器g_cjHeapRangeCount数组ABI耦合，P04不自行放宽。请合并上一问一起给接法/归属。

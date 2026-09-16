@@ -1,0 +1,22 @@
+diff --git a/runtime/src/Heap/z/zPhysicalMemoryManager.cpp b/runtime/src/Heap/z/zPhysicalMemoryManager.cpp
+index 87f794124..662891075 100644
+--- a/runtime/src/Heap/z/zPhysicalMemoryManager.cpp
++++ b/runtime/src/Heap/z/zPhysicalMemoryManager.cpp
+@@ -333,7 +333,7 @@ void ZPhysicalMemoryManager::stash_segments(const ZVirtualMemory& vmem, ZArray<z
+ 
+   stash_out->resize(static_cast<size_t>(vmem.granule_count()));
+   copy_to_stash(stash_out->data(), stash_out->size(), vmem);
+-  sort_zbacking_index_array(stash_out->data(), static_cast<int>(stash_out->size()));
++  // RED ARM 2: stash not sorted
+ }
+ 
+ void ZPhysicalMemoryManager::restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash) {
+@@ -353,7 +353,7 @@ void ZPhysicalMemoryManager::stash_segments(const ZArray<ZVirtualMemory>& vmems,
+     stash_index += granule_count;
+   }
+ 
+-  sort_zbacking_index_array(stash_out->data(), static_cast<int>(stash_out->size()));
++  // RED ARM 2: stash not sorted
+ }
+ 
+ void ZPhysicalMemoryManager::restore_segments(const ZArray<ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash) {

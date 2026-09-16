@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zMappedCache.cpp b/runtime/src/Heap/z/zMappedCache.cpp
+index c7e2fd26d..82da46d48 100644
+--- a/runtime/src/Heap/z/zMappedCache.cpp
++++ b/runtime/src/Heap/z/zMappedCache.cpp
+@@ -664,7 +664,7 @@ ZVirtualMemory ZMappedCache::remove_contiguous(size_t size) {
+     return true;
+   };
+ 
+-  if (size == ZPageSizeSmall) {
++  if (false /* RED ARM 4: small pages no longer take the lowest address */ && size == ZPageSizeSmall) {
+     // Small page allocations allocate at the lowest possible address
+     scan_remove_vmem<RemovalStrategy::LowestAddress>(size, select_size_fn, consume_vmem_fn);
+   } else {

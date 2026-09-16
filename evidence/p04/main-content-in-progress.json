@@ -1,0 +1,58 @@
+[
+  {
+    "path": "runtime/src/Heap/z/zArray.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zArray.inline.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/growableArray.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zList.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zList.inline.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zValue.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zValue.inline.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zLiveMap.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zLiveMap.cpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zLiveMap.inline.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zSafeDelete.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zSafeDelete.inline.hpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zMarkingSMR.cpp",
+    "same_as_main": true
+  },
+  {
+    "path": "runtime/src/Heap/z/zCPU.cpp",
+    "same_as_main": true
+  }
+]

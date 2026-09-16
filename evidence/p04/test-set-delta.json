@@ -1,0 +1,107 @@
+{
+  "base": "91f3dcc232201d4ad98ec3af6f10165edb950416",
+  "head": "worktree",
+  "files": [
+    {
+      "path": "runtime/tests/gc_unit/test_mapped_cache.cpp",
+      "added": [
+        "MappedCache.ProductHarvestRemapsToLowestFreeVirtual",
+        "MappedCache.TreeMatchesModelUnderRandomChurn",
+        "ZPhysicalMemoryManager.BackingIndicesSurviveVirtualShuffle"
+      ],
+      "removed": [
+        "MappedCache.NativeBackingSurvivesVirtualShuffle",
+        "MappedCache.ProductFailedVirtualClaimRestoresOwners",
+        "MappedCache.ProductHarvestRemapsAndCommitsOnlySuffix",
+        "MappedCache.ProductPartialGrowthFailureReturnsBothOwners"
+      ]
+    },
+    {
+      "path": "runtime/tests/gc_unit/test_mem_map.cpp",
+      "added": [],
+      "removed": [
+        "MemMapContract.AccessorsBoundaryCommitProtectAndDestroy",
+        "MemMapContract.BackingCapacityTracksOnlyCompletedRanges",
+        "MemMapContract.BudgetRejectsBeforeReserve",
+        "MemMapContract.FallbackRegistryPreservesEveryAcquiredReservation",
+        "MemMapContract.InitialPartialCommitRollsBackPrefixBeforeDestroy",
+        "MemMapContract.NativeBackingBlockEintrReturnsZero",
+        "MemMapContract.NativeBackingCommitAndUncommit",
+        "MemMapContract.NativeBackingCommitFailureReturnsZero",
+        "MemMapContract.NativeBackingEintrSplitsCommit",
+        "MemMapContract.NativeBackingEintrSplitsUncommit",
+        "MemMapContract.NativeBackingEnosysUsesCompat",
+        "MemMapContract.NativeBackingEopnotsuppUsesCompat",
+        "MemMapContract.NativeBackingFailureRetainsPrefixDespitePunchError",
+        "MemMapContract.NativeBackingUncommitErrorRetainsCapacity",
+        "MemMapContract.NullAndInvalidInputsDoNotReachOS",
+        "MemMapContract.PageTableConcurrentReclaimPreservesDescriptor",
+        "MemMapContract.PageTableMarkQuarantineWaitsForIterator",
+        "MemMapContract.PageTableReleaseWaitsForIterator",
+        "MemMapContract.PageTableReturnWaitsForOutermostIterator",
+        "MemMapContract.PartitionCommitRegistersPrefixAndExplicitRelease",
+        "MemMapContract.PartitionFirstFailureIsZeroPositiveControl",
+        "MemMapContract.PartitionReleaseFirstFailureIsZeroPositiveControl",
+        "MemMapContract.PartitionReleaseReportsPrefixOnSecondFailure",
+        "MemMapContract.RegionManagerCommitResultsPreserveCapacityAndCache",
+        "MemMapContract.RegionManagerInactiveAllocationUsesMemMapOwner",
+        "MemMapContract.SegmentedRegionManagerAllocationLookupAndReturn",
+        "MemMapContract.TwoNodeOwnershipRejectsCrossNodeFree"
+      ]
+    },
+    {
+      "path": "runtime/tests/gc_unit/test_page_retirement.cpp",
+      "added": [
+        "PageRetirement.PageTableConcurrentReclaimPreservesDescriptor",
+        "PageRetirement.PageTableMarkQuarantineWaitsForIterator",
+        "PageRetirement.PageTableReleaseWaitsForIterator",
+        "PageRetirement.PageTableReturnWaitsForOutermostIterator"
+      ],
+      "removed": []
+    },
+    {
+      "path": "runtime/tests/gc_unit/test_range_registry.cpp",
+      "added": [],
+      "removed": [
+        "RangeRegistryDirection.FixedRandomSequenceMatchesIndependentByteModel",
+        "RangeRegistryDirection.LowAndHighClaimsUseOppositeAddressEnds",
+        "RangeRegistryFailure.HighNoFitReturnsNullAndPreservesLedger",
+        "RangeRegistryFailure.LowNoFitReturnsNullAndPreservesLedger",
+        "RangeRegistryFailure.ZeroSizeReturnsNullAndPreservesLedger",
+        "RangeRegistryMerge.AdjacentInsertMergesBothNeighbours",
+        "RangeRegistryMerge.HandOutAndBackCallbacksKeepTheLedgerReversible",
+        "RangeValue.SplitGrowAndPartitionPreserveEveryByte"
+      ]
+    },
+    {
+      "path": "runtime/tests/gc_unit/test_uncommitter.cpp",
+      "added": [],
+      "removed": [
+        "Uncommitter.PartialPrefixIsRetainedNotRounded"
+      ]
+    },
+    {
+      "path": "runtime/tests/gc_unit/test_zVirtualMemory.cpp",
+      "added": [
+        "ZVirtualMemory.accessors",
+        "ZVirtualMemory.adjacent_to",
+        "ZVirtualMemory.is_null",
+        "ZVirtualMemory.resize",
+        "ZVirtualMemory.shrink_from_back",
+        "ZVirtualMemory.shrink_from_front"
+      ],
+      "removed": []
+    },
+    {
+      "path": "runtime/tests/gc_unit/test_zVirtualMemoryManager.cpp",
+      "added": [
+        "ZVirtualMemoryManagerTest.test_insert_merges_neighbours",
+        "ZVirtualMemoryManagerTest.test_remove_from_high",
+        "ZVirtualMemoryManagerTest.test_remove_from_low",
+        "ZVirtualMemoryManagerTest.test_remove_whole",
+        "ZVirtualMemoryManagerTest.test_reserve_discontiguous_and_coalesce"
+      ],
+      "removed": []
+    }
+  ]
+}

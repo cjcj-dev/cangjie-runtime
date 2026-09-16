@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/z/zHeap.hpp b/runtime/src/Heap/z/zHeap.hpp
+index 8cebb3aa7..0ec115293 100644
+--- a/runtime/src/Heap/z/zHeap.hpp
++++ b/runtime/src/Heap/z/zHeap.hpp
+@@ -199,7 +199,7 @@ private:
+             g_cjHeapRangeStart[i] = 0;
+             g_cjHeapRangeEnd[i] = 0;
+         }
+-        const unsigned n = static_cast<unsigned>(heapReservations.size());
++        const unsigned n = static_cast<unsigned>(std::min(heapReservations.size(), size_t(8)));
+         g_cjHeapRangeCount = n;
+         for (unsigned i = 0; i < n; ++i) {
+             g_cjHeapRangeStart[i] = heapReservations[i].start;

@@ -1,0 +1,78 @@
+[
+  {
+    "arm": "cut1",
+    "source": "/root/cj_build/agent_scratch/sym_cangjie_runtime_610_implement_r5687426297/cut1",
+    "head": "c1694d02e5b3306da6b32e05a4303124c7127a55",
+    "product_cut": [
+      "zRangeRegistry.inline.hpp",
+      "if (prev != nullptr && start == prev->end()) {",
+      "if (false && prev != nullptr && start == prev->end()) {"
+    ]
+  },
+  {
+    "arm": "cut2",
+    "source": "/root/cj_build/agent_scratch/sym_cangjie_runtime_610_implement_r5687426297/cut2",
+    "head": "c1694d02e5b3306da6b32e05a4303124c7127a55",
+    "product_cut": [
+      "zPhysicalMemoryManager.cpp",
+      "  sort_zbacking_index_array(stash_out->adr_at(0), stash_out->length());",
+      "  // Control: omit stash sorting."
+    ]
+  },
+  {
+    "arm": "cut3",
+    "source": "/root/cj_build/agent_scratch/sym_cangjie_runtime_610_implement_r5687426297/cut3",
+    "head": "c1694d02e5b3306da6b32e05a4303124c7127a55",
+    "product_cut": [
+      "zPageAllocator.cpp",
+      "        decrease_capacity(partition->numaId, part, false /* set_max_capacity */);",
+      "        // Control: omit uncommitted capacity accounting."
+    ]
+  },
+  {
+    "arm": "cut4",
+    "source": "/root/cj_build/agent_scratch/sym_cangjie_runtime_610_implement_r5687426297/cut4",
+    "head": "c1694d02e5b3306da6b32e05a4303124c7127a55",
+    "product_cut": [
+      "zMappedCache.cpp",
+      "if (size == ZPageSizeSmall) {",
+      "if (false && size == ZPageSizeSmall) {"
+    ]
+  },
+  {
+    "arm": "cut5",
+    "source": "/root/cj_build/agent_scratch/sym_cangjie_runtime_610_implement_r5687426297/cut5",
+    "head": "c1694d02e5b3306da6b32e05a4303124c7127a55",
+    "product_cut": [
+      "zUncommitter.cpp",
+      "        regions.freeRegionManager.UncommitFlushed(flushed);",
+      "        // Control: disconnect the uncommit capacity consumer."
+    ]
+  },
+  {
+    "arm": "cut6",
+    "source": "/root/cj_build/agent_scratch/sym_cangjie_runtime_610_implement_r5687426297/cut6",
+    "head": "c1694d02e5b3306da6b32e05a4303124c7127a55",
+    "product_cut": [
+      "zPageAllocator.cpp",
+      "        restore_segments(result.first_part(harvested), stash);",
+      "        // Control: disconnect the physical-stash consumer."
+    ]
+  },
+  {
+    "arm": "cut7",
+    "source": "/root/cj_build/agent_scratch/sym_cangjie_runtime_610_implement_r5687426297/cut7",
+    "head": "c1694d02e5b3306da6b32e05a4303124c7127a55",
+    "product_cut": [
+      "zHeap.hpp",
+      "const unsigned n = static_cast<unsigned>(heapReservations.size());",
+      "const unsigned n = static_cast<unsigned>(std::min(heapReservations.size(), size_t(8)));"
+    ]
+  },
+  {
+    "arm": "restored",
+    "source": "/root/cj_build/agent_scratch/sym_cangjie_runtime_610_implement_r5687426297/restored",
+    "head": "c1694d02e5b3306da6b32e05a4303124c7127a55",
+    "product_cut": null
+  }
+]

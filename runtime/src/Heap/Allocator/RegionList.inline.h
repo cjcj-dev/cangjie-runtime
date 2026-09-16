@@ -4,7 +4,11 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// RegionList method bodies (old-directory residue; ZGC has no RegionList).
+// Included once by zPageAllocator.cpp.
+
 #include "Heap/Allocator/RegionList.h"
+
 namespace MapleRuntime {
 void RegionList::MergeRegionList(RegionList& srcList, RegionInfo::RegionType regionType)
 {

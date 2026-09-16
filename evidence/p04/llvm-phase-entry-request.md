@@ -1,0 +1,7 @@
+LANE=sym_cangjie_runtime_610_implement_r5687426297
+ROLE=implement
+PROGRESS=WIP
+
+LLVM配套的读消费端切刀已准备，真实入口ReadBarrier::readFastPath内现有CmpEQ=CreateAnd(CmpEQ, InHeap, "cj.read.heap.slot")，行在冻结main1a014519及候选132068cf均存在。候选新IR循环结果在该行进入原快慢分路，切刀只移除InHeap消费，不改断言或入口直接报错。运行使用真实新llc生成的同一slot_domain_consumer，再由实际runtime初始化2/9段并MCC_NewObjArray分配；当前LLVM两刀/恢复已建，新路径归一化构建补证在继续。
+entry_cut_check现役PHASE_ENTRIES预演rc1，唯一缺口是LLVM readFastPath未登记；同尺仅追加精确llvm/lib/CodeGen/CJBarrierLowering.cpp:readFastPath的临时副本预演rc0（evidence/p04/llvm-entry-cut-{before,proposed}.json）。请核对并由主控登记该真实编译器入口，以便最终用现役清单重跑，不修改工具判据。runtime独立cut5现役清单已经rc0。
+另外：已按实际SOURCE_COMMIT补回OHOS归档目录的原c169真实commit/tree/blob浅Git对象；不是伪造HEAD。先前OHOS构建rc0，runner因无.git为128，保持原记录；runtime/src对原c169差分rc0后将复用同一OHOS ELF跑余下入口。

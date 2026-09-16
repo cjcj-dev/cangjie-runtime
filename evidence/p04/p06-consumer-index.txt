@@ -1,0 +1,56 @@
+git grep -n -E ZArray|ZArraySlice|ZPerNUMA -- runtime/src/Heap/z/zPhysicalMemoryManager* runtime/src/Heap/z/zVirtualMemoryManager* runtime/src/Heap/z/zRangeRegistry* runtime/src/Heap/z/zMappedCache* runtime/src/Heap/z/zPageAllocator*
+RC=0
+runtime/src/Heap/z/zMappedCache.cpp:539:size_t ZMappedCache::remove_discontiguous_with_strategy(size_t size, ZArray<ZVirtualMemory>* out) {
+runtime/src/Heap/z/zMappedCache.cpp:710:size_t ZMappedCache::remove_discontiguous(size_t size, ZArray<ZVirtualMemory>* out) {
+runtime/src/Heap/z/zMappedCache.cpp:722:size_t ZMappedCache::remove_for_uncommit(size_t size, ZArray<ZVirtualMemory>* out) {
+runtime/src/Heap/z/zMappedCache.hpp:118:  size_t remove_discontiguous_with_strategy(size_t size, ZArray<ZVirtualMemory>* out);
+runtime/src/Heap/z/zMappedCache.hpp:128:  size_t remove_discontiguous(size_t size, ZArray<ZVirtualMemory>* out);
+runtime/src/Heap/z/zMappedCache.hpp:133:  size_t remove_for_uncommit(size_t size, ZArray<ZVirtualMemory>* out);
+runtime/src/Heap/z/zPageAllocator.cpp:79:    const uint32_t numaCount = ZPerNUMAStorage::count();
+runtime/src/Heap/z/zPageAllocator.cpp:107:size_t FreeRegionManager::claim_virtual(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out)
+runtime/src/Heap/z/zPageAllocator.cpp:118:                                                                                ZArray<ZVirtualMemory>* vmems_in_out)
+runtime/src/Heap/z/zPageAllocator.cpp:159:void FreeRegionManager::stash_segments(const ZArraySlice<const ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const
+runtime/src/Heap/z/zPageAllocator.cpp:164:void FreeRegionManager::restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash)
+runtime/src/Heap/z/zPageAllocator.cpp:169:void FreeRegionManager::restore_segments(const ZArraySlice<const ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash)
+runtime/src/Heap/z/zPageAllocator.cpp:326:    ZArray<zbacking_index> stash;
+runtime/src/Heap/z/zPageAllocator.cpp:470:size_t FreeRegionManager::RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>* out)
+runtime/src/Heap/z/zPageAllocator.cpp:574:    const uint32_t partitions = ZPerNUMAStorage::count();
+runtime/src/Heap/z/zPageAllocator.hpp:35:    ZArray<ZVirtualMemory> partialMappings;
+runtime/src/Heap/z/zPageAllocator.hpp:244:    size_t claim_virtual(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out);
+runtime/src/Heap/z/zPageAllocator.hpp:247:                                                                 ZArray<ZVirtualMemory>* vmems_in_out);
+runtime/src/Heap/z/zPageAllocator.hpp:255:    void stash_segments(const ZArraySlice<const ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const;
+runtime/src/Heap/z/zPageAllocator.hpp:256:    void restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash);
+runtime/src/Heap/z/zPageAllocator.hpp:257:    void restore_segments(const ZArraySlice<const ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash);
+runtime/src/Heap/z/zPageAllocator.hpp:299:    size_t RemoveForUncommit(size_t flush, ZArray<ZVirtualMemory>* out);
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:56:  ZPerNUMAIterator<ZBackingIndexRegistry> iter(&_partition_registries);
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:269:  if (ZPerNUMAStorage::count() > 1 && ZLargePages::is_explicit()) {
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:310:void ZPhysicalMemoryManager::copy_to_stash(ZArraySlice<zbacking_index> stash, const ZVirtualMemory& vmem) const {
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:322:void ZPhysicalMemoryManager::copy_from_stash(const ZArraySlice<const zbacking_index> stash, const ZVirtualMemory& vmem) {
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:334:void ZPhysicalMemoryManager::stash_segments(const ZVirtualMemory& vmem, ZArray<zbacking_index>* stash_out) const {
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:342:void ZPhysicalMemoryManager::restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash) {
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:348:void ZPhysicalMemoryManager::stash_segments(const ZArraySlice<const ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const {
+runtime/src/Heap/z/zPhysicalMemoryManager.cpp:363:void ZPhysicalMemoryManager::restore_segments(const ZArraySlice<const ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash) {
+runtime/src/Heap/z/zPhysicalMemoryManager.hpp:29:  ZPerNUMA<ZBackingIndexRegistry> _partition_registries;
+runtime/src/Heap/z/zPhysicalMemoryManager.hpp:32:  void copy_to_stash(ZArraySlice<zbacking_index> stash, const ZVirtualMemory& vmem) const;
+runtime/src/Heap/z/zPhysicalMemoryManager.hpp:33:  void copy_from_stash(const ZArraySlice<const zbacking_index> stash, const ZVirtualMemory& vmem);
+runtime/src/Heap/z/zPhysicalMemoryManager.hpp:56:  void stash_segments(const ZVirtualMemory& vmem, ZArray<zbacking_index>* stash_out) const;
+runtime/src/Heap/z/zPhysicalMemoryManager.hpp:57:  void restore_segments(const ZVirtualMemory& vmem, const ZArray<zbacking_index>& stash);
+runtime/src/Heap/z/zPhysicalMemoryManager.hpp:59:  void stash_segments(const ZArraySlice<const ZVirtualMemory>& vmems, ZArray<zbacking_index>* stash_out) const;
+runtime/src/Heap/z/zPhysicalMemoryManager.hpp:60:  void restore_segments(const ZArraySlice<const ZVirtualMemory>& vmems, const ZArray<zbacking_index>& stash);
+runtime/src/Heap/z/zRangeRegistry.hpp:63:  size_t remove_from_low_many_at_most_inner(size_t size, ZArray<Range>* out);
+runtime/src/Heap/z/zRangeRegistry.hpp:87:  void insert_and_remove_from_low_many(const Range& range, ZArray<Range>* out);
+runtime/src/Heap/z/zRangeRegistry.hpp:88:  Range insert_and_remove_from_low_exact_or_many(size_t size, ZArray<Range>* in_out);
+runtime/src/Heap/z/zRangeRegistry.hpp:92:  size_t remove_from_low_many_at_most(size_t size, ZArray<Range>* out);
+runtime/src/Heap/z/zRangeRegistry.inline.hpp:184:size_t ZRangeRegistry<Range>::remove_from_low_many_at_most_inner(size_t size, ZArray<Range>* out) {
+runtime/src/Heap/z/zRangeRegistry.inline.hpp:336:void ZRangeRegistry<Range>::insert_and_remove_from_low_many(const Range& range, ZArray<Range>* out) {
+runtime/src/Heap/z/zRangeRegistry.inline.hpp:353:Range ZRangeRegistry<Range>::insert_and_remove_from_low_exact_or_many(size_t size, ZArray<Range>* in_out) {
+runtime/src/Heap/z/zRangeRegistry.inline.hpp:396:size_t ZRangeRegistry<Range>::remove_from_low_many_at_most(size_t size, ZArray<Range>* out) {
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:244:  ZPerNUMAIterator<ZVirtualMemoryRegistry> iter(&_partition_registries);
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:268:  ZPerNUMAIterator<ZVirtualMemoryRegistry> iter(&_partition_registries);
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:307:size_t ZVirtualMemoryManager::remove_from_low_many_at_most(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out) {
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:319:void ZVirtualMemoryManager::insert_and_remove_from_low_many(const ZVirtualMemory& vmem, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out) {
+runtime/src/Heap/z/zVirtualMemoryManager.cpp:323:ZVirtualMemory ZVirtualMemoryManager::insert_and_remove_from_low_exact_or_many(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_in_out) {
+runtime/src/Heap/z/zVirtualMemoryManager.hpp:62:  ZPerNUMA<ZVirtualMemoryRegistry> _partition_registries;
+runtime/src/Heap/z/zVirtualMemoryManager.hpp:86:  size_t remove_from_low_many_at_most(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out);
+runtime/src/Heap/z/zVirtualMemoryManager.hpp:90:  void insert_and_remove_from_low_many(const ZVirtualMemory& vmem, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_out);
+runtime/src/Heap/z/zVirtualMemoryManager.hpp:91:  ZVirtualMemory insert_and_remove_from_low_exact_or_many(size_t size, uint32_t partition_id, ZArray<ZVirtualMemory>* vmems_in_out);

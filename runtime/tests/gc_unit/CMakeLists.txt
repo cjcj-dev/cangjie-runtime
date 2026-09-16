@@ -51,8 +51,10 @@ set(GC_UNIT_SOURCES
     test_store_barrier_buffer.cpp
     test_barrier_old_atomic.cpp
     test_zPageAge.cpp
-    test_range_registry.cpp
+    test_zVirtualMemory.cpp
+    test_zVirtualMemoryManager.cpp
     test_mapped_cache.cpp
+    test_page_retirement.cpp
     test_stay_young.cpp
     test_gc_trigger.cpp
     test_gc_director.cpp
@@ -87,7 +89,6 @@ set(GC_UNIT_SOURCES
     test_verify_fail_close.cpp
     test_verify_phase.cpp
     test_verify_marking_stacks.cpp
-    test_mem_map.cpp
     test_colour_census.cpp
     test_payload_clamp.cpp
     test_cycle_ref_saferegion.cpp
@@ -99,7 +100,10 @@ target_include_directories(cj_gc_unit PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Loader/BinaryFile
     ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/src/Heap
+    ${CMAKE_BINARY_DIR}/src/Heap/Allocator
 )
 target_compile_features(cj_gc_unit PRIVATE cxx_std_17)
 # The product target disables C++ exceptions globally, while this deliberately
@@ -149,6 +153,7 @@ target_include_directories(cj_gc_allocation_stall_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_allocation_stall_unit PRIVATE cxx_std_17)
@@ -178,6 +183,7 @@ target_include_directories(cj_gc_cycle_saferegion_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_cycle_saferegion_unit PRIVATE cxx_std_17)
@@ -206,6 +212,7 @@ target_include_directories(cj_gc_clear_entries_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_clear_entries_unit PRIVATE cxx_std_14)
@@ -242,6 +249,7 @@ target_include_directories(cj_gc_uncommit_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_uncommit_unit PRIVATE cxx_std_17)

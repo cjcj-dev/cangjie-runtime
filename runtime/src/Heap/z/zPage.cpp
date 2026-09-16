@@ -59,7 +59,6 @@ RegionInfo* RegionInfo::NullRegion()
 
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
-MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;
 std::vector<RegionInfo::UnitSegment> RegionInfo::unitSegments;
 ZGranuleMap<RegionInfo*> RegionInfo::pageOwners;
 ZSafeDelete<RegionInfo::PageRetirement> RegionInfo::safeDestroy;
@@ -143,8 +142,6 @@ const size_t RegionInfo::LARGE_OBJECT_DEFAULT_THRESHOLD = MapleRuntime::MRT_PAGE
                                                             MapleRuntime::MRT_PAGE_SIZE : 32 * KB;
 // max size of per region is 128KB.
 const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntime::MRT_PAGE_SIZE;
-// size of huge page is 2048KB.
-const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZE;;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
 void RegionInfo::DumpRegionInfo(LogType type) const
 {

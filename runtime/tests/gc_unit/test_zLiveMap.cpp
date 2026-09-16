@@ -342,7 +342,7 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
     for (bool large : { false, true }) {
         const auto role = large ? RegionInfo::UnitRole::LARGE_SIZED_UNITS
                                 : RegionInfo::UnitRole::SMALL_SIZED_UNITS;
-        GcHeapFixture fx(false, role);
+        GcHeapFixture fx(role);
         RegionInfo* region = fx.region0;
         region->SetYoungRegionFlag(1);
         region->SetYoungAge(1);
@@ -449,7 +449,7 @@ void WaitForBothStrongLoads(const ZBitMap*, BitMap::idx_t)
 // zMark.cpp:405-425 accounts the first live result once.
 void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
 {
-    GcHeapFixture fx(false, large ? RegionInfo::UnitRole::LARGE_SIZED_UNITS
+    GcHeapFixture fx(large ? RegionInfo::UnitRole::LARGE_SIZED_UNITS
                                   : RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     RegionInfo* region = fx.region0;
     BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;

@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "gc_unittest.hpp"
+#include "zunittest.hpp"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
@@ -53,24 +54,23 @@ private:
 class OneUnitStallFixture {
 private:
     StallTestRuntime runtime;
-    struct MapOwner {
-        ~MapOwner() { MemMap::DestroyMemMap(value); }
-        MemMap* value{ nullptr };
-    } map;
     RegionInfo* capacity{ nullptr };
 
 public:
+    // The RegionManager (mapped caches keep entries in heap memory) must be
+    // destroyed before the mapping: declare it last.
+    std::unique_ptr<ZTestRegionHeap> heap;
+    RegionManager manager;
+
     OneUnitStallFixture()
     {
         // ZInitialize: allocator sampling starts only after statistics initialization.
         ZStat::Initialize();
         constexpr size_t units = 1;
-        const size_t metadataSize = RegionManager::GetMetadataSize(units);
-        map.value = MemMap::MapMemory(metadataSize + RegionInfo::UNIT_SIZE, metadataSize);
         HeapParam heapParam {};
         heapParam.regionSize = RegionInfo::UNIT_SIZE / 1024;
         heapParam.exemptionThreshold = 0.8;
-        manager.Initialize(units, reinterpret_cast<uintptr_t>(map.value->GetBaseAddr()), *map.value, heapParam, 0.5);
+        heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
         capacity = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
     }
 
@@ -80,8 +80,6 @@ public:
         capacity = nullptr;
         manager.ReclaimRegion(region);
     }
-
-    RegionManager manager;
 };
 
 struct WaitState {

@@ -192,13 +192,14 @@ public:
 private:
     static void PublishCompilerHeapRanges()
     {
-        constexpr unsigned kCap = 8;
+        constexpr unsigned kCap = kCjHeapRangeCap;
+        CHECK_DETAIL(heapReservations.size() <= kCap,
+                     "compiler heap range capacity exceeded: %zu > %u", heapReservations.size(), kCap);
         for (unsigned i = 0; i < kCap; ++i) {
             g_cjHeapRangeStart[i] = 0;
             g_cjHeapRangeEnd[i] = 0;
         }
-        const unsigned n = static_cast<unsigned>(
-            heapReservations.size() < kCap ? heapReservations.size() : kCap);
+        const unsigned n = static_cast<unsigned>(heapReservations.size());
         g_cjHeapRangeCount = n;
         for (unsigned i = 0; i < n; ++i) {
             g_cjHeapRangeStart[i] = heapReservations[i].start;
