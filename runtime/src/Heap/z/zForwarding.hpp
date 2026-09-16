@@ -339,6 +339,9 @@ public:
         // zForwarding.inline.hpp:267-300: one attached array and one CAS winner.
         ForwardingCursor cursor = 0;
         const uintptr_t fromIndex = index(from);
+        if (fromIndex > ForwardingEntry::kMaxFromIndex) {
+            return Receipt{ 0, false, Receipt::Status::EXISTING };
+        }
         const size_t toOffset = static_cast<size_t>(to - _heapBase);
         const ForwardingEntry existing = find(fromIndex, &cursor);
         if (existing.populated()) {

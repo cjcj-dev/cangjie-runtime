@@ -36,8 +36,15 @@ inline size_t ZForwardingAllocator::used() const
 
 inline void* ZForwardingAllocator::alloc(size_t size)
 {
-    char* const addr = _top.fetch_add(size, std::memory_order_relaxed);
-    return addr;
+    char* addr = _top.load(std::memory_order_relaxed);
+    for (;;) {
+        if (_start == nullptr || addr > _end || size > static_cast<size_t>(_end - addr)) {
+            return nullptr;
+        }
+        if (_top.compare_exchange_weak(addr, addr + size, std::memory_order_relaxed)) {
+            return addr;
+        }
+    }
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)

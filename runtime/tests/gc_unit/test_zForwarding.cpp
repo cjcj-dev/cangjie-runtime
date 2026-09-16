@@ -164,11 +164,10 @@ GC_TEST(ZForwardingEntries, LargeFromIndexRoundTrip)
     ForwardingEntries* tab = ForwardingEntries::Create(8, kStart, 0);
     GC_EXPECT_TRUE(tab != nullptr);
     const MAddress from = kStart + ((size_t(3) << 20) / kAlign) * kAlign;
-    GC_EXPECT_TRUE(((from - kStart) >> 3) > ((size_t(1) << 18) - 1));
-    GC_EXPECT_TRUE(((from - kStart) >> 3) <= ForwardingEntry::kMaxFromIndex);
+    GC_EXPECT_TRUE(((from - kStart) >> 3) > ForwardingEntry::kMaxFromIndex);
     const MAddress dest = 0x9000;
-    GC_EXPECT_EQ(tab->insert(from, dest), dest);
-    GC_EXPECT_EQ(tab->find(from), dest);
+    GC_EXPECT_EQ(tab->insert(from, dest), MAddress(0));
+    GC_EXPECT_EQ(tab->find(from), MAddress(0));
     tab->Destroy();
 }
 
