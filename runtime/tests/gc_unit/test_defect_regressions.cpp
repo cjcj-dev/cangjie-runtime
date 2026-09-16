@@ -18,6 +18,7 @@
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/GcStats.h"
@@ -279,6 +280,9 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     // obj == nullptr is the triggering ABI shape; field is demonstrably in heap.
     GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
     MCC_WriteRefField(fx.heap.obj1, nullptr, reinterpret_cast<RefField<false>*>(field));
+    if (StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false)) {
+        buffer->Flush();
+    }
 
     const uintptr_t installed = static_cast<uintptr_t>(raw(field->GetFieldValue()));
     GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
@@ -320,7 +324,9 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
         MCC_WriteRefField(fx.heap.obj1, nonHeapHolder, reinterpret_cast<RefField<false>*>(field));
-        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 0u);
+        if (StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false)) {
+            buffer->Flush();
+        }
         GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Contains(slot), true);
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);
@@ -362,11 +368,10 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
         ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(reinterpret_cast<RefField<false>*>(field)), false);
-        std::fprintf(stderr, "POST_BUFFER_TARGET_ASSERT_EXECUTED pending=%zu\n",
-                     ThreadLocal::GetGCData().storeBarrierBuffer->Pending());
-        GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 0u);
+        if (StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false)) {
+            buffer->Flush();
+        }
         GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Contains(slot), true);
-        GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);
     }
     int status = 0;

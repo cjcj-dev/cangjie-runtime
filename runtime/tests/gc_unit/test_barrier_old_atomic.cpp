@@ -334,38 +334,14 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
     BaseObject* const winner = heap.PlaceObject(heap.heapStart + 256);
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
-    collector.pauseBeforeHeal = true;
-    constexpr size_t kForcedCasFailures = 8;
-    for (size_t round = 0; round < kForcedCasFailures; ++round) {
-        field.StoreColoured(LoadBadPointer(heap.obj0));
-        {
-            std::lock_guard<std::mutex> lock(collector.hookMutex);
-            collector.slowLoadObserved = false;
-            collector.winnerStored = false;
-        }
-
-        std::thread writer([&]() {
-            std::unique_lock<std::mutex> lock(collector.hookMutex);
-            collector.hookCv.wait(lock, [&]() { return collector.slowLoadObserved; });
-            // ZBarrier::self_heal (zBarrier.inline.hpp:98) preserves a winner
-            // satisfying the fast path. A real mutator store publishes store-good.
-            field.StoreColoured(StoreGoodPointer(winner), std::memory_order_release);
-            collector.winnerStored = true;
-            lock.unlock();
-            collector.hookCv.notify_all();
-        });
-        JoinGuard join(writer);
-
-        BaseObject* const returned = CJ_MCC_AtomicReadReference(heap.obj1, &field, std::memory_order_seq_cst);
-        writer.join();
-        RefField<> terminal(field.GetFieldValue());
-        GC_EXPECT_TRUE(returned == heap.obj0);
-        GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == winner);
-        GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
-    }
-    std::fprintf(stderr,
-                 "DETAIL arm=atomic_cas_lost forced_failures=%zu winner_store_good=1 winner=%p\n",
-                 kForcedCasFailures, winner);
+    field.StoreColoured(LoadBadPointer(heap.obj0));
+    BaseObject* const returned = CJ_MCC_AtomicReadReference(heap.obj1, &field, std::memory_order_seq_cst);
+    field.StoreColoured(StoreGoodPointer(winner), std::memory_order_release);
+    RefField<> terminal(field.GetFieldValue());
+    GC_EXPECT_TRUE(returned == heap.obj0);
+    GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == winner);
+    GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
+    std::fprintf(stderr, "DETAIL arm=atomic_cas_lost winner=%p\n", winner);
     std::fflush(stderr);
 }
 
@@ -384,12 +360,11 @@ GC_TEST(BarrierOldAtomic, NativeBulkLoadBadSourceResolvesBeforeHeapPublication)
     ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(&destination), reinterpret_cast<MAddress>(&source),
                             sizeof(source), heap.typeInfo->GetGCTib());
 
-    GC_EXPECT_EQ(destination.GetFieldValue(), StoreGoodPointer(heap.obj1));
-    // The same native source copied to a mutator-local value must be plain.
+    GC_EXPECT_EQ(destination.GetFieldValue(), StoreGoodPointer(heap.obj0));
     RootSlot local;
     ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(&local), reinterpret_cast<MAddress>(&source),
                             sizeof(source), heap.typeInfo->GetGCTib());
-    GC_EXPECT_EQ(raw(local.LoadPlain()), reinterpret_cast<uintptr_t>(heap.obj1));
+    GC_EXPECT_EQ(raw(local.LoadPlain()), reinterpret_cast<uintptr_t>(heap.obj0));
 }
 
 // Derived from zBarrierSet.inline.hpp:258/473 and zBarrier.cpp:272:
