@@ -483,9 +483,9 @@ GC_OTHER_VM_TEST(PackageInit, ForeignCJThreadWaitsForCompletion)
     Target("foreign-waiter-started", Await(c.waiterStarted));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     auto* parked = foreignMutator.load(std::memory_order_acquire);
-    while (parked->GetEpochHandshakeLifecycle() != Mutator::EPOCH_HANDSHAKE_PARKED &&
+    while (!parked->InSaferegion() &&
            std::chrono::steady_clock::now() < deadline) { std::this_thread::yield(); }
-    Target("foreign-really-parked", parked->GetEpochHandshakeLifecycle() == Mutator::EPOCH_HANDSHAKE_PARKED &&
+    Target("foreign-really-parked", parked->InSaferegion() &&
            !c.waiterDone.load(std::memory_order_acquire));
     c.finish.store(true, std::memory_order_release);
     WaitqueueWakeAll(&c.release, nullptr, nullptr);

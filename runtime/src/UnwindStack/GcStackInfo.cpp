@@ -41,8 +41,8 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
-                CopyCollector::VisitHeapReferencesOnStack(
-                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
+                (void)young;
+                CopyCollector::Process(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
                 break;
             }
             case FrameType::C2R_STUB:
@@ -81,7 +81,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
         switch (frame->GetFrameType()) {
             case FrameType::MANAGED: {
                 currentFramePtr = frame;
-                CopyCollector::VisitStackRoots(func, regSlotsMap, ref, mutator);
+                CopyCollector::Process(func, nullptr, regSlotsMap, ref, mutator);
                 break;
             }
             case FrameType::STACKGROW:
@@ -159,8 +159,8 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
-                CopyCollector::VisitHeapReferencesOnStack(
-                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
+                (void)young;
+                CopyCollector::Process(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
                 break;
             }
             case FrameType::C2R_STUB:
@@ -216,7 +216,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
         switch (frame->GetFrameType()) {
             case FrameType::MANAGED: {
                 currentFramePtr = frame;
-                CopyCollector::VisitStackRoots(func, regSlotsMap, ref, mutator);
+                CopyCollector::Process(func, nullptr, regSlotsMap, ref, mutator);
                 break;
             }
             case FrameType::SAFEPOINT:

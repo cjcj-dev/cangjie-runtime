@@ -42,6 +42,7 @@
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
+#include "Heap/z/zStackWatermark.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
@@ -328,9 +329,8 @@ void WCollector::RemapYoungRoots()
         };
         DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
         size_t frames = 0;
-        if (!mutator.DrainStackWatermark(heapRoots, heapRoots, __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE),
-                                         StackWatermark::WM_OWNER_GC, &derived, frames, true,
-                                         StackWatermark::ProcessingPhase::REMAP)) {
+        if (!StackWatermarkSet::finish_processing(mutator, heapRoots, heapRoots,
+                __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE), &derived, frames)) {
             mutator.VisitHeapReferences(heapRoots, derived);
         }
     });
@@ -832,11 +832,7 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 {
     // The phase handshake has already completed each stack watermark. Only
     // non-frame plain carriers and colored storage remain at this entry.
-    RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
-#if defined(MRT_GC_UNIT_TESTS)
-        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_RELOCATE,
-                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
-#endif
+        RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
         (void)FixMinorEvacuatedSlot(root, stw);
     };
     VisitStrongPlainRoots(rawRootVisitor, {});

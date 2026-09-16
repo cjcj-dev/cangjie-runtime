@@ -47,6 +47,7 @@ class MarkStripeSet;
 class ZWorkers;
 class MarkContext;
 struct ThreadLocalData;
+class Mutator;
 
 // Per-generation mark ownership (zMark.hpp:42-124, zMark.cpp:80-92).
 class ZMark {
@@ -261,6 +262,8 @@ public:
 
     static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                 Mutator& mutator);
+    static void Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
+                        RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
     static size_t CurrentThreadRootMapMissCount();
 
     static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
@@ -288,6 +291,7 @@ public:
     static std::function<void(GCCycleGeneration, MarkStartPoint, const ZMark*)> testMarkStartState;
     static std::function<void()> testYoungMarkCompleted;
     static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
+    static std::function<void(Mutator&)> testOldMarkThreadResult;
 #endif
 
     void Init() override;

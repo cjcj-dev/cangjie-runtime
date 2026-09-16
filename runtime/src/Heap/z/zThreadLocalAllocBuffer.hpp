@@ -147,7 +147,7 @@ public:
 #endif
 
     void FlushRegion();
-
+    void RetireTLAB(bool gcWaste);
 
 private:
 #if defined(MRT_GC_UNIT_TESTS)
@@ -158,8 +158,6 @@ private:
     MAddress TryAllocateOnce(size_t totalSize, AllocType allocType);
     MAddress AllocateImpl(size_t totalSize, AllocType allocType);
     MAddress AllocateRawPointerObject(size_t totalSize);
-
-    void RetireTLAB(bool gcWaste);
 
     // tlRegion in AllocBuffer is a shortcut for fast allocation.
     // we should handle failure in RegionManager

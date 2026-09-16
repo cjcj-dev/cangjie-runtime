@@ -7,6 +7,8 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zStackWatermark.hpp"
+#include "Mutator/MutatorManager.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "root_publication_snapshot.hpp"
 #include "ObjectModel/RefField.inline.h"
@@ -61,6 +63,7 @@ struct RelocationReceiptTestAccess {
         collector.StartOldMarkWork();
         collector.TraceHeap();
     }
+    static void RunOldRoots(WCollector& collector) { collector.DoOldRoots(); }
     static size_t PendingYoungRootWork(WCollector& collector)
     {
         return ThreadLocal::GetMarkStacks(*collector.YoungMark()).Population();
@@ -253,6 +256,45 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
 }
 GC_OTHER_VM_TEST(NativeRootCurrent, MinorPublication) { CheckNativeRoot(true); }
 GC_OTHER_VM_TEST(NativeRootCurrent, MajorSeed) { CheckNativeRoot(false); }
+GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
+{
+    B09RuntimeFixture runtime;
+    GcHeapFixture fx;
+    auto& heap = Heap::GetHeap();
+    auto& resources = heap.GetCollectorResources();
+    WCollector collector(heap.GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    BaseObject* held = fx.obj0;
+
+    Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+    GC_EXPECT_TRUE(parked != nullptr);
+    parked->SetManagedContext(false);
+    (void)parked->EnterSaferegion(false);
+    ObjectRef* root = parked->AddNativeFrameRoot(held);
+    GC_EXPECT_TRUE(root != nullptr);
+    GC_EXPECT_TRUE(parked->InSaferegion());
+
+    bool workerSawParked = false;
+    collector.testOldMarkThreadResult = [&](Mutator& mutator) {
+        if (&mutator == parked) {
+            workerSawParked = true;
+        }
+    };
+    collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_ENUM);
+    collector.StartOldMarkWork();
+    RelocationReceiptTestAccess::RunOldRoots(collector);
+    collector.testOldMarkThreadResult = nullptr;
+
+    const bool watermarkDone = parked->GetStackWatermark().IsDone(StackWatermark::epoch_id());
+    const bool live = fx.region0->is_object_strongly_live(from_object(held));
+    std::fprintf(stderr, "P10_OLD_MARK_THREAD_ASSERT_EXECUTED worker=%u live=%u done=%u epoch=%u\n",
+                 unsigned(workerSawParked), unsigned(live), unsigned(watermarkDone), StackWatermark::epoch_id());
+    GC_EXPECT_TRUE(workerSawParked);
+    GC_EXPECT_TRUE(watermarkDone);
+
+    parked->RemoveNativeFrameRoot(root);
+    MutatorManager::Instance().DestroyRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
+}
 GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
 {
     PrintNativeRootMaps();

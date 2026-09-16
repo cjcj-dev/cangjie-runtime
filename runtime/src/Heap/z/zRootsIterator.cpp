@@ -20,9 +20,13 @@
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
+#include "Mutator/Mutator.h"
 
 
 namespace MapleRuntime {
+HandleMark::HandleMark(Mutator& mutator) : mutator(mutator), mark(mutator.NativeFrameRootCount()) {}
+HandleMark::~HandleMark() { mutator.PopNativeFrameRootsTo(mark); }
+
 void ResetSkippedStackMapCounts();
 void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
                        const Mutator& mutator);
@@ -67,18 +71,11 @@ void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
 void StaticRootTable::VisitRoots(const NativeSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
-    U32 gcRootsSize = 0;
-    std::unordered_set<NativeSlot*> visitedSet;
     for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
-        gcRootsSize = iter->second;
+        U32 gcRootsSize = iter->second;
         StaticRootArray* array = iter->first;
         for (USize i = 0; i < gcRootsSize; i++) {
-            NativeSlot* root = array->content[i];
-            // make sure to visit each static root only once time.
-            if (!visitedSet.insert(root).second) {
-                continue;
-            }
-            visitor(*root);
+            visitor(*array->content[i]);
         }
     }
 }
@@ -88,40 +85,12 @@ void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
     weakStorage.OopsDo(visitor);
 }
 
-} // namespace MapleRuntime
 
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-#include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
-#include "Heap/z/zMark.hpp"
-#include "Heap/z/zMarkStack.hpp"
-#include "Heap/z/zMark.hpp"
-
-#include <algorithm>
-#include "Base/CString.h"
-#include "Common/Runtime.h"
-#include "Concurrency/Concurrency.h"
-#include "Heap/z/zThreadLocalAllocBuffer.hpp"
-#include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zMark.hpp"
-#include "ObjectModel/RefField.inline.h"
-
-
-namespace MapleRuntime {
-void CopyCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
-                                       Mutator& mutator)
+void CopyCollector::Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
+                               RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-    // HotSpot frame::oops_do_internal (frame.cpp:1166-1177) dispatches only
-    // frames with managed metadata to oop-map scanning. Native callbacks
-    // expose managed references through handles, not a Cangjie stack map.
 #ifdef __APPLE__
     if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
 #else
@@ -132,82 +101,203 @@ void CopyCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& reg
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    DLOG(ENUM, "visit frame 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
-    auto gcInfo = GCInfoNode::BuildNodeForTrace(startIP, frameIP, frame.mFrame.GetFA());
-    auto slotDebugFunc = [&gcInfo](SlotBias off, BaseObject* root) {
-        if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
-            gcInfo.InsertSlotRoots<true>(off, root);
-        } else {
-            gcInfo.InsertSlotRoots<false>(off, root);
-        }
-    };
-    auto regDebugFunc = [&gcInfo](RegisterNum i, const BaseObject* root) {
-        if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
-            gcInfo.InsertRegRoot<true>(i, root);
-        } else {
-            gcInfo.InsertRegRoot<false>(i, root);
-        }
-    };
-#else
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
-#endif
-
-    // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
-    // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
-    RootVisitor slotVisitor = visitor;
-    RootVisitor regVisitor = visitor;
-
+    DerivedPtrVisitor derived =
+        derivedPtrVisitor != nullptr ? *derivedPtrVisitor : Mutator::MakeDerivedRootVisitor(visitor);
     if (heapMap.IsValid()) {
-        auto derived = Mutator::MakeDerivedRootVisitor(visitor);
         heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
-        heapMap.VisitSlotRoots(slotVisitor, slotDebugFunc);
-        if (!heapMap.VisitRegRoots(regVisitor, regDebugFunc, regSlotsMap)) {
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-            mutator.PushFrameInfoForTrace(gcInfo);
-#endif
+        heapMap.VisitSlotRoots(visitor, slotDebugFunc);
+        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
     } else {
         RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
     }
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    mutator.PushFrameInfoForTrace(gcInfo);
-#endif
     heapMap.RecordCalleeSaved(regSlotsMap);
-
 }
 
 
-} // namespace MapleRuntime
-
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-#include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
-#include "Heap/z/zMark.hpp"
-#include "Heap/z/zMarkStack.hpp"
-#include "Heap/z/zMark.hpp"
-
-#include <algorithm>
-#include "Base/CString.h"
-#include "Common/Runtime.h"
-#include "Concurrency/Concurrency.h"
-#include "Heap/z/zThreadLocalAllocBuffer.hpp"
-#include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zMark.hpp"
-#include "ObjectModel/RefField.inline.h"
 
 
-namespace MapleRuntime {
+
+void CopyCollector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+{
+    RegRoot::RecordStubCalleeSaved(regSlotsMap, fp);
+}
+
+#ifdef __arm__
+void CopyCollector::RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+{
+    RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, fp);
+}
+
+void CopyCollector::RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+{
+    RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap, fp);
+}
+#endif
+
+void CopyCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
+{
+    RegRoot::RecordStubAllRegister(regSlotsMap, fp);
+}
+
+
+
+
+
+
+
+
+
+void CopyCollector::VisitExportColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    Heap::GetHeap().VisitAllExportRoots(visitor);
+}
+
+OopStorage& CopyCollector::StrongRootStorage() const
+{
+    return collectorResources.GetFinalizerProcessor().StrongRootStorage();
+}
+
+OopStorage& CopyCollector::WeakFinalizerRootStorage() const
+{
+    return collectorResources.GetFinalizerProcessor().WeakRootStorage();
+}
+
+void CopyCollector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
+{
+    VisitStaticRoots(visitor);
+}
+
+void CopyCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    RootsIteratorStrongColored roots(*this);
+    roots.Apply(visitor);
+}
+
+void CopyCollector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    RootsIteratorWeakColored roots(*this);
+    roots.Apply(visitor);
+}
+
+void CopyCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    RootsIteratorAllColored roots(*this);
+    roots.Apply(visitor);
+}
+
+OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const CopyCollector& collector, unsigned workers,
+                                                         ZGenerationIdOptional generation)
+    : states{{{collector.StrongRootStorage(), workers}}}, generation(generation)
+{
+    (void)this->generation;
+}
+
+OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const CopyCollector& collector, unsigned workers,
+                                                     ZGenerationIdOptional generation)
+    : states{{{collector.WeakFinalizerRootStorage(), workers},
+              {Heap::GetHeap().GetExportRootStorage(), workers}}}, generation(generation) {}
+
+void OopStorageSetIteratorWeak::report_num_dead()
+{
+    numDead = 0;
+    for (auto& state : states) {
+        state.OopsDo([&](NativeSlot& slot) {
+            if (is_null(slot.GetTargetObject())) {
+                ++numDead;
+            }
+        });
+    }
+}
+
+void OopStorageSetIteratorStrong::Apply(const NativeSlotVisitor& visitor)
+{
+    // oopStorageSetParState.inline.hpp:38: every worker enters every storage.
+    for (auto& state : states) { state.OopsDo(visitor); }
+}
+
+void OopStorageSetIteratorWeak::Apply(const NativeSlotVisitor& visitor)
+{
+    for (auto& state : states) { state.OopsDo(visitor); }
+}
+
+void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)
+{
+    if (!claimed.exchange(true, std::memory_order_relaxed)) {
+        collector.VisitStaticAdapterRoots(visitor);
+    }
+}
+
+void RootsIteratorStrongColored::Apply(const NativeSlotVisitor& visitor)
+{
+    NativeSlotVisitor copy = visitor;
+    strong.apply(&copy);
+    statics.apply(&copy);
+}
+
+void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
+{
+    NativeSlotVisitor copy = visitor;
+    strong.apply(&copy);
+    weak.apply(&copy);
+    statics.apply(&copy);
+}
+
+JavaThreadsIterator::JavaThreadsIterator(ZGenerationIdOptional generation)
+    : claimed(0), generation(generation)
+{
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) { threads.push_back(&mutator); });
+}
+
+uint32_t JavaThreadsIterator::claim()
+{
+    return __atomic_fetch_add(&claimed, 1u, __ATOMIC_RELAXED);
+}
+
+void JavaThreadsIterator::Apply(const std::function<void(Mutator&)>& visitor)
+{
+    for (;;) {
+        const uint32_t index = claim();
+        if (index >= threads.size()) {
+            return;
+        }
+        visitor(*threads[index]);
+    }
+}
+
+void CopyCollector::VisitStrongPlainRoots(
+    const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor) const
+{
+    if (threadVisitor) {
+        MutatorManager::Instance().VisitAllMutators(threadVisitor);
+    }
+    RootVisitor plainVisitor = visitor;
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
+}
+
+void CopyCollector::VisitStaticRoots(const NativeSlotVisitor& visitor) const
+{
+    Heap::GetHeap().VisitStaticRoots(visitor);
+}
+
+void CopyCollector::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
+{
+    collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
+}
+
+
+
+void CopyCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
+                                       Mutator& mutator)
+{
+    Process(visitor, nullptr, regSlotsMap, frame, mutator);
+}
+
 void CopyCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
                                                   const FrameInfo& frame, Mutator& mutator, bool young)
@@ -330,126 +420,26 @@ void CopyCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsS
 
 } // namespace MapleRuntime
 
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-#include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
-#include "Heap/z/zMark.hpp"
-#include "Heap/z/zMarkStack.hpp"
-#include "Heap/z/zMark.hpp"
-
-#include <algorithm>
-#include "Base/CString.h"
-#include "Common/Runtime.h"
-#include "Concurrency/Concurrency.h"
-#include "Heap/z/zThreadLocalAllocBuffer.hpp"
-#include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zMark.hpp"
-#include "ObjectModel/RefField.inline.h"
-
-
-namespace MapleRuntime {
-void CopyCollector::VisitExportColoredRoots(const NativeSlotVisitor& visitor) const
+void CopyCollector::MergeMutatorRoots(WorkStack& workStack)
 {
-    Heap::GetHeap().VisitAllExportRoots(visitor);
+    (void)workStack;
+    (void)oldCycle.Mark().Flush();
 }
 
-OopStorage& CopyCollector::StrongRootStorage() const
+void CopyCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
-    return collectorResources.GetFinalizerProcessor().StrongRootStorage();
+    VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
+        EnumRefFieldRoot(root, foreignRootsSet);
+    });
 }
 
-OopStorage& CopyCollector::WeakFinalizerRootStorage() const
+void CopyCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
-    return collectorResources.GetFinalizerProcessor().WeakRootStorage();
+    ScopedEntryTrace trace("CJRT_GC_ENUM");
+    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD));
+    MergeMutatorRoots(workStack);
+    EnumAllExportRoots(foreignRootsSet);
 }
-
-void CopyCollector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
-{
-    VisitStaticRoots(visitor);
-}
-
-void CopyCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
-{
-    RootsIteratorStrongColored roots(*this);
-    roots.Apply(visitor);
-}
-
-void CopyCollector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
-{
-    RootsIteratorWeakColored roots(*this);
-    roots.Apply(visitor);
-}
-
-void CopyCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
-{
-    RootsIteratorAllColored roots(*this);
-    roots.Apply(visitor);
-}
-
-OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const CopyCollector& collector, unsigned workers)
-    : states{{{collector.StrongRootStorage(), workers}}} {}
-
-OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const CopyCollector& collector, unsigned workers)
-    : states{{{collector.WeakFinalizerRootStorage(), workers},
-              {Heap::GetHeap().GetExportRootStorage(), workers}}} {}
-
-void OopStorageSetIteratorStrong::Apply(const NativeSlotVisitor& visitor)
-{
-    // oopStorageSetParState.inline.hpp:38: every worker enters every storage.
-    for (auto& state : states) { state.OopsDo(visitor); }
-}
-
-void OopStorageSetIteratorWeak::Apply(const NativeSlotVisitor& visitor)
-{
-    for (auto& state : states) { state.OopsDo(visitor); }
-}
-
-void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)
-{
-    if (!claimed.exchange(true, std::memory_order_relaxed)) {
-        collector.VisitStaticAdapterRoots(visitor);
-    }
-}
-
-void RootsIteratorStrongColored::Apply(const NativeSlotVisitor& visitor)
-{
-    strong.Apply(visitor);
-    statics.Apply(visitor);
-}
-
-void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
-{
-    strong.Apply(visitor);
-    weak.Apply(visitor);
-    statics.Apply(visitor);
-}
-
-void CopyCollector::VisitStrongPlainRoots(
-    const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor) const
-{
-    if (threadVisitor) {
-        MutatorManager::Instance().VisitAllMutators(threadVisitor);
-    }
-    RootVisitor plainVisitor = visitor;
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
-}
-
-void CopyCollector::VisitStaticRoots(const NativeSlotVisitor& visitor) const
-{
-    Heap::GetHeap().VisitStaticRoots(visitor);
-}
-
-void CopyCollector::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
-{
-    collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
-}
-
 
 } // namespace MapleRuntime
 

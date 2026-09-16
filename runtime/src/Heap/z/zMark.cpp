@@ -45,6 +45,8 @@
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zUncoloredRoot.hpp"
+#include "Heap/z/zUncoloredRoot.inline.hpp"
+#include "Heap/z/zStackWatermark.hpp"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/Handshake.h"
@@ -550,6 +552,25 @@ private:
     const CopyCollector& collector;
 };
 
+class MarkThreadClosure {
+public:
+    static StackWatermarkProcessOopClosure::RootFunction root_function() { return ZUncoloredRoot::mark; }
+    void DoThread(Mutator& mutator) const
+    {
+        RootVisitor markRoot = [](ObjectRef& root) {
+            ZUncoloredRoot::mark(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+        };
+        size_t frames = 0;
+        (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),
+                                                   nullptr, frames, reinterpret_cast<void*>(root_function()));
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (CopyCollector::testOldMarkThreadResult) {
+            CopyCollector::testOldMarkThreadResult(mutator);
+        }
+#endif
+    }
+};
+
 // ZMarkOldRootsTask, zMark.cpp:797-834. Root results are published to the
 // generation mark domain by closures, then flushed by each participating worker.
 class MarkOldRootsTask final : public ZTask {
@@ -571,6 +592,7 @@ public:
 #endif
         });
         rootsUncolored.Apply(uncolored);
+        rootsUncolored.ApplyThreads([&](Mutator& mutator) { threadClosure.DoThread(mutator); });
         // zMark.cpp:830-834: flush and free worker stacks for both generations
         // here, since the set of workers executing during root scanning can be
         // different from the set of workers executing during mark.
@@ -587,6 +609,7 @@ private:
     NativeSlotVisitor finalizable;
     RootsIteratorStrongUncolored rootsUncolored;
     MarkOopClosure coloredClosure;
+    MarkThreadClosure threadClosure;
     ZMark& domain;
     std::function<void()> uncolored;
 };

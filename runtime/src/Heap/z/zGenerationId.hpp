@@ -22,4 +22,9 @@ enum class ZGenerationId : uint8_t {
     young,
     old,
 };
+enum class ZGenerationIdOptional : uint8_t {
+    young,
+    old,
+    none,
+};
 }

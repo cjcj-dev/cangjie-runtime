@@ -14,6 +14,8 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.inline.hpp"
+#include "Heap/z/zRootsIterator.hpp"
+#include "Heap/z/zStackWatermark.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "TypeInfoManager.h"
 #include <unordered_set>
@@ -201,6 +203,20 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
     }
 }
 
+void ZVerify::threads_start_processing()
+{
+    JavaThreadsIterator threads;
+    const uint64_t epoch = StackWatermark::epoch_id();
+    if (epoch == 0) {
+        return;
+    }
+    RootVisitor noop = [](ObjectRef&) {};
+    threads.Apply([&](Mutator& mutator) {
+        size_t frames = 0;
+        (void)StackWatermarkSet::finish_processing(mutator, noop, noop, epoch, nullptr, frames);
+    });
+}
+
 // zVerify.cpp:397-487. Visit the root-reachable graph, including young bridge
 // objects, but check outgoing fields only on live old objects.
 void ZVerify::Objects(bool verifyWeaks)
@@ -211,6 +227,7 @@ void ZVerify::Objects(bool verifyWeaks)
     const auto young = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const auto old = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
     DCHECK(young.phase == GC_PHASE_MARK_COMPLETE || old.phase == GC_PHASE_MARK_COMPLETE);
+    threads_start_processing();
     BaseObject* visitedBase = nullptr;
     const void* visitedSlot = nullptr;
     uintptr_t visitedValue = 0;
