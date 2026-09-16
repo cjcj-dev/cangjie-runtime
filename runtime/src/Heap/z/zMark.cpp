@@ -1731,11 +1731,11 @@ bool ZMark::TryEnd()
     if (terminate.Resurrected()) {
         return false;
     }
-    // zMark.cpp:954-970: resurrected check, then non-Java thread flush only.
-    bool flushed = FlushStacks();
-    if (HeapMarkReady()) {
-        flushed = HandshakeFlush(this) || flushed;
+    // zMark.cpp:954-970: resurrected, then non-Java flush; empty stripes => complete.
+    if (!HeapMarkReady()) {
+        return stripes.IsEmpty();
     }
+    const bool flushed = HandshakeFlush(this) || FlushStacks();
     if (flushed || !stripes.IsEmpty()) {
         return false;
     }
