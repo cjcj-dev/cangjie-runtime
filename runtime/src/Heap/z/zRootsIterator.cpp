@@ -20,9 +20,13 @@
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
+#include "Mutator/Mutator.h"
 
 
 namespace MapleRuntime {
+HandleMark::HandleMark(Mutator& mutator) : mutator(mutator), mark(mutator.NativeFrameRootCount()) {}
+HandleMark::~HandleMark() { mutator.PopNativeFrameRootsTo(mark); }
+
 void ResetSkippedStackMapCounts();
 void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
                        const Mutator& mutator);
@@ -392,12 +396,29 @@ void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) co
     roots.Apply(visitor);
 }
 
-OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers)
-    : states{{{collector.StrongRootStorage(), workers}}} {}
+OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers,
+                                                         ZGenerationIdOptional generation)
+    : states{{{collector.StrongRootStorage(), workers}}}, generation(generation)
+{
+    (void)this->generation;
+}
 
-OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers)
+OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers,
+                                                     ZGenerationIdOptional generation)
     : states{{{collector.WeakFinalizerRootStorage(), workers},
-              {Heap::GetHeap().GetExportRootStorage(), workers}}} {}
+              {Heap::GetHeap().GetExportRootStorage(), workers}}}, generation(generation) {}
+
+void OopStorageSetIteratorWeak::report_num_dead()
+{
+    numDead = 0;
+    for (auto& state : states) {
+        state.OopsDo([&](NativeSlot& slot) {
+            if (is_null(slot.GetTargetObject())) {
+                ++numDead;
+            }
+        });
+    }
+}
 
 void OopStorageSetIteratorStrong::Apply(const NativeSlotVisitor& visitor)
 {
@@ -419,15 +440,39 @@ void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)
 
 void RootsIteratorStrongColored::Apply(const NativeSlotVisitor& visitor)
 {
-    strong.Apply(visitor);
-    statics.Apply(visitor);
+    NativeSlotVisitor copy = visitor;
+    strong.apply(&copy);
+    statics.apply(&copy);
 }
 
 void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
 {
-    strong.Apply(visitor);
-    weak.Apply(visitor);
-    statics.Apply(visitor);
+    NativeSlotVisitor copy = visitor;
+    strong.apply(&copy);
+    weak.apply(&copy);
+    statics.apply(&copy);
+}
+
+JavaThreadsIterator::JavaThreadsIterator(ZGenerationIdOptional generation)
+    : claimed(0), generation(generation)
+{
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) { threads.push_back(&mutator); });
+}
+
+uint32_t JavaThreadsIterator::claim()
+{
+    return __atomic_fetch_add(&claimed, 1u, __ATOMIC_RELAXED);
+}
+
+void JavaThreadsIterator::Apply(const std::function<void(Mutator&)>& visitor)
+{
+    for (;;) {
+        const uint32_t index = claim();
+        if (index >= threads.size()) {
+            return;
+        }
+        visitor(*threads[index]);
+    }
 }
 
 void TracingCollector::VisitStrongPlainRoots(

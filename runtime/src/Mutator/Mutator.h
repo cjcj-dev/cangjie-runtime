@@ -388,8 +388,7 @@ public:
                      size_t* scannedFrames = nullptr);
     bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
                              uint64_t epoch, StackWatermark::Owner owner,
-                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young,
-                             StackWatermark::ProcessingPhase workPhase = StackWatermark::ProcessingPhase::MARK);
+                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
@@ -429,13 +428,15 @@ public:
 
     void VisitMutatorRoots(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor)
     {
-        VisitStackRoots(visitor, invisibleRootVisitor);
         VisitExceptionRoots(visitor);
         VisitNativeFrameRoots(visitor);
+        VisitStackRoots(visitor, invisibleRootVisitor);
     }
 
     ObjectRef* AddNativeFrameRoot(BaseObject* obj);
     void RemoveNativeFrameRoot(ObjectRef* root);
+    size_t NativeFrameRootCount() const { return nativeFrameRoots.size(); }
+    void PopNativeFrameRootsTo(size_t mark);
 #if defined(MRT_GC_UNIT_TESTS)
     void VisitInvisibleRoot(const RootVisitor& visitor) { VisitRawObjects(visitor); }
 #endif
@@ -679,7 +680,7 @@ private:
     std::atomic<GCPhaseTransitionState> transitionState = { NO_TRANSITION };
     ObjectRef rawObject{};
     ThreadGCData gcData;
-    std::list<ObjectRef> nativeFrameRoots;
+    std::vector<ObjectRef> nativeFrameRoots;
 
     NativeRootHandles localFinalizers;
 

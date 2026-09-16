@@ -10,9 +10,22 @@
 #include <algorithm>
 
 namespace MapleRuntime {
+bool HeapIterator::try_set_bit(BaseObject* object)
+{
+    constexpr uintptr_t granule = 2 * 1024 * 1024;
+    constexpr size_t objectAlign = 8;
+    const uintptr_t address = reinterpret_cast<uintptr_t>(object);
+    const uintptr_t key = address / granule;
+    auto found = objectBitmaps.find(key);
+    if (found == objectBitmaps.end()) {
+        found = objectBitmaps.emplace(key, std::make_unique<HeapIteratorBitMap>(granule / objectAlign)).first;
+    }
+    return found->second->try_set_bit((address % granule) / objectAlign);
+}
+
 void HeapIterator::Push(BaseObject* object, const ObjectVisitor& objectVisitor)
 {
-    if (object != nullptr && visited.insert(object).second) {
+    if (object != nullptr && try_set_bit(object)) {
         // zHeapIterator.cpp:329-339,421-428: verify at discovery so the
         // field visitor still describes the edge which reached this object.
         if (forVerify) { objectVisitor(object); }
@@ -73,7 +86,7 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
-    visited.clear();
+    objectBitmaps.clear();
     stack.clear();
     arrayStack.clear();
     auto& collector = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());

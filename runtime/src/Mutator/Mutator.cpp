@@ -457,6 +457,13 @@ void Mutator::RemoveNativeFrameRoot(ObjectRef* root)
     }
 }
 
+void Mutator::PopNativeFrameRootsTo(size_t mark)
+{
+    if (mark < nativeFrameRoots.size()) {
+        nativeFrameRoots.resize(mark);
+    }
+}
+
 void Mutator::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                          bool young)
 {
@@ -937,8 +944,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
 
 bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
                                   uint64_t epoch, StackWatermark::Owner owner,
-                                  const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young,
-                                  StackWatermark::ProcessingPhase workPhase)
+                                  const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young)
 {
     scannedFrames = 0;
     MutatorLock();
@@ -957,16 +963,20 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
         MutatorUnlock();
         return false;
     }
-    if (stackWatermark.IsDone(epoch, workPhase)) {
+    if (stackWatermark.IsDone(epoch)) {
         MutatorUnlock();
         return true;
     }
     if (!IsManagedContext()) {
-        bool began = stackWatermark.TryBegin(epoch, owner, 0, workPhase);
+        bool began = stackWatermark.TryBegin(epoch, owner, 0);
         if (began) {
             VisitExceptionRoots(visitor);
             VisitNativeFrameRoots(visitor);
             VisitRawObjects(visitedInvisibleRootVisitor);
+            gcData.InstallMasks(ThreadGCData::PublishedMasks());
+            if (gcData.storeBarrierBuffer != nullptr) {
+                gcData.storeBarrierBuffer->on_new_phase();
+            }
             stackWatermark.Finish(owner);
         }
         MutatorUnlock();
@@ -985,11 +995,15 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     CreateCurrentGCInfo();
 #endif
     StackFrameCursor cursor(uwContext);
-    bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount(), workPhase);
+    bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
     if (began) {
         VisitExceptionRoots(visitor);
         VisitNativeFrameRoots(visitor);
         VisitRawObjects(visitedInvisibleRootVisitor);
+        gcData.InstallMasks(ThreadGCData::PublishedMasks());
+        if (gcData.storeBarrierBuffer != nullptr) {
+            gcData.storeBarrierBuffer->on_new_phase();
+        }
         while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor, young)) {
             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
         }
@@ -1181,8 +1195,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     size_t frames = 0;
     const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
     const auto owner = GetMutator() == this ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
-    if (!DrainStackWatermark(visitor, visitor, epoch, owner, &derivedPtrVisitor, frames, false,
-                             StackWatermark::ProcessingPhase::REMAP)) {
+    if (!DrainStackWatermark(visitor, visitor, epoch, owner, &derivedPtrVisitor, frames, false)) {
         // Complete under the phase handshake before publishing mutatorPhase.
         VisitHeapReferences(visitor, derivedPtrVisitor);
     }

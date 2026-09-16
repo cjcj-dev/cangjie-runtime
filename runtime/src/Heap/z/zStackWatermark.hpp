@@ -38,8 +38,6 @@ public:
         WM_DONE = 2,
     };
 
-    enum class ProcessingPhase : uint32_t { MARK, REMAP };
-
     enum Owner : uint32_t {
         WM_OWNER_NONE = 0,
         WM_OWNER_SELF = 1,
@@ -50,8 +48,8 @@ public:
 
     void Reset()
     {
+        state.store(0, std::memory_order_relaxed);
         epoch.store(0, std::memory_order_relaxed);
-        processingPhase.store(ProcessingPhase::MARK, std::memory_order_relaxed);
         phase.store(WM_NOT_STARTED, std::memory_order_relaxed);
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
         cursorIndex.store(0, std::memory_order_relaxed);
@@ -105,8 +103,15 @@ public:
     // Legal: NOT_STARTED → SCANNING, or DONE of a prior epoch → SCANNING of a new epoch.
     // Illegal: SCANNING → SCANNING (double begin), DONE(complete) same epoch
     // → SCANNING. DONE(incomplete) may be retried by the closing STW.
-    bool TryBegin(uint64_t scanEpoch, Owner claimOwner, size_t totalFrames,
-                  ProcessingPhase workPhase = ProcessingPhase::MARK)
+    static uint32_t PackState(uint32_t epochBits, bool done)
+    {
+        return (epochBits << 1) | (done ? 1u : 0u);
+    }
+    static uint32_t UnpackEpoch(uint32_t packed) { return packed >> 1; }
+    static bool UnpackDone(uint32_t packed) { return (packed & 1u) != 0; }
+    static uint32_t epoch_id();
+
+    bool TryBegin(uint64_t scanEpoch, Owner claimOwner, size_t totalFrames)
     {
         CHECK_DETAIL(scanEpoch != 0, "[GCV2][stack-watermark] epoch must not be zero");
         CHECK_DETAIL(claimOwner == WM_OWNER_SELF || claimOwner == WM_OWNER_GC,
@@ -116,9 +121,8 @@ public:
         if (expected == WM_SCANNING) {
             return false;
         }
-        if (expected == WM_DONE && processingPhase.load(std::memory_order_acquire) == workPhase &&
-            epoch.load(std::memory_order_acquire) == scanEpoch &&
-            complete.load(std::memory_order_acquire)) {
+        const uint32_t packed = state.load(std::memory_order_acquire);
+        if (UnpackDone(packed) && UnpackEpoch(packed) == static_cast<uint32_t>(scanEpoch)) {
             return false;
         }
 
@@ -128,11 +132,11 @@ public:
             return false;
         }
 
-        processingPhase.store(workPhase, std::memory_order_relaxed);
         epoch.store(scanEpoch, std::memory_order_relaxed);
         cursorIndex.store(0, std::memory_order_relaxed);
         frameCount.store(totalFrames, std::memory_order_relaxed);
         complete.store(false, std::memory_order_relaxed);
+        state.store(PackState(static_cast<uint32_t>(scanEpoch), false), std::memory_order_relaxed);
         phase.store(WM_SCANNING, std::memory_order_release);
         return true;
     }
@@ -156,16 +160,17 @@ public:
         }
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
         complete.store(true, std::memory_order_relaxed);
+        state.store(PackState(static_cast<uint32_t>(epoch.load(std::memory_order_relaxed)), true),
+                    std::memory_order_release);
         phase.store(WM_DONE, std::memory_order_release);
     }
 
-    // Close a traversal that cannot establish the frame-coverage postcondition.
-    // IsDone(epoch) stays false so the closing STW can retry the epoch; if that
-    // still cannot start, the consumer takes the legacy fallback.
     void FinishIncomplete(Owner)
     {
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
         complete.store(false, std::memory_order_relaxed);
+        state.store(PackState(static_cast<uint32_t>(epoch.load(std::memory_order_relaxed)), false),
+                    std::memory_order_release);
         phase.store(WM_DONE, std::memory_order_release);
     }
 
@@ -182,10 +187,10 @@ public:
     bool IsNotStarted() const { return GetPhase() == WM_NOT_STARTED; }
     bool IsScanning() const { return GetPhase() == WM_SCANNING; }
     bool IsDone() const;
-    bool IsDone(uint64_t scanEpoch, ProcessingPhase workPhase = ProcessingPhase::MARK) const;
+    bool IsDone(uint64_t scanEpoch) const;
+    uint32_t PackedState() const { return state.load(std::memory_order_acquire); }
 private:
-
-    std::atomic<ProcessingPhase> processingPhase;
+    std::atomic<uint32_t> state;
     std::atomic<uint64_t> epoch;
     std::atomic<Phase> phase;
     std::atomic<Owner> owner;

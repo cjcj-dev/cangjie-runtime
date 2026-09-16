@@ -5,82 +5,169 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #pragma once
+#include <atomic>
+#include <functional>
 #include <list>
 #include "Common/OopStorage.h"
 #include <map>
 #include <mutex>
+#include <utility>
 #include <vector>
 #include "Common/BaseObject.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zGenerationId.hpp"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
 class TracingCollector;
+class Mutator;
 
-// zRootsIterator.cpp:159-198: storage sets precede the external-slot
-// (Cangjie ABI / HotSpot CLD) adapter and use the same colored closure.
+class HandleMark {
+    Mutator& mutator;
+    size_t mark;
+public:
+    explicit HandleMark(Mutator& mutator);
+    ~HandleMark();
+    HandleMark(const HandleMark&) = delete;
+    HandleMark& operator=(const HandleMark&) = delete;
+};
+
+template <typename Iterator>
+class ParallelApply {
+    Iterator iter_;
+    volatile bool completed;
+public:
+    template <typename... Args>
+    explicit ParallelApply(Args&&... args) : iter_(std::forward<Args>(args)...), completed(false) {}
+    template <typename Closure>
+    void apply(Closure* cl)
+    {
+        if (!completed) {
+            iter_.Apply(*cl);
+            if (!completed) {
+                completed = true;
+            }
+        }
+    }
+    Iterator& iter() { return iter_; }
+    bool CompletedForTest() const { return completed; }
+};
+
 class OopStorageSetIteratorStrong {
 public:
-    explicit OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers = 1);
+    OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers,
+                                ZGenerationIdOptional generation);
+    explicit OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers = 1)
+        : OopStorageSetIteratorStrong(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
     std::array<OopStorage::ParState<true>, 1> states;
+    ZGenerationIdOptional generation;
 };
 class OopStorageSetIteratorWeak {
 public:
-    explicit OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers = 1);
+    OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers,
+                              ZGenerationIdOptional generation);
+    explicit OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers = 1)
+        : OopStorageSetIteratorWeak(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
+    void report_num_dead();
+    size_t NumDeadForTest() const { return numDead; }
 private:
     std::array<OopStorage::ParState<true>, 2> states;
+    ZGenerationIdOptional generation;
+    size_t numDead = 0;
 };
 class StaticRootsAdapterIterator {
 public:
-    explicit StaticRootsAdapterIterator(const TracingCollector& collector) : collector(collector) {}
+    StaticRootsAdapterIterator(const TracingCollector& collector, ZGenerationIdOptional)
+        : collector(collector) {}
+    explicit StaticRootsAdapterIterator(const TracingCollector& collector)
+        : StaticRootsAdapterIterator(collector, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
     const TracingCollector& collector;
     std::atomic<bool> claimed{false};
 };
+class JavaThreadsIterator {
+public:
+    explicit JavaThreadsIterator(ZGenerationIdOptional generation = ZGenerationIdOptional::none);
+    uint32_t claim();
+    void Apply(const std::function<void(Mutator&)>& visitor);
+private:
+    std::vector<Mutator*> threads;
+    volatile uint32_t claimed;
+    ZGenerationIdOptional generation;
+};
 class RootsIteratorStrongColored {
 public:
+    RootsIteratorStrongColored(const TracingCollector& collector, unsigned workers,
+                               ZGenerationIdOptional generation)
+        : strong(collector, workers, generation), statics(collector, generation) {}
     explicit RootsIteratorStrongColored(const TracingCollector& collector, unsigned workers = 1)
-        : strong(collector, workers), statics(collector) {}
+        : RootsIteratorStrongColored(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    OopStorageSetIteratorStrong strong;
-    StaticRootsAdapterIterator statics;
+    ParallelApply<OopStorageSetIteratorStrong> strong;
+    ParallelApply<StaticRootsAdapterIterator> statics;
 };
 class RootsIteratorWeakColored {
 public:
+    RootsIteratorWeakColored(const TracingCollector& collector, unsigned workers,
+                             ZGenerationIdOptional generation)
+        : weak(collector, workers, generation) {}
     explicit RootsIteratorWeakColored(const TracingCollector& collector, unsigned workers = 1)
-        : weak(collector, workers) {}
-    void Apply(const NativeSlotVisitor& visitor) { weak.Apply(visitor); }
+        : RootsIteratorWeakColored(collector, workers, ZGenerationIdOptional::none) {}
+    void Apply(const NativeSlotVisitor& visitor)
+    {
+        NativeSlotVisitor copy = visitor;
+        weak.apply(&copy);
+    }
+    void report_num_dead() { weak.iter().report_num_dead(); }
 private:
-    OopStorageSetIteratorWeak weak;
+    ParallelApply<OopStorageSetIteratorWeak> weak;
 };
 class RootsIteratorAllColored {
 public:
+    RootsIteratorAllColored(const TracingCollector& collector, unsigned workers,
+                            ZGenerationIdOptional generation)
+        : strong(collector, workers, generation), weak(collector, workers, generation),
+          statics(collector, generation) {}
     explicit RootsIteratorAllColored(const TracingCollector& collector, unsigned workers = 1)
-        : strong(collector, workers), weak(collector, workers), statics(collector) {}
+        : RootsIteratorAllColored(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    OopStorageSetIteratorStrong strong;
-    OopStorageSetIteratorWeak weak;
-    StaticRootsAdapterIterator statics;
+    ParallelApply<OopStorageSetIteratorStrong> strong;
+    ParallelApply<OopStorageSetIteratorWeak> weak;
+    ParallelApply<StaticRootsAdapterIterator> statics;
 };
 
-// The language scanner owns stack-watermark fallback and non-thread plain
-// roots. There are no HotSpot CLD/nmethod registries in the Cangjie runtime.
 class RootsIteratorStrongUncolored {
 public:
+    explicit RootsIteratorStrongUncolored(ZGenerationIdOptional generation = ZGenerationIdOptional::none)
+        : javaThreads(generation) {}
     void Apply(const std::function<void()>& visitor)
     {
-        if (!claimed.exchange(true, std::memory_order_relaxed)) {
-            visitor();
-        }
+        std::function<void()> copy = visitor;
+        uncolored.apply(&copy);
+    }
+    void ApplyThreads(const std::function<void(Mutator&)>& visitor)
+    {
+        std::function<void(Mutator&)> copy = visitor;
+        javaThreads.apply(&copy);
     }
 private:
-    std::atomic<bool> claimed{false};
+    struct Once {
+        void Apply(const std::function<void()>& visitor)
+        {
+            if (!claimed.exchange(true, std::memory_order_relaxed)) {
+                visitor();
+            }
+        }
+        std::atomic<bool> claimed{false};
+    };
+    ParallelApply<Once> uncolored;
+    ParallelApply<JavaThreadsIterator> javaThreads;
 };
 using RootsIteratorAllUncolored = RootsIteratorStrongUncolored;
 

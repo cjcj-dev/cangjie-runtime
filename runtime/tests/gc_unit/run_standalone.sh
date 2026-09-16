@@ -368,6 +368,7 @@ MAIN_SOURCES=(
   "$SRC/test_segmented_array_init.cpp"
   "$SRC/test_package_init.cpp"
   "$SRC/test_verify_roots.cpp"
+  "$SRC/test_p10_roots_iterator.cpp"
   "$SRC/test_verify_fail_close.cpp"
   "$SRC/test_verify_phase.cpp"
   "$SRC/test_verify_marking_stacks.cpp"
