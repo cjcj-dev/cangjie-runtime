@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStat.hpp"
@@ -29,6 +30,7 @@ void DrainFollow(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, 
                  size_t workerId, std::vector<size_t>& seen, bool partial)
 {
     MapleRuntime::GcUnit::WorkerFixture workerThread(workerId);
+    SuspendibleThreadSetJoiner stsJoiner;
     (void)ZMark::FollowWork(context, smr, stripes, terminate, workerId, partial,
                                  [&seen](const MarkStackEntry& entry) {
                                      seen.push_back(entry.partial_array_offset());
