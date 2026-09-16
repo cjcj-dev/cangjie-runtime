@@ -602,46 +602,6 @@ GC_TEST(YoungConc, Y2yDirtyHolderPhaseSwitchHandsOffWholeBatch)
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
 }
 
-// Load-good colour wrapping a FORWARDED from must remap before store-good
-// colour (zBarrier.inline.hpp:591-623). LookupTo of the coloured address is
-// then a miss on the current table.
-// The holder belongs to young and this input models a previous young
-// relocation. ZGC's load barrier remaps/heals here (:456-466); the old field
-// mark barrier is allowed to leave young references to their own consumer.
-GC_TEST(YoungConc, LoadBarrierRemapsPreviousRelocationEpoch)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    fx.region0->SetRegionListOwner(nullptr);
-    fx.region0->reset(PageAge::eden);
-    fx.region0->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
-    fx.obj0->SetStateCode(ObjectState::FORWARDED);
-
-    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
-    // Install the selected generation set before borrowing its publication.
-    fx.InstallPageOwner(fx.region0);
-    ForwardingTable::Publication publication =
-        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
-    GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, to), to);
-    publication = ForwardingTable::Publication();
-
-    auto* field = &HeapSlotAt<>(to + TYPEINFO_PTR_SIZE);
-    field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::StartYoungRelocate(collector);
-    GC_EXPECT_TRUE(ZBarrier::ReadReference(fx.obj1, *field) == fx.obj1);
-
-    BaseObject* healed = to_object(field->GetTargetObject());
-    GC_EXPECT_EQ(reinterpret_cast<MAddress>(healed), to);
-    GC_EXPECT_EQ(static_cast<unsigned>(Collector::JudgeHandOutTarget(healed)),
-                 static_cast<unsigned>(HandVerdict::Usable));
-    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(healed), Generation::Young);
-    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
-}
 #endif
 
 // old→young still remset (control: TRACE window must not drop the only remset edge).

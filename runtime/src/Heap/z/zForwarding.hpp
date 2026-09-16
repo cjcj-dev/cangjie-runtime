@@ -4,145 +4,6 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef MRT_Z_FORWARDING_LIFE_H
-#define MRT_Z_FORWARDING_LIFE_H
-
-#include <atomic>
-#include <condition_variable>
-#include <cstdint>
-#include <mutex>
-
-#include "Base/Log.h"
-
-namespace MapleRuntime {
-class ZForwarding;
-
-// ZForwarding's four-piece lifetime (zForwarding.hpp:66-69, zForwarding.cpp:34-194).
-//
-//   Atomic<bool>    _claimed     claim()
-//   ZConditionLock  _ref_lock    wait / notify on the three-state count
-//   Atomic<int32_t> _ref_count   retain_page / release_page / claim invert / detach wait
-//   Atomic<bool>    _done        mark_done / is_done
-//
-// The three-state count is the ABA answer: a late reader is refused, it is never
-// handed a reused table. 0 is terminal. <0 is claimed (in-place relocate). >0 is live.
-//
-// The canonical words belong to ZForwarding, owned by the relocation set.
-class ZForwardingLife {
-public:
-    ZForwardingLife() = delete;
-
-    // P2 adapter for the legacy page helpers: they borrow the task's single
-    // construction token and leave mark_done to the task's final operation.
-    class PageWorkScope {
-    public:
-        explicit PageWorkScope(ZForwarding* forwarding, bool complete = false);
-        ~PageWorkScope();
-        PageWorkScope(const PageWorkScope&) = delete;
-        PageWorkScope& operator=(const PageWorkScope&) = delete;
-    private:
-        ZForwarding* previous;
-        ZForwarding* forwarding;
-        bool complete;
-    };
-    static ZForwarding* CurrentPageWork();
-
-    enum class Retire : uint32_t {
-        DISPEL_GHOST = 0,
-        TAKE_GARBAGE = 1,
-        RECLAIM_DIRTY = 2,
-        RECLAIM_MARK_QUARANTINE = 3,
-        RELEASE_REGION = 4,
-    };
-
-    // zForwarding.inline.hpp:67-70 -- constructed with claimed=false, ref=1, done=false.
-    // The construction 1 is the relocating worker's token; it is dropped at retire.
-    static void ResetForForwarding(std::atomic<int32_t>& refCount, std::atomic<bool>& claimed,
-                                   std::atomic<bool>& done)
-    {
-        claimed.store(false, std::memory_order_relaxed);
-        done.store(false, std::memory_order_relaxed);
-        refCount.store(1, std::memory_order_release);
-    }
-
-    // Idle state is not evidence that a forwarding page task completed.
-    static void ResetIdle(std::atomic<int32_t>& refCount, std::atomic<bool>& claimed, std::atomic<bool>& done)
-    {
-        claimed.store(false, std::memory_order_relaxed);
-        refCount.store(0, std::memory_order_release);
-        done.store(false, std::memory_order_release);
-        NotifyAll();
-    }
-
-    // zForwarding.cpp:51-53
-    static bool claim(std::atomic<bool>& claimed);
-
-    // zForwarding.cpp:188-194
-    static void mark_done(std::atomic<bool>& done);
-
-    static bool is_done(const std::atomic<bool>& done);
-
-    // zForwarding.cpp:86-108: the claimed arm must finish add_and_wait
-    // before it reports that the source page cannot be retained.
-    template<typename Wait>
-    static bool retain_page(std::atomic<int32_t>& refCount, Wait wait)
-    {
-        for (;;) {
-            int32_t n = refCount.load(std::memory_order_acquire);
-            if (n == 0) {
-                return false;
-            }
-            if (n < 0) {
-                wait();
-                return false;
-            }
-            if (refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel,
-                                              std::memory_order_acquire)) {
-                return true;
-            }
-        }
-    }
-
-    // zForwarding.cpp:134-169
-    static void release_page(std::atomic<int32_t>& refCount);
-
-    // zForwarding.cpp:110-131 -- invert n → -n, then wait until -1.
-    static void in_place_relocation_claim_page(std::atomic<int32_t>& refCount);
-
-    // zForwarding.cpp:171-181 -- block until the count is 0, then the page may be freed.
-    static void detach_page(std::atomic<int32_t>& refCount);
-
-    static void WaitPageDone(ZForwarding* forwarding);
-
-private:
-    struct Monitor {
-        std::mutex mu;
-        std::condition_variable cv;
-    };
-
-    static Monitor& Lock()
-    {
-        static Monitor m;
-        return m;
-    }
-
-    // Hold the mutex across notify so a waiter that has observed the old count
-    // but not yet entered wait cannot miss the signal. Same as ZGC's
-    // ZLocker<ZConditionLock> around notify_all (zForwarding.cpp:149,163).
-    static void NotifyAll()
-    {
-        std::lock_guard<std::mutex> guard(Lock().mu);
-        Lock().cv.notify_all();
-    }
-
-    static void WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect);
-
-};
-
-} // namespace MapleRuntime
-
-#endif // MRT_Z_FORWARDING_LIFE_H
-
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -156,6 +17,7 @@ private:
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <condition_variable>
 #include <mutex>
 #include <limits>
 #include <memory>
@@ -175,6 +37,7 @@ namespace MapleRuntime {
 using RegionLifeId = uint64_t;
 
 class ZLiveMap;
+class ZRelocateQueue;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.
 // _entries is a ZAttachedArray sitting after this object (zAttachedArray.inline.hpp:44-54).
@@ -183,6 +46,28 @@ class ZLiveMap;
 class ZForwarding {
 public:
     using AttachedArray = ZAttachedArray<ZForwarding, std::atomic<uint64_t>>;
+
+    enum class Retire : uint32_t {
+        DISPEL_GHOST = 0,
+        TAKE_GARBAGE = 1,
+        RECLAIM_DIRTY = 2,
+        RECLAIM_MARK_QUARANTINE = 3,
+        RELEASE_REGION = 4,
+    };
+
+    class PageWorkScope {
+    public:
+        explicit PageWorkScope(ZForwarding* forwarding, bool complete = false);
+        ~PageWorkScope();
+        PageWorkScope(const PageWorkScope&) = delete;
+        PageWorkScope& operator=(const PageWorkScope&) = delete;
+    private:
+        ZForwarding* previous;
+        ZForwarding* forwarding;
+        bool complete;
+    };
+    static ZForwarding* CurrentPageWork();
+    static void WaitPageDone(ZForwarding* forwarding);
     static constexpr uint32_t kAlignShift = 3;
 
     struct Receipt {
@@ -211,6 +96,8 @@ public:
     };
 
     static size_t nentries(size_t objectCountUpperBound);
+    static uint32_t nentries(const ZPage* page);
+    static ZForwarding* alloc(ZForwardingAllocator* allocator, ZPage* page, PageAge to_age);
 
     static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
                               ZPage* page, RegionLifeId pageLifeId = 0,
@@ -231,6 +118,10 @@ public:
     MAddress start() const;
     size_t size() const;
     size_t regionSize() const { return _size; }
+    size_t object_alignment_shift() const { return _object_alignment_shift; }
+    PageAge from_age() const { return _from_age; }
+    PageAge to_age() const { return _to_age; }
+    bool is_promotion() const { return _from_age != PageAge::old && _to_age == PageAge::old; }
     ZPage* page() const;
     RegionLifeId page_life_id() const { return _page_life_id; }
     uint8_t table_generation() const { return _table_generation; }
@@ -333,6 +224,9 @@ public:
         // zForwarding.inline.hpp:267-300: one attached array and one CAS winner.
         ForwardingCursor cursor = 0;
         const uintptr_t fromIndex = index(from);
+        if (fromIndex > ForwardingEntry::kMaxFromIndex) {
+            return Receipt{ 0, false, Receipt::Status::EXISTING };
+        }
         const size_t toOffset = static_cast<size_t>(to - _heapBase);
         const ForwardingEntry existing = find(fromIndex, &cursor);
         if (existing.populated()) {
@@ -390,12 +284,15 @@ public:
     bool is_claimed() const;
     bool in_place() const;
     void set_in_place();
-    bool retain_page();
+    bool retain_page(ZRelocateQueue* queue);
     void release_page();
-    void detach_page();
+    ZPage* detach_page();
     void mark_done();
     bool is_done() const;
     void in_place_relocation_claim_page();
+    void in_place_relocation_start(MAddress relocated_watermark);
+    void in_place_relocation_finish();
+    bool in_place_relocation_is_below_top_at_start(MAddress offset) const;
 
     std::atomic<int32_t>& ref_count() { return _ref_count; }
     std::atomic<bool>& claimed() { return _claimed; }
@@ -405,19 +302,24 @@ public:
 private:
     // zForwarding.inline.hpp:59-76
     ZForwarding(ZPage* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId);
+                RegionLifeId pageLifeId, PageAge from_age, PageAge to_age, size_t object_alignment_shift);
 
     const MAddress _start;
     const size_t _size;
     const MAddress _heapBase;
+    const size_t _object_alignment_shift;
     const AttachedArray _entries;
     ZPage* const _page;
+    const PageAge _from_age;
+    const PageAge _to_age;
     const RegionLifeId _page_life_id;
     // Monotonic per-region-span generation. Written before the table pointer is
     // published, then immutable for the table's lifetime.
     uint8_t _table_generation;
     std::atomic<bool> _claimed;
     std::atomic<bool> _in_place;
+    MAddress _in_place_top_at_start;
+    std::atomic<std::thread::id> _in_place_thread;
     mutable std::mutex _ref_lock;
     std::condition_variable _ref_changed;
     std::atomic<int32_t> _ref_count;

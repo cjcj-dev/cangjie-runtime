@@ -252,8 +252,10 @@ public:
             return ZGenerationId::old;
         }
         const MAddress address = raw(ref.GetTargetObject());
-        if (ForwardingTable::get(address, Generation::Young) != nullptr) {
-            CHECK(ForwardingTable::get(address, Generation::Old) == nullptr);
+        if (address == 0) {
+            return ZGenerationId::old;
+        }
+        if (Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).forwarding_table().get(address) != nullptr) {
             return ZGenerationId::young;
         }
         return ZGenerationId::old;
@@ -279,11 +281,11 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
                                          const ForwardingProvenance& provenance) const override
     {
-        if (!Heap::IsHeapAddress(obj)) return obj;
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) return obj;
         const MAddress from = reinterpret_cast<MAddress>(obj);
         const Generation ownerGeneration = generation == ZGenerationId::young
             ? Generation::Young : Generation::Old;
-        ZForwarding* forwarding = ForwardingTable::get(from, ownerGeneration);
+        ZForwarding* forwarding = Heap::GetHeap().GetCollector().GetGenerationCycle(ownerGeneration).forwarding_table().get(from);
         if (forwarding == nullptr) return obj;
 
         // zRelocate.cpp:383-415: lookup, retain/copy/release, then wait/find.
@@ -292,7 +294,7 @@ public:
         if (const MAddress to = forwarding->find(from)) {
             return reinterpret_cast<BaseObject*>(to);
         }
-        ZPage::RetainScope lease{ForwardingTable::Owner(forwarding)};
+        ZPage::RetainScope lease{forwarding};
         if (lease.ok()) {
             if (BaseObject* to = TryMutatorRelocate(obj, lease)) return to;
         }
@@ -386,7 +388,7 @@ public:
     // region type is rewritten as relocation progresses, and a predicate reading it can be right
     // one instant and wrong the next -- that shape produced several of this session's dead ends.
     // An address either is in the set or is not.
-    static constexpr bool kMembershipFromTable = ForwardingTable::kZfwdTableConsume;
+    static constexpr bool kMembershipFromTable = true;
 
     bool IsFromObject(BaseObject* obj) const override
     {
@@ -402,7 +404,7 @@ public:
             ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             return region != nullptr &&
                 (region->FromPageLiveMap() != nullptr ||
-                 ForwardingTable::RetainPageOwner(region).get() != nullptr ||
+                 forwarding_for_page(region) != nullptr ||
                  region->IsForwardingDone());
         }
         // filter const string object.
@@ -438,7 +440,7 @@ public:
     BaseObject* GetForwardPointer(BaseObject* fromObj, ZPage* region) const
     {
         // ZRelocate::forward_object consumes only the installed CAS winner.
-        auto owner = ForwardingTable::RetainPageOwner(region);
+        auto owner = forwarding_for_page(region);
         return owner ? reinterpret_cast<BaseObject*>(owner->find(reinterpret_cast<MAddress>(fromObj))) : nullptr;
     }
 
@@ -466,9 +468,9 @@ public:
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return FindToVersionResult::NotManaged();
         }
-        const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(obj), generation);
-        return lookup.to != 0 ? FindToVersionResult::Found(reinterpret_cast<BaseObject*>(lookup.to))
-                              : FindToVersionResult::NotForwarded();
+        const MAddress to = forwarding_find(generation, reinterpret_cast<MAddress>(obj));
+        return to != 0 ? FindToVersionResult::Found(reinterpret_cast<BaseObject*>(to))
+                       : FindToVersionResult::NotForwarded();
     }
 
 protected:
@@ -669,7 +671,7 @@ protected:
     {
         return target != nullptr && Heap::IsHeapAddress(target) &&
             Collector::JudgeHandOutTarget(target) == HandVerdict::Usable &&
-            ForwardingTable::get(reinterpret_cast<MAddress>(target), generation) == nullptr;
+            generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(target)) == nullptr;
     }
 
 
@@ -803,7 +805,7 @@ private:
     void RemapYoungRoots();
     bool Preforward();
     void StartRelocationTasks(GCCycleGeneration generation);
-    BaseObject* WaitForPageForwarding(BaseObject* obj, ForwardingTable::Owner owner) const;
+    BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);

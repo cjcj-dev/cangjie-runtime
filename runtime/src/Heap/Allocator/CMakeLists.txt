@@ -10,7 +10,7 @@ set(SRC_LIST
     "zPageAllocator.cpp"
 
     "Allocator.cpp"
-    "zForwardingTable.cpp"
+    "../z/zForwardingTable.cpp"
     "../z/zForwardingAllocator.cpp"
     "../z/zVirtualMemoryManager.cpp"
     "../z/zAddressSpaceLimit.cpp"

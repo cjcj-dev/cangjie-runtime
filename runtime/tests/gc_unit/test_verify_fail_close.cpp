@@ -118,13 +118,13 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
 {
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
+    auto publication = forwarding_for_page(
         fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication,
+    GC_EXPECT_EQ(UNUSED_InsertMapping(publication,
         reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
         reinterpret_cast<MAddress>(fixture.obj1));
-    auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
+    auto owner = forwarding_for_page(fixture.region0);
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     owner->verify();
     ExpectSceneAbort("Invalid number of live objects", [&] {
@@ -150,19 +150,19 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     }
     GcVerifyFixture fixture;
     fixture.PrepareOldSource();
-    auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
+    auto publication = forwarding_for_page(
         fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
+    auto owner = forwarding_for_page(fixture.region0);
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     remset.Initialize(fixture.heapStart, 2 * ZPage::UNIT_SIZE);
-    ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner.get()); });
+    ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner); });
     remset.Record(slot);
     if (!Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
-    ZVerify::BeforeRelocation(owner.get());
+    ZVerify::BeforeRelocation(owner);
 }
 
 // zVerify.cpp:131-138 distinguishes raw null from metadata-bearing null.

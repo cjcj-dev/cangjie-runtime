@@ -124,7 +124,7 @@ public:
         // ReclaimRegionToMarkQuarantine → InitZPage, which clears
         // nextRegionIdx0 (the ghost successor). Walking GetNextGhostRegion
         // after that truncates the chain; undispelled from-regions then
-        // fail PrepareForwardableRegion CHECK(inGhostFromRegion==0).
+        // fail CHECK(inGhostFromRegion==0).
         // Same shape as VisitAllRegions (RegionList.h:115-124).
         ZPage* node = listHead;
         while (node != nullptr) {
