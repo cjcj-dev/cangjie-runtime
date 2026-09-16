@@ -16,7 +16,10 @@
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
+#include "Cangjie.h"
 #include "gc_unittest.hpp"
+
+#if defined(MRT_TESTABLE_INTERNALS)
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo*, MIndex);
@@ -664,27 +667,38 @@ extern "C" int p2SlowFieldInputExercise()
     return failures.load();
 }
 
+static void RunP2(int (*exercise)())
+{
+    RuntimeParam param{};
+    param.heapParam.heapSize = 64 * 1024;
+    param.coParam.processorNum = 1;
+    GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
+    GC_EXPECT_EQ(exercise(), 0);
+    GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
+}
+
 GC_OTHER_VM_TEST(P2FieldBarrier, FieldBarrierExercise)
 {
-    GC_EXPECT_EQ(p2FieldBarrierExercise(), 0);
+    RunP2(p2FieldBarrierExercise);
 }
 
 GC_OTHER_VM_TEST(P2FieldBarrier, FinalizerRegistrationExercise)
 {
-    GC_EXPECT_EQ(p2FinalizerRegistrationExercise(), 0);
+    RunP2(p2FinalizerRegistrationExercise);
 }
 
 GC_OTHER_VM_TEST(P2FieldBarrier, FinalizerClosureExercise)
 {
-    GC_EXPECT_EQ(p2FinalizerClosureExercise(), 0);
+    RunP2(p2FinalizerClosureExercise);
 }
 
 GC_OTHER_VM_TEST(P2FieldBarrier, ArrayFieldExercise)
 {
-    GC_EXPECT_EQ(p2ArrayFieldExercise(), 0);
+    RunP2(p2ArrayFieldExercise);
 }
 
 GC_OTHER_VM_TEST(P2FieldBarrier, SlowFieldInputExercise)
 {
-    GC_EXPECT_EQ(p2SlowFieldInputExercise(), 0);
+    RunP2(p2SlowFieldInputExercise);
 }
+#endif
