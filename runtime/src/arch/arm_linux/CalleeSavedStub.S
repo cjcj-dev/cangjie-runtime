@@ -211,6 +211,10 @@ CalleeSavedStubFrameSize:
 
     .global unwindPCForC2RStubStart
 unwindPCForC2RStubStart:
+    CalleeSavedRegistersStub MCC_PackageInitBegin CJ_MCC_PackageInitBegin
+    CalleeSavedRegistersStub MCC_PackageInitComplete CJ_MCC_PackageInitComplete
+    CalleeSavedRegistersStub MCC_PackageInitFail CJ_MCC_PackageInitFail
+    CalleeSavedRegistersStub MCC_PackageInitAbort CJ_MCC_PackageInitAbort
     CalleeSavedRegistersStub MCC_NewObject CJ_MCC_NewObject
     CalleeSavedRegistersStub MCC_NewWeakRefObject CJ_MCC_NewWeakRefObject
     CalleeSavedRegistersStub MCC_NewObjArray CJ_MCC_NewObjArray

@@ -11,6 +11,7 @@
 #include "Base/CString.h"
 #include "Base/Types.h"
 #include "os/Path.h"
+#include "Loader/PackageInit.h"
 namespace MapleRuntime {
 enum class FileType {
     C_FILE, // cangjie File
@@ -51,10 +52,21 @@ public:
     const CString& GetBaseName() const;
     void SetFileCompatibility(bool isComp) { isCompatible = isComp; }
     bool IsCompatible() const { return isCompatible; }
+    void SetImageAddressMap(std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> map)
+    {
+        imageAddressMap = std::move(map);
+    }
+    const ElfUnloadQuiescence::ImageAddressMap& GetImageAddressMap() const { return *imageAddressMap; }
+    bool IsRegistered() const { return registered; }
+    void SetRegistered(bool value) { registered = value; }
+    PackageInitTable& GetPackageInitTable() { return packageInitTable; }
 private:
+    PackageInitTable packageInitTable;
+    std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> imageAddressMap;
     CString realPath; // file real path
     CString baseName;
     bool isCompatible { false };
+    bool registered { false }; // Protected by the loader catalog lock.
 };
 } // namespace MapleRuntime
 #endif
