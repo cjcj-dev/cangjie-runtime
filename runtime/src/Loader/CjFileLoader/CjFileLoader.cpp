@@ -452,6 +452,7 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
     if (!authorizedByCaller) {
 #ifdef MRT_TESTABLE_INTERNALS
         ElfUnloadQuiescence::NoteDirectPreflightForTesting();
+        ElfUnloadQuiescence::PauseDirectPreflightForTesting();
 #endif
         // Recheck BOTH pending entries and active frames under each acquired
         // admission. Never hold exclusive admission while an initializer may
@@ -652,16 +653,29 @@ void CJFileLoader::RegisterLoadFunc(void* loadFunc, void* loadLibraryFunc)
 
 void* CJFileLoader::LoadCJLibrary(const char* libName)
 {
+    CString baseName = Os::Path::GetBaseName(libName);
+    {
+        std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
+        auto handlerIt =
+            std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
+                return baseName == Os::Path::GetBaseName(info.baseName.Str());
+            });
+        if (handlerIt != cjLibHandlers.end() && handlerIt->closing) {
+            return nullptr;
+        }
+    }
     void* handler = binLoadApi.binLoad(libName);
     if (handler != nullptr) {
         std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
-        CString baseName = Os::Path::GetBaseName(libName);
         auto handlerIt =
             std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
                 return baseName == Os::Path::GetBaseName(info.baseName.Str());
             });
         if (handlerIt == cjLibHandlers.end()) {
-            cjLibHandlers.push_back({ baseName, handler });
+            cjLibHandlers.push_back({ baseName, handler, 0, false });
+        } else if (handlerIt->closing) {
+            binLoadApi.binUnload(handler);
+            return nullptr;
         }
     }
     return handler;
@@ -684,47 +698,140 @@ int CJFileLoader::UnloadLibrary(const char* libName)
         return -1;
     }
     CString baseName = Os::Path::GetBaseName(libName);
-    std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
-    auto handlerIt =
-        std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
-            return baseName == Os::Path::GetBaseName(info.baseName.Str());
-        });
-    if (handlerIt == cjLibHandlers.end()) {
-        return -1;
+    void* handler = nullptr;
+    U64 generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
+        auto handlerIt =
+            std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
+                return baseName == Os::Path::GetBaseName(info.baseName.Str());
+            });
+        if (handlerIt == cjLibHandlers.end() || handlerIt->closing) {
+            return -1;
+        }
+        handler = handlerIt->handler;
+        generation = ++handlerIt->generation;
+        handlerIt->closing = true;
     }
 
+    auto rollbackHandler = [this, &baseName, generation]() {
+        std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
+        auto handlerIt =
+            std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName, generation](const LibNameToHandler& info) {
+                return baseName == Os::Path::GetBaseName(info.baseName.Str()) && info.generation == generation;
+            });
+        if (handlerIt != cjLibHandlers.end()) {
+            handlerIt->closing = false;
+        }
+    };
+
     int ret = -1;
-    BaseFile* baseFile = GetBaseFile(baseName);
+    Uptr imageAddress = 0;
+    bool imageClosed = false;
+    LibNameToHandler handlerItStorage { baseName, handler, generation, true };
+    const LibNameToHandler* handlerIt = &handlerItStorage;
+#ifdef MRT_TESTABLE_INTERNALS
+    auto* previousUnload = binLoadApi.binUnload;
+    binLoadApi.binUnload = [](void* platformHandler) {
+        if (LoaderManager::GetInstance()->GetInitStatus()) {
+            bool worldStopped = MutatorManager::Instance().WorldStopped();
+            bool holdsAdmission = ElfUnloadQuiescence::PublicHoldAcrossPlatformForTesting();
+            ElfUnloadQuiescence::NotePublicPlatformWaitForTesting(worldStopped, holdsAdmission);
+            ElfUnloadQuiescence::PausePublicPlatformForTesting();
+        }
+        if (ElfUnloadQuiescence::ConsumeFailedPlatformUnloadForTesting()) {
+            return -1;
+        }
+        return Os::Loader::UnloadBinaryFile(platformHandler);
+    };
+    struct RestoreUnload {
+        BinLoadApi& api;
+        int (*prev)(void*);
+        ~RestoreUnload() { api.binUnload = prev; }
+    } restoreUnload { binLoadApi, previousUnload };
+#endif
     if (LoaderManager::GetInstance()->GetInitStatus()) {
+        BaseFile* baseFile = GetBaseFile(baseName);
         if (baseFile == nullptr) {
+            rollbackHandler();
             return -1;
         }
-        // A FutureImpl retains the image entry before its cjthread becomes an
-        // active mutator. Close that transition first, then reject queued image
-        // entries before using the active-frame preflight for started tasks.
-        ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
-        if (taskAdmission.HasPendingForImage(baseFile->GetFileMetaAddr())) {
-            LOG(RTLOG_WARNING, "refuse to unload queued Cangjie image %s", baseName.Str());
-            return -1;
-        }
-        // Keep every managed entry stopped from the active-frame decision
-        // through the platform unmap. A mutator blocked in C2N is already in a
-        // saferegion, but its managed caller is still an active image frame and
-        // therefore makes this unload ineligible.
-        ScopedEnterSaferegion enterSaferegion(false);
-        ScopedStopTheWorld stw("ELF unload active-image preflight", false);
-        if (HasActiveImageFrames(baseFile)) {
-            LOG(RTLOG_WARNING, "refuse to unload active Cangjie image %s", baseName.Str());
-            return -1;
-        }
-        ElfUnloadQuiescence::PurgeAuthorizationScope authorization(
-            baseFile->GetFileMetaAddr(), taskAdmission);
+        imageAddress = baseFile->GetFileMetaAddr();
+        bool holdAcrossPlatform = false;
+#ifdef MRT_TESTABLE_INTERNALS
+        holdAcrossPlatform = ElfUnloadQuiescence::PublicHoldAcrossPlatformForTesting();
+#endif
+        if (holdAcrossPlatform) {
+            ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
+            if (taskAdmission.HasPendingForImage(imageAddress)) {
+                LOG(RTLOG_WARNING, "refuse to unload queued Cangjie image %s", baseName.Str());
+                ElfUnloadQuiescence::AbortImageClosing(imageAddress);
+                rollbackHandler();
+                return -1;
+            }
+            ScopedEnterSaferegion enterSaferegion(false);
+            ScopedStopTheWorld stw("ELF unload active-image preflight", false);
+            if (HasActiveImageFrames(baseFile)) {
+                LOG(RTLOG_WARNING, "refuse to unload active Cangjie image %s", baseName.Str());
+                ElfUnloadQuiescence::AbortImageClosing(imageAddress);
+                rollbackHandler();
+                return -1;
+            }
+            (void)ElfUnloadQuiescence::BeginImageClosing(imageAddress);
+            ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress, taskAdmission);
+            ret = binLoadApi.binUnload(handlerIt->handler);
+        } else {
+            {
+                ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
+                if (taskAdmission.HasPendingForImage(imageAddress)) {
+                    LOG(RTLOG_WARNING, "refuse to unload queued Cangjie image %s", baseName.Str());
+                    rollbackHandler();
+                    return -1;
+                }
+                ScopedEnterSaferegion enterSaferegion(false);
+                ScopedStopTheWorld stw("ELF unload active-image preflight", false);
+                if (HasActiveImageFrames(baseFile)) {
+                    LOG(RTLOG_WARNING, "refuse to unload active Cangjie image %s", baseName.Str());
+                    rollbackHandler();
+                    return -1;
+                }
+                (void)ElfUnloadQuiescence::BeginImageClosing(imageAddress);
+            }
         ret = binLoadApi.binUnload(handlerIt->handler);
+        }
+        imageClosed = GetBaseFile(baseName) == nullptr || !ElfUnloadQuiescence::IsLinkedAddress(imageAddress);
     } else {
         ret = binLoadApi.binUnload(handlerIt->handler);
     }
-    if (ret == 0) {
-        cjLibHandlers.erase(handlerIt);
+
+    std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
+    auto commitIt =
+        std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName, generation](const LibNameToHandler& info) {
+            return baseName == Os::Path::GetBaseName(info.baseName.Str()) && info.generation == generation;
+        });
+    const bool shouldErase = imageClosed || (imageAddress == 0 && ret == 0);
+    if (commitIt == cjLibHandlers.end()) {
+        if (imageAddress != 0) {
+            if (imageClosed) {
+                ElfUnloadQuiescence::CommitImageClosing(imageAddress);
+            } else {
+                ElfUnloadQuiescence::AbortImageClosing(imageAddress);
+            }
+        }
+        return ret;
+    }
+    if (shouldErase) {
+        if (imageClosed) {
+            ElfUnloadQuiescence::CommitImageClosing(imageAddress);
+        } else if (imageAddress != 0) {
+            ElfUnloadQuiescence::AbortImageClosing(imageAddress);
+        }
+        cjLibHandlers.erase(commitIt);
+    } else {
+        commitIt->closing = false;
+        if (imageAddress != 0) {
+            ElfUnloadQuiescence::AbortImageClosing(imageAddress);
+        }
     }
     return ret;
 }
@@ -756,15 +863,19 @@ bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
 Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) const
 {
     CString baseName = Os::Path::GetBaseName(libName.Str());
-    std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
-    auto handlerIt =
-        std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
-            return baseName == Os::Path::GetBaseName(info.baseName.Str());
-        });
-    if (handlerIt == cjLibHandlers.end()) {
-        return 0;
+    void* handler = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
+        auto handlerIt =
+            std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
+                return baseName == Os::Path::GetBaseName(info.baseName.Str());
+            });
+        if (handlerIt == cjLibHandlers.end() || handlerIt->closing) {
+            return 0;
+        }
+        handler = handlerIt->handler;
     }
-    return reinterpret_cast<Uptr>(binLoadApi.findSymbol(handlerIt->handler, symName.Str()));
+    return reinterpret_cast<Uptr>(binLoadApi.findSymbol(handler, symName.Str()));
 }
 
 #ifdef MRT_TESTABLE_INTERNALS

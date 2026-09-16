@@ -100,6 +100,8 @@ private:
     struct LibNameToHandler {
         CString baseName;
         void* handler;
+        U64 generation { 0 };
+        bool closing { false };
     };
     mutable std::mutex libCjsoHandlersMutex;
     mutable std::recursive_mutex catalogMutex;

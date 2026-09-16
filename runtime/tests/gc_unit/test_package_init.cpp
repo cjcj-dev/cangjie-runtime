@@ -23,6 +23,7 @@
 #include "ObjectModel/MObject.h"
 #include "Loader/BinaryFile/CjFile/CjFile.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "Loader/PackageInit.h"
 #include "Loader/PackageInitTest.h"
 #include "LoaderManager.h"
@@ -810,6 +811,221 @@ GC_OTHER_VM_TEST(PackageInit, LibInitTransitionsNativeCallerToManagedBody)
     packageBody = nullptr;
     Target("runtime-finish", FiniCJRuntime() == E_OK);
 }
+#ifdef MRT_TESTABLE_INTERNALS
+namespace {
+std::string FixtureBesideExecutable(const char* name)
+{
+    char executable[4096] {};
+    const ssize_t length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+    std::string path(executable, static_cast<size_t>(length > 0 ? length : 0));
+    return path.substr(0, path.find_last_of('/') + 1) + name;
+}
+}
+GC_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
+{
+    Init();
+    const std::string aPath = FixtureBesideExecutable("libcj_package_init_fixture.so");
+    const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
+    void* imageA = dlopen(aPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("b0-a-open", imageA != nullptr);
+    auto getA = reinterpret_cast<void* (*)()>(dlsym(imageA, "PackageInitImageMetadata"));
+    auto armA = reinterpret_cast<void (*)(void (*)())>(dlsym(imageA, "PackageInitImageArmUnload"));
+    Target("b0-a-symbols", getA != nullptr && armA != nullptr);
+    auto* fileA = new CJFile(CString("package-init-direct-a"), reinterpret_cast<Uptr>(getA()));
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    loader->AddLoadedFiles(fileA);
+    loader->RegisterLoadFile(fileA->GetFileMetaAddr());
+    armA([]() {});
+    Target("b0-u-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
+    auto getU = reinterpret_cast<void* (*)()>(
+        reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageMetadata")));
+    auto armU = reinterpret_cast<void (*)(void (*)())>(
+        reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageArmUnload")));
+    Target("b0-u-symbols", getU != nullptr && armU != nullptr);
+    auto* fileU = new CJFile(CString("libcj_package_init_unrelated.so"), reinterpret_cast<Uptr>(getU()));
+    loader->AddLoadedFiles(fileU);
+    loader->RegisterLoadFile(fileU->GetFileMetaAddr());
+    const Uptr uMeta = fileU->GetFileMetaAddr();
+    armU([]() {});
+    ElfUnloadQuiescence::EnableDirectPreflightPauseForTesting();
+    ElfUnloadQuiescence::EnablePublicPlatformPauseForTesting();
+    std::atomic<bool> aClosed { false };
+    std::atomic<bool> uClosed { false };
+    std::thread closerA([&]() {
+        Target("b0-a-close", dlclose(imageA) == 0);
+        aClosed.store(true, std::memory_order_release);
+    });
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ElfUnloadQuiescence::DirectPreflightPausedForTesting() &&
+           std::chrono::steady_clock::now() < until) {
+        std::this_thread::yield();
+    }
+    Target("b0-direct-preflight-entered", ElfUnloadQuiescence::DirectPreflightPausedForTesting());
+    std::thread closerU([&]() {
+        Target("b0-u-public-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
+        uClosed.store(true, std::memory_order_release);
+    });
+    while (!ElfUnloadQuiescence::PublicPlatformPausedForTesting() &&
+           std::chrono::steady_clock::now() < until) {
+        std::this_thread::yield();
+    }
+    Target("b0-public-platform-boundary", ElfUnloadQuiescence::PublicPlatformPausedForTesting());
+    Target("b0-u-closing", ElfUnloadQuiescence::IsImageClosing(uMeta));
+    Target("b0-public-platform-without-stw",
+           !ElfUnloadQuiescence::PublicPlatformWaitHoldsStwForTesting() &&
+           !ElfUnloadQuiescence::PublicPlatformWaitHoldsAdmissionForTesting());
+    ElfUnloadQuiescence::ReleasePublicPlatformPauseForTesting();
+    ElfUnloadQuiescence::ReleaseDirectPreflightPauseForTesting();
+    Target("b0-a-completed", Await(aClosed));
+    Target("b0-u-completed", Await(uClosed));
+    closerA.join();
+    closerU.join();
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+GC_OTHER_VM_TEST(PackageInit, PublicUnloadAllowsPendingOwnerAndIdleU)
+{
+    Init();
+    const std::string aPath = FixtureBesideExecutable("libcj_package_init_fixture.so");
+    const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
+    void* imageA = dlopen(aPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+    Target("b1-a-open", imageA != nullptr);
+    auto getA = reinterpret_cast<void* (*)()>(dlsym(imageA, "PackageInitImageMetadata"));
+    auto armA = reinterpret_cast<void (*)(void (*)())>(dlsym(imageA, "PackageInitImageArmUnload"));
+    struct Context {
+        Completion c;
+        const void* package;
+        const void* unit;
+        std::atomic<bool> done { false };
+        std::atomic<bool> closed { false };
+        std::atomic<bool> publicDone { false };
+    } context;
+    context.package = dlsym(imageA, "PackageInitImagePackage");
+    context.unit = dlsym(imageA, "PackageInitImageUnit");
+    Target("b1-a-symbols", getA && armA && context.package && context.unit);
+    auto* fileA = new CJFile(CString("package-init-direct-a"), reinterpret_cast<Uptr>(getA()));
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    loader->AddLoadedFiles(fileA);
+    loader->RegisterLoadFile(fileA->GetFileMetaAddr());
+    armA(NativeFiniNotice);
+    nativeFiniEntered.store(false, std::memory_order_release);
+    Target("b1-u-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
+    auto getU = reinterpret_cast<void* (*)()>(
+        reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageMetadata")));
+    auto armU = reinterpret_cast<void (*)(void (*)())>(
+        reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageArmUnload")));
+    Target("b1-u-symbols", getU != nullptr && armU != nullptr);
+    auto* fileU = new CJFile(CString("libcj_package_init_unrelated.so"), reinterpret_cast<Uptr>(getU()));
+    loader->AddLoadedFiles(fileU);
+    loader->RegisterLoadFile(fileU->GetFileMetaAddr());
+    armU([]() {});
+    Start([](void* argument) {
+        auto& c = *static_cast<Context*>(argument);
+        void* owner = nullptr;
+        Target("b1-owner", Begin(c.package, c.unit, 0, &owner) == Code(Result::Execute));
+        c.c.ownerStarted.store(true, std::memory_order_release);
+        WaitqueuePark(&c.c.release, LLONG_MAX, Released, &c.c, false);
+        void* dependency = nullptr;
+        Target("b1-dependency", Begin(P(), V(), 0, &dependency) == Code(Result::Execute));
+        MCC_PackageInitComplete(dependency);
+        MCC_PackageInitComplete(owner);
+        c.done.store(true, std::memory_order_release);
+    }, &context);
+    Target("b1-owner-started", Await(context.c.ownerStarted));
+    ElfUnloadQuiescence::EnablePublicPlatformPauseForTesting();
+    std::thread closerA([&]() {
+        Target("b1-a-close", dlclose(imageA) == 0);
+        context.closed.store(true, std::memory_order_release);
+    });
+    Target("b1-a-fini", Await(nativeFiniEntered));
+    std::thread closerU([&]() {
+        Target("b1-u-public-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
+        context.publicDone.store(true, std::memory_order_release);
+    });
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ElfUnloadQuiescence::PublicPlatformPausedForTesting() &&
+           std::chrono::steady_clock::now() < until) {
+        std::this_thread::yield();
+    }
+    Target("b1-public-platform-without-stw",
+           ElfUnloadQuiescence::PublicPlatformPausedForTesting() &&
+           !ElfUnloadQuiescence::PublicPlatformWaitHoldsStwForTesting());
+    ElfUnloadQuiescence::ReleasePublicPlatformPauseForTesting();
+    context.c.finish.store(true, std::memory_order_release);
+    WaitqueueWakeAll(&context.c.release, nullptr, nullptr);
+    Target("b1-owner-done", Await(context.done));
+    Target("b1-direct-close-done", Await(context.closed));
+    Target("b1-public-close-done", Await(context.publicDone));
+    closerA.join();
+    closerU.join();
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+    WaitqueueDelete(&context.c.release);
+}
+GC_OTHER_VM_TEST(PackageInit, DuplicatePublicCloseIsBusy)
+{
+    Init();
+    const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    Target("dup-u-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
+    auto getU = reinterpret_cast<void* (*)()>(
+        reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageMetadata")));
+    auto armU = reinterpret_cast<void (*)(void (*)())>(
+        reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageArmUnload")));
+    Target("dup-u-symbols", getU != nullptr && armU != nullptr);
+    auto* fileU = new CJFile(CString("libcj_package_init_unrelated.so"), reinterpret_cast<Uptr>(getU()));
+    loader->AddLoadedFiles(fileU);
+    loader->RegisterLoadFile(fileU->GetFileMetaAddr());
+    armU([]() {});
+    ElfUnloadQuiescence::EnablePublicPlatformPauseForTesting();
+    std::atomic<int> firstRc { 1 };
+    std::atomic<int> secondRc { 0 };
+    std::thread first([&]() {
+        firstRc.store(UnloadCJLibrary(uPath.c_str()), std::memory_order_release);
+    });
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ElfUnloadQuiescence::PublicPlatformPausedForTesting() &&
+           std::chrono::steady_clock::now() < until) {
+        std::this_thread::yield();
+    }
+    Target("dup-first-reserved", ElfUnloadQuiescence::PublicPlatformPausedForTesting());
+    secondRc.store(UnloadCJLibrary(uPath.c_str()), std::memory_order_release);
+    Target("dup-second-busy", secondRc.load(std::memory_order_acquire) != E_OK);
+    ElfUnloadQuiescence::ReleasePublicPlatformPauseForTesting();
+    first.join();
+    Target("dup-first-ok", firstRc.load(std::memory_order_acquire) == E_OK);
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+GC_OTHER_VM_TEST(PackageInit, PlatformUnloadFailureRollsBack)
+{
+    Init();
+    const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    Target("fail-u-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
+    auto getU = reinterpret_cast<void* (*)()>(
+        reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageMetadata")));
+    auto armU = reinterpret_cast<void (*)(void (*)())>(
+        reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageArmUnload")));
+    Target("fail-u-symbols", getU != nullptr && armU != nullptr);
+    auto* fileU = new CJFile(CString("libcj_package_init_unrelated.so"), reinterpret_cast<Uptr>(getU()));
+    loader->AddLoadedFiles(fileU);
+    loader->RegisterLoadFile(fileU->GetFileMetaAddr());
+    armU([]() {});
+    ElfUnloadQuiescence::FailNextPlatformUnloadForTesting(true);
+    Target("fail-injected-close", UnloadCJLibrary(uPath.c_str()) != E_OK);
+    Target("fail-handle-retained", loader->GetLibraryHandleForTesting(uPath.c_str()) != nullptr);
+    Target("fail-retry-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
+    Target("fail-handle-cleared", loader->GetLibraryHandleForTesting(uPath.c_str()) == nullptr);
+    Target("runtime-finish", FiniCJRuntime() == E_OK);
+}
+GC_TEST(PackageInit, PublicUnloadWithoutRuntimeInitErasesHandler)
+{
+    const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
+    auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
+    Target("uninit-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
+    Target("uninit-handle-present", loader->GetLibraryHandleForTesting(uPath.c_str()) != nullptr);
+    Target("uninit-close", UnloadCJLibrary(uPath.c_str()) == E_OK);
+    Target("uninit-handle-erased", loader->GetLibraryHandleForTesting(uPath.c_str()) == nullptr);
+}
+#endif
 GC_TEST(PackageInit, UnattachedNativeUnavailable)
 {
     void* token = reinterpret_cast<void*>(1);
