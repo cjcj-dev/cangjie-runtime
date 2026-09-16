@@ -9,7 +9,6 @@ set(SRC_LIST
     "z/zInitialize.cpp"
     "z/zGlobals.cpp"
     "z/zThreadLocalData.cpp"
-    "z/zRuntimeWorkers.cpp"
     "z/workerThread.cpp"
     "z/zTask.cpp"
     "z/zWorkers.cpp"
