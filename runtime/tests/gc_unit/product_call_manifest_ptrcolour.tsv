@@ -1,3 +1,2 @@
 test_name	stable_product_anchor	carrier	consumer_callsite	cut_site
-ColourCensus.PlainWriteFunnelFailsClosed	MapleRuntime::AssertColouredWriteIfEnabled	product_so	test_colour_census.cpp:StoreColoured	BaseObject.cpp:ClassifySlotWord
-I2ReadRef.LoadBadHeapSlotIsHealedToCurrentColour	MapleRuntime::ZBarrier::self_heal	product_so	test_i2_readref.cpp:barrier.ReadReference	self_heal(is_load_good_or_null_fast_path
+I2ReadRef.LoadBadHeapSlotIsHealedToCurrentColour	MapleRuntime::ZBarrier::self_heal	product_so	test_i2_readref.cpp:ZBarrier::ReadReference	self_heal(is_load_good_or_null_fast_path

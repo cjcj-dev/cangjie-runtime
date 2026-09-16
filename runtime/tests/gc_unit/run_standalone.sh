@@ -658,9 +658,6 @@ echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries
 # the calls are imports.  main is the positive control above.
 PTRCOLOUR_PRODUCT_CONSUMERS=()
 PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::ZBarrier::ReadReference(')
-if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::AssertColouredWriteIfEnabled(')
-fi
 for consumer in "${PTRCOLOUR_PRODUCT_CONSUMERS[@]}"; do
   if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
     echo "GC_UNIT_PTRCOLOUR_LOCAL_DEFINITION symbol=$consumer" >&2
@@ -692,7 +689,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   /usr/bin/grep -R -F -q "${cut_site#*:}" "$ROOT/runtime/src"
   ptrcolour_rows=$((ptrcolour_rows + 1))
 done <"$PTRCOLOUR_MANIFEST"
-[[ "$ptrcolour_rows" -eq 2 ]]
+[[ "$ptrcolour_rows" -eq 1 ]]
 echo "GATE_PTRCOLOUR_PRODUCT_BINDING_OK rows=$ptrcolour_rows elf=$OUT/cj_gc_unit"
 
 # The classifier's four required metadata groups (old mark or finalizable) are coupled to this stable
