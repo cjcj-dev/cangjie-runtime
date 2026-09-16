@@ -559,7 +559,7 @@ public:
     MRT_EXPORT size_t FailedStalledAllocations() const;
 #endif
     template<Generation G>
-    void ForwardClaimedPage(ZPage* region, ForwardingTable::Owner owner, bool claimed = false,
+    void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
                             bool inPlace = false);
     template<Generation G>
     void StartForwardFromRegions(ZWorkers& workers);

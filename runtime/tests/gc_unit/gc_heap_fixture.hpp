@@ -207,8 +207,8 @@ struct GcHeapFixture {
         // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
         if (ZPage::heapStartAddress == heapStart) {
-            ForwardingTable::ResetRelocationSet(Generation::Young);
-            ForwardingTable::ResetRelocationSet(Generation::Old);
+            Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
+            Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).reset_relocation_set();
         }
         // ~ZPage: the page livemaps go with the synthetic heap.
         for (ZPage* region : {region0, region1}) {
@@ -259,7 +259,7 @@ struct GcHeapFixture {
     void InstallPageOwner(ZPage* region)
     {
         if (region->_scratch.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
-        if (ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration()) == nullptr) {
+        if (generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart()) == nullptr) {
             RegionList selected("fixture-forwardings");
             const Generation generation = region->GetOwnerGeneration();
             if (region0->GetOwnerGeneration() == generation) {

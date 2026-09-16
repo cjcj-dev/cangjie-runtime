@@ -124,7 +124,7 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
     GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication,
         reinterpret_cast<MAddress>(fixture.obj0), reinterpret_cast<MAddress>(fixture.obj1)),
         reinterpret_cast<MAddress>(fixture.obj1));
-    auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
+    auto owner = forwarding_for_page(fixture.region0);
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     owner->verify();
     ExpectSceneAbort("Invalid number of live objects", [&] {
@@ -153,7 +153,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
         fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
+    auto owner = forwarding_for_page(fixture.region0);
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));

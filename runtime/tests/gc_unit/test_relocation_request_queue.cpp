@@ -20,7 +20,7 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 struct PageQueueFixture {
     GcHeapFixture heap;
-    ForwardingTable::Owner owner;
+    ZForwarding* owner;
     RelocationRequestQueue queue;
     PageQueueFixture()
     {
@@ -30,7 +30,7 @@ struct PageQueueFixture {
             page->GetRegionStart(), page->GetRegionSize(), page, page->GetOwnerGeneration()));
         GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(page, nullptr, 1, page->GetRegionAllocPtr(),
             page->GetRegionStart(), 1, 0, page->GetRegionLifeId()));
-        owner = ForwardingTable::RetainPageOwner(page);
+        owner = forwarding_for_page(page);
         GC_EXPECT_TRUE(static_cast<bool>(owner));
     }
     ~PageQueueFixture()
@@ -178,7 +178,7 @@ GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
     (void)f.queue.WaitUntil(request.request, 1, &timedOut);
     GC_EXPECT_TRUE(timedOut);
     GC_EXPECT_FALSE(f.owner->is_done());
-    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(f.heap.obj0), f.heap.region0->GetOwnerGeneration()),
+    GC_EXPECT_EQ(forwarding_find(f.heap.region0->GetOwnerGeneration(), reinterpret_cast<MAddress>(f.heap.obj0)),
                  reinterpret_cast<MAddress>(f.heap.obj1));
     f.Complete();
     (void)f.queue.WaitUntil(request.request, 1, &timedOut);

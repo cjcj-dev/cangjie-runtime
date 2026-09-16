@@ -179,7 +179,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     manager.CompactRegion(region);
     region->MarkForwardingDone();
-    auto forwarding = ForwardingTable::RetainPageOwner(region);
+    auto forwarding = forwarding_for_page(region);
     BaseObject* to = reinterpret_cast<BaseObject*>(forwarding->find(reinterpret_cast<MAddress>(from)));
     std::fprintf(stderr, "NATIVE_ROOT_ORACLE before=%#zx from=%p to=%p slot=%#zx young=%u\n",
                  before, from, to, raw(slot.GetFieldValue()), unsigned(region->IsYoungRegion()));
@@ -217,7 +217,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
     collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
-    ForwardingTable::ResetRelocationSet(Generation::Young);
+    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
     // Observe the product's published old mark stacks after the root task
     // returned and before follow starts (testOldMarkStarted fires at the top
     // of DoTracing, after DoEnumeration). The slot visit is recorded too, so

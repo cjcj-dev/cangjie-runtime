@@ -5,12 +5,14 @@
 #include <memory>
 
 #include "Common/TypeDef.h"
+#include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 #include "Heap/z/zPageFwd.hpp"
 
 namespace MapleRuntime {
 
 class ZForwarding;
+class ZPage;
 
 class ZForwardingTable {
 public:
@@ -26,6 +28,10 @@ public:
 private:
     std::unique_ptr<ZGranuleMap<ZForwarding*>> _map;
 };
+
+ZForwardingTable& generation_forwarding_table(Generation generation);
+ZForwarding* forwarding_for_page(const ZPage* page);
+MAddress forwarding_find(Generation generation, MAddress from);
 
 } // namespace MapleRuntime
 

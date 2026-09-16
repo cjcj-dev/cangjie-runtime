@@ -57,7 +57,7 @@ void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expec
 }
 
 ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Retire site)
-    : owner(ForwardingTable::RetainPageOwner(region))
+    : owner(forwarding_for_page(region))
 {
     (void)site;
     if (region == nullptr) return;
@@ -82,7 +82,7 @@ void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
     // Legacy page cleanup runs inside the completion owner itself.
     if (CurrentPageWork() == forwarding || forwarding->is_done()) return;
     auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetRelocationRequestQueue();
-    const auto request = queue.Add(ForwardingTable::Owner(forwarding));
+    const auto request = queue.Add(ZForwarding*(forwarding));
     CHECK_DETAIL(request.accepted, "forwarding wait requires a page task");
     (void)queue.Wait(request.request);
 }

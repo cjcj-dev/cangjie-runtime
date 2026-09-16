@@ -860,7 +860,7 @@ BaseObject* CopyCollector::ResolveCurrentValueRoot(BaseObject* value, const void
     // Stored roots still need remapping using their source page's generation,
     // which can differ from the generation currently visiting the roots.
     (void)generation;
-    const auto forwarding = ForwardingTable::RetainPageOwner(
+    const auto forwarding = forwarding_for_page(
         Heap::page(reinterpret_cast<MAddress>(value)));
     BaseObject* current = value;
     if (forwarding) {

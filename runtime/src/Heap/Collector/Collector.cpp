@@ -56,14 +56,9 @@ const char* HandVerdictName(HandVerdict verdict)
     return "Unknown";
 }
 
-const char* ToAnswerName(ForwardingTable::ToAnswer answer)
+const char* ToAnswerName(int)
 {
-    switch (answer) {
-        case ForwardingTable::ToAnswer::ArmedHit: return "armed_hit";
-        case ForwardingTable::ToAnswer::ArmedMiss: return "armed_miss";
-        case ForwardingTable::ToAnswer::Unarmed: return "unarmed";
-    }
-    return "unknown";
+    return "table";
 }
 
 class BoundedDiagnosticBuffer {
@@ -173,8 +168,7 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         ? __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED)
         : 0;
     const HandVerdict verdict = ClassifyRawHeader(rawHeader);
-    const ForwardingTable::NeverInstalledSnapshot snapshot =
-        ForwardingTable::CaptureNeverInstalledSnapshot(address);
+    (void)address;
 
     ZPage* region = (target != nullptr && Heap::IsHeapAddress(target))
         ? Heap::page(address)
@@ -198,42 +192,11 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
     }
     char carriers[6144];
     BoundedDiagnosticBuffer carrierText(carriers, sizeof(carriers));
-    carrierText.Append("[");
-    for (size_t i = 0; i < snapshot.carrierCount; ++i) {
-        const ForwardingTable::CarrierIdentity& carrier = snapshot.carriers[i];
-        const bool sameIncarnation = region != nullptr && carrier.start == regionStart &&
-            carrier.fromPageLifeId != 0 && carrier.fromPageLifeId == currentLife;
-        carrierText.Append(
-            "%s{table_id=%#zx,start=%#zx,size=%zu,table_generation=%u,"
-            "from_page_epoch=%llu,lifeId=%llu,answer=%s,epoch_delta=",
-            i == 0 ? "" : ",", static_cast<size_t>(carrier.tableId),
-            static_cast<size_t>(carrier.start), carrier.size,
-            static_cast<unsigned>(carrier.tableGeneration),
-            static_cast<unsigned long long>(carrier.fromPageEpoch),
-            static_cast<unsigned long long>(carrier.fromPageLifeId),
-            ToAnswerName(carrier.answer));
-        if (sameIncarnation) {
-            const int64_t delta = static_cast<int64_t>(currentEpoch) -
-                static_cast<int64_t>(carrier.fromPageEpoch);
-            carrierText.Append("%lld}", static_cast<long long>(delta));
-        } else if (region != nullptr && carrier.fromPageLifeId != 0) {
-            carrierText.Append("n/a(reused)}");
-        } else {
-            carrierText.Append("n/a(no-incarnation)}");
-        }
-    }
-    carrierText.Append("]");
+    carrierText.Append("[]");
 
     char receipts[2048];
     BoundedDiagnosticBuffer receiptText(receipts, sizeof(receipts));
-    receiptText.Append("[");
-    for (size_t i = 0; i < snapshot.reverseCount; ++i) {
-        const ForwardingTable::ReverseReceiptIdentity& receipt = snapshot.reverseReceipts[i];
-        receiptText.Append("%s{table_id=%#zx,from=%#zx}",
-                           i == 0 ? "" : ",", static_cast<size_t>(receipt.tableId),
-                           static_cast<size_t>(receipt.from));
-    }
-    receiptText.Append("]");
+    receiptText.Append("[]");
 
     std::fprintf(
         stderr,
@@ -252,9 +215,9 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         static_cast<size_t>(witnessStart), static_cast<unsigned long long>(witnessEpoch),
         static_cast<unsigned long long>(witnessLife),
         witnessEpochDelta,
-        snapshot.carrierTotal, snapshot.carrierCount, snapshot.carrierOverflow ? 1u : 0u, carriers,
-        snapshot.reverseTotal, snapshot.reverseCount, snapshot.reverseOverflow ? 1u : 0u, receipts,
-        snapshot.scanOverflow ? 1u : 0u,
+        0zu, 0zu, 0u, carriers,
+        0zu, 0zu, 0u, receipts,
+        0u,
         (carrierText.Truncated() || receiptText.Truncated()) ? 1u : 0u);
     (void)std::fflush(stderr);
     return event;
@@ -272,9 +235,9 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         ? Heap::page(from)
         : nullptr;
     const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
-    const ForwardingTable::LookupResult lookup = canLookup
-        ? ForwardingTable::LookupTo(from, Heap::GetHeap().GetCollector().ObjectGeneration(target))
-        : ForwardingTable::LookupResult{};
+    const MAddress lookupTo = canLookup
+        ? forwarding_find(Heap::GetHeap().GetCollector().ObjectGeneration(target), from)
+        : 0;
     // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
     // gc_unit other-vm children, have CollectorResources but no CollectorProxy target to query.
     const unsigned gcPhase = Heap::GetHeap().GetCollectorResources().IsGcStarted()
@@ -302,11 +265,11 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
                  static_cast<void*>(region),
                  region != nullptr ? static_cast<unsigned>(0u) : 0xffu,
                  region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
-                 lookup.currentMembership ? 1u : 0u,
-                 static_cast<size_t>(lookup.tableId),
-                 static_cast<unsigned long long>(lookup.fromPageEpoch),
-                 static_cast<unsigned long long>(lookup.fromPageLifeId),
-                 static_cast<unsigned>(lookup.answer),
+                  lookupTo != 0 ? 1u : 0u,
+                  static_cast<size_t>(0),
+                  0ull,
+                  0ull,
+                  0u,
                  gcPhase);
     (void)fflush(stderr);
     (void)fflush(stdout);

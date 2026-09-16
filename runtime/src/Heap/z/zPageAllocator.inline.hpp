@@ -353,7 +353,7 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
         }
         if (!selected.is_request()) {
             ZPage* region = static_cast<ZPage*>(selected.ordinary);
-            regionManager.ForwardClaimedPage<G>(region, ForwardingTable::RetainPageOwner(region));
+            regionManager.ForwardClaimedPage<G>(region, forwarding_for_page(region));
             continue;
         }
 
@@ -362,7 +362,7 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
         // lose the forwarding claim. This claimant still owns the page task.
         (void)fromRegionList.TryDeleteRegion(region);
         regionManager.ForwardClaimedPage<G>(region,
-            ForwardingTable::RetainPageOwner(region), true);
+            forwarding_for_page(region), true);
     }
 }
 

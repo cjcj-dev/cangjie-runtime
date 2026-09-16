@@ -41,8 +41,8 @@ public:
         }
     private:
         friend class RelocationRequestQueue;
-        explicit Request(ForwardingTable::Owner value) : forwarding(std::move(value)) {}
-        ForwardingTable::Owner forwarding;
+        explicit Request(ZForwarding* value) : forwarding(std::move(value)) {}
+        ZForwarding* forwarding;
     };
 
     using Handle = std::shared_ptr<Request>;
@@ -68,7 +68,7 @@ public:
     // generation would leave a waiter with no completion owner.
     void BeginWorkers(size_t workers);
     EnqueueResult Add(void* owner, MAddress from);
-    EnqueueResult Add(ForwardingTable::Owner forwarding);
+    EnqueueResult Add(ZForwarding* forwarding);
     MAddress Wait(const Handle& request);
 
     // Wait for the canonical forwarding completion. Always returns zero;

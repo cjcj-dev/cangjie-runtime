@@ -113,7 +113,7 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
     region->PrepareForwardableRegion<Generation::Old>();
-    ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration());
+    ForwardingEntries* entries = generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
     }
@@ -356,7 +356,7 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
     GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
-    auto owner = ForwardingTable::RetainPageOwner(fx.region0);
+    auto owner = forwarding_for_page(fx.region0);
     GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
     RegionList empty("gc-unit-claimed-page");
@@ -378,7 +378,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
     GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
-    auto owner = ForwardingTable::RetainPageOwner(fx.region0);
+    auto owner = forwarding_for_page(fx.region0);
     GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
     RegionList empty("gc-unit-external-owner");

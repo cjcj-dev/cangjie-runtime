@@ -289,7 +289,7 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
                      publication, reinterpret_cast<MAddress>(route.from),
                      reinterpret_cast<MAddress>(route.to)),
                  reinterpret_cast<MAddress>(route.to));
-    GC_EXPECT_EQ(ForwardingTable::RetainPageOwner(route.source)->find(reinterpret_cast<MAddress>(route.from)),
+    GC_EXPECT_EQ(forwarding_for_page(route.source)->find(reinterpret_cast<MAddress>(route.from)),
                  reinterpret_cast<MAddress>(route.to));
 
     return route;
@@ -788,7 +788,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
-    ForwardingTable::ResetRelocationSet(Generation::Young);
+    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
     const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
     const bool independentAfterCoverage =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);

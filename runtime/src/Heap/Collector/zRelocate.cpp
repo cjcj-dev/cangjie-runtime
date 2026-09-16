@@ -176,9 +176,9 @@ void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before)
         return;
     }
     const uintptr_t after = raw(root.LoadPlain());
-    ZForwarding* old = ForwardingTable::get(before, Generation::Old);
+    ZForwarding* old = generation_forwarding_table(Generation::Old).get(before);
     if (old != nullptr && !old->is_claimed() && !old->is_done() && old->find(before) == 0 &&
-        !ForwardingTable::EntriesArmed(before, Generation::Young) &&
+        !(generation_forwarding_table(Generation::Young).get(before) != nullptr) &&
         Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD) == GCPhase::GC_PHASE_POST_TRACE) {
         g_remapYoungRootsOldPendingVisits.fetch_add(1, std::memory_order_relaxed);
     }

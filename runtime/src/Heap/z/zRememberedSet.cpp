@@ -267,7 +267,7 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     records.reserve(expectedRecords);
 
     auto shouldScanPage = [](MAddress slot) -> bool {
-        ZForwarding* forwarding = ForwardingTable::GetCovering(slot, Generation::Old);
+        ZForwarding* forwarding = generation_forwarding_table(Generation::Old).get(slot);
         if (forwarding == nullptr) {
             return true;
         }

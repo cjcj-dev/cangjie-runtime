@@ -207,7 +207,8 @@ public:
 
     const ZForwarding::FromPageView* GetFromPageView() const
     {
-        return ForwardingTable::GetFromPageView(const_cast<ZPage*>(this));
+        ZForwarding* forwarding = forwarding_for_page(const_cast<ZPage*>(this));
+        return forwarding == nullptr ? nullptr : forwarding->from_page_view(GetRegionLifeId());
     }
 
     bool HasFromPageMetadata() const;
@@ -506,9 +507,9 @@ public:
     // released or claimed — the late reader must not touch from-side state.
     class RetainScope {
     public:
-        explicit RetainScope(ZPage* region) : RetainScope(ForwardingTable::RetainPageOwner(region)) {}
-        explicit RetainScope(ForwardingTable::Owner forwarding)
-            : owner(std::move(forwarding)), region(owner ? owner->page() : nullptr),
+        explicit RetainScope(ZPage* region) : RetainScope(forwarding_for_page(region)) {}
+        explicit RetainScope(ZForwarding* forwarding)
+            : owner(forwarding), region(owner ? owner->page() : nullptr),
               retained(owner && owner->retain_page())
         {
             CHECK(!retained || owner->page_life_current());
@@ -523,8 +524,8 @@ public:
         }
         bool ok() const { return retained; }
         bool covers(ZPage* page) const { return retained && region == page; }
-        ZForwarding* forwarding() const { return owner.get(); }
-        ForwardingTable::Owner HoldForwarding() const { return owner; }
+        ZForwarding* forwarding() const { return owner; }
+        ZForwarding* HoldForwarding() const { return owner; }
 
         RetainScope(const RetainScope&) = delete;
         RetainScope& operator=(const RetainScope&) = delete;
@@ -532,7 +533,7 @@ public:
         RetainScope& operator=(RetainScope&&) = delete;
 
     private:
-        ForwardingTable::Owner owner;
+        ZForwarding* owner;
         ZPage* region;
         bool retained;
     };
@@ -574,7 +575,7 @@ public:
         {
             if (!retiring) return;
             owner->release_page();
-            if (ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();
+            if (ZForwardingLife::CurrentPageWork() != owner) owner->mark_done();
         }
 
         InPlaceClaimScope(const InPlaceClaimScope&) = delete;
@@ -583,7 +584,7 @@ public:
         InPlaceClaimScope& operator=(InPlaceClaimScope&&) = delete;
 
     private:
-        ForwardingTable::Owner owner;
+        ZForwarding* owner;
         bool retiring{ false };
     };
 

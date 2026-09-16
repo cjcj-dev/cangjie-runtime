@@ -33,7 +33,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     const auto result = ForwardingTable::LookupTo(from, generation);
     GC_EXPECT_TRUE(result.answer == ForwardingTable::ToAnswer::ArmedMiss);
     GC_EXPECT_EQ(result.to, static_cast<MAddress>(0));
-    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, generation) != nullptr);
+    GC_EXPECT_TRUE(generation_forwarding_table(generation).get(from) != nullptr);
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)

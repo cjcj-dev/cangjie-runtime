@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zRelocationSet.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/WCollector/WCollector.h"
 
@@ -104,9 +105,10 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
         MAddress field;
     };
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    ForwardingTable::VisitAll(Generation::Old, [&](ZForwarding* forwarding) {
+    ZRelocationSetIterator iter(&Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).relocation_set());
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
         if (forwarding == nullptr) {
-            return;
+            continue;
         }
         if (forwarding->retain_page()) {
             forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
@@ -150,7 +152,7 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
             });
         }
         ZVerify::AfterScan(forwarding);
-    });
+    }
 }
 
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
