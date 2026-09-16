@@ -9,33 +9,21 @@
 
 #include <cstddef>
 #include <functional>
+#include <mutex>
 
 #include "Common/TypeDef.h"
+#include "Heap/z/zAddress.hpp"
 
 namespace MapleRuntime {
 class Collector;
 class RememberedSet;
 
-// Compile-time switch (ZGC ZBufferStoreBarriers).
 constexpr bool kBufferStoreBarriers = true;
 constexpr size_t kStoreBarrierBufferLength = 32;
 
-// ZGC ZStoreBarrierEntry is (p, prev), with a parallel _base_pointers array.
-// Before relocation destroys the page liveness map, ZRelocate installs the base
-// object for every pending p; a phase flush then relocates the base and rebuilds
-// p at the same field offset (zStoreBarrierBuffer.cpp:52-102,130-153;
-// zRelocate.cpp:1048-1080,1289-1296).  Keeping only p is not sufficient: a
-// pending entry may still name a from-space holder when it is consumed.
 struct StoreBarrierEntry {
     MAddress p = 0;
-    BaseObject* pBase = nullptr;
-    size_t pOffset = 0;
     zpointer prev = zpointer::null;
-
-    MAddress Remap(BaseObject* remappedBase) const
-    {
-        return remappedBase == nullptr ? p : reinterpret_cast<MAddress>(remappedBase) + pOffset;
-    }
 };
 
 #if defined(MRT_GC_UNIT_TESTS)
@@ -50,43 +38,59 @@ using StoreBarrierFlushObserver = void (*)(StoreBarrierFlushEvent, const StoreBa
 class StoreBarrierBuffer {
 public:
     StoreBarrierBuffer();
-    void Initialize(uintptr_t color) { lastProcessedColor = color; }
+    void Initialize(uintptr_t color);
 
     bool IsEmpty() const;
     size_t Pending() const { return kStoreBarrierBufferLength - current; }
     size_t Current() const;
-    // zVerify.cpp:576-596; caller holds the safepoint excluding buffer writers.
     void VisitEntries(const std::function<void(const StoreBarrierEntry&)>& visitor) const
     {
         for (size_t i = current; i < kStoreBarrierBufferLength; ++i) { visitor(buffer[i]); }
     }
 
     static constexpr size_t Capacity() { return kStoreBarrierBufferLength; }
+    static StoreBarrierBuffer* buffer_for_store(bool heal);
 
     void Add(MAddress fieldAddress, BaseObject* fieldBase, RememberedSet& rs);
     void Add(MAddress fieldAddress, zpointer prev, RememberedSet& rs);
     void Add(MAddress fieldAddress, BaseObject* fieldBase, zpointer prev, RememberedSet& rs);
     void Flush(RememberedSet& rs);
-    // Test-only: drop pending without Record. Used to prove Flush-before-Drain.
+    void Flush(RememberedSet& rs, Collector& collector);
     void Discard();
+    void install_base_pointers();
+    void on_new_phase();
+    bool is_in(MAddress p) const;
 
 #if defined(MRT_TESTABLE_INTERNALS)
     uintptr_t LastProcessedColorForTest() const;
 #endif
 #if defined(MRT_GC_UNIT_TESTS)
     static void SetFlushObserverForTest(StoreBarrierFlushObserver observer);
+    StoreBarrierEntry buffer[kStoreBarrierBufferLength] {};
+    size_t current;
 #endif
 
 private:
-    void Flush(RememberedSet& rs, Collector& collector);
-    void MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs, Collector& collector,
-                         bool phaseChanged);
+    void clear();
+    void install_base_pointers_inner();
+    void on_new_phase_relocate(size_t i);
+    void on_new_phase_remember(size_t i);
+    void on_new_phase_mark(size_t i);
+    bool is_old_mark() const;
+    bool stored_during_old_mark() const;
 
+#if !defined(MRT_GC_UNIT_TESTS)
     StoreBarrierEntry buffer[kStoreBarrierBufferLength] {};
     size_t current;
+#endif
     uintptr_t lastProcessedColor;
+    uintptr_t lastInstalledColor;
+    std::mutex basePointerLock;
+    zaddress_unsafe basePointers[kStoreBarrierBufferLength] {};
 };
+
 } // namespace MapleRuntime
 
 #include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/z/zStoreBarrierBuffer.inline.hpp"
 #endif

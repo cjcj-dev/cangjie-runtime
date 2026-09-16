@@ -816,29 +816,14 @@ void ZBarrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fiel
 
 void ZBarrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref, zpointer prev)
 {
-    // ZZBarrier::heap_store_slow_path (zBarrier.cpp:253-261): buffer (p, prev)
-    // when possible; otherwise mark(addr) and remember(p) directly.
-    const bool heapSlot = Heap::IsHeapAddress(fieldAddress);
-    // ZStoreBarrierBuffer::make_load_good (zStoreBarrierBuffer.cpp:121-140)
-    // requires a heap base. Otherwise use the existing mark-and-remember path.
-    if (kBufferStoreBarriers && heapSlot && Heap::IsHeapAddress(obj) &&
-        !IsGcThread() && Mutator::GetMutator() != nullptr) {
-        ThreadLocal::GetGCData().storeBarrierBuffer->Add(fieldAddress, obj, prev, Heap::GetHeap().GetRememberedSet());
+    (void)obj;
+    (void)ref;
+    StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false);
+    if (buffer != nullptr) {
+        buffer->Add(fieldAddress, prev, Heap::GetHeap().GetRememberedSet());
         return;
     }
-    // addr in ZGC's heap_store_slow_path is make_load_good(prev), not the
-    // incoming value (zBarrier.inline.hpp:324-334,695-705).
-    if (!is_null(prev)) {
-        RefField<> previous(prev);
-        const ForwardingProvenance provenance{
-            ForwardingHolderKind::HeapRef, obj, reinterpret_cast<const void*>(fieldAddress)
-        };
-        Heap::GetHeap().GetCollector().MarkObjectIfActive(Heap::GetHeap().GetCollector().make_load_good(previous, provenance));
-    }
-    (void)ref;
-    if (heapSlot && !RegionInfo::GetRegionInfoAt(fieldAddress)->IsYoungRegion()) {
-        Heap::GetHeap().GetRememberedSet().Record(fieldAddress, true);
-    }
+    mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));
 }
 
 void ZBarrier::store_barrier_on_heap_oop_field(volatile zpointer* p, bool heal)

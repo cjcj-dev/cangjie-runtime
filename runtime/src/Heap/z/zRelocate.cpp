@@ -30,6 +30,7 @@
 
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/z/zThreadLocalData.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
@@ -381,8 +382,9 @@ bool WCollector::Preforward()
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
         MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
-        // zGeneration.cpp:old relocate_start flips only the old remap epoch.
-        // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
+        ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+            data.storeBarrierBuffer->install_base_pointers();
+        });
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         StartRelocationTasks(GCCycleGeneration::OLD);
@@ -952,6 +954,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
+                ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+                    data.storeBarrierBuffer->install_base_pointers();
+                });
                 ZGlobalsPointers::flip_young_relocate_start();
                 ZVerify::OnColorFlip();
             }
