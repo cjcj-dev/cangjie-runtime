@@ -68,7 +68,7 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TracingCollector::WorkStack workStack;
+    WorkStack workStack;
     collector.DiscoverWeakReference(fx.obj0, workStack);
 
     GC_EXPECT_TRUE(workStack.empty());
@@ -1049,7 +1049,7 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     auto fn = P1Entry(false, false, false, false);
     fn(&cycle, from_object(fx.obj0));
     fn(&cycle, from_object(fx.obj0));
-    TracingCollector::WorkStack work;
+    WorkStack work;
     std::vector<BaseObject*> reached;
     publication.FollowYoung(work, reached);
     std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu\n", reached.size(),

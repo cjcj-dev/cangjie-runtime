@@ -24,7 +24,6 @@ set(SRC_LIST
     "TracingCollector.cpp"
     "../z/zRootsIterator.cpp"
     "../z/zMarkStack.cpp"
-    "MarkStripe.cpp"
     "../z/zMarkingSMR.cpp"
     "../z/zMarkCache.cpp"
     "TaskQueue.cpp"

@@ -62,7 +62,7 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     mark.collector.MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     GC_EXPECT_EQ(mark.YoungPending(), 1u);
-    TracingCollector::WorkStack work;
+    WorkStack work;
     std::vector<BaseObject*> reached;
     GC_EXPECT_TRUE(mark.FollowYoung(work, reached));
     GC_EXPECT_TRUE(work.empty());

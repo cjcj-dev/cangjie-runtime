@@ -11,8 +11,10 @@
 #include <limits>
 
 #include <algorithm>
+#include <atomic>
 #include <new>
 #include <type_traits>
+#include <vector>
 
 #include "Base/Log.h"
 #include "Heap/z/zPage.hpp"
@@ -22,9 +24,18 @@ namespace {
 constexpr size_t FIRST_STACK_CAPACITY = 128;
 constexpr size_t REGULAR_STACK_CAPACITY = 512;
 
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<MarkStripeStack::StorageObserver> storageObserver{nullptr};
+std::atomic<MarkClosureObserver> g_markClosureObserver{nullptr};
+#endif
 } // namespace
 
-#include "Heap/Collector/MarkStripe.h"
+#if defined(MRT_TESTABLE_INTERNALS)
+void MarkStripeStack::SetStorageObserver(StorageObserver observer)
+{
+    storageObserver.store(observer, std::memory_order_release);
+}
+#endif
 
 MarkStripeStack* MarkStripeStack::Create(bool firstStack)
 {
@@ -283,6 +294,20 @@ bool MarkStripeStackList::IsEmpty() const { return head.load(std::memory_order_a
 size_t MarkStripe::Population() const { return published.Length() + overflowed.Length(); }
 
 size_t MarkStripeSet::NStripes() const { return nstripesMask.load(std::memory_order_relaxed) + 1; }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void SetMarkClosureObserverForTest(MarkClosureObserver observer)
+{
+    g_markClosureObserver.store(observer, std::memory_order_release);
+}
+void ObserveMarkClosureForTest(const std::vector<BaseObject*>* objects)
+{
+    auto observer = g_markClosureObserver.load(std::memory_order_acquire);
+    if (observer != nullptr) {
+        observer(objects);
+    }
+}
+#endif
 
 } // namespace MapleRuntime
 

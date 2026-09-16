@@ -624,7 +624,7 @@ extern "C" int p2SlowFieldInputExercise()
             auto& youngStacks = collector.YoungMark()->Stacks();
             const size_t youngBefore = youngStacks.Population();
             const size_t oldBefore = collector.MajorMark()->Stacks().Population();
-            TracingCollector::WorkStack work;
+            WorkStack work;
             inputTask = true;
             collector.TraceRefField(strongHolder, Slot(strongHolder), work, false);
             collector.TraceRefField(finalHolder, Slot(finalHolder), work, true);

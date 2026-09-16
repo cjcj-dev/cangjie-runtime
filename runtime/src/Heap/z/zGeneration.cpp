@@ -371,7 +371,7 @@ void WCollector::DoYoungGarbageCollection()
     auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER(ZStatPhases::PYoungRootEnum);
-        (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngCycle.MarkPtr());
+        (void)youngCycle.Mark().Flush();
         VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
@@ -380,7 +380,7 @@ void WCollector::DoYoungGarbageCollection()
                 }
             }
             PushYoungObject(object, workStack, "minor_root");
-        }, [&workStack, &currentMinorRoots](BaseObject* object) {
+        }, [this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (!Heap::IsHeapAddress(object)) {
                 return;
             }
@@ -388,7 +388,7 @@ void WCollector::DoYoungGarbageCollection()
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
             }
-            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false));
+            PushYoungObject(object, workStack, "minor_root");
         }, stackScanEpoch);
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), youngCycle.Mark());
@@ -792,7 +792,8 @@ bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRoo
     ZVerify::BeforeZOperation();
     NoteMarkTerminatePause();
     const size_t before = stripes.Population();
-    const bool ended = oldCycle.Mark().TryEnd() && workStack.empty();
+    (void)workStack;
+    const bool ended = oldCycle.Mark().TryEnd();
     const size_t after = stripes.Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
     if (!ended) {

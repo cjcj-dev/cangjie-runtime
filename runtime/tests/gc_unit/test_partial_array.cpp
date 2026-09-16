@@ -39,7 +39,7 @@ namespace MapleRuntime {
 
 struct PartialArrayTestAccess {
     static void Push(const WCollector& collector, RefField<>* addr, size_t length,
-                     TracingCollector::WorkStack& workStack)
+                     WorkStack& workStack)
     {
         collector.PushPartialArray(addr, length, workStack);
     }
@@ -61,7 +61,7 @@ struct PartialArrayTestAccess {
         arm(heap);
     }
 
-    static void ReadPublished(WCollector& collector, TracingCollector::WorkStack& result)
+    static void ReadPublished(WCollector& collector, WorkStack& result)
     {
         auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
         auto& domain = heap.MajorMark() != nullptr ? *heap.MajorMark()
@@ -204,7 +204,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     SlotBuf buf(MarkPartialArray::MIN_LENGTH);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TracingCollector::WorkStack workStack;
+    WorkStack workStack;
     RefField<>* const chunk = reinterpret_cast<RefField<>*>(buf.slots);
     for (size_t i = 0; i < MarkPartialArray::MIN_LENGTH; ++i) {
         chunk[i].StoreColoured(zpointer::null);

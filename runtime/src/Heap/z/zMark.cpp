@@ -724,14 +724,13 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         }
         return;
     }
-    if (region->IsYoungRegion() && !region->is_object_marked(from_object(object), finalizable)) {
-        // ZMark::mark_object gc_thread arm (zMark.inline.hpp:58-73): mark before
-        // push; the first-live claim travels with the entry.
-        bool firstLive = false;
-        const bool already = !region->mark_object(from_object(object), finalizable, firstLive);
-        if (!already) {
-            workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(object))), false, firstLive, true, finalizable));
-        }
+    (void)workStack;
+    if (finalizable) {
+        const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+            .MarkObjectIfActive<false, true, true, true>(from_object(object));
+    } else {
+        const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+            .MarkObjectIfActive<false, true, true, false>(from_object(object));
     }
 }
 
@@ -759,25 +758,6 @@ BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void*
 } // namespace
 
 namespace WCollectorInternal {
-void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStack, const char* origin,
-                       const void* slot, BaseObject* holder)
-{
-    BaseObject* admitted = AdmitYoungObject(object, origin, slot, holder);
-    if (admitted != nullptr) {
-        workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(admitted))), true, true, true, false));
-    }
-}
-
-void PushAdmittedYoung(const MarkStackEntry& entry, TracingCollector::WorkStack& workStack, const char* origin,
-                       const void* slot, BaseObject* holder)
-{
-    BaseObject* admitted =
-        AdmitYoungObject(to_object(ZOffset::address(to_zoffset(entry.object_address()))), origin, slot, holder);
-    if (admitted != nullptr) {
-        workStack.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(admitted))), entry.mark(), entry.inc_live(), entry.follow(),
-                                           entry.finalizable()));
-    }
-}
 } // namespace WCollectorInternal
 
 namespace {
@@ -875,25 +855,13 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     (void)reachableSlots;
     (void)weakSlots;
     (void)reachableSlotDomain;
+    (void)workStack;
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = ZPage::GetDispelGhostCount();
     ZWorkers& workersSet = GetWorkers(GCCycleGeneration::YOUNG);
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
     ZMark& domain = youngCycle.Mark();
-    MarkThreadLocalStacks& seed = domain.Stacks();
-    while (!workStack.empty()) {
-        const MarkStackEntry entry = workStack.back();
-        workStack.pop_back();
-        MAddress address = 0;
-        if (entry.partial_array()) {
-            size_t length = 0;
-            MarkPartialArray::Decode(entry, address, length);
-        } else {
-            address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(entry.object_address()))));
-        }
-        seed.Push(domain.Stripes(), domain.Stripes().StripeForAddress(address), entry, true);
-    }
-    (void)seed.Flush(domain.Stripes(), true);
+    (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, false);
     workersSet.run(&task);
     if (!collectorResources.GetYoungDriverPort().Abort().Poll()) {
@@ -944,9 +912,9 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();
 #endif
-    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngCycle.MarkPtr());
+    (void)youngCycle.Mark().Flush();
     do {
-        if (!workStack.empty() || !youngCycle.Mark().Stripes().IsEmpty()) {
+        if (!youngCycle.Mark().Stripes().IsEmpty() || !youngCycle.Mark().Stacks().IsEmpty()) {
             if (windowStats != nullptr) {
                 ++windowStats->closureCalls;
             }
@@ -956,7 +924,6 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
             return false;
         }
     } while (youngCycle.Mark().TryTerminateFlush());
-    CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
     return true;
 }
 
@@ -965,7 +932,8 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
     const size_t before = youngCycle.Mark().Stripes().Population();
-    const bool ended = youngCycle.Mark().TryEnd() && workStack.empty();
+    (void)workStack;
+    const bool ended = youngCycle.Mark().TryEnd();
     const size_t after = youngCycle.Mark().Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
     if (!ended) {
@@ -1151,24 +1119,12 @@ void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) 
 
 size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
 {
+    (void)workStack;
     ZWorkers& workersSet = GetWorkers(GCCycleGeneration::OLD);
     ZMark& domain = oldCycle.Mark();
     domain.BindWorkers(&workersSet);
     domain.BindAbort(&collectorResources.GetMajorDriverPort().Abort());
-    MarkThreadLocalStacks& seed = domain.Stacks();
-    while (!workStack.empty()) {
-        const MarkStackEntry entry = workStack.back();
-        workStack.pop_back();
-        MAddress address = 0;
-        if (entry.partial_array()) {
-            size_t length = 0;
-            MarkPartialArray::Decode(entry, address, length);
-        } else {
-            address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(entry.object_address()))));
-        }
-        seed.Push(domain.Stripes(), domain.Stripes().StripeForAddress(address), entry, true);
-    }
-    (void)seed.Flush(domain.Stripes(), true);
+    (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, partial);
     workersSet.run(&task);
     if (!partial && !collectorResources.GetMajorDriverPort().Abort().Poll()) {
@@ -1182,14 +1138,8 @@ void TracingCollector::TracingImpl(WorkStack& workStack)
 {
     // ZMark::mark_follow (zMark.cpp:944-952): join workers, check abort,
     // then flush producers. Stopped stripes never start another follow pass.
-    do {
-        if (!workStack.empty() || !oldCycle.Mark().Stripes().IsEmpty()) {
-            markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
-        }
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
-            return;
-        }
-    } while (FlushMarkProducers(oldCycle.MarkPtr()));
+    (void)workStack;
+    oldCycle.Mark().MarkFollow(false);
 }
 
 void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
@@ -1211,8 +1161,8 @@ void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
                 continue;
             }
         }
+        MarkOldObjectIfActive(exportObj, true);
         WorkStack exportSeed;
-        exportSeed.push_back(entry);
         markedObjectCount.fetch_add(RunMajorStripeMark(exportSeed), std::memory_order_relaxed);
 
         // ZMark::mark_and_follow (zMark.cpp:412-415) deduplicates GC liveness,

@@ -62,7 +62,7 @@ struct MarkPublicationFixture {
     {
         DrainDomain(*collector.MajorMark(), std::forward<Visitor>(visitor));
     }
-    bool FollowYoung(TracingCollector::WorkStack& work, std::vector<BaseObject*>& reached)
+    bool FollowYoung(WorkStack& work, std::vector<BaseObject*>& reached)
     {
         WCollector::MinorSlotSet slots;
         WCollector::MinorSlotSet weakSlots;

@@ -68,7 +68,7 @@ struct RelocationReceiptTestAccess {
     static void DrainYoungRootWork(WCollector& collector)
     {
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.YoungMark());
-        TracingCollector::WorkStack work;
+        WorkStack work;
         std::vector<BaseObject*> reachable;
         WCollector::MinorSlotSet slots;
         WCollector::MinorSlotSet weak;

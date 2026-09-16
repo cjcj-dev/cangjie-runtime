@@ -305,12 +305,6 @@ public:
     static void RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
 #endif
     static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp);
-    // Types, so that we don't confuse root sets and working stack.
-    // The policy is: we simply `push_back` into root set,
-    // but we use Enqueue to add into work stack.
-    using RootSet = MarkStack<MarkStackEntry>;
-    using WorkStack = MarkStack<MarkStackEntry>;
-    using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
 #if defined(MRT_TESTABLE_INTERNALS)
     // Observers see the product result after dispatch; none supplies work.
     // Static storage keeps the instance layout identical in both build shapes.
