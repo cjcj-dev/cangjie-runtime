@@ -809,6 +809,24 @@ zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer
     return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Phantom));
 }
 
+zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
+        return barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
+                       ColorMarkGood, p, o, false);
+    }
+    return load_barrier_on_oop_field_preloaded(p, o);
+}
+
+bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)
+{
+    CHECK_DETAIL(Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked(),
+                 "phantom clean is only valid when resurrection is blocked");
+    const zpointer o = load_atomic(p);
+    return is_null(barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
+                           ColorMarkGood, p, o, true));
+}
+
 void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
 {
     for (size_t i = 0; i < length; ++i) {
