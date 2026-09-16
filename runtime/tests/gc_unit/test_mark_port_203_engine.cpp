@@ -327,3 +327,21 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     GC_EXPECT_TRUE(resumed == ZMark::Result::Completed);
     GC_EXPECT_EQ(followed, count);
 }
+
+// ZMark::try_end (zMark.cpp:954-971): true iff stripes empty and !resurrected
+// after a terminate flush of thread-local stacks.
+GC_TEST(MarkPort203Engine, TryEndFalseWhenResurrectedOrUnflushed)
+{
+    MapleRuntime::GcUnit::B09RuntimeFixture runtime;
+    MapleRuntime::GcUnit::WorkerFixture domainWorker;
+    ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
+    domain.PrepareWork(1);
+    GC_EXPECT_TRUE(domain.Stripes().IsEmpty());
+    GC_EXPECT_TRUE(!domain.Terminate().Resurrected());
+    GC_EXPECT_TRUE(domain.TryEnd());
+
+    domain.Terminate().SetResurrected(true);
+    GC_EXPECT_TRUE(!domain.TryEnd());
+    domain.Terminate().SetResurrected(false);
+    GC_EXPECT_TRUE(domain.TryEnd());
+}

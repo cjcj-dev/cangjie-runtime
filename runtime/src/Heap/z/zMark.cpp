@@ -1139,13 +1139,12 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
     const size_t before = youngMark->Stripes().Population();
-    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMark.get());
+    const bool ended = youngMark->TryEnd() && workStack.empty();
     const size_t after = youngMark->Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
-    if (!workStack.empty() || !youngMark->Stripes().IsEmpty()) {
+    if (!ended) {
         return false;
     }
-    // zMark.cpp:973-989: successful mark-end verifies the current generation.
     MarkingStacks::VerifyAllEmpty(*youngMark);
     return true;
 }

@@ -783,10 +783,10 @@ bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRoo
     ZVerify::BeforeZOperation();
     NoteMarkTerminatePause();
     const size_t before = stripes.Population();
-    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMark.get());
+    const bool ended = majorMark->TryEnd() && workStack.empty();
     const size_t after = stripes.Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
-    if (!workStack.empty() || !stripes.IsEmpty()) {
+    if (!ended) {
         NoteMarkTerminateContinue(workStack.size() + stripes.Population());
         return false;
     }
