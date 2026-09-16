@@ -40,15 +40,11 @@ public:
     void free_node(MarkStripeStackListNode* node);
     std::atomic<MarkStripeStackListNode*>* hazard_ptr();
     friend class ZMark;
-#if defined(MRT_TESTABLE_INTERNALS)
     friend struct MarkingSMRTestAccess;
-#endif
 };
-#if defined(MRT_TESTABLE_INTERNALS)
 struct MarkingSMRTestAccess {
     static void reclaim(MarkingSMR& smr) { smr.reclaim(); }
     static size_t pending_count(const MarkingSMR& smr) { return smr.pending_count(); }
 };
-#endif
 } // namespace MapleRuntime
 #endif
