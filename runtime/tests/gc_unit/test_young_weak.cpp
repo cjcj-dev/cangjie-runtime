@@ -278,14 +278,14 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(route.source, route.from));
     RegionList selected("old-source-value-root");
     selected.PrependRegion(route.source);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
     route.source->PrepareForwardableRegion<Generation::Old>();
     route.from->SetStateCode(ObjectState::FORWARDED);
-    ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
+    ZForwarding* publication = forwarding_for_page(
         route.source, reinterpret_cast<MAddress>(route.from));
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(
+    GC_EXPECT_EQ(UNUSED_InsertMapping(
                      publication, reinterpret_cast<MAddress>(route.from),
                      reinterpret_cast<MAddress>(route.to)),
                  reinterpret_cast<MAddress>(route.to));
@@ -789,7 +789,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
     Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
-    const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
+    const auto afterCoverage = LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
     const bool independentAfterCoverage =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     std::fprintf(stderr,

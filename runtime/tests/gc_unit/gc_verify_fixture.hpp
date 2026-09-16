@@ -35,7 +35,7 @@ struct GcVerifyFixture : GcHeapFixture {
         region0->SetRegionListOwner(nullptr);
         RegionList selected("verify-source");
         selected.PrependRegion(region0);
-        CHECK(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+        CHECK(BeginForwardingArena(Generation::Old, selected));
         (void)selected.TakeHeadRegion();
         region0->PrepareForwardableRegion<Generation::Old>();
     }

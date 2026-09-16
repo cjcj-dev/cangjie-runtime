@@ -623,11 +623,11 @@ GC_TEST(YoungConc, LoadBarrierRemapsPreviousRelocationEpoch)
     const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
     // Install the selected generation set before borrowing its publication.
     fx.InstallPageOwner(fx.region0);
-    ForwardingTable::Publication publication =
-        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
+    ZForwarding* publication =
+        forwarding_for_page(fx.region0, from);
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, to), to);
-    publication = ForwardingTable::Publication();
+    GC_EXPECT_EQ(UNUSED_InsertMapping(publication, from, to), to);
+    publication = nullptr;
 
     auto* field = &HeapSlotAt<>(to + TYPEINFO_PTR_SIZE);
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
@@ -639,8 +639,8 @@ GC_TEST(YoungConc, LoadBarrierRemapsPreviousRelocationEpoch)
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(healed), to);
     GC_EXPECT_EQ(static_cast<unsigned>(Collector::JudgeHandOutTarget(healed)),
                  static_cast<unsigned>(HandVerdict::Usable));
-    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(healed), Generation::Young);
-    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
+    FwdLookup lookup = LookupTo(reinterpret_cast<MAddress>(healed), Generation::Young);
+    GC_EXPECT_TRUE(lookup.answer != FwdLookup::ArmedHit);
 }
 #endif
 

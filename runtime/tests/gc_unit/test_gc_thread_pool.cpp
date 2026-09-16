@@ -89,7 +89,7 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
     // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
     RegionList selected("runtime-workers-selected");
     selected.PrependRegion(region);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
     region->PrepareForwardableRegion<Generation::Old>();
     region->MarkForwardingDone();
@@ -110,7 +110,7 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
     RegionList selected("runtime-workers-selected");
     selected.PrependRegion(region);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
     region->PrepareForwardableRegion<Generation::Old>();
     ForwardingEntries* entries = generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart());

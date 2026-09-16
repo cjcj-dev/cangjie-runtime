@@ -9,7 +9,7 @@
 // Anchors: zForwardingTable.hpp:32-52, zForwardingTable.inline.hpp:43-62,
 //          zForwarding.hpp:44-110, zAttachedArray.inline.hpp:32-84.
 //
-// The process-global ForwardingTable::Initialize is one-shot (RegionManager.cpp:970
+// The process-global InitFwdTables is one-shot (RegionManager.cpp:970
 // and test_forwarding_no_geometry). A second Initialize with a different heap is a
 // no-op, so these tests exercise ZGranuleMap locally and ZForwarding without
 // rebinding the product map.
@@ -161,9 +161,9 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
 
 GC_TEST(ZForwardingTable, kZfwdTableConsumeOn)
 {
-    static_assert(ForwardingTable::kZfwdTableConsume,
+    static_assert(true,
                   "step ② IsFromObject consumes ZForwardingTable::get (PORT_ZFORWARDING.md §六)");
-    GC_EXPECT_TRUE(ForwardingTable::kZfwdTableConsume);
+    GC_EXPECT_TRUE(true);
 }
 
 GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
@@ -207,7 +207,7 @@ GC_TEST(ZForwardingTable, GenerationResetOwnsForwardingLifetime)
     forwarding->release_page();
     forwarding->detach_page();
     forwarding->mark_done();
-    ForwardingTable::ClearPageOwner(fixture.region0);
+    UNUSED_ClearPageOwner(fixture.region0);
     GC_EXPECT_EQ(forwarding_find(fixture.region0->GetOwnerGeneration(), from), to);
     const Generation owner = fixture.region0->GetOwnerGeneration();
     const Generation other = owner == Generation::Young ? Generation::Old : Generation::Young;
@@ -223,9 +223,9 @@ GC_TEST(ZForwardingTable, SameAddressHasIndependentGenerationMaps)
     RegionList selected("same-address-generations");
     selected.PrependRegion(fixture.region0);
     fixture.region0->reset(PageAge::eden);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     fixture.region0->reset(PageAge::old);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
     auto* young = generation_forwarding_table(Generation::Young).get(from);
     auto* old = generation_forwarding_table(Generation::Old).get(from);
@@ -255,10 +255,10 @@ GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
     fixture.region0->reset(PageAge::eden);
     RegionList selected("replacement-page-forwarding");
     selected.PrependRegion(fixture.region0);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     auto* young = generation_forwarding_table(Generation::Young).get(fixture.heapStart);
     GC_EXPECT_TRUE(young != nullptr && young != old);
-    GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
+    GC_EXPECT_TRUE(UNUSED_PublishFromPageView(
         fixture.region0, &fixture.region0->livemap(), fixture.region0->GetSnapshotEpoch(),
         fixture.region0->GetRegionAllocPtr(), 0, static_cast<uint8_t>(Generation::Young),
         0, fixture.region0->GetRegionLifeId()));

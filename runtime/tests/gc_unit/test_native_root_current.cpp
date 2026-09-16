@@ -159,7 +159,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
     RegionList selected("native-root-relocation");
     selected.PrependRegion(region);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
+    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
     // Invoke the explicit product instantiation, not a header-instantiated
     // fixture copy of the forwarding publication mechanism.
