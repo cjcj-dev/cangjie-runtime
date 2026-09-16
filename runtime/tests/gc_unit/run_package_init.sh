@@ -32,6 +32,12 @@ if [[ -z "${PACKAGE_INIT_ELF:-}" ]]; then
         -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" -I"$HEADERS" \
         "$SRC/package_init_image.cpp" -o "$OUT/libcj_package_init_fixture.so" > "$OUT/plugin.build.log" 2>&1 &
     pids+=("$!")
+    clang++ -std=gnu++17 -O0 -g -pthread -fno-rtti -fPIC -shared \
+        -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" -I"$ROOT/runtime/include" \
+        -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+        -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" -I"$HEADERS" \
+        "$SRC/package_init_image.cpp" -o "$OUT/libcj_package_init_unrelated.so" > "$OUT/plugin-unrelated.build.log" 2>&1 &
+    pids+=("$!")
     for source in gc_unit_main.cpp gc_cycle_sequence_fixture.cpp test_package_init.cpp; do
         object="$OUT/$source.o"
         objects+=("$object")

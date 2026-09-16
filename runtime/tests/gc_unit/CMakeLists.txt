@@ -127,7 +127,11 @@ endif()
 add_library(cj_package_init_fixture SHARED package_init_image.cpp)
 target_include_directories(cj_package_init_fixture PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
-add_dependencies(cj_gc_unit cj_package_init_fixture)
+add_library(cj_package_init_unrelated SHARED package_init_image.cpp)
+set_target_properties(cj_package_init_unrelated PROPERTIES OUTPUT_NAME cj_package_init_unrelated)
+target_include_directories(cj_package_init_unrelated PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
+add_dependencies(cj_gc_unit cj_package_init_fixture cj_package_init_unrelated)
 
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)

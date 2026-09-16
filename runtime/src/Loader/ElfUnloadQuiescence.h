@@ -31,6 +31,7 @@ public:
         struct Range { Uptr start; size_t size; bool executable; };
         Uptr metadata { 0 };
         Uptr identity { 0 };
+        U64 generation { 0 };
         std::vector<Range> ranges;
         bool Contains(Uptr address, bool codeOnly = false) const;
     };
@@ -116,7 +117,8 @@ public:
     };
 
     // Serializes the pending-task check and active-frame preflight with task
-    // submission/start. Hold this scope through the platform unload.
+    // submission/start. Public unload must drop this scope before the platform
+    // close; the fini callback re-establishes its own admission.
     class TaskAdmissionScope final {
     public:
         TaskAdmissionScope();
@@ -154,6 +156,10 @@ public:
     // Outside exclusive admission: owners must be able to admit dependencies
     // while a direct unload waits. Caller must reacquire and recheck afterwards.
     static void WaitForPendingTasks(Uptr imageAddress);
+    static bool BeginImageClosing(Uptr imageAddress);
+    static void AbortImageClosing(Uptr imageAddress);
+    static void CommitImageClosing(Uptr imageAddress);
+    static bool IsImageClosing(Uptr imageAddress);
     static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address);
@@ -182,6 +188,23 @@ public:
     static bool PackageReaderPausedForTesting();
     static void ReleasePackageReaderPauseForTesting();
     static void PausePackageReaderForTesting();
+    static void EnableDirectPreflightPauseForTesting();
+    static bool DirectPreflightPausedForTesting();
+    static void ReleaseDirectPreflightPauseForTesting();
+    static void PauseDirectPreflightForTesting();
+    static void EnablePublicPlatformPauseForTesting();
+    static bool PublicPlatformPausedForTesting();
+    static void ReleasePublicPlatformPauseForTesting();
+    static void PausePublicPlatformForTesting();
+    static bool PublicPlatformWaitHoldsStwForTesting();
+    static bool PublicPlatformWaitHoldsAdmissionForTesting();
+    static void NotePublicPlatformWaitForTesting(bool holdsStw, bool holdsAdmission);
+    static void ForcePublicHoldAcrossPlatformForTesting(bool enable);
+    static bool PublicHoldAcrossPlatformForTesting();
+    static void SkipImageClosingForTesting(bool enable);
+    static bool ImageClosingSkippedForTesting();
+    static void FailNextPlatformUnloadForTesting(bool enable);
+    static bool ConsumeFailedPlatformUnloadForTesting();
 #endif
 
 private:
@@ -196,6 +219,8 @@ private:
     static std::mutex& PendingTaskMutex();
     static std::condition_variable& PendingTaskCondition();
     static std::unordered_set<PendingTask*>& PendingTasks();
+    static std::mutex& ClosingMutex();
+    static std::unordered_set<Uptr>& ClosingIdentities();
     static Uptr ResolveImageIdentity(Uptr address);
     static std::shared_ptr<const ImageAddressMap> RegisteredImage(Uptr metadata);
     static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address);
