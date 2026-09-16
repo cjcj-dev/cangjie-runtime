@@ -8,6 +8,7 @@
 #define MRT_REGION_INFO_H
 
 #include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zPageType.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -43,6 +44,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zVirtualMemory.hpp"
 #include "Heap/z/zGranuleMap.hpp"
+#include "Heap/z/zPageTable.hpp"
 
 #include "Base/TimeUtils.h"
 #include "securec.h"
@@ -125,10 +127,38 @@ public:
     // ZPage::generation()->seqnum(), shared by all pages in that generation.
     uint64_t GetSnapshotEpoch() const;
     void ResetPageSequence();
+    void reset_seqnum() { ResetPageSequence(); }
     uint64_t BirthSequence() const { return __atomic_load_n(&metadata.birthSequence, __ATOMIC_ACQUIRE); }
     uint64_t OtherSequence() const { return __atomic_load_n(&metadata.otherSequence, __ATOMIC_ACQUIRE); }
+    uint32_t seqnum() const { return static_cast<uint32_t>(BirthSequence()); }
     bool IsAllocating() const;
     bool IsRelocatable() const;
+    bool is_allocating() const { return IsAllocating(); }
+    bool is_relocatable() const { return IsRelocatable(); }
+
+    ZPageType type() const { return _type; }
+    bool is_small() const { return _type == ZPageType::small; }
+    bool is_medium() const { return _type == ZPageType::medium; }
+    bool is_large() const { return _type == ZPageType::large; }
+    const char* type_to_string() const;
+    size_t object_alignment() const;
+    zoffset start() const { return _virtual.start(); }
+    zoffset_end end() const { return _virtual.end(); }
+    size_t size() const { return _virtual.size(); }
+    MAddress top() const { return GetRegionAllocPtr(); }
+    size_t remaining() const
+    {
+        return GetRegionEnd() > GetRegionAllocPtr() ? GetRegionEnd() - GetRegionAllocPtr() : 0;
+    }
+    size_t used() const { return GetRegionAllocatedSize(); }
+    RegionInfo* clone_for_promotion() const;
+    uintptr_t alloc_object(size_t size);
+    uintptr_t alloc_object_atomic(size_t size);
+    bool undo_alloc_object(uintptr_t addr, size_t size);
+    bool undo_alloc_object_atomic(uintptr_t addr, size_t size);
+    RegionInfo* reset(PageAge age);
+
+    RegionInfo(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
 
     uint8_t GetRegionLifeSeq() const
     {
@@ -334,7 +364,6 @@ public:
     };
 
     static std::vector<UnitSegment> unitSegments;
-    static ZGranuleMap<RegionInfo*> pageOwners;
 
     // zPageAllocator.hpp:166 ZSafeDelete<ZPage> _safe_destroy. The ABI keeps
     // page descriptors in the unit array (I6, PLAN §5), so the object whose
@@ -672,7 +701,7 @@ public:
     RegionType GetRegionType() const;
     UnitRole GetUnitRole() const { return static_cast<UnitRole>(metadata.unitRole); }
 
-    size_t GetUnitIdx() const { return RegionInfo::UnitInfo::GetUnitIdx(reinterpret_cast<const UnitInfo*>(this)); }
+    size_t GetUnitIdx() const { return FindUnitIndex(GetRegionStart()); }
 
     MAddress GetRegionStart() const;
 
@@ -1014,6 +1043,8 @@ private:
 
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;
     UnitMetadata metadata;
+    ZPageType _type = ZPageType::small;
+    ZVirtualMemory _virtual;
 };
 } // namespace MapleRuntime
 

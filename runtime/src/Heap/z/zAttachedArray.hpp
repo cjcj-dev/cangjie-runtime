@@ -31,6 +31,9 @@ public:
 
     static void* alloc(size_t length);
 
+    template <typename Allocator>
+    static void* alloc(Allocator* allocator, size_t length);
+
     static void free(ObjectT* obj);
 
     explicit ZAttachedArray(size_t length);

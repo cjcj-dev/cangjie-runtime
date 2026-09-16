@@ -6,6 +6,9 @@
 
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zInitialize.hpp"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/z/zPageTable.hpp"
 
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zDriver.hpp"
@@ -443,6 +446,28 @@ void RegionManager::StampCensusBoundaries()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
+RegionInfo* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr); }
+
+ZPageTable& Heap::page_table() { return ZPageTable::heap_table(); }
+
+bool Heap::is_in(MAddress addr)
+{
+    RegionInfo* p = page(addr);
+    return p != nullptr && p->is_in(to_zaddress(addr));
+}
+
+bool Heap::is_young(MAddress addr)
+{
+    RegionInfo* p = page(addr);
+    return p != nullptr && p->IsYoungRegion();
+}
+
+bool Heap::is_old(MAddress addr)
+{
+    RegionInfo* p = page(addr);
+    return p != nullptr && !p->IsYoungRegion();
+}
+
 // heapDumper.cpp: VM_HeapDumper::doit. The requesting thread executes the
 // safepoint operation; neither generation driver consumes inspector work.
 void Heap::DumpHeap(HeapDumpKind kind)

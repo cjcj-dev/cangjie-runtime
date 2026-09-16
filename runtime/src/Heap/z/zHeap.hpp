@@ -30,6 +30,8 @@ extern uintptr_t g_cjHeapRangeStart[];
 extern uintptr_t g_cjHeapRangeEnd[];
 }
 namespace MapleRuntime {
+class RegionInfo;
+class ZPageTable;
 class OopStorage;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
@@ -100,6 +102,12 @@ public:
     }
 
     static bool IsHeapAddress(const void* addr) { return IsHeapAddress(reinterpret_cast<MAddress>(addr)); }
+
+    static RegionInfo* page(MAddress addr);
+    static bool is_in(MAddress addr);
+    static bool is_young(MAddress addr);
+    static bool is_old(MAddress addr);
+    static ZPageTable& page_table();
 
 
     void DumpHeap(HeapDumpKind kind);

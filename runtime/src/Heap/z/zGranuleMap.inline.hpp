@@ -38,18 +38,31 @@ inline void ZGranuleMap<T>::put(zoffset offset, size_t size, T value)
 
 namespace MapleRuntime {
 template<typename T>
-inline bool ZGranuleMap<T>::compare_exchange(zoffset offset, T& expected, T desired)
+inline T ZGranuleMap<T>::get_acquire(zoffset offset) const
 {
-        return _map[index_for_offset(offset)].compare_exchange_strong(expected, desired, std::memory_order_release,
-                                                                      std::memory_order_acquire);
+        return _map[index_for_offset(offset)].load(std::memory_order_acquire);
     }
 }
 
 namespace MapleRuntime {
 template<typename T>
-inline T ZGranuleMap<T>::exchange(zoffset offset, T value)
+inline void ZGranuleMap<T>::release_put(zoffset offset, T value)
 {
-        return _map[index_for_offset(offset)].exchange(value, std::memory_order_acq_rel);
+        std::atomic_thread_fence(std::memory_order_release);
+        _map[index_for_offset(offset)].store(value, std::memory_order_relaxed);
+    }
+}
+
+namespace MapleRuntime {
+template<typename T>
+inline void ZGranuleMap<T>::release_put(zoffset offset, size_t size, T value)
+{
+        std::atomic_thread_fence(std::memory_order_release);
+        const size_t start = index_for_offset(offset);
+        const size_t count = size / _granule;
+        for (size_t i = 0; i < count; ++i) {
+            _map[start + i].store(value, std::memory_order_relaxed);
+        }
     }
 }
 

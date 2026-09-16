@@ -342,7 +342,14 @@ GC_TEST(ZIndexDistributorTest, page_table_parallel_iterator_emits_each_page_once
     table.put(static_cast<zoffset>((domain / 2) * granule), 2 * granule, &pages[1]);
     table.put(static_cast<zoffset>((domain - 1) * granule), granule, &pages[2]);
     std::vector<size_t> expected(3);
-    table.visit_unique([&](Page* page) { ++expected[page->id]; });
+    Page* last = nullptr;
+    for (size_t i = 0; i < table.size(); ++i) {
+        Page* page = table.at(i);
+        if (page != nullptr && page != last) {
+            ++expected[page->id];
+            last = page;
+        }
+    }
     std::vector<std::atomic<size_t>> actual(expected.size());
     for (auto& count : actual) {
         count.store(0);

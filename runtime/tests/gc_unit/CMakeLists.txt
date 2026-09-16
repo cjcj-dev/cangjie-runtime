@@ -51,6 +51,7 @@ set(GC_UNIT_SOURCES
     test_store_barrier_buffer.cpp
     test_barrier_old_atomic.cpp
     test_zPageAge.cpp
+    test_zPage.cpp
     test_zVirtualMemory.cpp
     test_zVirtualMemoryManager.cpp
     test_mapped_cache.cpp

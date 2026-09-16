@@ -60,7 +60,6 @@ RegionInfo* RegionInfo::NullRegion()
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 std::vector<RegionInfo::UnitSegment> RegionInfo::unitSegments;
-ZGranuleMap<RegionInfo*> RegionInfo::pageOwners;
 ZSafeDelete<RegionInfo::PageRetirement> RegionInfo::safeDestroy;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
@@ -276,6 +275,8 @@ void RegionInfo::ClearRelocationResiduals()
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zLiveMap.inline.hpp"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGlobals.hpp"
 
 namespace MapleRuntime {
 // ZPage::reset_seqnum (zPage.cpp:90-93), after owner selection and before publication.
@@ -302,4 +303,73 @@ RegionInfo::RegionInfo()
         metadata.allocPtr = reinterpret_cast<uintptr_t>(nullptr);
         metadata.regionEnd = reinterpret_cast<uintptr_t>(nullptr);
     }
+
+RegionInfo::RegionInfo(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
+    : _type(type), _virtual(vmem)
+{
+    metadata.allocPtr = untype(ZOffset::address_unsafe(vmem.start()));
+    metadata.regionEnd = metadata.allocPtr + vmem.size();
+    reset(age);
+}
+
+const char* RegionInfo::type_to_string() const
+{
+    switch (type()) {
+        case ZPageType::small:
+            return "Small";
+        case ZPageType::medium:
+            return "Medium";
+        case ZPageType::large:
+            return "Large";
+        default:
+            return "Unknown";
+    }
+}
+
+RegionInfo* RegionInfo::reset(PageAge age)
+{
+    SetYoungRegionFlag(age != PageAge::old);
+    SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
+    ResetPageSequence();
+    return this;
+}
+
+RegionInfo* RegionInfo::clone_for_promotion() const
+{
+    CHECK(IsYoungRegion());
+    RegionInfo* page = new RegionInfo(_type, PageAge::old, _virtual);
+    page->metadata.allocPtr = metadata.allocPtr;
+    page->metadata.regionEnd = metadata.regionEnd;
+    return page;
+}
+
+uintptr_t RegionInfo::alloc_object(size_t size)
+{
+    CHECK(is_allocating());
+    const size_t aligned = AlignUp<size_t>(size, object_alignment());
+    return Alloc(aligned);
+}
+
+uintptr_t RegionInfo::alloc_object_atomic(size_t size)
+{
+    CHECK(is_allocating());
+    const size_t aligned = AlignUp<size_t>(size, object_alignment());
+    return AtomicAlloc(aligned);
+}
+
+bool RegionInfo::undo_alloc_object(uintptr_t addr, size_t size)
+{
+    const size_t aligned = AlignUp<size_t>(size, object_alignment());
+    if (GetRegionAllocPtr() != addr + aligned) {
+        return false;
+    }
+    SetRegionAllocPtr(addr);
+    return true;
+}
+
+bool RegionInfo::undo_alloc_object_atomic(uintptr_t addr, size_t size)
+{
+    const size_t aligned = AlignUp<size_t>(size, object_alignment());
+    return UndoAllocObjectAtomic(addr, aligned);
+}
 }

@@ -99,10 +99,6 @@ public:
 
     void put(zoffset offset, size_t size, T value);
 
-    bool compare_exchange(zoffset offset, T& expected, T desired);
-
-    T exchange(zoffset offset, T value);
-
     // zGranuleMap.inline.hpp:104-114: raw slot address for callers that
     // treat a run of granules as an array (ZPhysicalMemoryManager pmem).
     const T* addr(zoffset offset) const;
@@ -112,20 +108,11 @@ public:
     size_t size() const;
     MAddress base() const;
 
-    template<typename Function>
-    void visit_unique(Function function) const
-    {
-        T last{};
-        for (size_t i = 0; i < _size; ++i) {
-            T value = at(i);
-            if (value != T() && value != last) {
-                function(value);
-                last = value;
-            }
-        }
-    }
-
     T at(size_t index) const;
+
+    T get_acquire(zoffset offset) const;
+    void release_put(zoffset offset, T value);
+    void release_put(zoffset offset, size_t size, T value);
 
 private:
     size_t index_for_offset(zoffset offset) const;
@@ -138,8 +125,6 @@ private:
 };
 
 } // namespace MapleRuntime
-
-#include "Heap/z/zPageTable.hpp"
 
 #include "Heap/z/zGranuleMap.inline.hpp"
 
