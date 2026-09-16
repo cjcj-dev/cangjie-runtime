@@ -52,7 +52,8 @@ GenerationCycle::GenerationCycle(GCCycleGeneration generation)
     : mark(std::make_unique<ZMark>(ZMarkStripesMax,
           generation == GCCycleGeneration::YOUNG ? MarkingStacks::MarkingGeneration::YOUNG
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
-      generation(generation)
+      generation(generation),
+      _relocation_set(this)
 {}
 
 GenerationCycle::~GenerationCycle() = default;
@@ -637,7 +638,7 @@ void WCollector::DoYoungGarbageCollection()
             ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
             return !region->IsYoungRegion() || IsMarkedObject<Generation::Young>(object);
         });
-        ForwardingTable::ResetRelocationSet(Generation::Young);
+        GetGenerationCycle(GCCycleGeneration::YOUNG).reset_relocation_set();
         space.GetRegionManager().ResetFlipPromotedPages();
     }
 

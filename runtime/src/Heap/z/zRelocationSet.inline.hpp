@@ -8,6 +8,8 @@
 #define MRT_RELOCATION_SET_INLINE_H
 
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 
 namespace MapleRuntime {
     template<Generation G>
@@ -63,8 +65,9 @@ inline void RegionManager::PrepareFromRegionList()
         // ZGeneration::select_relocation_set (zGeneration.cpp:205-225) has
         // already selected this generation. The arena's owner CHECK validates
         // that producer contract; do not silently repair its input here.
-        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(G, fromRegionList),
-                     "forwarding arena budget allocation failed");
+        Heap::GetHeap().GetCollector().GetGenerationCycle(
+            G == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)
+            .relocation_set().install_from_regions(fromRegionList);
         fromRegionList.VisitAllRegions([](ZPage* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
                  region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd());

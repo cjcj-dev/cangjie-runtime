@@ -6,6 +6,12 @@
 
 
 #include "Heap/WCollector/WCollector.h"
+#include "Heap/Allocator/RegionList.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zRelocationSet.hpp"
 
 #include <array>
 #include <atomic>
@@ -68,7 +74,7 @@ void WCollector::PostTrace()
     // zGeneration.cpp:1042 / :1131-1133: old resets its own previous set
     // after non-strong processing and before select. Young tables stay
     // until young's ResetRelocationSet.
-    ForwardingTable::ResetRelocationSet(Generation::Old);
+    Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).reset_relocation_set();
     // ZGenerationOld::collect (zGeneration.cpp:1044): stop after reset,
     // before selecting the next relocation set.
     if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
@@ -124,6 +130,85 @@ void RegionManager::ResetFlipPromotedPages()
 {
     std::lock_guard<std::mutex> lock(flipPromotedMutex);
     flipPromotedPages.clear();
+}
+
+ZRelocationSet::ZRelocationSet(ZGeneration* generation)
+    : _generation(generation),
+      _allocator(),
+      _forwardings(nullptr),
+      _nforwardings(0)
+{
+}
+
+ZWorkers* ZRelocationSet::workers() const { return _generation != nullptr ? _generation->Workers() : nullptr; }
+
+void ZRelocationSet::install(const ZRelocationSetSelector* selector) { (void)selector; }
+
+void ZRelocationSet::install_from_regions(RegionList& regions)
+{
+    size_t n = 0;
+    size_t budget = 0;
+    regions.VisitAllRegions([&](ZPage* region) {
+        ++n;
+        const size_t live = region->is_marked() ? region->live_objects() : (region->GetRegionSize() >> 3);
+        const size_t entries = ZForwarding::nentries(live);
+        size_t bytes = 0;
+        (void)ZForwarding::AttachedArray::allocation_size(entries, &bytes);
+        (void)ZForwardingAllocator::add_to_budget(bytes, &budget);
+    });
+    budget += n * sizeof(ZForwarding*);
+    _allocator.reset(budget);
+    _forwardings = static_cast<ZForwarding**>(_allocator.alloc(n * sizeof(ZForwarding*)));
+    _nforwardings = 0;
+    regions.VisitAllRegions([&](ZPage* region) {
+        const size_t live = region->is_marked() ? region->live_objects() : (region->GetRegionSize() >> 3);
+        ZForwarding* forwarding = ZForwarding::alloc(live, region->GetRegionStart(), ZAddressHeapBase,
+            region->GetRegionSize(), region, region->GetRegionLifeId(), &_allocator);
+        _generation->forwarding_table().insert(forwarding);
+        _forwardings[_nforwardings++] = forwarding;
+    });
+}
+
+void ZRelocationSet::reset(ZPageAllocator* page_allocator)
+{
+    (void)page_allocator;
+    ZRelocationSetIterator iter(this);
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        forwarding->~ZForwarding();
+    }
+    _nforwardings = 0;
+    _forwardings = nullptr;
+}
+
+void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
+{
+    std::lock_guard<std::mutex> locker(_promotion_lock);
+    for (int i = 0; i < pages.length(); ++i) {
+        _flip_promoted_pages.push(pages.at(i));
+    }
+}
+
+void ZRelocationSet::register_relocate_promoted(const ZArray<ZPage*>& pages)
+{
+    std::lock_guard<std::mutex> locker(_promotion_lock);
+    for (int i = 0; i < pages.length(); ++i) {
+        _relocate_promoted_pages.push(pages.at(i));
+    }
+}
+
+void ZRelocationSet::register_in_place_relocate_promoted(ZPage* page)
+{
+    std::lock_guard<std::mutex> locker(_promotion_lock);
+    _in_place_relocate_promoted_pages.push(page);
+}
+
+void GenerationCycle::reset_relocation_set()
+{
+    ZRelocationSetIterator iter(&_relocation_set);
+    for (ZForwarding* forwarding; iter.next(&forwarding);) {
+        _forwarding_table.remove(forwarding);
+    }
+    _relocation_set.reset(nullptr);
 }
 
 } // namespace MapleRuntime

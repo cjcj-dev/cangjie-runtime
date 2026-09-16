@@ -14,6 +14,8 @@
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zRelocationSet.hpp"
 namespace MapleRuntime {
 class RememberedSet;
 class ZMark;
@@ -83,6 +85,11 @@ public:
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
     void End();
+    ZForwardingTable& forwarding_table() { return _forwarding_table; }
+    const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
+    ZRelocationSet& relocation_set() { return _relocation_set; }
+    ZForwarding* forwarding(MAddress addr) const { return _forwarding_table.get(addr); }
+    void reset_relocation_set();
 private:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
@@ -106,6 +113,8 @@ private:
     std::atomic<GCReason> reason { GC_REASON_USER };
     std::atomic<GCPhase> phase { GC_PHASE_IDLE };
     bool active = false;
+    ZForwardingTable _forwarding_table;
+    ZRelocationSet _relocation_set;
 };
 
 // zGeneration.cpp:489-497: type is scoped to one young collection.
