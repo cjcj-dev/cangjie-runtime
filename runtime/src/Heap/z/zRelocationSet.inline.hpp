@@ -68,7 +68,7 @@ inline void RegionManager::PrepareFromRegionList()
         fromRegionList.VisitAllRegions([](ZPage* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
                  region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd());
-            if (region->IsGhostFromRegion()) {
+            if (region->_scratch.inGhostFromRegion != 0) {
                 return;
             }
             region->PrepareForwardableRegion<G>();

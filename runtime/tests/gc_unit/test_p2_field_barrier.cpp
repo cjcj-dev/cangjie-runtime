@@ -37,6 +37,15 @@ void Expect(bool value, const char* name)
     std::fflush(stdout);
     if (!value) ++failures;
 }
+[[noreturn]] void P2Finish(const char* fullName)
+{
+    std::fflush(stdout);
+    if (failures.load() == 0) {
+        std::fprintf(stderr, "GC_UNIT_OTHER_VM_OKIDOKI %s\n", fullName);
+        std::fflush(stderr);
+    }
+    std::_Exit(failures.load() == 0 ? 0 : 1);
+}
 TypeInfo* Type(unsigned char* storage, bool refs, unsigned fields)
 {
     auto* type = reinterpret_cast<TypeInfo*>(storage);
@@ -292,7 +301,7 @@ extern "C" int p2FieldBarrierExercise()
                 failures.load(), remsetChild, youngFollow, oldOld, oldYoung);
     heap.RemoveExportObject(root);
     if (minorOnly) heap.RemoveExportObject(controlRoot);
-    return failures.load();
+    P2Finish("P2FieldBarrier.FieldBarrierExercise");
 }
 
 // Stop at a product breakpoint after the roots task has consumed its storage
@@ -403,7 +412,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     std::printf("P2_REGISTRATION_RESULT failures=%u discovered=%zu enqueued=%zu\n", failures.load(),
                 references.Discovered(ReferenceType::FINAL) - discovered,
                 references.Enqueued(ReferenceType::FINAL) - enqueued);
-    return failures.load();
+    P2Finish("P2FieldBarrier.FinalizerRegistrationExercise");
 }
 
 // Inspect finalizable closure output before processing/reclamation, so a
@@ -466,7 +475,7 @@ extern "C" int p2FinalizerClosureExercise()
     Expect(references.Enqueued(ReferenceType::FINAL) - enqueued == 1, "finalizable_processing_excludes_strong_upgrade");
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::printf("P2_CLOSURE_RESULT failures=%u target_stage=complete\n", failures.load());
-    return failures.load();
+    P2Finish("P2FieldBarrier.FinalizerClosureExercise");
 }
 
 extern "C" int p2ArrayFieldExercise()
@@ -546,7 +555,7 @@ extern "C" int p2ArrayFieldExercise()
     std::fflush(stdout);
     ConcurrentGCBreakpoints::ReleaseControl();
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), finalizable ? 1 : 2);
-    std::_Exit(failures.load());
+    P2Finish("P2FieldBarrier.ArrayFieldExercise");
 }
 
 namespace {
@@ -692,8 +701,7 @@ extern "C" int p2SlowFieldInputExercise()
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
                 failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
-    std::fflush(stdout);
-    std::_Exit(failures.load());
+    P2Finish("P2FieldBarrier.SlowFieldInputExercise");
 }
 
 static void RunP2(int (*exercise)())
