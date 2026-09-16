@@ -2234,14 +2234,14 @@ void RegionManager::ForwardRegion(ZPage* region)
     // zRelocate.cpp:993-1003. The owner outlives source-page retirement, so
     // the after check reads the forwarding table and destination objects only.
     auto verifyForwarding = forwarding_for_page(region);
-    ZVerify::BeforeRelocation(verifyForwarding.get());
+    ZVerify::BeforeRelocation(verifyForwarding);
     struct VerifyAfterRelocation {
         ZForwarding* forwarding;
         ~VerifyAfterRelocation()
         {
             ZVerify::AfterRelocation(forwarding);
         }
-    } verifyAfterRelocation { verifyForwarding.get() };
+    } verifyAfterRelocation { verifyForwarding };
 
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", 0u);
@@ -2477,7 +2477,7 @@ RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(ZForwarding* f
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     if (!forwarding) return { nullptr, false, false };
-    auto found = byPage.find(forwarding.get());
+    auto found = byPage.find(forwarding);
     if (found != byPage.end()) return { found->second, false, true };
     if (forwarding->is_done()) return { Handle(new Request(std::move(forwarding))), false, true };
     // An already claimed forwarding has its own completion owner even after
