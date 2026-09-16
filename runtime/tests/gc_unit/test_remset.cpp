@@ -354,7 +354,6 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
 
     RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
@@ -451,7 +450,6 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
 
     RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
@@ -540,11 +538,8 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 
     fx.region1->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
-    RefField<> installed = RemsetRearmTestAccess::Tag(collector, fx.obj1);
-    const uintptr_t observedPrev = raw(field->GetFieldValue());
-    field->StoreColoured(installed.GetFieldValue());
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot)); // the direct store does not run a barrier
+    field->StoreColoured(PreviousRememberedPointer(fx.obj1));
+    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
