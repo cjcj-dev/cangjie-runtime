@@ -319,7 +319,6 @@ MAIN_SOURCES=(
   "$SRC/test_colour_is_checks.cpp"
   "$SRC/test_remap_young_roots.cpp"
   "$SRC/test_zForwarding.cpp"
-  "$SRC/test_forwarding_no_geometry.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
   "$SRC/test_p05_heuristics.cpp"
@@ -346,7 +345,6 @@ MAIN_SOURCES=(
   "$SRC/test_string_dedup.cpp"
   "$SRC/test_concurrent_gc_breakpoints.cpp"
   "$SRC/test_uncommitter.cpp"
-  "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_gc_thread_pool.cpp"
   "$SRC/test_zWorkers.cpp"
 

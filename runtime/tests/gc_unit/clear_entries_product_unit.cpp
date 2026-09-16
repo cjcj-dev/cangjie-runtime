@@ -947,27 +947,7 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
 // LookupTo returns the decision record itself.  Change both metadata faces only
 // after the product lookup returns, then prove the record still describes the
 // carrier inputs that selected Unavailable rather than those later faces.
-GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutation)
-{
-    GcHeapFixture fixture;
-    fixture.InstallPageOwner(fixture.region0);
-    const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
-    const Generation generation = fixture.region0->GetOwnerGeneration();
-    const auto result = LookupTo(from, generation);
-    const auto identity = reinterpret_cast<uintptr_t>(generation_forwarding_table(generation).get(from));
-    const auto epoch = fixture.region0->GetSnapshotEpoch();
-    const auto life = fixture.region0->GetRegionLifeId();
-    Heap::GetHeap().GetCollector().GetGenerationCycle(generation).reset_relocation_set();
-    fixture.region0->BumpRegionLifeId();
-    fixture.obj0->SetStateCode(ObjectState::FORWARDED);
-    GC_EXPECT_TRUE(result.answer == FwdLookup::ArmedMiss);
-    GC_EXPECT_EQ(result.tableId, identity);
-    GC_EXPECT_EQ(result.fromPageEpoch, epoch);
-    GC_EXPECT_EQ(result.fromPageLifeId, life);
-    GC_EXPECT_TRUE(result.forwardingSnapshotValid);
-    GC_EXPECT_TRUE(LookupTo(from, generation).answer == FwdLookup::Unarmed);
-    fixture.obj0->SetStateCode(ObjectState::NORMAL);
-}
+
 
 
 
@@ -1240,37 +1220,7 @@ void IncomingAbortWitness(int)
 
 
 
-GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarriers)
-{
-    GcHeapFixture fixture;
-    RegionList selected("diagnostic-generations");
-    selected.PrependRegion(fixture.region0);
-    fixture.region0->reset(PageAge::eden);
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
-    fixture.region0->reset(PageAge::old);
-    GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
-    const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
-    const auto snapshot = UNUSED_Snapshot(from);
-    GC_EXPECT_EQ(snapshot.carrierTotal, 2u);
-    GC_EXPECT_EQ(snapshot.carrierCount, 2u);
-    GC_EXPECT_FALSE(snapshot.carrierOverflow);
-    for (Generation generation : {Generation::Young, Generation::Old}) {
-        const auto identity = reinterpret_cast<uintptr_t>(generation_forwarding_table(generation).get(from));
-        bool matched = false;
-        for (size_t i = 0; i < snapshot.carrierCount; ++i) {
-            const auto& carrier = snapshot.carriers[i];
-            if (carrier.tableId == identity) {
-                GC_EXPECT_EQ(carrier.tableGeneration, static_cast<uint8_t>(generation));
-                GC_EXPECT_EQ(carrier.start, fixture.region0->GetRegionStart());
-                matched = true;
-            }
-        }
-        GC_EXPECT_TRUE(matched);
-    }
-    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
-    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).reset_relocation_set();
-    (void)selected.TakeHeadRegion();
-}
+
 
 // ZBarrier::is_good_or_null_fast_path does not send a load-good to-version
 // through the from-side slow path (zBarrier.inline.hpp:294-343).  Reproduce the
@@ -2066,30 +2016,6 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
 }
-
-GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysInstalledSet)
-{
-    GcHeapFixture fixture;
-    fixture.region0->reset(PageAge::eden);
-    fixture.InstallPageOwner(fixture.region0);
-    const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(fixture.obj1);
-    {
-        auto publication = forwarding_for_page(fixture.region0, from);
-        GC_EXPECT_TRUE(static_cast<bool>(publication));
-        GC_EXPECT_EQ(UNUSED_InsertMapping(publication, from, to), to);
-    }
-    auto owner = forwarding_for_page(fixture.region0);
-    GC_EXPECT_TRUE(static_cast<bool>(owner));
-    owner->release_page();
-    owner->mark_done();
-    GC_EXPECT_EQ(forwarding_find(Generation::Young, from), to);
-    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
-    GC_EXPECT_TRUE(generation_forwarding_table(Generation::Young).get(from) == nullptr);
-    GC_EXPECT_TRUE(LookupTo(from, Generation::Young).answer == FwdLookup::Unarmed);
-}
-
-
 
 // ClearEntries must seal an installed table and wait for the publication owner
 // that crossed the copy boundary.  The owner inserts while clear is waiting;

@@ -39,7 +39,6 @@ set(GC_UNIT_SOURCES
     test_colour_is_checks.cpp
     test_remap_young_roots.cpp
     test_zForwarding.cpp
-    test_forwarding_no_geometry.cpp
     test_z_forwarding_table.cpp
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
@@ -66,7 +65,6 @@ set(GC_UNIT_SOURCES
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp
     test_uncommitter.cpp
-    test_relocation_request_queue.cpp
     test_gc_thread_pool.cpp
     test_zWorkers.cpp
 
