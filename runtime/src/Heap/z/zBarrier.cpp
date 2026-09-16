@@ -59,7 +59,7 @@ void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr)
 namespace {
 enum class CopySlotKind { Heap, Native, Uncolored };
 
-        void CopyReferenceSlots(
+        void CopyOopOne(
                              MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                              std::vector<size_t> offsets, CopySlotKind sourceKind, CopySlotKind destinationKind)
 {
@@ -69,29 +69,24 @@ enum class CopySlotKind { Heap, Native, Uncolored };
     }
     std::sort(offsets.begin(), offsets.end());
     offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
-    std::vector<BaseObject*> refs;
-    refs.reserve(offsets.size());
+    size_t cursor = 0;
     for (size_t offset : offsets) {
         CHECK_DETAIL(offset + sizeof(HeapSlot<>) <= srcLen,
                      "full-colour ref offset outside copy: offset=%zu srcLen=%zu", offset, srcLen);
-        if (sourceKind == CopySlotKind::Uncolored) {
-            refs.push_back(to_object(safe(RootSlotAt(src + offset).LoadPlain())));
-        } else if (sourceKind == CopySlotKind::Native) {
-            refs.push_back(ZBarrier::ReadStaticRef(NativeSlotAt(src + offset)));
-        } else {
-            refs.push_back(ZBarrier::ReadReference(nullptr, HeapSlotAt<>(src + offset)));
-        }
-    }
-    size_t cursor = 0;
-    size_t index = 0;
-    for (size_t offset : offsets) {
         if (offset > cursor) {
             const size_t gap = offset - cursor;
             CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst + cursor), gap,
                                    reinterpret_cast<void*>(src + cursor), gap) == EOK,
                          "full-colour primitive-gap copy failed");
         }
-        BaseObject* target = refs[index++];
+        BaseObject* target = nullptr;
+        if (sourceKind == CopySlotKind::Uncolored) {
+            target = to_object(safe(RootSlotAt(src + offset).LoadPlain()));
+        } else if (sourceKind == CopySlotKind::Native) {
+            target = ZBarrier::ReadStaticRef(NativeSlotAt(src + offset));
+        } else {
+            target = ZBarrier::ReadReference(nullptr, HeapSlotAt<>(src + offset));
+        }
         if (destinationKind == CopySlotKind::Heap) {
             ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(dst + offset), false);
             HeapSlotAt<>(dst + offset).StoreColoured(ZAddress::store_good(from_object(target)));
@@ -106,7 +101,7 @@ enum class CopySlotKind { Heap, Native, Uncolored };
         const size_t tail = srcLen - cursor;
         CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst + cursor), tail,
                                reinterpret_cast<void*>(src + cursor), tail) == EOK,
-                     "full-colour primitive-tail copy failed");
+                         "full-colour primitive-tail copy failed");
     }
 }
 } // namespace
@@ -119,7 +114,7 @@ void ZBarrier::WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t src
     gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
         offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
     }, src, src + srcLen);
-    CopyReferenceSlots( dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
@@ -129,7 +124,7 @@ void ZBarrier::ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib)
     gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
         offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
     }, src, src + size);
-    CopyReferenceSlots( dst, size, src, size, std::move(offsets),
+    CopyOopOne( dst, size, src, size, std::move(offsets),
         CopySlotKind::Heap, CopySlotKind::Uncolored);
 }
 
@@ -326,7 +321,7 @@ void ZBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size
     gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
         offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
     }, src, src + srcLen);
-    CopyReferenceSlots( dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Native);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), srcLen);
@@ -604,7 +599,7 @@ void ZBarrier::CopyObjectStructColouredToHeap(BaseObject* layoutObj, MAddress la
                 offsets.push_back(static_cast<size_t>(address - layoutStart));
             }
         }, layoutStart, layoutStart + srcLen);
-    CopyReferenceSlots( dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
@@ -618,7 +613,7 @@ void ZBarrier::CopyStaticStructColouredToHeap(MAddress dst, size_t dstLen, MAddr
         [&offsets, src](RefField<>& field) {
             offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - src));
         }, src, src + srcLen);
-    CopyReferenceSlots( dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         CopySlotKind::Native, CopySlotKind::Heap);
 }
 
@@ -631,7 +626,7 @@ void ZBarrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, s
         [&offsets, dst](RefField<>& field) {
             offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - dst));
         }, dst, dst + srcLen);
-    CopyReferenceSlots( dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
@@ -644,7 +639,7 @@ void ZBarrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress 
     for (size_t offset = 0; offset < srcLen; offset += sizeof(HeapSlot<>)) {
         offsets.push_back(offset);
     }
-    CopyReferenceSlots( dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
@@ -655,7 +650,7 @@ void ZBarrier::CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t
     gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
         offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
     }, src, src + size);
-    CopyReferenceSlots( dst, size, src, size, std::move(offsets),
+    CopyOopOne( dst, size, src, size, std::move(offsets),
                        CopySlotKind::Native, CopySlotKind::Uncolored);
 }
 
