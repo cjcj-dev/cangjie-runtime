@@ -68,18 +68,6 @@ inline void RegionManager::PrepareFromRegionList()
         Heap::GetHeap().GetCollector().GetGenerationCycle(
             G == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)
             .relocation_set().install_from_regions(fromRegionList);
-        fromRegionList.VisitAllRegions([](ZPage* region) {
-            DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
-                 region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd());
-            region->PrepareForwardableRegion<G>();
-            // ZGC installs the page and its forwarding record as one relocation-set
-            // operation (zRelocationSet.cpp:91-96).  Keep the equivalent invariant
-            // at this GC phase boundary: a from-region must not become visible to
-            // either major PostTrace or minor evacuation without its page carrier.
-            CHECK_DETAIL(region->HasFromPageMetadata(),
-                         "from-page carrier missing after prepare region=%p generation=%u",
-                         region, static_cast<unsigned>(G));
-        });
 
         fromRegionList.CopyListTo(ghostFromRegionList);
     }

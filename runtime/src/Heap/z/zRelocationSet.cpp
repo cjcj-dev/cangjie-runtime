@@ -41,6 +41,7 @@
 #include "Heap/z/zForwardingEntry.hpp"
 #include "Heap/z/zArray.inline.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zPage.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -159,8 +160,13 @@ private:
     void install(ZForwarding* forwarding, size_t index)
     {
         ZPage* const page = forwarding->page();
+        page->ClearRelocationResiduals();
         _relocation_set->generation()->forwarding_table().insert(forwarding);
-        (void)page;
+        if (page->GetOwnerGeneration() == Generation::Young) {
+            page->PublishForwardingCarrier<Generation::Young>();
+        } else {
+            page->PublishForwardingCarrier<Generation::Old>();
+        }
         _forwardings[index] = forwarding;
     }
 
