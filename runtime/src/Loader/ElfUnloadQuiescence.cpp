@@ -78,6 +78,17 @@ std::atomic<bool> packageReaderPaused { false };
 std::atomic<bool> packageReaderReleased { false };
 std::atomic<bool> unrelatedStwHeld { false };
 std::atomic<bool> unrelatedStwReleased { false };
+std::atomic<bool> directPreflightPauseEnabled { false };
+std::atomic<bool> directPreflightPaused { false };
+std::atomic<bool> directPreflightReleased { false };
+std::atomic<bool> publicPlatformPauseEnabled { false };
+std::atomic<bool> publicPlatformPaused { false };
+std::atomic<bool> publicPlatformReleased { false };
+std::atomic<bool> publicWaitHoldsStw { false };
+std::atomic<bool> publicWaitHoldsAdmission { false };
+std::atomic<bool> forcePublicHoldAcrossPlatform { false };
+std::atomic<bool> skipImageClosing { false };
+std::atomic<bool> failNextPlatformUnload { false };
 #endif
 } // namespace
 
@@ -127,6 +138,18 @@ std::unordered_set<ElfUnloadQuiescence::PendingTask*>& ElfUnloadQuiescence::Pend
 {
     static std::unordered_set<PendingTask*> tasks;
     return tasks;
+}
+
+std::mutex& ElfUnloadQuiescence::ClosingMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_set<Uptr>& ElfUnloadQuiescence::ClosingIdentities()
+{
+    static std::unordered_set<Uptr> identities;
+    return identities;
 }
 
 Uptr ElfUnloadQuiescence::ResolveImageIdentity(Uptr address)
@@ -304,6 +327,8 @@ ElfUnloadQuiescence::PendingTask::PendingTask(Uptr entryAddress, const SharedTas
 {
     CHECK_DETAIL(admission.admissionLock.owns_lock(), "ELF task registration requires shared admission");
     image = RegisteredImageForAddress(entryAddress);
+    CHECK_DETAIL(image == nullptr || !IsImageClosing(image->metadata),
+                 "ELF task registration cannot cross a committed image close");
     std::lock_guard<std::mutex> lock(PendingTaskMutex());
     pending = PendingTasks().insert(this).second;
     CHECK_DETAIL(pending, "ELF pending task must be registered exactly once");
@@ -364,6 +389,53 @@ bool ElfUnloadQuiescence::TaskAdmissionScope::HasPendingForImage(Uptr imageAddre
 void ElfUnloadQuiescence::TaskAdmissionScope::WaitUntilNoPendingForImage(Uptr imageAddress) const
 {
     WaitForPendingTasks(imageAddress);
+}
+
+bool ElfUnloadQuiescence::BeginImageClosing(Uptr imageAddress)
+{
+#ifdef MRT_TESTABLE_INTERNALS
+    if (skipImageClosing.load(std::memory_order_acquire)) {
+        return true;
+    }
+#endif
+    const Uptr identity = RegisteredIdentity(imageAddress);
+    std::lock_guard<std::mutex> lock(ClosingMutex());
+    return ClosingIdentities().insert(identity).second;
+}
+
+void ElfUnloadQuiescence::AbortImageClosing(Uptr imageAddress)
+{
+    const auto image = RegisteredImage(imageAddress);
+    if (image == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(ClosingMutex());
+    ClosingIdentities().erase(image->identity);
+}
+
+void ElfUnloadQuiescence::CommitImageClosing(Uptr imageAddress)
+{
+    Uptr identity = 0;
+    if (const auto image = RegisteredImage(imageAddress)) {
+        identity = image->identity;
+    } else {
+        identity = ResolveImageIdentity(imageAddress);
+    }
+    std::lock_guard<std::mutex> lock(ClosingMutex());
+    if (identity != 0) {
+        ClosingIdentities().erase(identity);
+    }
+}
+
+bool ElfUnloadQuiescence::IsImageClosing(Uptr imageAddress)
+{
+    const auto image = RegisteredImage(imageAddress);
+    const Uptr identity = image != nullptr ? image->identity : ResolveImageIdentity(imageAddress);
+    if (identity == 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(ClosingMutex());
+    return ClosingIdentities().count(identity) != 0;
 }
 
 void ElfUnloadQuiescence::WaitForPendingTasks(Uptr imageAddress)
@@ -427,6 +499,9 @@ std::shared_ptr<const ElfUnloadQuiescence::ImageAddressMap> ElfUnloadQuiescence:
     image->metadata = imageAddress;
     image->identity = ResolveImageIdentity(imageAddress);
     CHECK_DETAIL(image->identity != 0, "ELF load image identity is unavailable");
+    CHECK_DETAIL(!IsImageClosing(imageAddress), "ELF load cannot reopen a closing image generation");
+    static std::atomic<U64> nextGeneration { 1 };
+    image->generation = nextGeneration.fetch_add(1, std::memory_order_relaxed);
 #if defined(_WIN64)
     Uptr cursor = image->identity;
     MEMORY_BASIC_INFORMATION info {};
@@ -791,6 +866,108 @@ extern "C" MRT_EXPORT void MRT_TestElfUnloadHoldUnrelatedStw()
         std::this_thread::yield();
     }
     unrelatedStwHeld.store(false, std::memory_order_release);
+}
+
+void ElfUnloadQuiescence::EnableDirectPreflightPauseForTesting()
+{
+    directPreflightPaused.store(false, std::memory_order_relaxed);
+    directPreflightReleased.store(false, std::memory_order_relaxed);
+    directPreflightPauseEnabled.store(true, std::memory_order_release);
+}
+
+bool ElfUnloadQuiescence::DirectPreflightPausedForTesting()
+{
+    return directPreflightPaused.load(std::memory_order_acquire);
+}
+
+void ElfUnloadQuiescence::ReleaseDirectPreflightPauseForTesting()
+{
+    directPreflightReleased.store(true, std::memory_order_release);
+}
+
+void ElfUnloadQuiescence::PauseDirectPreflightForTesting()
+{
+    if (!directPreflightPauseEnabled.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    directPreflightPaused.store(true, std::memory_order_release);
+    while (!directPreflightReleased.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+
+void ElfUnloadQuiescence::EnablePublicPlatformPauseForTesting()
+{
+    publicPlatformPaused.store(false, std::memory_order_relaxed);
+    publicPlatformReleased.store(false, std::memory_order_relaxed);
+    publicPlatformPauseEnabled.store(true, std::memory_order_release);
+}
+
+bool ElfUnloadQuiescence::PublicPlatformPausedForTesting()
+{
+    return publicPlatformPaused.load(std::memory_order_acquire);
+}
+
+void ElfUnloadQuiescence::ReleasePublicPlatformPauseForTesting()
+{
+    publicPlatformReleased.store(true, std::memory_order_release);
+}
+
+void ElfUnloadQuiescence::PausePublicPlatformForTesting()
+{
+    if (!publicPlatformPauseEnabled.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    publicPlatformPaused.store(true, std::memory_order_release);
+    while (!publicPlatformReleased.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+
+void ElfUnloadQuiescence::NotePublicPlatformWaitForTesting(bool holdsStw, bool holdsAdmission)
+{
+    publicWaitHoldsStw.store(holdsStw, std::memory_order_release);
+    publicWaitHoldsAdmission.store(holdsAdmission, std::memory_order_release);
+}
+
+bool ElfUnloadQuiescence::PublicPlatformWaitHoldsStwForTesting()
+{
+    return publicWaitHoldsStw.load(std::memory_order_acquire);
+}
+
+bool ElfUnloadQuiescence::PublicPlatformWaitHoldsAdmissionForTesting()
+{
+    return publicWaitHoldsAdmission.load(std::memory_order_acquire);
+}
+
+void ElfUnloadQuiescence::ForcePublicHoldAcrossPlatformForTesting(bool enable)
+{
+    forcePublicHoldAcrossPlatform.store(enable, std::memory_order_release);
+}
+
+bool ElfUnloadQuiescence::PublicHoldAcrossPlatformForTesting()
+{
+    return forcePublicHoldAcrossPlatform.load(std::memory_order_acquire);
+}
+
+void ElfUnloadQuiescence::SkipImageClosingForTesting(bool enable)
+{
+    skipImageClosing.store(enable, std::memory_order_release);
+}
+
+bool ElfUnloadQuiescence::ImageClosingSkippedForTesting()
+{
+    return skipImageClosing.load(std::memory_order_acquire);
+}
+
+void ElfUnloadQuiescence::FailNextPlatformUnloadForTesting(bool enable)
+{
+    failNextPlatformUnload.store(enable, std::memory_order_release);
+}
+
+bool ElfUnloadQuiescence::ConsumeFailedPlatformUnloadForTesting()
+{
+    return failNextPlatformUnload.exchange(false, std::memory_order_acq_rel);
 }
 #endif
 
