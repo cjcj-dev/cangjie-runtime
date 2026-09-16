@@ -31,6 +31,7 @@ std::function<void()> TracingCollector::testOldMarkStarted;
 std::function<void(GCCycleGeneration, MarkStartPoint, const MarkDomain*)> TracingCollector::testMarkStartState;
 std::function<void()> TracingCollector::testYoungMarkCompleted;
 std::function<void(const ExportOwnershipTestObservation&)> TracingCollector::testExportOwnershipResult;
+std::function<void(Mutator&)> TracingCollector::testOldMarkThreadResult;
 #endif
 
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as

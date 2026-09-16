@@ -207,95 +207,6 @@ GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
 }
 
-GC_TEST(YoungConc, EpochHandshakeIsRequired)
-{
-    GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
-    GC_EXPECT_TRUE(MutatorManager::ConcurrentStackScanEnabled());
-}
-
-GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorCreateDuringActiveEpochIsBornClean)
-{
-    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MRT_CjRuntimeInit();
-    MutatorManager& manager = MutatorManager::Instance();
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
-    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_begin\n");
-    const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
-    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_create epoch=%zu\n",
-                 static_cast<size_t>(epoch));
-    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_create mutator=%p\n", mutator);
-    GC_EXPECT_TRUE(mutator != nullptr);
-    GC_EXPECT_TRUE(mutator->FinishedEpochHandshake(epoch));
-    std::vector<Mutator*> registered;
-    manager.GetAllMutators(registered);
-    GC_EXPECT_EQ(std::count(registered.begin(), registered.end(), mutator), 1);
-    manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_destroy\n");
-    manager.EndEpochHandshakeLifecycleTest();
-    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
-}
-
-GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyDuringActiveEpochDefersStorage)
-{
-    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MRT_CjRuntimeInit();
-    MutatorManager& manager = MutatorManager::Instance();
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
-    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_begin\n");
-    (void)manager.BeginEpochHandshakeLifecycleTest();
-    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_create\n");
-    Mutator* target = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-    std::vector<Mutator*> registered;
-    manager.GetAllMutators(registered);
-    GC_EXPECT_EQ(std::count(registered.begin(), registered.end(), target), 1);
-    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_destroy\n");
-    manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=after_destroy deferred=%zu\n",
-                 manager.EpochHandshakeDestroyDeferredForTest());
-    registered.clear();
-    manager.GetAllMutators(registered);
-    GC_EXPECT_EQ(std::count(registered.begin(), registered.end(), target), 0);
-    GC_EXPECT_EQ(manager.EpochHandshakeDestroyDeferredForTest(), 1u);
-    manager.EndEpochHandshakeLifecycleTest();
-    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
-}
-
-GC_OTHER_VM_TEST(YoungConc, FinalizerCreateDuringActiveEpochIsBornClean)
-{
-    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MRT_CjRuntimeInit();
-    MutatorManager& manager = MutatorManager::Instance();
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
-    const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
-    void* cjthread = NewFinalizerCJThread();
-    GC_EXPECT_TRUE(cjthread != nullptr);
-    Mutator* mutator = ThreadLocal::GetMutator();
-    GC_EXPECT_TRUE(mutator != nullptr);
-    GC_EXPECT_TRUE(mutator->FinishedEpochHandshake(epoch));
-    EndFinalizerCJThread();
-    manager.EndEpochHandshakeLifecycleTest();
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
-}
-
-GC_OTHER_VM_TEST(YoungConc, FinalizerEndDuringActiveEpochDefersStorage)
-{
-    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MRT_CjRuntimeInit();
-    MutatorManager& manager = MutatorManager::Instance();
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
-    (void)manager.BeginEpochHandshakeLifecycleTest();
-    GC_EXPECT_TRUE(NewFinalizerCJThread() != nullptr);
-    EndFinalizerCJThread();
-    GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
-    GC_EXPECT_TRUE(manager.EpochHandshakeDestroyDeferredForTest() >= 1u);
-    manager.EndEpochHandshakeLifecycleTest();
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
-}
 // Paint-then-claim-skip: already-marked MarkObject returns true; without grey ledger
 // TraceYoungClosure would drop reachableVec/fields (WCollector.cpp:8110-8136).
 // A mutator publishes ordinary SATB work after coordinated mark workers have
@@ -834,17 +745,6 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     GC_EXPECT_TRUE(work.empty());
     GC_EXPECT_TRUE(is_null(field.GetTargetObject()));
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
-}
-
-// Pin the required epoch handshake and stack scan predicates.
-GC_TEST(YoungConc, MarkRequiresEpochHandshake)
-{
-    GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
-}
-
-GC_TEST(YoungConc, FollowRequiresEpochHandshake)
-{
-    GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
 }
 
 GC_TEST(YoungConc, StackScanIsRequired)

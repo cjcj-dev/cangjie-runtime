@@ -46,6 +46,7 @@ namespace MapleRuntime {
 
 class MarkStripeSet;
 class ZWorkers;
+class Mutator;
 
 // ZGC zMarkTerminate.inline.hpp:43-125.
 
@@ -301,6 +302,7 @@ public:
     static std::function<void(GCCycleGeneration, MarkStartPoint, const MarkDomain*)> testMarkStartState;
     static std::function<void()> testYoungMarkCompleted;
     static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
+    static std::function<void(Mutator&)> testOldMarkThreadResult;
 #endif
 
     void Init() override;

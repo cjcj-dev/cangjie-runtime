@@ -26,13 +26,6 @@
 #include "CpuProfiler/CpuProfiler.h"
 
 namespace MapleRuntime {
-namespace {
-thread_local bool inEpochHandshake = false;
-
-// HotSpot runtime/globals.hpp:176 and handshake.cpp:223-230.
-// A zero diagnostic timeout leaves handshake completion unbounded.
-constexpr uint64_t HandshakeTimeout = 0;
-} // namespace
 // Mutator-list write-lock watchdog timeout (seconds). Read once from env
 // cjMutatorLockTimeout, falling back to WAIT_LOCK_TIMEOUT, so heavy CPU-oversubscribed
 // builds can raise it without a rebuild. A reader holding the list lock can be starved
@@ -135,8 +128,6 @@ Mutator* MutatorManager::CreateMutator()
         mutator->InitTid();
         BindMutator(*mutator);
         mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
-        // dynjoin (乙): under active epoch, born-clean exclude (not wait-set join).
-        ExcludeNewMutatorFromActiveEpoch(*mutator);
         ConcurrencyModel::SetMutator(mutator);
     } else {
         MutatorManagementRLock();
@@ -144,7 +135,6 @@ Mutator* MutatorManager::CreateMutator()
         mutator->InitTid();
         BindMutator(*mutator);
         mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
-        ExcludeNewMutatorFromActiveEpoch(*mutator);
     }
     MutatorManagementRUnlock();
     return mutator;
@@ -155,9 +145,7 @@ void MutatorManager::TransitMutatorToExit()
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
     PackageInitTable::OwnerExit();
-    RecordEpochHandshakeExitTransition();
     mutator->MutatorLock();
-    mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_EXITING);
     mutator->MutatorUnlock();
     mutator->ResetMutator();
     (void)mutator->EnterSaferegion(false);
@@ -179,16 +167,6 @@ void MutatorManager::DestroyExpiredMutators()
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
     ConsumeCpuProfileRequest(mutator);
-    // dynjoin: while an epoch handshake is active, never free a participant (or a
-    // racing create) under the old R-lock path — that used to be serialised by the
-    // full-handshake W-lock. Defer to expiringMutators; PostGC drains them.
-    if (EpochHandshakeActive()) {
-        epochHandshakeDestroyDeferred.fetch_add(1, std::memory_order_relaxed);
-        expiringMutatorListLock.lock();
-        expiringMutators.push_back(mutator);
-        expiringMutatorListLock.unlock();
-        return;
-    }
     if (TryAcquireMutatorManagementRLock()) {
         delete mutator; // call ~Mutator() under mutatorListLock
         MutatorManagementRUnlock();
@@ -226,19 +204,13 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
         std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
         runtimeMutators.insert(mutator);
     }
-    // Same born-clean/participant race closure as CreateMutator and foreign
-    // attach. Registration precedes exclusion so the epoch snapshot sees the
-    // mutator or exclusion completes it, never neither.
-    ExcludeNewMutatorFromActiveEpoch(*mutator);
     ThreadLocal::SetMutator(mutator);
     ThreadLocal::SetThreadType(threadType);
     ThreadLocal::SetCJProcessorFlag(true);
     MutatorManagementRUnlock();
     if (threadType == ThreadType::UNCOMMITTER_THREAD) {
         // ZUncommitter joins the suspendible set only for allocator accounting.
-        // This native participant has no CJThread or managed stack. Registration
-        // and born-clean epoch handling above are shared with runtime mutators.
-        mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_RUNNING);
+        // This native participant has no CJThread or managed stack.
         return mutator; // initially in saferegion; ScopedObjectAccess joins STW
     }
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
@@ -276,12 +248,6 @@ void MutatorManager::DestroyRuntimeMutator(ThreadType threadType)
     ThreadLocal::SetCJProcessorFlag(false);
     if (threadType != ThreadType::FP_THREAD) {
         DestroyMutator(mutator);
-    } else {
-        // The FP runtime mutator is static. There is no storage to retire, but
-        // do not permit reuse while an epoch can still hold its participant pin.
-        while (EpochHandshakeActive()) {
-            (void)sched_yield();
-        }
     }
 }
 
@@ -296,13 +262,6 @@ void MutatorManager::Init()
 
 MutatorManager& MutatorManager::Instance() noexcept { return Runtime::Current().GetMutatorManager(); }
 
-bool MutatorManager::EpochHandshakeEnabled()
-{
-    // Epoch receipts are part of the only young-generation mark protocol.
-    // ZGC has no young configuration that omits concurrent root publication.
-    return true;
-}
-
 bool MutatorManager::ConcurrentStackScanEnabled()
 {
     // Young and old marking share the required stack-watermark protocol.
@@ -310,133 +269,13 @@ bool MutatorManager::ConcurrentStackScanEnabled()
     return true;
 }
 
-void MutatorManager::RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf)
-{
-    (void)mutator;
-    (void)epoch;
-    (void)bySelf;
-    std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-    if (epoch != epochHandshakeActive.load(std::memory_order_acquire) ||
-        !epochHandshakeAckedMutators.insert(&mutator).second) {
-        epochHandshakeAckedTwice.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    epochHandshakeAcked.fetch_add(1, std::memory_order_relaxed);
-    if (bySelf) {
-        epochHandshakeSelfAck.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        epochHandshakeGcAssistedAck.fetch_add(1, std::memory_order_relaxed);
-    }
-    switch (mutator.GetEpochHandshakeLifecycle()) {
-        case Mutator::EPOCH_HANDSHAKE_STARTING:
-            epochHandshakeStartingAck.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case Mutator::EPOCH_HANDSHAKE_RUNNING:
-            epochHandshakeRunningAck.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case Mutator::EPOCH_HANDSHAKE_PARKED:
-            epochHandshakeParkedAck.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case Mutator::EPOCH_HANDSHAKE_EXITING:
-            epochHandshakeExitingAck.fetch_add(1, std::memory_order_relaxed);
-            break;
-        default:
-            CHECK_DETAIL(false, "unknown epoch handshake lifecycle state");
-    }
-}
-
-void MutatorManager::RecordEpochHandshakeStackScan(bool scanned, size_t frames)
-{
-    epochHandshakeStackFrames.fetch_add(frames, std::memory_order_relaxed);
-    if (scanned) {
-        epochHandshakeStackScanned.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        epochHandshakeStackFallback.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-void MutatorManager::ExcludeNewMutatorFromActiveEpoch(Mutator& mutator)
-{
-    uint64_t active = epochHandshakeActive.load(std::memory_order_acquire);
-    if (active == 0) {
-        return;
-    }
-    // (乙) exclude + born-clean. Must serialise with the snapshot that fills
-    // epochHandshakeParticipants: if this mutator was already claimed as a
-    // participant, it must take the normal request/ack path (not overwrite).
-    std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-    active = epochHandshakeActive.load(std::memory_order_acquire);
-    if (active == 0) {
-        return;
-    }
-    if (epochHandshakeParticipants.find(&mutator) != epochHandshakeParticipants.end()) {
-        return;
-    }
-    if (mutator.FinishedEpochHandshake(active)) {
-        return;
-    }
-    mutator.SetEnumYoung(epochHandshakeGeneration == GCCycleGeneration::YOUNG);
-    mutator.SetMutatorPhase(Heap::GetHeap().GetGCPhase(epochHandshakeGeneration));
-    mutator.MarkBornCleanForEpoch(active);
-    epochHandshakeBornCleanJoins.fetch_add(1, std::memory_order_relaxed);
-}
-
-void MutatorManager::RecordEpochHandshakeExitTransition()
-{
-    if (epochHandshakeActive.load(std::memory_order_acquire) != 0) {
-        epochHandshakeExitTransitions.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
 #if defined(MRT_TESTABLE_INTERNALS)
-uint64_t MutatorManager::BeginEpochHandshakeLifecycleTest()
-{
-    CHECK_DETAIL(!EpochHandshakeActive(), "nested lifecycle test epoch");
-    const uint64_t epoch = epochHandshakeSequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    {
-        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-        epochHandshakeGeneration = GCCycleGeneration::YOUNG;
-        epochHandshakeParticipants.clear();
-        epochHandshakeAckedMutators.clear();
-    }
-    epochHandshakeDestroyDeferred.store(0, std::memory_order_relaxed);
-    epochHandshakeActive.store(epoch, std::memory_order_release);
-    return epoch;
-}
-
-void MutatorManager::EndEpochHandshakeLifecycleTest()
-{
-    {
-        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-        epochHandshakeParticipants.clear();
-    }
-    epochHandshakeActive.store(0, std::memory_order_release);
-    DestroyExpiredMutators();
-}
-
 size_t MutatorManager::RuntimeMutatorRegistrySizeForTest()
 {
     std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
     return runtimeMutators.size();
 }
 #endif
-
-EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool young)
-{
-    (void)source;
-    (void)young;
-    EpochHandshakeStats stats;
-    stats.epoch = StackWatermark::epoch_id();
-    return stats;
-}
-
-extern "C" MRT_EXPORT uint64_t MRT_RunEpochHandshake()
-{
-    return MutatorManager::Instance().RunEpochHandshake("explicit", true).epoch;
-}
-
-
 
 void MutatorManager::AcquireMutatorManagementWLock()
 {
@@ -819,11 +658,6 @@ bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
 {
-    // stackwm #5: exposure-hook slow path must not introduce STW (assertion ④).
-    if (UNLIKELY(inEpochHandshake)) {
-        epochHandshakeStopTheWorldCalls.fetch_add(1, std::memory_order_relaxed);
-        CHECK_DETAIL(false, "epoch handshake path must not call StopTheWorld");
-    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool saferegionEntered = false;
     // Ensure an active mutator entered saferegion before STW (aka. stop all other mutators).

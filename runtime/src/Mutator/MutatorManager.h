@@ -54,30 +54,6 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData);
 
 using MutatorVisitor = std::function<void(Mutator&)>;
 
-struct EpochHandshakeStats {
-    uint64_t epoch = 0;
-    size_t requested = 0;
-    size_t acked = 0;
-    size_t ackedTwice = 0;
-    size_t selfAck = 0;
-    size_t gcAssistedAck = 0;
-    size_t startingAck = 0;
-    size_t runningAck = 0;
-    size_t parkedAck = 0;
-    size_t exitingAck = 0;
-    size_t deferredCreates = 0;
-    size_t bornCleanJoins = 0;
-    size_t exitTransitions = 0;
-    size_t destroyDeferred = 0;
-    size_t stopTheWorldCalls = 0;
-    size_t stackScanned = 0;
-    size_t stackFallback = 0;
-    size_t stackFrames = 0;
-    // Residual mutex window only (ledger clear / stats gather). Handshake wait
-    // no longer holds mutator-management W-lock (dynjoin: exclude + born-clean).
-    uint64_t managementLockNanos = 0;
-};
-
 class MutatorManager {
 public:
     MutatorManager() {}
@@ -227,28 +203,9 @@ public:
     void EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToGCPhase(GCPhase phase, bool young = false);
 
-    static bool EpochHandshakeEnabled();
     static bool ConcurrentStackScanEnabled();
-    EpochHandshakeStats RunEpochHandshake(const char* source, bool young);
-    void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
-    void RecordEpochHandshakeStackScan(bool scanned, size_t frames);
-    // dynjoin (乙): create during active epoch marks mutator born-clean for that
-    // epoch (completion=active, state=ACKNOWLEDGED) and excludes it from the wait
-    // set. OpenJDK handshake.cpp:293-295: new ThreadsList members have no op.
-    void ExcludeNewMutatorFromActiveEpoch(Mutator& mutator);
-    void RecordEpochHandshakeExitTransition();
-    bool EpochHandshakeActive() const
-    {
-        return epochHandshakeActive.load(std::memory_order_acquire) != 0;
-    }
 #if defined(MRT_TESTABLE_INTERNALS)
-    uint64_t BeginEpochHandshakeLifecycleTest();
-    void EndEpochHandshakeLifecycleTest();
     size_t RuntimeMutatorRegistrySizeForTest();
-    size_t EpochHandshakeDestroyDeferredForTest() const
-    {
-        return epochHandshakeDestroyDeferred.load(std::memory_order_relaxed);
-    }
 #endif
 
     void TransitionAllMutatorsToCpuProfile();
@@ -397,31 +354,6 @@ public:
     std::list<Mutator*> undoneLightSyncMutators;
     GCPhase lightSyncGCPhase;
 
-    std::atomic<uint64_t> epochHandshakeSequence = { 0 };
-    std::atomic<uint64_t> epochHandshakeActive = { 0 };
-    // Generation of the current root operation, guarded by the ledger mutex.
-    GCCycleGeneration epochHandshakeGeneration = GCCycleGeneration::OLD;
-    std::atomic<size_t> epochHandshakeAcked = { 0 };
-    std::atomic<size_t> epochHandshakeAckedTwice = { 0 };
-    std::atomic<size_t> epochHandshakeSelfAck = { 0 };
-    std::atomic<size_t> epochHandshakeGcAssistedAck = { 0 };
-    std::atomic<size_t> epochHandshakeStartingAck = { 0 };
-    std::atomic<size_t> epochHandshakeRunningAck = { 0 };
-    std::atomic<size_t> epochHandshakeParkedAck = { 0 };
-    std::atomic<size_t> epochHandshakeExitingAck = { 0 };
-    std::atomic<size_t> epochHandshakeDeferredCreates = { 0 };
-    std::atomic<size_t> epochHandshakeBornCleanJoins = { 0 };
-    std::atomic<size_t> epochHandshakeExitTransitions = { 0 };
-    std::atomic<size_t> epochHandshakeDestroyDeferred = { 0 };
-    std::atomic<size_t> epochHandshakeStopTheWorldCalls = { 0 };
-    std::atomic<size_t> epochHandshakeStackScanned = { 0 };
-    std::atomic<size_t> epochHandshakeStackFallback = { 0 };
-    std::atomic<size_t> epochHandshakeStackFrames = { 0 };
-    std::mutex epochHandshakeLedgerMutex;
-    std::unordered_set<Mutator*> epochHandshakeAckedMutators;
-    // Participants of the active epoch; DestroyMutator must not free these while
-    // active != 0 (replaces the old full-handshake W-lock serialisation).
-    std::unordered_set<Mutator*> epochHandshakeParticipants;
     // Runtime mutators are not necessarily owned by a scheduler CJThread, so
     // keep them in the same participant inventory explicitly.
     std::mutex runtimeMutatorRegistryMutex;

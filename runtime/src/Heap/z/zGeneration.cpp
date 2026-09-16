@@ -289,8 +289,7 @@ void WCollector::DoYoungGarbageCollection()
     uint64_t stackScanEpoch = 0;
     {
         // Publish S1/S3/S5 while every mutator is stopped. SetGCPhase is the
-        // release publication point; AcknowledgeEpochHandshake asserts ENUM
-        // before it is allowed to snapshot a single frame.
+        // release publication point before stack-watermark processing.
         Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
         stw.reset();
 

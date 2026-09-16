@@ -183,15 +183,6 @@ void Mutator::AddLocalFinalizer(BaseObject* object)
 void Mutator::ResetMutator()
 {
     CHECK_DETAIL(nativeFrameRoots.empty(), "native frame roots are not released");
-    for (;;) {
-        MutatorLock();
-        if (epochHandshakeState.load(std::memory_order_acquire) == EPOCH_HANDSHAKE_CLAIMED) {
-            MutatorUnlock();
-            (void)sched_yield();
-            continue;
-        }
-        break;
-    }
     SetManagedContext(false);
     StorePlain(rawObject, zaddress::null);
     if (!localFinalizers.empty()) {
@@ -239,9 +230,6 @@ void Mutator::HandleSuspensionRequest()
             TransitionGCPhase(true);
         } else if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
             TransitionToCpuProfile(true);
-        } else if (HasSuspensionRequest(SUSPENSION_FOR_EPOCH_HANDSHAKE)) {
-            uint64_t epoch = epochHandshakeRequest.load(std::memory_order_acquire);
-            (void)AcknowledgeEpochHandshake(epoch, true);
         } else if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
             SuspendForSync();
             if (HasSuspensionRequest(SUSPENSION_FOR_GC_PHASE)) {
@@ -271,81 +259,6 @@ void Mutator::HandleSuspensionRequest()
             return;
         }
     }
-}
-
-void Mutator::RequestEpochHandshake(uint64_t epoch, bool young)
-{
-    CHECK_DETAIL(epoch != 0, "epoch handshake request must not use epoch zero");
-    EpochHandshakeState state = epochHandshakeState.load(std::memory_order_acquire);
-    // Born-clean mutators (dynjoin 乙) already have completion==epoch and state
-    // ACKNOWLEDGED without ever receiving a request. Request must still be legal
-    // for the next epoch only; same-epoch re-request is forbidden.
-    CHECK_DETAIL((state == EPOCH_HANDSHAKE_IDLE || state == EPOCH_HANDSHAKE_ACKNOWLEDGED) &&
-                     epochHandshakeRequest.load(std::memory_order_acquire) < epoch &&
-                     epochHandshakeCompletion.load(std::memory_order_acquire) < epoch,
-                 "overlapping epoch handshake request: mutator=%p epoch=%llu request=%llu completion=%llu state=%u",
-                 this, static_cast<unsigned long long>(epoch),
-                 static_cast<unsigned long long>(epochHandshakeRequest.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(epochHandshakeCompletion.load(std::memory_order_relaxed)),
-                 static_cast<unsigned>(epochHandshakeState.load(std::memory_order_relaxed)));
-    SetEnumYoung(young);
-    epochHandshakeRequest.store(epoch, std::memory_order_relaxed);
-    epochHandshakeState.store(EPOCH_HANDSHAKE_REQUESTED, std::memory_order_release);
-    SetSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
-}
-
-void Mutator::MarkBornCleanForEpoch(uint64_t epoch)
-{
-    CHECK_DETAIL(epoch != 0, "born-clean epoch must not use epoch zero");
-    if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
-        CHECK_DETAIL(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD) == GCPhase::GC_PHASE_ENUM,
-                     "concurrent stack-scan join before ENUM barrier publication");
-        bool began = stackWatermark.TryBegin(epoch, 0);
-        CHECK_DETAIL(began, "born-clean mutator failed to close empty stack watermark");
-        stackWatermark.Finish();
-    }
-    // Publish completion before state so a concurrent FinishedEpochHandshake
-    // observer that sees ACKNOWLEDGED also sees the matching completion.
-    epochHandshakeRequest.store(epoch, std::memory_order_relaxed);
-    epochHandshakeCompletion.store(epoch, std::memory_order_release);
-    epochHandshakeState.store(EPOCH_HANDSHAKE_ACKNOWLEDGED, std::memory_order_release);
-}
-
-bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
-{
-    if (epoch == 0 || epochHandshakeRequest.load(std::memory_order_acquire) != epoch) {
-        return false;
-    }
-
-    EpochHandshakeState expected = EPOCH_HANDSHAKE_REQUESTED;
-    if (!epochHandshakeState.compare_exchange_strong(expected, EPOCH_HANDSHAKE_CLAIMED,
-                                                     std::memory_order_acq_rel, std::memory_order_acquire)) {
-        return expected == EPOCH_HANDSHAKE_ACKNOWLEDGED && FinishedEpochHandshake(epoch);
-    }
-
-    if (!bySelf && !CanGcAssistEpochHandshake()) {
-        epochHandshakeState.store(EPOCH_HANDSHAKE_REQUESTED, std::memory_order_release);
-        return false;
-    }
-
-    if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
-        // S1/S3/S5 publication order: the first short STW publishes the shared
-        // ENUM phase and colour masks before an ack can snapshot roots. This
-        // acquire phase read pairs with Collector::SetGCPhase's release store.
-        CHECK_DETAIL(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD) == GCPhase::GC_PHASE_ENUM,
-                     "concurrent stack scan ack before ENUM barrier publication");
-        size_t frames = 0;
-        bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, EnumYoung(), epoch, bySelf, &frames);
-        MutatorManager::Instance().RecordEpochHandshakeStackScan(scanned, frames);
-        if (scanned) {
-            SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
-        }
-    }
-    ClearSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
-    MutatorManager::Instance().RecordEpochHandshakeAck(*this, epoch, bySelf);
-    epochHandshakeCompletion.store(epoch, std::memory_order_release);
-    epochHandshakeState.store(EPOCH_HANDSHAKE_ACKNOWLEDGED, std::memory_order_release);
-    return true;
 }
 
 void Mutator::SuspendForSync()
