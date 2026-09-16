@@ -17,18 +17,13 @@ set(SRC_LIST
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-# OS_HEADER(gc/z/zPhysicalMemoryBacking) stand-in: CMake picks the pd header.
 if (CMAKE_SYSTEM_NAME MATCHES "Windows")
-    set(Z_PMM_BACKING_HEADER "zPhysicalMemoryBacking_windows.hpp")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/windows)
 elseif (CMAKE_SYSTEM_NAME MATCHES "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "iOS")
-    set(Z_PMM_BACKING_HEADER "zPhysicalMemoryBacking_bsd.hpp")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/bsd)
 else()
-    set(Z_PMM_BACKING_HEADER "zPhysicalMemoryBacking_linux.hpp")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/linux)
 endif()
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/zPhysicalMemoryBacking.hpp"
-     "#include \"Heap/z/${Z_PMM_BACKING_HEADER}\"\n")
-include_directories(${CMAKE_CURRENT_BINARY_DIR})
-include_directories(${CMAKE_CURRENT_BINARY_DIR}/Allocator)
 add_subdirectory(Allocator)
 add_subdirectory(Barrier)
 add_subdirectory(Collector)

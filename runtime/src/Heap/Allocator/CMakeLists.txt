@@ -41,7 +41,7 @@ if (CMAKE_SYSTEM_NAME MATCHES "Windows")
         "../z/zLargePages_windows.cpp"
         "../z/zNUMA_windows.cpp"
     )
-    set(Z_PMM_BACKING_HEADER "zPhysicalMemoryBacking_windows.hpp")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../z/os/windows)
 elseif (CMAKE_SYSTEM_NAME MATCHES "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "iOS")
     list(APPEND SRC_LIST
         "../z/zVirtualMemoryManager_posix.cpp"
@@ -49,7 +49,7 @@ elseif (CMAKE_SYSTEM_NAME MATCHES "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "iOS")
         "../z/zLargePages_bsd.cpp"
         "../z/zNUMA_bsd.cpp"
     )
-    set(Z_PMM_BACKING_HEADER "zPhysicalMemoryBacking_bsd.hpp")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../z/os/bsd)
 else()
     list(APPEND SRC_LIST
         "../z/zVirtualMemoryManager_posix.cpp"
@@ -58,15 +58,11 @@ else()
         "../z/zLargePages_linux.cpp"
         "../z/zNUMA_linux.cpp"
     )
-    set(Z_PMM_BACKING_HEADER "zPhysicalMemoryBacking_linux.hpp")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../z/os/linux)
     add_compile_definitions(LINUX)
 endif()
 
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/zPhysicalMemoryBacking.hpp"
-     "#include \"Heap/z/${Z_PMM_BACKING_HEADER}\"\n")
-
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
-include_directories(${CMAKE_CURRENT_BINARY_DIR})
 add_library(Allocator STATIC ${SRC_LIST})
 if (MRT_GC_UNIT_TESTS)
     target_compile_definitions(Allocator PRIVATE MRT_GC_UNIT_TESTS=1)

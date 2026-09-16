@@ -97,8 +97,7 @@ target_include_directories(cj_gc_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap/Allocator
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/src/Heap
     ${CMAKE_BINARY_DIR}/src/Heap/Allocator
@@ -142,8 +141,7 @@ target_include_directories(cj_gc_allocation_stall_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap/Allocator
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_allocation_stall_unit PRIVATE cxx_std_17)
@@ -173,8 +171,7 @@ target_include_directories(cj_gc_cycle_saferegion_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap/Allocator
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_cycle_saferegion_unit PRIVATE cxx_std_17)
@@ -203,8 +200,7 @@ target_include_directories(cj_gc_clear_entries_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap/Allocator
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_clear_entries_unit PRIVATE cxx_std_14)
@@ -241,8 +237,7 @@ target_include_directories(cj_gc_uncommit_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap
-    ${CMAKE_BINARY_DIR}/src/Heap/Allocator
+    ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_uncommit_unit PRIVATE cxx_std_17)
