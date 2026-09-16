@@ -349,6 +349,14 @@ zaddress ZBarrier::load_good_slow_path(zaddress addr)
     return addr;
 }
 
+zaddress ZBarrier::keep_alive_slow_path(zaddress addr)
+{
+    if (!is_null(addr)) {
+        Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+    }
+    return addr;
+}
+
 zaddress ZBarrier::blocking_keep_alive_on_weak_slow_path(zaddress addr)
 {
     if (is_null(addr)) {
@@ -403,6 +411,11 @@ BaseObject* ZBarrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoi
     if (strength == ReferenceStrength::Strong) {
         return to_object(barrier(is_load_good_or_null_fast_path, &ZBarrier::load_good_slow_path,
                                  ColorLoadGood, p, observed, false));
+    }
+    const bool blocked = Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked();
+    if (!blocked) {
+        return to_object(barrier(is_mark_good_fast_path, &ZBarrier::keep_alive_slow_path,
+                                 ColorMarkGood, p, observed, false));
     }
     if (strength == ReferenceStrength::Weak) {
         return to_object(barrier(is_mark_good_fast_path, &ZBarrier::blocking_keep_alive_on_weak_slow_path,
