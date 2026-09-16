@@ -255,7 +255,8 @@ inline void ZBarrier::self_heal(ZBarrierFastPath fast_path, volatile zpointer* p
     for (;;) {
         assert_transition_monotonicity(ptr, heal_ptr);
         zpointer prev = zpointer::null;
-        if (field.CompareExchange(ptr, heal_ptr, std::memory_order_relaxed, std::memory_order_relaxed, &prev)) {
+        if (HealSlot(field, ptr, heal_ptr, HealSite::BarrierReadReference, HealNull::Allow,
+                     std::memory_order_relaxed, std::memory_order_relaxed, &prev)) {
             return;
         }
         if (fast_path(prev)) {
