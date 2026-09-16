@@ -63,7 +63,10 @@ struct RelocationReceiptTestAccess {
         collector.StartOldMarkWork();
         collector.TraceHeap();
     }
-    static void RunOldRoots(WCollector& collector) { collector.DoOldRoots(); }
+    static void RunOldRoots(WCollector& collector)
+    {
+        collector.EnumAllCommonRoots(collector.GetWorkers(GCCycleGeneration::OLD));
+    }
     static size_t PendingYoungRootWork(WCollector& collector)
     {
         return ThreadLocal::GetMarkStacks(*collector.YoungMark()).Population();
