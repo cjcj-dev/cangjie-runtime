@@ -74,6 +74,7 @@ run_ohos_host_arm() {
       -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
       -DMRT_TESTABLE_INTERNALS=1 -include string \
       -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+      -I"$ROOT/runtime/src/Heap/z/os/linux" \
       -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
@@ -257,6 +258,7 @@ INC_FLAGS=(
   -I"$SRC"
   -I"$ROOT/runtime/src"
   -I"$ROOT/runtime/src/Heap"
+  -I"$ROOT/runtime/src/Heap/z/os/linux"
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include"
   -I"$ROOT/runtime/include"
   -I"$BOUNDS_INC"
