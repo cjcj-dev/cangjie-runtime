@@ -426,6 +426,6 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
             oldValueRetained |= object == heap.obj0;
         });
         GC_EXPECT_TRUE(oldValueRetained);
-        GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&destination)));
+        GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&destination)));
     }
 }
