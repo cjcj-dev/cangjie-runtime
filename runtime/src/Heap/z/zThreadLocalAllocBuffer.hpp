@@ -33,20 +33,20 @@ public:
     static AllocBuffer* GetAllocBuffer();
 
     MAddress Allocate(size_t size, AllocType allocType);
-    RegionInfo* GetRegion() { return tlRegion; }
+    ZPage* GetRegion() { return tlRegion; }
     RegionList& GetTlRawPointerRegions() { return tlRawPointerRegions; }
     RegionList& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
-    RegionInfo* GetPreparedRegion() { return preparedRegion.load(std::memory_order_relaxed); }
-    void SetRegion(RegionInfo* newRegion);
+    ZPage* GetPreparedRegion() { return preparedRegion.load(std::memory_order_relaxed); }
+    void SetRegion(ZPage* newRegion);
     void ClearRegion();
 
     size_t ComputeTLABSize(size_t objectSize, size_t maxSize) const;
     void AccumulateTLABStatistics(TLABStatistics& total, size_t used, size_t capacity);
     void ResizeTLAB(size_t capacity, double fallbackFraction, size_t maxSize);
 
-    bool SetPreparedRegion(RegionInfo* newPreparedRegion)
+    bool SetPreparedRegion(ZPage* newPreparedRegion)
     {
-        RegionInfo* expect = nullptr;
+        ZPage* expect = nullptr;
         return preparedRegion.compare_exchange_strong(expect, newPreparedRegion, std::memory_order_release);
     }
     void CommitRawPointerRegions();
@@ -163,19 +163,19 @@ private:
 
     // tlRegion in AllocBuffer is a shortcut for fast allocation.
     // we should handle failure in RegionManager
-    RegionInfo* tlRegion = RegionInfo::NullRegion();
+    ZPage* tlRegion = ZPage::NullRegion();
 
     // HotSpot ThreadLocalAllocBuffer: thread-owned statistics survive refills
     // and reset only at a young-cycle boundary. Async refill reads atomics only.
     TLABStatistics tlabStatistics;
     TLABAllocationAverage tlabAllocationFraction;
-    std::atomic<size_t> desiredTLABSize{ RegionInfo::UNIT_SIZE };
+    std::atomic<size_t> desiredTLABSize{ ZPage::UNIT_SIZE };
     std::atomic<size_t> tlabRefills{ 0 };
 
     // Allocation work is handed to marking as an atomic batch.
     mutable std::mutex handoffLock;
 
-    std::atomic<RegionInfo*> preparedRegion = { nullptr };
+    std::atomic<ZPage*> preparedRegion = { nullptr };
     // allocate objects which are exposed to runtime thus can not be moved.
     // allocation context is responsible to notify collector when these objects are safe to be collected.
     RegionList tlRawPointerRegions;

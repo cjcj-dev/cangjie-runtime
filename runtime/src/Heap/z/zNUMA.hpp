@@ -4,6 +4,11 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+// NUMA topology value object. ZGC keeps a static ZNUMA class
+// (zNUMA.hpp:30-58); moving to that shape is A03n. calculate_share follows
+// ZNUMA::calculate_share (zNUMA.inline.hpp:45-59) so the memory managers can
+// already split capacity per partition the ZGC way.
+
 #pragma once
 #include <cstdint>
 #include <cstddef>
@@ -13,6 +18,10 @@ class NumaTopology {
 public:
     static NumaTopology Seal(const std::vector<uint32_t>& nodeIds);
     static NumaTopology SealProcessTopology();
+
+    static size_t calculate_share(uint32_t numa_id, size_t total, size_t granule, uint32_t ignore_count = 0);
+
+    static void numa_make_local(void* addr, size_t size, uint32_t numa_id);
 
     bool IsSealed() const { return sealed; }
     size_t Count() const;

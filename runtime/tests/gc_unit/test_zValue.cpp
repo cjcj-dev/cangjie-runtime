@@ -18,6 +18,7 @@
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zValue.inline.hpp"
 #include "gc_unittest.hpp"
+#include "zunittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -84,21 +85,19 @@ GC_TEST(ZValue, per_worker_slot_count_follows_conc_gc_threads)
 }
 
 #if defined(__linux__)
-// Product wiring: PerAgeObjectAllocator::sharedSmallPage is a ZPerCPU<RegionInfo*>
+// Product wiring: PerAgeObjectAllocator::sharedSmallPage is a ZPerCPU<ZPage*>
 // (zObjectAllocator.hpp:41); retire_pages clears every CPU slot (set_all,
 // zObjectAllocator.cpp:198-203).
 GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
 {
     ZStat::Initialize();
     constexpr size_t units = 64;
-    const size_t metadata = RegionManager::GetMetadataSize(units);
-    MemMap* map = MemMap::MapMemory(metadata + units * RegionInfo::UNIT_SIZE, metadata);
-    GC_EXPECT_TRUE(map != nullptr);
     HeapParam params{};
-    params.regionSize = RegionInfo::UNIT_SIZE / KB;
+    params.regionSize = ZPage::UNIT_SIZE / KB;
     params.exemptionThreshold = 0.8;
+    std::unique_ptr<ZTestRegionHeap> heap;
     RegionManager manager;
-    manager.Initialize(units, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, params, 0.5);
+    heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
 
     auto& allocator = *manager.objectAllocators[untype(PageAge::eden)];
     GC_EXPECT_EQ(allocator.sharedSmallPage.count(), ZCPU::count());
@@ -111,7 +110,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
     const uint32_t cpu = ZCPU::id();
-    GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == RegionInfo::GetRegionInfoAt(first));
+    GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == Heap::page(first));
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         if (other != cpu) {
             GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);
@@ -123,6 +122,5 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);
     }
-    MemMap::DestroyMemMap(map);
 }
 #endif

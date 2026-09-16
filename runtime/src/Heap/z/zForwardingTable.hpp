@@ -13,10 +13,10 @@
 
 #include "Common/TypeDef.h"
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zPageFwd.hpp"
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
-class RegionInfo;
 class RegionList;
 class BaseObject;
 class ZLiveMap;
@@ -40,8 +40,8 @@ public:
         friend class ForwardingTable;
     };
 
-    static Owner RetainPageOwner(const RegionInfo* region);
-    static void ClearPageOwner(RegionInfo* region);
+    static Owner RetainPageOwner(const ZPage* region);
+    static void ClearPageOwner(ZPage* region);
 
     // Copy and receipt publication borrow the installed forwarding. The page
     // retain is held by the relocation operation (zRelocate.cpp:354-420).
@@ -129,7 +129,7 @@ public:
     // The generation set owns every allocation through reset.
     static bool BeginForwardingArena(Generation gen, RegionList& regions);
 
-    static bool InstallPublicationBeforeCopy(MAddress regionStart, size_t regionSize, RegionInfo* region, Generation gen);
+    static bool InstallPublicationBeforeCopy(MAddress regionStart, size_t regionSize, ZPage* region, Generation gen);
     // zGeneration.cpp:276-284: unlink every member, then destroy the set.
     static void ResetRelocationSet(Generation gen);
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -147,17 +147,17 @@ public:
     static void VisitAll(Generation generation, const std::function<void(ZForwarding*)>& visitor);
     // Product connection points for the dual carrier. Publication copies the
     // from-page view into the already-installed ZForwarding; every consumer
-    // resolves the view back through the table rather than RegionInfo storage.
-    static bool PublishFromPageView(RegionInfo* region, ZLiveMap* livemap, uint64_t epoch,
+    // resolves the view back through the table rather than ZPage storage.
+    static bool PublishFromPageView(ZPage* region, ZLiveMap* livemap, uint64_t epoch,
                                     MAddress topAtStart, uint64_t birthSequence,
                                     uint8_t owner,
                                     uint8_t largeMarked, RegionLifeId lifeId);
-    static const ZForwarding::FromPageView* GetFromPageView(RegionInfo* region);
+    static const ZForwarding::FromPageView* GetFromPageView(ZPage* region);
 
     // Copy producer borrows the set installed before relocation starts.
-    static Publication EnsurePublicationBeforeCopy(RegionInfo* region, MAddress from);
+    static Publication EnsurePublicationBeforeCopy(ZPage* region, MAddress from);
     // After-copy consumer borrows that same installed forwarding.
-    static Publication RetainOpenPublicationAfterCopy(RegionInfo* region, MAddress from);
+    static Publication RetainOpenPublicationAfterCopy(ZPage* region, MAddress from);
     static ZForwarding::Receipt InstallMapping(const Publication& publication, MAddress from, MAddress to);
     static MAddress InsertMapping(const Publication& publication, MAddress from, MAddress to);
     // Out of line so the unit runner exercises the product SO's publication
@@ -181,8 +181,8 @@ public:
     static bool Ready();
 
 private:
-    static size_t ObjectCountUpperBound(RegionInfo* region, size_t regionSize);
-    static bool UnbindPageOwnerLocked(RegionInfo* region, bool allowExclusive);
+    static size_t ObjectCountUpperBound(ZPage* region, size_t regionSize);
+    static bool UnbindPageOwnerLocked(ZPage* region, bool allowExclusive);
 };
 } // namespace MapleRuntime
 

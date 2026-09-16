@@ -93,20 +93,6 @@ public:
     }
 };
 
-class InstalledExportHandleBarrier final {
-public:
-    explicit InstalledExportHandleBarrier(Barrier& barrier)
-        : previous(Heap::barrierPtr)
-    {
-        Heap::barrierPtr = &barrier;
-    }
-
-    ~InstalledExportHandleBarrier() { Heap::barrierPtr = previous; }
-
-private:
-    Barrier* previous;
-};
-
 class InstalledExportAllocBuffer final {
 public:
     explicit InstalledExportAllocBuffer(AllocBuffer& allocBuffer)
@@ -159,8 +145,6 @@ private:
 };
 
 struct ExportHandleFixture {
-    ExportHandleFixture() : barrier(), installed(barrier) {}
-
     BaseObject* PlaceThirdObject()
     {
         const MAddress address = reinterpret_cast<MAddress>(heap.obj0) + 128;
@@ -171,20 +155,13 @@ struct ExportHandleFixture {
 
     GcHeapFixture heap;
     ExportHandleTestCollector collector;
-    RememberedSet rememberedSet;
-    Barrier barrier;
-    InstalledExportHandleBarrier installed;
 };
 
 struct CompilerStoreFixture {
     CompilerStoreFixture()
-        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()),
-          barrier(), installed(barrier) {}
+        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()) {}
     GcHeapFixture heap;
     WCollector collector;
-    RememberedSet rememberedSet;
-    Barrier barrier;
-    InstalledExportHandleBarrier installed;
 };
 
 } // namespace
@@ -192,7 +169,7 @@ struct CompilerStoreFixture {
 // ① iorfix 8baacb1e — pregrant before RouteRegion freezes domain.
 // Contract: after liveInfo0 is frozen without object B, later mark on a *different*
 // current liveInfo does not open GetRoute(B). Route geometry alone is not enough.
-// Product: RegionInfo::GetRoute domain gate (RegionInfo.h:812+) + installdomain paint face.
+// Product: ZPage::GetRoute domain gate (ZPage.h:812+) + installdomain paint face.
 
 
 // ② nullslot 2da28bee — non-heap latest must not be CAS-null'd (recolour only).
@@ -242,8 +219,8 @@ GC_TEST(DefectRegress, StaticRootObservedValueHeal)
     RootSlot root;
     StorePlain(root, from_object(fx.obj0));
     zaddress_unsafe observed = root.LoadPlain();
-    GC_EXPECT_TRUE(HealRootIfObserved(root, observed, from_object(fx.obj1),
-                                     HealSite::BarrierCompareAndSwapReference));
+    GC_EXPECT_TRUE(root.CompareExchangePlain(observed, from_object(fx.obj1),
+                                            std::memory_order_relaxed, std::memory_order_relaxed));
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(fx.obj1));
 }
 
@@ -255,8 +232,8 @@ GC_TEST(DefectRegress, StaticRootHealDoesNotClobberConcurrentStore)
     zaddress_unsafe observed = root.LoadPlain();
     BaseObject* concurrent = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     StorePlain(root, from_object(concurrent));
-    GC_EXPECT_FALSE(HealRootIfObserved(root, observed, from_object(fx.obj1),
-                                      HealSite::BarrierCompareAndSwapReference));
+    GC_EXPECT_FALSE(root.CompareExchangePlain(observed, from_object(fx.obj1),
+                                             std::memory_order_relaxed, std::memory_order_relaxed));
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(concurrent));
 }
 
@@ -287,14 +264,14 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    // ZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-705)
+    // ZZBarrier::store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-705)
     // skips raw null. Flip remembered metadata to exercise the actual slow path.
     field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.heap.obj0)) ^ ZPointerRememberedMask));
     GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
@@ -318,10 +295,10 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -360,10 +337,10 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -385,7 +362,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
         // This is the exported product ABI. A rejected holder access must be
         // observed by the parent's target assertion, not terminate the test runner.
         field->StoreColoured(StoreGoodPointer(fx.heap.obj1));
-        ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(reinterpret_cast<RefField<false>*>(field)), false);
+        ZZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(reinterpret_cast<RefField<false>*>(field)), false);
         std::fprintf(stderr, "POST_BUFFER_TARGET_ASSERT_EXECUTED pending=%zu\n",
                      ThreadLocal::GetGCData().storeBarrierBuffer->Pending());
         GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 0u);
@@ -405,10 +382,10 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);

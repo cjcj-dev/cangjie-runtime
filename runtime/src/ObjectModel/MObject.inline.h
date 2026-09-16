@@ -69,13 +69,13 @@ inline void MObject::Store(size_t offset, T value)
 inline MObject* MObject::LoadRef(size_t offset)
 {
     RefField<>& ref = GetRefField<false>(offset);
-    return static_cast<MObject*>(Heap::GetBarrier().ReadReference(this, ref));
+    return static_cast<MObject*>(ZBarrier::ReadReference(this, ref));
 }
 
 inline void MObject::StoreRef(size_t offset, MObject* value)
 {
     RefField<>& ref = GetRefField<false>(offset);
-    Heap::GetBarrier().WriteReference(this, ref, value);
+    ZBarrier::WriteReference(this, ref, value);
 }
 } // namespace MapleRuntime
 #endif // MRT_MOBJECT_INLINE_H

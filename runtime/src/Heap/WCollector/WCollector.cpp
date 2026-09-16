@@ -68,7 +68,7 @@ class CJInteropContext : public BaseObject {
 public:
     CJFunc* GetCJFunc()
     {
-        return static_cast<CJFunc*>(Heap::GetBarrier().ReadReference(this,
+        return static_cast<CJFunc*>(ZBarrier::ReadReference(this,
             HeapSlotAt<false>(&cjFunc)));
     }
 private:
@@ -79,7 +79,7 @@ class CJForeignProxy : public BaseObject {
 public:
     CJInteropContext* GetCJInteropContext()
     {
-        return static_cast<CJInteropContext*>(Heap::GetBarrier().ReadReference(this,
+        return static_cast<CJInteropContext*>(ZBarrier::ReadReference(this,
             HeapSlotAt<false>(&interopContext)));
     }
 private:

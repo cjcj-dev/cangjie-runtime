@@ -97,7 +97,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
         stats = manager.PrepareYoungGarbageCandidates(
-            [&collector](RegionInfo* region) { collector.minorCandidateRegions.insert(region); });
+            [&collector](ZPage* region) { collector.minorCandidateRegions.insert(region); });
     }
     // Flush pre-flip producers before invalidating their generation sequence.
     (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
@@ -365,7 +365,7 @@ void WCollector::DoYoungGarbageCollection()
         (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
         VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
-                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
                 if (region != nullptr && !region->IsYoungRegion()) {
                     currentMinorRoots.insert(object);
                 }
@@ -375,7 +375,7 @@ void WCollector::DoYoungGarbageCollection()
             if (!Heap::IsHeapAddress(object)) {
                 return;
             }
-            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
             }
@@ -603,7 +603,7 @@ void WCollector::DoYoungGarbageCollection()
     TenuringInputs tenuringIn;
     tenuringIn.softMaxCapacity = Heap::GetHeap().GetMaxCapacity();
     tenuringIn.youngAllocated = stats.candidateBytes;
-    for (RegionInfo* region : minorCandidateRegions) {
+    for (ZPage* region : minorCandidateRegions) {
         const size_t live = region->is_marked() ? region->live_bytes() : 0;
         liveBytes += live;
         uint32_t age = region->GetYoungAge();
@@ -642,7 +642,7 @@ void WCollector::DoYoungGarbageCollection()
         // zGeneration.cpp:563 / :699-701: after this young mark_end, reset
         // the previous young relocation set. Independent of old remap.
         StringDedup::Instance().Clean([this](BaseObject* object) {
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
             return !region->IsYoungRegion() || IsMarkedObject<Generation::Young>(object);
         });
         ForwardingTable::ResetRelocationSet(Generation::Young);
@@ -756,7 +756,7 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
     ProcessFinalizers();
     StringDedup::Instance().Clean([this](BaseObject* object) {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         return region->IsYoungRegion() || IsMarkedObject<Generation::Old>(object);
     });
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
@@ -868,7 +868,7 @@ BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const v
     // which can differ from the generation currently visiting the roots.
     (void)generation;
     const auto forwarding = ForwardingTable::RetainPageOwner(
-        RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(value)));
+        Heap::page(reinterpret_cast<MAddress>(value)));
     BaseObject* current = value;
     if (forwarding) {
         const MAddress target = forwarding->find(reinterpret_cast<MAddress>(value));

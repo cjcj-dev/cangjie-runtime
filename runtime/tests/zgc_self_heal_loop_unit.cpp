@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// Positive control for the ported OpenJDK ZBarrier::self_heal loop
+// Positive control for the ported OpenJDK ZZBarrier::self_heal loop
 // (ObjectModel/RefField.h, from zBarrier.inline.hpp:72-110).
 //
 // Why this exists: survival_dense exercises the port 56 times per run and every

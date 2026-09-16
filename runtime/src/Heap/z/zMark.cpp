@@ -43,6 +43,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zUncoloredRoot.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -59,7 +60,7 @@ bool WCollector::MarkObject(BaseObject* obj) const
 bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache* liveCache) const
 {
     (void)youngClaim;
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
 
     size_t objectSize = obj->GetSize();
     // ZPage::mark_object (zPage.inline.hpp:284-294) followed by the caller's
@@ -76,12 +77,12 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     }
     if (!marked) {
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
-             region, region->GetRegionType(), region->GetRegionStart(), region->live_bytes());
+             region, 0u, region->GetRegionStart(), region->live_bytes());
     }
     return marked;
 }
 
-bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* region)
+bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, ZPage* region)
 {
     (void)offset;
     // ZPage::mark_object(addr, finalizable = true) + inc_live on the first claim.
@@ -184,7 +185,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
         }
     }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-    HealRoot(ref, from_object(root), HealSite::WCollectorEnumRawRoot);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&ref), ZPointerLoadGoodMask)
     rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(root))), true, true, true, false));
 }
 
@@ -192,7 +193,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
 // remapping and generation routing; the original colored slot is authoritative.
 void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack&, bool finalizable) const
 {
-    Heap::GetBarrier().MarkBarrierOnOldOopField(obj, field, finalizable);
+    ZBarrier::MarkBarrierOnOldOopField(obj, field, finalizable);
 }
 
 // Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196): the heap
@@ -518,8 +519,7 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
 void TracingCollector::DiscoverFinalizableRoot(NativeSlot& slot) const
 {
     CHECK(oldCycle.IsPhaseMark());
-    auto& barrier = Heap::GetBarrier();
-    BaseObject* object = barrier.ReadStaticRef(slot);
+    BaseObject* object = ZBarrier::ReadStaticRef(slot);
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
     object = ValidateCurrentValue(object, provenance);
     if (object == nullptr) return;
@@ -528,7 +528,7 @@ void TracingCollector::DiscoverFinalizableRoot(NativeSlot& slot) const
     auto& processor = collectorResources.GetFinalizerProcessor().GetReferenceProcessor();
     const auto status = processor.DiscoverReference(object, ReferenceType::FINAL);
     CHECK(status == ReferenceStatus::DISCOVERED || status == ReferenceStatus::ALREADY_DISCOVERED);
-    barrier.MarkFinalizableBarrierOnRoot(slot);
+    ZBarrier::MarkFinalizableBarrierOnRoot(slot);
 }
 
 namespace {
@@ -539,7 +539,7 @@ public:
     explicit MarkOopClosure(const TracingCollector& collector) : collector(collector) {}
     void DoOop(NativeSlot& slot) const
     {
-        BaseObject* object = Heap::GetBarrier().ReadStaticRef(slot);
+        BaseObject* object = ZBarrier::ReadStaticRef(slot);
         collector.MarkOldObjectIfActive(object);
     }
 private:
@@ -607,7 +607,7 @@ class MarkYoungOopClosure {
 public:
     void DoOop(NativeSlot& slot) const
     {
-        Heap::GetBarrier().MarkYoungGoodBarrierOnOopField(slot);
+        ZBarrier::MarkYoungGoodBarrierOnOopField(slot);
     }
 };
 
@@ -698,7 +698,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             }
         }
         if (n < 8) {
-            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
             VLOG(REPORT,
                  "[GCV2][invalid-minor-root] obj=%p origin=%s region=%p regionStart=%#zx young=%u pinned=%u "
                  "large=%u free=%u garbage=%u neverExamined=%u "
@@ -716,7 +716,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         }
         CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
     }
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
         if (GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
             MarkOldObjectIfActive(object, true);
@@ -802,7 +802,7 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
     if (region == nullptr) {
         return false;
     }
@@ -924,7 +924,7 @@ private:
                 output.slots.push_back(slot);
             }
             auto& field = HeapSlotAt<>(slot);
-            Heap::GetBarrier().MarkBarrierOnYoungOopField(field);
+            ZBarrier::MarkBarrierOnYoungOopField(field);
         };
         auto publish = [this, &ctx](const MarkStackEntry& work) { PublishEntry(ctx, work); };
         if (entry.partial_array()) {
@@ -937,7 +937,7 @@ private:
         }
         auto& localObjects = output.objects;
         WCollector* collector = shared.collector;
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
 
         if (isYoung) {
@@ -1004,7 +1004,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
                                           const MinorSlotSet* reachableSlotDomain)
 {
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
-    const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
+    const size_t dispelAtEntry = ZPage::GetDispelGhostCount();
 
     ZWorkers& workersSet = GetWorkers(GCCycleGeneration::YOUNG);
     const size_t workers = workersSet.active_workers();
@@ -1054,7 +1054,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
                      "young striped closure returned without coordinated worker termination");
     }
 
-    const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
+    const size_t dispelAtExit = ZPage::GetDispelGhostCount();
     CHECK_DETAIL(dispelAtExit == dispelAtEntry,
                  "T-D ghost dispel during striped mark_closure window entry=%zu exit=%zu", dispelAtEntry,
                  dispelAtExit);
@@ -1585,7 +1585,7 @@ namespace MapleRuntime {
 bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
                                        MarkLiveCache* cache) const
 {
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
     CHECK_DETAIL(region->IsRelocatable(), "mark consumer requires a relocatable page");
     bool firstLive = entry.inc_live();
     bool already = false;
@@ -1968,7 +1968,7 @@ void TracingCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack
 namespace MapleRuntime {
 bool TracingCollector::MarkObject(BaseObject* obj) const
     {
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        ZPage* regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
         // ZPage::mark_object + inc_live on the first live claim (zMark.cpp:405-425).
         bool incLive = false;
         bool marked = !regionInfo->mark_object(from_object(obj), false, incLive);

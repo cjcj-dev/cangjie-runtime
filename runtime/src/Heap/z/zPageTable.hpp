@@ -5,13 +5,14 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #pragma once
+#include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 #include "Heap/z/zIndexDistributor.hpp"
+
 namespace MapleRuntime {
-// zPageTable.inline.hpp:79-99. The map includes reservation holes. A page
-// spanning several granules is emitted only at its own start granule.
-// zPageTable.hpp:73: the iterator holds a ZIndexDistributor; z_globals.hpp:99
-// (ZIndexDistributorStrategy) selects the claim tree by default.
+class ZPage;
+class ZPageAllocator;
+
 template<typename T>
 class ZPageTableParallelIterator {
 public:
@@ -25,6 +26,65 @@ private:
     ZIndexDistributor distributor;
 };
 
-}
+class ZPageTable {
+    friend class ZPageTableIterator;
+    friend class ZGenerationPagesIterator;
+    friend class ZGenerationPagesParallelIterator;
+
+    ZGranuleMap<ZPage*> _map;
+
+public:
+    ZPageTable(size_t max_offset, MAddress base, size_t granule) : _map(max_offset, base, granule) {}
+
+    static void install(MAddress base, size_t heapSize, size_t granule);
+
+    int count() const;
+    ZPage* get(MAddress addr) const;
+    ZPage* at(size_t index) const { return _map.at(index); }
+
+    void insert(ZPage* page);
+    void remove(ZPage* page);
+    void replace(ZPage* old_page, ZPage* new_page);
+
+    ZGranuleMap<ZPage*>& map() { return _map; }
+    const ZGranuleMap<ZPage*>& map() const { return _map; }
+
+    static ZPageTable& heap_table();
+};
+
+class ZPageTableIterator {
+    const ZGranuleMap<ZPage*>* _map;
+    size_t _index;
+    ZPage* _prev;
+
+public:
+    explicit ZPageTableIterator(const ZPageTable* table);
+    bool next(ZPage** page);
+};
+
+class ZGenerationPagesIterator {
+    ZPageTableIterator _iterator;
+    ZGenerationId _generation_id;
+    ZPageAllocator* _page_allocator;
+
+public:
+    ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id, ZPageAllocator* page_allocator);
+    ~ZGenerationPagesIterator();
+    bool next(ZPage** page);
+};
+
+class ZGenerationPagesParallelIterator {
+    ZPageTableParallelIterator<ZPage*> _iterator;
+    ZGenerationId _generation_id;
+    ZPageAllocator* _page_allocator;
+
+public:
+    ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id, ZPageAllocator* page_allocator);
+    ~ZGenerationPagesParallelIterator();
+    template<typename Function>
+    void do_pages(Function function);
+};
+
+} // namespace MapleRuntime
 
 #include "Heap/z/zPageTable.inline.hpp"

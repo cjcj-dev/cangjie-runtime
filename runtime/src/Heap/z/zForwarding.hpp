@@ -174,7 +174,6 @@ namespace MapleRuntime {
 
 using RegionLifeId = uint64_t;
 
-class RegionInfo;
 class ZLiveMap;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.
@@ -214,7 +213,7 @@ public:
     static size_t nentries(size_t objectCountUpperBound);
 
     static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              RegionInfo* page, RegionLifeId pageLifeId = 0,
+                              ZPage* page, RegionLifeId pageLifeId = 0,
                               ForwardingAllocator* arena = nullptr);
 
     // Standalone storage for focused forwarding tests. Product objects use the set arena.
@@ -232,7 +231,7 @@ public:
     MAddress start() const;
     size_t size() const;
     size_t regionSize() const { return _size; }
-    RegionInfo* page() const;
+    ZPage* page() const;
     RegionLifeId page_life_id() const { return _page_life_id; }
     uint8_t table_generation() const { return _table_generation; }
     void set_table_generation(uint8_t generation) { _table_generation = generation; }
@@ -269,7 +268,7 @@ public:
 
     // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
-    // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
+    // InitZPage has bumped that seq (ZPage.h:InitZPage).
     static bool DestUsable(MAddress to);
 
 
@@ -405,14 +404,14 @@ public:
 
 private:
     // zForwarding.inline.hpp:59-76
-    ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
+    ZForwarding(ZPage* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
                 RegionLifeId pageLifeId);
 
     const MAddress _start;
     const size_t _size;
     const MAddress _heapBase;
     const AttachedArray _entries;
-    RegionInfo* const _page;
+    ZPage* const _page;
     const RegionLifeId _page_life_id;
     // Monotonic per-region-span generation. Written before the table pointer is
     // published, then immutable for the table's lifetime.

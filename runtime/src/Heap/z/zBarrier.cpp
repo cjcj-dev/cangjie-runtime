@@ -31,8 +31,10 @@
 #include <vector>
 
 namespace MapleRuntime {
-#include "Heap/Barrier/BarrierTestObservations.h"
-static_assert(!std::is_polymorphic<ZBarrier>::value, "Barrier must not regain virtual dispatch");
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void(ZBarrier::FieldMarkKind, RefField<>&, zpointer, zaddress)> ZBarrier::testFieldMarkResult;
+#endif
+static_assert(!std::is_polymorphic<ZBarrier>::value, "ZBarrier must not regain virtual dispatch");
 
 // ZZBarrier::assert_transition_monotonicity, zBarrier.inline.hpp:40-70.
 void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr)

@@ -326,12 +326,12 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     // forms are outside Heap.  Keeping the heap-slot decision authoritative
     // also fails safe for a malformed contradictory pair.
     if (Heap::IsHeapAddress(plainField)) {
-        Heap::GetBarrier().WriteReference(plainObj, *plainField, plainRef);
+        ZBarrier::WriteReference(plainObj, *plainField, plainRef);
         return;
     }
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
         VLOG(REPORT, "found and writing a global struct ref field");
-        Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
+        ZBarrier::WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
         return;
     }
     // The remaining value-type field is a stack/plain slot ($BP == 0).
@@ -348,11 +348,11 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
     CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStructField wrong parameter, dst: %p src: %p", plainDst,
                  plainSrc);
     if (Heap::IsHeapAddress(plainDst)) {
-        Heap::GetBarrier().WriteStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
+        ZBarrier::WriteStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
         return;
     }
     if (IsGlobalStruct(plainObj, plainDst)) {
-        Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
+        ZBarrier::WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
         return;
     }
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(plainDst), dstLen,
@@ -363,7 +363,7 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
 extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, NativeSlot* field)
 {
     MAddress address = reinterpret_cast<MAddress>(field);
-    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(address), ref);
+    ZBarrier::WriteStaticRef(NativeSlotAt(address), ref);
 }
 
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
@@ -372,7 +372,7 @@ extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src,
     MAddress plainSrc = src;
     CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", plainDst,
                  plainSrc);
-    Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gcTib);
+    ZBarrier::WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gcTib);
 }
 
 extern "C" TypeInfo* MCC_GetObjClass(const ObjectPtr obj)
@@ -404,7 +404,7 @@ extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, s
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    Heap::GetBarrier().CopyRefArray(dstObj, dstField, dstSize,
+    ZBarrier::CopyRefArray(dstObj, dstField, dstSize,
                                     srcObj, srcField, srcSize);
 }
 
@@ -415,31 +415,31 @@ extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize,
+    ZBarrier::CopyStructArray(dstObj, dstField, dstSize,
                                        srcObj, srcField, srcSize);
 }
 extern "C" void MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                          MemoryOrder order)
 {
-    Heap::GetBarrier().AtomicWriteReference(obj, *field, ref, order);
+    ZBarrier::AtomicWriteReference(obj, *field, ref, order);
 }
 
 extern "C" ObjectPtr MCC_AtomicReadReference(const ObjectPtr obj, RefField<true>* field, MemoryOrder order)
 {
-    return Heap::GetBarrier().AtomicReadReference(obj, *field, order);
+    return ZBarrier::AtomicReadReference(obj, *field, order);
 }
 
 extern "C" ObjectPtr MCC_AtomicSwapReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                              MemoryOrder order)
 {
-    return Heap::GetBarrier().AtomicSwapReference(obj, *field, ref,
+    return ZBarrier::AtomicSwapReference(obj, *field, ref,
                                                   order);
 }
 
 extern "C" bool MCC_AtomicCompareSwapReference(const ObjectPtr oldRef, const ObjectPtr newRef, const ObjectPtr obj,
                                                RefField<true>* field, MemoryOrder succOrder, MemoryOrder failOrder)
 {
-    return Heap::GetBarrier().CompareAndSwapReference(obj, *field,
+    return ZBarrier::CompareAndSwapReference(obj, *field,
                                                       oldRef, newRef, succOrder,
                                                       failOrder);
 }
@@ -767,7 +767,7 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
         // push frame to stack array
         MSize elementSize = trace->GetElementSize();
         MAddress dstAddr = reinterpret_cast<Uptr>(trace) + MArray::GetContentOffset() + elementSize * stackIndex;
-        Heap::GetBarrier().WriteStruct(trace, dstAddr, elementSize,
+        ZBarrier::WriteStruct(trace, dstAddr, elementSize,
                                        reinterpret_cast<MAddress>(&frameData), elementSize);
         stackIndex++;
     }
@@ -818,7 +818,7 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
         MSize elementSize = allRecords->GetElementSize();
         MAddress dstAddr =
             reinterpret_cast<Uptr>(allRecords) + MArray::GetContentOffset() + elementSize * recordIndex;
-        Heap::GetBarrier().WriteStruct(allRecords, dstAddr, elementSize,
+        ZBarrier::WriteStruct(allRecords, dstAddr, elementSize,
                                        reinterpret_cast<MAddress>(&snapshot), elementSize);
         recordIndex++;
     }
@@ -978,7 +978,7 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     StackManager::RecordLiteFrameInfos(frame, 4); // record 4 frames
     pinnedArrayRecorder.RemoveBtInfo(rawPtr, Mutator::GetMutator(), frame);
 #endif
-    auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(rawPtr));
+    auto regionInfo = Heap::page(reinterpret_cast<uintptr_t>(rawPtr));
     (void)regionInfo->DecRawPointerObjectCount();
     (void)CJThreadPreemptOffCntSub();
 }
@@ -1223,7 +1223,7 @@ extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arra
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     MObject* obj = ObjectManager::NewObject(arrayTi, objSize, AllocType::RAW_POINTER_OBJECT);
     // set rawArray
-    Heap::GetBarrier().WriteReference(obj, obj->GetRefField(TYPEINFO_PTR_SIZE), static_cast<BaseObject*>(rawArrayObj));
+    ZBarrier::WriteReference(obj, obj->GetRefField(TYPEINFO_PTR_SIZE), static_cast<BaseObject*>(rawArrayObj));
     CJArray* cjArray = reinterpret_cast<CJArray*>(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE);
     cjArray->start = 0;
     cjArray->length = subPkgCnt;
@@ -1723,7 +1723,7 @@ extern "C" ObjRef MCC_GetAssociatedValues(ObjRef obj, TypeInfo* arrayTi)
         VLOG(REPORT, "MCC_GetAssociatedValues new object failed and throw OutOfMemoryError");
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
     }
-    Heap::GetBarrier().WriteReference(
+    ZBarrier::WriteReference(
         arrayObj, arrayObj->GetRefField(TYPEINFO_PTR_SIZE), static_cast<BaseObject*>(array));
     CJArray* cjArray = reinterpret_cast<CJArray*>(reinterpret_cast<Uptr>(arrayObj) + TYPEINFO_PTR_SIZE);
     cjArray->start = 0;
@@ -1861,17 +1861,17 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
     if (Heap::IsHeapAddress(field)) {
-        return Heap::GetBarrier().ReadReference(obj, *field);
+        return ZBarrier::ReadReference(obj, *field);
     }
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
-        return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
+        return ZBarrier::ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
     }
     return to_object(safe(RootSlotAt(static_cast<void*>(field)).LoadPlain()));
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
 {
-    return Heap::GetBarrier().ReadWeakRef(obj, *field);
+    return ZBarrier::ReadWeakRef(obj, *field);
 }
 extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress srcField, size_t size, GCTib gctib)
 {
@@ -1884,11 +1884,11 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
         return;
     }
     if (Heap::IsHeapAddress(srcField)) {
-        Heap::GetBarrier().ReadStruct(dstPtr, srcField, size, gctib);
+        ZBarrier::ReadStruct(dstPtr, srcField, size, gctib);
         return;
     }
     if (IsGlobalStruct(obj, srcField)) {
-        Heap::GetBarrier().ReadStaticStruct(dstPtr, srcField, size, gctib);
+        ZBarrier::ReadStaticStruct(dstPtr, srcField, size, gctib);
         return;
     }
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstPtr), size,
@@ -1897,11 +1897,11 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
 }
 extern "C" ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field)
 {
-    return Heap::GetBarrier().ReadStaticRef(*field);
+    return ZBarrier::ReadStaticRef(*field);
 }
 extern "C" void CJ_MCC_ReadStaticStruct(MAddress dstPtr, size_t dstSize, MAddress srcPtr, size_t srcSize, GCTib gctib)
 {
-    Heap::GetBarrier().ReadStaticStruct(dstPtr, srcPtr, dstSize, gctib);
+    ZBarrier::ReadStaticStruct(dstPtr, srcPtr, dstSize, gctib);
 }
 extern "C" void* MCC_GetTypeInfoAnnotations(TypeInfo* cls, TypeInfo* arrayTi) { return cls->GetAnnotations(arrayTi); }
 
@@ -1956,7 +1956,7 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
                 return false;
             }
             if (Heap::IsHeapAddress(obj)) {
-                curObj = Heap::GetBarrier().ReadReference(obj, obj->GetRefField(offset));
+                curObj = ZBarrier::ReadReference(obj, obj->GetRefField(offset));
             } else {
                 curObj = to_object(obj->GetRefField(offset).GetTargetObject());
             }
@@ -1999,11 +1999,11 @@ static void CopyGenericField(const ObjectPtr obj, void* fieldPtr, const ObjectPt
         return;
     }
     if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(src)) {
-        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(fp), src,
+        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(fp), src,
                                       reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size);
         return;
     }
-    Heap::GetBarrier().WriteStruct(dst, reinterpret_cast<MAddress>(fp), size,
+    ZBarrier::WriteStruct(dst, reinterpret_cast<MAddress>(fp), size,
                                    reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size);
 }
 
@@ -2074,7 +2074,7 @@ extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, siz
                      "MCC_WriteGenericPayload memcpy_s failed");
     } else {
         MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
-        Heap::GetBarrier().WriteStruct(dst, dstAddr, srcSize, srcField, srcSize);
+        ZBarrier::WriteStruct(dst, dstAddr, srcSize, srcField, srcSize);
     }
 }
 
@@ -2095,7 +2095,7 @@ extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t
         CHECK_DETAIL(memcpy_s(dstNative, size, reinterpret_cast<void*>(srcPayload), size) == EOK,
                      "CJ_MCC_ReadGenericPayload memcpy_s failed");
     } else {
-        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(dstNative), obj, srcPayload, size);
+        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(dstNative), obj, srcPayload, size);
     }
 }
 
@@ -2108,7 +2108,7 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
         constexpr size_t stackCache = 256;
         if (size < stackCache) {
             char stackMem[stackCache]{ 0 };
-            Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<MAddress>(stackMem),
+            ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(stackMem),
                 reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
             CopyGenericField(dstPtr, reinterpret_cast<void*>(
                 reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
@@ -2118,7 +2118,7 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
             char* nativeHeapMem = (char*)malloc(size);
             CHECK_DETAIL(nativeHeapMem != nullptr, "malloc failed when read generic %p -> %p(%p) size %zu",
                          dstPtr, obj, fieldPtr, size);
-            Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<MAddress>(nativeHeapMem),
+            ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(nativeHeapMem),
                 reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
             CopyGenericField(dstPtr, reinterpret_cast<void*>(
                 reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
@@ -2134,11 +2134,11 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
         return;
     }
     if (!Heap::IsHeapAddress(dstPtr) && Heap::IsHeapAddress(obj)) {
-        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, obj,
+        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, obj,
                                       reinterpret_cast<MAddress>(fieldPtr), size);
         return;
     }
-    Heap::GetBarrier().WriteStruct(dstPtr, reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size,
+    ZBarrier::WriteStruct(dstPtr, reinterpret_cast<MAddress>(dstPtr) + TYPEINFO_PTR_SIZE, size,
                                    reinterpret_cast<MAddress>(fieldPtr), size);
 }
 
@@ -2265,7 +2265,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TEMP_ENUM:
         case TypeKind::TYPE_KIND_RAWARRAY:
         case TypeKind::TYPE_KIND_FUNC: {
-            Heap::GetBarrier().CopyRefArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+            ZBarrier::CopyRefArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             break;
         }
         case TypeKind::TYPE_KIND_UNIT:
@@ -2297,7 +2297,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
             // VArray may embed managed refs (HasRefField recurses via component flag /
             // TypeGCInfo). Unconditional memmove skips remset post-record (G-C1).
             if (componentTypeInfo->HasRefField()) {
-                Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+                ZBarrier::CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             } else {
                 CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                        reinterpret_cast<void*>(srcField), srcSize) == EOK,
@@ -2308,7 +2308,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_TUPLE:
         case TypeKind::TYPE_KIND_STRUCT:
         case TypeKind::TYPE_KIND_ENUM: {
-            Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+            ZBarrier::CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
             break;
         }
         default:
@@ -2355,7 +2355,7 @@ extern "C" uintptr_t CJ_MCC_GetJSLambdaAddr(const ObjectPtr obj)
 
     // Loop to check if it's a wrapper class, if so, get realAutoEnvObj until finding a non-wrapper class
     while (MCC_IsWrapperClassForAutoEnv(currentObj->GetTypeInfo())) {
-        currentObj = Heap::GetBarrier().ReadReference(currentObj,
+        currentObj = ZBarrier::ReadReference(currentObj,
             currentObj->GetRefField(TYPEINFO_PTR_SIZE + realAutoEnvObjOffset));
     }
 

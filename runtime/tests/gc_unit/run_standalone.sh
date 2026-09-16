@@ -74,6 +74,7 @@ run_ohos_host_arm() {
       -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
       -DMRT_TESTABLE_INTERNALS=1 -include string \
       -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+      -I"$ROOT/runtime/src/Heap/z/os/linux" \
       -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
@@ -200,18 +201,6 @@ case "${MRT_GC_UNIT_OHOS_HOST:-0}" in
 esac
 
 TEST_DEFINES=()
-RANGE_REGISTRY_FLAGS=()
-RANGE_REGISTRY_SOURCES=()
-if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  range_registry_symbols=$(nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | \
-    /usr/bin/grep -c 'RangeRegistry' || true)
-  if [[ "$range_registry_symbols" -eq 0 ]]; then
-    echo "error: MRT_TESTABLE_INTERNALS=1 but product SO has no RangeRegistry symbols" >&2
-    exit 6
-  fi
-  RANGE_REGISTRY_FLAGS=(-DMRT_TESTABLE_INTERNALS=1)
-  RANGE_REGISTRY_SOURCES=("$SRC/test_range_registry.cpp")
-fi
 
 # Keep the standalone test translation units in the same compile-time
 # configuration as the product SO they bind. The default SO deliberately has
@@ -270,6 +259,7 @@ INC_FLAGS=(
   -I"$ROOT/runtime/src"
   -I"$ROOT/runtime/src/Loader/BinaryFile"
   -I"$ROOT/runtime/src/Heap"
+  -I"$ROOT/runtime/src/Heap/z/os/linux"
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include"
   -I"$ROOT/runtime/include"
   -I"$BOUNDS_INC"
@@ -287,7 +277,6 @@ fi
 MAIN_COMPILE_FLAGS=(
   -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti
   -fvisibility-inlines-hidden
-  "${RANGE_REGISTRY_FLAGS[@]}"
   "${TEST_DEFINES[@]}"
   "${TESTABLE_FLAGS[@]}"
   "${INC_FLAGS[@]}"
@@ -333,6 +322,7 @@ MAIN_SOURCES=(
   "$SRC/test_forwarding_no_geometry.cpp"
   "$SRC/test_z_forwarding_table.cpp"
   "$SRC/test_allocation_stall_queue.cpp"
+  "$SRC/test_p05_heuristics.cpp"
   "$SRC/test_young_conc.cpp"
   "$SRC/test_alloc_buffer_handoff.cpp"
   "$SRC/test_tlab_usage.cpp"
@@ -343,8 +333,11 @@ MAIN_SOURCES=(
   "$SRC/test_store_barrier_buffer.cpp"
   "$SRC/test_barrier_old_atomic.cpp"
   "$SRC/test_zPageAge.cpp"
-  "${RANGE_REGISTRY_SOURCES[@]}"
+  "$SRC/test_zPage.cpp"
+  "$SRC/test_zVirtualMemory.cpp"
+  "$SRC/test_zVirtualMemoryManager.cpp"
   "$SRC/test_mapped_cache.cpp"
+  "$SRC/test_page_retirement.cpp"
   "$SRC/test_stay_young.cpp"
   "$SRC/test_gc_trigger.cpp"
   "$SRC/test_gc_director.cpp"
@@ -378,7 +371,6 @@ MAIN_SOURCES=(
   "$SRC/test_verify_fail_close.cpp"
   "$SRC/test_verify_phase.cpp"
   "$SRC/test_verify_marking_stacks.cpp"
-  "$SRC/test_mem_map.cpp"
   "$SRC/test_colour_census.cpp"
   "$SRC/test_payload_clamp.cpp"
   "$SRC/test_cycle_ref_saferegion.cpp"

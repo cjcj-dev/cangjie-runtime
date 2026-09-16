@@ -101,7 +101,7 @@ struct RelocationReceiptTestAccess {
         collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
         auto& remembered = Heap::GetHeap().GetRememberedSet();
         if (!remembered.IsInitialized()) {
-            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+            remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         }
         // ZDriver::gc_major runs the young roots collection before old marking.
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
@@ -253,8 +253,8 @@ private:
 };
 
 struct ValueRootRoute {
-    RegionInfo* source = nullptr;
-    RegionInfo* destination = nullptr;
+    ZPage* source = nullptr;
+    ZPage* destination = nullptr;
     BaseObject* from = nullptr;
     BaseObject* to = nullptr;
 };
@@ -268,16 +268,16 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     route.to = fx.PlaceObject(route.destination->GetRegionStart());
     route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + route.from->GetSize());
     route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + route.to->GetSize());
-    route.source->SetYoungRegionFlag(0);
-    route.destination->SetYoungRegionFlag(destinationYoung ? 1 : 0);
+    route.source->reset(PageAge::old);
+    route.destination->reset(destinationYoung ? PageAge::eden : PageAge::old);
     if (destinationYoung) {
-        route.destination->SetYoungAge(1);
+        route.destination->reset(PageAge::eden);
     }
 
-    route.source->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    route.source->SetRegionListOwner(nullptr);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(route.source, route.from));
     RegionList selected("old-source-value-root");
-    selected.PrependRegion(route.source, RegionInfo::RegionType::FROM_REGION);
+    selected.PrependRegion(route.source);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
     route.source->PrepareForwardableRegion<Generation::Old>();
@@ -301,7 +301,7 @@ bool IsValueRootMarked(const ValueRootRoute& route)
 }
 
 struct WeakGraph {
-    explicit WeakGraph(GcHeapFixture& fixture, RegionInfo* region, RegionInfo* targetRegion = nullptr)
+    explicit WeakGraph(GcHeapFixture& fixture, ZPage* region, ZPage* targetRegion = nullptr)
         : fx(fixture), owner(region), targetOwner(targetRegion == nullptr ? region : targetRegion)
     {
         std::memset(weakTypeStorage, 0, sizeof(weakTypeStorage));
@@ -339,13 +339,13 @@ struct WeakGraph {
 
     bool IsMarked(BaseObject* object) const
     {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         return region->is_object_strongly_live(from_object(object));
     }
 
     GcHeapFixture& fx;
-    RegionInfo* owner;
-    RegionInfo* targetOwner;
+    ZPage* owner;
+    ZPage* targetOwner;
     BaseObject* strongRoot = nullptr;
     BaseObject* weak = nullptr;
     BaseObject* referent = nullptr;
@@ -382,7 +382,7 @@ struct ExportForeignGraph {
     }
 
     GcHeapFixture& fx;
-    RegionInfo* owner;
+    ZPage* owner;
     BaseObject* root = nullptr;
     BaseObject* foreign = nullptr;
     alignas(TypeInfo) unsigned char foreignTypeStorage[sizeof(TypeInfo)];
@@ -396,9 +396,9 @@ void RunYoungWeakVariant(size_t helpers)
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     WeakGraph graph(fx, fx.region1);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
@@ -412,7 +412,7 @@ void RunYoungWeakVariant(size_t helpers)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(graph.child);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = resources.IsGcStarted();
@@ -460,9 +460,9 @@ void RunYoungWeakRemsetFlow()
     // a real old->young edge.  The holder then enters this young collection;
     // the remembered slot itself, rather than a test-built weakSlots ledger,
     // is what the product minor path receives.
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     WeakGraph graph(fx, fx.region0, fx.region1);
     *reinterpret_cast<uintptr_t*>(graph.referent) = reinterpret_cast<uintptr_t>(fx.typeInfo);
     *reinterpret_cast<uintptr_t*>(graph.child) = reinterpret_cast<uintptr_t>(fx.typeInfo);
@@ -475,10 +475,9 @@ void RunYoungWeakRemsetFlow()
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     rememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier;
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
     referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ ZPointerMarkedYoungMask));
-    barrier.WriteReference(graph.weak, referentField, graph.referent);
+    ZBarrier::WriteReference(graph.weak, referentField, graph.referent);
     const MAddress weakSlot = reinterpret_cast<MAddress>(&referentField);
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 
@@ -528,7 +527,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
     WeakGraph graph(fx, fx.region0);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
@@ -542,7 +541,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.child);
     if (runtimeEntry) {
-        Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+        Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
         space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
         space.GetRegionManager().AddRawPointerObject(graph.weak);
         space.GetRegionManager().AddRawPointerObject(graph.referent);
@@ -724,7 +723,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
     WeakGraph graph(fx, fx.region0);
     // This grid is deliberately non-weak: the only edge must be followed by
     // the export root family even when the common root stack is empty.
@@ -773,7 +772,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);
     space.GetRegionManager().AddRawPointerObject(route.to);
     Heap::GetHeap().GetRememberedSet().Initialize(
-        fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
 
     const bool startedBefore = resources.IsGcStarted();
@@ -816,7 +815,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
     ExportForeignGraph graph(fx);
 
     BaseObject* secondRoot = nullptr;

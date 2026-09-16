@@ -113,18 +113,6 @@ public:
     mutable bool winnerStored = false;
 };
 
-class InstalledBarrierScope final {
-public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
-    {
-        Heap::barrierPtr = &barrier;
-    }
-    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
-
-private:
-    Barrier* previous;
-};
-
 class AllocBufferScope final {
 public:
     explicit AllocBufferScope(AllocBuffer* replacement)
@@ -215,30 +203,26 @@ ReceiptCounts DrainReceipts(BaseObject* oldValue, BaseObject* newValue)
 }
 
 struct StoreFixture {
-    StoreFixture() : barrier(), installed(barrier)
+    StoreFixture()
     {
         regionOld = heap.region0;
         regionNew = heap.region1;
-        regionOld->SetYoungRegionFlag(0);
-        regionNew->SetYoungRegionFlag(1);
+        regionOld->reset(PageAge::old);
+        regionNew->reset(PageAge::eden);
         holder = heap.obj0;
         oldValue = heap.PlaceObject(heap.heapStart + 256);
         newValue = heap.obj1;
         regionOld->SetRegionAllocPtr(reinterpret_cast<MAddress>(oldValue) + oldValue->GetSize());
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
         field->StoreColoured(to_zpointer(raw(GcUnit::StoreGoodPointer(oldValue)) ^ ZPointerMarkedOldMask));
-        remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
         (void)DrainReceipts(oldValue, newValue);
     }
 
     GcHeapFixture heap;
     MarkPublicationFixture marking;
     BarrierCollector collector;
-    RememberedSet remembered;
-    Barrier barrier;
-    InstalledBarrierScope installed;
-    RegionInfo* regionOld = nullptr;
-    RegionInfo* regionNew = nullptr;
+    ZPage* regionOld = nullptr;
+    ZPage* regionNew = nullptr;
     BaseObject* holder = nullptr;
     BaseObject* oldValue = nullptr;
     BaseObject* newValue = nullptr;
@@ -255,10 +239,10 @@ GC_TEST(BarrierOldAtomic, NoAllocBufferOverwriteRetiresOldValue)
     MutatorScope mutatorScope(mutator);
     AllocBufferScope noBuffer(nullptr);
 
-    fixture.barrier.WriteReference(fixture.holder, *fixture.field, fixture.newValue);
+    ZBarrier::WriteReference(fixture.holder, *fixture.field, fixture.newValue);
     ThreadLocal::GetGCData().storeBarrierBuffer->Flush();
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
-    const bool slotRemembered = fixture.remembered.Contains(reinterpret_cast<MAddress>(fixture.field));
+    const bool slotRemembered = Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(fixture.field));
     std::fprintf(stderr,
                  "DETAIL arm=no_alloc old_receipt=%zu new_receipt=%zu remset=%u final_target=%p\n",
                  receipts.oldValue, receipts.newValue, static_cast<unsigned>(slotRemembered),
@@ -280,12 +264,12 @@ GC_TEST(BarrierOldAtomic, AllocBufferOverwriteRetiresOldValueControl)
     AllocBuffer alloc;
     AllocBufferScope withBuffer(&alloc);
 
-    fixture.barrier.WriteReference(fixture.holder, *fixture.field, fixture.newValue);
+    ZBarrier::WriteReference(fixture.holder, *fixture.field, fixture.newValue);
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     ThreadLocal::GetGCData().storeBarrierBuffer->Flush();
     mutator.FlushStoreBarrierBuffer(false);
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
-    const bool slotRemembered = fixture.remembered.Contains(reinterpret_cast<MAddress>(fixture.field));
+    const bool slotRemembered = Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(fixture.field));
     std::fprintf(stderr,
                  "DETAIL arm=with_alloc pending=%zu old_receipt=%zu new_receipt=%zu remset=%u final_target=%p\n",
                  pending, receipts.oldValue, receipts.newValue, static_cast<unsigned>(slotRemembered),
@@ -302,10 +286,7 @@ GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
 {
     GcHeapFixture heap;
     BarrierCollector collector;
-    RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier;
-    InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(heap.obj0);
     field.StoreColoured(before);
@@ -330,10 +311,7 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
     collector.from = heap.obj0;
     collector.to = heap.PlaceObject(heap.heapStart + 256);
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(collector.to) + collector.to->GetSize());
-    RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier;
-    InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(collector.from);
     field.StoreColoured(before);
@@ -357,10 +335,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
     BarrierCollector collector;
     BaseObject* const winner = heap.PlaceObject(heap.heapStart + 256);
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
-    RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier;
-    InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     collector.pauseBeforeHeal = true;
     constexpr size_t kForcedCasFailures = 8;
@@ -375,7 +350,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
         std::thread writer([&]() {
             std::unique_lock<std::mutex> lock(collector.hookMutex);
             collector.hookCv.wait(lock, [&]() { return collector.slowLoadObserved; });
-            // ZBarrier::self_heal (zBarrier.inline.hpp:98) preserves a winner
+            // ZZBarrier::self_heal (zBarrier.inline.hpp:98) preserves a winner
             // satisfying the fast path. A real mutator store publishes store-good.
             field.StoreColoured(StoreGoodPointer(winner), std::memory_order_release);
             collector.winnerStored = true;
@@ -403,22 +378,20 @@ GC_TEST(BarrierOldAtomic, NativeBulkLoadBadSourceResolvesBeforeHeapPublication)
 {
     GcHeapFixture heap;
     BarrierCollector collector;
-    RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Barrier barrier;
     collector.from = heap.obj0;
     collector.to = heap.obj1;
     NativeSlot source(LoadBadPointer(heap.obj0));
     HeapSlot<>& destination = HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     destination.StoreColoured(zpointer::null);
 
-    barrier.ReadStaticStruct(reinterpret_cast<MAddress>(&destination), reinterpret_cast<MAddress>(&source),
+    ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(&destination), reinterpret_cast<MAddress>(&source),
                             sizeof(source), heap.typeInfo->GetGCTib());
 
     GC_EXPECT_EQ(destination.GetFieldValue(), StoreGoodPointer(heap.obj1));
     // The same native source copied to a mutator-local value must be plain.
     RootSlot local;
-    barrier.ReadStaticStruct(reinterpret_cast<MAddress>(&local), reinterpret_cast<MAddress>(&source),
+    ZBarrier::ReadStaticStruct(reinterpret_cast<MAddress>(&local), reinterpret_cast<MAddress>(&source),
                             sizeof(source), heap.typeInfo->GetGCTib());
     GC_EXPECT_EQ(raw(local.LoadPlain()), reinterpret_cast<uintptr_t>(heap.obj1));
 }
@@ -432,13 +405,10 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
                           TypeKind::TYPE_KIND_ENUM, TypeKind::TYPE_KIND_VARRAY}) {
         GcHeapFixture heap;
         MarkPublicationFixture marking;
-        heap.region0->SetYoungRegionFlag(0);
-        heap.region1->SetYoungRegionFlag(1);
+        heap.region0->reset(PageAge::old);
+        heap.region1->reset(PageAge::eden);
         BarrierCollector collector;
-        RememberedSet remembered;
-        remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-        Barrier barrier;
-        InstalledBarrierScope installed(barrier);
+            remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
         alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};
         auto* component = reinterpret_cast<TypeInfo*>(componentStorage);
         component->SetType(TypeKind::TYPE_KIND_CLASS);

@@ -31,49 +31,10 @@ namespace MapleRuntime {
 class BaseObject;
 class WCollector;
 
-// ZBarrier assertion is owned by the barrier, independently of diagnostics.
 void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr);
-
-// Every heap/root healing write names its owning algorithm.  This is deliberately
-// exhaustive: a catch-all value would recreate the attribution gap slot CAS closes.
-enum class HealSite : uint16_t {
-    BaseObjectCompareExchangeRefField,
-    BarrierWeakClean,
-    BarrierCompareAndSwapReference,
-    MutatorPreForwardHeaderlessRecord,
-    MutatorPreForwardRoot,
-    MutatorPreForwardStackField,
-    MutatorMarkRoot,
-    WCollectorEnumRawRoot,
-    WCollectorEnumRefFieldRoot,
-    WCollectorFixRootForwarded,
-    WCollectorForwardRawGhost,
-    WCollectorGetAndTryTagObj,
-    WCollectorMinorFixForwarded,
-    WCollectorMinorFixForwardNull,
-    WCollectorMinorFixInteriorForward,
-    WCollectorMinorResolveLoadGoodForward,
-    WCollectorMinorResolveOldForward,
-    WCollectorNormalizeRawRoot,
-    WCollectorRemapYoungRoots,
-    WCollectorResolveRootLoadGoodForward,
-    WCollectorTryUntagRefField,
-    WCollectorTryUpdateRefField,
-};
-
-enum class HealNull : uint8_t { Disallow, Allow };
 
 template<bool isAtomic>
 class HeapSlot;
-
-// observedOut: OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:92-107) needs the value the
-// CAS actually found, so it can re-apply the same heal value to it. Optional; nullptr leaves
-// every existing caller on the plain success/failure contract.
-// ⚠ It is written only when the CAS is reached -- the non-null-to-null guard below returns
-// before that, so a Disallow caller must not read it.
-// Full-colour write funnel: every HeapSlot write is checked unconditionally;
-// RootSlot/DerivedSlot addresses remain outside this heap-only admission.
-void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal);
 
 /* there are several similar terms about object address:
     1. address: the start position of any virtual memory block.
@@ -138,7 +99,6 @@ public:
         MAddress expectedRaw = raw(expectedValue);
         MAddress newRaw = raw(newValue);
         CHECK(std::numeric_limits<MAddress>::max() > newRaw);
-        AssertColouredWriteIfEnabled(this, newRaw);
 #if defined(CANGJIE_TSAN_SUPPORT)
         // tsan will get expectedValue's address for us, just pass the real value
         auto ret = Sanitizer::TsanAtomicCompareExchange(&fieldVal, expectedRaw, newRaw, succOrder, failOrder);
@@ -162,7 +122,6 @@ public:
     {
         MAddress newRaw = raw(newRef);
         CHECK(newRaw < std::numeric_limits<RefFieldValue>::max());
-        AssertColouredWriteIfEnabled(this, newRaw);
         MAddress ret = 0;
 #if defined(CANGJIE_TSAN_SUPPORT)
         ret = Sanitizer::TsanAtomicExchange(&fieldVal, newRaw, order);
@@ -261,9 +220,6 @@ private:
     zaddress_unsafe rootValue;
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);
-    friend bool HealRoot(RootSlot&, zaddress, HealSite, HealNull, std::memory_order);
-    friend bool HealRootIfObserved(RootSlot&, zaddress_unsafe, zaddress, HealSite,
-                                   HealNull, std::memory_order, std::memory_order);
     friend class WCollector;
 };
 
@@ -276,33 +232,6 @@ inline void StorePlain(RootSlot& slot, zaddress value,
                        std::memory_order order = std::memory_order_relaxed)
 {
     slot.StorePlain(value, order);
-}
-
-inline bool HealRoot(RootSlot& slot, zaddress good, HealSite site,
-                     HealNull allowNull = HealNull::Disallow,
-                     std::memory_order order = std::memory_order_relaxed)
-{
-    (void)site;
-    zaddress_unsafe observed = slot.LoadPlain(order);
-    if (allowNull == HealNull::Disallow && !is_null(observed) && is_null(good)) {
-        return false;
-    }
-    slot.StorePlain(good, order);
-    return true;
-}
-
-// Conditional repair for an uncolored-root owner. Colored native mutator
-// accesses use ZBarrier::self_heal instead; this helper never accepts colored values.
-inline bool HealRootIfObserved(RootSlot& slot, zaddress_unsafe observed, zaddress good, HealSite site,
-                               HealNull allowNull = HealNull::Disallow,
-                               std::memory_order succOrder = std::memory_order_relaxed,
-                               std::memory_order failOrder = std::memory_order_relaxed)
-{
-    (void)site;
-    if (allowNull == HealNull::Disallow && !is_null(observed) && is_null(good)) {
-        return false;
-    }
-    return slot.CompareExchangePlain(observed, good, succOrder, failOrder);
 }
 
 // OpenJDK ProcessDerivedOop preserves the offset, processes the base, then
@@ -338,10 +267,9 @@ inline void RebaseDerived(DerivedSlot& slot, const RootSlot& base, size_t offset
 // DerivedSlot remains plain via RebaseDerived.
 template<bool isAtomic = false>
 inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expected,
-                                       BaseObject* host, size_t offset, HealSite site)
+                                       BaseObject* host, size_t offset)
 {
     MAddress address = reinterpret_cast<MAddress>(host) + offset;
-    (void)site;
     return field.CompareExchange(expected,
                     to_zpointer(raw(ZAddress::store_good(to_zaddress(address)))));
 }
@@ -351,10 +279,9 @@ inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expec
 // Use the (host, offset) overload for a metadata-provided derived base.
 template<bool isAtomic = false>
 inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expected,
-                                       BaseObject* interior, HealSite site)
+                                       BaseObject* interior)
 {
     MAddress address = reinterpret_cast<MAddress>(interior);
-    (void)site;
     return field.CompareExchange(expected,
                     to_zpointer(raw(ZAddress::store_good(to_zaddress(address)))));
 }

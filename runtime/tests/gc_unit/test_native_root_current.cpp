@@ -105,10 +105,10 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    heap.GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetYoungAge(1);
+    heap.GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+    ZPage* region = fx.region0;
+    region->reset(PageAge::eden);
+    region->reset(PageAge::eden);
     resources.GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold = 1;
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
@@ -155,16 +155,16 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, from));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
     RegionList selected("native-root-relocation");
-    selected.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+    selected.PrependRegion(region);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
     // Invoke the explicit product instantiation, not a header-instantiated
     // fixture copy of the forwarding publication mechanism.
-    using Prepare = void (*)(RegionInfo*);
+    using Prepare = void (*)(ZPage*);
     void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
     GC_EXPECT_TRUE(product != nullptr);
     auto prepare = reinterpret_cast<Prepare>(dlsym(product,
-        "_ZN12MapleRuntime10RegionInfo24PrepareForwardableRegionILNS_10GenerationE0EEEvv"));
+        "_ZN12MapleRuntime10ZPage24PrepareForwardableRegionILNS_10GenerationE0EEEvv"));
     GC_EXPECT_TRUE(prepare != nullptr);
     Dl_info identity{};
     GC_EXPECT_TRUE(dladdr(reinterpret_cast<void*>(prepare), &identity) != 0 &&
@@ -262,10 +262,10 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     WCollector collector(heap.GetAllocator(), heap.GetCollectorResources());
     RelocationReceiptTestAccess::BindNativeRootFixture(heap.GetCollectorResources(), collector);
     NativeSlot slot(zpointer::null);
-    heap.GetBarrier().WriteStaticRef(slot, fx.obj0);
-    GC_EXPECT_TRUE(heap.GetBarrier().ReadStaticRef(slot) == fx.obj0);
-    heap.GetBarrier().WriteStaticRef(slot, nullptr);
-    GC_EXPECT_TRUE(heap.GetBarrier().ReadStaticRef(slot) == nullptr);
+    ZZBarrier::WriteStaticRef(slot, fx.obj0);
+    GC_EXPECT_TRUE(ZZBarrier::ReadStaticRef(slot) == fx.obj0);
+    ZZBarrier::WriteStaticRef(slot, nullptr);
+    GC_EXPECT_TRUE(ZZBarrier::ReadStaticRef(slot) == nullptr);
     std::fprintf(stderr, "native_root_boundary executed=1 colored=1 null=1\n");
 }
 
@@ -279,15 +279,15 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
-    fx.region0->SetYoungRegionFlag(1);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+    fx.region0->reset(PageAge::eden);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_TRACE);
     collector.StartYoungMarkWork();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
     NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     const size_t before = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
-    heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
+    ZZBarrier::MarkYoungGoodBarrierOnOopField(root);
     const bool marked = fx.region0->is_object_strongly_live(from_object(fx.obj0));
     const size_t first = RelocationReceiptTestAccess::PendingYoungRootWork(collector);
     std::fprintf(stderr, "B19_YOUNG_MARK_BEFORE_HEAL executed=1 marked=%u before=%zu after=%zu word=%#lx\n",
@@ -296,7 +296,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     GC_EXPECT_EQ(first, before + 1);
     GC_EXPECT_TRUE(ZPointer::is_marked_young(to_zpointer(raw(root.GetFieldValue()))));
     // The same physical, now young-good slot must not publish another follow.
-    heap.GetBarrier().MarkYoungGoodBarrierOnOopField(root);
+    ZZBarrier::MarkYoungGoodBarrierOnOopField(root);
     GC_EXPECT_EQ(RelocationReceiptTestAccess::PendingYoungRootWork(collector), first);
     RelocationReceiptTestAccess::DrainYoungRootWork(collector);
     GC_EXPECT_EQ(RelocationReceiptTestAccess::PendingYoungRootWork(collector), size_t(0));
@@ -321,8 +321,8 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
-    fixture.region0->SetYoungRegionFlag(0);
+    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+    fixture.region0->reset(PageAge::old);
     GC_EXPECT_FALSE(fixture.region0->is_object_strongly_live(from_object(fixture.obj0)));
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
@@ -354,8 +354,8 @@ void CheckRootStorageSegments(unsigned family)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, 2);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
-    fixture.region0->SetYoungRegionFlag(family != 0);
+    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+    fixture.region0->reset(family != 0 ? PageAge::eden : PageAge::old);
     auto& finalizers = resources.GetFinalizerProcessor();
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
     constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
@@ -431,8 +431,8 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
-    fixture.region0->SetYoungRegionFlag(1);
+    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+    fixture.region0->reset(PageAge::eden);
     std::vector<U64> original;
     for (size_t i = 0; i < sizeof(uintptr_t) * CHAR_BIT; ++i) {
         original.push_back(heap.RegisterExportRoot(fixture.obj0));

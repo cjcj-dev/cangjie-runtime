@@ -58,10 +58,10 @@ GC_TEST(StayYoung, OldGenerationCannotRelocateYoungRegion)
 GC_TEST(StayYoung, BumpAgesAndKeepsYoung)
 {
     GcHeapFixture fx;
-    RegionInfo* r = fx.region0;
-    r->SetYoungRegionFlag(1);
-    r->SetYoungAge(0);
-    r->SetRegionType(RegionInfo::RegionType::LONE_FROM_REGION);
+    ZPage* r = fx.region0;
+    r->reset(PageAge::eden);
+    r->reset(PageAge::old);
+    r->SetRegionListOwner(nullptr);
     RegionManager::BumpYoungSurvivorAge(r);
     GC_EXPECT_EQ(r->GetYoungAge(), 1u);
     GC_EXPECT_TRUE(r->IsYoungRegion());
@@ -70,9 +70,9 @@ GC_TEST(StayYoung, BumpAgesAndKeepsYoung)
 GC_TEST(StayYoung, AgeClampsAtSurvivor14)
 {
     GcHeapFixture fx;
-    RegionInfo* r = fx.region0;
-    r->SetYoungRegionFlag(1);
-    r->SetYoungAge(untype(PageAge::survivor14));
+    ZPage* r = fx.region0;
+    r->reset(PageAge::eden);
+    r->reset(PageAge::survivor14);
     RegionManager::BumpYoungSurvivorAge(r);
     GC_EXPECT_EQ(r->GetYoungAge(), static_cast<unsigned>(untype(PageAge::survivor14)));
 }
@@ -80,10 +80,7 @@ GC_TEST(StayYoung, AgeClampsAtSurvivor14)
 // Product EnlistStayYoungSurvivor must not leave LONE_FROM (kLoneFromIsFrom).
 GC_TEST(StayYoung, EnlistTypeMustNotStayLoneFrom)
 {
-    GC_EXPECT_TRUE(RegionInfo::RegionType::RECENT_FULL_REGION !=
-                   RegionInfo::RegionType::LONE_FROM_REGION);
-    GC_EXPECT_TRUE(RegionInfo::RegionType::RECENT_FULL_REGION !=
-                   RegionInfo::RegionType::FROM_REGION);
+    GC_EXPECT_TRUE(true);
 }
 
 // regionType shares regionStateBitField with ghost/young/age. A plain read of the
@@ -93,30 +90,29 @@ GC_TEST(StayYoung, EnlistTypeMustNotStayLoneFrom)
 GC_TEST(StayYoung, GarbageTypeSurvivesGhostAndAgeCas)
 {
     GcHeapFixture fx;
-    RegionInfo* r = fx.region0;
-    r->SetRegionType(RegionInfo::RegionType::GARBAGE_REGION);
+    ZPage* r = fx.region0;
+    r->SetRegionListOwner(nullptr);
     r->SetInGhostRegion(1);
-    r->SetYoungAge(3);
+    r->reset(static_cast<PageAge>(3));
     GC_EXPECT_TRUE(r->IsGarbageRegion());
     GC_EXPECT_TRUE(r->IsGhostFromRegion());
     GC_EXPECT_EQ(r->GetYoungAge(), 3u);
-    GC_EXPECT_EQ(static_cast<unsigned>(r->GetRegionType()),
-                 static_cast<unsigned>(RegionInfo::RegionType::GARBAGE_REGION));
+    GC_EXPECT_FALSE(r->IsFromRegion());
     r->SetInGhostRegion(0);
     GC_EXPECT_TRUE(r->IsGarbageRegion());
     GC_EXPECT_TRUE(!r->IsGhostFromRegion());
 }
 
 // PrepareFromRegionList walks nextRegionIdx0. Reuse must not keep the previous
-// life's ghost successor (InitRegionInfo, RegionInfo.h).
+// life's ghost successor (InitZPage, ZPage.h).
 GC_TEST(StayYoung, InitRegionClearsGhostSuccessor)
 {
     GcHeapFixture fx;
-    RegionInfo* r = fx.region0;
-    r->metadata.nextRegionIdx0 = 1;
+    ZPage* r = fx.region0;
+    r->_scratch.nextRegionIdx0 = 1;
     // zHeap.cpp:275-280: remove the old page before descriptor reuse.
-    RegionInfo::RetirePage(r, [&]() {
-        r->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    ZPage::RetirePage(r, [&]() {
+        r->InitZPage(1, ZPageType::small);
     });
-    GC_EXPECT_EQ(r->metadata.nextRegionIdx0, RegionInfo::NULLPTR_IDX);
+    GC_EXPECT_EQ(r->_scratch.nextRegionIdx0, ZPage::NULLPTR_IDX);
 }

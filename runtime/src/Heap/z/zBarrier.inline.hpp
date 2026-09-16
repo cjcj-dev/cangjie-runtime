@@ -34,7 +34,7 @@ inline void ZBarrier::MarkIfYoung(zaddress address)
 {
     BaseObject* object = to_object(address);
     if (Heap::IsHeapAddress(object) &&
-        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
+        Heap::page(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
         MarkYoung(address);
     }
 }
@@ -312,7 +312,8 @@ inline void ZBarrier::remap_young_relocated(volatile zpointer* p, zpointer o)
 inline void ZBarrier::remember(volatile zpointer* p)
 {
     const MAddress address = reinterpret_cast<MAddress>(p);
-    if (Heap::IsHeapAddress(address) && !RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
+    ZPage* page = Heap::page(address);
+    if (page != nullptr && !page->IsYoungRegion()) {
         Heap::GetHeap().GetRememberedSet().Record(address, true);
     }
 }

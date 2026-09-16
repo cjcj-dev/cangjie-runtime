@@ -56,7 +56,7 @@ void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expec
     }
 }
 
-RegionInfo::InPlaceClaimScope::InPlaceClaimScope(RegionInfo* region, ZForwardingLife::Retire site)
+ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Retire site)
     : owner(ForwardingTable::RetainPageOwner(region))
 {
     (void)site;
@@ -214,7 +214,7 @@ void ZForwardingLife::detach_page(std::atomic<int32_t>& refCount)
 }
 
 namespace MapleRuntime {
-RegionInfo* ZForwarding::page() const { return _page; }
+ZPage* ZForwarding::page() const { return _page; }
 }
 
 namespace MapleRuntime {

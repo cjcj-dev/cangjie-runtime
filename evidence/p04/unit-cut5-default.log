@@ -1,0 +1,8 @@
+# slot test2 acquired 2026-09-16T05:09:05+08:00
+UNIT arm=/root/sym_cangjie_runtime_610_implement_r5687426297-cut5 config=default rc=1 wall=9
+[==========] 524 tests from 93 test suites ran.
+[  PASSED  ] 522 tests.
+[  FAILED  ] 2 tests, listed below:
+[  FAILED  ] Uncommitter.UncommitIdleUnitsReleasesPhysical
+[  FAILED  ] Uncommitter.TestUncommitIndependentPartitionThread
+GC_UNIT_PARALLEL jobs=192 tests=524 wall=8.651

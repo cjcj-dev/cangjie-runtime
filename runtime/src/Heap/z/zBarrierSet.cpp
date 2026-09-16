@@ -6,6 +6,8 @@
 #include "Heap/z/zBarrier.inline.hpp"
 
 namespace MapleRuntime {
+// ZGC zBarrierSet.inline.hpp: AccessBarrier::barrier_needed is false for
+// primitive value_copy; only reference oop stores/loads need barriers.
 bool ZBarrierSet::barrier_needed(bool isReference)
 {
     return isReference;

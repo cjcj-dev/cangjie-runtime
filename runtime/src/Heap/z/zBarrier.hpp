@@ -23,14 +23,17 @@ class Collector;
 enum class ReferenceStrength : uint8_t { Strong, Weak, Phantom };
 struct ForwardingProvenance;
 
+class AllStatic {
+    AllStatic() = delete;
+    AllStatic(const AllStatic&) = delete;
+    AllStatic& operator=(const AllStatic&) = delete;
+};
+
 using ZBarrierFastPath = bool (*)(zpointer);
 using ZBarrierColor = zpointer (*)(zaddress, zpointer);
 
-class ZBarrier {
+class ZBarrier : public AllStatic {
 public:
-    ZBarrier() = default;
-    ZBarrier(const ZBarrier&) = delete;
-    ZBarrier& operator=(const ZBarrier&) = delete;
 
 #if defined(MRT_TESTABLE_INTERNALS)
     enum class FieldMarkKind { Old, Finalizable, Young, Remset };
@@ -168,6 +171,5 @@ public:
     static zpointer ColorLoadGood(zaddress address, zpointer previous);
 };
 
-using Barrier = ZBarrier;
 } // namespace MapleRuntime
 #endif // ~MRT_BARRIER_H

@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "gc_unittest.hpp"
+#include "zunittest.hpp"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
@@ -53,35 +54,32 @@ private:
 class OneUnitStallFixture {
 private:
     StallTestRuntime runtime;
-    struct MapOwner {
-        ~MapOwner() { MemMap::DestroyMemMap(value); }
-        MemMap* value{ nullptr };
-    } map;
-    RegionInfo* capacity{ nullptr };
+    ZPage* capacity{ nullptr };
 
 public:
+    // The RegionManager (mapped caches keep entries in heap memory) must be
+    // destroyed before the mapping: declare it last.
+    std::unique_ptr<ZTestRegionHeap> heap;
+    RegionManager manager;
+
     OneUnitStallFixture()
     {
         // ZInitialize: allocator sampling starts only after statistics initialization.
         ZStat::Initialize();
         constexpr size_t units = 1;
-        const size_t metadataSize = RegionManager::GetMetadataSize(units);
-        map.value = MemMap::MapMemory(metadataSize + RegionInfo::UNIT_SIZE, metadataSize);
         HeapParam heapParam {};
-        heapParam.regionSize = RegionInfo::UNIT_SIZE / 1024;
+        heapParam.regionSize = ZPage::UNIT_SIZE / 1024;
         heapParam.exemptionThreshold = 0.8;
-        manager.Initialize(units, reinterpret_cast<uintptr_t>(map.value->GetBaseAddr()), *map.value, heapParam, 0.5);
-        capacity = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
+        heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
+        capacity = manager.TakeRegion(1, ZPageType::small, false, false);
     }
 
     void PublishCapacity()
     {
-        RegionInfo* region = capacity;
+        ZPage* region = capacity;
         capacity = nullptr;
         manager.ReclaimRegion(region);
     }
-
-    RegionManager manager;
 };
 
 struct WaitState {
@@ -113,7 +111,7 @@ void RunWaiter(RegionManager& manager, std::atomic<size_t>& claimed)
     Mutator mutator;
     mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     ThreadLocal::SetMutator(&mutator);
-    RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    ZPage* region = manager.TakeRegion(1, ZPageType::small);
     claimed.store(region == nullptr ? 0 : region->GetUnitCount(), std::memory_order_release);
     ThreadLocal::SetMutator(nullptr);
 }
@@ -191,14 +189,14 @@ GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
 GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
 {
     OneUnitStallFixture fixture;
-    RegionInfo* competing = nullptr;
+    ZPage* competing = nullptr;
     bool supplied = false;
     fixture.manager.SetAllocationStallTestHooks(
         [](RegionManager&) {},
         [&](RegionManager& manager) {
             fixture.PublishCapacity();
             supplied = true;
-            competing = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
+            competing = manager.TakeRegion(1, ZPageType::small, false, false);
         },
         {});
     std::atomic<size_t> allocated{ 0 };

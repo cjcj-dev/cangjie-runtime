@@ -56,8 +56,8 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     GenerationMarkRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
     mark.collector.MarkObjectIfActive(fx.obj0);
     mark.collector.MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
@@ -97,7 +97,7 @@ GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
 }
 
 // Migrated weak-get cases from gc.TestReferenceRefersToDuringConcMark and
-// ZBarrier::blocking_keep_alive_on_weak_slow_path. These are admission tests;
+// ZZBarrier::blocking_keep_alive_on_weak_slow_path. These are admission tests;
 // the fixture does not execute the old mark-end pause or the rendezvous.
 GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
 {
@@ -132,7 +132,7 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
         CollectorResources& resources;
         ~RestoreBlock() { resources.UnblockResurrection(); }
     } restore { resources };
-    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::eden);
     resources.BlockResurrection();
     RestoreMarkFlips flips;
     const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, true, false);

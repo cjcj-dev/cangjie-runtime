@@ -1,0 +1,65 @@
+# ⭐ 真实相位入口函数（基线里已存在的产品驱动点；断线补丁至少一处要落在这些函数的定义体或调用行上）
+# 来源：0909 审查实际断开的位置。可加，⛔ 别删。
+RunGarbageCollection
+RequestGC
+DoGarbageCollection
+PushYoungObject
+FindUselessExternObjects
+Preforward
+PostTrace
+PublishMarkCoverage
+ReclaimRetired
+RehomeCompactedInPlaceRegion
+TryAllocateForRelocation
+SetRelocationRegion
+# 0910 00:0x 主控补（#31 归并、#9 实现各自实核基线 dc02cba6 / 751210ef 后提出）：
+ResolveCycleRef
+ResolveCycleRefImpl
+RouteOrCompactRegionImpl
+PostResolveCycleTask
+VerifyFaceEnabled
+VerifyPhaseEnter
+GCPhasePreForward
+TransitionToGCPhaseExclusive
+ForwardObjectImpl
+ForwardObjectExclusive
+RelocateObjectInner
+TryMutatorRelocate
+WaitForPageForwarding
+RunCycle
+Uncommit
+VisitHeapRootSlots
+WriteReference
+RecordCrossGenEdge
+ZeroAndFill
+runtime/src/Heap/z/zStat.cpp:Sort
+PublishForwardingCarrier
+PrepareForwardableRegion
+DoYoungGarbageCollection
+DoTracing
+ProcessOldNonStrongReferences
+PostWriteReference
+# 0914 主控登记（B14 #554 GcRequestSync 握手/ack 承重点）
+WaitForAck
+ProcessDriverRequest
+RequestGCAndWait
+# 0914 主控登记（B15/B16 栈水位消费点）
+DrainStackWatermark
+VisitRawObjects
+NoteLargeArrayInitRootVisit
+# 0914：门脚本条目已迁至 PHASE_ENTRIES-gate.txt（装置类清单）
+
+# 0916 P06：真实GC worker Pop -> SMR退休队列；基线append行与当前候选调用链实核，预演旧清单rc1/登记后rc0
+runtime/src/Heap/z/zMarkingSMR.cpp:free_node
+
+# 0916 #646: scheduler destroy-mutator hook calls existing logical owner exit; baseline cut preflight old rc1/proposed rc0
+runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:MRT_TransitMutatorToExit
+
+# 0916 #646: real LibInit body lifetime; actual candidate cut old list rc1/new rc0, dynamic 18 items only unrelated-unload progress fails
+runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:LibInit
+
+# 0916 P07: real GC worker dispatch completion and ZWorkers run statistics; baseline lines verified
+runtime/src/Heap/z/workerThread.cpp:coordinator_distribute_task
+runtime/src/Heap/z/zWorkers.cpp:run
+
+llvm/lib/CodeGen/CJBarrierLowering.cpp:readFastPath

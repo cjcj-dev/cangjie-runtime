@@ -94,7 +94,7 @@ void ColoredRoot(NativeSlot& root, bool afterOldMark)
         CHECK_DETAIL(ZPointer::is_marked_old(to_zpointer(raw(value))),
                      "Unmarked old root at %p", &root);
     }
-    ZVerify::Object(Heap::GetBarrier().ReadStaticRef(root), &root);
+    ZVerify::Object(ZBarrier::ReadStaticRef(root), &root);
 }
 void PlainRoot(ObjectRef& root)
 {
@@ -141,7 +141,7 @@ void ZVerify::Object(BaseObject* object, const void* slot)
     CHECK_DETAIL(addr != 0 && is_valid(static_cast<zaddress>(addr)) &&
                  (addr & (alignof(void*) - 1)) == 0 && Heap::IsHeapAddress(addr),
                  "Bad object %p found at %p", object, slot);
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(addr);
+    ZPage* region = Heap::page(addr);
     CHECK_DETAIL(region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion(),
                  "Bad object page %p found at %p", object, slot);
     TypeInfo* type = object->GetTypeInfo();
@@ -161,7 +161,7 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
         // zVerify.cpp:133-136: raw null is only possible when flip promoting.
         CHECK_DETAIL(collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).phase == GC_PHASE_MARK_COMPLETE,
                      "Raw null requires young mark complete at %p", &field);
-        RegionInfo* holder = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(base));
+        ZPage* holder = Heap::page(reinterpret_cast<MAddress>(base));
         // ZPage::is_allocating (zPage.inline.hpp:180-182).
         CHECK_DETAIL(holder->IsAllocating(),
                      "Raw null requires allocating holder at %p", &field);
@@ -172,15 +172,15 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
         Object(to_object(preloaded.GetTargetObject()), &field);
         return;
     }
-    BaseObject* target = Heap::GetBarrier().ReadReference(base, field);
+    BaseObject* target = ZBarrier::ReadReference(base, field);
     Object(target, &field);
-    const bool young = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion();
+    const bool young = Heap::page(reinterpret_cast<MAddress>(target))->IsYoungRegion();
     if (verifyWeaks) {
         CHECK_DETAIL(ZPointer::is_marked_any_old(to_zpointer(raw(value))),
                      "Bad possibly weak oop at %p", &field);
         CHECK_DETAIL(!young || ZPointer::is_marked_young(to_zpointer(raw(value))),
                      "Unmarked young oop at %p", &field);
-        CHECK_DETAIL(young || RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->is_object_live(
+        CHECK_DETAIL(young || Heap::page(reinterpret_cast<MAddress>(target))->is_object_live(
                                   from_object(target)),
                      "Non-live old oop at %p", &field);
         const uintptr_t remset = raw(value) & ZPointerRememberedMask;
@@ -195,7 +195,7 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
         if (!young || !youngMarking) {
             CHECK_DETAIL(ZPointer::is_marked_old(to_zpointer(raw(value))),
                          "Unmarked old oop at %p", &field);
-            CHECK_DETAIL(!RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(base))->IsYoungRegion(),
+            CHECK_DETAIL(!Heap::page(reinterpret_cast<MAddress>(base))->IsYoungRegion(),
                          "Old oop holder must be old at %p", &field);
         }
     }
@@ -217,7 +217,7 @@ void ZVerify::Objects(bool verifyWeaks)
     HeapIterator iterator(verifyWeaks, true);
     iterator.Iterate([&](BaseObject* object) {
         Object(object, nullptr);
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         if (region->IsYoungRegion()) { return; }
         if (!region->is_object_live(from_object(object))) {
             LOG(RTLOG_ERROR, "ZVerify found non-live object: %p at %p value=%#zx from=%p",
@@ -267,7 +267,7 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr ||
         forwarding->table_generation() != static_cast<uint8_t>(Generation::Old)) { return; }
-    RegionInfo* page = forwarding->page();
+    ZPage* page = forwarding->page();
     if (page == nullptr) { return; }
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     const bool activeCurrent = Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent();
@@ -297,7 +297,7 @@ void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
         BaseObject* object = reinterpret_cast<BaseObject*>(forwarding->find(from));
         Object(object, nullptr);
         // Destination age is represented by the destination page in this port.
-        if (RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) { continue; }
+        if (Heap::page(reinterpret_cast<MAddress>(object))->IsYoungRegion()) { continue; }
         IterateVerifyFields(object, [&](RefField<>& field) {
             const MAddress slot = reinterpret_cast<MAddress>(&field);
             const zpointer value = field.GetFieldValue(std::memory_order_acquire);

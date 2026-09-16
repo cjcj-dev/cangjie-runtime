@@ -10,7 +10,7 @@ namespace MapleRuntime {
 template <typename ObjectT, typename ArrayT>
 inline size_t ZAttachedArray<ObjectT, ArrayT>::object_size()
 {
-        const size_t alignment = alignof(ArrayT);
+        const size_t alignment = sizeof(ArrayT);
         return (sizeof(ObjectT) + alignment - 1) & ~(alignment - 1);
     }
 }
@@ -51,6 +51,21 @@ inline void* ZAttachedArray<ObjectT, ArrayT>::alloc(size_t length)
             return nullptr;
         }
         void* const addr = std::malloc(size);
+        if (addr == nullptr) {
+            return nullptr;
+        }
+        initialize(addr, length);
+        return addr;
+    }
+}
+
+namespace MapleRuntime {
+template <typename ObjectT, typename ArrayT>
+template <typename Allocator>
+inline void* ZAttachedArray<ObjectT, ArrayT>::alloc(Allocator* allocator, size_t length)
+{
+        const size_t size = object_size() + array_size(length);
+        void* const addr = allocator->alloc(size);
         if (addr == nullptr) {
             return nullptr;
         }

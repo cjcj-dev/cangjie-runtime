@@ -4,16 +4,21 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#pragma once
-#include <cstdint>
-#include <cstddef>
-namespace MapleRuntime {
-struct MemoryRange {
-    uintptr_t start{ 0 };
-    size_t size{ 0 };
+// ZGC zVirtualMemory.hpp:31-38.
 
-    uintptr_t End() const { return start + size; }
-    bool IsNull() const { return start == 0 || size == 0; }
+#pragma once
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zRange.hpp"
+
+namespace MapleRuntime {
+
+class ZVirtualMemory : public ZRange<zoffset, zoffset_end> {
+public:
+  ZVirtualMemory();
+  ZVirtualMemory(zoffset start, size_t size);
+  ZVirtualMemory(const ZRange<zoffset, zoffset_end>& range);
+
+  int granule_count() const;
 };
 
-}
+} // namespace MapleRuntime

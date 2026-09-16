@@ -12,7 +12,7 @@
 #include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
-bool CartesianTree::MergeInsertInternal(Index idx, Count num, bool refreshRegionInfo)
+bool CartesianTree::MergeInsertInternal(Index idx, Count num, bool refreshZPage)
 {
     //     +-------------+       +--------------+
     //     | parent node |  n--> | current node |
@@ -31,13 +31,13 @@ bool CartesianTree::MergeInsertInternal(Index idx, Count num, bool refreshRegion
     // this loop insert the new node (idx, num) at the proper place
     do {
         if (n == nullptr) {
-            n = new (nodeAllocator.Allocate()) Node(idx, num, refreshRegionInfo);
+            n = new (nodeAllocator.Allocate()) Node(idx, num, refreshZPage);
             CTREE_ASSERT(n != nullptr, "failed to allocate a new node");
             *pn = n;
             IncTotalCount(num);
             break;
         }
-        MergeResult res = MergeAt(*n, idx, num, refreshRegionInfo);
+        MergeResult res = MergeAt(*n, idx, num, refreshZPage);
         if (res == MergeResult::MERGE_SUCCESS) {
             break;
         } else if (UNLIKELY(res == MergeResult::MERGE_ERROR)) {
@@ -123,11 +123,11 @@ void CartesianTree::DumpTree(const char* msg) const
 }
 #endif
 
-void CartesianTree::Node::RefreshFreeRegionInfo()
+void CartesianTree::Node::RefreshFreeZPage()
 {
     Index idx = GetIndex();
     Count cnt = GetCount();
-    RegionInfo::InitFreeRegion(idx, cnt);
+    ZPage::InitFreeRegion(idx, cnt);
 }
 
 size_t CartesianTree::GetNodeCount() const
@@ -164,7 +164,7 @@ bool CartesianTree::TakeIdleUnits(uint64_t idleBeforeNs, Count maxCount, Index& 
     return true;
 }
 
-bool CartesianTree::TakeUnitsImpl(Count num, Index& idx, bool refershRegionInfo)
+bool CartesianTree::TakeUnitsImpl(Count num, Index& idx, bool refershZPage)
 {
     ForwardIterator it(*this);
     Node** nodePtr = it.Next(); // pointer to root node
@@ -191,7 +191,7 @@ bool CartesianTree::TakeUnitsImpl(Count num, Index& idx, bool refershRegionInfo)
     auto count = node->GetCount();
     lastUsedNs = TimeUtil::NanoSeconds();
 
-    node->UpdateNode(idx + num, count - num, refershRegionInfo);
+    node->UpdateNode(idx + num, count - num, refershZPage);
     DecTotalCount(num);
 
     if (node->GetCount() == 0) {
@@ -256,7 +256,7 @@ CartesianTree::Node** CartesianTree::FindBestFitLowAddrPtr(Node** nodePtr, Count
 // Best-fit allocation with lowest-address tiebreaker.
 // Picks the node whose count is closest to num to avoid unnecessary splitting,
 // breaking ties by lowest address to pack live data toward the low end.
-bool CartesianTree::TakeUnitsLowAddrImpl(Count num, Index& idx, bool refreshRegionInfo)
+bool CartesianTree::TakeUnitsLowAddrImpl(Count num, Index& idx, bool refreshZPage)
 {
     Node** nodePtr = FindBestFitLowAddrPtr(&root, num, nullptr);
     if (nodePtr == nullptr) {
@@ -268,7 +268,7 @@ bool CartesianTree::TakeUnitsLowAddrImpl(Count num, Index& idx, bool refreshRegi
     idx = node->GetIndex();
     auto count = node->GetCount();
 
-    node->UpdateNode(idx + num, count - num, refreshRegionInfo);
+    node->UpdateNode(idx + num, count - num, refreshZPage);
     DecTotalCount(num);
 
     if (node->GetCount() == 0) {

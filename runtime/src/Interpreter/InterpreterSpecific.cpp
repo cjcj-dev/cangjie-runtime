@@ -391,14 +391,14 @@ int IsSubType(struct DYN_TypeInfo* typeInfo, struct DYN_TypeInfo* superTypeInfo)
 DYN_ObjRef ReadStaticField(DYN_FieldRef source)
 {
     DLOG(INTERPRETER, "ReadStaticField %p", source);
-    BaseObject* res = Heap::GetBarrier().ReadStaticRef(NativeSlotAt(source));
+    BaseObject* res = ZBarrier::ReadStaticRef(NativeSlotAt(source));
     return static_cast<DYN_ObjRef>(res);
 }
 
 void WriteStaticField(DYN_FieldRef destination, DYN_ObjRef new_value)
 {
     DLOG(INTERPRETER, "WriteStaticField %p %p", destination, new_value);
-    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(destination), static_cast<BaseObject*>(new_value));
+    ZBarrier::WriteStaticRef(NativeSlotAt(destination), static_cast<BaseObject*>(new_value));
 }
 
 DYN_ObjRef ReadInstanceField(DYN_ObjRef source, DYN_FieldRef field)
@@ -502,11 +502,11 @@ void WriteGenericField(DYN_ObjRef dstObj, uintptr_t dstField, DYN_ObjRef src, si
         return;
     }
     if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from)) {
-        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(fp), from,
+        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(fp), from,
                                       reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE, size);
         return;
     }
-    Heap::GetBarrier().WriteStruct(dst, reinterpret_cast<MAddress>(fp), size,
+    ZBarrier::WriteStruct(dst, reinterpret_cast<MAddress>(fp), size,
                                    reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE, size);
 }
 
