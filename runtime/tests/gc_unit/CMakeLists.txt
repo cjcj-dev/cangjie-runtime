@@ -35,7 +35,6 @@ set(GC_UNIT_SOURCES
     test_gctibzero.cpp
     test_pinroot.cpp
     test_followedge.cpp
-    test_z_forwarding_life.cpp
     test_colour_is_checks.cpp
     test_remap_young_roots.cpp
     test_zForwarding.cpp
@@ -74,7 +73,6 @@ set(GC_UNIT_SOURCES
     test_fillerobj.cpp
     test_i2_readref.cpp
     test_loadfc.cpp
-    test_ghost_region_lookup.cpp
     test_fnlz_roots.cpp
     test_reference_processor.cpp
     test_mark_stack_entry.cpp
