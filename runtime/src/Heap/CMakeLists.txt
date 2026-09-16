@@ -17,9 +17,9 @@ set(SRC_LIST
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-if (CMAKE_SYSTEM_NAME MATCHES "Windows")
+if (WINDOWS_FLAG MATCHES 1)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/windows)
-elseif (CMAKE_SYSTEM_NAME MATCHES "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "iOS")
+elseif (MACOS_FLAG MATCHES 1)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/bsd)
 else()
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/z/os/linux)

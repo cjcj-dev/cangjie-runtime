@@ -32,7 +32,7 @@ set(SRC_LIST
 
 # ZGC os/<os>/gc/z/: CMake selects the pd files. Do not list posix/linux
 # unconditionally, and do not keep _WIN64/__APPLE__ in the shared files.
-if (CMAKE_SYSTEM_NAME MATCHES "Windows")
+if (WINDOWS_FLAG MATCHES 1)
     list(APPEND SRC_LIST
         "../z/zVirtualMemoryManager_windows.cpp"
         "../z/zPhysicalMemoryBacking_windows.cpp"
@@ -42,7 +42,7 @@ if (CMAKE_SYSTEM_NAME MATCHES "Windows")
         "../z/zNUMA_windows.cpp"
     )
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../z/os/windows)
-elseif (CMAKE_SYSTEM_NAME MATCHES "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "iOS")
+elseif (MACOS_FLAG MATCHES 1)
     list(APPEND SRC_LIST
         "../z/zVirtualMemoryManager_posix.cpp"
         "../z/zPhysicalMemoryBacking_bsd.cpp"
