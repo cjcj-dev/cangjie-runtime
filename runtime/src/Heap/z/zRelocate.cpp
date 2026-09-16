@@ -315,7 +315,9 @@ void WCollector::RemapYoungRoots()
         // Old relocation may already have installed its table before this
         // young-remap pass. Conversely a promoted source can still belong
         // to the young table, so the page's current generation is not a gate.
-        if ((generation_forwarding_table(Generation::Young).get(raw(observed)) != nullptr)) {
+        const MAddress observedAddr = raw(observed);
+        if (observedAddr != 0 &&
+            generation_forwarding_table(Generation::Young).get(observedAddr) != nullptr) {
             ForwardUpdateRawRef(root, Generation::Young);
         }
 #if defined(MRT_TESTABLE_INTERNALS)
