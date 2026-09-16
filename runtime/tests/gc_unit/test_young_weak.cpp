@@ -80,10 +80,9 @@ struct RelocationReceiptTestAccess {
         resources.collectorProxy.currentCollector = nullptr;
     }
 
-    static void BindRuntimeWorkers(CollectorResources& resources, RuntimeWorkers* threadPool, int32_t threadCount = 1)
+    // zArguments: the concurrent worker budget the driver hands each request.
+    static void BindWorkerBudget(CollectorResources& resources, int32_t threadCount = 1)
     {
-        resources.runtimeWorkers = threadPool;
-        resources.gcThreadCount = threadCount;
         resources.concurrentGcThreadCount = threadCount;
     }
 
@@ -407,10 +406,9 @@ void RunYoungWeakVariant(size_t helpers)
     // zGeneration.cpp: each generation owns its worker pool before collection.
     collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->SetActiveWorkers(helpers + 1u);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->set_active_workers(helpers + 1u);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    RuntimeWorkers threadPool(helpers + 1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(graph.child);
@@ -437,7 +435,7 @@ void RunYoungWeakVariant(size_t helpers)
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
     // The producer-to-consumer bearing point must deliver the field closure.
@@ -484,8 +482,7 @@ void RunYoungWeakRemsetFlow()
     const MAddress weakSlot = reinterpret_cast<MAddress>(&referentField);
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
@@ -510,7 +507,7 @@ void RunYoungWeakRemsetFlow()
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
@@ -540,8 +537,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    RuntimeWorkers threadPool(helpers + 1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool, static_cast<int32_t>(helpers + 1));
+    RelocationReceiptTestAccess::BindWorkerBudget(resources, static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.child);
@@ -608,7 +604,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     if (family == MajorRootFamily::EXPORT) {
         Heap::GetHeap().RemoveExportObject(exportHandle);
     }
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
     if (runtimeEntry) {
@@ -739,8 +735,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.weak);
@@ -754,7 +749,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
                  static_cast<int>(rootMarked), static_cast<int>(childMarked));
 
     Heap::GetHeap().RemoveExportObject(handle);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
@@ -773,8 +768,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);
     space.GetRegionManager().AddRawPointerObject(route.to);
@@ -808,7 +802,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
 
     if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(currentMarked);
     GC_EXPECT_TRUE(carrierCurrent);
@@ -838,8 +832,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    RuntimeWorkers threadPool(1u);
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(graph.owner);
     space.GetRegionManager().AddRawPointerObject(graph.foreign);
@@ -918,7 +911,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
         Heap::GetHeap().RemoveExportObject(secondHandle);
         Heap::GetHeap().RemoveExportObject(duplicateHandle);
     }
-    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(producerCarrier);
     GC_EXPECT_TRUE(rootMarked);

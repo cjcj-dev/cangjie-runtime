@@ -4,21 +4,19 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// gc/z/zTask.cpp:24-48
 #include "Heap/z/zTask.hpp"
 
 namespace MapleRuntime {
-ZTask::Task::Task(ZTask* task, const char* name)
-    : WorkerTask(name),
-      _task(task) {}
+// zTask.cpp:26-48
+ZTask::Task::Task(ZTask* task, const char* name) : WorkerTask(name), _task(task) {}
 
 void ZTask::Task::work(uint32_t worker_id)
 {
+    (void)worker_id;
     _task->work();
 }
 
-ZTask::ZTask(const char* name)
-    : _worker_task(this, name) {}
+ZTask::ZTask(const char* name) : _worker_task(this, name) {}
 
 const char* ZTask::name() const
 {
@@ -30,8 +28,10 @@ WorkerTask* ZTask::worker_task()
     return &_worker_task;
 }
 
-ZRestartableTask::ZRestartableTask(const char* name)
-    : ZTask(name) {}
+ZRestartableTask::ZRestartableTask(const char* name) : ZTask(name) {}
 
-void ZRestartableTask::resize_workers(uint32_t nworkers) {}
+void ZRestartableTask::resize_workers(uint32_t nworkers)
+{
+    (void)nworkers;
+}
 } // namespace MapleRuntime

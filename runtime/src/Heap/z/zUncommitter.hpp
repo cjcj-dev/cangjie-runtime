@@ -12,19 +12,24 @@
 #include <cstdint>
 #include <condition_variable>
 #include <mutex>
-#include <thread>
 
 #include "Base/Globals.h"
+#include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
 class Allocator;
 
-class Uncommitter {
+// zUncommitter.hpp:33-71: a ZThread per partition. ZGC starts it in the
+// constructor; this runtime's finalizer thread owns Start/Stop (P05), so the
+// ZThread lifecycle is entered from Start and left from Stop.
+class Uncommitter final : public ZThread {
 public:
     explicit Uncommitter(Allocator& partition);
-    ~Uncommitter() { Stop(); }
+    ~Uncommitter() override { Stop(); }
     void Start();
     void Stop();
+    void run_thread() override;
+    void terminate() override;
     static constexpr uint64_t kDefaultDelayNs = 300ULL * SECOND_TO_NANO_SECOND;
     static constexpr size_t kMaxUncommitChunk = 256 * MB;
 
@@ -44,7 +49,6 @@ private:
     friend struct UncommitterTestAccess;
 #endif
     static Uncommitter& Current();
-    void Run();
     bool WaitUntil(uint64_t deadline);
     bool Activate();
     size_t Uncommit();
@@ -54,7 +58,7 @@ private:
 
     // The current allocator has one logical partition (id 0).
     Allocator& partition;
-    std::thread worker;
+    bool started = false;
     std::mutex lock;
     std::condition_variable condition;
     std::atomic<bool> stopped{false};

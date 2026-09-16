@@ -24,41 +24,7 @@
 namespace MapleRuntime {
 
 #if defined(MRT_TESTABLE_INTERNALS)
-// Read-only observation after root workers return and before old follow starts.
-// Published nodes are immutable; producers may prepend but no worker removes
-// nodes during this phase. This copies actual product publication, not inputs.
-struct RootPublicationSnapshot {
-    static void CopyList(const MarkStripeStackList& list, TracingCollector::RootSet& result)
-    {
-        for (auto* node = list.head.load(std::memory_order_acquire); node != nullptr; node = node->Next()) {
-            const auto* stack = node->Stack();
-            for (size_t i = 0; i < stack->top; ++i) {
-                const auto entry = stack->entries(stack)[i];
-                if (!entry.partial_array()) { result.push_back(entry); }
-            }
-        }
-    }
-    static void Copy(MarkDomain& domain, TracingCollector::RootSet& result)
-    {
-        for (size_t i = 0; i < domain.Stripes().Count(); ++i) {
-            const auto& stripe = domain.Stripes().At(i);
-            CopyList(stripe.published, result);
-            CopyList(stripe.overflowed, result);
-        }
-    }
-};
-
-void TracingCollector::ObservePublishedRoots(GCWorkers::Generation generation)
-{
-    if (testRootsResult) {
-        RootSet published;
-        RootPublicationSnapshot::Copy(*majorMarkDomain, published);
-        testRootsResult(generation, published);
-    }
-}
-
-std::function<void(GCWorkers::Generation, TracingCollector::RootSet&)> TracingCollector::testRootsResult;
-std::function<void(GCWorkers::Generation, NativeSlot*)> TracingCollector::testColoredRootResult;
+std::function<void(GCCycleGeneration, NativeSlot*)> TracingCollector::testColoredRootResult;
 std::function<void()> TracingCollector::testCyclePrepared;
 std::function<void()> TracingCollector::testYoungMarkStarted;
 std::function<void()> TracingCollector::testOldMarkStarted;
