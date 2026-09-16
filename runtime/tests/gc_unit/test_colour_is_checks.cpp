@@ -82,16 +82,18 @@ GC_TEST(ColourIsChecks, BarrierSelfHealUpgradeAndCompetingStore)
     const zpointer old = ZAddress::store_good(address);
     ZGlobalsPointers::flip_young_relocate_start();
     const zpointer healed = ZAddress::load_good(address, old);
-    auto fast = [](zpointer word) { return ZPointer::is_load_good_or_null(word); };
     HeapSlot<> slot(old);
-    GC_EXPECT_TRUE(ZgcSelfHeal(slot, old, healed, fast, HealSite::BarrierCompareAndSwapReference));
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&slot), old, healed, false);
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(healed));
     const auto writer = ZAddress::store_good(static_cast<zaddress>(ZAddressHeapBase | 0x2000));
     slot.StoreColoured(writer);
-    GC_EXPECT_FALSE(ZgcSelfHeal(slot, old, healed, fast, HealSite::BarrierCompareAndSwapReference));
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&slot), old, healed, false);
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(writer));
     slot.StoreColoured(old);
-    GC_EXPECT_FALSE(ZgcSelfHeal(slot, old, color_null(), fast, HealSite::BarrierCompareAndSwapReference));
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&slot), old, color_null(), false);
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(old));
 }
 

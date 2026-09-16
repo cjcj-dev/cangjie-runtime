@@ -158,8 +158,7 @@ ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithRe
         g_beforeWeakCleanCasForTest();
     }
 #endif
-    if (HealSlot(referentField, observed, to_zpointer(0), HealSite::BarrierWeakClean,
-                 HealNull::Allow, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    if (referentField.CompareExchange(observed, to_zpointer(0))) {
         return { true, false, nullptr };
     }
 

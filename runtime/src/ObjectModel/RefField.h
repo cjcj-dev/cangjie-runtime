@@ -35,7 +35,7 @@ class WCollector;
 void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr);
 
 // Every heap/root healing write names its owning algorithm.  This is deliberately
-// exhaustive: a catch-all value would recreate the attribution gap HealSlot closes.
+// exhaustive: a catch-all value would recreate the attribution gap slot CAS closes.
 enum class HealSite : uint16_t {
     BaseObjectCompareExchangeRefField,
     BarrierWeakClean,
@@ -71,13 +71,6 @@ class HeapSlot;
 // every existing caller on the plain success/failure contract.
 // ⚠ It is written only when the CAS is reached -- the non-null-to-null guard below returns
 // before that, so a Disallow caller must not read it.
-template<bool isAtomic>
-inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desired, HealSite site,
-                     HealNull allowNull = HealNull::Disallow,
-                     std::memory_order succOrder = std::memory_order_relaxed,
-                     std::memory_order failOrder = std::memory_order_relaxed,
-                     zpointer* observedOut = nullptr);
-
 // Full-colour write funnel: every HeapSlot write is checked unconditionally;
 // RootSlot/DerivedSlot addresses remain outside this heap-only admission.
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal);
@@ -136,12 +129,6 @@ public:
     // OpenJDK does not need an explicit release here because safe publication is the Java memory
     // model's job and C2 emits the barrier; in C++ the ordering has to be written down.
     void StoreColoured(zpointer value, std::memory_order order = std::memory_order_release);
-
-private:
-    friend class ZBarrier;
-    template<bool atomic>
-    friend bool HealSlot(HeapSlot<atomic>&, zpointer, zpointer, HealSite, HealNull,
-                         std::memory_order, std::memory_order, zpointer*);
 
     bool CompareExchange(zpointer expectedValue, zpointer newValue,
                          std::memory_order succOrder = std::memory_order_relaxed,
@@ -225,76 +212,6 @@ private:
     RefFieldValue fieldVal;
 };
 
-// The sole HeapSlot compare-exchange write.  Match ZBarrier::self_heal: a
-// non-null observed reference must not be healed to null unless its owner makes
-// that destructive transition explicit.
-template<bool isAtomic>
-inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desired, HealSite site,
-                     HealNull allowNull, std::memory_order succOrder, std::memory_order failOrder,
-                     zpointer* observedOut)
-{
-    (void)site;
-    if (allowNull == HealNull::Disallow && !is_null(expected) && is_null(desired)) {
-        return false;
-    }
-    bool ok = slot.CompareExchange(expected, desired, succOrder, failOrder, observedOut);
-    return ok;
-}
-
-// ZBarrier::self_heal, zBarrier.inline.hpp:72-110. CAS retries only upgrade
-// metadata, and stop when another writer has already satisfied this predicate.
-template<bool isAtomic, typename FastPath>
-inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr, FastPath fastPath,
-                        HealSite site, HealNull allowNull = HealNull::Disallow)
-{
-    // :73-79  Never heal with null since it interacts badly with reference processing.
-    // ZGC's guard is `is_null_assert_load_good(heal_ptr) && !is_null_any(ptr)`; is_null_any
-    // tests the address bits rather than the whole word.
-    if (allowNull == HealNull::Disallow && is_null_any(healPtr) &&
-        !is_null_any(ptr)) {
-
-        return false;
-    }
-
-    // :82-87  assert_is_valid / assert(!fast_path(ptr)) / assert(fast_path(heal_ptr)) /
-    //         assert(ZPointer::is_remapped(heal_ptr))
-    const bool ptrFastPath = fastPath(ptr);
-    const bool healFastPath = fastPath(healPtr);
-
-    CHECK_DETAIL(!ptrFastPath, "ZBarrier::self_heal input must be load-bad");
-    CHECK_DETAIL(healFastPath, "ZBarrier::self_heal value must satisfy fast path");
-    CHECK(ZPointer::is_remapped(to_zpointer(raw(healPtr))));
-
-    // :89
-    for (;;) {
-        AssertBarrierTransitionMonotonicity(ptr, healPtr);
-
-        // :91-92  Heal.
-        // HealNull::Allow: the :73-79 guard above is ZGC's and has already been applied once
-        // at entry. Letting HealSlot re-apply its own version would short-circuit the CAS on a
-        // later iteration and leave observedOut unwritten.
-        zpointer prevPtr = zpointer::null;
-        if (HealSlot(slot, ptr, healPtr, site, HealNull::Allow, std::memory_order_relaxed,
-                     std::memory_order_relaxed, &prevPtr)) {
-            // :93-96  Success
-
-            return true;
-        }
-
-        if (fastPath(prevPtr)) {
-            // :98-101  Must not self heal
-
-            return false;
-        }
-
-        // :103-107  The oop location was healed by another barrier, but still needs upgrading.
-        // Re-apply healing to make sure the oop is not left with weaker (remapped or
-        // finalizable) metadata bits than what this barrier tried to apply.
-
-        ptr = prevPtr;
-    }
-}
-
 template<bool isAtomic = false>
 inline void StoreColoured(HeapSlot<isAtomic>& slot, zaddress value, MAddress colour,
                           std::memory_order order = std::memory_order_relaxed)
@@ -375,7 +292,7 @@ inline bool HealRoot(RootSlot& slot, zaddress good, HealSite site,
 }
 
 // Conditional repair for an uncolored-root owner. Colored native mutator
-// accesses use ZgcSelfHeal instead; this helper never accepts colored values.
+// accesses use ZBarrier::self_heal instead; this helper never accepts colored values.
 inline bool HealRootIfObserved(RootSlot& slot, zaddress_unsafe observed, zaddress good, HealSite site,
                                HealNull allowNull = HealNull::Disallow,
                                std::memory_order succOrder = std::memory_order_relaxed,
@@ -424,8 +341,9 @@ inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expec
                                        BaseObject* host, size_t offset, HealSite site)
 {
     MAddress address = reinterpret_cast<MAddress>(host) + offset;
-    return HealSlot(field, expected,
-                    to_zpointer(raw(ZAddress::store_good(to_zaddress(address)))), site);
+    (void)site;
+    return field.CompareExchange(expected,
+                    to_zpointer(raw(ZAddress::store_good(to_zaddress(address)))));
 }
 
 // When the host is unknown, preserve the interior payload but still publish a
@@ -436,8 +354,9 @@ inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expec
                                        BaseObject* interior, HealSite site)
 {
     MAddress address = reinterpret_cast<MAddress>(interior);
-    return HealSlot(field, expected,
-                    to_zpointer(raw(ZAddress::store_good(to_zaddress(address)))), site);
+    (void)site;
+    return field.CompareExchange(expected,
+                    to_zpointer(raw(ZAddress::store_good(to_zaddress(address)))));
 }
 
 static_assert(sizeof(HeapSlot<>) == sizeof(MAddress), "HeapSlot must remain one machine word");

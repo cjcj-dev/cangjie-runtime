@@ -1984,7 +1984,7 @@ extern "C" bool CJ_MCC_IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo
     return IsTupleTypeOf(obj, typeInfo, targetTypeInfo);
 }
 
-extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size)
+static void CopyGenericField(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size)
 {
     if (src == nullptr || size == 0) {
         return;
@@ -1995,7 +1995,7 @@ extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const O
         CHECK_DETAIL(memcpy_s(fp, size,
                               reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE),
                               size) == EOK,
-                     "WriteGeneric memcpy_s failed");
+                     "CopyGenericField memcpy_s failed");
         return;
     }
     if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(src)) {
@@ -2024,7 +2024,7 @@ extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typ
                      "MCC_AssignGeneric memcpy_s failed");
     } else {
         MAddress dstAddr = reinterpret_cast<MAddress>(dst) + TYPEINFO_PTR_SIZE;
-        CJ_MCC_WriteGeneric(dst, reinterpret_cast<void*>(dstAddr), src, instanceSize);
+        CopyGenericField(dst, reinterpret_cast<void*>(dstAddr), src, instanceSize);
     }
 }
 
@@ -2110,7 +2110,7 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
             char stackMem[stackCache]{ 0 };
             Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<MAddress>(stackMem),
                 reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
-            CJ_MCC_WriteGeneric(dstPtr, reinterpret_cast<void*>(
+            CopyGenericField(dstPtr, reinterpret_cast<void*>(
                 reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
                 reinterpret_cast<ObjectPtr>(stackMem - TYPEINFO_PTR_SIZE), size);
             return;
@@ -2120,7 +2120,7 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
                          dstPtr, obj, fieldPtr, size);
             Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<MAddress>(nativeHeapMem),
                 reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
-            CJ_MCC_WriteGeneric(dstPtr, reinterpret_cast<void*>(
+            CopyGenericField(dstPtr, reinterpret_cast<void*>(
                 reinterpret_cast<uintptr_t>(dstPtr) + TYPEINFO_PTR_SIZE),
                 reinterpret_cast<ObjectPtr>(nativeHeapMem - TYPEINFO_PTR_SIZE), size);
             free(nativeHeapMem);

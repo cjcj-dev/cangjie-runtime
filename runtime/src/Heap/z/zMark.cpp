@@ -126,7 +126,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     // tracecov: is the mark's field walk broad enough to be the thing that keeps colours fresh?
     // The mark-good fast path above returns without healing, which is correct because mark-good
     // implies load-good; a stale field is therefore mark-bad and reaches the code below, which does
-    // heal (HealSlot at the end of this function).  So "stale slots survive" reduces to "the mark
+    // heal (CAS at the end of this function).  So "stale slots survive" reduces to "the mark
     // never visited that field".  Counting how much this path actually runs is the cheapest way to
     // tell a narrow walk from a broad one -- and unlike IsMarkedObject<Old>, a counter here is
     // valid at any phase (the mark-bitmap query answered 0 for 4.2M live objects at barrier time,
@@ -153,8 +153,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
              latest->GetTypeInfo(), latest->GetSize());
-    } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
-                        HealSite::WCollectorEnumRefFieldRoot)) {
+    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
         DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()),
              raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     } else {
@@ -334,8 +333,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
-    } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
-                        HealSite::WCollectorGetAndTryTagObj)) {
+    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
             raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     }
@@ -795,7 +793,7 @@ size_t MarkStripeCount(size_t workers)
 } // namespace
 
 namespace WCollectorInternal {
-// h3seed3 乙: live-holder slot → free|garbage target → HealSlot null.
+// h3seed3 乙: live-holder slot → free|garbage target → CAS null.
 // Criterion fields (RegionInfo state word): IsFreeRegion() / IsGarbageRegion()
 // via TryGetRegionInfoAt(target) at the call site (closure edge or Fix).
 // Returns true if the slot was scrubbed (caller must not push / treat as live edge).
@@ -821,8 +819,7 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
     // zBarrier.inline.hpp:294-343 has no unresolved-to-null installation arm.
     // A free/garbage target means forwarding authority was retired before
     // coverage completed; fail closed instead of manufacturing a null heal.
-    (void)HealSlot(field, oldField.GetFieldValue(), zpointer::null,
-                   HealSite::WCollectorMinorFixForwardNull, HealNull::Disallow);
+    (void)field.CompareExchange(oldField.GetFieldValue(), zpointer::null);
     Collector::FailClosedLoad(
         "WCollector::ScrubMinorFreeTarget.unresolved", target, oldVal,
         ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });

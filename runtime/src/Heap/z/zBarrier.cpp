@@ -463,8 +463,7 @@ bool ZBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& fiel
 {
     const zpointer expected = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(oldRef)))));
     const zpointer desired = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(newRef)))));
-    return HealSlot(field, expected, desired, HealSite::BarrierCompareAndSwapReference,
-                    HealNull::Allow, succOrder, failOrder);
+    return field.CompareExchange(expected, desired, succOrder, failOrder);
 }
 
 void ZBarrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
