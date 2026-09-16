@@ -852,6 +852,7 @@ public:
 
     void work() override
     {
+        SuspendibleThreadSetJoiner stsJoiner;
         const uint32_t workerId = WorkerThread::worker_id();
         MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks());
         size_t nMarked = 0;
@@ -1297,6 +1298,7 @@ public:
 
     void work() override
     {
+        SuspendibleThreadSetJoiner stsJoiner;
         const uint32_t workerId = WorkerThread::worker_id();
         MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks());
         size_t nNewlyMarked = 0;

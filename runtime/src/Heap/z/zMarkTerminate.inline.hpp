@@ -21,6 +21,7 @@ void MarkTerminate::Reset(size_t workers)
 
 void MarkTerminate::Leave()
 {
+    SuspendibleThreadSetLeaver stsLeaver;
     std::lock_guard<std::mutex> lock(mutex);
     CHECK_DETAIL(working != 0, "mark worker left twice");
     --working;
@@ -39,6 +40,7 @@ void MarkTerminate::MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStrip
 
 bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
 {
+    SuspendibleThreadSetLeaver stsLeaver;
     std::unique_lock<std::mutex> lock(mutex);
     CHECK_DETAIL(working != 0, "mark worker left termination twice");
     --working;
@@ -49,10 +51,7 @@ bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
         return true;
     }
     MaybeReduceStripes(stripes, usedNStripes);
-    {
-        SuspendibleThreadSetLeaver leaver;
-        condition.wait(lock);
-    }
+    condition.wait(lock);
     if (awakening != 0) {
         --awakening;
     }
