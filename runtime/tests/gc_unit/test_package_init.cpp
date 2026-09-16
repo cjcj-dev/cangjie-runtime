@@ -836,7 +836,7 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
     loader->AddLoadedFiles(fileA);
     loader->RegisterLoadFile(fileA->GetFileMetaAddr());
     armA([]() {});
-    Target("b0-u-load", LoadCJLibrary(uPath.c_str()) != nullptr);
+    Target("b0-u-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
     auto getU = reinterpret_cast<void* (*)()>(
         reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageMetadata")));
     auto armU = reinterpret_cast<void (*)(void (*)())>(
@@ -906,7 +906,7 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadAllowsPendingOwnerAndIdleU)
     loader->RegisterLoadFile(fileA->GetFileMetaAddr());
     armA(NativeFiniNotice);
     nativeFiniEntered.store(false, std::memory_order_release);
-    Target("b1-u-load", LoadCJLibrary(uPath.c_str()) != nullptr);
+    Target("b1-u-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
     auto getU = reinterpret_cast<void* (*)()>(
         reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageMetadata")));
     auto armU = reinterpret_cast<void (*)(void (*)())>(
@@ -963,7 +963,7 @@ GC_OTHER_VM_TEST(PackageInit, DuplicatePublicCloseIsBusy)
     Init();
     const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
-    Target("dup-u-load", LoadCJLibrary(uPath.c_str()) != nullptr);
+    Target("dup-u-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
     auto getU = reinterpret_cast<void* (*)()>(
         reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageMetadata")));
     auto armU = reinterpret_cast<void (*)(void (*)())>(
@@ -997,7 +997,7 @@ GC_OTHER_VM_TEST(PackageInit, PlatformUnloadFailureRollsBack)
     Init();
     const std::string uPath = FixtureBesideExecutable("libcj_package_init_unrelated.so");
     auto* loader = static_cast<CJFileLoader*>(LoaderManager::GetInstance()->GetLoader());
-    Target("fail-u-load", LoadCJLibrary(uPath.c_str()) != nullptr);
+    Target("fail-u-load", LoaderManager::GetInstance()->LoadCJLibrary(uPath.c_str()) != nullptr);
     auto getU = reinterpret_cast<void* (*)()>(
         reinterpret_cast<void*>(loader->FindSymbol(uPath.c_str(), "PackageInitImageMetadata")));
     auto armU = reinterpret_cast<void (*)(void (*)())>(
