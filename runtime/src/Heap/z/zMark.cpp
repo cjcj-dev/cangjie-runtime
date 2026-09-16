@@ -895,7 +895,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
         NoteTraceYoungClosureDuringPause();
     }
 #endif
-    if (workStack.empty() && youngCycle.Mark().Stripes().IsEmpty()) {
+    (void)youngCycle.Mark().Flush(ThreadLocal::GetThreadLocalData());
+    if (workStack.empty() && youngCycle.Mark().Stripes().IsEmpty() &&
+        youngCycle.Mark().Stacks().IsEmpty()) {
         return;
     }
 
@@ -916,6 +918,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
     PublishConcurrentYoungProducersTestReceipt();
 #endif
     (void)youngCycle.Mark().Flush();
+    (void)youngCycle.Mark().Flush(ThreadLocal::GetThreadLocalData());
     do {
         if (!youngCycle.Mark().Stripes().IsEmpty() || !youngCycle.Mark().Stacks().IsEmpty()) {
             if (windowStats != nullptr) {
@@ -1732,6 +1735,7 @@ bool ZMark::TryEnd()
     if (terminate.Resurrected()) {
         return false;
     }
+    (void)Flush(ThreadLocal::GetThreadLocalData());
     // zMark.cpp:954-970: resurrected, then non-Java flush; empty stripes => complete.
     if (!HeapMarkReady()) {
         return stripes.IsEmpty();
