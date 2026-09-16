@@ -10,6 +10,7 @@
 
 #include "Heap/z/zServiceability.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <vector>
@@ -18,6 +19,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zPageAge.hpp"
 #include "Common/BaseObject.h"
 #include "RuntimeConfig.h"
 
@@ -32,6 +34,7 @@ extern uintptr_t g_cjHeapRangeEnd[];
 namespace MapleRuntime {
 class RegionInfo;
 class ZPageTable;
+enum class UnitRole : uint8_t;
 class OopStorage;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
@@ -108,6 +111,10 @@ public:
     static bool is_young(MAddress addr);
     static bool is_old(MAddress addr);
     static ZPageTable& page_table();
+    static RegionInfo* alloc_page(size_t num, UnitRole role, bool expectPhysicalMem = false,
+                                  bool allowSaferegion = true, bool clearPayload = true,
+                                  PageAge age = PageAge::eden);
+    static void free_page(RegionInfo* page);
 
 
     void DumpHeap(HeapDumpKind kind);

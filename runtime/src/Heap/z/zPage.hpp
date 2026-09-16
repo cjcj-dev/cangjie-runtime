@@ -105,11 +105,47 @@ private:
 // sizeof(RegionInfo) must be equal to sizeof(UnitInfo). We rely on this fact to calculate region-related address.
 
 
-// Metadata ABI: UI(i) is stored below the exported heapStartAddress anchor at
-// anchor - (i + 1) * sizeof(UnitInfo). The anchor is the metadata array end;
-// payload addresses come from unitSegments, independently of this array.
-// region info is stored in the metadata of its primary unit (i.e. the first unit).
-class RegionInfo {
+enum class UnitRole : uint8_t {
+    FREE_UNITS = 0,
+    SMALL_SIZED_UNITS,
+    LARGE_SIZED_UNITS,
+    SUBORDINATE_UNIT,
+};
+
+enum class RegionType : uint8_t {
+    FREE_REGION,
+    THREAD_LOCAL_REGION,
+    RECENT_FULL_REGION,
+    FROM_REGION,
+    LONE_FROM_REGION,
+    UNMOVABLE_FROM_REGION,
+    TO_REGION,
+    FULL_PINNED_REGION,
+    RECENT_PINNED_REGION,
+    RAW_POINTER_PINNED_REGION,
+    TL_RAW_POINTER_REGION,
+    TL_LARGE_RAW_POINTER_REGION,
+    LARGE_REGION,
+    RECENT_LARGE_REGION,
+    GARBAGE_REGION,
+};
+
+class ZPage {
+    friend class ForwardingTable;
+private:
+    const ZPageType _type;
+    ZGenerationId _generation_id;
+    PageAge _age;
+    uint32_t _seqnum;
+    uint32_t _seqnum_other;
+    uint32_t _partition_id;
+    const ZVirtualMemory _virtual;
+    volatile zoffset_end _top;
+    ZLiveMap* _livemap;
+    bool _relocate_promoted;
+public:
+    using UnitRole = MapleRuntime::UnitRole;
+    using RegionType = MapleRuntime::RegionType;
     // The table serializes publication/unbinding of this facade's owner.
     friend class ForwardingTable;
 public:
@@ -312,46 +348,7 @@ public:
 
     ALWAYS_INLINE size_t GetAddressOffset(MAddress address) const;
 
-    enum class UnitRole : uint8_t {
-        // for the head unit
-        FREE_UNITS = 0,
-        SMALL_SIZED_UNITS,
-        LARGE_SIZED_UNITS,
 
-        SUBORDINATE_UNIT,
-    };
-
-    // region is and must be one of following types during its whole lifecycle.
-    // one-to-one mapping to region-lists.
-
-    enum class RegionType : uint8_t {
-        FREE_REGION,
-
-        THREAD_LOCAL_REGION,
-        RECENT_FULL_REGION,
-        FROM_REGION,
-        LONE_FROM_REGION,
-        UNMOVABLE_FROM_REGION,
-        TO_REGION,
-
-        // pinned object will not be forwarded by concurrent copying gc.
-        FULL_PINNED_REGION,
-        RECENT_PINNED_REGION,
-
-        // region for raw-pointer objects which are exposed to runtime thus can not be moved by any gc.
-        // raw-pointer region becomes pinned region when none of its member objects are used as raw pointer.
-        RAW_POINTER_PINNED_REGION,
-
-        // allocation context is able and responsible to determine whether it is safe to be collected.
-        // There are two kind of region, and the type depends on the allocation size.
-        TL_RAW_POINTER_REGION,
-        TL_LARGE_RAW_POINTER_REGION,
-
-        LARGE_REGION,
-        RECENT_LARGE_REGION,
-
-        GARBAGE_REGION,
-    };
 
     // The reverse metadata array remains an ABI adapter. Its anchor need not
     // be adjacent to payload reservations. Cache indices are dense within each
@@ -652,14 +649,8 @@ public:
     void SetRegionType(RegionType type);
     void SetTraceRegionFlag(uint8_t flag);
     // twoflags: CSet/route exclusion only. Independent of isTraceRegion lifetime.
-    void SetNotRelocatableThisCycle(uint8_t flag)
-    {
-        __atomic_store_n(&metadata.notRelocatableThisCycle, flag, __ATOMIC_RELEASE);
-    }
-    bool IsNotRelocatableThisCycle() const
-    {
-        return __atomic_load_n(&metadata.notRelocatableThisCycle, __ATOMIC_ACQUIRE) != 0;
-    }
+    void SetNotRelocatableThisCycle(uint8_t) {}
+    bool IsNotRelocatableThisCycle() const { return is_allocating(); }
     void SetInGhostRegion(uint8_t flag);
 
     void SetYoungRegionFlag(uint8_t flag);
@@ -737,7 +728,7 @@ public:
     // rewind allocPtr only if this object is still the bump tip. Failure is allowed.
     bool UndoAllocObjectAtomic(uintptr_t addr, size_t size);
 
-    bool IsTraceRegion() const { return metadata.isTraceRegion == 1; }
+    bool IsTraceRegion() const { return false; }
 
     // copyable during concurrent copying gc.
     bool IsSmallRegion() const;
@@ -746,7 +737,7 @@ public:
 
     bool IsThreadLocalRegion() const
     {
-        return static_cast<RegionType>(metadata.regionType) == RegionType::THREAD_LOCAL_REGION;
+        return GetRegionType() == RegionType::THREAD_LOCAL_REGION;
     }
 
     bool IsPinnedRegion() const;
@@ -874,12 +865,6 @@ private:
                 // a region allocated during trace phase, gc should not put any object in this region into satb buffer.
                 // the count of objects which can be put into satb buffer should has an upper-bound,
                 // so that concurrent tracing can converge and terminate.
-                uint8_t isTraceRegion : 1;
-
-                // true if this unit belongs to a ghost region, which is an unreal region for keeping reclaimed
-                // from-region. ghost region is set up to memorize a from-region before from-space is forwarded. this
-                // flag is cleared when ghost-from-space is cleared. Note this flag is essentially important for
-                // FindToVersion().
                 uint8_t inGhostFromRegion : 1;
             };
             AtomicBitField<uint16_t> regionStateBitField;
@@ -888,12 +873,6 @@ private:
         // reuses the old split-field footprint, preserving UnitInfo size.
         std::atomic<uint64_t> routeStateSnapshot{ 0 };
         RegionLifeId ghostLifeId = 0;
-        // twoflags: orthogonal to isTraceRegion.
-        // isTraceRegion = implicit-black / ShouldEnqueue skip (cleared by HandleTraceRegions).
-        // notRelocatableThisCycle = allocated after mark start this cycle → not a
-        // relocation / CSet candidate until next PrepareTrace. Never read by ShouldEnqueue.
-        uint8_t notRelocatableThisCycle = 0;
-        ZGenerationId _generation_id;
         RwLock rwLock;
     };
 
@@ -1043,9 +1022,8 @@ private:
 
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;
     UnitMetadata metadata;
-    ZPageType _type = ZPageType::small;
-    ZVirtualMemory _virtual;
 };
+using RegionInfo = ZPage;
 } // namespace MapleRuntime
 
 #include "Heap/z/zPage.inline.hpp"

@@ -123,19 +123,12 @@ static bool IsSmallEdenPage(const RegionInfo* page)
 RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole role,
                                              PageAge age, bool nonBlocking)
 {
-    RegionInfo* page = TakeRegion(units, role, false, !nonBlocking, true, age);
+    RegionInfo* page = Heap::alloc_page(units, role, false, !nonBlocking, true, age);
     if (page == nullptr) { return nullptr; }
     page->SetYoungRegionFlag(age != PageAge::old);
     page->SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
     if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_add(page->GetRegionSize(), std::memory_order_relaxed);
-    }
-    const GCPhase phase = Heap::GetHeap().GetGCPhase(page->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-    if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
-        page->SetTraceRegionFlag(1);
-    }
-    if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
-        page->SetNotRelocatableThisCycle(1);
     }
     // Register with the page lifecycle, never with tlRegionList. Registration
     // precedes object allocation, as RegionList's byte accounting requires.
@@ -227,7 +220,7 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
         return nullptr;
     }
     const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
-    RegionInfo* region = TakeRegion(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
+    RegionInfo* region = Heap::alloc_page(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
                                     allowSaferegion, true, youngRegion ? PageAge::eden : PageAge::old);
     if (region != nullptr) {
         {
@@ -238,15 +231,6 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
                 tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             }
             region->SetYoungAge(0);
-            GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
-                region->SetTraceRegionFlag(1);
-            }
-            // twoflags: POST_TRACE+ only (TRACE uses isTraceRegion). No CLEAR_SATB.
-            if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-                phase == GC_PHASE_FORWARD) {
-                region->SetNotRelocatableThisCycle(1);
-            }
             tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
             DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) units[%zu+%zu, %zu) type %u",
                 region, region->GetRegionStart(), region->GetRegionSize(), region->GetRegionEnd(),

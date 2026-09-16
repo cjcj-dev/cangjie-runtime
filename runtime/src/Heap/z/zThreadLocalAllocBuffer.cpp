@@ -220,14 +220,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // TRACE-phase new regions already get isTraceRegion (implicit black). Do not stamp
         // TRACE (would exclude most young regions until next major → minor starvation).
         // ⛔ No CLEAR_SATB (minor shares it). Orthogonal to isTraceRegion / ShouldEnqueue.
-        if (reg != nullptr && !reg->IsNotRelocatableThisCycle()) {
-            GCPhase heapP = Heap::GetHeap().GetGCPhase(reg->IsYoungRegion()
-                    ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-            if (heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
-                heapP == GCPhase::GC_PHASE_FORWARD) {
-                reg->SetNotRelocatableThisCycle(1);
-            }
-        }
+        (void)reg;
     }
     DLOG(ALLOC, "alloc 0x%zx(%zu)", addr, totalSize);
     return addr;
@@ -332,13 +325,13 @@ MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     size_t needUnitNum = AlignUp(totalSize, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
     if (totalSize <= manager.GetThreadLocalRegionSize()) {
-        region = manager.TakeRegion(needUnitNum, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        region = Heap::alloc_page(needUnitNum, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         if (region == nullptr) {
             return 0;
         }
         tlRawPointerRegions.PrependRegion(region, RegionInfo::RegionType::TL_RAW_POINTER_REGION);
     } else {
-        region = manager.TakeRegion(needUnitNum, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+        region = Heap::alloc_page(needUnitNum, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
         if (region == nullptr) {
             return 0;
         }

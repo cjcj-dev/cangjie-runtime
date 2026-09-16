@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -76,17 +77,13 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
     std::lock_guard<std::mutex> lock(youngRegionFlagMutex);
     // The bit records charged occupancy, including zero-initialized metadata.
     // Page identity is published separately below (ZPage::reset, zPage.cpp:103).
-    bool wasYoung = metadata.regionStateBitField.GetAtomicValue(
-        RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
+    bool wasYoung = _generation_id == ZGenerationId::young;
     bool makeYoung = flag != 0;
     if (!wasYoung && makeYoung) {
         youngRegionBytes.fetch_add(GetRegionSize(), std::memory_order_release);
         youngRegionCount.fetch_add(1, std::memory_order_release);
     }
-    metadata.regionStateBitField.SetAtomicValue(
-        RegionStateBitPos::YOUNG_REGION_FLAG, YOUNG_STATE_BIT_LENGTH, makeYoung ? 1 : 0);
-    ZGenerationId generation = makeYoung ? ZGenerationId::young : ZGenerationId::old;
-    __atomic_store(&metadata._generation_id, &generation, __ATOMIC_RELEASE);
+    _generation_id = makeYoung ? ZGenerationId::young : ZGenerationId::old;
     if (wasYoung && !makeYoung) {
         size_t count = youngRegionCount.load(std::memory_order_relaxed);
         CHECK(count > 0);
@@ -299,13 +296,32 @@ uint64_t RegionInfo::GetSnapshotEpoch() const
 
 namespace MapleRuntime {
 RegionInfo::RegionInfo()
+    : _type(ZPageType::small),
+      _generation_id(ZGenerationId::old),
+      _age(PageAge::old),
+      _seqnum(0),
+      _seqnum_other(0),
+      _partition_id(0),
+      _virtual(),
+      _top(zoffset_end::invalid),
+      _livemap(nullptr),
+      _relocate_promoted(false)
     {
         metadata.allocPtr = reinterpret_cast<uintptr_t>(nullptr);
         metadata.regionEnd = reinterpret_cast<uintptr_t>(nullptr);
     }
 
 RegionInfo::RegionInfo(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
-    : _type(type), _virtual(vmem)
+    : _type(type),
+      _generation_id(age != PageAge::old ? ZGenerationId::young : ZGenerationId::old),
+      _age(age),
+      _seqnum(0),
+      _seqnum_other(0),
+      _partition_id(0),
+      _virtual(vmem),
+      _top(to_zoffset_end(vmem.start())),
+      _livemap(nullptr),
+      _relocate_promoted(false)
 {
     metadata.allocPtr = untype(ZOffset::address_unsafe(vmem.start()));
     metadata.regionEnd = metadata.allocPtr + vmem.size();
@@ -340,6 +356,8 @@ RegionInfo* RegionInfo::clone_for_promotion() const
     RegionInfo* page = new RegionInfo(_type, PageAge::old, _virtual);
     page->metadata.allocPtr = metadata.allocPtr;
     page->metadata.regionEnd = metadata.regionEnd;
+    page->_top = _top;
+    ZPageTable::heap_table().replace(const_cast<RegionInfo*>(this), page);
     return page;
 }
 

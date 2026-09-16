@@ -496,8 +496,8 @@ inline RegionInfo* RegionInfo::GetGhostFromRegionAt(uintptr_t allocAddr)
 
 inline void RegionInfo::InitFreeRegion(size_t unitIdx, size_t nUnit)
     {
-        RegionInfo* region = reinterpret_cast<RegionInfo*>(RegionInfo::UnitInfo::GetUnitInfo(unitIdx));
-        region->InitRegionInfo(nUnit, UnitRole::FREE_UNITS);
+        (void)unitIdx;
+        (void)nUnit;
     }
 
 inline ZPageType RegionInfoTypeFor(size_t nUnit, RegionInfo::UnitRole uclass)
@@ -828,9 +828,8 @@ inline void RegionInfo::SetRegionType(RegionType type)
                                                     static_cast<uint8_t>(type));
     }
 
-inline void RegionInfo::SetTraceRegionFlag(uint8_t flag)
+inline void RegionInfo::SetTraceRegionFlag(uint8_t)
     {
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
     }
 
 
@@ -863,14 +862,13 @@ inline void RegionInfo::PromoteYoungRegion()
 inline void RegionInfo::SetYoungAge(uint8_t age)
     {
         CHECK(age <= MAX_YOUNG_AGE);
+        _age = age == 0 ? PageAge::old : static_cast<PageAge>(age);
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH, age);
     }
 
 inline uint8_t RegionInfo::GetYoungAge() const
     {
-        return static_cast<uint8_t>(metadata.regionStateBitField.GetAtomicValue(
-                                        RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH) >>
-                                    RegionStateBitPos::YOUNG_AGE_FLAG);
+        return static_cast<uint8_t>(untype(_age));
     }
 
 inline RegionInfo::RegionType RegionInfo::GetRegionType() const
@@ -1159,7 +1157,6 @@ inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass, PageAge age)
     {
         InitRegionInfo(nUnit, uClass, age);
         CHECK(uClass != UnitRole::FREE_UNITS);
-        ZPageTable::heap_table().insert(this);
     }
 
 } // namespace MapleRuntime
@@ -1168,9 +1165,7 @@ inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass, PageAge age)
 namespace MapleRuntime {
 inline ZGenerationId RegionInfo::generation_id() const
 {
-    ZGenerationId generation;
-    __atomic_load(&metadata._generation_id, &generation, __ATOMIC_ACQUIRE);
-    return generation;
+    return _generation_id;
 }
 }
 
@@ -1209,11 +1204,11 @@ inline MAddress RegionInfo::GetRegionAllocPtr() const { return metadata.allocPtr
 }
 
 namespace MapleRuntime {
-inline bool RegionInfo::IsSmallRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS; }
+inline bool RegionInfo::IsSmallRegion() const { return is_small(); }
 }
 
 namespace MapleRuntime {
-inline bool RegionInfo::IsLargeRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS; }
+inline bool RegionInfo::IsLargeRegion() const { return is_large(); }
 }
 
 namespace MapleRuntime {

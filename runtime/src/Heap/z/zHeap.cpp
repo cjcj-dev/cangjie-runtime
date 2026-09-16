@@ -450,6 +450,25 @@ RegionInfo* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr
 
 ZPageTable& Heap::page_table() { return ZPageTable::heap_table(); }
 
+RegionInfo* Heap::alloc_page(size_t num, UnitRole role, bool expectPhysicalMem, bool allowSaferegion,
+                             bool clearPayload, PageAge age)
+{
+    RegionManager& manager = static_cast<RegionSpace&>(GetHeap().GetAllocator()).GetRegionManager();
+    RegionInfo* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
+    if (page != nullptr) {
+        page_table().insert(page);
+    }
+    return page;
+}
+
+void Heap::free_page(RegionInfo* page)
+{
+    if (page == nullptr) {
+        return;
+    }
+    RegionInfo::RetirePage(page, [] {});
+}
+
 bool Heap::is_in(MAddress addr)
 {
     RegionInfo* p = page(addr);

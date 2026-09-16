@@ -60,7 +60,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 #if defined(__EULER__)
         needUnitCount = maxUnitCountPerPinnedRegion;
 #endif
-        RegionInfo* region = TakeRegion(needUnitCount, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        RegionInfo* region = Heap::alloc_page(needUnitCount, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         if (region == nullptr) {
             return 0;
         }
@@ -82,16 +82,6 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
             // refresh this still-empty page under the same mutex that spans
             // old retirement and seqnum advancement (P14 pause-model adapter).
             region->ResetPageSequence();
-            // If allocate pinned obj during tracing, set region to traced new region.
-            GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
-                region->SetTraceRegionFlag(1);
-            }
-            // twoflags: POST_TRACE+ only (TRACE uses isTraceRegion).
-            if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-                phase == GC_PHASE_FORWARD) {
-                region->SetNotRelocatableThisCycle(1);
-            }
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
             recentPinnedRegionList.PrependRegionLocked(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
             allocator(PageAge::old)->pinnedPage.store(region, std::memory_order_release);
@@ -113,7 +103,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
     {
         size_t regionCount = (size + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
-        RegionInfo* region = TakeRegion(regionCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS,
+        RegionInfo* region = Heap::alloc_page(regionCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS,
                                         false, true, clearPayload, PageAge::eden);
         if (region == nullptr) {
             return 0;
@@ -122,20 +112,9 @@ inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
              region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), region->GetRegionType());
         uintptr_t addr = region->Alloc(size);
 
-        GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-        bool shouldSetTraceRegion = (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER);
         if (largeTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION)) {
-            if (shouldSetTraceRegion) {
-                region->SetTraceRegionFlag(1);
-            }
         } else {
             recentLargeRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION);
-            region->SetTraceRegionFlag(0);
-        }
-        // twoflags: POST_TRACE+ only (independent of isTraceRegion).
-        if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-            phase == GC_PHASE_FORWARD) {
-            region->SetNotRelocatableThisCycle(1);
         }
 
         return addr;
