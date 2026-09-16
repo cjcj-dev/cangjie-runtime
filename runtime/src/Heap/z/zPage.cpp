@@ -296,8 +296,8 @@ ZPage::ZPage()
 
 ZPage::ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
     : _type(type),
-      _generation_id(age != PageAge::old ? ZGenerationId::young : ZGenerationId::old),
-      _age(age),
+      _generation_id(ZGenerationId::old),
+      _age(PageAge::old),
       _seqnum(0),
       _seqnum_other(0),
       _partition_id(0),
