@@ -1213,3 +1213,16 @@ inline bool RegionInfo::IsSmallRegion() const { return static_cast<UnitRole>(met
 namespace MapleRuntime {
 inline bool RegionInfo::IsLargeRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS; }
 }
+
+namespace MapleRuntime {
+template<typename Function>
+inline void ZGenerationPagesParallelIterator::do_pages(Function function)
+{
+    _iterator.do_pages([&](ZPage* page) {
+        if (page->generation_id() == _generation_id) {
+            return function(page);
+        }
+        return true;
+    });
+}
+}
