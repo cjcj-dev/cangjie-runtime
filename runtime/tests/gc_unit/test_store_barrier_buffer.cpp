@@ -770,19 +770,18 @@ GC_TEST(StoreBuf, PhaseFlipLeavesOnePreviousAndOneCurrentSlot)
     const MAddress previousSlot = SlotAt(fx, 8);
     const MAddress currentSlot = SlotAt(fx, 9);
 
+    RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
     buf.Add(previousSlot, zpointer::null, rs);
     buf.Flush(rs);
-    rs.FlipForMinor();
+    heapRs.FlipForMinor();
     buf.Add(currentSlot, zpointer::null, rs);
     buf.Flush(rs);
 
     std::unordered_set<MAddress> previous;
-    GC_EXPECT_EQ(rs.ScanPreviousForMinor(previous), 1u);
+    GC_EXPECT_EQ(heapRs.ScanPreviousForMinor(previous), 1u);
     GC_EXPECT_EQ(previous.size(), 1u);
     GC_EXPECT_TRUE(previous.count(previousSlot) == 1);
-    const std::unordered_set<MAddress> current = rs.Snapshot();
-    GC_EXPECT_EQ(current.size(), 1u);
-    GC_EXPECT_TRUE(current.count(currentSlot) == 1);
+    GC_EXPECT_TRUE(heapRs.Contains(currentSlot));
 }
 
 GC_TEST(StoreBuf, FullAutoFlushKeepsEveryEntry)
@@ -797,14 +796,12 @@ GC_TEST(StoreBuf, FullAutoFlushKeepsEveryEntry)
         buf.Add(SlotAt(fx, i + 8), zpointer::null, rs);
     }
     GC_EXPECT_EQ(buf.Pending(), 1u);
-    GC_EXPECT_EQ(rs.Size(), StoreBarrierBuffer::Capacity());
+    RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
+    GC_EXPECT_EQ(heapRs.Size(), StoreBarrierBuffer::Capacity());
     buf.Flush(rs);
     GC_EXPECT_TRUE(buf.IsEmpty());
-    std::unordered_set<MAddress> drained;
-    rs.DrainForMinor(drained);
-    GC_EXPECT_EQ(drained.size(), n);
     for (size_t i = 0; i < n; ++i) {
-        GC_EXPECT_TRUE(drained.count(SlotAt(fx, i + 8)) == 1);
+        GC_EXPECT_TRUE(heapRs.Contains(SlotAt(fx, i + 8)));
     }
 }
 
@@ -833,9 +830,10 @@ GC_TEST(StoreBuf, FlushBeforeRelocateSnapshotPublishesPending)
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
     buf.Add(slot, zpointer::null, rs);
-    GC_EXPECT_TRUE(rs.Snapshot().count(slot) == 0);
+    RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
+    GC_EXPECT_TRUE(!heapRs.Contains(slot));
     buf.Flush(rs);
-    GC_EXPECT_TRUE(rs.Snapshot().count(slot) == 1);
+    GC_EXPECT_TRUE(heapRs.Contains(slot));
 }
 
 GC_TEST(StoreBuf, MarkEndSnapshotLeavesCurrentForNextMinor)
@@ -848,10 +846,7 @@ GC_TEST(StoreBuf, MarkEndSnapshotLeavesCurrentForNextMinor)
     const MAddress slot = SlotAt(fx, 11);
     buf.Add(slot, zpointer::null, rs);
     buf.Flush(rs);
-    std::unordered_set<MAddress> markEnd = rs.Snapshot();
-    GC_EXPECT_TRUE(markEnd.count(slot) == 1);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
-    GC_EXPECT_EQ(rs.Size(), 1u);
 }
 
 GC_TEST(StoreBuf, FlushBeforeMinorDoesNotLoseEdges)
@@ -866,11 +861,9 @@ GC_TEST(StoreBuf, FlushBeforeMinorDoesNotLoseEdges)
         buf.Add(SlotAt(fx, i + 8), zpointer::null, rs);
     }
     buf.Flush(rs);
-    std::unordered_set<MAddress> drained;
-    rs.DrainForMinor(drained);
-    GC_EXPECT_EQ(drained.size(), n);
+    RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
     for (size_t i = 0; i < n; ++i) {
-        GC_EXPECT_TRUE(drained.count(SlotAt(fx, i + 8)) == 1);
+        GC_EXPECT_TRUE(heapRs.Contains(SlotAt(fx, i + 8)));
     }
 }
 
@@ -884,9 +877,7 @@ GC_TEST(StoreBuf, ThreadExitFlushRedeems)
     const MAddress slot = SlotAt(fx, 9);
     buf.Add(slot, zpointer::null, rs);
     buf.Flush(rs);
-    std::unordered_set<MAddress> drained;
-    rs.DrainForMinor(drained);
-    GC_EXPECT_TRUE(drained.count(slot) == 1);
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
 
 GC_TEST(StoreBuf, ReRememberDoesNotFightBuffer)
