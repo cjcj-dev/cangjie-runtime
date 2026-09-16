@@ -405,7 +405,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
 
     // This is the compiler slow-arm ordering: capture, overwrite, then ABI exit.
     field.StoreColoured(newWord);
-    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
+    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false); // oldvalue-anchor
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
 

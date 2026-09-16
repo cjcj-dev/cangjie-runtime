@@ -154,12 +154,13 @@ public:
     }
 };
 
-class TestBarrier final {
+class TestBarrier final : public Barrier {
 public:
+    TestBarrier() = default;
     TestBarrier(Collector&, RememberedSet&) {}
     void Record(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
     {
-        ZBarrier::RecordCrossGenEdge(obj, fieldAddress, ref);
+        RecordCrossGenEdge(obj, fieldAddress, ref);
     }
 };
 

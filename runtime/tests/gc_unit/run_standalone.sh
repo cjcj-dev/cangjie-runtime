@@ -529,7 +529,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   fi
   [[ "$anchor" == "store_barrier_on_heap_oop_field" ]]
   [[ "$carrier" == "product_so" ]]
-  [[ "$consumer" == "ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false)" ]]
+  [[ "$consumer" == "ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false); // oldvalue-anchor" ]]
   suite="${test_name%%.*}"
   name="${test_name#*.}"
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_store_barrier_buffer.cpp"
@@ -542,7 +542,7 @@ done <"$OLDVALUE_MANIFEST"
 for test_name in "${EXPECTED_OLDVALUE_TESTS[@]}"; do
   /usr/bin/grep -q "^${test_name}"$'\t' "$OLDVALUE_MANIFEST"
 done
-[[ $(/usr/bin/grep -F -c 'ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false)' \
+[[ $(/usr/bin/grep -F -c 'oldvalue-anchor' \
   "$SRC/test_store_barrier_buffer.cpp") -eq "$oldvalue_rows" ]]
 OLDVALUE_UNDEFINED="$OUT/cj_gc_unit.undefined-oldvalue.txt"
 nm -u "$OUT/cj_gc_unit" >"$OLDVALUE_UNDEFINED"
