@@ -708,7 +708,7 @@ extern "C" int p2SlowFieldInputExercise()
 static void RunP2(int (*exercise)())
 {
     RuntimeParam param{};
-    param.heapParam.heapSize = 64 * 1024;
+    param.heapParam.heapSize = 4 * 1024 * 1024;
     param.coParam.processorNum = 1;
     GC_EXPECT_EQ(InitCJRuntime(&param), E_OK);
     const int rc = exercise();
