@@ -49,10 +49,13 @@ struct PartialArrayTestAccess {
         auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
         GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
         auto arm = [](TracingCollector& c) {
-            c.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(1);
-            c.GetGenerationCycle(GCCycleGeneration::OLD).Begin(0);
+            auto& old = c.GetGenerationCycle(GCCycleGeneration::OLD);
+            old.InitializeWorkers(1);
+            if (!old.Snapshot().active) {
+                old.Begin(0);
+            }
             c.StartOldMarkWork();
-            c.GetGenerationCycle(GCCycleGeneration::OLD).PublishPhase(GC_PHASE_TRACE);
+            old.PublishPhase(GC_PHASE_TRACE);
         };
         arm(collector);
         arm(heap);
