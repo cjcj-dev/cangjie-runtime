@@ -27,6 +27,8 @@ private:
     ZPerWorker<WorkerState> _worker_states;
 
     void reclaim(WorkerState* local_state);
+    void reclaim();
+    size_t pending_count() const;
 
 public:
     MarkingSMR();
@@ -37,8 +39,16 @@ public:
     void free();
     void free_node(MarkStripeStackListNode* node);
     std::atomic<MarkStripeStackListNode*>* hazard_ptr();
-    void reclaim();
-    size_t pending_count() const;
+    friend class ZMark;
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct MarkingSMRTestAccess;
+#endif
 };
+#if defined(MRT_TESTABLE_INTERNALS)
+struct MarkingSMRTestAccess {
+    static void reclaim(MarkingSMR& smr) { smr.reclaim(); }
+    static size_t pending_count(const MarkingSMR& smr) { return smr.pending_count(); }
+};
+#endif
 } // namespace MapleRuntime
 #endif

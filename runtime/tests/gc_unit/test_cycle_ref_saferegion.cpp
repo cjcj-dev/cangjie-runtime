@@ -38,7 +38,7 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         resources.collectorProxy.currentCollector = collector;
     }

@@ -86,7 +86,7 @@ struct RelocationReceiptTestAccess {
         GC_EXPECT_TRUE(region == nullptr || region->GetRegionListOwner() == nullptr);
     }
 
-    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);

@@ -87,7 +87,7 @@ extern "C" int CJ_ScheduleManagerInit();
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.

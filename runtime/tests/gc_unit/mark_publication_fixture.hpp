@@ -13,7 +13,7 @@ struct MarkPublicationFixture {
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector { Heap::GetHeap().GetAllocator(), resources };
-    TracingCollector* previousCollector;
+    CopyCollector* previousCollector;
     MarkPublicationFixture()
         : previousCollector(resources.collectorProxy.currentCollector)
     {

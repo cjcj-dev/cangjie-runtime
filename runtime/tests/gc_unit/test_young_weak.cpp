@@ -49,7 +49,7 @@ extern "C" int CJ_ScheduleManagerInit();
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.
@@ -696,7 +696,7 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             MarkStripeStack* published = current.Stripes().At(0).StealStack(smr, 0);
             GC_EXPECT_TRUE(published != nullptr);
             MarkStripeStack::Destroy(published);
-            smr.reclaim();
+            MarkingSMRTestAccess::reclaim(smr);
             MarkingStacks::VerifyAllEmpty(current);
         }
     }
@@ -850,7 +850,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
         // Pin the fixture objects while the real driver completes relocation.
         space.GetRegionManager().AddRawPointerObject(graph.root);
         if (secondRoot != nullptr) space.GetRegionManager().AddRawPointerObject(secondRoot);
-        TracingCollector::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
+        CopyCollector::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
             const auto paired = [&](const std::vector<ExportOwnershipTestObservation::Edge>& edges) {
                 return edges.size() == owners &&
                     std::count(edges.begin(), edges.end(), std::make_pair(graph.root, graph.foreign)) == 1 &&
@@ -880,7 +880,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
             }
         };
         RelocationReceiptTestAccess::RunMajorCollection(collector);
-        TracingCollector::testExportOwnershipResult = nullptr;
+        CopyCollector::testExportOwnershipResult = nullptr;
         driverCompleted = !collector.GetCycleSnapshot(GCCycleGeneration::OLD).active;
     } else {
         RelocationReceiptTestAccess::RunExportMajorMark(collector);

@@ -15,35 +15,35 @@
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
-class TracingCollector;
+class CopyCollector;
 
 // zRootsIterator.cpp:159-198: storage sets precede the external-slot
 // (Cangjie ABI / HotSpot CLD) adapter and use the same colored closure.
 class OopStorageSetIteratorStrong {
 public:
-    explicit OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers = 1);
+    explicit OopStorageSetIteratorStrong(const CopyCollector& collector, unsigned workers = 1);
     void Apply(const NativeSlotVisitor& visitor);
 private:
     std::array<OopStorage::ParState<true>, 1> states;
 };
 class OopStorageSetIteratorWeak {
 public:
-    explicit OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers = 1);
+    explicit OopStorageSetIteratorWeak(const CopyCollector& collector, unsigned workers = 1);
     void Apply(const NativeSlotVisitor& visitor);
 private:
     std::array<OopStorage::ParState<true>, 2> states;
 };
 class StaticRootsAdapterIterator {
 public:
-    explicit StaticRootsAdapterIterator(const TracingCollector& collector) : collector(collector) {}
+    explicit StaticRootsAdapterIterator(const CopyCollector& collector) : collector(collector) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    const TracingCollector& collector;
+    const CopyCollector& collector;
     std::atomic<bool> claimed{false};
 };
 class RootsIteratorStrongColored {
 public:
-    explicit RootsIteratorStrongColored(const TracingCollector& collector, unsigned workers = 1)
+    explicit RootsIteratorStrongColored(const CopyCollector& collector, unsigned workers = 1)
         : strong(collector, workers), statics(collector) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
@@ -52,7 +52,7 @@ private:
 };
 class RootsIteratorWeakColored {
 public:
-    explicit RootsIteratorWeakColored(const TracingCollector& collector, unsigned workers = 1)
+    explicit RootsIteratorWeakColored(const CopyCollector& collector, unsigned workers = 1)
         : weak(collector, workers) {}
     void Apply(const NativeSlotVisitor& visitor) { weak.Apply(visitor); }
 private:
@@ -60,7 +60,7 @@ private:
 };
 class RootsIteratorAllColored {
 public:
-    explicit RootsIteratorAllColored(const TracingCollector& collector, unsigned workers = 1)
+    explicit RootsIteratorAllColored(const CopyCollector& collector, unsigned workers = 1)
         : strong(collector, workers), weak(collector, workers), statics(collector) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:

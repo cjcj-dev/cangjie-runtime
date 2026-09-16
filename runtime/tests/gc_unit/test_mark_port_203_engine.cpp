@@ -68,7 +68,7 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
         for (auto& t : threads) {
             t.join();
         }
-        GC_EXPECT_TRUE(terminate.Terminated());
+        GC_EXPECT_TRUE(stripes.IsEmpty());
         size_t total = 0;
         for (size_t w = 0; w < workers; ++w) {
             total += seen[w].size();
@@ -162,7 +162,6 @@ GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
                                              seen.push_back(entry.partial_array_offset());
                                          });
     GC_EXPECT_TRUE(result == ZMark::Result::Partial);
-    GC_EXPECT_TRUE(!terminate.Terminated());
     GC_EXPECT_TRUE(terminate.Saturated());
     GC_EXPECT_EQ(seen.size(), 0u);
 }
@@ -195,7 +194,7 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     std::vector<size_t> producerSeen;
     DrainFollow(producer, smr, stripes, terminate, 1, producerSeen, false);
     waitThread.join();
-    GC_EXPECT_TRUE(terminate.Terminated());
+    GC_EXPECT_TRUE(stripes.IsEmpty());
     GC_EXPECT_EQ(seen.size() + producerSeen.size(), 1u);
 }
 

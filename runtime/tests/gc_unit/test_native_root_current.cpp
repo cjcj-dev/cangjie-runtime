@@ -377,7 +377,7 @@ void CheckRootStorageSegments(unsigned family)
     size_t otherConsumed = 0;
     bool valuesValid = true;
     struct ResetObserver {
-        ~ResetObserver() { TracingCollector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
     } reset;
     collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* slot) {
         if ((generation == GCCycleGeneration::OLD) != (family == 0)) { return; }
@@ -447,7 +447,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     NativeSlot* addedSlot = nullptr;
     bool newSlotVisited = false;
     struct ResetObserver {
-        ~ResetObserver() { TracingCollector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
     } reset;
     collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* slot) {
         if (generation != GCCycleGeneration::YOUNG || slot == nullptr) { return; }

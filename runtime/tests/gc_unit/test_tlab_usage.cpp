@@ -63,9 +63,9 @@ void CheckNativeFrameScan(bool derived)
         const RootVisitor roots = [&](RootSlot&) { ++visits; };
         const DerivedPtrVisitor derivedRoots = [&](BasePtrType, DerivedSlot&) { ++visits; };
         if (derived) {
-            TracingCollector::VisitHeapReferencesOnStack(roots, derivedRoots, registers, frame, mutator, true);
+            CopyCollector::VisitHeapReferencesOnStack(roots, derivedRoots, registers, frame, mutator, true);
         } else {
-            TracingCollector::VisitStackRoots(roots, registers, frame, mutator);
+            CopyCollector::VisitStackRoots(roots, registers, frame, mutator);
         }
         _exit(visits == 0 ? 0 : 1);
     }

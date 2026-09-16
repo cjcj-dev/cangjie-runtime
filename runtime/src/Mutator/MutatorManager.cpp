@@ -682,43 +682,7 @@ void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
     ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
 }
 
-namespace {
 
-bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
-{
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    auto& remembered = Heap::GetHeap().GetRememberedSet();
-    if (remembered.IsInitialized()) {
-        data.storeBarrierBuffer->Flush();
-    }
-    return domain == nullptr ? collector.FlushGCDataMarkProducers(data)
-                             : collector.FlushGCDataMarkProducers(data, domain);
-}
-
-bool FlushTlsMarkProducers(ThreadLocalData* tls, ZMark* domain)
-{
-    if (tls == nullptr) {
-        return false;
-    }
-    bool published = false;
-    if (tls->nativeGCData != nullptr && tls->nativeGCData != tls->gcData) {
-        published = FlushTargetGCData(*tls->nativeGCData, domain);
-    }
-    if (tls->gcData != nullptr) {
-        published = FlushTargetGCData(*tls->gcData, domain) || published;
-    }
-    // Allocation-context producers remain a separate OS-owned input until
-    // their P05/P08 migration; never attribute them to a remote logical owner.
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    return (domain == nullptr ? collector.FlushThreadMarkProducers(tls)
-                              : collector.FlushThreadMarkProducers(tls, domain)) || published;
-}
-
-bool FlushTlsMarkProducersDetach(ThreadLocalData* tls)
-{
-    return FlushTlsMarkProducers(tls, nullptr);
-}
-} // namespace
 
 void MutatorManager::VisitMarkingThreads(const std::function<void(const ThreadGCData*)>& visitor)
 {
@@ -883,9 +847,9 @@ void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
     }
     HandshakeState* hs = target->handshake;
     if (hs != nullptr) {
-        hs->process_queued_then_detach([](ThreadLocalData* t) { (void)FlushTlsMarkProducersDetach(t); });
+        hs->process_queued_then_detach([](ThreadLocalData* t) { (void)ZMark::FlushThread(t); });
     } else {
-        (void)FlushTlsMarkProducersDetach(tls);
+        (void)ZMark::FlushThread(tls);
     }
     target->bufferLive.store(0, std::memory_order_release);
     target->refs.fetch_sub(1, std::memory_order_acq_rel);
@@ -919,76 +883,6 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
     const bool pending = Handshake::Current().has_operation();
     Handshake::Current().process_by_self();
     return pending;
-}
-
-bool MutatorManager::HandshakeFlushMarkProducers(ZMark* domain)
-{
-    bool flushed = false;
-    if (WorldStopped()) {
-        {
-            std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-            for (auto& entry : markFlushThreads) {
-                if (entry.second->bufferLive.load(std::memory_order_acquire) == 0) {
-                    continue;
-                }
-                if (FlushTlsMarkProducers(entry.first, domain)) {
-                    flushed = true;
-                }
-            }
-        }
-        ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-            flushed = FlushTargetGCData(data, domain) || flushed;
-        });
-        // Remote buffer processing can publish new chunks on this executor.
-        flushed = FlushTlsMarkProducers(ThreadLocal::GetThreadLocalData(), domain) || flushed;
-        return flushed;
-    }
-
-    class MarkFlushHandshakeClosure : public HandshakeClosure {
-    public:
-        explicit MarkFlushHandshakeClosure(ZMark* d)
-            : HandshakeClosure("ZMarkFlushStacks"), domain_(d), flushed_(false) {}
-        void do_thread(ThreadLocalData* tls) override
-        {
-            if (FlushTlsMarkProducers(tls, domain_)) {
-                flushed_ = true;
-            }
-        }
-        bool flushed() const { return flushed_.load(std::memory_order_relaxed); }
-    private:
-        ZMark* domain_;
-        std::atomic<bool> flushed_;
-    } cl(domain);
-    Heap::GetHeap().GetFinalizerProcessor().Notify();
-    Handshake::execute(&cl);
-    // A parked or unbound logical owner is absent from the OS handshake
-    // bindings. Its lock protects the saferegion check and the complete flush.
-    ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator* target, ThreadLocalData*) {
-        if (target == nullptr) { return; }
-        target->MutatorLock();
-        if (target->InSaferegion()) {
-            flushed = FlushTargetGCData(data, domain) || flushed;
-        }
-        target->MutatorUnlock();
-    });
-    // ZMark::flush also rendezvous with the VM/GC executor, which may have
-    // produced marking work while executing another thread's SBB closure.
-    flushed = FlushTlsMarkProducers(ThreadLocal::GetThreadLocalData(), domain) || flushed;
-    if (cl.flushed()) {
-        flushed = true;
-    }
-    {
-        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-        for (auto it = markFlushThreads.begin(); it != markFlushThreads.end();) {
-            if (it->second->dying.load(std::memory_order_acquire) != 0 &&
-                it->second->refs.load(std::memory_order_acquire) == 0) {
-                it = markFlushThreads.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-    return flushed;
 }
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)

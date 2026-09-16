@@ -17,7 +17,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
@@ -108,13 +108,13 @@ void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 
 namespace MapleRuntime {
-void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
+void CopyCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                        Mutator& mutator)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
@@ -202,20 +202,20 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 
 namespace MapleRuntime {
-void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
+void CopyCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
                                                   const FrameInfo& frame, Mutator& mutator, bool young)
 {
     VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
 }
 
-void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
+void CopyCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                                   const RootVisitor& slotRootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
                                                   const FrameInfo& frame, Mutator& mutator, bool young)
@@ -280,24 +280,24 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     heapMap.RecordCalleeSaved(regSlotsMap);
 }
 
-void TracingCollector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+void CopyCollector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordStubCalleeSaved(regSlotsMap, fp);
 }
 
 #ifdef __arm__
-void TracingCollector::RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+void CopyCollector::RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, fp);
 }
 
-void TracingCollector::RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+void CopyCollector::RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap, fp);
 }
 #endif
 
-void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
+void CopyCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordStubAllRegister(regSlotsMap, fp);
 }
@@ -306,20 +306,20 @@ void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 
 
 
-void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
+void CopyCollector::MergeMutatorRoots(WorkStack& workStack)
 {
     (void)workStack;
     (void)oldCycle.Mark().Flush();
 }
 
-void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
+void CopyCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
     VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
 
         EnumRefFieldRoot(root, foreignRootsSet);
     });
 }
-void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
+void CopyCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_ENUM");
     EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD));
@@ -348,54 +348,54 @@ void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRoo
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 
 namespace MapleRuntime {
-void TracingCollector::VisitExportColoredRoots(const NativeSlotVisitor& visitor) const
+void CopyCollector::VisitExportColoredRoots(const NativeSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitAllExportRoots(visitor);
 }
 
-OopStorage& TracingCollector::StrongRootStorage() const
+OopStorage& CopyCollector::StrongRootStorage() const
 {
     return collectorResources.GetFinalizerProcessor().StrongRootStorage();
 }
 
-OopStorage& TracingCollector::WeakFinalizerRootStorage() const
+OopStorage& CopyCollector::WeakFinalizerRootStorage() const
 {
     return collectorResources.GetFinalizerProcessor().WeakRootStorage();
 }
 
-void TracingCollector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
+void CopyCollector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
 {
     VisitStaticRoots(visitor);
 }
 
-void TracingCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
+void CopyCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
 {
     RootsIteratorStrongColored roots(*this);
     roots.Apply(visitor);
 }
 
-void TracingCollector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
+void CopyCollector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
 {
     RootsIteratorWeakColored roots(*this);
     roots.Apply(visitor);
 }
 
-void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
+void CopyCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
 {
     RootsIteratorAllColored roots(*this);
     roots.Apply(visitor);
 }
 
-OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const TracingCollector& collector, unsigned workers)
+OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const CopyCollector& collector, unsigned workers)
     : states{{{collector.StrongRootStorage(), workers}}} {}
 
-OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const TracingCollector& collector, unsigned workers)
+OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const CopyCollector& collector, unsigned workers)
     : states{{{collector.WeakFinalizerRootStorage(), workers},
               {Heap::GetHeap().GetExportRootStorage(), workers}}} {}
 
@@ -430,7 +430,7 @@ void RootsIteratorAllColored::Apply(const NativeSlotVisitor& visitor)
     statics.Apply(visitor);
 }
 
-void TracingCollector::VisitStrongPlainRoots(
+void CopyCollector::VisitStrongPlainRoots(
     const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor) const
 {
     if (threadVisitor) {
@@ -440,12 +440,12 @@ void TracingCollector::VisitStrongPlainRoots(
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
 }
 
-void TracingCollector::VisitStaticRoots(const NativeSlotVisitor& visitor) const
+void CopyCollector::VisitStaticRoots(const NativeSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 
-void TracingCollector::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
+void CopyCollector::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
 {
     collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
 }

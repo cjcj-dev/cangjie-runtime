@@ -22,14 +22,14 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct GenerationCycleRootTestAccess {
-    static void Seed(TracingCollector& collector, BaseObject* object)
+    static void Seed(CopyCollector& collector, BaseObject* object)
     {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.emplace(TracingCollector::ValueRoot(object),
-                                            TracingCollector::ValueRootList{});
+        collector.cycleRefWorkStack.emplace(CopyCollector::ValueRoot(object),
+                                            CopyCollector::ValueRootList{});
     }
 
-    static void Clear(TracingCollector& collector)
+    static void Clear(CopyCollector& collector)
     {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
         collector.cycleRefWorkStack.clear();

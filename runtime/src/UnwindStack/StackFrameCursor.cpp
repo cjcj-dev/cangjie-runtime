@@ -58,10 +58,10 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
         case FrameType::MANAGED: {
             if (derivedPtrVisitor != nullptr) {
                 // The shared frame closure processes derived values before ordinary bases.
-                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
+                CopyCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
                                                              young);
             } else {
-                TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
+                CopyCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
             }
             break;
         }
@@ -69,16 +69,16 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
             LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
             break;
         case FrameType::SAFEPOINT:
-            TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            CopyCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2R_STUB:
-            TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            CopyCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2N_STUB:
-            TracingCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            CopyCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::EXSLUSIVE:
-            TracingCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
+            CopyCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                              reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         default:
@@ -89,16 +89,16 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
         case FrameType::MANAGED: {
             if (derivedPtrVisitor != nullptr) {
                 // The shared frame closure processes derived values before ordinary bases.
-                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
+                CopyCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
                                                              young);
             } else {
-                TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
+                CopyCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
             }
             break;
         }
         case FrameType::SAFEPOINT:
         case FrameType::STACKGROW:
-            TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            CopyCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2R_STUB:
         case FrameType::C2N_STUB:
@@ -106,7 +106,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #ifdef INTERPRETER_ENABLED
         case FrameType::INTERPRETER_C2I:
 #endif
-            TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            CopyCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         default:
             break;

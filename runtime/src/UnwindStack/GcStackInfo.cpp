@@ -41,21 +41,21 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
-                TracingCollector::VisitHeapReferencesOnStack(
+                CopyCollector::VisitHeapReferencesOnStack(
                     regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
                 break;
             }
             case FrameType::C2R_STUB:
 
-                TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                CopyCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::C2N_STUB:
 
-                TracingCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                CopyCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::EXSLUSIVE:
 
-                TracingCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
+                CopyCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                                  reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::STACKGROW:
@@ -63,7 +63,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                 break;
             case FrameType::SAFEPOINT:
 
-                TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                CopyCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
 
@@ -81,23 +81,23 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
         switch (frame->GetFrameType()) {
             case FrameType::MANAGED: {
                 currentFramePtr = frame;
-                TracingCollector::VisitStackRoots(func, regSlotsMap, ref, mutator);
+                CopyCollector::VisitStackRoots(func, regSlotsMap, ref, mutator);
                 break;
             }
             case FrameType::STACKGROW:
                 LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
                 break;
             case FrameType::SAFEPOINT:
-                TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                CopyCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             case FrameType::C2R_STUB:
-                TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                CopyCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             case FrameType::C2N_STUB:
-                TracingCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                CopyCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             case FrameType::EXSLUSIVE:
-                TracingCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
+                CopyCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                                  reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             default: {
@@ -159,7 +159,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
-                TracingCollector::VisitHeapReferencesOnStack(
+                CopyCollector::VisitHeapReferencesOnStack(
                     regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
                 break;
             }
@@ -170,12 +170,12 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
             case FrameType::INTERPRETER_C2I:
 #endif
 
-                TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                CopyCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
 
-                TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                CopyCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
 
@@ -216,17 +216,17 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
         switch (frame->GetFrameType()) {
             case FrameType::MANAGED: {
                 currentFramePtr = frame;
-                TracingCollector::VisitStackRoots(func, regSlotsMap, ref, mutator);
+                CopyCollector::VisitStackRoots(func, regSlotsMap, ref, mutator);
                 break;
             }
             case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
-                TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                CopyCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             case FrameType::C2R_STUB:
             case FrameType::C2N_STUB:
             case FrameType::EXSLUSIVE:
-                TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                CopyCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             default: {
                 break;

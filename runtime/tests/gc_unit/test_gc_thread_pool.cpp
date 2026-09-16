@@ -37,7 +37,7 @@ struct RelocationReceiptTestAccess {
     }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-    static void BindCollector(CollectorResources& resources, TracingCollector& collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector& collector)
     {
         resources.collectorProxy.currentCollector = &collector;
     }

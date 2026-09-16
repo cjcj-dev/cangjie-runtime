@@ -17,20 +17,20 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
 
 #if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(GCCycleGeneration, NativeSlot*)> TracingCollector::testColoredRootResult;
-std::function<void()> TracingCollector::testCyclePrepared;
-std::function<void()> TracingCollector::testYoungMarkStarted;
-std::function<void()> TracingCollector::testOldMarkStarted;
-std::function<void(GCCycleGeneration, MarkStartPoint, const ZMark*)> TracingCollector::testMarkStartState;
-std::function<void()> TracingCollector::testYoungMarkCompleted;
-std::function<void(const ExportOwnershipTestObservation&)> TracingCollector::testExportOwnershipResult;
+std::function<void(GCCycleGeneration, NativeSlot*)> CopyCollector::testColoredRootResult;
+std::function<void()> CopyCollector::testCyclePrepared;
+std::function<void()> CopyCollector::testYoungMarkStarted;
+std::function<void()> CopyCollector::testOldMarkStarted;
+std::function<void(GCCycleGeneration, MarkStartPoint, const ZMark*)> CopyCollector::testMarkStartState;
+std::function<void()> CopyCollector::testYoungMarkCompleted;
+std::function<void(const ExportOwnershipTestObservation&)> CopyCollector::testExportOwnershipResult;
 #endif
 
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
@@ -122,7 +122,7 @@ WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt()
 #endif
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void TracingCollector::DumpHeap(const CString& tag)
+void CopyCollector::DumpHeap(const CString& tag)
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "Not In STW");
     DLOG(FRAGMENT, "DumpHeap %s", tag.Str());
@@ -152,7 +152,7 @@ void TracingCollector::DumpHeap(const CString& tag)
 }
 
 ATTR_NO_SANITIZE_ADDRESS
-void TracingCollector::DumpRoots(LogType logType)
+void CopyCollector::DumpRoots(LogType logType)
 {
     RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
         zaddress_unsafe value = ref.LoadPlain();
@@ -275,7 +275,7 @@ void ReportSkippedStackMapCounts()
             zeroEntries, pcMiss, zeroRootIndices);
     }
 }
-size_t TracingCollector::CurrentThreadRootMapMissCount()
+size_t CopyCollector::CurrentThreadRootMapMissCount()
 {
     return g_currentThreadRootMapMissCount;
 }
@@ -286,7 +286,7 @@ size_t TracingCollector::CurrentThreadRootMapMissCount()
 
 namespace MapleRuntime {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void TracingCollector::DumpBeforeGC()
+void CopyCollector::DumpBeforeGC()
     {
         if (ENABLE_LOG(FRAGMENT)) {
             if (MutatorManager::Instance().WorldStopped()) {
@@ -298,7 +298,7 @@ void TracingCollector::DumpBeforeGC()
         }
     }
 
-void TracingCollector::DumpAfterGC()
+void CopyCollector::DumpAfterGC()
     {
         if (ENABLE_LOG(FRAGMENT)) {
             if (MutatorManager::Instance().WorldStopped()) {

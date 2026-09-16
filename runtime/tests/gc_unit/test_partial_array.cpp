@@ -19,7 +19,7 @@
 #include "Base/Globals.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
@@ -46,9 +46,9 @@ struct PartialArrayTestAccess {
 
     static void StartFieldMark(WCollector& collector)
     {
-        auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+        auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
         GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
-        auto arm = [](TracingCollector& c) {
+        auto arm = [](CopyCollector& c) {
             auto& old = c.GetGenerationCycle(GCCycleGeneration::OLD);
             old.InitializeWorkers(1);
             if (!old.Snapshot().active) {
@@ -63,7 +63,7 @@ struct PartialArrayTestAccess {
 
     static void ReadPublished(WCollector& collector, WorkStack& result)
     {
-        auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+        auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
         auto& domain = heap.MajorMark() != nullptr ? *heap.MajorMark()
                                                          : *collector.MajorMark();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {

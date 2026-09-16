@@ -46,6 +46,7 @@ namespace MapleRuntime {
 class MarkStripeSet;
 class ZWorkers;
 class MarkContext;
+struct ThreadLocalData;
 
 // Per-generation mark ownership (zMark.hpp:42-124, zMark.cpp:80-92).
 class ZMark {
@@ -84,6 +85,9 @@ public:
     size_t NWorkers() const { return nworkers; }
     size_t TargetNStripes() const { return targetNStripes; }
     bool Flush();
+    bool Flush(ThreadLocalData* tls);
+    static bool FlushThread(ThreadLocalData* tls);
+    static bool FlushAllGenerations();
     bool FlushStacks();
     bool TryTerminateFlush();
     bool TryProactiveFlush(size_t workerId);
@@ -99,6 +103,7 @@ public:
 private:
     size_t CalculateNStripes(size_t nworkers) const;
     void EnsureWorkers(size_t nworkers);
+    static bool HandshakeFlush(ZMark* domain);
 
     MarkingSMR smr;
     MarkStripeSet stripes;
@@ -195,41 +200,7 @@ constexpr int MARK_PREFETCH_DISTANCE = 16; // when it is changed, remember to ch
 #error Prefetch queue size must be strictly greater than prefetch distance.
 #endif
 
-class PrefetchQueue {
-public:
-    explicit PrefetchQueue(size_t d) : elems{ nullptr }, distance(d), tail(0), head(0) {}
-    ~PrefetchQueue() {}
-    inline void Add(BaseObject* objaddr)
-    {
-        size_t t = tail;
-        elems[t] = objaddr;
-        tail = (t + 1) & (MRT_MAX_PREFETCH_QUEUE_SIZE - 1UL);
 
-        __builtin_prefetch(reinterpret_cast<void*>(objaddr), 0, PREFETCH_LOCALITY);
-    }
-
-    inline BaseObject* Remove()
-    {
-        size_t h = head;
-        BaseObject* objaddr = elems[h];
-        head = (h + 1) & (MRT_MAX_PREFETCH_QUEUE_SIZE - 1UL);
-
-        return objaddr;
-    }
-
-    inline size_t Length() const { return (tail - head) & (MRT_MAX_PREFETCH_QUEUE_SIZE - 1UL); }
-
-    inline bool Empty() const { return head == tail; }
-
-    inline bool Full() const { return Length() == distance; }
-
-private:
-    static constexpr int PREFETCH_LOCALITY = 3;
-    BaseObject* elems[MRT_MAX_PREFETCH_QUEUE_SIZE];
-    size_t distance;
-    size_t tail;
-    size_t head;
-}; // PrefetchQueue
 
 // For managing gc roots
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -264,7 +235,7 @@ RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt();
 #endif
 
 class MarkingWork;
-class TracingCollector : public Collector {
+class CopyCollector : public Collector {
     friend class ZMarkTask;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
@@ -279,9 +250,9 @@ public:
         WEAK_REFERENT,
     };
 
-    explicit TracingCollector(Allocator& allocator, CollectorResources& resources);
+    explicit CopyCollector(Allocator& allocator, CollectorResources& resources);
 
-    ~TracingCollector() override = default;
+    ~CopyCollector() override = default;
     ZMark* MajorMark() { return oldCycle.MarkPtr(); }
     const ZMark* MajorMark() const { return oldCycle.MarkPtr(); }
     virtual void PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex);
@@ -398,7 +369,7 @@ public:
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
     virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false)
     {
-        Collector::AbortUnimplemented("TracingCollector::TraceObjectRefFields");
+        Collector::AbortUnimplemented("CopyCollector::TraceObjectRefFields");
     }
     // Follow one partial-array chunk popped off the work stack. Ported from
     // ZGC's ZMark::follow_partial_array (zMark.cpp:265-270). Only reachable
@@ -406,7 +377,7 @@ public:
     virtual void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack);
     virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
     {
-        Collector::AbortUnimplemented("TracingCollector::GetAndTryTagObj");
+        Collector::AbortUnimplemented("CopyCollector::GetAndTryTagObj");
     }
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
@@ -433,6 +404,7 @@ public:
 
 
     void RunGarbageCollection(uint64_t, GCReason) override = 0;
+    virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
 
     void TransitionToGCPhase(const GCPhase phase, const bool, bool young = false)
     {
@@ -448,6 +420,9 @@ public:
 
 
 protected:
+    virtual void ForwardFromSpace(GCCycleGeneration generation);
+    virtual void RefineFromSpace();
+    virtual void DoGarbageCollection(GCCycleGeneration generation) = 0;
     void RequestGCInternal(GCReason reason, bool async) override { collectorResources.RequestGC(reason, async); }
 
     Allocator& theAllocator;
@@ -554,7 +529,7 @@ protected:
 
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet, Generation generation) const
     {
-        Collector::AbortUnimplemented("TracingCollector::EnumAndTagRawRoot");
+        Collector::AbortUnimplemented("CopyCollector::EnumAndTagRawRoot");
     }
 
     void FindUselessExternObjects();

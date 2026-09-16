@@ -76,7 +76,7 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
     visited.clear();
     stack.clear();
     arrayStack.clear();
-    auto& collector = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     NativeSlotVisitor colored = [&](NativeSlot& root) {
         if (fieldVisitor) { fieldVisitor(nullptr, &root, raw(root.GetFieldValue())); }
         // Strong loads only remap/heal: no keepalive marking during inspection.

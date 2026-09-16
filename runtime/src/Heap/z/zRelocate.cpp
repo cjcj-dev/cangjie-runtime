@@ -32,7 +32,7 @@
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zThreadLocalData.hpp"
 #include "Heap/z/zDirector.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -1010,7 +1010,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 // ZGC immediately scans buffered entries that crossed the young
                 // flip (zStoreBarrierBuffer.cpp:162-187). Publish all mutator
                 // buffers before the active-face Snapshot used for this ref fix.
-                (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
+                (void)ZMark::FlushAllGenerations();
                 std::unordered_set<MAddress> concRemset =
                     Heap::GetHeap().GetRememberedSet().Snapshot();
                 remsetVec.reserve(remsetVec.size() + concRemset.size());
