@@ -56,14 +56,16 @@ def main() -> int:
             source_line = original.splitlines()[line - 1].strip()
             direct_calls.append((path, line, source_line))
 
+    barrier_inline = SRC / "Heap" / "z" / "zBarrier.inline.hpp"
     allowed_direct = [
         item
         for item in direct_calls
-        if item[0] == REF_FIELD and "slot.CompareExchange(expected, desired" in item[2]
+        if (item[0] == REF_FIELD and "slot.CompareExchange(expected, desired" in item[2])
+        or (item[0] == barrier_inline and "field.CompareExchange(ptr, heal_ptr" in item[2])
     ]
     escaped_direct = [item for item in direct_calls if item not in allowed_direct]
-    if len(allowed_direct) != 1:
-        failures.append(f"HealSlot body CompareExchange count is {len(allowed_direct)}, expected 1")
+    if len(allowed_direct) != 2:
+        failures.append(f"HealSlot/self_heal CompareExchange count is {len(allowed_direct)}, expected 2")
     for path, line, source_line in escaped_direct:
         failures.append(f"direct CompareExchange escaped HealSlot: {path.relative_to(REPO)}:{line}: {source_line}")
 
