@@ -262,7 +262,7 @@ GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
         fixture.region0, &fixture.region0->livemap(), fixture.region0->GetSnapshotEpoch(),
         fixture.region0->GetRegionAllocPtr(), 0, static_cast<uint8_t>(Generation::Young),
         0, fixture.region0->GetRegionLifeId()));
-    ZPage::RetainScope oldSource{ZForwarding*(old)};
+    ZPage::RetainScope oldSource{old};
     ZPage::RetainScope newSource{fixture.region0};
     GC_EXPECT_FALSE(oldSource.ok());
     GC_EXPECT_TRUE(oldSource.forwarding() == old);
