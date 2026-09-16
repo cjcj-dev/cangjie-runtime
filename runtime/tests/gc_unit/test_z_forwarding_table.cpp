@@ -143,7 +143,7 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
     GC_EXPECT_EQ(fwd->page_life_id(), static_cast<RegionLifeId>(7));
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
 
-    RelocationRequestQueue queue;
+    ZRelocateQueue queue;
     queue.BeginWorkers(1);
     GC_EXPECT_TRUE(fwd->retain_page(&queue));
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 2);
@@ -276,7 +276,7 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
     rememberedWaitEntered.store(false);
-    RelocationRequestQueue::SetWaitEnterHook(RememberedWaitEntered);
+    ZRelocateQueue::SetWaitEnterHook(RememberedWaitEntered);
     std::atomic<bool> returned{ false };
     bool retained = true;
     std::thread reader([&] {
@@ -295,9 +295,9 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     const bool returnedAfterRelease = returned.load(std::memory_order_acquire);
     fwd->mark_done();
     reader.join();
-    RelocationRequestQueue::SetWaitEnterHook(nullptr);
+    ZRelocateQueue::SetWaitEnterHook(nullptr);
     auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator())
-        .GetRegionManager().GetRelocationRequestQueue();
+        .GetRegionManager().GetZRelocateQueue();
     (void)queue.Complete(fwd);
     fwd->Destroy();
     GC_EXPECT_TRUE(queued);

@@ -37,7 +37,7 @@ namespace MapleRuntime {
 using RegionLifeId = uint64_t;
 
 class ZLiveMap;
-class RelocationRequestQueue;
+class ZRelocateQueue;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.
 // _entries is a ZAttachedArray sitting after this object (zAttachedArray.inline.hpp:44-54).
@@ -284,7 +284,7 @@ public:
     bool is_claimed() const;
     bool in_place() const;
     void set_in_place();
-    bool retain_page(RelocationRequestQueue* queue);
+    bool retain_page(ZRelocateQueue* queue);
     void release_page();
     ZPage* detach_page();
     void mark_done();

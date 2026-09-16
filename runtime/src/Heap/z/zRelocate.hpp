@@ -4,8 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef MRT_RELOCATION_REQUEST_QUEUE_H
-#define MRT_RELOCATION_REQUEST_QUEUE_H
+#ifndef MRT_Z_RELOCATE_HPP
+#define MRT_Z_RELOCATE_HPP
 
 #include <atomic>
 #include <condition_variable>
@@ -26,7 +26,7 @@ namespace MapleRuntime {
 // One handle per forwarding, shared by every object on the page. Claim and
 // completion live in ZForwarding; the queue stores neither an object address
 // nor an independent answer. Worker rendezvous is atomic with enqueue.
-class RelocationRequestQueue {
+class ZRelocateQueue {
 public:
     enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED };
 
@@ -41,7 +41,7 @@ public:
             return forwarding->claimed().load(std::memory_order_acquire) ? State::CLAIMED : State::QUEUED;
         }
     private:
-        friend class RelocationRequestQueue;
+        friend class ZRelocateQueue;
         explicit Request(ZForwarding* value) : forwarding(std::move(value)) {}
         ZForwarding* forwarding;
     };
@@ -126,4 +126,4 @@ private:
 
 } // namespace MapleRuntime
 
-#endif // MRT_RELOCATION_REQUEST_QUEUE_H
+#endif // MRT_Z_RELOCATE_HPP

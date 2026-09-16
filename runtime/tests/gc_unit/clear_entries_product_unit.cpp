@@ -1583,7 +1583,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     GC_EXPECT_FALSE(region->IsForwardingDone());
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
+    ZRelocateQueue& queue = productSpace.GetRegionManager().GetZRelocateQueue();
     queue.BeginWorkers(1);
 
     const pid_t child = fork();
@@ -1750,7 +1750,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt
 
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, state.region);
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(1);
     const auto request = queue.Add(state.region, from);
     GC_EXPECT_TRUE(request.accepted);
@@ -1783,7 +1783,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
 
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, state.region);
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(1);
     const auto request = queue.Add(state.region, from);
     GC_EXPECT_TRUE(request.accepted);
@@ -1847,7 +1847,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     // The precondition is an installed, unfinished forwarding table.
     GC_EXPECT_TRUE((generation_forwarding_table(Generation::Old).get(from) != nullptr));
     GC_EXPECT_FALSE(region->IsForwardingDone());
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(1);
 
     const auto seeded = queue.Add(region, from);
@@ -1855,7 +1855,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
         forwarding->in_place_relocation_claim_page();
     }
     PageWaitEnterBarrier::Reset();
-    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
+    ZRelocateQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
@@ -1863,7 +1863,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     });
     PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
-    RelocationRequestQueue::SetWaitEnterHook(nullptr);
+    ZRelocateQueue::SetWaitEnterHook(nullptr);
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(forwarding_find(Generation::Old, from));
     const bool workerClosed = queue.PendingCount() == 0;
@@ -1923,7 +1923,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     buffer->SetRegion(routeDestination);
     DeliverySharedPageScope allocation(routeDestination);
     GC_EXPECT_TRUE(manager.RelocateClaimedPage(region));
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(1);
 
     const auto seeded = queue.Add(region, from);
@@ -1931,7 +1931,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
         forwarding->in_place_relocation_claim_page();
     }
     PageWaitEnterBarrier::Reset();
-    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
+    ZRelocateQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
@@ -1939,7 +1939,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     });
     PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
-    RelocationRequestQueue::SetWaitEnterHook(nullptr);
+    ZRelocateQueue::SetWaitEnterHook(nullptr);
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(forwarding_find(Generation::Old, from));
     const bool workerClosed = queue.PendingCount() == 0;
@@ -1996,7 +1996,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
 
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(1);
     const auto request = queue.Add(region, from);
     GC_EXPECT_TRUE(request.accepted);
@@ -2731,7 +2731,7 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, second));
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, region);
-    auto& queue = manager.GetRelocationRequestQueue();
+    auto& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(1);
     const auto request = queue.Add(region, reinterpret_cast<MAddress>(second));
     GC_EXPECT_TRUE(request.accepted);

@@ -338,12 +338,12 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
     while (true) {
         // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
         // before advancing the ordinary relocation iterator.
-        RelocationRequestQueue::Selection selected =
-            regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
+        ZRelocateQueue::Selection selected =
+            regionManager.GetZRelocateQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
                 return fromRegionList.TakeHeadRegion();
             });
         if (!selected) {
-            selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
+            selected = regionManager.GetZRelocateQueue().SynchronizePoll();
             if (selected.workersDone) {
                 break;
             }

@@ -89,7 +89,7 @@ void ZForwarding::WaitPageDone(ZForwarding* forwarding)
     }
     // Legacy page cleanup runs inside the completion owner itself.
     if (CurrentPageWork() == forwarding || forwarding->is_done()) return;
-    auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetRelocationRequestQueue();
+    auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetZRelocateQueue();
     const auto request = queue.Add(forwarding);
     CHECK_DETAIL(request.accepted, "forwarding wait requires a page task");
     (void)queue.Wait(request.request);
@@ -105,7 +105,7 @@ bool ZForwarding::claim()
     return _claimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
 }
 
-bool ZForwarding::retain_page(RelocationRequestQueue* queue)
+bool ZForwarding::retain_page(ZRelocateQueue* queue)
 {
     for (;;) {
         int32_t n = _ref_count.load(std::memory_order_acquire);

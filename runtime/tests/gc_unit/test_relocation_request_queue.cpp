@@ -21,7 +21,7 @@ namespace {
 struct PageQueueFixture {
     GcHeapFixture heap;
     ZForwarding* owner;
-    RelocationRequestQueue queue;
+    ZRelocateQueue queue;
     PageQueueFixture()
     {
         auto* page = heap.region0;
@@ -92,11 +92,11 @@ struct WaitContext {
         mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
         handshake.leave_safe();
         current = this;
-        RelocationRequestQueue::SetWaitEnterHook(&Observe);
+        ZRelocateQueue::SetWaitEnterHook(&Observe);
     }
     ~WaitContext()
     {
-        RelocationRequestQueue::SetWaitEnterHook(nullptr);
+        ZRelocateQueue::SetWaitEnterHook(nullptr);
         current = nullptr;
         ThreadLocal::SetMutator(savedMutator);
         Handshake::BindCurrent(nullptr);
@@ -232,7 +232,7 @@ GC_TEST(RelocationPageQueue, EnqueueWakesSynchronizedWorker)
 {
     PageQueueFixture f;
     f.queue.BeginWorkers(2);
-    RelocationRequestQueue::Selection selected;
+    ZRelocateQueue::Selection selected;
     std::thread worker([&] { selected = f.queue.SynchronizePoll(); });
     while (f.queue.SynchronizedWorkerCount() != 1) std::this_thread::yield();
     const auto request = f.queue.Add(f.owner);

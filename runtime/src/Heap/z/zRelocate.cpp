@@ -1331,7 +1331,7 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ZForwarding* owne
         }
         if (const MAddress winner = owner->find(from)) return reinterpret_cast<BaseObject*>(winner);
     }
-    auto& queue = manager.GetRelocationRequestQueue();
+    auto& queue = manager.GetZRelocateQueue();
     const auto request = queue.Add(owner);
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
     (void)queue.Wait(request.request);
@@ -1721,7 +1721,7 @@ void RegionManager::StartForwardFromRegions(ZWorkers& workers)
     relocationStarted = true;
     relocationDrained = false;
     relocationWorkers = &workers;
-    relocationRequestQueue.BeginWorkers(workers.active_workers());
+    relocateQueue.BeginWorkers(workers.active_workers());
 }
 
 template<Generation G>
@@ -1769,7 +1769,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
     owner->detach_page();
     owner->mark_done();
     // From here on only forwarding/queue state may be touched.
-    (void)relocationRequestQueue.Complete(owner);
+    (void)relocateQueue.Complete(owner);
 }
 
 
@@ -2451,15 +2451,15 @@ namespace MapleRuntime {
 
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
-std::atomic<RelocationRequestQueue::WaitEnterHook> g_waitEnterHook{ nullptr };
+std::atomic<ZRelocateQueue::WaitEnterHook> g_waitEnterHook{ nullptr };
 }
-void RelocationRequestQueue::SetWaitEnterHook(WaitEnterHook hook)
+void ZRelocateQueue::SetWaitEnterHook(WaitEnterHook hook)
 {
     g_waitEnterHook.store(hook, std::memory_order_release);
 }
 #endif
 
-void RelocationRequestQueue::BeginWorkers(size_t workers)
+void ZRelocateQueue::BeginWorkers(size_t workers)
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     PruneDoneLocked();
@@ -2471,14 +2471,14 @@ void RelocationRequestQueue::BeginWorkers(size_t workers)
     accepting = true;
 }
 
-RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(void* region, MAddress from)
+ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(void* region, MAddress from)
 {
     auto owner = forwarding_for_page(static_cast<ZPage*>(region));
     CHECK_DETAIL(!owner || owner->covers(from), "relocation request outside forwarding from=%#zx", from);
     return Add(std::move(owner));
 }
 
-RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(ZForwarding* forwarding)
+ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(ZForwarding* forwarding)
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     if (!forwarding) return { nullptr, false, false };
@@ -2497,19 +2497,19 @@ RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(ZForwarding* f
     return { request, true, true };
 }
 
-void RelocationRequestQueue::add_and_wait(ZForwarding* forwarding)
+void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
 {
     const EnqueueResult result = Add(forwarding);
     CHECK_DETAIL(result.accepted, "forwarding wait requires a page task");
     (void)Wait(result.request);
 }
 
-MAddress RelocationRequestQueue::Wait(const Handle& request)
+MAddress ZRelocateQueue::Wait(const Handle& request)
 {
     return WaitUntil(request);
 }
 
-MAddress RelocationRequestQueue::WaitUntil(const Handle& request, size_t maxSpins, bool* timedOut)
+MAddress ZRelocateQueue::WaitUntil(const Handle& request, size_t maxSpins, bool* timedOut)
 {
     if (timedOut != nullptr) *timedOut = false;
     if (request == nullptr) return 0;
@@ -2544,7 +2544,7 @@ MAddress RelocationRequestQueue::WaitUntil(const Handle& request, size_t maxSpin
     return 0;
 }
 
-size_t RelocationRequestQueue::Complete(ZForwarding* forwarding)
+size_t ZRelocateQueue::Complete(ZForwarding* forwarding)
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     const size_t completed = forwarding != nullptr && forwarding->is_done() && byPage.count(forwarding) != 0 ? 1 : 0;
@@ -2553,7 +2553,7 @@ size_t RelocationRequestQueue::Complete(ZForwarding* forwarding)
     return completed;
 }
 
-void RelocationRequestQueue::PruneDoneLocked()
+void ZRelocateQueue::PruneDoneLocked()
 {
     for (auto it = queue.begin(); it != queue.end();) {
         if ((*it)->page_forwarding()->is_done()) {
@@ -2566,7 +2566,7 @@ void RelocationRequestQueue::PruneDoneLocked()
     }
 }
 
-RelocationRequestQueue::Handle RelocationRequestQueue::PruneAndClaimLocked()
+ZRelocateQueue::Handle ZRelocateQueue::PruneAndClaimLocked()
 {
     PruneDoneLocked();
     for (const auto& request : queue) {
@@ -2575,13 +2575,13 @@ RelocationRequestQueue::Handle RelocationRequestQueue::PruneAndClaimLocked()
     return nullptr;
 }
 
-RelocationRequestQueue::Handle RelocationRequestQueue::PruneAndClaim()
+ZRelocateQueue::Handle ZRelocateQueue::PruneAndClaim()
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     return PruneAndClaimLocked();
 }
 
-RelocationRequestQueue::Selection RelocationRequestQueue::SynchronizePoll()
+ZRelocateQueue::Selection ZRelocateQueue::SynchronizePoll()
 {
     std::unique_lock<std::mutex> lock(queueMutex);
     Handle request = PruneAndClaimLocked();
@@ -2610,19 +2610,19 @@ RelocationRequestQueue::Selection RelocationRequestQueue::SynchronizePoll()
     }
 }
 
-bool RelocationRequestQueue::IsActive() const
+bool ZRelocateQueue::IsActive() const
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     return accepting;
 }
 
-size_t RelocationRequestQueue::PendingCount() const
+size_t ZRelocateQueue::PendingCount() const
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     return byPage.size();
 }
 
-size_t RelocationRequestQueue::SynchronizedWorkerCount() const
+size_t ZRelocateQueue::SynchronizedWorkerCount() const
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     return synchronizedWorkers;
