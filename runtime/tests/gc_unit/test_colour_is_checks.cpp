@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
 #include "Common/ColourEncoding.h"
 #include "ObjectModel/RefField.h"
 #include "gc_unittest.hpp"
