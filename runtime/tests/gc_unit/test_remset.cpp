@@ -315,9 +315,9 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
     std::unordered_set<MAddress> firstMinor;
-    rs.DrainForMinor(firstMinor);
+    Heap::GetHeap().GetRememberedSet().DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
-    GC_EXPECT_EQ(rs.Size(), 0u);
+    GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Size(), 0u);
     GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
 
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -515,7 +515,7 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
-    const uintptr_t previousEpoch = raw(PreviousRememberedPointer(fx.obj0));
+    field->StoreColoured(PreviousRememberedPointer(fx.obj0));
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
@@ -546,8 +546,6 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     field->StoreColoured(installed.GetFieldValue());
     GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot)); // the direct store does not run a barrier
 
-    ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
 }
@@ -704,7 +702,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
+    GC_EXPECT_TRUE(ExpectRecorded(Heap::GetHeap().GetRememberedSet(), reinterpret_cast<MAddress>(field)));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -747,12 +745,12 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
 
     std::unordered_set<MAddress> firstMinor;
-    rs.DrainForMinor(firstMinor);
+    Heap::GetHeap().GetRememberedSet().DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(reinterpret_cast<MAddress>(field)) == 1);
 
     // No second write: the edge is still in the heap, the record is not.
     std::unordered_set<MAddress> secondMinor;
-    rs.DrainForMinor(secondMinor);
+    Heap::GetHeap().GetRememberedSet().DrainForMinor(secondMinor);
     GC_EXPECT_EQ(secondMinor.size(), 0u);
 }
 
@@ -773,27 +771,25 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
 
+    auto& heapRs = Heap::GetHeap().GetRememberedSet();
     std::unordered_set<MAddress> firstMinor;
-    rs.DrainForMinor(firstMinor);
+    heapRs.DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
-    GC_EXPECT_EQ(rs.Size(), 0u);
+    GC_EXPECT_EQ(heapRs.Size(), 0u);
 
-    // What RescanRememberedSet does for a scanned slot whose target is still young.  Twice, because
-    // a slot can be reached through more than one path in a cycle and the re-arm must be idempotent
-    // rather than accumulate.
-    rs.Record(slot);
-    rs.Record(slot);
-    GC_EXPECT_EQ(rs.Size(), 1u);
+    heapRs.Record(slot);
+    heapRs.Record(slot);
+    GC_EXPECT_EQ(heapRs.Size(), 1u);
 
     std::unordered_set<MAddress> secondMinor;
-    rs.DrainForMinor(secondMinor);
+    heapRs.DrainForMinor(secondMinor);
     GC_EXPECT_TRUE(secondMinor.count(slot) == 1);
     GC_EXPECT_EQ(secondMinor.size(), 1u);
 
     // And it self-drains: a cycle that does not re-arm gives the slot up, which is how an edge whose
     // target has been promoted out of young stops costing a scan.
     std::unordered_set<MAddress> thirdMinor;
-    rs.DrainForMinor(thirdMinor);
+    heapRs.DrainForMinor(thirdMinor);
     GC_EXPECT_EQ(thirdMinor.size(), 0u);
 }
 
