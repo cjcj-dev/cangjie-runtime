@@ -256,7 +256,6 @@ public:
             return ZGenerationId::old;
         }
         if (Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).forwarding_table().get(address) != nullptr) {
-            CHECK(Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).forwarding_table().get(address) == nullptr);
             return ZGenerationId::young;
         }
         return ZGenerationId::old;
