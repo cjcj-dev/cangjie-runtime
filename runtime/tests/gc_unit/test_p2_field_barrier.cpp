@@ -135,12 +135,12 @@ extern "C" int p2FieldBarrierExercise()
     // Advance a real young epoch before overwriting the old slot. Its previous
     // non-null word must go through the store barrier and remember the slot.
     collector.RequestGC(GC_REASON_YOUNG, false);
-    auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
-    auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     auto* oldViaYoung = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     const U64 oldViaYoungRoot = heap.RegisterExportRoot(oldViaYoung);
     EnsureOld(oldViaYoung, collector);
     heap.RemoveExportObject(oldViaYoungRoot);
+    auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
+    auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(child, Slot(child), sentinel);
     ZBarrier::WriteReference(child, Slot(child, 1), oldViaYoung);
     ZBarrier::WriteReference(holder, Slot(holder), child);
