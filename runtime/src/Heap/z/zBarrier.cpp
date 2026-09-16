@@ -67,35 +67,34 @@ enum class CopySlotKind { Heap, Native, Uncolored };
     if (srcLen == 0) {
         return;
     }
-    std::vector<uint8_t> snapshot(srcLen);
-    CHECK_DETAIL(memcpy_s(snapshot.data(), snapshot.size(), reinterpret_cast<void*>(src), srcLen) == EOK,
-                 "full-colour source snapshot failed");
     std::sort(offsets.begin(), offsets.end());
     offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
-    size_t cursor = 0;
+    std::vector<BaseObject*> refs;
+    refs.reserve(offsets.size());
     for (size_t offset : offsets) {
-        CHECK_DETAIL(offset >= cursor && offset + sizeof(HeapSlot<>) <= srcLen,
-                     "full-colour ref offset outside copy: offset=%zu cursor=%zu srcLen=%zu", offset, cursor, srcLen);
+        CHECK_DETAIL(offset + sizeof(HeapSlot<>) <= srcLen,
+                     "full-colour ref offset outside copy: offset=%zu srcLen=%zu", offset, srcLen);
+        if (sourceKind == CopySlotKind::Uncolored) {
+            refs.push_back(to_object(safe(RootSlotAt(src + offset).LoadPlain())));
+        } else if (sourceKind == CopySlotKind::Native) {
+            refs.push_back(ZBarrier::ReadStaticRef(NativeSlotAt(src + offset)));
+        } else {
+            refs.push_back(ZBarrier::ReadReference(nullptr, HeapSlotAt<>(src + offset)));
+        }
+    }
+    size_t cursor = 0;
+    size_t index = 0;
+    for (size_t offset : offsets) {
         if (offset > cursor) {
             const size_t gap = offset - cursor;
-            CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), gap,
-                                  snapshot.data() + cursor, gap) == EOK,
+            CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst + cursor), gap,
+                                   reinterpret_cast<void*>(src + cursor), gap) == EOK,
                          "full-colour primitive-gap copy failed");
         }
-        uintptr_t sourceWord = 0;
-        std::memcpy(&sourceWord, snapshot.data() + offset, sizeof(sourceWord));
-        BaseObject* target;
-        if (sourceKind == CopySlotKind::Uncolored) {
-            // Mutator-local values are load-good after the shared root protocol.
-            // They are not zpointer words and must never enter a color fast path.
-            target = to_object(safe(to_zaddress_unsafe(sourceWord)));
-        } else {
-            HeapSlot<> source(to_zpointer(sourceWord));
-            target = sourceKind == CopySlotKind::Native
-                ? ZBarrier::ReadStaticRef(source) : ZBarrier::ReadReference(nullptr, source);
-        }
+        BaseObject* target = refs[index++];
         if (destinationKind == CopySlotKind::Heap) {
-            ZBarrier::WriteReference(nullptr, HeapSlotAt<>(dst + offset), target);
+            ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(dst + offset), false);
+            HeapSlotAt<>(dst + offset).StoreColoured(ZAddress::store_good(from_object(target)));
         } else if (destinationKind == CopySlotKind::Native) {
             ZBarrier::WriteStaticRef(NativeSlotAt(dst + offset), target);
         } else {
@@ -105,8 +104,8 @@ enum class CopySlotKind { Heap, Native, Uncolored };
     }
     if (cursor < srcLen) {
         const size_t tail = srcLen - cursor;
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), tail,
-                              snapshot.data() + cursor, tail) == EOK,
+        CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst + cursor), tail,
+                               reinterpret_cast<void*>(src + cursor), tail) == EOK,
                      "full-colour primitive-tail copy failed");
     }
 }
