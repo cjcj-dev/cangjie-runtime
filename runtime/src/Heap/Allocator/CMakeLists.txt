@@ -25,6 +25,7 @@ set(SRC_LIST
     "../z/zPage.cpp"
     "../z/zPageTable.cpp"
     "../z/zObjectAllocator.cpp"
+    "../z/zHeuristics.cpp"
     "../z/zRelocationSetSelector.cpp"
     "CartesianTree.cpp"
     "../z/zMappedCache.cpp"

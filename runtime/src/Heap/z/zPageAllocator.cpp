@@ -849,11 +849,9 @@ void RegionManager::PromoteAllRegions()
 }
 
 ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
-                                      bool allowSaferegion, bool clearPayload, PageAge age)
+                                       bool allowSaferegion, bool clearPayload, PageAge age)
 {
-    // check for allocation since we do not want gc threads and mutators do any harm to each other.
     size_t size = num * ZPage::UNIT_SIZE;
-    // routefix: RequestForRegion may sleep; under ROUTING keep the critical section short.
     if (allowSaferegion) {
         RequestForRegion(size);
     }
@@ -868,7 +866,8 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
     size_t gatedBytes = GetGatedGarbageBytes();
 #endif
 
-    AllocationStallRequest request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload);
+retry:
+    ZPageAllocation request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload);
     bool claimed = false;
     bool requestGc = false;
     {
@@ -886,16 +885,11 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
         ZPage* region = freeRegionManager.MaterializePageMemory(
             request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedUnits, age);
         if (request.Memory().virtualClaimed) {
-            // The address is known only after materialization; keep the existing
-            // diagnostic envelope update under its allocator lock.
             std::lock_guard<std::mutex> lock(pageAllocatorMutex);
             const uintptr_t end = ZPage::GetUnitAddress(request.Memory().index) + size;
             inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), end), std::memory_order_release);
         }
         if (region == nullptr) {
-            // zPageAllocator.cpp:1906: preserve the succeeded prefix in the
-            // committed cache and return only the failed suffix uncommitted.
-            // No page descriptor has been published for this allocation.
             std::unique_ptr<ScopedEnterSaferegion> enterSaferegion;
             if (allowSaferegion) { enterSaferegion.reset(new ScopedEnterSaferegion(true)); }
             std::lock_guard<std::mutex> lock(pageAllocatorMutex);
@@ -903,9 +897,12 @@ ZPage* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysical
             freeRegionManager.FreeMemoryAllocFailed(request.Memory());
             CHECK(pageAllocatorUsed >= size);
             pageAllocatorUsed -= size;
-            allocationStallQueue.SatisfyAvailableLocked([this](AllocationStallRequest& pending) {
+            allocationStallQueue.SatisfyAvailableLocked([this](ZPageAllocation& pending) {
                 return ClaimAllocationLocked(pending);
             });
+            if (allowSaferegion) {
+                goto retry;
+            }
             return nullptr;
         }
         ZStatMutatorAllocRate::sample_allocation(size);

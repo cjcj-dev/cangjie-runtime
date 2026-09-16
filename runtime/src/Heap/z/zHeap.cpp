@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zPage.hpp"
@@ -207,6 +208,7 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 
 void HeapImpl::Init(const HeapParam& param)
 {
+    ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
     theSpace->Init(param);
     rememberedSet.Initialize(theSpace->GetSpaceStartAddress(),

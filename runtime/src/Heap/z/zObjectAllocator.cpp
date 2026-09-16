@@ -6,6 +6,8 @@
 
 
 #include "Heap/z/zObjectAllocator.hpp"
+#include "Heap/z/zHeuristics.hpp"
+#include "Heap/z/zGlobals.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -110,7 +112,10 @@ void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
 
 // zObjectAllocator.cpp:40-45
 RegionManager::PerAgeObjectAllocator::PerAgeObjectAllocator(PageAge pageAge)
-    : age(pageAge), sharedSmallPage(nullptr) {}
+    : age(pageAge),
+      usePerCpuSharedSmallPages(ZHeuristics::use_per_cpu_shared_small_pages()),
+      sharedSmallPage(nullptr),
+      sharedMediumPage(nullptr) {}
 
 // zHeap.cpp:229: shared-page TLAB accounting includes only small eden pages.
 static bool IsSmallEdenPage(const ZPage* page)
@@ -163,24 +168,38 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
 {
     CHECK(untype(age) < kPageAgeCount);
     PerAgeObjectAllocator& allocator = *this->allocator(age);
-    if (size > GetLargeObjectThreshold()) {
-        // ZObjectAllocator::PerAge::alloc_large_object. This runtime has no
-        // medium page class; objects above its small limit use dedicated pages.
+    if (size > ZObjectSizeLimitSmall) {
+        if (ZPageSizeMediumEnabled && size <= ZObjectSizeLimitMedium) {
+            std::lock_guard<ZLock> mediumLock(allocator.mediumPageAllocLock);
+            ZPage** const shared = allocator.shared_medium_page_addr();
+            ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
+            uintptr_t addr = page == nullptr ? 0 : page->AtomicAlloc(size);
+            if (addr != 0) { return addr; }
+            const size_t units = AlignUp(ZPageSizeMediumMin, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
+            ZPage* fresh = AllocateSharedPage(units, ZPageType::medium, allocator.age, nonBlocking);
+            if (fresh == nullptr) { return 0; }
+            addr = fresh->Alloc(size);
+            CHECK(addr != 0);
+            for (;;) {
+                if (__atomic_compare_exchange_n(shared, &page, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                    return addr;
+                }
+                if (page == nullptr) { continue; }
+                const uintptr_t previous = page->AtomicAlloc(size);
+                if (previous == 0) { continue; }
+                UndoSharedPage(fresh);
+                return previous;
+            }
+        }
         const size_t units = AlignUp(size, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
-        ZPage* page = AllocateSharedPage(units, ZPageType::large,
-                                               allocator.age, nonBlocking);
+        ZPage* page = AllocateSharedPage(units, ZPageType::large, allocator.age, nonBlocking);
         return page == nullptr ? 0 : page->Alloc(size);
     }
-    // ZObjectAllocator::PerAge::shared_small_page_addr / alloc_small_object.
-    // Keep this stable slot address across refill; a safepoint can retire its
-    // value, and the compare-exchange below explicitly handles that case.
     ZPage** const shared = allocator.shared_small_page_addr();
     ZPage* page = __atomic_load_n(shared, __ATOMIC_ACQUIRE);
     uintptr_t addr = page == nullptr ? 0 : page->AtomicAlloc(size);
     if (addr != 0) { return addr; }
 
-    // zObjectAllocator.cpp:78-116: allocate before publishing the candidate,
-    // retry after retirement or exhaustion, and undo a losing page allocation.
     ZPage* fresh = AllocateSharedPage(maxUnitCountPerRegion, ZPageType::small,
                                            allocator.age, nonBlocking);
     if (fresh == nullptr) { return 0; }
@@ -207,6 +226,7 @@ void RegionManager::RetireSharedPages(PageAgeRange ages)
     for (PageAge age : ages) {
         allocator(age)->pinnedPage.store(nullptr, std::memory_order_release);
         allocator(age)->sharedSmallPage.set_all(nullptr);
+        allocator(age)->sharedMediumPage.set(nullptr);
     }
 }
 
@@ -319,6 +339,9 @@ MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
     if (UNLIKELY(allocType == AllocType::PINNED_OBJECT)) {
         return regionManager.AllocPinned(allocSize);
+    }
+    if (allocSize > ZObjectSizeLimitSmall) {
+        return regionManager.AllocSharedObject(allocSize, PageAge::eden);
     }
     if (UNLIKELY(allocSize >= regionManager.GetLargeObjectThreshold())) {
         return regionManager.AllocLarge(
