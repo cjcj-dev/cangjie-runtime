@@ -130,7 +130,7 @@ GC_TEST(ValueSlotABI, NullHolderHeapScalarStaysColored)
     GcHeapFixture fixture;
     auto& slot = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj1) + TYPEINFO_PTR_SIZE);
     slot.StoreColoured(color_null());
-    MCC_WriteRefField(fixture.obj0, nullptr, &slot);
+    MCC_WriteRefField(fixture.obj0, fixture.obj1, &slot);
     GC_EXPECT_TRUE(ZPointer::is_store_good(slot.GetFieldValue()));
     GC_EXPECT_TRUE(CJ_MCC_ReadRefField(nullptr, &slot) == fixture.obj0);
 }
