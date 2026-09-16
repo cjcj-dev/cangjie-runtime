@@ -896,7 +896,7 @@ static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
     // before this mark pass (ZUncoloredRoot::make_load_good's current-color arm).
     BaseObject* current = object;
     collector.PublishThreadRoot(current, young, follow);
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask)
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return true;
 }
 
@@ -931,7 +931,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
     BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
     CHECK_DETAIL(toObj != nullptr, "preforward headerless missing winner oldObj=%p", oldObj);
     if (oldObj != toObj) {
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&field), ZPointerLoadGoodMask)
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&field), ZPointerLoadGoodMask);
     }
 }
 
@@ -1127,7 +1127,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward stack field missing winner oldObj=%p", oldObj);
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&rootField), ZPointerLoadGoodMask)
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&rootField), ZPointerLoadGoodMask);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
                 CheckAndPush(oldObj, rootSet, rootStack);
@@ -1159,7 +1159,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             // live object start, or the collector is already wrong.
             BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask)
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         } else if (oldObj != nullptr) {
             if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
                 if (IsHeaderedStackObject(oldObj)) {
