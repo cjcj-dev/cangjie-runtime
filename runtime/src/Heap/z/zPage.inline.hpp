@@ -646,9 +646,7 @@ inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     {
         CHECK(IsFromRegion());
         CHECK(is_small());
-        if (_scratch.inGhostFromRegion != 0) {
-            return;
-        }
+        CHECK(_scratch.inGhostFromRegion == 0);
         (void)IsForwardingDone();
         // The preceding generation reset removed its forwarding set.
         ClearRelocationResiduals();

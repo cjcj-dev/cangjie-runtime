@@ -544,11 +544,9 @@ extern "C" int p2ArrayFieldExercise()
     std::printf("P2_ARRAY_RESULT failures=%u finalizable=%d fields=%zu expected=%zu range_target=%d\n",
                 failures.load(), finalizable, fields.load(), fieldCount, rangeTarget.load());
     std::fflush(stdout);
-    if (failures.load() != 0) std::_Exit(failures.load());
-    ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), finalizable ? 1 : 2);
-    return failures.load();
+    std::_Exit(failures.load());
 }
 
 namespace {
@@ -694,7 +692,8 @@ extern "C" int p2SlowFieldInputExercise()
     heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
                 failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
-    return failures.load();
+    std::fflush(stdout);
+    std::_Exit(failures.load());
 }
 
 static void RunP2(int (*exercise)())
