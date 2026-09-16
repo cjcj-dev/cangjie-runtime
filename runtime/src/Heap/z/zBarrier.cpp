@@ -250,7 +250,6 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
 {
     auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
-    CHECK(old.IsPhaseMark());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, false>(address);

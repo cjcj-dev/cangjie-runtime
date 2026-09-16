@@ -1751,7 +1751,6 @@ EXPORTS
     _ZN12MapleRuntime24ReportRemsetConsumeStatsEyRKNS_19DiffPathRemsetStatsE @1969
     _ZN12MapleRuntime25RestoreInjectedPlainIfAnyEv @1970
     _ZN12MapleRuntime26g_forwardRaceStillBadCountE @1971 DATA
-    _ZN12MapleRuntime28AssertColouredWriteIfEnabledEPKvy @1973
     _ZN12MapleRuntime29ORDERS_OF_MAGNITUDE_FROM_NANOE @1975 DATA
     _ZN12MapleRuntime2Os4Path11GetBaseNameEPKc @1976
     _ZN12MapleRuntime2Os4Path11GetRealPathEPKcPc @1977
@@ -2340,21 +2339,17 @@ EXPORTS
     _ZNK12MapleRuntime6MArray22ForEachRefFieldInRangeERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEEyy @2667
     _ZNK12MapleRuntime6VarInt8GetValueEv @2668
     _ZNK12MapleRuntime7Barrier10ReadStructEyPNS_10BaseObjectEyy @2669
-    _ZNK12MapleRuntime7Barrier11ReadGenericEPNS_10BaseObjectES2_Pvy @2670
     _ZNK12MapleRuntime7Barrier11ReadWeakRefEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2671
     _ZNK12MapleRuntime7Barrier11WriteStructEPNS_10BaseObjectEyyyy @2672
     _ZNK12MapleRuntime7Barrier12CopyRefArrayEPNS_10BaseObjectEyyS2_yy @2673
-    _ZNK12MapleRuntime7Barrier12WriteGenericEPNS_10BaseObjectEPvS2_y @2674
     _ZNK12MapleRuntime7Barrier13ReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2675
     _ZNK12MapleRuntime7Barrier13ReadStaticRefERNS_8HeapSlotILb0EEE @2676
     _ZNK12MapleRuntime7Barrier14WriteReferenceEPNS_10BaseObjectERNS_8HeapSlotILb0EEES2_ @2677
     _ZNK12MapleRuntime7Barrier14WriteStaticRefERNS_8HeapSlotILb0EEEPNS_10BaseObjectE @2678
     _ZNK12MapleRuntime7Barrier15CopyStructArrayEPNS_10BaseObjectEyyS2_yy @2679
-    _ZNK12MapleRuntime7Barrier15ReadGenericImplEPNS_10BaseObjectES2_Pvy @2680
     _ZNK12MapleRuntime7Barrier15WriteStructImplEPNS_10BaseObjectEyyyy @2681
     _ZNK12MapleRuntime7Barrier16CopyRefArrayImplEPNS_10BaseObjectEyyS2_yy @2682
     _ZNK12MapleRuntime7Barrier16ReadStaticStructEyyyNS_5GCTibE @2683
-    _ZNK12MapleRuntime7Barrier16WriteGenericImplEPNS_10BaseObjectEPvS2_y @2684
     _ZNK12MapleRuntime7Barrier17WriteStaticStructEyyyyNS_5GCTibE @2685
     _ZNK12MapleRuntime7Barrier18RecordCrossGenEdgeEPNS_10BaseObjectEyS2_NS_8zpointerE @2686
     _ZNK12MapleRuntime7Barrier18WriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb0EEES2_ @2687

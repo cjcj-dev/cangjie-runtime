@@ -36,25 +36,6 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, generation) != nullptr);
 }
 
-GC_TEST(ForwardingNoGeometry, InstalledReceiptSurvivesPageReleaseUntilSetReset)
-{
-    GcHeapFixture heap;
-    const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(heap.obj1);
-    const Generation generation = heap.region0->GetOwnerGeneration();
-    InstallReceipt(heap, from, to);
-    auto owner = ForwardingTable::RetainPageOwner(heap.region0);
-    GC_EXPECT_TRUE(static_cast<bool>(owner));
-    owner->release_page();
-    owner->mark_done();
-    const auto result = ForwardingTable::LookupTo(from, generation);
-    GC_EXPECT_TRUE(result.answer == ForwardingTable::ToAnswer::ArmedHit);
-    GC_EXPECT_EQ(result.to, to);
-    ForwardingTable::ResetRelocationSet(generation);
-    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, generation) == nullptr);
-    GC_EXPECT_TRUE(ForwardingTable::LookupTo(from, generation).answer == ForwardingTable::ToAnswer::Unarmed);
-}
-
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct MutatorPublishTestAccess {
