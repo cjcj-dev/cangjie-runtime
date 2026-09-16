@@ -845,6 +845,7 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
     auto* fileU = new CJFile(CString("libcj_package_init_unrelated.so"), reinterpret_cast<Uptr>(getU()));
     loader->AddLoadedFiles(fileU);
     loader->RegisterLoadFile(fileU->GetFileMetaAddr());
+    const Uptr uMeta = fileU->GetFileMetaAddr();
     armU([]() {});
     ElfUnloadQuiescence::EnableDirectPreflightPauseForTesting();
     ElfUnloadQuiescence::EnablePublicPlatformPauseForTesting();
@@ -869,6 +870,7 @@ GC_OTHER_VM_TEST(PackageInit, PublicUnloadDropsStwBeforePlatform)
         std::this_thread::yield();
     }
     Target("b0-public-platform-boundary", ElfUnloadQuiescence::PublicPlatformPausedForTesting());
+    Target("b0-u-closing", ElfUnloadQuiescence::IsImageClosing(uMeta));
     Target("b0-public-platform-without-stw",
            !ElfUnloadQuiescence::PublicPlatformWaitHoldsStwForTesting() &&
            !ElfUnloadQuiescence::PublicPlatformWaitHoldsAdmissionForTesting());
