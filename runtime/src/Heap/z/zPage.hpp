@@ -196,7 +196,6 @@ public:
     static constexpr bool kEnrolTimeProbe = true;
     static std::atomic<uint64_t>& EnrolBeforeFlip();
     static std::atomic<uint64_t>& EnrolAfterFlip();
-    void NoteEnrolPhase();
 
     ZPage();
     static ZPage* NullRegion();
