@@ -2,6 +2,9 @@
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "gc_worker_fixture.hpp"
 #include "Heap/z/zGCIdPrinter.hpp"
+#include <atomic>
+#include <functional>
+#include "Base/Semaphore.h"
 #define private public
 #include "Heap/z/workerThread.hpp"
 #undef private

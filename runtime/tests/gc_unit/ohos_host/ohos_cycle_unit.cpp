@@ -13,6 +13,7 @@
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
+#include "root_publication_snapshot.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -94,27 +95,20 @@ void* RunMajorCycle(void*)
     auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
     GenerationCycleRootTestAccess::Seed(collector, object);
-    collector.testRootsResult = [handle](GCWorkers::Generation generation,
-                                        TracingCollector::RootSet& roots) {
-        if (generation != GCWorkers::Generation::OLD) {
-            return;
-        }
+    // Read the product's published old mark stacks at the top of DoTracing
+    // (after the old root task returned, before follow). The export root
+    // keeping the object alive is not in this window (it feeds the driver's
+    // foreign stack), so the cycle-owner family scan is what publishes it.
+    collector.testOldMarkStarted = [handle, &collector]() {
         BaseObject* current = Heap::GetHeap().GetExportObject(handle);
-        bool found = false;
-        for (auto* node = roots.head(); node != nullptr; node = node->next) {
-            auto copy = *node;
-            while (!copy.empty()) {
-                found = found || to_object(ZOffset::address(to_zoffset(copy.back().object_address()))) == current;
-                copy.pop_back();
-            }
-        }
+        const bool found = RootPublicationSnapshot::Contains(*collector.MajorMarkDomain(), current);
         gMajorRootObserved.store(found, std::memory_order_relaxed);
         std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
                     static_cast<void*>(current), static_cast<unsigned>(found));
         std::fflush(stdout);
     };
     collector.RequestGC(GC_REASON_USER, false);
-    collector.testRootsResult = nullptr;
+    collector.testOldMarkStarted = nullptr;
     GenerationCycleRootTestAccess::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;

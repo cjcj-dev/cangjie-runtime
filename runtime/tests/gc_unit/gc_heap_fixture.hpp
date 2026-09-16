@@ -28,6 +28,7 @@
 #undef private
 #include "zunittest.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"
+#include "Heap/z/zAddress.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
@@ -50,6 +51,39 @@ inline zpointer ColouredPointer(BaseObject* object, uintptr_t remap)
 inline zpointer StoreGoodPointer(BaseObject* object)
 {
     return to_zpointer(raw(ZAddress::color(static_cast<zaddress>(reinterpret_cast<uintptr_t>(object)), static_cast<uintptr_t>(::g_cjStoreGoodMask))));
+}
+
+// Capture a StoreGood word from the current cycle, then run the product
+// mark-start flip so that word becomes mark-bad. Weak LoadBarrier only
+// enters the blocked/keep-alive slow path when is_mark_good is false
+// (zBarrier.cpp:319-324). XOR flips restore on destruction.
+struct RestoreMarkFlips {
+    bool young = false;
+    bool old = false;
+    ~RestoreMarkFlips()
+    {
+        if (old) {
+            ZGlobalsPointers::flip_old_mark_start();
+        }
+        if (young) {
+            ZGlobalsPointers::flip_young_mark_start();
+        }
+    }
+};
+
+inline zpointer CaptureStoreGoodThenFlipMark(BaseObject* object, RestoreMarkFlips& restore,
+                                             bool flipYoung, bool flipOld)
+{
+    const zpointer stored = StoreGoodPointer(object);
+    if (flipYoung) {
+        ZGlobalsPointers::flip_young_mark_start();
+        restore.young = true;
+    }
+    if (flipOld) {
+        ZGlobalsPointers::flip_old_mark_start();
+        restore.old = true;
+    }
+    return stored;
 }
 
 // Access the product generation state for the same setup used by ZLiveMapTest.

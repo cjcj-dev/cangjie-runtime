@@ -66,6 +66,7 @@ set(GC_UNIT_SOURCES
     test_uncommitter.cpp
     test_relocation_request_queue.cpp
     test_gc_thread_pool.cpp
+    test_zWorkers.cpp
 
     test_exempt_unlock.cpp
     test_isfromreg.cpp
@@ -83,6 +84,7 @@ set(GC_UNIT_SOURCES
     test_mark_port_203_engine.cpp
     test_partial_array.cpp
     test_segmented_array_init.cpp
+    test_package_init.cpp
     test_verify_roots.cpp
     test_verify_fail_close.cpp
     test_verify_phase.cpp
@@ -96,6 +98,7 @@ add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
 target_include_directories(cj_gc_unit PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Loader/BinaryFile
     ${CMAKE_SOURCE_DIR}/src/Heap
     ${CMAKE_SOURCE_DIR}/src/Heap/z/os/linux
     ${CMAKE_SOURCE_DIR}/include
@@ -125,6 +128,15 @@ elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
         BUILD_RPATH "${GCV2_RUNTIME_LIB_DIR}"
         INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
 endif()
+
+add_library(cj_package_init_fixture SHARED package_init_image.cpp)
+target_include_directories(cj_package_init_fixture PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
+add_library(cj_package_init_unrelated SHARED package_init_image.cpp)
+set_target_properties(cj_package_init_unrelated PROPERTIES OUTPUT_NAME cj_package_init_unrelated)
+target_include_directories(cj_package_init_unrelated PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/Heap ${CMAKE_SOURCE_DIR}/include)
+add_dependencies(cj_gc_unit cj_package_init_fixture cj_package_init_unrelated)
 
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)

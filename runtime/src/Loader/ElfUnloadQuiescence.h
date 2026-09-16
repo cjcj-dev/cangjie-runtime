@@ -8,6 +8,8 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <memory>
+#include <vector>
 #include <shared_mutex>
 #include <unordered_set>
 
@@ -25,6 +27,14 @@ namespace MapleRuntime {
 // registries.
 class ElfUnloadQuiescence final {
 public:
+    struct ImageAddressMap {
+        struct Range { Uptr start; size_t size; bool executable; };
+        Uptr metadata { 0 };
+        Uptr identity { 0 };
+        U64 generation { 0 };
+        std::vector<Range> ranges;
+        bool Contains(Uptr address, bool codeOnly = false) const;
+    };
     enum class ReaderKind : U8 {
         GENERIC,
         GC_STACK_ENTRY,
@@ -65,10 +75,23 @@ public:
     // records that complete interval; CompletionScope closes its final removal
     // against an unload preflight.
     class TaskAdmissionScope;
+    class PendingTask;
+    class SharedTaskAdmissionScope final {
+    public:
+        SharedTaskAdmissionScope();
+        ~SharedTaskAdmissionScope() = default;
+        SharedTaskAdmissionScope(const SharedTaskAdmissionScope&) = delete;
+        SharedTaskAdmissionScope& operator=(const SharedTaskAdmissionScope&) = delete;
+    private:
+        friend class PendingTask;
+        static bool TryAcquire(void* scope);
+        std::shared_lock<std::shared_timed_mutex> admissionLock;
+    };
 
     class PendingTask final {
     public:
         explicit PendingTask(Uptr entryAddress);
+        PendingTask(Uptr entryAddress, const SharedTaskAdmissionScope& admission);
         ~PendingTask();
 
         PendingTask(const PendingTask&) = delete;
@@ -85,18 +108,21 @@ public:
 
     private:
         friend class TaskAdmissionScope;
+        friend class ElfUnloadQuiescence;
         void MarkCompleted();
 
         Uptr entry { 0 };
+        std::shared_ptr<const ImageAddressMap> image;
         bool pending { false };
     };
 
     // Serializes the pending-task check and active-frame preflight with task
-    // submission/start. Hold this scope through the platform unload.
+    // submission/start. Public unload must drop this scope before the platform
+    // close; the fini callback re-establishes its own admission.
     class TaskAdmissionScope final {
     public:
         TaskAdmissionScope();
-        ~TaskAdmissionScope() = default;
+        ~TaskAdmissionScope();
 
         TaskAdmissionScope(const TaskAdmissionScope&) = delete;
         TaskAdmissionScope& operator=(const TaskAdmissionScope&) = delete;
@@ -127,7 +153,14 @@ public:
         const TaskAdmissionScope* previousAdmission { nullptr };
     };
 
-    static void LinkImage(Uptr imageAddress);
+    // Outside exclusive admission: owners must be able to admit dependencies
+    // while a direct unload waits. Caller must reacquire and recheck afterwards.
+    static void WaitForPendingTasks(Uptr imageAddress);
+    static bool BeginImageClosing(Uptr imageAddress);
+    static void AbortImageClosing(Uptr imageAddress);
+    static void CommitImageClosing(Uptr imageAddress);
+    static bool IsImageClosing(Uptr imageAddress);
+    static std::shared_ptr<const ImageAddressMap> LinkImage(Uptr imageAddress);
     static void UnlinkImage(Uptr imageAddress);
     static bool IsLinkedAddress(Uptr address);
     static bool IsAddressInImage(Uptr address, Uptr imageAddress);
@@ -155,6 +188,23 @@ public:
     static bool PackageReaderPausedForTesting();
     static void ReleasePackageReaderPauseForTesting();
     static void PausePackageReaderForTesting();
+    static void EnableDirectPreflightPauseForTesting();
+    static bool DirectPreflightPausedForTesting();
+    static void ReleaseDirectPreflightPauseForTesting();
+    static void PauseDirectPreflightForTesting();
+    static void EnablePublicPlatformPauseForTesting();
+    static bool PublicPlatformPausedForTesting();
+    static void ReleasePublicPlatformPauseForTesting();
+    static void PausePublicPlatformForTesting();
+    static bool PublicPlatformWaitHoldsStwForTesting();
+    static bool PublicPlatformWaitHoldsAdmissionForTesting();
+    static void NotePublicPlatformWaitForTesting(bool holdsStw, bool holdsAdmission);
+    static void ForcePublicHoldAcrossPlatformForTesting(bool enable);
+    static bool PublicHoldAcrossPlatformForTesting();
+    static void SkipImageClosingForTesting(bool enable);
+    static bool ImageClosingSkippedForTesting();
+    static void FailNextPlatformUnloadForTesting(bool enable);
+    static bool ConsumeFailedPlatformUnloadForTesting();
 #endif
 
 private:
@@ -169,7 +219,12 @@ private:
     static std::mutex& PendingTaskMutex();
     static std::condition_variable& PendingTaskCondition();
     static std::unordered_set<PendingTask*>& PendingTasks();
+    static std::mutex& ClosingMutex();
+    static std::unordered_set<Uptr>& ClosingIdentities();
     static Uptr ResolveImageIdentity(Uptr address);
+    static std::shared_ptr<const ImageAddressMap> RegisteredImage(Uptr metadata);
+    static std::shared_ptr<const ImageAddressMap> RegisteredImageForAddress(Uptr address);
+    static Uptr RegisteredIdentity(Uptr metadata);
 };
 
 } // namespace MapleRuntime

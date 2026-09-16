@@ -8,10 +8,11 @@ set(SRC_LIST
     "z/zHeap.cpp"
     "z/zInitialize.cpp"
     "z/zGlobals.cpp"
-    "z/zWorkers.cpp"
-    "z/zRuntimeWorkers.cpp"
     "z/workerThread.cpp"
     "z/zTask.cpp"
+    "z/zWorkers.cpp"
+    "z/concurrentGCThread.cpp"
+    "z/zThread.cpp"
     "z/zUtils.cpp"
     "z/zCPU.cpp"
 )
