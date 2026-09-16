@@ -370,32 +370,6 @@ void CopyCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor
     heapMap.RecordCalleeSaved(regSlotsMap);
 }
 
-void CopyCollector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
-{
-    RegRoot::RecordStubCalleeSaved(regSlotsMap, fp);
-}
-
-#ifdef __arm__
-void CopyCollector::RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
-{
-    RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, fp);
-}
-
-void CopyCollector::RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
-{
-    RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap, fp);
-}
-#endif
-
-void CopyCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
-{
-    RegRoot::RecordStubAllRegister(regSlotsMap, fp);
-}
-
-
-
-
-
 void CopyCollector::MergeMutatorRoots(WorkStack& workStack)
 {
     (void)workStack;
@@ -419,34 +393,3 @@ void CopyCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsS
 
 
 } // namespace MapleRuntime
-
-void CopyCollector::MergeMutatorRoots(WorkStack& workStack)
-{
-    (void)workStack;
-    (void)oldCycle.Mark().Flush();
-}
-
-void CopyCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
-{
-    VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
-        EnumRefFieldRoot(root, foreignRootsSet);
-    });
-}
-
-void CopyCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
-{
-    ScopedEntryTrace trace("CJRT_GC_ENUM");
-    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD));
-    MergeMutatorRoots(workStack);
-    EnumAllExportRoots(foreignRootsSet);
-}
-
-} // namespace MapleRuntime
-
-namespace MapleRuntime {
-
-
-
-
-
-}

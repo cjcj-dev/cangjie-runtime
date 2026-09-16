@@ -312,15 +312,3 @@ void CopyCollector::DumpAfterGC()
     }
 #endif
 }
-
-namespace MapleRuntime {
-#ifdef MRT_TESTABLE_INTERNALS
-USize StaticRootTable::RootCountForTesting()
-{
-    std::lock_guard<std::mutex> lock(gcRootsLock);
-    return totalRootsCount;
-}
-#endif
-
-
-} // namespace MapleRuntime
