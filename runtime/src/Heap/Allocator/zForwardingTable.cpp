@@ -210,7 +210,15 @@ ZForwarding* ForwardingTable::GetCovering(MAddress addr, Generation gen) { retur
 void ForwardingTable::VisitAll(Generation generation, const std::function<void(ZForwarding*)>& visitor)
 {
     if (!Ready() || visitor == nullptr) return;
-    g_relocationSets[static_cast<size_t>(generation)].map.visit_unique(visitor);
+    auto& map = g_relocationSets[static_cast<size_t>(generation)].map;
+    ZForwarding* last = nullptr;
+    for (size_t i = 0; i < map.size(); ++i) {
+        ZForwarding* value = map.at(i);
+        if (value != nullptr && value != last) {
+            visitor(value);
+            last = value;
+        }
+    }
 }
 
 bool ForwardingTable::PublishFromPageView(RegionInfo* region, ZLiveMap* livemap, uint64_t epoch,
