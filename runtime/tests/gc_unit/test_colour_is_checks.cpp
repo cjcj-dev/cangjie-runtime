@@ -1,7 +1,6 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // Licensed under Apache-2.0 with Runtime Library Exception.
 #include "Heap/z/zAddress.hpp"
-#include "Heap/z/zBarrier.inline.hpp"
 #include "Common/ColourEncoding.h"
 #include "ObjectModel/RefField.h"
 #include "gc_unittest.hpp"
@@ -84,17 +83,13 @@ GC_TEST(ColourIsChecks, BarrierSelfHealUpgradeAndCompetingStore)
     ZGlobalsPointers::flip_young_relocate_start();
     const zpointer healed = ZAddress::load_good(address, old);
     HeapSlot<> slot(old);
-    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
-                        reinterpret_cast<volatile zpointer*>(&slot), old, healed, false);
+    GC_EXPECT_TRUE(slot.CompareExchange(old, healed));
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(healed));
     const auto writer = ZAddress::store_good(static_cast<zaddress>(ZAddressHeapBase | 0x2000));
     slot.StoreColoured(writer);
-    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
-                        reinterpret_cast<volatile zpointer*>(&slot), old, healed, false);
+    GC_EXPECT_FALSE(slot.CompareExchange(old, healed));
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(writer));
     slot.StoreColoured(old);
-    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
-                        reinterpret_cast<volatile zpointer*>(&slot), old, color_null(), false);
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(old));
 }
 
