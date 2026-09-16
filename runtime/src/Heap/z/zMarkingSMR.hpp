@@ -27,6 +27,8 @@ private:
     ZPerWorker<WorkerState> _worker_states;
 
     void reclaim(WorkerState* local_state);
+    void reclaim();
+    size_t pending_count() const;
 
 public:
     MarkingSMR();
@@ -37,15 +39,12 @@ public:
     void free();
     void free_node(MarkStripeStackListNode* node);
     std::atomic<MarkStripeStackListNode*>* hazard_ptr();
-
-    // Until the mark-end free() (zMark.cpp:993-996, P09) the engine reclaims
-    // the current worker's pending nodes when it terminates (FollowWork).
-    void reclaim();
-
-    // White-box evidence for the ABA positive/safe control: pending nodes of
-    // the current worker. Production pop uses the same hazard slots; this
-    // accessor does not alter reclamation.
-    size_t pending_count() const;
+    friend class ZMark;
+    friend struct MarkingSMRTestAccess;
+};
+struct MarkingSMRTestAccess {
+    static void reclaim(MarkingSMR& smr) { smr.reclaim(); }
+    static size_t pending_count(const MarkingSMR& smr) { return smr.pending_count(); }
 };
 } // namespace MapleRuntime
 #endif

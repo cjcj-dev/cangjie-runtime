@@ -32,7 +32,7 @@ GC_TEST(MarkingStacks, PopulationCountsEntriesAndPublishedChunks)
     MarkStripeStack* published = stripes.At(2).StealStack(smr, 0);
     GC_EXPECT_TRUE(published != nullptr);
     MarkStripeStack::Destroy(published);
-    smr.reclaim();
+    MarkingSMRTestAccess::reclaim(smr);
     GC_EXPECT_EQ(stripes.Population(), 0u);
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), std::numeric_limits<size_t>::max());
 }
@@ -67,7 +67,7 @@ GC_OTHER_VM_TEST(MarkingStacks, RejectsPublishedStackAndAcceptsDrainedStack)
     MarkStripeStack* stack = stripes.At(1).StealStack(smr, 0);
     GC_EXPECT_TRUE(stack != nullptr);
     MarkStripeStack::Destroy(stack);
-    smr.reclaim();
+    MarkingSMRTestAccess::reclaim(smr);
     MarkingStacks::VerifyEmpty(stripes.Population());
     GC_EXPECT_EQ(stripes.Population(), 0u);
 }

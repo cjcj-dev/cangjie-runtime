@@ -152,7 +152,8 @@ private:
 
 class MarkThreadLocalStacks {
 public:
-    explicit MarkThreadLocalStacks(size_t stripeCount = 64);
+    MarkThreadLocalStacks() : MarkThreadLocalStacks(16) {}
+    explicit MarkThreadLocalStacks(size_t stripeCount);
     ~MarkThreadLocalStacks();
     MarkThreadLocalStacks(const MarkThreadLocalStacks&) = delete;
     MarkThreadLocalStacks& operator=(const MarkThreadLocalStacks&) = delete;

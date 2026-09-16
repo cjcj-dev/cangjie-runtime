@@ -16,7 +16,6 @@ void MarkTerminate::Reset(size_t workers)
     workerCount = workers;
     working = workers;
     awakening = 0;
-    terminated = false;
 }
 
 void MarkTerminate::Leave()
@@ -46,7 +45,6 @@ bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
     --working;
     if (working == 0) {
         MarkingStacks::VerifyEmpty(stripes.Population());
-        terminated = true;
         condition.notify_all();
         return true;
     }
@@ -80,18 +78,5 @@ bool MarkTerminate::Saturated() const
     std::lock_guard<std::mutex> lock(mutex);
     return working + awakening == workerCount;
 }
-
-bool MarkTerminate::Terminated() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return terminated && working == 0;
-}
-
-size_t MarkTerminate::WorkerCount() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return workerCount;
-}
-
 
 } // namespace MapleRuntime

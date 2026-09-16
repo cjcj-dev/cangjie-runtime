@@ -12,7 +12,7 @@
 #include "Heap/z/zMarkStack.hpp"
 namespace MapleRuntime {
 class Mutator;
-class MarkDomain;
+class ZMark;
 struct ThreadLocalData;
 // ZThreadLocalData, zThreadLocalData.hpp:35-57. Mark stacks belong to
 // the thread data itself; the store buffer has its own allocation/lifetime.
@@ -41,7 +41,7 @@ struct ThreadGCData {
     void InstallMasks(const Masks& masks);
     void Attach(Mutator* owner, ThreadLocalData* nativeOwner, zaddress_unsafe* root);
     void Detach();
-    bool FlushMarkStacks(MarkDomain& domain);
+    bool FlushMarkStacks(ZMark& domain);
     static void VisitOwners(const std::function<void(ThreadGCData&, Mutator*, ThreadLocalData*)>& visitor);
     ThreadGCData(const ThreadGCData&) = delete;
     ThreadGCData& operator=(const ThreadGCData&) = delete;

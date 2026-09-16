@@ -10,6 +10,7 @@
 
 #include <mutex>
 #include "Base/TimeUtils.h"
+#include "Heap/z/zMarkStackEntry.hpp"
 
 namespace MapleRuntime {
 template<class T>
@@ -218,5 +219,9 @@ private:
     MarkStackBuf<T>* t = nullptr;
     size_t s = 0;
 };
+
+using WorkStack = MarkStack<MarkStackEntry>;
+using RootSet = MarkStack<MarkStackEntry>;
+using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
 }
 #endif // MRT_NEW_MARK_STACK_H

@@ -19,6 +19,7 @@ class ZValueStorage {
 private:
     static uintptr_t _top;
     static uintptr_t _end;
+    static uint32_t _block_count;
 
 public:
     static const size_t Offset = 4 * 1024;
@@ -64,6 +65,7 @@ template <typename S, typename T>
 class ZValue {
 private:
     const uintptr_t _addr;
+    const uint32_t _count;
 
     uintptr_t value_addr(uint32_t value_id) const;
 
