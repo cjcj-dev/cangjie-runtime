@@ -74,7 +74,7 @@ GC_TEST(WeakRootsProduct, PhantomCleanDeadClearsSlot)
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
     resources.BlockResurrection();
     GC_EXPECT_TRUE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
-    GC_EXPECT_TRUE(is_null(*SlotOf(slot)));
+    GC_EXPECT_TRUE(is_null_any(*SlotOf(slot)));
     std::fprintf(stderr, "WEAK_ROOTS_DEAD_CLEAN_ASSERT_EXECUTED\n");
 }
 
