@@ -365,14 +365,7 @@ void WCollector::TraceHeap()
     }
 
     if (concurrentStackScan) {
-
-        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack", false);
-        stackScanEpoch = handshake.epoch;
-        CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
-                     "major concurrent stack scan accounting failed: epoch=%llu requested=%zu scanned=%zu "
-                     "fallback=%zu",
-                     static_cast<unsigned long long>(stackScanEpoch), handshake.requested, handshake.stackScanned,
-                     handshake.stackFallback);
+        stackScanEpoch = StackWatermark::epoch_id();
     }
 
     {
