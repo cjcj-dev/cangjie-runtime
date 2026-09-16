@@ -46,7 +46,7 @@ public:
 
     TaskType GetType() const { return taskType; }
 
-    void SetRegionType(TaskType type) { taskType = type; }
+    void SetTaskKind(TaskType type) { taskType = type; }
 
     TaskIndex GetTaskIndex() const { return taskIndex; }
 

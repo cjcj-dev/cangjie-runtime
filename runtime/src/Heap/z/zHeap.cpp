@@ -450,7 +450,7 @@ RegionInfo* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr
 
 ZPageTable& Heap::page_table() { return ZPageTable::heap_table(); }
 
-RegionInfo* Heap::alloc_page(size_t num, UnitRole role, bool expectPhysicalMem, bool allowSaferegion,
+RegionInfo* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age)
 {
     RegionManager& manager = static_cast<RegionSpace&>(GetHeap().GetAllocator()).GetRegionManager();

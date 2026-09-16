@@ -340,8 +340,8 @@ GC_TEST(ZLiveMapPage, find_base_resolves_interior_field)
 GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
 {
     for (bool large : { false, true }) {
-        const auto role = large ? RegionInfo::UnitRole::LARGE_SIZED_UNITS
-                                : RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+        const auto role = large ? ZPageType::large
+                                : ZPageType::small;
         GcHeapFixture fx(role);
         RegionInfo* region = fx.region0;
         region->SetYoungRegionFlag(1);
@@ -395,14 +395,14 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
     RegionInfo* region = fx.region0;
     const uint32_t smallSegment = ZLiveMapTest::segment_size(*region->livemap());
     GC_EXPECT_TRUE(smallSegment > 2u);
-    for (auto role : {RegionInfo::UnitRole::LARGE_SIZED_UNITS,
-                      RegionInfo::UnitRole::SMALL_SIZED_UNITS,
-                      RegionInfo::UnitRole::LARGE_SIZED_UNITS}) {
+    for (auto role : {ZPageType::large,
+                      ZPageType::small,
+                      ZPageType::large}) {
         RegionInfo::RetirePage(region, [] {});
         region = RegionInfo::InitRegion(0, 1, role);
         fx.region0 = region;
         const uint32_t actual = ZLiveMapTest::segment_size(*region->livemap());
-        const uint32_t expected = role == RegionInfo::UnitRole::LARGE_SIZED_UNITS ? 2u : smallSegment;
+        const uint32_t expected = role == ZPageType::large ? 2u : smallSegment;
         std::fprintf(stderr, "P02_PAGE_GEOMETRY role=%u segment=%u expected=%u\n",
                      static_cast<unsigned>(role), actual, expected);
         GC_EXPECT_EQ(actual, expected);
@@ -449,8 +449,8 @@ void WaitForBothStrongLoads(const ZBitMap*, BitMap::idx_t)
 // zMark.cpp:405-425 accounts the first live result once.
 void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
 {
-    GcHeapFixture fx(large ? RegionInfo::UnitRole::LARGE_SIZED_UNITS
-                                  : RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GcHeapFixture fx(large ? ZPageType::large
+                                  : ZPageType::small);
     RegionInfo* region = fx.region0;
     BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
@@ -544,7 +544,7 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
         RegionInfo::RetirePage(fx.region0, [] {});
         RegionInfo::RetirePage(fx.region1, [] {});
         fx.region1 = nullptr;
-        fx.region0 = RegionInfo::InitRegion(0, units, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        fx.region0 = RegionInfo::InitRegion(0, units, ZPageType::small);
         GcHeapFixture::AdvanceGeneration(Generation::Old);
     }
     RegionInfo* region = fx.region0;

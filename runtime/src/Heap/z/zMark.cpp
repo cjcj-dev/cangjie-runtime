@@ -76,7 +76,7 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     }
     if (!marked) {
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
-             region, region->GetRegionType(), region->GetRegionStart(), region->live_bytes());
+             region, 0u, region->GetRegionStart(), region->live_bytes());
     }
     return marked;
 }

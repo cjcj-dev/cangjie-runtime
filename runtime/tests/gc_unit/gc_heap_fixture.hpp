@@ -147,7 +147,7 @@ struct GcHeapFixture {
 
     static constexpr size_t kUnits = 6;
 
-    explicit GcHeapFixture(RegionInfo::UnitRole role = RegionInfo::UnitRole::SMALL_SIZED_UNITS)
+    explicit GcHeapFixture(ZPageType role = ZPageType::small)
     {
         // ZInitialize initializes statistics before any allocation can sample.
         EnsureZAddressDomain();
@@ -169,7 +169,7 @@ struct GcHeapFixture {
         }
         RegionInfo::Initialize(kUnits, heapStart);
         region0 = RegionInfo::InitRegion(0, 1, role);
-        region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        region1 = RegionInfo::InitRegion(1, 1, ZPageType::small);
         ZPageTable::heap_table().insert(region0);
         ZPageTable::heap_table().insert(region1);
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.

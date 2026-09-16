@@ -1,34 +1,9 @@
 #ifndef MRT_REGION_LIST_TYPES_H
 #define MRT_REGION_LIST_TYPES_H
 
-#include <cstdint>
+#include "Heap/z/zPageType.hpp"
 
 namespace MapleRuntime {
-
-enum class UnitRole : uint8_t {
-    FREE_UNITS = 0,
-    SMALL_SIZED_UNITS,
-    LARGE_SIZED_UNITS,
-};
-
-enum class RegionType : uint8_t {
-    FREE_REGION,
-    THREAD_LOCAL_REGION,
-    RECENT_FULL_REGION,
-    FROM_REGION,
-    LONE_FROM_REGION,
-    UNMOVABLE_FROM_REGION,
-    TO_REGION,
-    FULL_PINNED_REGION,
-    RECENT_PINNED_REGION,
-    RAW_POINTER_PINNED_REGION,
-    TL_RAW_POINTER_REGION,
-    TL_LARGE_RAW_POINTER_REGION,
-    LARGE_REGION,
-    RECENT_LARGE_REGION,
-    GARBAGE_REGION,
-};
-
 } // namespace MapleRuntime
 
 #endif

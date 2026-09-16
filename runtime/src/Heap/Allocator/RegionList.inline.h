@@ -10,7 +10,7 @@
 #include "Heap/Allocator/RegionList.h"
 
 namespace MapleRuntime {
-void RegionList::MergeRegionList(RegionList& srcList, RegionInfo::RegionType regionType)
+void RegionList::MergeRegionList(RegionList& srcList)
 {
     RegionList regionList("region list cache");
     srcList.MoveTo(regionList);
@@ -20,7 +20,6 @@ void RegionList::MergeRegionList(RegionList& srcList, RegionInfo::RegionType reg
         return;
     }
     std::lock_guard<std::mutex> lock(listMutex);
-    regionList.SetElementType(regionType);
     IncCounts(regionList.GetRegionCount(), regionList.GetUnitCount());
     if (listHead == nullptr) {
         listHead = head;
@@ -35,13 +34,13 @@ void RegionList::MergeRegionList(RegionList& srcList, RegionInfo::RegionType reg
     }
 }
 
-void RegionList::PrependRegion(RegionInfo* region, RegionInfo::RegionType type)
+void RegionList::PrependRegion(RegionInfo* region)
 {
     std::lock_guard<std::mutex> lock(listMutex);
-    PrependRegionLocked(region, type);
+    PrependRegionLocked(region);
 }
 
-void RegionList::PrependRegionLocked(RegionInfo* region, RegionInfo::RegionType type)
+void RegionList::PrependRegionLocked(RegionInfo* region)
 {
     if (region == nullptr) {
         return;
@@ -49,11 +48,10 @@ void RegionList::PrependRegionLocked(RegionInfo* region, RegionInfo::RegionType 
 
     CHECK_DETAIL(region->GetRegionListOwner() == nullptr, "region already belongs to a list");
 
-    DLOG(REGION, "list %p (%zu, %zu)+(%zu, %zu) prepend region %p@[%#zx+%zu, %#zx) type %u->%u", this,
+    DLOG(REGION, "list %p (%zu, %zu)+(%zu, %zu) prepend region %p@[%#zx+%zu, %#zx)", this,
         regionCount, unitCount, 1llu, region->GetUnitCount(), region, region->GetRegionStart(),
-        region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType(), type);
+        region->GetRegionAllocatedSize(), region->GetRegionEnd());
 
-    region->SetRegionType(type);
     region->SetRegionListOwner(this);
     region->SetPrevRegion(nullptr);
     IncCounts(1, region->GetUnitCount());
@@ -81,7 +79,7 @@ void RegionList::DeleteRegionLocked(RegionInfo* del)
 
     DLOG(REGION, "list %p (%zu, %zu)-(%zu, %zu) delete region %p@[%#zx+%zu, %#zx) type %u", this,
         regionCount, unitCount, 1llu, del->GetUnitCount(),
-        del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(), del->GetRegionType());
+        del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(), 0u);
 
     DecCounts(1, del->GetUnitCount());
 

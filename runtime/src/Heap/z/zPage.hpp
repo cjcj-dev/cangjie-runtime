@@ -116,8 +116,6 @@ private:
     ZLiveMap* _livemap;
     bool _relocate_promoted;
 public:
-    using UnitRole = MapleRuntime::UnitRole;
-    using RegionType = MapleRuntime::RegionType;
     using Page = ZPage;
     // The table serializes publication/unbinding of this facade's owner.
     friend class ForwardingTable;
@@ -274,8 +272,7 @@ public:
     Generation GetOwnerGeneration() const;
 
     // ---- ZPage livemap surface (zPage.inline.hpp:57-70, 223-331, 371-392) ----
-    // Names follow ZGC; the page type split (small/large) uses UnitRole until
-    // ZPageType lands.
+    // Names follow ZGC.
     int object_alignment_shift() const;
     uint32_t object_max_count() const;
 
@@ -412,10 +409,10 @@ public:
 
     static void InitFreeRegion(size_t unitIdx, size_t nUnit);
 
-    static RegionInfo* InitRegion(size_t unitIdx, size_t nUnit, RegionInfo::UnitRole uclass,
+    static RegionInfo* InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass,
                                   PageAge age = PageAge::old);
 
-    static RegionInfo* InitRegionAt(uintptr_t addr, size_t nUnit, RegionInfo::UnitRole uclass);
+    static RegionInfo* InitRegionAt(uintptr_t addr, size_t nUnit, ZPageType uclass);
 
     static void WaitCopiedBeforePayloadWipe(RegionInfo* region, const char* site);
 
@@ -609,18 +606,8 @@ public:
     };
 
     // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
-    void SetUnitRole(UnitRole role)
-    {
-        metadata.unitRoleBitField.SetAtomicValue(0, BIT_LENGTH, static_cast<uint8_t>(role));
-    }
-    void SetUnitRole0(UnitRole role)
-    {
-        metadata.unitRoleBitField.SetAtomicValue(BIT_LENGTH, BIT_LENGTH, static_cast<uint8_t>(role));
-    }
-    void SetRegionType(RegionType type);
-    void SetTraceRegionFlag(uint8_t flag);
-    // twoflags: CSet/route exclusion only. Independent of isTraceRegion lifetime.
-    void SetNotRelocatableThisCycle(uint8_t) {}
+
+    bool OnNamedList(const char* name) const;
     bool IsNotRelocatableThisCycle() const { return is_allocating(); }
     void SetInGhostRegion(uint8_t flag);
 
@@ -660,8 +647,8 @@ public:
 
     uint8_t GetYoungAge() const;
 
-    RegionType GetRegionType() const;
-    UnitRole GetUnitRole() const { return static_cast<UnitRole>(metadata.unitRole); }
+
+
 
     size_t GetUnitIdx() const { return FindUnitIndex(GetRegionStart()); }
 
@@ -706,10 +693,7 @@ public:
 
     bool IsLargeRegion() const;
 
-    bool IsThreadLocalRegion() const
-    {
-        return GetRegionType() == RegionType::THREAD_LOCAL_REGION;
-    }
+    bool IsThreadLocalRegion() const { return OnNamedList("thread local regions"); }
 
     bool IsPinnedRegion() const;
 
@@ -729,14 +713,14 @@ public:
 
     void SetNextRegion(const RegionInfo* r);
 
-    bool IsFromRegion() const { return GetRegionType() == RegionType::FROM_REGION; }
-    bool IsLoneFromRegion() const { return GetRegionType() == RegionType::LONE_FROM_REGION; }
+    bool IsFromRegion() const { return OnNamedList("from regions"); }
+    bool IsLoneFromRegion() const { return GetRegionListOwner() == nullptr && is_relocatable(); }
     bool IsUnmovableFromRegion() const;
 
-    bool IsToRegion() const { return GetRegionType() == RegionType::TO_REGION; }
+    bool IsToRegion() const { return false; }
 
-    bool IsGarbageRegion() const { return GetRegionType() == RegionType::GARBAGE_REGION; }
-    bool IsFreeRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::FREE_UNITS; }
+    bool IsGarbageRegion() const { return OnNamedList("garbage regions"); }
+    bool IsFreeRegion() const { return GetRegionListOwner() == nullptr && !is_relocatable(); }
 
     bool IsValidRegion() const;
     // zRelocationSetSelector.cpp / zGeneration.cpp:216-221: a relocatable page
@@ -841,7 +825,7 @@ private:
             AtomicBitField<uint16_t> regionStateBitField;
         };
         // One atomic snapshot binds state to region life. The exact-start table
-        // reuses the old split-field footprint, preserving UnitInfo size.
+        // route snapshot footprint.
         std::atomic<uint64_t> routeStateSnapshot{ 0 };
         RegionLifeId ghostLifeId = 0;
         RwLock rwLock;
@@ -865,9 +849,9 @@ public:
 
     // Reinitialization consumes an already retired descriptor. The allocator
     // must remove the old page and finish safe retirement before reaching here.
-    void InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge age = PageAge::old);
+    void InitRegionInfo(size_t nUnit, ZPageType uClass, PageAge age = PageAge::old, bool live = true);
 
-    void InitRegion(size_t nUnit, UnitRole uClass, PageAge age = PageAge::old);
+    void InitRegion(size_t nUnit, ZPageType uClass, PageAge age = PageAge::old);
 
     static constexpr uint32_t NULLPTR_IDX = INVALID_IDX;
     UnitMetadata metadata;

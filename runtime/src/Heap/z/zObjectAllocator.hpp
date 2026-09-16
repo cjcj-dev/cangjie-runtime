@@ -60,13 +60,13 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 #if defined(__EULER__)
         needUnitCount = maxUnitCountPerPinnedRegion;
 #endif
-        RegionInfo* region = Heap::alloc_page(needUnitCount, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        RegionInfo* region = Heap::alloc_page(needUnitCount, ZPageType::small);
         if (region == nullptr) {
             return 0;
         }
         DLOG(REGION, "alloc pinned region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
              region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(),
-             region->GetRegionType());
+             0u);
 
 #if defined(MRT_TESTABLE_INTERNALS)
         if (testPinnedPageAcquired != nullptr) {
@@ -83,7 +83,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
             // old retirement and seqnum advancement (P14 pause-model adapter).
             region->ResetPageSequence();
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
-            recentPinnedRegionList.PrependRegionLocked(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
+            recentPinnedRegionList.PrependRegionLocked(region);
             allocator(PageAge::old)->pinnedPage.store(region, std::memory_order_release);
             addr = region->Alloc(size);
             region = nullptr;
@@ -103,18 +103,18 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
     {
         size_t regionCount = (size + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
-        RegionInfo* region = Heap::alloc_page(regionCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS,
+        RegionInfo* region = Heap::alloc_page(regionCount, ZPageType::large,
                                         false, true, clearPayload, PageAge::eden);
         if (region == nullptr) {
             return 0;
         }
         DLOG(REGION, "alloc large region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
-             region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), region->GetRegionType());
+             region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), 0u);
         uintptr_t addr = region->Alloc(size);
 
-        if (largeTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION)) {
+        if (largeTraceRegions.TryPrependRegion(region)) {
         } else {
-            recentLargeRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION);
+            recentLargeRegionList.PrependRegion(region);
         }
 
         return addr;
@@ -125,14 +125,14 @@ inline void RegionManager::EnlistFullThreadLocalRegion(RegionInfo* region) noexc
         MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
 
         if (region->IsTraceRegion()) {
-            if (!fullTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION)) {
-                recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+            if (!fullTraceRegions.TryPrependRegion(region)) {
+                recentFullRegionList.PrependRegion(region);
                 RecentFullAccounting::Enqueue(1, region->GetUnitCount());
                 (void)region;
             }
             return;
         }
-        recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+        recentFullRegionList.PrependRegion(region);
         RecentFullAccounting::Enqueue(1, region->GetUnitCount());
     }
 

@@ -500,9 +500,9 @@ inline void RegionInfo::InitFreeRegion(size_t unitIdx, size_t nUnit)
         (void)nUnit;
     }
 
-inline ZPageType RegionInfoTypeFor(size_t nUnit, RegionInfo::UnitRole uclass)
+inline ZPageType RegionInfoTypeFor(size_t nUnit, ZPageType uclass)
 {
-    if (uclass == RegionInfo::UnitRole::LARGE_SIZED_UNITS) {
+    if (uclass == ZPageType::large) {
         return ZPageType::large;
     }
     const size_t bytes = nUnit * RegionInfo::UNIT_SIZE;
@@ -512,7 +512,7 @@ inline ZPageType RegionInfoTypeFor(size_t nUnit, RegionInfo::UnitRole uclass)
     return ZPageType::small;
 }
 
-inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, RegionInfo::UnitRole uclass, PageAge age)
+inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass, PageAge age)
     {
         const MAddress start = GetUnitAddress(unitIdx);
         ZPage* region = new ZPage(RegionInfoTypeFor(nUnit, uclass), age,
@@ -522,7 +522,7 @@ inline RegionInfo* RegionInfo::InitRegion(size_t unitIdx, size_t nUnit, RegionIn
         return region;
     }
 
-inline RegionInfo* RegionInfo::InitRegionAt(uintptr_t addr, size_t nUnit, RegionInfo::UnitRole uclass)
+inline RegionInfo* RegionInfo::InitRegionAt(uintptr_t addr, size_t nUnit, ZPageType uclass)
     {
         size_t idx = RegionInfo::GetUnitIdxAt(addr);
         return InitRegion(idx, nUnit, uclass);
@@ -588,7 +588,7 @@ inline size_t RegionInfo::GetAvailableSize() const
 
 inline void RegionInfo::InitFreeUnits()
     {
-        InitRegionInfo(GetUnitCount(), UnitRole::FREE_UNITS);
+        InitRegionInfo(GetUnitCount(), ZPageType::small, PageAge::old, false);
     }
 
 
@@ -789,15 +789,9 @@ inline bool RegionInfo::ForwardingClaimed() const
         return owner && owner->claimed().load(std::memory_order_acquire);
     }
 
-inline void RegionInfo::SetRegionType(RegionType type)
-    {
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH,
-                                                    static_cast<uint8_t>(type));
-    }
 
-inline void RegionInfo::SetTraceRegionFlag(uint8_t)
-    {
-    }
+
+
 
 
 
@@ -840,11 +834,7 @@ inline uint8_t RegionInfo::GetYoungAge() const
                                     RegionStateBitPos::YOUNG_AGE_FLAG);
     }
 
-inline RegionInfo::RegionType RegionInfo::GetRegionType() const
-    {
-        return static_cast<RegionType>(
-            metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH));
-    }
+
 
 // ZPage::is_allocating / is_relocatable (zPage.inline.hpp:180-186).
 inline bool RegionInfo::IsAllocating() const
@@ -917,8 +907,7 @@ inline bool RegionInfo::UndoAllocObjectAtomic(uintptr_t addr, size_t size)
 
 inline bool RegionInfo::IsPinnedRegion() const
     {
-        return (static_cast<RegionType>(metadata.regionType) == RegionType::FULL_PINNED_REGION) ||
-            (static_cast<RegionType>(metadata.regionType) == RegionType::RECENT_PINNED_REGION);
+        return OnNamedList("old pinned regions") || OnNamedList("recent pinned regions");
     }
 
 inline RegionInfo* RegionInfo::GetPrevRegion() const
@@ -971,8 +960,7 @@ inline void RegionInfo::SetNextRegion(const RegionInfo* r)
 
 inline bool RegionInfo::IsUnmovableFromRegion() const
     {
-        RegionType type = GetRegionType();
-        return type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION;
+        return OnNamedList("escaped from regions") || OnNamedList("raw pointer pinned regions");
     }
 
 inline bool RegionInfo::IsValidRegion() const
@@ -1051,7 +1039,7 @@ inline void RegionInfo::BumpRegionLifeId()
         }
     }
 
-inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge age)
+inline void RegionInfo::InitRegionInfo(size_t nUnit, ZPageType uClass, PageAge age, bool live)
     {
         CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
         CHECK(TryGetRegionInfoAt(GetRegionStart()) == nullptr);
@@ -1098,19 +1086,19 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass, PageAge ag
         // reuse. The hold is deliberately NOT cleared: reaching this point while held means
         // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
         // next collection set instead of silently papering over the escape.
-        SetRegionType(RegionType::FREE_REGION);
-        SetNotRelocatableThisCycle(0);
+        SetRegionListOwner(nullptr);
+
         SetInGhostRegion(0);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
-        if (uClass != UnitRole::FREE_UNITS) {
+        (void)uClass;
+        if (live) {
             InitializeLiveMap();
         }
     }
 
-inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass, PageAge age)
+inline void RegionInfo::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)
     {
-        InitRegionInfo(nUnit, uClass, age);
-        CHECK(uClass != UnitRole::FREE_UNITS);
+        InitRegionInfo(nUnit, uClass, age, true);
         (void)nUnit;
     }
 

@@ -274,10 +274,10 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
         route.destination->SetYoungAge(1);
     }
 
-    route.source->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    route.source->SetRegionListOwner(nullptr);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(route.source, route.from));
     RegionList selected("old-source-value-root");
-    selected.PrependRegion(route.source, RegionInfo::RegionType::FROM_REGION);
+    selected.PrependRegion(route.source);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
     route.source->PrepareForwardableRegion<Generation::Old>();

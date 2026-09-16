@@ -71,7 +71,7 @@ public:
         heapParam.regionSize = RegionInfo::UNIT_SIZE / 1024;
         heapParam.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
-        capacity = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
+        capacity = manager.TakeRegion(1, ZPageType::small, false, false);
     }
 
     void PublishCapacity()
@@ -111,7 +111,7 @@ void RunWaiter(RegionManager& manager, std::atomic<size_t>& claimed)
     Mutator mutator;
     mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     ThreadLocal::SetMutator(&mutator);
-    RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* region = manager.TakeRegion(1, ZPageType::small);
     claimed.store(region == nullptr ? 0 : region->GetUnitCount(), std::memory_order_release);
     ThreadLocal::SetMutator(nullptr);
 }
@@ -196,7 +196,7 @@ GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
         [&](RegionManager& manager) {
             fixture.PublishCapacity();
             supplied = true;
-            competing = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
+            competing = manager.TakeRegion(1, ZPageType::small, false, false);
         },
         {});
     std::atomic<size_t> allocated{ 0 };

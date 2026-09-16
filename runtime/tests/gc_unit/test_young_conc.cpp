@@ -231,7 +231,7 @@ GC_TEST(YoungConc, TraceRegionSkipsSatbWithoutPaint)
     MarkPublicationFixture markFixture;
     fx.region0->SetYoungRegionFlag(1);
     fx.region0->SetYoungAge(1);
-    fx.region0->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    fx.region0->SetRegionListOwner(nullptr);
     fx.region0->SetTraceRegionFlag(1);
 
     GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
@@ -731,7 +731,7 @@ GC_TEST(YoungConc, TraceRefFieldRemapsPreviousRelocationEpoch)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    fx.region0->SetRegionListOwner(nullptr);
     fx.region0->SetYoungRegionFlag(1);
     fx.region0->SetYoungAge(1);
     fx.region1->SetYoungRegionFlag(1);

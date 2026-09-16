@@ -451,7 +451,7 @@ bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx
     }
 
     RegionInfo* prepared = manager.TakeRegion(
-        unitCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS, false, true, true);
+        unitCount, ZPageType::large, false, true, true);
     if (prepared == nullptr) {
         return false;
     }

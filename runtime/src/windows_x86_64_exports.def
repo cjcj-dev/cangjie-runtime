@@ -1029,7 +1029,6 @@ EXPORTS
     _ZN12MapleRuntime10MethodInfo32GetActualTypeFromGenericTypeImplEPNS_15GenericTypeInfoEPv @1027
     _ZN12MapleRuntime10MethodInfo7HasSRetEv @1028
     _ZN12MapleRuntime10MethodInfo8AddCJArgEPNS_8ArgValueEPNS_8TypeInfoEPNS_7MObjectE @1029
-    _ZN12MapleRuntime10RegionInfo10InitRegionEyyNS0_8UnitRoleE @1030
     _ZN12MapleRuntime10RegionInfo10MarkObjectEPKNS_10BaseObjectE @1031
     _ZN12MapleRuntime10RegionInfo10MarkObjectEPKNS_10BaseObjectEy @1032
     _ZN12MapleRuntime10RegionInfo10NullRegionEv @1033
@@ -1038,7 +1037,6 @@ EXPORTS
     _ZN12MapleRuntime10RegionInfo13EnqueueObjectEPKNS_10BaseObjectEy @1036
     _ZN12MapleRuntime10RegionInfo13InitFreeUnitsEv @1037
     _ZN12MapleRuntime10RegionInfo13tipInHeapHitsE @1038 DATA
-    _ZN12MapleRuntime10RegionInfo14InitRegionInfoEyNS0_8UnitRoleE @1039
     _ZN12MapleRuntime10RegionInfo14IsMarkedObjectEPKNS_10BaseObjectE @1040
     _ZN12MapleRuntime10RegionInfo15GetRegionInfoAtEy @1041
     _ZN12MapleRuntime10RegionInfo15HasYoungRegionsEv @1042
@@ -1048,7 +1046,7 @@ EXPORTS
     _ZN12MapleRuntime10RegionInfo16IsSurvivedObjectEy @1046
     _ZN12MapleRuntime10RegionInfo16dispelGhostCountE @1047 DATA
     _ZN12MapleRuntime10RegionInfo16youngRegionCountE @1048 DATA
-    _ZN12MapleRuntime10RegionInfo18SetTraceRegionFlagEh @1049
+
     _ZN12MapleRuntime10RegionInfo18SetYoungRegionFlagEh @1050
     _ZN12MapleRuntime10RegionInfo19ClearGhostRegionBitEv @1051
     _ZN12MapleRuntime10RegionInfo19GetYoungRegionCountEv @1052
@@ -1063,17 +1061,10 @@ EXPORTS
     _ZN12MapleRuntime10RegionInfo26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10RegionInfo27BindLiveInfo0FromLiveIfNullEv @1065
     _ZN12MapleRuntime10RegionInfo30LARGE_OBJECT_DEFAULT_THRESHOLDE @1068 DATA
-    _ZN12MapleRuntime10RegionInfo8UnitInfo12ToFreeRegionEv @1070
-    _ZN12MapleRuntime10RegionInfo8UnitInfo13GetUnitInfoAtEy @1071
-    _ZN12MapleRuntime10RegionInfo8UnitInfo14totalUnitCountE @1072 DATA
-    _ZN12MapleRuntime10RegionInfo8UnitInfo16heapStartAddressE @1073 DATA
     _ZN12MapleRuntime10RegionInfo9UNIT_SIZEE @1074 DATA
-    _ZN12MapleRuntime10RegionList13PrependRegionEPNS_10RegionInfoENS1_10RegionTypeE @1075
-    _ZN12MapleRuntime10RegionList14SetElementTypeENS_10RegionInfo10RegionTypeE @1076
-    _ZN12MapleRuntime10RegionList15MergeRegionListERS0_NS_10RegionInfo10RegionTypeE @1077
     _ZN12MapleRuntime10RegionList15VisitAllRegionsERKNSt3__18functionIFvPNS_10RegionInfoEEEE @1078
     _ZN12MapleRuntime10RegionList18DeleteRegionLockedEPNS_10RegionInfoE @1079
-    _ZN12MapleRuntime10RegionList19PrependRegionLockedEPNS_10RegionInfoENS1_10RegionTypeE @1080
+
     _ZN12MapleRuntime10RegionList20ClearTraceRegionFlagEv @1081
     _ZN12MapleRuntime10SampleTaskC2ERKS0_ @1082
     _ZN12MapleRuntime10SampleTaskC2EyyRNSt3__16vectorIyNS1_9allocatorIyEEEERNS2_INS_9FrameTypeENS3_IS7_EEEERNS2_IjNS3_IjEEEE @1083
@@ -1326,7 +1317,6 @@ EXPORTS
     _ZN12MapleRuntime13ParameterInfo7SetNameEPKc @1407
     _ZN12MapleRuntime13RegionManager10AllocLargeEy @1408
     _ZN12MapleRuntime13RegionManager10InitializeEyy @1409
-    _ZN12MapleRuntime13RegionManager10TakeRegionEyNS_10RegionInfo8UnitRoleEb @1410
     _ZN12MapleRuntime13RegionManager11AllocPinnedEy @1411
     _ZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoE @1413
     _ZN12MapleRuntime13RegionManager13CompactRegionEPNS_10RegionInfoE @1414
@@ -1667,7 +1657,6 @@ EXPORTS
     _ZN12MapleRuntime17ExceptionHandling14ProcessEHFrameERKNS_9FrameInfoERNSt3__16vectorINS4_10unique_ptrINS_12IEHFrameInfoENS4_14default_deleteIS7_EEEENS4_9allocatorISA_EEEE @1811
     _ZN12MapleRuntime17ExceptionHandling16BuildEHFrameInfoEv @1812
     _ZN12MapleRuntime17FreeRegionManager10InitializeEj @1813
-    _ZN12MapleRuntime17FreeRegionManager10TakeRegionEyNS_10RegionInfo8UnitRoleEb @1814
     _ZN12MapleRuntime17FreeRegionManager15AddGarbageUnitsEjj @1815
     _ZN12MapleRuntime17FreeRegionManager15AddReleaseUnitsEjj @1816
     _ZN12MapleRuntime17FreeRegionManager22AddMarkQuarantineUnitsEjj @1818

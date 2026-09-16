@@ -71,9 +71,9 @@ struct LargeArrayFixture {
         Heap::OnHeapExtended(start + units * RegionInfo::UNIT_SIZE);
         GcHeapFixture::AdvanceGeneration(Generation::Old);
         RegionInfo::Initialize(units, start);
-        region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-        region1 = RegionInfo::InitRegion(1, arrayUnits, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
-        region1->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
+        region0 = RegionInfo::InitRegion(0, 1, ZPageType::small);
+        region1 = RegionInfo::InitRegion(1, arrayUnits, ZPageType::large);
+        region1->SetRegionListOwner(nullptr);
         auto* holderType = reinterpret_cast<TypeInfo*>(holderStorage);
         holderType->SetType(TypeKind::TYPE_KIND_CLASS);
         holderType->SetFlagHasRefField();

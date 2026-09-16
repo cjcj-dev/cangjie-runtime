@@ -120,7 +120,7 @@ static bool IsSmallEdenPage(const RegionInfo* page)
 }
 
 // ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
-RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole role,
+RegionInfo* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
                                              PageAge age, bool nonBlocking)
 {
     RegionInfo* page = Heap::alloc_page(units, role, false, !nonBlocking, true, age);
@@ -132,10 +132,10 @@ RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole
     }
     // Register with the page lifecycle, never with tlRegionList. Registration
     // precedes object allocation, as RegionList's byte accounting requires.
-    if (role == RegionInfo::UnitRole::LARGE_SIZED_UNITS) {
-        recentLargeRegionList.PrependRegion(page, RegionInfo::RegionType::RECENT_LARGE_REGION);
+    if (role == ZPageType::large) {
+        recentLargeRegionList.PrependRegion(page);
     } else {
-        recentFullRegionList.PrependRegion(page, RegionInfo::RegionType::RECENT_FULL_REGION);
+        recentFullRegionList.PrependRegion(page);
         RecentFullAccounting::Enqueue(1, page->GetUnitCount());
     }
     return page;
@@ -168,7 +168,7 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
         // ZObjectAllocator::PerAge::alloc_large_object. This runtime has no
         // medium page class; objects above its small limit use dedicated pages.
         const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
-        RegionInfo* page = AllocateSharedPage(units, RegionInfo::UnitRole::LARGE_SIZED_UNITS,
+        RegionInfo* page = AllocateSharedPage(units, ZPageType::large,
                                                allocator.age, nonBlocking);
         return page == nullptr ? 0 : page->Alloc(size);
     }
@@ -182,7 +182,7 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
 
     // zObjectAllocator.cpp:78-116: allocate before publishing the candidate,
     // retry after retirement or exhaustion, and undo a losing page allocation.
-    RegionInfo* fresh = AllocateSharedPage(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS,
+    RegionInfo* fresh = AllocateSharedPage(maxUnitCountPerRegion, ZPageType::small,
                                            allocator.age, nonBlocking);
     if (fresh == nullptr) { return 0; }
     addr = fresh->Alloc(size);
@@ -220,7 +220,7 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
         return nullptr;
     }
     const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
-    RegionInfo* region = Heap::alloc_page(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
+    RegionInfo* region = Heap::alloc_page(units, ZPageType::small, expectPhysicalMem,
                                     allowSaferegion, true, youngRegion ? PageAge::eden : PageAge::old);
     if (region != nullptr) {
         {
@@ -231,11 +231,11 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
                 tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             }
             region->SetYoungAge(0);
-            tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+            tlRegionList.PrependRegion(region);
             DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) units[%zu+%zu, %zu) type %u",
                 region, region->GetRegionStart(), region->GetRegionSize(), region->GetRegionEnd(),
                 region->GetUnitIdx(), region->GetUnitCount(), region->GetUnitIdx() + region->GetUnitCount(),
-                region->GetRegionType());
+                0u);
         }
     }
 

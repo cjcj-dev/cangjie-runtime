@@ -95,7 +95,7 @@ GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
 {
     GcHeapFixture fixture;
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    RegionInfo* twoUnits = RegionInfo::InitRegion(2, 2, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* twoUnits = RegionInfo::InitRegion(2, 2, ZPageType::small);
     const size_t before = manager.GetYoungAllocatedSize();
     fixture.region0->SetYoungRegionFlag(1);
     twoUnits->SetYoungRegionFlag(1);

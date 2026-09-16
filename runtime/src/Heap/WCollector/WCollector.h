@@ -353,7 +353,7 @@ public:
 
     // lonefrom: "is this object being relocated in this cycle" must not be asked as
     // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
-    // from-list with TakeHeadRegion(RegionType::LONE_FROM_REGION) (RegionManager.cpp:1638), so a
+    // from-list with TakeHeadRegion() (RegionManager.cpp:1638), so a
     // region is retyped the moment relocation of it starts.  IsFromRegion() tests FROM_REGION
     // alone -- IsLoneFromRegion() is a separate predicate -- so for the whole window in which a
     // region is actually being evacuated, its objects answer "not from".

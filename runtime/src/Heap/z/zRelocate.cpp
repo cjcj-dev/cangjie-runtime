@@ -1041,7 +1041,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     !ShouldPromoteAge(region->GetYoungAge(), GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold)) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
                         manager.EnlistStayYoungSurvivor(region);
-                    } else if (region->GetRegionType() != RegionInfo::RegionType::RECENT_FULL_REGION) {
+                    } else if (!(region->OnNamedList("recent full regions"))) {
                         RegionManager::FinishStayYoungInPlace(region);
                     }
                     continue;
@@ -1481,7 +1481,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
                 provenance.fieldOffset,
                 static_cast<void*>(current), static_cast<void*>(live),
-                live != nullptr ? static_cast<unsigned>(live->GetRegionType()) : 0xffu,
+                live != nullptr ? 0u : 0xffu,
                 live != nullptr ? static_cast<unsigned>(live->generation_id()) : 0xffu,
                 lookup.currentMembership ? 1u : 0u, static_cast<size_t>(lookup.tableId),
                 static_cast<unsigned>(lookup.answer),
@@ -1760,8 +1760,7 @@ void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owne
     if (!owner || (!claimed && !owner->claim())) return;
     ZForwardingLife::PageWorkScope work(owner.get());
     if (inPlace) {
-        (void)fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                             RegionInfo::RegionType::LONE_FROM_REGION);
+        (void)fromRegionList.TryDeleteRegion(region);
         owner->set_in_place();
         CompactRegion(region);
     } else {
@@ -1834,10 +1833,9 @@ void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
     // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
     // rehome below so the garbage list cannot name a non-GARBAGE region.
     if (region != nullptr && region->IsGarbageRegion()) {
-        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+        garbageRegionList.TryDeleteRegion(region);
     }
-    unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    unmovableFromRegionList.PrependRegion(region);
 }
 
 void RegionManager::ExemptFromRegion(RegionInfo* region)
@@ -1890,16 +1888,14 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
             continue;
         }
         if (region->IsGarbageRegion()) {
-            garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                              RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+            garbageRegionList.TryDeleteRegion(region);
             ExemptFromRegion(region);
             ++kept;
             continue;
         }
         const bool wasFrom = region->IsFromRegion();
         if (wasFrom) {
-            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                           RegionInfo::RegionType::LONE_FROM_REGION);
+            fromRegionList.TryDeleteRegion(region);
         }
         const bool canForward = region->IsLoneFromRegion() ||
             (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()));
@@ -1915,8 +1911,7 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
             }
         }
         if (region->IsFromRegion()) {
-            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                           RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+            fromRegionList.TryDeleteRegion(region);
         }
         if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
             ExemptFromRegion(region);
@@ -1946,7 +1941,7 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
                      "— cycle-end from-page not in {FORWARDED,COMPACTED,Exempt-kept}",
                      region, region->GetRegionStart(), static_cast<unsigned>(region->RelocateObserve()),
                      static_cast<unsigned>(region->IsForwardingDone()),
-                     static_cast<unsigned>(region->GetRegionType()), (region->is_marked() ? region->live_bytes() : 0));
+                     0u, (region->is_marked() ? region->live_bytes() : 0));
     }
 }
 
@@ -1973,12 +1968,12 @@ void RegionManager::CollectFromSpaceGarbage()
         } else {
 #if defined(__OHOS__)
             if (region->IsGhostFromRegion()) {
-                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+                garbageRegionList.PrependRegion(region);
             } else {
                 ReclaimRegion(region);
             }
 #else
-            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            garbageRegionList.PrependRegion(region);
 #endif
         }
         region = fromRegionList.TakeHeadRegion();
@@ -2041,7 +2036,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
-        (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), region->GetRegionType());
+        (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), 0u);
     MAddress regionLimit = region->GetRegionAllocPtr();
     ForwardingTable::Publication publication =
         ForwardingTable::EnsurePublicationBeforeCopy(region, regionStart);
@@ -2123,25 +2118,18 @@ void RegionManager::EnlistCompactedRegionForAllocator(RegionInfo* region)
     if (region == nullptr) {
         return;
     }
-    const RegionInfo::RegionType type = region->GetRegionType();
     bool claimed = false;
-    if (type == RegionInfo::RegionType::FROM_REGION) {
-        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                                 RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    if (region->IsFromRegion()) {
+        claimed = fromRegionList.TryDeleteRegion(region);
+    } else if (region->IsLoneFromRegion()) {
         claimed = true;
-    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                                    RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION ||
-               type == RegionInfo::RegionType::RECENT_FULL_REGION) {
-        // Already owned by the allocator list, or the concurrent stay-young
-        // path won and made it collector-visible. Both are complete states.
+    } else if (region->IsGarbageRegion()) {
+        claimed = garbageRegionList.TryDeleteRegion(region);
+    } else if (region->IsThreadLocalRegion() || region->OnNamedList("recent full regions")) {
         return;
     }
     if (claimed) {
-        tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        tlRegionList.PrependRegion(region);
     }
 }
 
@@ -2168,27 +2156,22 @@ void RegionManager::RehomeCompactedInPlaceRegion(RegionInfo* region)
     if (region == nullptr) {
         return;
     }
-    const RegionInfo::RegionType type = region->GetRegionType();
     bool claimed = false;
-    if (type == RegionInfo::RegionType::FROM_REGION) {
-        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                                 RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+    if (region->IsFromRegion()) {
+        claimed = fromRegionList.TryDeleteRegion(region);
+    } else if (region->IsLoneFromRegion()) {
         claimed = true;
-    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                                    RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION) {
-        claimed = tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
-                                               RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::RECENT_FULL_REGION) {
+    } else if (region->IsGarbageRegion()) {
+        claimed = garbageRegionList.TryDeleteRegion(region);
+    } else if (region->IsThreadLocalRegion()) {
+        claimed = tlRegionList.TryDeleteRegion(region);
+    } else if (region->OnNamedList("recent full regions")) {
         return;
     }
     if (!claimed) {
         return;
     }
-    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+    recentFullRegionList.PrependRegion(region);
     RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
@@ -2234,35 +2217,22 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region, bool advanceAge)
     // PrependRegion overwrites next/prev without unlinking — later
     // CollectFromSpaceGarbage MergeRegionList walks a chain that now points
     // into recentFull, and DeleteRegionLocked SEGVs (r13=0, +0x14).
-    const RegionInfo::RegionType type = region->GetRegionType();
     bool claimed = false;
-    if (type == RegionInfo::RegionType::FROM_REGION) {
-        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                                 RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        // TakeHeadRegion already unlinked it (RegionManager.cpp:1712). Type still
-        // LONE_FROM until Prepend; kLoneFromIsFrom readers would keep treating it
-        // as from-space if we skipped the store (WCollector.h:495).
-        region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+    if (region->IsFromRegion()) {
+        claimed = fromRegionList.TryDeleteRegion(region);
+    } else if (region->IsLoneFromRegion()) {
         claimed = true;
-    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                                    RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION) {
-        // CompactRegion's ownership tail may win first. Transfer that completed
-        // allocator-list state instead of either abandoning the survivor there
-        // or linking the node into two lists.
-        claimed = tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
-                                               RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (type == RegionInfo::RegionType::RECENT_FULL_REGION) {
-        // RouteRegion's compact-in-place fallback already re-homed this region.
-        // A second Prepend while it is the list head sets both links to itself.
+    } else if (region->IsGarbageRegion()) {
+        claimed = garbageRegionList.TryDeleteRegion(region);
+    } else if (region->IsThreadLocalRegion()) {
+        claimed = tlRegionList.TryDeleteRegion(region);
+    } else if (region->OnNamedList("recent full regions")) {
         return;
     }
     if (!claimed) {
         return;
     }
-    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+    recentFullRegionList.PrependRegion(region);
     RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
@@ -2282,11 +2252,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     } verifyAfterRelocation { verifyForwarding.get() };
 
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
-        (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
+        (region->IsRoutingState() || region->IsCompacted())), "region type %u", 0u);
 
     DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
-        region->GetRegionType(), (region->is_marked() ? region->live_bytes() : 0));
+        0u, (region->is_marked() ? region->live_bytes() : 0));
 
     bool youngRegion = region->IsYoungRegion();
     if (youngRegion && !GenerationMayRelocateYoung(G)) {

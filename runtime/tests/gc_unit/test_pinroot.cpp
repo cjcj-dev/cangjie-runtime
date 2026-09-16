@@ -22,7 +22,7 @@ namespace MapleRuntime {
 struct PinRootTestAccess {
     static void MakeOldPinned(RegionManager& manager, RegionInfo* region)
     {
-        manager.oldPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::FULL_PINNED_REGION);
+        manager.oldPinnedRegionList.PrependRegion(region);
     }
 
     // Reuses the friendship this file already has rather than adding another one to the product
@@ -30,7 +30,7 @@ struct PinRootTestAccess {
     // to RegionManager for the sake of one test.
     static void ParkOnThreadLocal(RegionManager& manager, RegionInfo* region)
     {
-        manager.tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        manager.tlRegionList.PrependRegion(region);
     }
     static bool OnRecentFull(RegionManager& manager, const RegionInfo* region)
     {
@@ -143,13 +143,13 @@ GC_TEST(RegionRetirement, CompactInPlaceLeavesRegionOnAListACollectorWalks)
 
     // Where CompactRegion leaves it, with no AllocBuffer owning it any more.
     PinRootTestAccess::ParkOnThreadLocal(manager, region);
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRegionType()),
+    GC_EXPECT_EQ(static_cast<unsigned>(0u),
                  static_cast<unsigned>(RegionInfo::RegionType::THREAD_LOCAL_REGION));
 
     manager.RehomeCompactedInPlaceRegion(region);
 
     // The invariant: it now sits on a list a collection-set builder reads, typed accordingly.
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRegionType()),
+    GC_EXPECT_EQ(static_cast<unsigned>(0u),
                  static_cast<unsigned>(RegionInfo::RegionType::RECENT_FULL_REGION));
 
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));

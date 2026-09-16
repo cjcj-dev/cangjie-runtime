@@ -50,7 +50,7 @@ int RunIsUnmovableChild(bool armRetireHook)
     (void)signal(SIGABRT, SIG_DFL);
     (void)signal(SIGSEGV, SIG_DFL);
     GcHeapFixture fx;
-    fx.region0->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    fx.region0->SetRegionListOwner(nullptr);
     fx.region0->SetInGhostRegion(1);
 #if defined(MRT_GC_UNIT_TESTS)
     if (armRetireHook) {

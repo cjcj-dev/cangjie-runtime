@@ -61,7 +61,7 @@ GC_TEST(StayYoung, BumpAgesAndKeepsYoung)
     RegionInfo* r = fx.region0;
     r->SetYoungRegionFlag(1);
     r->SetYoungAge(0);
-    r->SetRegionType(RegionInfo::RegionType::LONE_FROM_REGION);
+    r->SetRegionListOwner(nullptr);
     RegionManager::BumpYoungSurvivorAge(r);
     GC_EXPECT_EQ(r->GetYoungAge(), 1u);
     GC_EXPECT_TRUE(r->IsYoungRegion());
@@ -94,7 +94,7 @@ GC_TEST(StayYoung, GarbageTypeSurvivesGhostAndAgeCas)
 {
     GcHeapFixture fx;
     RegionInfo* r = fx.region0;
-    r->SetRegionType(RegionInfo::RegionType::GARBAGE_REGION);
+    r->SetRegionListOwner(nullptr);
     r->SetInGhostRegion(1);
     r->SetYoungAge(3);
     GC_EXPECT_TRUE(r->IsGarbageRegion());
@@ -116,7 +116,7 @@ GC_TEST(StayYoung, InitRegionClearsGhostSuccessor)
     r->metadata.nextRegionIdx0 = 1;
     // zHeap.cpp:275-280: remove the old page before descriptor reuse.
     RegionInfo::RetirePage(r, [&]() {
-        r->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        r->InitRegionInfo(1, ZPageType::small);
     });
     GC_EXPECT_EQ(r->metadata.nextRegionIdx0, RegionInfo::NULLPTR_IDX);
 }

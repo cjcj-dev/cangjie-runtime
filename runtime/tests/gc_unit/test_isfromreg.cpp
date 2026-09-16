@@ -22,11 +22,11 @@ namespace MapleRuntime {
 struct IsFromRegTestAccess {
     static void ParkFrom(RegionManager& manager, RegionInfo* region)
     {
-        manager.fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+        manager.fromRegionList.PrependRegion(region);
     }
     static void ParkGarbage(RegionManager& manager, RegionInfo* region)
     {
-        manager.garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+        manager.garbageRegionList.PrependRegion(region);
     }
     static bool OnFrom(RegionManager& manager, const RegionInfo* region)
     {
@@ -78,8 +78,7 @@ GC_TEST(IsFromReg, TryDeleteFromFailsAfterPinRetype)
     GC_EXPECT_TRUE(fx.region0->IsFromRegion());
     GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0,
                                                      RegionInfo::RegionType::RAW_POINTER_PINNED_REGION));
-    manager.rawPointerPinnedRegionList.PrependRegion(fx.region0,
-                                                     RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
+    manager.rawPointerPinnedRegionList.PrependRegion(fx.region0);
     GC_EXPECT_FALSE(fx.region0->IsFromRegion());
     GC_EXPECT_FALSE(IsFromRegTestAccess::TryClaimFrom(manager, fx.region0,
                                                       RegionInfo::RegionType::GARBAGE_REGION));
@@ -103,8 +102,7 @@ GC_TEST(IsFromReg, UnlistedGarbageClaimIsRefusedUntilPrepend)
     IsFromRegTestAccess::ParkGarbage(manager, fx.region0);
     GC_EXPECT_TRUE(IsFromRegTestAccess::TryClaimGarbage(manager, fx.region0,
                                                         RegionInfo::RegionType::RAW_POINTER_PINNED_REGION));
-    manager.rawPointerPinnedRegionList.PrependRegion(fx.region0,
-                                                     RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
+    manager.rawPointerPinnedRegionList.PrependRegion(fx.region0);
     GC_EXPECT_TRUE(IsFromRegTestAccess::OnPinned(manager, fx.region0));
     GC_EXPECT_FALSE(IsFromRegTestAccess::OnGarbage(manager, fx.region0));
 }

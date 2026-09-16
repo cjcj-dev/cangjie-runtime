@@ -238,7 +238,7 @@ public:
     uintptr_t unavailable_from() const { return unavailableFrom; }
     uintptr_t unavailable_from_region() const { return unavailableFromRegion; }
     bool unavailable_region_snapshot_valid() const { return unavailableRegionSnapshotValid; }
-    uint8_t unavailable_region_type() const { return unavailableRegionType; }
+    uint8_t unavailable_region_type() const { return unavailablePageKind; }
     uint8_t unavailable_generation() const { return unavailableGeneration; }
     bool unavailable_in_current_relocation_set() const { return unavailableInCurrentRelocationSet; }
     uintptr_t unavailable_table_id() const { return unavailableTableId; }
@@ -297,7 +297,7 @@ public:
                      provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
                      provenance.fieldOffset,
                      reinterpret_cast<void*>(unavailableFrom), reinterpret_cast<void*>(unavailableFromRegion),
-                     regionType, static_cast<unsigned>(unavailableRegionType),
+                     regionType, static_cast<unsigned>(unavailablePageKind),
                      static_cast<unsigned>(unavailableGeneration),
                      unavailableInCurrentRelocationSet ? 1u : 0u,
                      static_cast<size_t>(unavailableTableId),
@@ -322,7 +322,7 @@ private:
           unavailableLookupCause("n/a"), unavailableLookupActiveCandidate(false),
           unavailableLookupActiveAnswer("n/a"),
           unavailableFrom(0), unavailableFromRegion(0),
-          unavailableRegionSnapshotValid(false), unavailableRegionType(0), unavailableGeneration(0),
+          unavailableRegionSnapshotValid(false), unavailablePageKind(0), unavailableGeneration(0),
           unavailableInCurrentRelocationSet(false), unavailableTableId(0),
           unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
           unavailableForwardingSnapshotValid(false), unavailableNeverInstalledEvent(0),
@@ -344,7 +344,7 @@ private:
           unavailableFrom(witness.from),
           unavailableFromRegion(witness.fromRegion),
           unavailableRegionSnapshotValid(witness.regionSnapshotValid),
-          unavailableRegionType(witness.regionType), unavailableGeneration(witness.generation),
+          unavailablePageKind(witness.regionType), unavailableGeneration(witness.generation),
           unavailableInCurrentRelocationSet(witness.inCurrentRelocationSet),
           unavailableTableId(witness.tableId),
           unavailableFromPageEpoch(witness.fromPageEpoch),
@@ -370,7 +370,7 @@ private:
     uintptr_t unavailableFrom;
     uintptr_t unavailableFromRegion;
     bool unavailableRegionSnapshotValid;
-    uint8_t unavailableRegionType;
+    uint8_t unavailablePageKind;
     uint8_t unavailableGeneration;
     bool unavailableInCurrentRelocationSet;
     uintptr_t unavailableTableId;

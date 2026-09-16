@@ -26,7 +26,7 @@ struct SixRegions {
         : entries{ fixture.region0, fixture.region1, nullptr, nullptr, nullptr, nullptr }
     {
         for (size_t i = 2; i < 6; ++i) {
-            entries[i] = RegionInfo::InitRegion(i, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+            entries[i] = RegionInfo::InitRegion(i, 1, ZPageType::small);
         }
     }
 
@@ -43,7 +43,7 @@ struct SixRegions {
     void insert_sorted(RegionList& list)
     {
         for (int i = 5; i >= 0; --i) {
-            list.PrependRegion(entries[i], RegionInfo::RegionType::FROM_REGION);
+            list.PrependRegion(entries[i]);
         }
     }
 
@@ -139,8 +139,8 @@ GC_TEST(ZListAuthority, DoublePrependIsRejected)
     GcHeapFixture fixture;
     ExpectListAbort([&]() {
         RegionList list("zlist-double-prepend");
-        list.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-        list.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
+        list.PrependRegion(fixture.region0);
+        list.PrependRegion(fixture.region0);
     });
 #endif
 }
@@ -152,8 +152,8 @@ GC_TEST(ZListAuthority, WrongListRemoveIsRejected)
     ExpectListAbort([&]() {
         RegionList owner("zlist-owner");
         RegionList other("zlist-other");
-        owner.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
-        other.PrependRegion(fixture.region1, RegionInfo::RegionType::FROM_REGION);
+        owner.PrependRegion(fixture.region0);
+        other.PrependRegion(fixture.region1);
         other.DeleteRegion(fixture.region0);
     });
 #endif
@@ -164,13 +164,13 @@ GC_TEST(ZListAuthority, RemoveThenInsertTransfersAuthority)
     GcHeapFixture fixture;
     RegionList first("zlist-first");
     RegionList second("zlist-second");
-    first.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
+    first.PrependRegion(fixture.region0);
     GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == &first);
     first.DeleteRegion(fixture.region0);
     GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
     GC_EXPECT_TRUE(fixture.region0->GetPrevRegion() == nullptr);
     GC_EXPECT_TRUE(fixture.region0->GetNextRegion() == nullptr);
-    second.PrependRegion(fixture.region0, RegionInfo::RegionType::GARBAGE_REGION);
+    second.PrependRegion(fixture.region0);
     GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == &second);
     GC_EXPECT_EQ(second.GetRegionCount(), static_cast<size_t>(1));
 }
@@ -180,7 +180,7 @@ GC_TEST(ZListAuthority, GhostSnapshotResetDoesNotOwnRegion)
     GcHeapFixture fixture;
     RegionList authority("zlist-authority");
     RegionList ghost("zlist-ghost");
-    authority.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
+    authority.PrependRegion(fixture.region0);
     authority.CopyListTo(ghost);
     GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == &authority);
     fixture.region0->metadata.nextRegionIdx0 = static_cast<uint32_t>(fixture.region1->GetUnitIdx());
@@ -190,7 +190,7 @@ GC_TEST(ZListAuthority, GhostSnapshotResetDoesNotOwnRegion)
     GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
     // zHeap.cpp:275-280: remove the old page before descriptor reuse.
     RegionInfo::RetirePage(fixture.region0, [&]() {
-        fixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        fixture.region0->InitRegionInfo(1, ZPageType::small);
     });
     GC_EXPECT_TRUE(fixture.region0->GetNextGhostRegion() == nullptr);
     GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
@@ -206,18 +206,18 @@ GC_TEST(ZListAuthority, OwnerMustBeReleasedBeforeRegionLifeReset)
         // own page so its deliberately retained owner cannot alter the parent.
         GcHeapFixture childFixture;
         RegionList owner("zlist-life-owner");
-        owner.PrependRegion(childFixture.region0, RegionInfo::RegionType::FROM_REGION);
+        owner.PrependRegion(childFixture.region0);
         RegionInfo::RetirePage(childFixture.region0, [&]() {
-            childFixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+            childFixture.region0->InitRegionInfo(1, ZPageType::small);
         });
     });
 
     RegionList owner("zlist-life-release");
-    owner.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
+    owner.PrependRegion(fixture.region0);
     owner.DeleteRegion(fixture.region0);
     // zHeap.cpp:275-280: remove the old page before descriptor reuse.
     RegionInfo::RetirePage(fixture.region0, [&]() {
-        fixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        fixture.region0->InitRegionInfo(1, ZPageType::small);
     });
     GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
     GC_EXPECT_EQ(fixture.region0->GetRegionLifeId(), oldLife + 1);

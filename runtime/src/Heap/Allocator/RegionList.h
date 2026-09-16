@@ -21,10 +21,12 @@ public:
     friend void RemoveRegionLocked(RegionList*, RegionInfo*);
     RegionList(const char* name) : listName(name) {}
 
-    void PrependRegion(RegionInfo* region, RegionInfo::RegionType type);
-    void PrependRegionLocked(RegionInfo* region, RegionInfo::RegionType type);
+    void PrependRegion(RegionInfo* region);
+    void PrependRegionLocked(RegionInfo* region);
 
-    void MergeRegionList(RegionList& regionList, RegionInfo::RegionType regionType);
+    void MergeRegionList(RegionList& regionList);
+
+    const char* GetListName() const { return listName; }
 
     void DeleteRegion(RegionInfo* del)
     {
@@ -36,22 +38,16 @@ public:
         DeleteRegionLocked(del);
     }
 
-    bool TryDeleteRegion(RegionInfo* del, RegionInfo::RegionType oldType, RegionInfo::RegionType newType)
+    bool TryDeleteRegion(RegionInfo* del)
     {
         if (del == nullptr) {
             return false;
         }
-
-        CHECK(oldType != newType);
         std::lock_guard<std::mutex> lock(listMutex);
-        if (del->GetRegionType() != oldType) {
-            return false;
-        }
         if (del->GetRegionListOwner() != this) {
             return false;
         }
         DeleteRegionLocked(del);
-        del->SetRegionType(newType);
         return true;
     }
 
@@ -98,16 +94,6 @@ public:
         return currentHead;
     }
 
-    RegionInfo* TakeHeadRegion(RegionInfo::RegionType newType)
-    {
-        std::lock_guard<std::mutex> lg(listMutex);
-        if (listHead == nullptr) { return nullptr; }
-        RegionInfo* currentHead = listHead;
-        DeleteRegionLocked(currentHead);
-        currentHead->SetRegionType(newType);
-        return currentHead;
-    }
-
     size_t GetUnitCount() const { return unitCount; }
 
     size_t GetRegionCount() const { return regionCount; }
@@ -148,12 +134,8 @@ public:
         }
     }
 
-    void SetElementType(RegionInfo::RegionType type)
+    void SetElementType()
     {
-        std::lock_guard<std::mutex> lock(listMutex);
-        for (RegionInfo* node = listHead; node != nullptr; node = node->GetNextRegion()) {
-            node->SetRegionType(type);
-        }
     }
 
     void ClearTraceRegionFlag()
@@ -237,11 +219,11 @@ class RegionCache : public RegionList {
 public:
     RegionCache(const char* name) : RegionList(name) {}
 
-    bool TryPrependRegion(RegionInfo *region, RegionInfo::RegionType type)
+    bool TryPrependRegion(RegionInfo *region)
     {
         std::lock_guard<std::mutex> lock(listMutex);
         if (active) {
-            PrependRegionLocked(region, type);
+            PrependRegionLocked(region);
             return true;
         }
         return false;

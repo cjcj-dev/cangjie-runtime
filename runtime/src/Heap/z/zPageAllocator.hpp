@@ -232,7 +232,7 @@ public:
     // zPageAllocator.cpp:1470-1515 alloc_page_inner: consume the already-owned
     // vmem outside the allocator lock: claim_physical_for_increased_capacity →
     // commit_and_map (cleanup_failed_commit on a partial commit) → create_page.
-    RegionInfo* MaterializePageMemory(PageMemory& memory, RegionInfo::UnitRole role,
+    RegionInfo* MaterializePageMemory(PageMemory& memory, ZPageType role,
                                      bool expectPhysicalMem, bool clearPayload, size_t& committedUnits,
                                      PageAge age = PageAge::old);
     // ZPartition::free_memory_alloc_failed (zPageAllocator.cpp:1079-1101).
@@ -475,7 +475,7 @@ public:
     __attribute__((visibility("hidden"))) static size_t GetHeapUnitCount(size_t heapSize);
 
     // get metadataSize by regionNum or unitNumber
-    // RegionInfo and UnitInfo have the same sizeof
+    // page-table geometry, not a reverse metadata array
     __attribute__((visibility("hidden"))) static size_t GetMetadataSize(size_t num);
 #if defined(__EULER__)
     void SetCacheRatio(double minSize, double maxSize, double defaultParam);
@@ -623,7 +623,7 @@ public:
 
     // take a region with *num* units for allocation
     // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
-    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false,
+    RegionInfo* TakeRegion(size_t num, ZPageType, bool expectPhysicalMem = false,
                            bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old);
 
 
@@ -647,7 +647,7 @@ public:
 
     void MergeRawPointerPinnedRegions()
     {
-        oldPinnedRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FULL_PINNED_REGION);
+        oldPinnedRegionList.MergeRegionList(rawPointerPinnedRegionList);
     }
 
     void CollectFromSpaceGarbage();
@@ -809,7 +809,7 @@ private:
         RegionInfo** shared_small_page_addr();
         RegionInfo* const* shared_small_page_addr() const;
     };
-    RegionInfo* AllocateSharedPage(size_t units, RegionInfo::UnitRole role, PageAge age, bool nonBlocking);
+    RegionInfo* AllocateSharedPage(size_t units, ZPageType role, PageAge age, bool nonBlocking);
     void UndoSharedPage(RegionInfo* page);
     ZDeferredConstructed<PerAgeObjectAllocator> objectAllocators[kPageAgeCount];
     PerAgeObjectAllocator* allocator(PageAge age);

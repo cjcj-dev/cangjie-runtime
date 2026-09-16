@@ -47,7 +47,7 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSi
 inline size_t RegionManager::CollectRegion(RegionInfo* region)
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-             region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd(), region->GetRegionType());
+             region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd(), 0u);
         // STEER3 CALLSITE_AUDIT: scrub HERE (once), not at ReclaimRegion.
         // Linux TakeRegion often reuses garbage via ClearUnits WITHOUT ReclaimRegion
         // (RegionManager.cpp TakeRegion same-size head path). Scrub-only-at-Reclaim
@@ -58,12 +58,12 @@ inline size_t RegionManager::CollectRegion(RegionInfo* region)
 #if defined(__OHOS__)
         // Do not publish an installed ghost carrier to dirtyTree before its dispel point.
         if (region->IsGhostFromRegion()) {
-            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            garbageRegionList.PrependRegion(region);
         } else {
             ReclaimRegion(region);
         }
 #else
-        garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+        garbageRegionList.PrependRegion(region);
 #endif
         region->UnlockWriteRegion();
 
@@ -88,21 +88,18 @@ inline void RegionManager::AddRawPointerObject(BaseObject* obj)
         // a GC that already claimed GARBAGE still sees rawPtrCnt>0. Retry the
         // unlisted window between TryDelete and Prepend.
         for (;;) {
-            if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                               RegionInfo::RegionType::RAW_POINTER_PINNED_REGION) ||
-                garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                                  RegionInfo::RegionType::RAW_POINTER_PINNED_REGION)) {
+            if (fromRegionList.TryDeleteRegion(region) ||
+                garbageRegionList.TryDeleteRegion(region)) {
                 GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
                 CHECK(phase != GCPhase::GC_PHASE_FORWARD && phase != GCPhase::GC_PHASE_PREFORWARD);
                 if (phase == GCPhase::GC_PHASE_POST_TRACE) {
                     region->ClearGhostRegionBit();
                 }
-                rawPointerPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
+                rawPointerPinnedRegionList.PrependRegion(region);
                 break;
             }
-            const RegionInfo::RegionType t = region->GetRegionType();
-            if (t != RegionInfo::RegionType::FROM_REGION && t != RegionInfo::RegionType::GARBAGE_REGION) {
-                CHECK(t != RegionInfo::RegionType::LONE_FROM_REGION);
+            if (!region->IsFromRegion() && !region->IsGarbageRegion()) {
+                CHECK(!region->IsLoneFromRegion());
                 break;
             }
             std::this_thread::yield();
@@ -175,9 +172,9 @@ inline void RegionManager::MergeRawPointerRegions(RegionList& smallSizeRegionLis
     {
         const size_t smallRegions = smallSizeRegionList.GetRegionCount();
         const size_t smallUnits = smallSizeRegionList.GetUnitCount();
-        recentFullRegionList.MergeRegionList(smallSizeRegionList, RegionInfo::RegionType::RECENT_FULL_REGION);
+        recentFullRegionList.MergeRegionList(smallSizeRegionList);
         RecentFullAccounting::Enqueue(smallRegions, smallUnits);
-        recentLargeRegionList.MergeRegionList(largeSizeRegionList, RegionInfo::RegionType::RECENT_LARGE_REGION);
+        recentLargeRegionList.MergeRegionList(largeSizeRegionList);
     }
 
 inline void RegionManager::HandleTraceRegions()
@@ -185,11 +182,11 @@ inline void RegionManager::HandleTraceRegions()
         fullTraceRegions.DeactivateRegionCache();
         const size_t traceRegions = fullTraceRegions.GetRegionCount();
         const size_t traceUnits = fullTraceRegions.GetUnitCount();
-        recentFullRegionList.MergeRegionList(fullTraceRegions, RegionInfo::RegionType::RECENT_FULL_REGION);
+        recentFullRegionList.MergeRegionList(fullTraceRegions);
         RecentFullAccounting::Enqueue(traceRegions, traceUnits);
 
         largeTraceRegions.DeactivateRegionCache();
-        recentLargeRegionList.MergeRegionList(largeTraceRegions, RegionInfo::RegionType::RECENT_LARGE_REGION);
+        recentLargeRegionList.MergeRegionList(largeTraceRegions);
 
         tlRegionList.ClearTraceRegionFlag();
         recentPinnedRegionList.ClearTraceRegionFlag();
@@ -279,7 +276,7 @@ inline bool RegionManager::TryTakeGarbageRegionAfterDispel(RegionInfo* target)
                 CHECK_DETAIL(region->IsGarbageRegion(),
                              "TryTakeGarbageRegionAfterDispel region=%p type=%u ghost=%u "
                              "(garbage list still names a non-GARBAGE region)",
-                             region, static_cast<unsigned>(region->GetRegionType()),
+                             region, static_cast<unsigned>(0u),
                              static_cast<unsigned>(region->IsGhostFromRegion()));
                 CHECK(!region->IsGhostFromRegion());
                 // routedest: refuse a held region here too, so it is neither quarantined nor
@@ -343,7 +340,7 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
         // before advancing the ordinary relocation iterator.
         RelocationRequestQueue::Selection selected =
             regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
-                return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
+                return fromRegionList.TakeHeadRegion();
             });
         if (!selected) {
             selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
@@ -363,8 +360,7 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
         RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
         // If an ordinary iterator already removed the page, its worker will
         // lose the forwarding claim. This claimant still owns the page task.
-        (void)fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                             RegionInfo::RegionType::LONE_FROM_REGION);
+        (void)fromRegionList.TryDeleteRegion(region);
         regionManager.ForwardClaimedPage<G>(region,
             ForwardingTable::RetainPageOwner(region), true);
     }

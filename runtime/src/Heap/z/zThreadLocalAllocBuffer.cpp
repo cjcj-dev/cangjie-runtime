@@ -325,17 +325,17 @@ MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     size_t needUnitNum = AlignUp(totalSize, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
     if (totalSize <= manager.GetThreadLocalRegionSize()) {
-        region = Heap::alloc_page(needUnitNum, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        region = Heap::alloc_page(needUnitNum, ZPageType::small);
         if (region == nullptr) {
             return 0;
         }
-        tlRawPointerRegions.PrependRegion(region, RegionInfo::RegionType::TL_RAW_POINTER_REGION);
+        tlRawPointerRegions.PrependRegion(region);
     } else {
-        region = Heap::alloc_page(needUnitNum, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+        region = Heap::alloc_page(needUnitNum, ZPageType::large);
         if (region == nullptr) {
             return 0;
         }
-        tlLargeRawPointerRegions.PrependRegion(region, RegionInfo::RegionType::TL_LARGE_RAW_POINTER_REGION);
+        tlLargeRawPointerRegions.PrependRegion(region);
     }
 
     // region is enough for totalSize.

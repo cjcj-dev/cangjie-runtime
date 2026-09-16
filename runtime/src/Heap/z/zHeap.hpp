@@ -20,6 +20,7 @@
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zPageAge.hpp"
+#include "Heap/z/zPageType.hpp"
 #include "Heap/Allocator/RegionListTypes.hpp"
 #include "Heap/z/zPageFwd.hpp"
 #include "Common/BaseObject.h"
@@ -111,7 +112,7 @@ public:
     static bool is_young(MAddress addr);
     static bool is_old(MAddress addr);
     static ZPageTable& page_table();
-    static RegionInfo* alloc_page(size_t num, UnitRole role, bool expectPhysicalMem = false,
+    static RegionInfo* alloc_page(size_t num, ZPageType role, bool expectPhysicalMem = false,
                                   bool allowSaferegion = true, bool clearPayload = true,
                                   PageAge age = PageAge::eden);
     static void free_page(RegionInfo* page);

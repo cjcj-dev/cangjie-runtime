@@ -63,7 +63,7 @@ void RegionList::DumpRegionList(const char* msg)
         DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) units [%zu+%zu, %zu) type %u prev %p next %p", region,
             region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
             region->GetUnitIdx(), region->GetUnitCount(), region->GetUnitIdx() + region->GetUnitCount(),
-            region->GetRegionType(), region->GetPrevRegion(), region->GetNextRegion());
+            0u, region->GetPrevRegion(), region->GetNextRegion());
     }
 }
 #endif
@@ -357,7 +357,7 @@ bool FreeRegionManager::PreparePageMemory(PageMemory& memory)
 // alloc_page_inner (zPageAllocator.cpp:1470-1515): claim_physical_for_increased_capacity
 // (:1761-1780), commit_and_map_single_partition (:1792-1806), map_committed
 // (:1878-1887), cleanup_failed_commit_single_partition (:1906-1932), create_page.
-RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, RegionInfo::UnitRole role,
+RegionInfo* FreeRegionManager::MaterializePageMemory(PageMemory& memory, ZPageType role,
                                                      bool expectPhysicalMem, bool clearPayload, size_t& committedUnits,
                                                      PageAge age)
 {
@@ -665,7 +665,7 @@ void RegionManager::ReclaimRetiredRegion(RegionInfo* region)
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-        region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+        region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
     // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
     // must not re-scan O(N) under remset mutex.
@@ -790,7 +790,7 @@ void RegionManager::ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region)
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
     {
         RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_MARK_QUARANTINE);
     }
@@ -822,7 +822,7 @@ void RegionManager::ReleaseRetiredRegion(RegionInfo* region)
     // their two owned bitmap slices before the address range can be unmapped/reused.
     ScrubRememberedSetForRegion(region);
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
-        region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+        region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
     {
         RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RELEASE_REGION);
@@ -848,7 +848,7 @@ void RegionManager::PromoteAllRegions()
     });
 }
 
-RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem,
+RegionInfo* RegionManager::TakeRegion(size_t num, ZPageType type, bool expectPhysicalMem,
                                       bool allowSaferegion, bool clearPayload, PageAge age)
 {
     // check for allocation since we do not want gc threads and mutators do any harm to each other.
@@ -989,7 +989,7 @@ size_t RegionManager::CollectLargeGarbage()
         // for large region, the object is the page start (zPage.inline.hpp:254-256).
         if (!region->is_object_live(to_zaddress(region->GetRegionStart()))) {
             DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
-                 region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+                 region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
             RegionInfo* del = region;
             region = region->GetNextRegion();

@@ -48,7 +48,7 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         // returning the page. Its address space must exist as after heap init.
         Heap::GetHeap().GetRememberedSet().Initialize(manager.GetRegionHeapStart(),
                                                     4 * unit * ZVirtualToPhysicalRatio);
-        const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+        const auto role = ZPageType::small;
         RegionInfo* first = manager.TakeRegion(2, role, false, false, false);
         RegionInfo* second = manager.TakeRegion(2, role, false, false, false);
         if (first == nullptr || second == nullptr) {

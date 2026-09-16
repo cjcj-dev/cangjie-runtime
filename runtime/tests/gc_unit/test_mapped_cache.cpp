@@ -294,7 +294,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     const size_t unit = RegionInfo::UNIT_SIZE;
     ProductHeapFixture fixture(8);
     RegionManager& manager = fixture.manager;
-    const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+    const auto role = ZPageType::small;
     RegionInfo* first = manager.TakeRegion(2, role, false, false, false);
     RegionInfo* second = manager.TakeRegion(2, role, false, false, false);
     RegionInfo* third = manager.TakeRegion(2, role, false, false, false);
@@ -333,7 +333,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     const size_t unit = RegionInfo::UNIT_SIZE;
     ProductHeapFixture fixture(12);
     RegionManager& manager = fixture.manager;
-    const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+    const auto role = ZPageType::small;
     RegionInfo* regions[5];
     for (auto& region : regions) {
         region = manager.TakeRegion(2, role, false, false, false);

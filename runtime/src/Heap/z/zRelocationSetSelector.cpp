@@ -51,7 +51,7 @@
 namespace MapleRuntime {
 void RegionManager::ReassembleFromSpace()
 {
-    fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
+    fromRegionList.MergeRegionList(unmovableFromRegionList);
 }
 
 void RegionManager::CountLiveObject(const BaseObject* obj)
@@ -89,7 +89,7 @@ void RegionManager::AssembleSmallGarbageCandidates()
             if (IsOldRelocationCandidate(region) && !region->IsNotRelocatableThisCycle()) {
                 list.DeleteRegion(region);
                 if (recent) RecentFullAccounting::Dequeue(1, region->GetUnitCount());
-                fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+                fromRegionList.PrependRegion(region);
             }
             region = next;
         }
@@ -106,7 +106,7 @@ void RegionManager::AssembleLargeGarbageCandidates()
         RegionInfo* next = region->GetNextRegion();
         if (!IsOldRelocationCandidate(region)) {
             oldLargeRegionList.DeleteRegion(region);
-            recentLargeRegionList.PrependRegion(region, RegionInfo::RegionType::LARGE_REGION);
+            recentLargeRegionList.PrependRegion(region);
         }
         region = next;
     }
@@ -115,7 +115,7 @@ void RegionManager::AssembleLargeGarbageCandidates()
         RegionInfo* next = region->GetNextRegion();
         if (IsOldRelocationCandidate(region)) {
             recentLargeRegionList.DeleteRegion(region);
-            oldLargeRegionList.PrependRegion(region, RegionInfo::RegionType::LARGE_REGION);
+            oldLargeRegionList.PrependRegion(region);
         }
         region = next;
     }
@@ -159,7 +159,7 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
         RegionInfo* next = region->GetNextRegion();
         if (!IsOldRelocationCandidate(region)) {
             oldPinnedRegionList.DeleteRegion(region);
-            recentPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
+            recentPinnedRegionList.PrependRegion(region);
         }
         region = next;
     }
@@ -168,7 +168,7 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
         RegionInfo* next = region->GetNextRegion();
         if (IsOldRelocationCandidate(region)) {
             recentPinnedRegionList.DeleteRegion(region);
-            oldPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::FULL_PINNED_REGION);
+            oldPinnedRegionList.PrependRegion(region);
         }
         region = next;
     }
@@ -177,7 +177,7 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
         RegionInfo* next = region->GetNextRegion();
         if (collectAll && region->GetRawPointerObjectCount() > 0) {
             oldPinnedRegionList.DeleteRegion(region);
-            rawPointerPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
+            rawPointerPinnedRegionList.PrependRegion(region);
         }
         region = next;
     }
@@ -226,7 +226,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         if (region->GetRawPointerObjectCount() == 0) {
             const uint64_t moveStart = TimeUtil::NanoSeconds();
             unmovableFromRegionList.DeleteRegion(region);
-            fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+            fromRegionList.PrependRegion(region);
             stats.listMoveNs += TimeUtil::NanoSeconds() - moveStart;
         }
         region = next;
@@ -258,7 +258,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         const uint64_t moveStart = TimeUtil::NanoSeconds();
         recentFullRegionList.DeleteRegion(region);
         RecentFullAccounting::Dequeue(1, units);
-        fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+        fromRegionList.PrependRegion(region);
         stats.listMoveNs += TimeUtil::NanoSeconds() - moveStart;
         region = next;
     }
@@ -275,18 +275,18 @@ namespace {
 // PINNED after ExemptFromRegions snapshots the list (RegionManager.h:507;
 // CI face del->IsFromRegion at post_trace). ZGC skips !is_relocatable
 // (zGeneration.cpp:211-213); a lost claim is the same skip, not a relaxed CHECK.
-bool ClaimFromRegion(RegionList& fromList, RegionInfo* del, RegionInfo::RegionType newType, const char* site)
+bool ClaimFromRegion(RegionList& fromList, RegionInfo* del, const char* site)
 {
-    if (fromList.TryDeleteRegion(del, RegionInfo::RegionType::FROM_REGION, newType)) {
+    if (fromList.TryDeleteRegion(del)) {
         return true;
     }
-    const unsigned t = static_cast<unsigned>(del->GetRegionType());
+    const unsigned t = 0u;
     const unsigned rs = static_cast<unsigned>(del->RelocateObserve());
     LOG(RTLOG_ERROR, "[GCV2][isfromreg] site=%s skip type=%u route=%u young=%u", site, t, rs,
         static_cast<unsigned>(del->IsYoungRegion()));
-    CHECK_DETAIL(del->GetRegionType() == RegionInfo::RegionType::RAW_POINTER_PINNED_REGION ||
-                     del->GetRegionType() == RegionInfo::RegionType::UNMOVABLE_FROM_REGION ||
-                     del->GetRegionType() == RegionInfo::RegionType::GARBAGE_REGION,
+    CHECK_DETAIL(del->OnNamedList("raw pointer pinned regions") ||
+                     del->OnNamedList("escaped from regions") ||
+                     del->IsGarbageRegion(),
                  "[isfromreg] site=%s unexpected type=%u route=%u", site, t, rs);
     return false;
 }
@@ -309,8 +309,7 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         // ZGeneration::select_relocation_set (zGeneration.cpp:211-213).
         if (!fromRegion->IsRelocatable()) {
-            if (ClaimFromRegion(fromRegionList, fromRegion, RegionInfo::RegionType::UNMOVABLE_FROM_REGION,
-                                "allocating")) {
+            if (ClaimFromRegion(fromRegionList, fromRegion, "allocating")) {
                 ExemptFromRegion(fromRegion);
             }
             continue;
@@ -399,16 +398,16 @@ size_t RegionManager::ExemptFromRegions()
             if (!freeEmpty) {
                 continue;
             }
-            if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::GARBAGE_REGION, "cset-empty")) {
+            if (!ClaimFromRegion(fromRegionList, del, "cset-empty")) {
                 continue;
             }
             if (del->GetRawPointerObjectCount() > 0) {
-                rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
+                rawPointerPinnedRegionList.PrependRegion(del);
                 continue;
             }
 
             ScrubRememberedSetForRegion(del);
-            garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
+            garbageRegionList.PrependRegion(del);
             continue;
         }
         if (rawPtrCnt > 0) {
@@ -416,10 +415,10 @@ size_t RegionManager::ExemptFromRegions()
             DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), liveBytes, rawPtrCnt);
-            if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION, "cset-rawpin")) {
+            if (!ClaimFromRegion(fromRegionList, del, "cset-rawpin")) {
                 continue;
             }
-            rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
+            rawPointerPinnedRegionList.PrependRegion(del);
             floatingGarbage += (del->GetRegionSize() - liveBytes);
             continue;
         }
@@ -448,7 +447,7 @@ size_t RegionManager::ExemptFromRegions()
         DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by relocsel: %zu units, %zu live bytes", del,
             del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
             del->GetUnitCount(), descs[i].liveBytes);
-        if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::UNMOVABLE_FROM_REGION, "cset-relocsel")) {
+        if (!ClaimFromRegion(fromRegionList, del, "cset-relocsel")) {
             continue;
         }
         ExemptFromRegion(del);
