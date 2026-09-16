@@ -459,9 +459,7 @@ extern "C" int p2FinalizerClosureExercise()
     EnsureOld(control, collector);
     holder->OnFinalizerCreated();
     upgraded->OnFinalizerCreated();
-    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(live), 2);
-    NativeSlot* roots[] = { &strongRoot };
-    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    ZBarrier::WriteStaticRef(holderRoot, nullptr);
     const size_t discovered = references.Discovered(ReferenceType::FINAL);
     const size_t enqueued = references.Enqueued(ReferenceType::FINAL);
     ConcurrentGCBreakpoints::AcquireControl();
@@ -489,7 +487,7 @@ extern "C" int p2FinalizerClosureExercise()
     ConcurrentGCBreakpoints::RunToIdle();
     ConcurrentGCBreakpoints::ReleaseControl();
     Expect(references.Enqueued(ReferenceType::FINAL) - enqueued == 1, "finalizable_processing_excludes_strong_upgrade");
-    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(live), 2);
     std::printf("P2_CLOSURE_RESULT failures=%u target_stage=complete\n", failures.load());
     P2Finish("P2FieldBarrier.FinalizerClosureExercise");
 }
@@ -630,12 +628,8 @@ extern "C" int p2SlowFieldInputExercise()
     EnsureOld(oldSentinel, collector);
     EnsureOld(finalChild, collector);
     EnsureOld(finalSentinel, collector);
-    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(boot), 2);
+    ZBarrier::WriteStaticRef(bootFinal, nullptr);
     finalHolder->OnFinalizerCreated();
-    NativeSlot strongRoot(zpointer::null);
-    ZBarrier::WriteStaticRef(strongRoot, strongHolder);
-    NativeSlot* roots[] = { &strongRoot };
-    heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     collector.RequestGC(GC_REASON_YOUNG, false);
     auto* young = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
     auto* youngSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
@@ -721,7 +715,7 @@ extern "C" int p2SlowFieldInputExercise()
            "slow_old_strong_control_followed_by_product");
     Expect(finalFollow != 0 && IsFinalizable(finalSentinel),
            "slow_old_final_control_followed_by_product");
-    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
+    heap.UnregisterStaticRoots(reinterpret_cast<Uptr>(boot), 2);
     std::printf("P2_SLOW_RESULT failures=%u strong=%u final=%u strong_follow=%u final_follow=%u\n",
                 failures.load(), strongSlow.load(), finalSlow.load(), strongFollow.load(), finalFollow.load());
     P2Finish("P2FieldBarrier.SlowFieldInputExercise");
