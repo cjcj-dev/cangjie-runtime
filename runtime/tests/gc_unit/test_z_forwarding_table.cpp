@@ -39,8 +39,7 @@ GC_TEST(ZGranuleMap, GetPutRemove)
 {
     constexpr MAddress kStart = 0x40000000;
     constexpr size_t kSize = 0x1000;
-    ZGranuleMap<ZForwarding*> map;
-    GC_EXPECT_TRUE(map.Initialize(kStart, 4 * kSize, kSize));
+    ZGranuleMap<ZForwarding*> map(4 * kSize, kStart, kSize);
 
     ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
     GC_EXPECT_TRUE(fwd != nullptr);
@@ -65,8 +64,7 @@ GC_TEST(ZGranuleMap, OffsetBoundaryRejectsBeforeIndex)
     constexpr MAddress kStart = 0x41000000;
     constexpr size_t kGranule = 0x1000;
     constexpr size_t kHeapSize = 4 * kGranule;
-    ZGranuleMap<ZForwarding*> map;
-    GC_EXPECT_TRUE(map.Initialize(kStart, kHeapSize, kGranule));
+    ZGranuleMap<ZForwarding*> map(kHeapSize, kStart, kGranule);
 
     zoffset offset = zoffset::invalid;
     GC_EXPECT_TRUE(map.offset_for_address(kStart, &offset));
@@ -84,10 +82,9 @@ GC_TEST(ZGranuleMap, DiscontiguousPagesLeaveHoleUnmapped)
 {
     constexpr MAddress base = 0x42000000;
     constexpr size_t granule = 0x1000;
-    ZGranuleMap<int*> map;
+    ZGranuleMap<int*> map(5 * granule, base, granule);
     int first = 1;
     int second = 2;
-    GC_EXPECT_TRUE(map.Initialize(base, 5 * granule, granule));
     map.put(static_cast<zoffset>(0), 2 * granule, &first);
     map.put(static_cast<zoffset>(3 * granule), 2 * granule, &second);
     for (size_t i = 0; i < 5; ++i) {
@@ -103,13 +100,8 @@ GC_TEST(ZGranuleMap, DiscontiguousPagesLeaveHoleUnmapped)
 GC_TEST(ZGranuleMap, AddressExtentPreservesLow48Budget)
 {
     constexpr size_t granule = 0x1000;
-    ZGranuleMap<int*> map;
+    ZGranuleMap<int*> map(granule, kPointerAddressLimit - granule, granule);
     zoffset offset = zoffset::invalid;
-    GC_EXPECT_FALSE(map.offset_for_address(0, &offset));
-    GC_EXPECT_FALSE(map.Initialize(kPointerAddressLimit - granule, 2 * granule, granule));
-    GC_EXPECT_FALSE(map.Initialize(kPointerAddressLimit, granule, granule));
-    GC_EXPECT_FALSE(map.Initialize(0x1000, granule + 1, granule));
-    GC_EXPECT_TRUE(map.Initialize(kPointerAddressLimit - granule, granule, granule));
     GC_EXPECT_TRUE(map.offset_for_address(kPointerAddressLimit - 1, &offset));
     GC_EXPECT_EQ(raw(offset), static_cast<Uptr>(granule - 1));
     GC_EXPECT_FALSE(map.offset_for_address(kPointerAddressLimit, &offset));
@@ -178,8 +170,7 @@ GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
 {
     constexpr MAddress kStart = 0x60000000;
     constexpr size_t kSize = 0x1000;
-    ZGranuleMap<ZForwarding*> entries;
-    GC_EXPECT_TRUE(entries.Initialize(kStart, 4 * kSize, kSize));
+    ZGranuleMap<ZForwarding*> entries(4 * kSize, kStart, kSize);
 
     ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
     GC_EXPECT_TRUE(fwd != nullptr);
@@ -231,9 +222,9 @@ GC_TEST(ZForwardingTable, SameAddressHasIndependentGenerationMaps)
     GcHeapFixture fixture;
     RegionList selected("same-address-generations");
     selected.PrependRegion(fixture.region0);
-    fixture.region0->SetYoungRegionFlag(1);
+    fixture.region0->reset(PageAge::eden);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
-    fixture.region0->SetYoungRegionFlag(0);
+    fixture.region0->reset(PageAge::old);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
     auto* young = ForwardingTable::get(from, Generation::Young);
@@ -261,14 +252,14 @@ GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
     old->release_page();
     old->mark_done();
 
-    fixture.region0->SetYoungRegionFlag(1);
+    fixture.region0->reset(PageAge::eden);
     RegionList selected("replacement-page-forwarding");
     selected.PrependRegion(fixture.region0);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
     auto* young = ForwardingTable::get(fixture.heapStart, Generation::Young);
     GC_EXPECT_TRUE(young != nullptr && young != old);
     GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
-        fixture.region0, fixture.region0->livemap(), fixture.region0->GetSnapshotEpoch(),
+        fixture.region0, &fixture.region0->livemap(), fixture.region0->GetSnapshotEpoch(),
         fixture.region0->GetRegionAllocPtr(), 0, static_cast<uint8_t>(Generation::Young),
         0, fixture.region0->GetRegionLifeId()));
     ZPage::RetainScope oldSource{ForwardingTable::Owner(old)};

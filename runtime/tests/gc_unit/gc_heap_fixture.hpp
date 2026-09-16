@@ -210,8 +210,6 @@ struct GcHeapFixture {
         // ~ZPage: the page livemaps go with the synthetic heap.
         for (ZPage* region : {region0, region1}) {
             if (region != nullptr) {
-                delete region->livemap();
-                region->_scratch.livemap = nullptr;
                 delete region->_scratch.retiredLivemap;
                 region->_scratch.retiredLivemap = nullptr;
             }
@@ -220,10 +218,10 @@ struct GcHeapFixture {
         // are mapped per test, so leaving their flags set before munmap makes
         // later tests observe young regions that no longer exist.
         if (region0 != nullptr && region0->IsYoungRegion()) {
-            region0->SetYoungRegionFlag(0);
+            region0->reset(PageAge::old);
         }
         if (region1 != nullptr && region1->IsYoungRegion()) {
-            region1->SetYoungRegionFlag(0);
+            region1->reset(PageAge::old);
         }
         heapMapping.reset();
     }
@@ -271,7 +269,7 @@ struct GcHeapFixture {
             while (selected.TakeHeadRegion() != nullptr) {}
         }
         CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region, region->GetOwnerGeneration()));
-        CHECK(ForwardingTable::PublishFromPageView(region, region->livemap(), region->GetSnapshotEpoch(),
+        CHECK(ForwardingTable::PublishFromPageView(region, &region->livemap(), region->GetSnapshotEpoch(),
             region->GetRegionAllocPtr(), region->BirthSequence(),
             static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
             0, region->GetRegionLifeId()));

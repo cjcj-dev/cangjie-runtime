@@ -448,7 +448,7 @@ static ZLiveMap* RouteLiveMap(ZPage* region, ZGenerationId& id)
         return from->livemap;
     }
     id = region->generation_id();
-    return region->livemap();
+    return &region->livemap();
 }
 
 void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
@@ -505,7 +505,7 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     if (isGhost) {
         region->BindFromPageLiveMapIfNull();
     }
-    ZLiveMap* live = region->livemap();
+    ZLiveMap* live = &region->livemap();
     ZLiveMap* ghost = region->FromPageLiveMap();
     if (ghost != nullptr && ghost != live) {
         // MarkObject already maintained live bytes on the live face; ghost paint is
@@ -2061,7 +2061,7 @@ void RegionManager::CompactRegion(ZPage* region)
         if (toAge == PageAge::old) {
             region->PromoteYoungRegion();
         } else {
-            region->SetYoungAge(untype(toAge));
+            region->reset(toAge);
         }
     }
     // ZPage::reset(to_age): only the actual in-place destination is born anew.
@@ -2193,7 +2193,7 @@ void RegionManager::BumpYoungSurvivorAge(ZPage* region)
 {
     uint8_t next = region->GetYoungAge();
     if (next < untype(PageAge::survivor14)) {
-        region->SetYoungAge(static_cast<uint8_t>(next + 1));
+        region->reset(static_cast<PageAge>(next + 1));
     }
 }
 

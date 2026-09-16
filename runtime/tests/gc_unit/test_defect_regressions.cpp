@@ -290,9 +290,9 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -321,9 +321,9 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -363,9 +363,9 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -409,9 +409,9 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
     fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);

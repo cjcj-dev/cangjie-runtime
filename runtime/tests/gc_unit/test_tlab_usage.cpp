@@ -97,12 +97,12 @@ GC_OTHER_VM_TEST(TLABUsage, YoungOccupancyUsesActualExtent)
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     ZPage* twoUnits = ZPage::InitRegion(2, 2, ZPageType::small);
     const size_t before = manager.GetYoungAllocatedSize();
-    fixture.region0->SetYoungRegionFlag(1);
-    twoUnits->SetYoungRegionFlag(1);
+    fixture.region0->reset(PageAge::eden);
+    twoUnits->reset(PageAge::eden);
     GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, 3 * ZPage::UNIT_SIZE);
-    twoUnits->SetYoungRegionFlag(0);
+    twoUnits->reset(PageAge::old);
     GC_EXPECT_EQ(manager.GetYoungAllocatedSize() - before, ZPage::UNIT_SIZE);
-    fixture.region0->SetYoungRegionFlag(0);
+    fixture.region0->reset(PageAge::old);
     GC_EXPECT_EQ(manager.GetYoungAllocatedSize(), before);
 }
 

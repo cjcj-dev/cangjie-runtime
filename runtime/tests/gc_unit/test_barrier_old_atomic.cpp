@@ -219,8 +219,8 @@ struct StoreFixture {
     {
         regionOld = heap.region0;
         regionNew = heap.region1;
-        regionOld->SetYoungRegionFlag(0);
-        regionNew->SetYoungRegionFlag(1);
+        regionOld->reset(PageAge::old);
+        regionNew->reset(PageAge::eden);
         holder = heap.obj0;
         oldValue = heap.PlaceObject(heap.heapStart + 256);
         newValue = heap.obj1;
@@ -432,8 +432,8 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
                           TypeKind::TYPE_KIND_ENUM, TypeKind::TYPE_KIND_VARRAY}) {
         GcHeapFixture heap;
         MarkPublicationFixture marking;
-        heap.region0->SetYoungRegionFlag(0);
-        heap.region1->SetYoungRegionFlag(1);
+        heap.region0->reset(PageAge::old);
+        heap.region1->reset(PageAge::eden);
         BarrierCollector collector;
         RememberedSet remembered;
         remembered.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);

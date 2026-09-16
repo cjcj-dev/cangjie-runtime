@@ -335,8 +335,7 @@ GC_TEST(ZIndexDistributorTest, page_table_parallel_iterator_emits_each_page_once
     constexpr size_t domain = 4096;
     constexpr size_t granule = 4096;
     constexpr MAddress base = 0x40000000;
-    ZGranuleMap<Page*> table;
-    GC_EXPECT_TRUE(table.Initialize(base, domain * granule, granule));
+    ZGranuleMap<Page*> table(domain * granule, base, granule);
     Page pages[] = {{base, 0}, {base + (domain / 2) * granule, 1}, {base + (domain - 1) * granule, 2}};
     table.put(static_cast<zoffset>(0), 3 * granule, &pages[0]);
     table.put(static_cast<zoffset>((domain / 2) * granule), 2 * granule, &pages[1]);

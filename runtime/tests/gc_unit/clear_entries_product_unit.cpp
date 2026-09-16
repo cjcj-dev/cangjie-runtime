@@ -481,7 +481,7 @@ DeliveryReferenceArrayTypes& GetDeliveryReferenceArrayTypes()
 
 void PinOwnerGeneration(ZPage* region, Generation gen)
 {
-    region->SetYoungRegionFlag(gen == Generation::Young ? 1 : 0);
+    region->reset(gen == Generation::Young ? PageAge::eden : PageAge::old);
 }
 
 void PublishGenerationMarkComplete(Generation gen)
@@ -496,7 +496,7 @@ ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
     if (previous != nullptr) {
         RelocationReceiptTestAccess::ReleaseListOwnership(previous);
         if (previous->IsYoungRegion()) {
-            previous->SetYoungRegionFlag(0);
+            previous->reset(PageAge::old);
         }
     }
     if (previous != nullptr && Heap::page(previous->GetRegionStart()) != nullptr) {
@@ -550,7 +550,7 @@ ZLiveMap* PrepareForwardable(GcHeapFixture& fx, ZPage* region, MAddress liveObje
     }
     const Generation generation = region->GetOwnerGeneration();
     // The page owns its livemap (zPage.cpp:42); mark the live object into it.
-    ZLiveMap* live = region->livemap();
+    ZLiveMap* live = &region->livemap();
     GC_EXPECT_TRUE(live != nullptr);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, reinterpret_cast<BaseObject*>(liveObject)));
     // The product freezes the selected set before publishing any page view.
@@ -598,7 +598,7 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector,
     ZPage* destination = ResetDeliveryUnit(fx, 2);
     GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
     region->SetRegionListOwner(nullptr);
-    if (generation == Generation::Young) region->SetYoungRegionFlag(1);
+    if (generation == Generation::Young) region->reset(PageAge::eden);
     destination->SetRegionListOwner(nullptr);
 
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
@@ -1277,9 +1277,9 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarrier
     GcHeapFixture fixture;
     RegionList selected("diagnostic-generations");
     selected.PrependRegion(fixture.region0);
-    fixture.region0->SetYoungRegionFlag(1);
+    fixture.region0->reset(PageAge::eden);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
-    fixture.region0->SetYoungRegionFlag(0);
+    fixture.region0->reset(PageAge::old);
     GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
     const auto snapshot = ForwardingTable::CaptureNeverInstalledSnapshot(from);
@@ -2147,7 +2147,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
 GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysInstalledSet)
 {
     GcHeapFixture fixture;
-    fixture.region0->SetYoungRegionFlag(1);
+    fixture.region0->reset(PageAge::eden);
     fixture.InstallPageOwner(fixture.region0);
     const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
     const MAddress to = reinterpret_cast<MAddress>(fixture.obj1);
@@ -2260,10 +2260,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierConsumerSurvivesCurrentPageResetUnti
 
     ZLiveMap* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
     region->SetRegionAllocPtr(region->GetRegionStart());
-    // The reused slot loses its current livemap; the carrier still holds the
-    // original page's map (ZGC keeps the whole from ZPage in the set).
-    region->_scratch.livemap = nullptr;
-    region->InitializeLiveMap();
+    region->reset_livemap();
 
     const ZForwarding::FromPageView* from = ForwardingTable::GetFromPageView(region);
     GC_EXPECT_TRUE(from != nullptr);
@@ -2288,9 +2285,9 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     GcHeapFixture& fx = ProductFixture();
     ZPage* holderRegion = ResetDeliveryUnit(fx, 0);
     ZPage* targetRegion = ResetDeliveryUnit(fx, 1);
-    holderRegion->SetYoungRegionFlag(1);
-    targetRegion->SetYoungRegionFlag(1);
-    targetRegion->SetYoungAge(1);
+    holderRegion->reset(PageAge::eden);
+    targetRegion->reset(PageAge::eden);
+    targetRegion->reset(PageAge::eden);
 
     const MAddress holderStart = holderRegion->GetRegionStart();
     BaseObject* liveHolder = fx.PlaceObject(holderStart);
@@ -2308,7 +2305,7 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(holderRegion, liveHolder));
     RegionManager manager;
     manager.AddFlipPromotedPage(holderRegion);
-    holderRegion->SetYoungRegionFlag(0);
+    holderRegion->reset(PageAge::old);
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -2328,7 +2325,7 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     EmptyBothRememberedFaces(remembered);
     // manager owns the original map through its promotion page.
-    targetRegion->SetYoungRegionFlag(0);
+    targetRegion->reset(PageAge::old);
 }
 
 // ZGC zRelocate.cpp:652-731,838-861: lift the old page face before reuse,
@@ -2339,8 +2336,8 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     GcHeapFixture& fx = ProductFixture();
     ZPage* holderRegion = ResetDeliveryUnit(fx, 0);
     ZPage* targetRegion = ResetDeliveryUnit(fx, 1);
-    targetRegion->SetYoungRegionFlag(1);
-    targetRegion->SetYoungAge(1);
+    targetRegion->reset(PageAge::eden);
+    targetRegion->reset(PageAge::eden);
 
     BaseObject* from = fx.PlaceObject(holderRegion->GetRegionStart());
     const size_t objectSize = from->GetSize();
@@ -2398,7 +2395,7 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     GC_EXPECT_EQ(consumed.consumed, 1u);
     GC_EXPECT_EQ(consumed.work, 1u);
     EmptyBothRememberedFaces(remembered);
-    targetRegion->SetYoungRegionFlag(0);
+    targetRegion->reset(PageAge::old);
 }
 
 // ZRelocateWork::update_remset_promoted: young targets are remembered;
@@ -2408,7 +2405,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedObjectRemembersYoungTargetOnly)
     GcHeapFixture& fx = ProductFixture();
     ZPage* holderRegion = ResetDeliveryUnit(fx, 0);
     ZPage* targetRegion = ResetDeliveryUnit(fx, 1);
-    targetRegion->SetYoungRegionFlag(1);
+    targetRegion->reset(PageAge::eden);
     BaseObject* holder = fx.PlaceObject(holderRegion->GetRegionStart());
     BaseObject* target = fx.PlaceObject(targetRegion->GetRegionStart());
     holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetSize());
@@ -2422,7 +2419,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedObjectRemembersYoungTargetOnly)
     RegionManager::RememberPromotedObject(holder);
     GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
     EmptyBothRememberedFaces(remembered);
-    targetRegion->SetYoungRegionFlag(0);
+    targetRegion->reset(PageAge::old);
     RegionManager::RememberPromotedObject(holder);
     GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -2437,8 +2434,8 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         ZPage* holderRegion = ResetDeliveryUnit(fx, 0);
         ZPage* fromRegion = ResetDeliveryUnit(fx, 4);
         ZPage* toRegion = ResetDeliveryUnit(fx, 2);
-        fromRegion->SetYoungRegionFlag(1);
-        if (flipPromoted) holderRegion->SetYoungRegionFlag(1);
+        fromRegion->reset(PageAge::eden);
+        if (flipPromoted) holderRegion->reset(PageAge::eden);
         BaseObject* holder = fx.PlaceObject(holderRegion->GetRegionStart());
         BaseObject* from = fx.PlaceObject(fromRegion->GetRegionStart());
         BaseObject* to = fx.PlaceObject(toRegion->GetRegionStart());
@@ -2488,7 +2485,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         const uintptr_t markBits = ZPointerMarkedYoungMask | ZPointerMarkedOldMask;
         GC_EXPECT_EQ(raw(field.GetFieldValue()) & markBits, raw(before) & markBits);
         ForwardingTable::ResetRelocationSet(fromRegion->GetOwnerGeneration());
-        fromRegion->SetYoungRegionFlag(0);
+        fromRegion->reset(PageAge::old);
         LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
         RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     }
@@ -2506,8 +2503,8 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     ZPage* holderRegion = ResetDeliveryUnit(fx, 0);
     ZPage* youngRegion = ResetDeliveryUnit(fx, 1);
     ZPage* youngCarrier = ResetDeliveryUnit(fx, 3);
-    youngRegion->SetYoungRegionFlag(1);
-    youngRegion->SetYoungAge(1);
+    youngRegion->reset(PageAge::eden);
+    youngRegion->reset(PageAge::eden);
 
     DeliveryReferenceArrayTypes& types = GetDeliveryReferenceArrayTypes();
     auto* holder = reinterpret_cast<MArray*>(holderRegion->GetRegionStart());
@@ -2555,7 +2552,7 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
 
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(holderRegion, holder));
     holderRegion->SetRegionListOwner(nullptr);
-    youngCarrier->SetYoungRegionFlag(1);
+    youngCarrier->reset(PageAge::eden);
 
     LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
     nearField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
@@ -2596,8 +2593,8 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
     CleanupLateBackfill(fx, forwarding);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-    youngCarrier->SetYoungRegionFlag(0);
-    youngRegion->SetYoungRegionFlag(0);
+    youngCarrier->reset(PageAge::old);
+    youngRegion->reset(PageAge::old);
 }
 
 // True runtime entry: this test never calls RemapYoungRoots or Preforward. It
@@ -2612,8 +2609,8 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     GcHeapFixture& fx = ProductFixture();
     ZPage* holderRegion = ResetDeliveryUnit(fx, 0);
     ZPage* youngRegion = ResetDeliveryUnit(fx, 1);
-    youngRegion->SetYoungRegionFlag(1);
-    youngRegion->SetYoungAge(1);
+    youngRegion->reset(PageAge::eden);
+    youngRegion->reset(PageAge::eden);
 
     DeliveryReferenceArrayTypes& types = GetDeliveryReferenceArrayTypes();
     auto* holder = reinterpret_cast<MArray*>(holderRegion->GetRegionStart());
@@ -2706,7 +2703,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
         BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
         BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
         region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-        ZLiveMap* live = region->livemap();
+        ZLiveMap* live = &region->livemap();
         auto& regionManager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         RelocationReceiptTestAccess::ParkFrom(regionManager, region);
         // ZGC selects a set only when packing can release a page. Two sparse
@@ -2728,7 +2725,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     }
     if (promoted) {
         // The source table, not its current page generation, owns remapping.
-        forwarding.region->SetYoungRegionFlag(0);
+        forwarding.region->reset(PageAge::old);
     }
 
     MutatorManager& manager = MutatorManager::Instance();
@@ -3046,7 +3043,7 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     // PrepareForwardableRegion walks a dense allocation range from page start.
     fixture.obj0 = fixture.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(region->GetRegionStart() + fixture.obj0->GetSize());
-    region->SetYoungRegionFlag(1);
+    region->reset(PageAge::eden);
     region->SetRegionListOwner(nullptr);
     RegionList selected("page579-selected");
     selected.PrependRegion(region);
@@ -3086,7 +3083,7 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     auto* region = fixture.region0;
     auto& collector = Heap::GetHeap().GetCollector();
     for (uint8_t young : {1, 0, 1, 0}) {
-        region->SetYoungRegionFlag(young);
+        region->reset(young ? PageAge::eden : PageAge::old);
         const Generation expected = young ? Generation::Young : Generation::Old;
         const ZGenerationId expectedId = young ? ZGenerationId::young : ZGenerationId::old;
         const Generation current = collector.ObjectGeneration(fixture.obj0);

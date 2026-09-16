@@ -107,8 +107,8 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     heap.GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     ZPage* region = fx.region0;
-    region->SetYoungRegionFlag(1);
-    region->SetYoungAge(1);
+    region->reset(PageAge::eden);
+    region->reset(PageAge::eden);
     resources.GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold = 1;
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
@@ -280,7 +280,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
-    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::eden);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_TRACE);
     collector.StartYoungMarkWork();
     // Load-good, but the previous young/old mark epochs: the root must take
@@ -322,7 +322,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
-    fixture.region0->SetYoungRegionFlag(0);
+    fixture.region0->reset(PageAge::old);
     GC_EXPECT_FALSE(fixture.region0->is_object_strongly_live(from_object(fixture.obj0)));
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
@@ -355,7 +355,7 @@ void CheckRootStorageSegments(unsigned family)
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
-    fixture.region0->SetYoungRegionFlag(family != 0);
+    fixture.region0->reset(family != 0 ? PageAge::eden : PageAge::old);
     auto& finalizers = resources.GetFinalizerProcessor();
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
     constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
@@ -432,7 +432,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
-    fixture.region0->SetYoungRegionFlag(1);
+    fixture.region0->reset(PageAge::eden);
     std::vector<U64> original;
     for (size_t i = 0; i < sizeof(uintptr_t) * CHAR_BIT; ++i) {
         original.push_back(heap.RegisterExportRoot(fixture.obj0));

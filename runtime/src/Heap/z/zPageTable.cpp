@@ -8,12 +8,23 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 
+#include <memory>
+
 namespace MapleRuntime {
+
+namespace {
+std::unique_ptr<ZPageTable> g_heap_table;
+}
+
+void ZPageTable::install(MAddress base, size_t heapSize, size_t granule)
+{
+    g_heap_table.reset(new ZPageTable(heapSize, base, granule));
+}
 
 ZPageTable& ZPageTable::heap_table()
 {
-    static ZPageTable table;
-    return table;
+    CHECK(g_heap_table != nullptr);
+    return *g_heap_table;
 }
 
 int ZPageTable::count() const

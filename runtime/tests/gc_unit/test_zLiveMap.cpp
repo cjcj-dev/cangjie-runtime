@@ -344,19 +344,17 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
                                 : ZPageType::small;
         GcHeapFixture fx(role);
         ZPage* region = fx.region0;
-        region->SetYoungRegionFlag(1);
-        region->SetYoungAge(1);
+        region->reset(PageAge::eden);
+        region->reset(PageAge::eden);
         BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
-        ZLiveMap* original = region->livemap();
+        ZLiveMap* original = &region->livemap();
         GC_EXPECT_TRUE(original != nullptr);
         GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, object));
         GC_EXPECT_TRUE(region->is_object_live(from_object(object)));
         auto originalPage = region->CloneForPromotion();
         GC_EXPECT_FALSE(region->IsYoungRegion());
         GC_EXPECT_EQ(originalPage->Age(), 1u);
-        GC_EXPECT_TRUE(region->livemap() != original);
-        GC_EXPECT_TRUE(region->livemap() != nullptr);
-        GC_EXPECT_FALSE(region->livemap()->is_marked(ZGenerationId::old));
+        GC_EXPECT_FALSE(region->livemap().is_marked(ZGenerationId::old));
         std::vector<BaseObject*> visited;
         originalPage->ObjectIterate([&](BaseObject* obj) { visited.push_back(obj); });
         GC_EXPECT_EQ(visited.size(), 1u);
@@ -393,7 +391,7 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
 {
     GcHeapFixture fx;
     ZPage* region = fx.region0;
-    const uint32_t smallSegment = ZLiveMapTest::segment_size(*region->livemap());
+    const uint32_t smallSegment = ZLiveMapTest::segment_size(region->livemap());
     GC_EXPECT_TRUE(smallSegment > 2u);
     for (auto role : {ZPageType::large,
                       ZPageType::small,
@@ -401,7 +399,7 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
         ZPage::RetirePage(region, [] {});
         region = ZPage::InitRegion(0, 1, role);
         fx.region0 = region;
-        const uint32_t actual = ZLiveMapTest::segment_size(*region->livemap());
+        const uint32_t actual = ZLiveMapTest::segment_size(region->livemap());
         const uint32_t expected = role == ZPageType::large ? 2u : smallSegment;
         std::fprintf(stderr, "P02_PAGE_GEOMETRY role=%u segment=%u expected=%u\n",
                      static_cast<unsigned>(role), actual, expected);
@@ -668,7 +666,7 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     GC_EXPECT_FALSE(collector.MarkObject(seed));
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    ResetSchedule schedule(region->livemap());
+    ResetSchedule schedule(&region->livemap());
     resetSchedule = &schedule;
     ZLiveMap::testReset = PauseClaimedReset;
     bool already[2] = {true, true};

@@ -268,10 +268,10 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     route.to = fx.PlaceObject(route.destination->GetRegionStart());
     route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + route.from->GetSize());
     route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + route.to->GetSize());
-    route.source->SetYoungRegionFlag(0);
-    route.destination->SetYoungRegionFlag(destinationYoung ? 1 : 0);
+    route.source->reset(PageAge::old);
+    route.destination->reset(destinationYoung ? PageAge::eden : PageAge::old);
     if (destinationYoung) {
-        route.destination->SetYoungAge(1);
+        route.destination->reset(PageAge::eden);
     }
 
     route.source->SetRegionListOwner(nullptr);
@@ -396,9 +396,9 @@ void RunYoungWeakVariant(size_t helpers)
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     WeakGraph graph(fx, fx.region1);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
@@ -460,9 +460,9 @@ void RunYoungWeakRemsetFlow()
     // a real old->young edge.  The holder then enters this young collection;
     // the remembered slot itself, rather than a test-built weakSlots ledger,
     // is what the product minor path receives.
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     WeakGraph graph(fx, fx.region0, fx.region1);
     *reinterpret_cast<uintptr_t*>(graph.referent) = reinterpret_cast<uintptr_t>(fx.typeInfo);
     *reinterpret_cast<uintptr_t*>(graph.child) = reinterpret_cast<uintptr_t>(fx.typeInfo);
@@ -528,7 +528,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
     WeakGraph graph(fx, fx.region0);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
@@ -724,7 +724,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
     WeakGraph graph(fx, fx.region0);
     // This grid is deliberately non-weak: the only edge must be followed by
     // the export root family even when the common root stack is empty.
@@ -816,7 +816,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
     ExportForeignGraph graph(fx);
 
     BaseObject* secondRoot = nullptr;

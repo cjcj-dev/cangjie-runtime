@@ -78,25 +78,6 @@ std::atomic<size_t> youngRegionBytes{ 0 };
 std::atomic<size_t> ZPage::dispelGhostCount { 0 };
 
 std::mutex ZPage::youngRegionFlagMutex;
-void ZPage::SetYoungRegionFlag(uint8_t flag)
-{
-    std::lock_guard<std::mutex> lock(youngRegionFlagMutex);
-    // The bit records charged occupancy, including zero-initialized _scratch.
-    // Page identity is published separately below (ZPage::reset, zPage.cpp:103).
-    bool wasYoung = _generation_id == ZGenerationId::young;
-    bool makeYoung = flag != 0;
-    if (!wasYoung && makeYoung) {
-        youngRegionBytes.fetch_add(GetRegionSize(), std::memory_order_release);
-        youngRegionCount.fetch_add(1, std::memory_order_release);
-    }
-    _generation_id = makeYoung ? ZGenerationId::young : ZGenerationId::old;
-    if (wasYoung && !makeYoung) {
-        size_t count = youngRegionCount.load(std::memory_order_relaxed);
-        CHECK(count > 0);
-        youngRegionCount.fetch_sub(1, std::memory_order_release);
-        youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
-    }
-}
 
 size_t ZPage::GetYoungRegionCount()
 {
@@ -148,7 +129,7 @@ const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntim
 void ZPage::DumpZPage(LogType type) const
 {
     DLOG(type, "Region index: %zu, type: %s, address: 0x%zx-0x%zx, allocated(B) %zu, live(B) %zu", GetUnitIdx(),
-         GetTypeName(), GetRegionStart(), GetRegionEnd(), GetRegionAllocatedSize(), livemap()->live_bytes());
+         GetTypeName(), GetRegionStart(), GetRegionEnd(), GetRegionAllocatedSize(), livemap().live_bytes());
 }
 
 const char* ZPage::GetTypeName() const
@@ -180,17 +161,12 @@ std::unique_ptr<ZPage::PromotionPage> ZPage::CloneForPromotion()
 {
     CHECK(IsYoungRegion());
     const ZForwarding::FromPageView* from = GetFromPageView();
-    ZLiveMap* original = from == nullptr ? livemap() : from->livemap;
+    ZLiveMap* original = from == nullptr ? &livemap() : from->livemap;
     const MAddress originalTop = from == nullptr ? GetRegionAllocPtr() : from->topAtStart;
-    // The published from-page livemap is this page's own map (PublishFromPageMetadata
-    // passes livemap()); the promotion page takes it over while the slot gets a
-    // fresh one (ZGC keeps the whole original ZPage in the relocation set).
-    CHECK_DETAIL(original == livemap(), "promotion source livemap does not belong to region %p", this);
+    CHECK_DETAIL(original == &livemap(), "promotion source livemap does not belong to region %p", this);
     const uint8_t age = GetYoungAge();
     PromoteYoungRegion();
-    CHECK(_scratch.retiredLivemap == original);
-    _scratch.retiredLivemap = nullptr;
-    return std::make_unique<PromotionPage>(std::unique_ptr<ZLiveMap>(original), GetRegionStart(), originalTop, age,
+    return std::make_unique<PromotionPage>(original, GetRegionStart(), originalTop, age,
                                            IsLargeRegion());
 }
 
@@ -311,7 +287,7 @@ ZPage::ZPage()
       _partition_id(0),
       _virtual(),
       _top(zoffset_end::invalid),
-      _livemap(nullptr),
+      _livemap(object_max_count_for(ZPageType::small, 0)),
       _relocate_promoted(false)
     {
         _scratch.allocPtr = reinterpret_cast<uintptr_t>(nullptr);
@@ -327,7 +303,7 @@ ZPage::ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
       _partition_id(0),
       _virtual(vmem),
       _top(to_zoffset_end(vmem.start())),
-      _livemap(nullptr),
+      _livemap(object_max_count_for(type, vmem.size())),
       _relocate_promoted(false)
 {
     _scratch.allocPtr = untype(ZOffset::address_unsafe(vmem.start()));
@@ -351,8 +327,21 @@ const char* ZPage::type_to_string() const
 
 ZPage* ZPage::reset(PageAge age)
 {
-    SetYoungRegionFlag(age != PageAge::old);
-    SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
+    std::lock_guard<std::mutex> lock(youngRegionFlagMutex);
+    const bool wasYoung = _generation_id == ZGenerationId::young;
+    _age = age;
+    _generation_id = age == PageAge::old ? ZGenerationId::old : ZGenerationId::young;
+    const bool makeYoung = _generation_id == ZGenerationId::young;
+    if (!wasYoung && makeYoung) {
+        youngRegionBytes.fetch_add(GetRegionSize(), std::memory_order_release);
+        youngRegionCount.fetch_add(1, std::memory_order_release);
+    }
+    if (wasYoung && !makeYoung) {
+        size_t count = youngRegionCount.load(std::memory_order_relaxed);
+        CHECK(count > 0);
+        youngRegionCount.fetch_sub(1, std::memory_order_release);
+        youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
+    }
     ResetPageSequence();
     return this;
 }

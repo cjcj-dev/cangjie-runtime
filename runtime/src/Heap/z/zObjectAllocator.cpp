@@ -125,8 +125,7 @@ ZPage* RegionManager::AllocateSharedPage(size_t units, ZPageType role,
 {
     ZPage* page = Heap::alloc_page(units, role, false, !nonBlocking, true, age);
     if (page == nullptr) { return nullptr; }
-    page->SetYoungRegionFlag(age != PageAge::old);
-    page->SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
+    page->reset(age);
     if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_add(page->GetRegionSize(), std::memory_order_relaxed);
     }
@@ -224,13 +223,12 @@ ZPage* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysical
                                     allowSaferegion, true, youngRegion ? PageAge::eden : PageAge::old);
     if (region != nullptr) {
         {
-            region->SetYoungRegionFlag(youngRegion ? 1 : 0);
+            region->reset(youngRegion ? PageAge::eden : PageAge::old);
             if (youngRegion) {
                 // zHeap.cpp:233: charge the backing extent even before a
                 // prepared region is installed as a thread's current TLAB.
                 tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             }
-            region->SetYoungAge(0);
             tlRegionList.PrependRegion(region);
             DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) units[%zu+%zu, %zu) type %u",
                 region, region->GetRegionStart(), region->GetRegionSize(), region->GetRegionEnd(),

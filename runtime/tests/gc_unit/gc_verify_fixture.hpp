@@ -25,8 +25,8 @@ struct GcVerifyFixture : GcHeapFixture {
 
     void PrepareOldSource()
     {
-        region0->SetYoungRegionFlag(0);
-        region1->SetYoungRegionFlag(0);
+        region0->reset(PageAge::old);
+        region1->reset(PageAge::old);
         (void)RegionSpace::MarkObject<Generation::Old>(obj0);
         LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Old)
             .PublishPhase(GC_PHASE_MARK_COMPLETE);

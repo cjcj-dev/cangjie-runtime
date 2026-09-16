@@ -243,8 +243,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     // ZPageTable::remove/insert (zPageTable.cpp:44-65): retire before reuse.
     ZPage::RetirePage(fx.region1, [] {});
     fx.region1 = ZPage::InitRegion(1, 4, ZPageType::small);
-    fx.region1->SetYoungRegionFlag(major ? 0 : 1);
-    fx.region1->SetYoungAge(1);
+    fx.region1->reset(major ? PageAge::old : PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     // The product allocates and owns this page's livemap (InitRegion ->
     // InitializeLiveMap); promotion transfers that ownership
     // (ZPage::clone_for_promotion, zPage.cpp:64).

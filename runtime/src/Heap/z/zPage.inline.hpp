@@ -4,8 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef MRT_REGIONINFO_INLINE_H
-#define MRT_REGIONINFO_INLINE_H
+#ifndef MRT_ZPAGE_INLINE_H
+#define MRT_ZPAGE_INLINE_H
 
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"
@@ -28,9 +28,14 @@ inline bool ZPage::IsRoutingState()
         return owner && owner->is_claimed() && !owner->is_done();
     }
 
-inline ZLiveMap* ZPage::livemap() const
+inline ZLiveMap& ZPage::livemap()
 {
-    return __atomic_load_n(&_scratch.livemap, std::memory_order_acquire);
+    return _livemap;
+}
+
+inline const ZLiveMap& ZPage::livemap() const
+{
+    return _livemap;
 }
 
 inline ZForwarding* ZPage::GetFromPageCarrier() const
@@ -138,13 +143,9 @@ inline void ZPage::BindFromPageLiveMapIfNull()
         if (FromPageLiveMap() != nullptr) {
             return;
         }
-        ZLiveMap* live = livemap();
-        if (live == nullptr) {
-            return;
-        }
         const RegionLifeId life = GetRegionLifeId();
         CHECK_DETAIL(ForwardingTable::PublishFromPageView(
-                         this, live, GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
+                         this, &livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
                          static_cast<uint8_t>(GetOwnerGeneration()),
                          static_cast<uint8_t>(IsLargeRegion() && is_marked() &&
                                               is_live_bit_set(to_zaddress(GetRegionStart()))),
@@ -157,14 +158,6 @@ inline void ZPage::StampCensusBoundary()
         uintptr_t offset = GetRegionAllocPtr() - GetRegionStart();
         _scratch.censusBoundaryOffset =
             static_cast<uint32_t>(std::min<uintptr_t>(offset, std::numeric_limits<uint32_t>::max()));
-    }
-
-// zPage.cpp:42: _livemap(object_max_count()). Constructed once per page life.
-inline void ZPage::InitializeLiveMap()
-    {
-        CHECK(livemap() == nullptr);
-        ZLiveMap* live = new ZLiveMap(object_max_count());
-        __atomic_store_n(&_scratch.livemap, live, std::memory_order_release);
     }
 
 // ---- ZPage livemap surface ----
@@ -191,8 +184,21 @@ inline size_t ZPage::object_alignment() const
 }
 
 // zPage.inline.hpp:57-70 object_max_count.
+inline uint32_t ZPage::object_max_count_for(ZPageType type, size_t size)
+{
+    if (type == ZPageType::large) {
+        return 1;
+    }
+    const int shift = type == ZPageType::medium ? ZObjectAlignmentMediumShift : ZObjectAlignmentSmallShift;
+    const uint32_t n = static_cast<uint32_t>(size >> shift);
+    return n == 0 ? 1u : n;
+}
+
 inline uint32_t ZPage::object_max_count() const
 {
+    if (!_virtual.is_null()) {
+        return object_max_count_for(type(), _virtual.size());
+    }
     if (type() == ZPageType::large) {
         return 1;
     }
@@ -210,7 +216,7 @@ inline bool ZPage::is_in(zaddress addr) const
 inline bool ZPage::is_marked() const
 {
     DCHECK_D(IsRelocatable(), "Invalid page state");
-    return livemap()->is_marked(generation_id());
+    return livemap().is_marked(generation_id());
 }
 
 // zPage.inline.hpp:228-230.
@@ -237,14 +243,14 @@ inline bool ZPage::is_live_bit_set(zaddress addr) const
 {
     DCHECK_D(IsRelocatable(), "Invalid page state");
     const BitMap::idx_t index = bit_index(addr);
-    return livemap()->get(generation_id(), index);
+    return livemap().get(generation_id(), index);
 }
 
 inline bool ZPage::is_strong_bit_set(zaddress addr) const
 {
     DCHECK_D(IsRelocatable(), "Invalid page state");
     const BitMap::idx_t index = bit_index(addr);
-    return livemap()->get(generation_id(), index + 1);
+    return livemap().get(generation_id(), index + 1);
 }
 
 // zPage.inline.hpp:254-260: an allocating page is implicitly live.
@@ -282,23 +288,23 @@ inline bool ZPage::mark_object(zaddress addr, bool finalizable, bool& inc_live)
 
     // Set mark bit
     const BitMap::idx_t index = bit_index(addr);
-    return livemap()->set(generation_id(), index, finalizable, inc_live);
+    return livemap().set(generation_id(), index, finalizable, inc_live);
 }
 
 // zPage.inline.hpp:296-317.
 inline void ZPage::inc_live(uint32_t objects, size_t bytes)
 {
-    livemap()->inc_live(objects, bytes);
+    livemap().inc_live(objects, bytes);
 }
 
 inline uint32_t ZPage::live_objects() const
 {
-    return livemap()->live_objects();
+    return livemap().live_objects();
 }
 
 inline size_t ZPage::live_bytes() const
 {
-    return livemap()->live_bytes();
+    return livemap().live_bytes();
 }
 
 // zPage.inline.hpp:319-331.
@@ -314,7 +320,7 @@ inline void ZPage::object_iterate(Function function)
         return true;
     };
 
-    livemap()->iterate(generation_id(), do_bit);
+    livemap().iterate(generation_id(), do_bit);
 }
 
 // zPage.inline.hpp:371-386.
@@ -328,7 +334,7 @@ inline MAddress ZPage::find_base_unsafe(MAddress p)
     // the field address p, it's important to note that for medium pages both p
     // and it's associated base could map to the same index.
     const BitMap::idx_t index = bit_index(to_zaddress(p));
-    const BitMap::idx_t base_index = livemap()->find_base_bit(index);
+    const BitMap::idx_t base_index = livemap().find_base_bit(index);
     if (base_index == BitMap::idx_t(-1)) {
         return 0;
     } else {
@@ -346,7 +352,7 @@ inline MAddress ZPage::find_base(MAddress p)
 // zPage.cpp:115-117.
 inline void ZPage::reset_livemap()
 {
-    livemap()->reset();
+    livemap().reset();
 }
 
 inline ALWAYS_INLINE size_t ZPage::GetAddressOffset(MAddress address) const
@@ -419,9 +425,8 @@ inline void ZPage::InitializeSegments(uintptr_t metadataEnd, const std::vector<U
             unitSegments.push_back(UnitSegment{ range.start, range.size, index });
             index += range.size / UNIT_SIZE + 1;
         }
-        ZPageTable::heap_table().map().Reset();
-        CHECK(ZPageTable::heap_table().initialize(segments.front().start,
-                                                 segments.back().End() - segments.front().start, UNIT_SIZE));
+        ZPageTable::install(segments.front().start,
+                            segments.back().End() - segments.front().start, UNIT_SIZE);
     }
 
 inline size_t ZPage::FindUnitIndex(uintptr_t address)
@@ -620,7 +625,7 @@ inline void ZPage::PublishFromPageMetadata()
     {
         const RegionLifeId life = GetRegionLifeId();
         CHECK_DETAIL(ForwardingTable::PublishFromPageView(
-                         this, livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
+                         this, &livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
                          static_cast<uint8_t>(G),
                          static_cast<uint8_t>(IsLargeRegion() && is_marked() &&
                                               is_live_bit_set(to_zaddress(GetRegionStart()))),
@@ -710,7 +715,7 @@ inline void ZPage::DispelGhostFromRegion()
         // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
         VLOG(REPORT,
              "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
-             this, GetRegionStart(), nUnit, livemap()->live_bytes(),
+             this, GetRegionStart(), nUnit, livemap().live_bytes(),
               IsForwardingDone() ? 1u : 0u,
              static_cast<unsigned>(IsYoungRegion()));
         // The old top/livemap disappeared with the forwarding carrier above;
@@ -804,27 +809,13 @@ inline void ZPage::SetInGhostRegion(uint8_t flag)
 inline void ZPage::PromoteYoungRegion()
     {
         CHECK_DETAIL(IsYoungRegion(), "cannot promote an old region %p", this);
-        CHECK_DETAIL(_scratch.retiredLivemap == nullptr, "region %p promoted twice in one life", this);
-        ZLiveMap* fresh = new ZLiveMap(object_max_count());
-        SetYoungRegionFlag(0);
-        SetYoungAge(0);
-        ResetPageSequence();
-        _scratch.retiredLivemap = livemap();
-        __atomic_store_n(&_scratch.livemap, fresh, std::memory_order_release);
-    }
-
-inline void ZPage::SetYoungAge(uint8_t age)
-    {
-        CHECK(age <= MAX_YOUNG_AGE);
-        _age = age == 0 ? PageAge::old : static_cast<PageAge>(age);
-        _scratch.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH, age);
+        reset(PageAge::old);
+        reset_livemap();
     }
 
 inline uint8_t ZPage::GetYoungAge() const
     {
-        return static_cast<uint8_t>(_scratch.regionStateBitField.GetAtomicValue(
-                                        RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH) >>
-                                    RegionStateBitPos::YOUNG_AGE_FLAG);
+        return _age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(_age));
     }
 
 
@@ -1050,19 +1041,14 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitZPage");
-        // ZPageAllocator::safe_destroy_page: the previous page life's livemap
-        // (and a promotion's parked young map) goes with it (~ZPage / ~CHeapBitMap).
-        delete livemap();
-        __atomic_store_n(&_scratch.livemap, static_cast<ZLiveMap*>(nullptr), std::memory_order_release);
         delete _scratch.retiredLivemap;
         _scratch.retiredLivemap = nullptr;
-        SetYoungRegionFlag(0);
         _scratch.allocPtr = GetRegionStart();
         _scratch.regionEnd = _scratch.allocPtr + nUnit * ZPage::UNIT_SIZE;
-        // ZPage::reset(age), zPage.cpp:103-108: establish identity before page-table publication.
-        SetYoungRegionFlag(age != PageAge::old);
-        SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
-        ResetPageSequence();
+        reset(age);
+        if (live) {
+            reset_livemap();
+        }
         _scratch.prevRegionIdx = NULLPTR_IDX;
         _scratch.nextRegionIdx = NULLPTR_IDX;
         // Ghost walk (PrepareFromRegionList) follows nextRegionIdx0. A reused
@@ -1084,9 +1070,7 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         SetInGhostRegion(0);
         __atomic_store_n(&_scratch.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         (void)uClass;
-        if (live) {
-            InitializeLiveMap();
-        }
+        (void)live;
     }
 
 inline void ZPage::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)

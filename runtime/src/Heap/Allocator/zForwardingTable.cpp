@@ -34,7 +34,7 @@ namespace {
 // Each generation owns its installed forwarding objects and their common arena.
 // The map borrows them until that generation resets its relocation set.
 struct RelocationSet {
-    ZGranuleMap<ZForwarding*> map;
+    std::unique_ptr<ZGranuleMap<ZForwarding*>> map;
     std::unique_ptr<ForwardingAllocator> arena;
     std::vector<ZForwarding*> forwardings;
 };
@@ -74,13 +74,9 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
 {
     if (g_ready.load(std::memory_order_acquire)) {
 #if defined(MRT_GC_UNIT_TESTS)
-        if (g_relocationSets[0].map.base() != heapStart) {
-            // Aggregate gc_unit creates a fresh synthetic mmap per test. Each
-            // fixture destructor has already drained/reclaimed its carriers;
-            // rebase only the test build so the next fixture exercises the
-            // same product address checks rather than an obsolete map base.
-            g_relocationSets[0].map.ResetForTest();
-            g_relocationSets[1].map.ResetForTest();
+        if (g_relocationSets[0].map != nullptr && g_relocationSets[0].map->base() != heapStart) {
+            g_relocationSets[0].map.reset();
+            g_relocationSets[1].map.reset();
             g_ready.store(false, std::memory_order_release);
         } else {
             return true;
@@ -92,15 +88,11 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     if (unitSize == 0 || heapSize == 0) {
         return false;
     }
-    if (!g_relocationSets[0].map.Initialize(heapStart, heapSize, unitSize) ||
-        !g_relocationSets[1].map.Initialize(heapStart, heapSize, unitSize)) {
-        LOG(RTLOG_ERROR, "[FWDTABLE] granule map init failed size=%zu unit=%zu -- table stays off", heapSize,
-            unitSize);
-        return false;
-    }
+    g_relocationSets[0].map.reset(new ZGranuleMap<ZForwarding*>(heapSize, heapStart, unitSize));
+    g_relocationSets[1].map.reset(new ZGranuleMap<ZForwarding*>(heapSize, heapStart, unitSize));
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
-        heapSize, unitSize, g_relocationSets[0].map.size());
+        heapSize, unitSize, g_relocationSets[0].map->size());
     return true;
 }
 
@@ -124,7 +116,7 @@ bool ForwardingTable::BeginForwardingArena(Generation gen, RegionList& regions)
     regions.VisitAllRegions([&](ZPage* region) {
         ZForwarding* forwarding = ZForwarding::alloc(
             ObjectCountUpperBound(region, region->GetRegionSize()), region->GetRegionStart(),
-            set.map.base(), region->GetRegionSize(), region, region->GetRegionLifeId(), set.arena.get());
+            set.map->base(), region->GetRegionSize(), region, region->GetRegionLifeId(), set.arena.get());
         CHECK(forwarding != nullptr);
         forwarding->set_table_generation(static_cast<uint8_t>(gen));
         set.forwardings.push_back(forwarding);
@@ -157,7 +149,7 @@ void ForwardingTable::insert(ZForwarding* forwarding)
     if (forwarding == nullptr || !Ready()) {
         return;
     }
-    auto& map = g_relocationSets[forwarding->table_generation()].map;
+    auto& map = *g_relocationSets[forwarding->table_generation()].map;
     CHECK(MapGet(map, forwarding->start()) == nullptr);
     MapPut(map, forwarding->start(), forwarding->size(), forwarding);
 }
@@ -165,14 +157,14 @@ void ForwardingTable::insert(ZForwarding* forwarding)
 void ForwardingTable::remove(ZForwarding* forwarding)
 {
     if (forwarding == nullptr || !Ready()) return;
-    auto& map = g_relocationSets[forwarding->table_generation()].map;
+    auto& map = *g_relocationSets[forwarding->table_generation()].map;
     CHECK(MapGet(map, forwarding->start()) == forwarding);
     MapPut(map, forwarding->start(), forwarding->size(), nullptr);
 }
 
 ZForwarding* ForwardingTable::get(MAddress addr, Generation gen)
 {
-    return Ready() ? MapGet(g_relocationSets[static_cast<size_t>(gen)].map, addr) : nullptr;
+    return Ready() ? MapGet(*g_relocationSets[static_cast<size_t>(gen)].map, addr) : nullptr;
 }
 
 bool ForwardingTable::InstallPublicationBeforeCopy(
@@ -210,7 +202,7 @@ ZForwarding* ForwardingTable::GetCovering(MAddress addr, Generation gen) { retur
 void ForwardingTable::VisitAll(Generation generation, const std::function<void(ZForwarding*)>& visitor)
 {
     if (!Ready() || visitor == nullptr) return;
-    auto& map = g_relocationSets[static_cast<size_t>(generation)].map;
+    auto& map = *g_relocationSets[static_cast<size_t>(generation)].map;
     ZForwarding* last = nullptr;
     for (size_t i = 0; i < map.size(); ++i) {
         ZForwarding* value = map.at(i);
@@ -505,7 +497,11 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
         }
     };
     // The lookup domain is precisely the installed forwarding map.
-    for (const auto& set : g_relocationSets) visitActiveMap(set.map);
+    for (const auto& set : g_relocationSets) {
+        if (set.map != nullptr) {
+            visitActiveMap(*set.map);
+        }
+    }
     return snapshot;
 }
 

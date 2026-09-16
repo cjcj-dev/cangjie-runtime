@@ -35,17 +35,12 @@ namespace MapleRuntime {
 
 ZPhysicalMemoryManager::ZPhysicalMemoryManager(size_t max_capacity)
   : _backing(max_capacity),
-    _physical_mappings() {
+    _physical_mappings(ZAddressOffsetMax, 0, ZBackingGranuleSize) {
   assert(max_capacity % ZBackingGranuleSize == 0);
 
   // Setup backing storage limits
   ZBackingOffsetMax = max_capacity;
   ZBackingIndexMax = static_cast<uint32_t>(max_capacity / ZBackingGranuleSize);
-
-  // ZGranuleMap(ZAddressOffsetMax): one backing index per granule of the
-  // heap address domain (ZAddressOffsetMax was tightened to the highest
-  // reserved address end by ZVirtualMemoryManager).
-  CHECK(_physical_mappings.Initialize(0, ZAddressOffsetMax, ZBackingGranuleSize));
 
   // Install capacity into the registry
   const size_t num_segments_total = max_capacity / ZBackingGranuleSize;

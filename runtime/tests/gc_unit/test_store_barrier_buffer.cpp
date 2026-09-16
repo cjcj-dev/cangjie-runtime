@@ -193,8 +193,8 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
@@ -260,8 +260,8 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
@@ -320,8 +320,8 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
@@ -350,8 +350,8 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
@@ -386,8 +386,8 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
 
     BaseObject* const holder = fx.obj0;
     BaseObject* const oldReferent = fx.PlaceObject(fx.heapStart + 256);
@@ -468,8 +468,8 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
@@ -645,7 +645,7 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     HeapSlotAt<>(slot).StoreColoured(zpointer::null);
     const uintptr_t saved = ::g_cjStoreGoodMask;
     const zpointer previous = RefField<>(fx.obj0, saved).GetFieldValue();
-    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::eden);
     buf.Add(slot, previous, rs);
     ::g_cjStoreGoodMask ^= ZPointerMarkedYoungMask;
     buf.Flush(rs);
@@ -662,7 +662,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBufferCollector collector;
@@ -947,8 +947,8 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
     for (bool preloaded : {false, true}) {
         for (bool weak : {false, true}) {
             GcHeapFixture fx;
-            fx.region0->SetYoungRegionFlag(0);
-            fx.region1->SetYoungRegionFlag(1);
+            fx.region0->reset(PageAge::old);
+            fx.region1->reset(PageAge::eden);
             if (weak) {
                 fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
             }

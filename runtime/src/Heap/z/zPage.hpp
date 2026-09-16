@@ -4,8 +4,8 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef MRT_REGION_INFO_H
-#define MRT_REGION_INFO_H
+#ifndef MRT_ZPAGE_H
+#define MRT_ZPAGE_H
 
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
@@ -111,7 +111,7 @@ private:
     uint32_t _partition_id;
     const ZVirtualMemory _virtual;
     volatile zoffset_end _top;
-    ZLiveMap* _livemap;
+    ZLiveMap _livemap;
     bool _relocate_promoted;
 public:
     using Page = ZPage;
@@ -200,12 +200,8 @@ public:
     ZPage();
     static ZPage* NullRegion();
 
-    // ZPage::_livemap (zPage.hpp:52). One ZLiveMap per page life, owned by
-    // this descriptor and constructed with object_max_count() at InitZPage.
-    // It is held by pointer only because ZPage is a reused slot of the
-    // reverse metadata array; the independent page descriptor (zPage.cpp:33-62)
-    // embeds it by value.
-    ZLiveMap* livemap() const;
+    ZLiveMap& livemap();
+    const ZLiveMap& livemap() const;
 
     ZForwarding* GetFromPageCarrier() const;
 
@@ -263,14 +259,11 @@ public:
     void StampCensusBoundary();
     void ResetCensusBoundary() { _scratch.censusBoundaryOffset = 0; }
 
-    // ZPage constructs its livemap before publishing the page in the page table
-    // (zPage.cpp:42 _livemap(object_max_count())).
-    void InitializeLiveMap();
-
     Generation GetOwnerGeneration() const;
 
     // ---- ZPage livemap surface (zPage.inline.hpp:57-70, 223-331, 371-392) ----
     // Names follow ZGC.
+    static uint32_t object_max_count_for(ZPageType type, size_t size);
     int object_alignment_shift() const;
     uint32_t object_max_count() const;
 
@@ -600,8 +593,6 @@ public:
     bool IsNotRelocatableThisCycle() const { return is_allocating(); }
     void SetInGhostRegion(uint8_t flag);
 
-    void SetYoungRegionFlag(uint8_t flag);
-
     bool IsYoungRegion() const;
 
     static size_t GetYoungRegionCount();
@@ -618,12 +609,12 @@ public:
     // region slot becomes old; this object owns the original, un-copied map.
     class PromotionPage {
     public:
-        PromotionPage(std::unique_ptr<ZLiveMap> live, MAddress start, MAddress top, uint8_t age, bool large)
-            : livemap(std::move(live)), start(start), top(top), age(age), large(large) {}
+        PromotionPage(ZLiveMap* live, MAddress start, MAddress top, uint8_t age, bool large)
+            : livemap(live), start(start), top(top), age(age), large(large) {}
         void ObjectIterate(const std::function<void(BaseObject*)>& visitor) const;
         uint8_t Age() const { return age; }
     private:
-        std::unique_ptr<ZLiveMap> livemap;
+        ZLiveMap* livemap;
         MAddress start;
         MAddress top;
         uint8_t age;
@@ -631,8 +622,6 @@ public:
     };
 
     std::unique_ptr<PromotionPage> CloneForPromotion();
-
-    void SetYoungAge(uint8_t age);
 
     uint8_t GetYoungAge() const;
 
@@ -735,11 +724,7 @@ private:
     static constexpr uint8_t YOUNG_STATE_BIT_LENGTH = 1 + YOUNG_AGE_BIT_LENGTH;
     static constexpr uint8_t MAX_YOUNG_AGE = (1U << YOUNG_AGE_BIT_LENGTH) - 1;
     enum RegionStateBitPos : uint8_t {
-        REGION_TYPE_FLAG = 0,
-        TRACE_REGION_FLAG = BIT_LENGTH,
-        IN_GHOST_FROM_REGION_FLAG,
-        YOUNG_REGION_FLAG,
-        YOUNG_AGE_FLAG
+        IN_GHOST_FROM_REGION_FLAG = 5
     };
 
     // P11/P05 scratch. ZGC has no analogue; not part of the ZPage ten-field set.
@@ -757,7 +742,6 @@ private:
 
         std::atomic<RegionList*> regionListOwner{ nullptr };
         std::atomic<RegionLifeId> regionLifeId{ 0 };
-        ZLiveMap* livemap = nullptr;
         ZLiveMap* retiredLivemap = nullptr;
         ZPage* ownerRegion = nullptr;
         ZPage* ownerRegion0 = nullptr;
@@ -805,4 +789,4 @@ public:
 } // namespace MapleRuntime
 
 #include "Heap/z/zPage.inline.hpp"
-#endif // MRT_REGION_INFO_H
+#endif // MRT_ZPAGE_H

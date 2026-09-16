@@ -842,7 +842,7 @@ void RegionManager::PromoteAllRegions()
                 region->PromoteYoungRegion();
             } else {
                 // Preserve the pre-genface cleanup for already-old regions.
-                region->SetYoungAge(0);
+                region->reset(PageAge::old);
             }
         }
     });

@@ -258,9 +258,9 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
@@ -279,9 +279,9 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -307,9 +307,9 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -344,9 +344,9 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     // Product remset consumption accepts exact object starts through the loaded
     // TypeInfo registry (Remembered.cpp:1157-1204). GcHeapFixture normally needs
     // residence only; this product-entry test needs the stronger real-object precondition.
@@ -448,9 +448,9 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -509,9 +509,9 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -536,8 +536,8 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::old);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -552,8 +552,8 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
     GC_EXPECT_FALSE(rs.Contains(slot));
 
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     RefField<> installed = RemsetRearmTestAccess::Tag(collector, fx.obj1);
     const uintptr_t observedPrev = raw(field->GetFieldValue());
     field->StoreColoured(installed.GetFieldValue());
@@ -568,9 +568,9 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
 {
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -586,9 +586,9 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
 GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
 {
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -605,9 +605,9 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
 GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
 {
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -633,9 +633,9 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
@@ -654,8 +654,8 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
 GC_TEST(Remset, StaticRootNotRecorded)
 {
     GcHeapFixture fx;
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RememberedSet rs;
@@ -673,10 +673,10 @@ GC_TEST(Remset, StaticRootNotRecorded)
 GC_TEST(Remset, YoungToYoungNotRecorded)
 {
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::eden);
+    fx.region0->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
@@ -715,8 +715,8 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::old);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
@@ -757,9 +757,9 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -784,9 +784,9 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
 {
     RemsetNativeThreadScope nativeThread;
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);

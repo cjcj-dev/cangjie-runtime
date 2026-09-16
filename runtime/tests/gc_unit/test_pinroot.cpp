@@ -164,7 +164,7 @@ GC_TEST(RegionRetirement, StayYoungAfterCompactInPlaceDoesNotRelinkRecentFull)
     GcHeapFixture fx;
     RegionManager manager;
     ZPage* region = fx.region0;
-    region->SetYoungRegionFlag(1);
+    region->reset(PageAge::eden);
     // Minimal ghost geometry normally installed by PrepareForwardableRegion;
     // the unit fixture has no CollectorProxy, so plant only the state consumed
     // by FinishStayYoungInPlace/DispelGhostFromRegion.
@@ -188,7 +188,7 @@ GC_TEST(RegionRetirement, StayYoungTransfersCompletedCompactTailFromThreadLocal)
     GcHeapFixture fx;
     RegionManager manager;
     ZPage* region = fx.region0;
-    region->SetYoungRegionFlag(1);
+    region->reset(PageAge::eden);
     region->SetInGhostRegion(1);
     region->MarkForwardingDone();
 

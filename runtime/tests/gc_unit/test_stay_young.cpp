@@ -59,8 +59,8 @@ GC_TEST(StayYoung, BumpAgesAndKeepsYoung)
 {
     GcHeapFixture fx;
     ZPage* r = fx.region0;
-    r->SetYoungRegionFlag(1);
-    r->SetYoungAge(0);
+    r->reset(PageAge::eden);
+    r->reset(PageAge::old);
     r->SetRegionListOwner(nullptr);
     RegionManager::BumpYoungSurvivorAge(r);
     GC_EXPECT_EQ(r->GetYoungAge(), 1u);
@@ -71,8 +71,8 @@ GC_TEST(StayYoung, AgeClampsAtSurvivor14)
 {
     GcHeapFixture fx;
     ZPage* r = fx.region0;
-    r->SetYoungRegionFlag(1);
-    r->SetYoungAge(untype(PageAge::survivor14));
+    r->reset(PageAge::eden);
+    r->reset(PageAge::survivor14);
     RegionManager::BumpYoungSurvivorAge(r);
     GC_EXPECT_EQ(r->GetYoungAge(), static_cast<unsigned>(untype(PageAge::survivor14)));
 }
@@ -93,7 +93,7 @@ GC_TEST(StayYoung, GarbageTypeSurvivesGhostAndAgeCas)
     ZPage* r = fx.region0;
     r->SetRegionListOwner(nullptr);
     r->SetInGhostRegion(1);
-    r->SetYoungAge(3);
+    r->reset(static_cast<PageAge>(3));
     GC_EXPECT_TRUE(r->IsGarbageRegion());
     GC_EXPECT_TRUE(r->IsGhostFromRegion());
     GC_EXPECT_EQ(r->GetYoungAge(), 3u);
