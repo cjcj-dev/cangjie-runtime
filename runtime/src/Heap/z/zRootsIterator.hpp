@@ -75,7 +75,7 @@ public:
     void report_num_dead();
     size_t NumDeadForTest() const { return numDead; }
 private:
-    std::array<OopStorage::ParState<true>, 2> states;
+    std::array<OopStorage::ParState<true>, 3> states;
     ZGenerationIdOptional generation;
     size_t numDead = 0;
 };

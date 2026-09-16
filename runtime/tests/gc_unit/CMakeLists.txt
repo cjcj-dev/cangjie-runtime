@@ -88,6 +88,7 @@ set(GC_UNIT_SOURCES
     test_verify_roots.cpp
     test_p10_roots_iterator.cpp
     test_weak_roots.cpp
+    test_sync_native_wait.cpp
     test_verify_fail_close.cpp
     test_verify_phase.cpp
     test_verify_marking_stacks.cpp

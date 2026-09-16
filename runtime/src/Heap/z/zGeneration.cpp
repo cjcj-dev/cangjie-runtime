@@ -36,6 +36,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Common/SuspendibleThreadSet.h"
+#include "Sync/Sync.h"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
@@ -753,6 +754,7 @@ void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     if (oldCycle.WeakRootsProcessor() != nullptr) {
         oldCycle.WeakRootsProcessor()->process_weak_roots();
     }
+    SyncRetireDead();
     StringDedup::Instance().Clean([this](BaseObject* object) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         return region->IsYoungRegion() || IsMarkedObject<Generation::Old>(object);

@@ -28,7 +28,11 @@ MObject* MObject::NewObject(TypeInfo* ti, MSize size, AllocType allocType)
 MObject* MObject::NewPinnedObject(TypeInfo* ti, MSize size)
 {
     CHECK_DETAIL(ti->IsObjectType() == true, "must be object class.");
-    auto addr = HeapManager::Allocate(size, AllocType::PINNED_OBJECT);
+    // Sync wait state lives in native WeakHandle (objectMonitor.hpp:164).
+    // Do not pin Future/Mutex/Monitor/WaitQueue; they must relocate.
+    AllocType allocType =
+        ti->IsSyncClass() ? AllocType::MOVEABLE_OBJECT : AllocType::PINNED_OBJECT;
+    auto addr = HeapManager::Allocate(size, allocType);
     if (LIKELY(addr != NULL_ADDRESS)) {
         (void)SetClassInfo(addr, ti);
     } else {
