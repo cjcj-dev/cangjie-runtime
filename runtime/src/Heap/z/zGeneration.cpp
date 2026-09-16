@@ -34,6 +34,8 @@
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zWeakRootsProcessor.hpp"
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
@@ -747,15 +749,18 @@ void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     // Finalizable graphs were followed during mark discovery. This phase
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
     ProcessFinalizers();
+    if (oldCycle.WeakRootsProcessor() != nullptr) {
+        oldCycle.WeakRootsProcessor()->process_weak_roots();
+    }
     StringDedup::Instance().Clean([this](BaseObject* object) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         return region->IsYoungRegion() || IsMarkedObject<Generation::Old>(object);
     });
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
-    // A serial driver and synchronous ZWorkers::run have already joined GC
-    // work here; mutators (including the finalizer thread) need a rendezvous.
     ZRendezvousHandshakeClosure rendezvous;
     Handshake::execute(&rendezvous);
+    ZRendezvousGCThreads gcRendezvous;
+    gcRendezvous.doit();
     collectorResources.UnblockResurrection();
     collectorResources.GetFinalizerProcessor().EnqueueReferences();
     // zGeneration.cpp:1147-1168: the serial driver excludes young collections
@@ -1032,10 +1037,14 @@ void GenerationCycle::InitializeWorkers(uint32_t capacity)
 {
     CHECK(workers == nullptr);
     workers = std::make_unique<ZWorkers>(generation, capacity, &statWorkers);
+    if (generation == GCCycleGeneration::OLD) {
+        weakRootsProcessor = std::make_unique<ZWeakRootsProcessor>(workers.get());
+    }
 }
 
 void GenerationCycle::StopWorkers()
 {
+    weakRootsProcessor.reset();
     workers.reset();
 }
 }

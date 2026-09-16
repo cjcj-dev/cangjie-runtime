@@ -365,6 +365,11 @@ zaddress ZBarrier::blocking_keep_alive_on_phantom_slow_path(zaddress addr)
     return addr;
 }
 
+zaddress ZBarrier::blocking_load_barrier_on_phantom_slow_path(zaddress addr)
+{
+    return blocking_keep_alive_on_phantom_slow_path(addr);
+}
+
 zpointer ZBarrier::ColorLoadGood(zaddress address, zpointer previous)
 {
     return ZAddress::load_good(address, previous);
@@ -802,6 +807,24 @@ zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer
 {
     auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
     return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Phantom));
+}
+
+zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
+        return barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
+                       ColorMarkGood, p, o, false);
+    }
+    return load_barrier_on_oop_field_preloaded(p, o);
+}
+
+bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)
+{
+    CHECK_DETAIL(Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked(),
+                 "phantom clean is only valid when resurrection is blocked");
+    const zpointer o = load_atomic(p);
+    return is_null(barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
+                           ColorMarkGood, p, o, true));
 }
 
 void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)

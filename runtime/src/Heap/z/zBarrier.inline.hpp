@@ -9,6 +9,7 @@
 #define MRT_BARRIER_INLINE_H
 
 #include "Heap/z/zBarrier.hpp"
+#include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"

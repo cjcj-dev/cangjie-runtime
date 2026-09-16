@@ -38,6 +38,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -281,6 +282,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
 
 void WCollector::RemapYoungRoots()
 {
+    SuspendibleThreadSetJoiner joiner;
     MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
     // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
     const auto remset = Heap::GetHeap().GetRememberedSet().Snapshot();
@@ -415,7 +417,10 @@ bool WCollector::Preforward()
     private:
         ZArrayParallelIterator<std::function<void()>> iter;
     } roots(families, sizeof(families) / sizeof(families[0]));
-    workers.run(&roots);
+    {
+        SuspendibleThreadSetJoiner joiner;
+        workers.run(&roots);
+    }
     StringDedup::Instance().Remap();
     return true;
 }
