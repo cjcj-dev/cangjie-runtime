@@ -1579,13 +1579,21 @@ bool ZMark::FlushStacks()
 }
 
 namespace {
+bool HeapMarkReady()
+{
+    return Heap::GetHeap().GetRememberedSet().IsInitialized();
+}
+
 bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
 {
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     auto& remembered = Heap::GetHeap().GetRememberedSet();
     if (remembered.IsInitialized()) {
         data.storeBarrierBuffer->Flush();
     }
+    if (!HeapMarkReady()) {
+        return domain != nullptr ? data.FlushMarkStacks(*domain) : false;
+    }
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     return domain == nullptr ? collector.FlushGCDataMarkProducers(data)
                              : collector.FlushGCDataMarkProducers(data, domain);
 }
@@ -1601,6 +1609,9 @@ bool FlushTlsMarkProducers(ThreadLocalData* tls, ZMark* domain)
     }
     if (tls->gcData != nullptr) {
         published = FlushTargetGCData(*tls->gcData, domain) || published;
+    }
+    if (!HeapMarkReady()) {
+        return published;
     }
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     return (domain == nullptr ? collector.FlushThreadMarkProducers(tls)
@@ -1646,8 +1657,12 @@ bool ZMark::HandshakeFlush(ZMark* domain)
         ZMark* domain_;
         std::atomic<bool> flushed_;
     } cl(domain);
-    Heap::GetHeap().GetFinalizerProcessor().Notify();
-    Handshake::execute(&cl);
+    if (HeapMarkReady()) {
+        Heap::GetHeap().GetFinalizerProcessor().Notify();
+        Handshake::execute(&cl);
+    } else {
+        cl.do_thread(ThreadLocal::GetThreadLocalData());
+    }
     ThreadGCData::VisitOwners([&](ThreadGCData& data, Mutator* target, ThreadLocalData*) {
         if (target == nullptr) { return; }
         target->MutatorLock();
@@ -1716,9 +1731,15 @@ bool ZMark::TryEnd()
     if (terminate.Resurrected()) {
         return false;
     }
-    (void)Flush();
-    (void)FlushStacks();
-    return stripes.IsEmpty();
+    // zMark.cpp:954-970: resurrected check, then non-Java thread flush only.
+    bool flushed = FlushStacks();
+    if (HeapMarkReady()) {
+        flushed = HandshakeFlush(this) || flushed;
+    }
+    if (flushed || !stripes.IsEmpty()) {
+        return false;
+    }
+    return true;
 }
 
 void ZMark::Free()
