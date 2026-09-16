@@ -399,7 +399,6 @@ public:
     BaseObject* Resolve(BaseObject* from) const
     {
         RefField<> field(StoreGoodPointer(from));
-        auto& collector = static_cast<WCollector&>(theCollector);
         ZGlobalsPointers::flip_old_relocate_start();
         BaseObject* result = ReadReference(nullptr, field);
         ZGlobalsPointers::flip_old_relocate_start();
