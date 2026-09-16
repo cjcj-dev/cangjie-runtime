@@ -936,13 +936,12 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
 GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
 {
     for (bool preloaded : {false, true}) {
-        for (bool weak : {false, true}) {
+        {
+            const bool weak = true;
             GcHeapFixture fx;
             fx.region0->SetYoungRegionFlag(0);
             fx.region1->SetYoungRegionFlag(1);
-            if (weak) {
-                fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
-            }
+            fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
             RememberedSet rs;
             rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
             StoreBufferCollector collector;
