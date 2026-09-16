@@ -38,7 +38,6 @@ void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr);
 // exhaustive: a catch-all value would recreate the attribution gap HealSlot closes.
 enum class HealSite : uint16_t {
     BaseObjectCompareExchangeRefField,
-    BarrierReadReference,
     BarrierWeakClean,
     BarrierCompareAndSwapReference,
     MutatorPreForwardHeaderlessRecord,
