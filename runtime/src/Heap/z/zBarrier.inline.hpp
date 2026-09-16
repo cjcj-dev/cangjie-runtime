@@ -176,7 +176,7 @@ inline bool ZBarrier::is_store_good_fast_path(zpointer ptr)
 
 inline bool ZBarrier::is_store_good_or_null_fast_path(zpointer ptr)
 {
-    return is_null(ptr) || ZPointer::is_store_good(ptr);
+    return ZPointer::is_store_good_or_null(ptr);
 }
 
 inline bool ZBarrier::is_store_good_or_null_any_fast_path(zpointer ptr)
