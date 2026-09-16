@@ -868,7 +868,9 @@ inline void RegionInfo::SetYoungAge(uint8_t age)
 
 inline uint8_t RegionInfo::GetYoungAge() const
     {
-        return static_cast<uint8_t>(untype(_age));
+        return static_cast<uint8_t>(metadata.regionStateBitField.GetAtomicValue(
+                                        RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH) >>
+                                    RegionStateBitPos::YOUNG_AGE_FLAG);
     }
 
 inline RegionInfo::RegionType RegionInfo::GetRegionType() const
@@ -1157,6 +1159,9 @@ inline void RegionInfo::InitRegion(size_t nUnit, UnitRole uClass, PageAge age)
     {
         InitRegionInfo(nUnit, uClass, age);
         CHECK(uClass != UnitRole::FREE_UNITS);
+        if (ZPageTable::heap_table().get(GetRegionStart()) != this) {
+            ZPageTable::heap_table().insert(this);
+        }
     }
 
 } // namespace MapleRuntime

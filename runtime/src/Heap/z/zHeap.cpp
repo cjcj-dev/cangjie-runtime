@@ -455,7 +455,7 @@ RegionInfo* Heap::alloc_page(size_t num, UnitRole role, bool expectPhysicalMem, 
 {
     RegionManager& manager = static_cast<RegionSpace&>(GetHeap().GetAllocator()).GetRegionManager();
     RegionInfo* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
-    if (page != nullptr) {
+    if (page != nullptr && page_table().get(page->GetRegionStart()) != page) {
         page_table().insert(page);
     }
     return page;
