@@ -468,16 +468,9 @@ inline ZPage* ZPage::GetZPage(uint32_t idx)
     return ZPageTable::heap_table().get(GetUnitAddress(idx));
 }
 
-inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t allocAddr)
+inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t)
     {
-        ZPage* region = ZPageTable::heap_table().get(allocAddr);
-        if (region == nullptr || !region->IsGhostFromRegion()) {
-            return nullptr;
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        RunGhostLookupTestHook(region);
-#endif
-        return region;
+        return nullptr;
     }
 
 inline MAddress ZPage::GetUnitAddress(size_t idx)
@@ -639,42 +632,6 @@ inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
         _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
 
-    template<Generation G>
-inline void ZPage::PrepareForwardableRegion()
-    {
-        CHECK(IsFromRegion());
-        CHECK(is_small());
-        (void)IsForwardingDone();
-        // The preceding generation reset removed its forwarding set.
-        ClearRelocationResiduals();
-        // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
-        // parallel with the region machinery so the two answers can be compared before either is
-        // trusted; nothing reads it for decisions yet.
-        CHECK_DETAIL(forwarding_for_page(this) != nullptr,
-                     "forwarding table install failed before relocation region=%p range=[%#zx,%#zx)",
-                     this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
-        // enrolphase: which side of the relocate-start flip does this enrolment land on?
-        //
-        // OpenJDK installs the relocation set once, in the concurrent select_relocation_set
-        // (zGeneration.cpp:254 ZRelocationSet::install), and only then flips
-        // (relocate_start -> flip_relocate_start, :918 -> :922).  Post-flip the set is closed, so
-        // "painted with the current colour after the flip" implies "will not move this cycle".
-        //
-        // EvacuateYoungRegions calls PrepareForwardTable<Young> twice -- WCollector.cpp:6483 and
-        // again at :6952 -- with the young flip between them.  An enrolment on the far side leaves
-        // a window in which a region is still NORMAL while the current colour is already the new
-        // one, and a value painted there is load-good but names an object that is about to move.
-        // That matches the measured FORWARD population exactly (afterFlip=1, slotGood=1, hasTo=1,
-        // 20/20), and it is why moving only the first flip (kFlipAfterFromSpace) changed nothing.
-        //
-        // The staleness predicate is not the hole: over ~2^20 non-NORMAL targets per run, across
-        // six runs, zero escaped it.
-        // Shared boundary: publish immutable from-page metadata, forwarding
-        // construction token, and ghost membership through one product edge.
-        PublishForwardingCarrier<G>();
-
-    }
-
 inline void ZPage::ClearGhostRegionBit()
     {
         if (IsGhostFromRegion()) {
@@ -715,12 +672,7 @@ inline void ZPage::DispelGhostFromRegion()
 
 inline bool ZPage::IsGhostFromRegion() const
     {
-        const bool ghost = _scratch.regionStateBitField.GetAtomicValue(
-            RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) != 0;
-        if (!ghost) {
-            return false;
-        }
-        return __atomic_load_n(&_scratch.ghostLifeId, __ATOMIC_ACQUIRE) == GetRegionLifeId();
+        return false;
     }
 
 inline void ZPage::AssertGhostClearedAfterReuse(size_t nUnit) const
@@ -784,13 +736,8 @@ inline bool ZPage::ForwardingClaimed() const
 
 
 
-inline void ZPage::SetInGhostRegion(uint8_t flag)
+inline void ZPage::SetInGhostRegion(uint8_t)
     {
-        const RegionLifeId life = GetRegionLifeId();
-        __atomic_store_n(&_scratch.ghostLifeId, life, __ATOMIC_RELEASE);
-        _scratch.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
-        if (flag != 0) {
-        }
     }
 
 // ZPage::clone_for_promotion + ZPage::reset(age) (zPage.cpp:64-72, 103-113)

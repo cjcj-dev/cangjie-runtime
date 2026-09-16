@@ -280,7 +280,6 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     selected.PrependRegion(route.source);
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
     (void)selected.TakeHeadRegion();
-    route.source->PrepareForwardableRegion<Generation::Old>();
     route.from->SetStateCode(ObjectState::FORWARDED);
     ZForwarding* publication = forwarding_for_page(
         route.source, reinterpret_cast<MAddress>(route.from));

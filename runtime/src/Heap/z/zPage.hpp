@@ -452,19 +452,10 @@ public:
     template<Generation G>
     void PublishFromPageMetadata();
 
-    // Product publication edge shared by forwarding and from-page liveness.
-    // Keep this in the ordinary product inline path: the operation is part of
-    // PrepareForwardableRegion, not a test-facing ABI surface.
     template<Generation G>
     __attribute__((always_inline)) inline void PublishForwardingCarrier();
 
-    template<Generation G>
-    void PrepareForwardableRegion();
-
     void ClearGhostRegionBit();
-
-    // dispel all units of this region.
-    // inGhostFromRegion is the unique guard condition.
 
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.
@@ -753,7 +744,7 @@ private:
         uint32_t nextRegionIdx0;
         union {
             struct {
-                uint8_t inGhostFromRegion : 1;
+                uint8_t unusedGhostPad : 1;
             };
             AtomicBitField<uint16_t> regionStateBitField;
         };

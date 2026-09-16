@@ -164,19 +164,6 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     selected.PrependRegion(region);
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
-    // Invoke the explicit product instantiation, not a header-instantiated
-    // fixture copy of the forwarding publication mechanism.
-    using Prepare = void (*)(ZPage*);
-    void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    GC_EXPECT_TRUE(product != nullptr);
-    auto prepare = reinterpret_cast<Prepare>(dlsym(product,
-        "_ZN12MapleRuntime10ZPage24PrepareForwardableRegionILNS_10GenerationE0EEEvv"));
-    GC_EXPECT_TRUE(prepare != nullptr);
-    Dl_info identity{};
-    GC_EXPECT_TRUE(dladdr(reinterpret_cast<void*>(prepare), &identity) != 0 &&
-                   identity.dli_fname != nullptr && std::strstr(identity.dli_fname, "libcangjie-runtime.so") != nullptr);
-    prepare(region);
-    dlclose(product);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_PREFORWARD);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();

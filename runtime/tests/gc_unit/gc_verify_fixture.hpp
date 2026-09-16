@@ -37,7 +37,6 @@ struct GcVerifyFixture : GcHeapFixture {
         selected.PrependRegion(region0);
         CHECK(BeginForwardingArena(Generation::Old, selected));
         (void)selected.TakeHeadRegion();
-        region0->PrepareForwardableRegion<Generation::Old>();
     }
 };
 } // namespace MapleRuntime::GcUnit

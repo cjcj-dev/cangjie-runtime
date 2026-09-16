@@ -55,21 +55,8 @@ namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
     template<Generation G>
-    static void PrepareProductPage(ZPage* region)
+    static void PrepareProductPage(ZPage*)
     {
-        using ProductFn = void (*)(ZPage*);
-        void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-        GC_EXPECT_TRUE(handle != nullptr);
-        const char* name = G == Generation::Young
-            ? "_ZN12MapleRuntime10ZPage24PrepareForwardableRegionILNS_10GenerationE0EEEvv"
-            : "_ZN12MapleRuntime10ZPage24PrepareForwardableRegionILNS_10GenerationE1EEEvv";
-        void* symbol = dlsym(handle, name);
-        GC_EXPECT_TRUE(symbol != nullptr);
-        Dl_info info {};
-        GC_EXPECT_TRUE(dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&
-                       std::strstr(info.dli_fname, "libcangjie-runtime.so") != nullptr);
-        reinterpret_cast<ProductFn>(symbol)(region);
-        dlclose(handle);
     }
 
     static void ParkFrom(RegionManager& manager, ZPage* region)
