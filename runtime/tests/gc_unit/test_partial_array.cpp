@@ -170,7 +170,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
 {
     GcHeapFixture fx;
     Heap::OnHeapCreated(fx.heapStart);
-    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     SlotBuf buf(MarkPartialArray::MIN_LENGTH);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     TracingCollector::WorkStack workStack;

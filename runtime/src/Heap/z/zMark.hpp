@@ -404,7 +404,7 @@ public:
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
     // ZPage::mark_object(addr, finalizable = true) with direct inc_live accounting.
-    virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
+    virtual bool ResurrectObject(BaseObject* obj, size_t offset, ZPage* regionInfo)
     {
         (void)offset;
         bool incLive = false;
@@ -470,7 +470,7 @@ protected:
         ValueRoot(BaseObject* value, ForwardingStage source = ForwardingStage::OverwritePrevious)
             : object(value), stage(source), color(::g_cjLoadGoodMask),
               generation(source == ForwardingStage::IncomingNew && Heap::IsHeapAddress(value)
-                  ? RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(value))->GetOwnerGeneration()
+                  ? Heap::page(reinterpret_cast<MAddress>(value))->GetOwnerGeneration()
                   : Generation::Old) {}
         operator BaseObject*() const { return object; }
         ForwardingStage Stage() const

@@ -49,8 +49,8 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-// enroltime: defined out of line so RegionInfo.h does not have to see Heap/GCPhase.
-void RegionInfo::NoteEnrolPhase()
+// enroltime: defined out of line so ZPage.h does not have to see Heap/GCPhase.
+void ZPage::NoteEnrolPhase()
 {
     // Diagnostic-only. gc_unit fixtures never Heap::Init, so
     // CollectorProxy::currentCollector is null and GetGCPhase would fault.
@@ -123,22 +123,22 @@ void RegionInfo::NoteEnrolPhase()
 
 namespace MapleRuntime {
 #if defined(MRT_GC_UNIT_TESTS)
-std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
-std::atomic<size_t> RegionInfo::ghostLookupTestHookCalls { 0 };
+std::atomic<ZPage::GhostLookupTestHook> ZPage::ghostLookupTestHook { nullptr };
+std::atomic<size_t> ZPage::ghostLookupTestHookCalls { 0 };
 
 
-void RegionInfo::SetGhostLookupTestHook(GhostLookupTestHook hook)
+void ZPage::SetGhostLookupTestHook(GhostLookupTestHook hook)
 {
     ghostLookupTestHookCalls.store(0, std::memory_order_relaxed);
     ghostLookupTestHook.store(hook, std::memory_order_release);
 }
 
-size_t RegionInfo::GhostLookupTestHookCalls()
+size_t ZPage::GhostLookupTestHookCalls()
 {
     return ghostLookupTestHookCalls.load(std::memory_order_acquire);
 }
 
-void RegionInfo::RunGhostLookupTestHook(RegionInfo* region)
+void ZPage::RunGhostLookupTestHook(ZPage* region)
 {
     GhostLookupTestHook hook = ghostLookupTestHook.exchange(nullptr, std::memory_order_acq_rel);
     if (hook != nullptr) {

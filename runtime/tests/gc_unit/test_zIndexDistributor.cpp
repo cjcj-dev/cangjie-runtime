@@ -335,14 +335,20 @@ GC_TEST(ZIndexDistributorTest, page_table_parallel_iterator_emits_each_page_once
     constexpr size_t domain = 4096;
     constexpr size_t granule = 4096;
     constexpr MAddress base = 0x40000000;
-    ZGranuleMap<Page*> table;
-    GC_EXPECT_TRUE(table.Initialize(base, domain * granule, granule));
+    ZGranuleMap<Page*> table(domain * granule, base, granule);
     Page pages[] = {{base, 0}, {base + (domain / 2) * granule, 1}, {base + (domain - 1) * granule, 2}};
     table.put(static_cast<zoffset>(0), 3 * granule, &pages[0]);
     table.put(static_cast<zoffset>((domain / 2) * granule), 2 * granule, &pages[1]);
     table.put(static_cast<zoffset>((domain - 1) * granule), granule, &pages[2]);
     std::vector<size_t> expected(3);
-    table.visit_unique([&](Page* page) { ++expected[page->id]; });
+    Page* last = nullptr;
+    for (size_t i = 0; i < table.size(); ++i) {
+        Page* page = table.at(i);
+        if (page != nullptr && page != last) {
+            ++expected[page->id];
+            last = page;
+        }
+    }
     std::vector<std::atomic<size_t>> actual(expected.size());
     for (auto& count : actual) {
         count.store(0);

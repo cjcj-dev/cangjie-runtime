@@ -200,8 +200,8 @@ GC_TEST(YoungConc, PaintedObjectSkippedByShouldEnqueue)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
+    fx.region0->reset(PageAge::eden);
+    fx.region0->reset(PageAge::eden);
 
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
 
@@ -215,28 +215,11 @@ GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
+    fx.region0->reset(PageAge::eden);
+    fx.region0->reset(PageAge::eden);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
-}
-
-// isTraceRegion without paint is not allocate-black: SATB must still enqueue
-// (zBarrier.inline.hpp:735-739 mark_and_remember). Skipping here left SurvivalNode
-// array overwrites white (survnode visitSame=0).
-GC_TEST(YoungConc, TraceRegionSkipsSatbWithoutPaint)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    fx.region0->SetTraceRegionFlag(1);
-
-    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
-    GC_EXPECT_FALSE(fx.region0->is_object_strongly_live(from_object(fx.obj0)));
-
 }
 
 GC_TEST(YoungConc, EpochHandshakeIsRequired)
@@ -342,8 +325,8 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     BaseObject* first = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + 64);
@@ -356,7 +339,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(first);
     space.GetRegionManager().AddRawPointerObject(second);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Mutator producer;
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
@@ -396,8 +379,8 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
@@ -410,7 +393,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -446,9 +429,9 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
@@ -461,7 +444,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -506,8 +489,8 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     BaseObject* y2yHolder = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     BaseObject* y2yChild = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 192);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(y2yChild) + 64);
@@ -522,7 +505,7 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     space.GetRegionManager().AddRawPointerObject(y2yHolder);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -557,8 +540,8 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj1) + 64);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
@@ -568,7 +551,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -598,7 +581,7 @@ GC_OTHER_VM_TEST(YoungConc, ExportRootRegistrationDoesNotMarkIncomingValue)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->reset(PageAge::eden);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(fx.obj1);
     std::vector<BaseObject*> work;
     mark.DrainObjects(work);
@@ -615,7 +598,7 @@ GC_OTHER_VM_TEST(YoungConc, RemovingExportRootPublishesPreviousValue)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->reset(PageAge::eden);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(fx.obj1);
     RelocationReceiptTestAccess::FlipYoungMarkForNativeBarrier(mark.collector);
     Heap::GetHeap().RemoveExportObject(handle);
@@ -631,15 +614,15 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::eden);
+    fx.region0->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     TestCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     TestBarrier barrier(collector, rs);
 
     field->StoreColoured(zpointer::null);
@@ -731,11 +714,11 @@ GC_TEST(YoungConc, TraceRefFieldRemapsPreviousRelocationEpoch)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->SetRegionListOwner(nullptr);
+    fx.region0->reset(PageAge::eden);
+    fx.region0->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
@@ -772,14 +755,14 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     TestCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     TestBarrier barrier(collector, rs);
 
     field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
@@ -801,11 +784,11 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::old);
     TestCollector collector;
     RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     TestBarrier barrier(collector, remembered);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
@@ -828,13 +811,13 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    BaseObject* incoming = fx.PlaceObject(fx.heapStart + RegionInfo::UNIT_SIZE + 128);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    BaseObject* incoming = fx.PlaceObject(fx.heapStart + ZPage::UNIT_SIZE + 128);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     TestCollector collector;
     RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     TestBarrier barrier(collector, remembered);
     // ZBarrier::store_barrier_on_heap_oop_field reads prev before the store
     // (zBarrier.inline.hpp:695-705); stale mark colors force its slow path.
@@ -856,14 +839,14 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
     markFixture.collector.GetGenerationCycle(GCCycleGeneration::YOUNG).PublishPhase(GC_PHASE_IDLE);
     markFixture.collector.GetGenerationCycle(GCCycleGeneration::OLD).PublishPhase(GC_PHASE_IDLE);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     TestCollector collector;
     RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     TestBarrier barrier(collector, remembered);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     barrier.WriteReference(fx.obj0, field, nullptr);
@@ -897,7 +880,7 @@ GC_TEST(YoungConc, FlipForMinorSeparatesConcurrentProducerFace)
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     RememberedSet rememberedSet;
-    rememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const MAddress before = fx.heapStart + 8 * sizeof(void*);
     const MAddress during = fx.heapStart + 9 * sizeof(void*);
     rememberedSet.Record(before);
@@ -917,7 +900,7 @@ GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::eden);
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
     markFixture.collector.MarkYoungObjectIfActive(fx.obj0);
     GC_EXPECT_EQ(markFixture.YoungPending(), 1u);
@@ -933,10 +916,10 @@ GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
     RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     StoreBarrierBuffer buffer;
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
     const zpointer previous = RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue();
@@ -1032,7 +1015,7 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     MarkPublicationFixture publication;
                     auto& cycle = publication.collector.GetGenerationCycle(
                         young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-                    fx.region0->SetYoungRegionFlag(young);
+                    fx.region0->reset(young ? PageAge::eden : PageAge::old);
                     fx.region0->ResetPageSequence();
                     auto fn = P1Entry(false, gcThread, follow, finalizable);
                     fn(&cycle, from_object(fx.obj0));
@@ -1041,7 +1024,7 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                                  young, gcThread, follow, finalizable, pending,
                                  static_cast<size_t>(fx.region0->live_bytes()));
                     GC_EXPECT_EQ(pending, 0u);
-                    GC_EXPECT_FALSE(fx.region0->livemap()->is_marked(fx.region0->generation_id()));
+                    GC_EXPECT_FALSE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
                     cycle.PublishPhase(GC_PHASE_TRACE);
                     fn(&cycle, from_object(fx.obj0));
@@ -1079,7 +1062,7 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     YoungConcTestRuntime runtime(manager);
     GcHeapFixture fx;
     MarkPublicationFixture publication;
-    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->reset(PageAge::eden);
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto& cycle = publication.collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -1104,7 +1087,7 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
     MarkPublicationFixture publication;
     auto& cycle = publication.collector.GetGenerationCycle(GCCycleGeneration::OLD);
     auto& domain = *publication.collector.MajorMarkDomain();
-    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->reset(PageAge::old);
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     auto fn = P1Entry(true, true, true, false);

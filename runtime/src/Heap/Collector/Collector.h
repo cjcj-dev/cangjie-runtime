@@ -185,8 +185,8 @@ public:
     struct UnavailableWitness {
         bool forwardedValid{ false };
         bool forwarded{ false };
-        bool fromRegionInfoNullValid{ false };
-        bool fromRegionInfoNull{ false };
+        bool fromZPageNullValid{ false };
+        bool fromZPageNull{ false };
         const char* lookupAnswer{ "not_queried" };
         bool lookupSnapshotValid{ false };
         const char* lookupCause{ "n/a" };
@@ -228,8 +228,8 @@ public:
     UnavailableRoute unavailable_route() const { return unavailableRoute; }
     bool unavailable_forwarded_valid() const { return unavailableForwardedValid; }
     bool unavailable_forwarded() const { return unavailableForwarded; }
-    bool unavailable_from_region_info_null_valid() const { return unavailableFromRegionInfoNullValid; }
-    bool unavailable_from_region_info_null() const { return unavailableFromRegionInfoNull; }
+    bool unavailable_from_region_info_null_valid() const { return unavailableFromZPageNullValid; }
+    bool unavailable_from_region_info_null() const { return unavailableFromZPageNull; }
     const char* unavailable_lookup_answer() const { return unavailableLookupAnswer; }
     bool unavailable_lookup_snapshot_valid() const { return unavailableLookupSnapshotValid; }
     const char* unavailable_lookup_cause() const { return unavailableLookupCause; }
@@ -238,7 +238,7 @@ public:
     uintptr_t unavailable_from() const { return unavailableFrom; }
     uintptr_t unavailable_from_region() const { return unavailableFromRegion; }
     bool unavailable_region_snapshot_valid() const { return unavailableRegionSnapshotValid; }
-    uint8_t unavailable_region_type() const { return unavailableRegionType; }
+    uint8_t unavailable_region_type() const { return unavailablePageKind; }
     uint8_t unavailable_generation() const { return unavailableGeneration; }
     bool unavailable_in_current_relocation_set() const { return unavailableInCurrentRelocationSet; }
     uintptr_t unavailable_table_id() const { return unavailableTableId; }
@@ -271,8 +271,8 @@ public:
                                 const ForwardingProvenance& provenance) const
     {
         const char* forwarded = unavailableForwardedValid ? (unavailableForwarded ? "1" : "0") : "n/a";
-        const char* fromRegionInfoNull = unavailableFromRegionInfoNullValid
-            ? (unavailableFromRegionInfoNull ? "1" : "0") : "n/a";
+        const char* fromZPageNull = unavailableFromZPageNullValid
+            ? (unavailableFromZPageNull ? "1" : "0") : "n/a";
         const char* lookup = unavailableLookupSnapshotValid ? unavailableLookupAnswer : "n/a";
         const char* lookupCause = unavailableLookupSnapshotValid ? unavailableLookupCause : "n/a";
         const char* activeCandidate = unavailableLookupSnapshotValid
@@ -286,7 +286,7 @@ public:
                      "field_type=%s field_offset=%zu from=%p from_region=%p "
                      "region_type=%s(%u) generation=%u in_current_relocation_set=%u table_id=%#zx "
                      "from_page_epoch=%llu lifeId=%llu "
-                     "lookup_state=%s route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
+                     "lookup_state=%s route=%s forwarded=%s fromZPage_null=%s lookup=%s "
                      "lookup_snapshot_valid=%u cause=%s active_candidate=%s active_lookup=%s "
                       "never_installed_event=%llu gc_phase=%u",
                      consumer == nullptr ? "unknown" : consumer,
@@ -297,7 +297,7 @@ public:
                      provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
                      provenance.fieldOffset,
                      reinterpret_cast<void*>(unavailableFrom), reinterpret_cast<void*>(unavailableFromRegion),
-                     regionType, static_cast<unsigned>(unavailableRegionType),
+                     regionType, static_cast<unsigned>(unavailablePageKind),
                      static_cast<unsigned>(unavailableGeneration),
                      unavailableInCurrentRelocationSet ? 1u : 0u,
                      static_cast<size_t>(unavailableTableId),
@@ -305,7 +305,7 @@ public:
                      static_cast<unsigned long long>(unavailableFromPageLifeId),
                      lookup,
                      unavailable_route_name(),
-                     forwarded, fromRegionInfoNull, lookup,
+                     forwarded, fromZPageNull, lookup,
                      static_cast<unsigned>(unavailableLookupSnapshotValid), lookupCause,
                       activeCandidate, activeLookup,
                       static_cast<unsigned long long>(unavailableNeverInstalledEvent),
@@ -317,12 +317,12 @@ private:
     FindToVersionResult(State state, BaseObject* object)
         : lookupState(state), object(object), unavailableRoute(UnavailableRoute::Unknown),
           unavailableForwardedValid(false), unavailableForwarded(false),
-          unavailableFromRegionInfoNullValid(false), unavailableFromRegionInfoNull(false),
+          unavailableFromZPageNullValid(false), unavailableFromZPageNull(false),
           unavailableLookupAnswer("not_queried"), unavailableLookupSnapshotValid(false),
           unavailableLookupCause("n/a"), unavailableLookupActiveCandidate(false),
           unavailableLookupActiveAnswer("n/a"),
           unavailableFrom(0), unavailableFromRegion(0),
-          unavailableRegionSnapshotValid(false), unavailableRegionType(0), unavailableGeneration(0),
+          unavailableRegionSnapshotValid(false), unavailablePageKind(0), unavailableGeneration(0),
           unavailableInCurrentRelocationSet(false), unavailableTableId(0),
           unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
           unavailableForwardingSnapshotValid(false), unavailableNeverInstalledEvent(0),
@@ -333,8 +333,8 @@ private:
     FindToVersionResult(UnavailableRoute route, const UnavailableWitness& witness)
         : lookupState(State::Unavailable), object(nullptr), unavailableRoute(route),
           unavailableForwardedValid(witness.forwardedValid), unavailableForwarded(witness.forwarded),
-          unavailableFromRegionInfoNullValid(witness.fromRegionInfoNullValid),
-          unavailableFromRegionInfoNull(witness.fromRegionInfoNull),
+          unavailableFromZPageNullValid(witness.fromZPageNullValid),
+          unavailableFromZPageNull(witness.fromZPageNull),
           unavailableLookupAnswer(witness.lookupAnswer == nullptr ? "unknown" : witness.lookupAnswer),
           unavailableLookupSnapshotValid(witness.lookupSnapshotValid),
           unavailableLookupCause(witness.lookupCause == nullptr ? "unknown" : witness.lookupCause),
@@ -344,7 +344,7 @@ private:
           unavailableFrom(witness.from),
           unavailableFromRegion(witness.fromRegion),
           unavailableRegionSnapshotValid(witness.regionSnapshotValid),
-          unavailableRegionType(witness.regionType), unavailableGeneration(witness.generation),
+          unavailablePageKind(witness.regionType), unavailableGeneration(witness.generation),
           unavailableInCurrentRelocationSet(witness.inCurrentRelocationSet),
           unavailableTableId(witness.tableId),
           unavailableFromPageEpoch(witness.fromPageEpoch),
@@ -360,8 +360,8 @@ private:
     UnavailableRoute unavailableRoute;
     bool unavailableForwardedValid;
     bool unavailableForwarded;
-    bool unavailableFromRegionInfoNullValid;
-    bool unavailableFromRegionInfoNull;
+    bool unavailableFromZPageNullValid;
+    bool unavailableFromZPageNull;
     const char* unavailableLookupAnswer;
     bool unavailableLookupSnapshotValid;
     const char* unavailableLookupCause;
@@ -370,7 +370,7 @@ private:
     uintptr_t unavailableFrom;
     uintptr_t unavailableFromRegion;
     bool unavailableRegionSnapshotValid;
-    uint8_t unavailableRegionType;
+    uint8_t unavailablePageKind;
     uint8_t unavailableGeneration;
     bool unavailableInCurrentRelocationSet;
     uintptr_t unavailableTableId;

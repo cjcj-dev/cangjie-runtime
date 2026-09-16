@@ -194,7 +194,7 @@ struct CompilerStoreFixture {
 // ① iorfix 8baacb1e — pregrant before RouteRegion freezes domain.
 // Contract: after liveInfo0 is frozen without object B, later mark on a *different*
 // current liveInfo does not open GetRoute(B). Route geometry alone is not enough.
-// Product: RegionInfo::GetRoute domain gate (RegionInfo.h:812+) + installdomain paint face.
+// Product: ZPage::GetRoute domain gate (ZPage.h:812+) + installdomain paint face.
 
 
 // ② nullslot 2da28bee — non-heap latest must not be CAS-null'd (recolour only).
@@ -289,10 +289,10 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -320,10 +320,10 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -362,10 +362,10 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
@@ -408,10 +408,10 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     InstalledExportMutator mutator;
     CompilerStoreFixture fx;
-    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    fx.heap.region0->SetYoungRegionFlag(0);
-    fx.heap.region1->SetYoungRegionFlag(1);
-    fx.heap.region1->SetYoungAge(1);
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * ZPage::UNIT_SIZE);
+    fx.heap.region0->reset(PageAge::old);
+    fx.heap.region1->reset(PageAge::eden);
+    fx.heap.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);

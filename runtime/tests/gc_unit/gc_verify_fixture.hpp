@@ -19,22 +19,22 @@ struct GcVerifyFixture : GcHeapFixture {
         obj1 = PlaceObject(region1->GetRegionStart());
         region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + RegionSpace::GetAllocSize(*obj0));
         region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + RegionSpace::GetAllocSize(*obj1));
-        region0->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        region0->SetRegionListOwner(nullptr);
+        region1->SetRegionListOwner(nullptr);
     }
 
     void PrepareOldSource()
     {
-        region0->SetYoungRegionFlag(0);
-        region1->SetYoungRegionFlag(0);
+        region0->reset(PageAge::old);
+        region1->reset(PageAge::old);
         (void)RegionSpace::MarkObject<Generation::Old>(obj0);
         LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Old)
             .PublishPhase(GC_PHASE_MARK_COMPLETE);
         // zRelocationSet.cpp:110-118: select pages and install the arena before
         // preparing a source page or verifying its forwarding entries.
-        region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+        region0->SetRegionListOwner(nullptr);
         RegionList selected("verify-source");
-        selected.PrependRegion(region0, region0->GetRegionType());
+        selected.PrependRegion(region0);
         CHECK(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
         (void)selected.TakeHeadRegion();
         region0->PrepareForwardableRegion<Generation::Old>();

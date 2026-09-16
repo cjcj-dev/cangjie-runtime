@@ -249,7 +249,7 @@ void NoteExportRootPublicationAtT2TestReceipt()
     BaseObject* holder = g_exportRootAfterT1Holder.load(std::memory_order_acquire);
     BaseObject* child = g_exportRootAfterT1Child.load(std::memory_order_acquire);
     auto isMarked = [](BaseObject* object) {
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
         return region != nullptr && region->is_object_strongly_live(from_object(object));
     };
     g_exportRootHolderMarked.store(isMarked(holder), std::memory_order_relaxed);

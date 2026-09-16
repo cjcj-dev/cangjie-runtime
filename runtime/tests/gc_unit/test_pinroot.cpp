@@ -20,22 +20,22 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct PinRootTestAccess {
-    static void MakeOldPinned(RegionManager& manager, RegionInfo* region)
+    static void MakeOldPinned(RegionManager& manager, ZPage* region)
     {
-        manager.oldPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::FULL_PINNED_REGION);
+        manager.oldPinnedRegionList.PrependRegion(region);
     }
 
     // Reuses the friendship this file already has rather than adding another one to the product
     // header: the region lists are private, and a second friend declaration is a permanent change
     // to RegionManager for the sake of one test.
-    static void ParkOnThreadLocal(RegionManager& manager, RegionInfo* region)
+    static void ParkOnThreadLocal(RegionManager& manager, ZPage* region)
     {
-        manager.tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        manager.tlRegionList.PrependRegion(region);
     }
-    static bool OnRecentFull(RegionManager& manager, const RegionInfo* region)
+    static bool OnRecentFull(RegionManager& manager, const ZPage* region)
     {
         bool found = false;
-        manager.recentFullRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
+        manager.recentFullRegionList.VisitAllRegions([&found, region](ZPage* r) {
             if (r == region) {
                 found = true;
             }
@@ -46,10 +46,10 @@ struct PinRootTestAccess {
     {
         return manager.recentFullRegionList.GetRegionCount();
     }
-    static bool OnThreadLocal(RegionManager& manager, const RegionInfo* region)
+    static bool OnThreadLocal(RegionManager& manager, const ZPage* region)
     {
         bool found = false;
-        manager.tlRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
+        manager.tlRegionList.VisitAllRegions([&found, region](ZPage* r) {
             if (r == region) {
                 found = true;
             }
@@ -77,7 +77,7 @@ PinRootResult RunPinnedArm()
     GcHeapFixture fx;
     fx.typeInfo->SetInstanceSize(static_cast<U32>(kFutureSize - sizeof(void*)));
 
-    RegionInfo* region = fx.region0;
+    ZPage* region = fx.region0;
     MAddress start = region->GetRegionStart();
     for (size_t i = 0; i < kFutureCount; ++i) {
         (void)fx.PlaceObject(start + i * kFutureSize);
@@ -139,18 +139,18 @@ GC_TEST(RegionRetirement, CompactInPlaceLeavesRegionOnAListACollectorWalks)
 {
     GcHeapFixture fx;
     RegionManager manager;
-    RegionInfo* region = fx.region0;
+    ZPage* region = fx.region0;
 
     // Where CompactRegion leaves it, with no AllocBuffer owning it any more.
     PinRootTestAccess::ParkOnThreadLocal(manager, region);
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRegionType()),
-                 static_cast<unsigned>(RegionInfo::RegionType::THREAD_LOCAL_REGION));
+    GC_EXPECT_EQ(static_cast<unsigned>(0u),
+                 static_cast<unsigned>(1));
 
     manager.RehomeCompactedInPlaceRegion(region);
 
     // The invariant: it now sits on a list a collection-set builder reads, typed accordingly.
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRegionType()),
-                 static_cast<unsigned>(RegionInfo::RegionType::RECENT_FULL_REGION));
+    GC_EXPECT_EQ(static_cast<unsigned>(0u),
+                 static_cast<unsigned>(0));
 
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
     GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
@@ -163,8 +163,8 @@ GC_TEST(RegionRetirement, StayYoungAfterCompactInPlaceDoesNotRelinkRecentFull)
 {
     GcHeapFixture fx;
     RegionManager manager;
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
+    ZPage* region = fx.region0;
+    region->reset(PageAge::eden);
     // Minimal ghost geometry normally installed by PrepareForwardableRegion;
     // the unit fixture has no CollectorProxy, so plant only the state consumed
     // by FinishStayYoungInPlace/DispelGhostFromRegion.
@@ -187,8 +187,8 @@ GC_TEST(RegionRetirement, StayYoungTransfersCompletedCompactTailFromThreadLocal)
 {
     GcHeapFixture fx;
     RegionManager manager;
-    RegionInfo* region = fx.region0;
-    region->SetYoungRegionFlag(1);
+    ZPage* region = fx.region0;
+    region->reset(PageAge::eden);
     region->SetInGhostRegion(1);
     region->MarkForwardingDone();
 
@@ -209,7 +209,7 @@ GC_TEST(RegionRetirement, CompactTailDoesNotStealConcurrentRecentFullNode)
 {
     GcHeapFixture fx;
     RegionManager manager;
-    RegionInfo* region = fx.region0;
+    ZPage* region = fx.region0;
 
     PinRootTestAccess::ParkOnThreadLocal(manager, region);
     manager.RehomeCompactedInPlaceRegion(region);

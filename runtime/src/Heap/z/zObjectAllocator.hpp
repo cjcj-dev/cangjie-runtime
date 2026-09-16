@@ -14,12 +14,12 @@
 namespace MapleRuntime {
 // zObjectAllocator.cpp:48-54 (per-CPU shared small pages are always in use;
 // ZHeuristics::use_per_cpu_shared_small_pages belongs to the allocator package).
-inline RegionInfo** RegionManager::PerAgeObjectAllocator::shared_small_page_addr()
+inline ZPage** RegionManager::PerAgeObjectAllocator::shared_small_page_addr()
 {
     return sharedSmallPage.addr();
 }
 
-inline RegionInfo* const* RegionManager::PerAgeObjectAllocator::shared_small_page_addr() const
+inline ZPage* const* RegionManager::PerAgeObjectAllocator::shared_small_page_addr() const
 {
     return sharedSmallPage.addr();
 }
@@ -34,7 +34,7 @@ inline RegionManager::PerAgeObjectAllocator* RegionManager::allocator(PageAge ag
 
 inline uintptr_t RegionManager::AllocPinnedLocked(size_t size)
 {
-    RegionInfo* page = allocator(PageAge::old)->pinnedPage.load(std::memory_order_acquire);
+    ZPage* page = allocator(PageAge::old)->pinnedPage.load(std::memory_order_acquire);
     return page == nullptr ? 0 : page->Alloc(size);
 }
 
@@ -60,13 +60,13 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 #if defined(__EULER__)
         needUnitCount = maxUnitCountPerPinnedRegion;
 #endif
-        RegionInfo* region = TakeRegion(needUnitCount, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        ZPage* region = Heap::alloc_page(needUnitCount, ZPageType::small);
         if (region == nullptr) {
             return 0;
         }
         DLOG(REGION, "alloc pinned region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
              region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(),
-             region->GetRegionType());
+             0u);
 
 #if defined(MRT_TESTABLE_INTERNALS)
         if (testPinnedPageAcquired != nullptr) {
@@ -82,18 +82,8 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
             // refresh this still-empty page under the same mutex that spans
             // old retirement and seqnum advancement (P14 pause-model adapter).
             region->ResetPageSequence();
-            // If allocate pinned obj during tracing, set region to traced new region.
-            GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
-                region->SetTraceRegionFlag(1);
-            }
-            // twoflags: POST_TRACE+ only (TRACE uses isTraceRegion).
-            if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-                phase == GC_PHASE_FORWARD) {
-                region->SetNotRelocatableThisCycle(1);
-            }
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
-            recentPinnedRegionList.PrependRegionLocked(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
+            recentPinnedRegionList.PrependRegionLocked(region);
             allocator(PageAge::old)->pinnedPage.store(region, std::memory_order_release);
             addr = region->Alloc(size);
             region = nullptr;
@@ -112,52 +102,41 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 
 inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
     {
-        size_t regionCount = (size + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
-        RegionInfo* region = TakeRegion(regionCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS,
+        size_t regionCount = (size + ZPage::UNIT_SIZE - 1) / ZPage::UNIT_SIZE;
+        ZPage* region = Heap::alloc_page(regionCount, ZPageType::large,
                                         false, true, clearPayload, PageAge::eden);
         if (region == nullptr) {
             return 0;
         }
         DLOG(REGION, "alloc large region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
-             region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), region->GetRegionType());
+             region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), 0u);
         uintptr_t addr = region->Alloc(size);
 
-        GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-        bool shouldSetTraceRegion = (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER);
-        if (largeTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION)) {
-            if (shouldSetTraceRegion) {
-                region->SetTraceRegionFlag(1);
-            }
+        if (largeTraceRegions.TryPrependRegion(region)) {
         } else {
-            recentLargeRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION);
-            region->SetTraceRegionFlag(0);
-        }
-        // twoflags: POST_TRACE+ only (independent of isTraceRegion).
-        if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-            phase == GC_PHASE_FORWARD) {
-            region->SetNotRelocatableThisCycle(1);
+            recentLargeRegionList.PrependRegion(region);
         }
 
         return addr;
     }
 
-inline void RegionManager::EnlistFullThreadLocalRegion(RegionInfo* region) noexcept
+inline void RegionManager::EnlistFullThreadLocalRegion(ZPage* region) noexcept
     {
         MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
 
         if (region->IsTraceRegion()) {
-            if (!fullTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION)) {
-                recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+            if (!fullTraceRegions.TryPrependRegion(region)) {
+                recentFullRegionList.PrependRegion(region);
                 RecentFullAccounting::Enqueue(1, region->GetUnitCount());
-                region->SetTraceRegionFlag(0);
+                (void)region;
             }
             return;
         }
-        recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+        recentFullRegionList.PrependRegion(region);
         RecentFullAccounting::Enqueue(1, region->GetUnitCount());
     }
 
-inline void RegionManager::RemoveThreadLocalRegion(RegionInfo* region) noexcept
+inline void RegionManager::RemoveThreadLocalRegion(ZPage* region) noexcept
     {
         MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
         tlRegionList.DeleteRegion(region);

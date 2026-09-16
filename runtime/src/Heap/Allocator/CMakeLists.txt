@@ -23,6 +23,7 @@ set(SRC_LIST
     "../z/zTLABUsage.cpp"
     "../z/zPageAllocator.cpp"
     "../z/zPage.cpp"
+    "../z/zPageTable.cpp"
     "../z/zObjectAllocator.cpp"
     "../z/zRelocationSetSelector.cpp"
     "CartesianTree.cpp"

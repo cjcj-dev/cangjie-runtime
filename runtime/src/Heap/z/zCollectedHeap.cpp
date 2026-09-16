@@ -37,7 +37,7 @@ void Collector::MarkObjectIfActive(BaseObject* object) const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
     if (region->IsYoungRegion()) {
         MarkYoungObjectIfActive(object);
     } else {

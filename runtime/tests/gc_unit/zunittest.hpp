@@ -217,13 +217,13 @@ public:
   ZTestRegionHeap(size_t units, RegionManager& manager, const HeapParam& params, double garbageThreshold)
     : _offsetMax(ZAddressOffsetMax) {
     EnsureZAddressDomain();
-    const size_t maxCapacity = units * RegionInfo::UNIT_SIZE;
+    const size_t maxCapacity = units * ZPage::UNIT_SIZE;
     _virtual.reset(new ZVirtualMemoryManager(maxCapacity));
     GC_EXPECT_TRUE(_virtual->is_initialized());
     _physical.reset(new ZPhysicalMemoryManager(maxCapacity));
     GC_EXPECT_TRUE(_physical->is_initialized());
-    const std::vector<RegionInfo::UnitSegment> segments = RegionManager::ReservedSegments(*_virtual);
-    _metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(segments));
+    const std::vector<ZPage::UnitSegment> segments = RegionManager::ReservedSegments(*_virtual);
+    _metadataSize = RegionManager::GetMetadataSize(ZPage::IndexedUnitCount(segments));
     _metadata = mmap(nullptr, _metadataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     GC_EXPECT_TRUE(_metadata != MAP_FAILED);
     manager.Initialize(units, reinterpret_cast<uintptr_t>(_metadata), *_virtual, *_physical, params, garbageThreshold);

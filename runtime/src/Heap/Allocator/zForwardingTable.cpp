@@ -34,7 +34,7 @@ namespace {
 // Each generation owns its installed forwarding objects and their common arena.
 // The map borrows them until that generation resets its relocation set.
 struct RelocationSet {
-    ZGranuleMap<ZForwarding*> map;
+    std::unique_ptr<ZGranuleMap<ZForwarding*>> map;
     std::unique_ptr<ForwardingAllocator> arena;
     std::vector<ZForwarding*> forwardings;
 };
@@ -74,13 +74,9 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
 {
     if (g_ready.load(std::memory_order_acquire)) {
 #if defined(MRT_GC_UNIT_TESTS)
-        if (g_relocationSets[0].map.base() != heapStart) {
-            // Aggregate gc_unit creates a fresh synthetic mmap per test. Each
-            // fixture destructor has already drained/reclaimed its carriers;
-            // rebase only the test build so the next fixture exercises the
-            // same product address checks rather than an obsolete map base.
-            g_relocationSets[0].map.ResetForTest();
-            g_relocationSets[1].map.ResetForTest();
+        if (g_relocationSets[0].map != nullptr && g_relocationSets[0].map->base() != heapStart) {
+            g_relocationSets[0].map.reset();
+            g_relocationSets[1].map.reset();
             g_ready.store(false, std::memory_order_release);
         } else {
             return true;
@@ -92,15 +88,11 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     if (unitSize == 0 || heapSize == 0) {
         return false;
     }
-    if (!g_relocationSets[0].map.Initialize(heapStart, heapSize, unitSize) ||
-        !g_relocationSets[1].map.Initialize(heapStart, heapSize, unitSize)) {
-        LOG(RTLOG_ERROR, "[FWDTABLE] granule map init failed size=%zu unit=%zu -- table stays off", heapSize,
-            unitSize);
-        return false;
-    }
+    g_relocationSets[0].map.reset(new ZGranuleMap<ZForwarding*>(heapSize, heapStart, unitSize));
+    g_relocationSets[1].map.reset(new ZGranuleMap<ZForwarding*>(heapSize, heapStart, unitSize));
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
-        heapSize, unitSize, g_relocationSets[0].map.size());
+        heapSize, unitSize, g_relocationSets[0].map->size());
     return true;
 }
 
@@ -111,7 +103,7 @@ bool ForwardingTable::BeginForwardingArena(Generation gen, RegionList& regions)
     CHECK(set.forwardings.empty());
     size_t budget = 0;
     bool valid = true;
-    regions.VisitAllRegions([&](RegionInfo* region) {
+    regions.VisitAllRegions([&](ZPage* region) {
         CHECK(region->GetOwnerGeneration() == gen);
         const size_t entries = ZForwarding::nentries(ObjectCountUpperBound(region, region->GetRegionSize()));
         size_t bytes;
@@ -121,10 +113,10 @@ bool ForwardingTable::BeginForwardingArena(Generation gen, RegionList& regions)
     if (!valid) return false;
     set.arena = std::make_unique<ForwardingAllocator>(budget);
     if (!set.arena->valid()) return false;
-    regions.VisitAllRegions([&](RegionInfo* region) {
+    regions.VisitAllRegions([&](ZPage* region) {
         ZForwarding* forwarding = ZForwarding::alloc(
             ObjectCountUpperBound(region, region->GetRegionSize()), region->GetRegionStart(),
-            set.map.base(), region->GetRegionSize(), region, region->GetRegionLifeId(), set.arena.get());
+            set.map->base(), region->GetRegionSize(), region, region->GetRegionLifeId(), set.arena.get());
         CHECK(forwarding != nullptr);
         forwarding->set_table_generation(static_cast<uint8_t>(gen));
         set.forwardings.push_back(forwarding);
@@ -140,7 +132,7 @@ const ForwardingAllocator* ForwardingTable::ArenaForTest(Generation gen)
 }
 #endif
 
-size_t ForwardingTable::ObjectCountUpperBound(RegionInfo* region, size_t regionSize)
+size_t ForwardingTable::ObjectCountUpperBound(ZPage* region, size_t regionSize)
 {
     // ZForwarding::nentries sizes the attached array from live object count.
     // Before a mark count is authoritative (standalone setup), retain the
@@ -157,7 +149,7 @@ void ForwardingTable::insert(ZForwarding* forwarding)
     if (forwarding == nullptr || !Ready()) {
         return;
     }
-    auto& map = g_relocationSets[forwarding->table_generation()].map;
+    auto& map = *g_relocationSets[forwarding->table_generation()].map;
     CHECK(MapGet(map, forwarding->start()) == nullptr);
     MapPut(map, forwarding->start(), forwarding->size(), forwarding);
 }
@@ -165,18 +157,18 @@ void ForwardingTable::insert(ZForwarding* forwarding)
 void ForwardingTable::remove(ZForwarding* forwarding)
 {
     if (forwarding == nullptr || !Ready()) return;
-    auto& map = g_relocationSets[forwarding->table_generation()].map;
+    auto& map = *g_relocationSets[forwarding->table_generation()].map;
     CHECK(MapGet(map, forwarding->start()) == forwarding);
     MapPut(map, forwarding->start(), forwarding->size(), nullptr);
 }
 
 ZForwarding* ForwardingTable::get(MAddress addr, Generation gen)
 {
-    return Ready() ? MapGet(g_relocationSets[static_cast<size_t>(gen)].map, addr) : nullptr;
+    return Ready() ? MapGet(*g_relocationSets[static_cast<size_t>(gen)].map, addr) : nullptr;
 }
 
 bool ForwardingTable::InstallPublicationBeforeCopy(
-    MAddress regionStart, size_t regionSize, RegionInfo* region, Generation gen)
+    MAddress regionStart, size_t regionSize, ZPage* region, Generation gen)
 {
     ZForwarding* forwarding = get(regionStart, gen);
     return forwarding != nullptr && forwarding->start() == regionStart &&
@@ -193,9 +185,9 @@ void ForwardingTable::ResetRelocationSet(Generation gen)
         remove(forwarding);
     }
     for (ZForwarding* forwarding : set.forwardings) {
-        RegionInfo* page = RegionInfo::TryGetRegionInfoAt(forwarding->start());
-        if (page != nullptr && page->metadata.fwdOwner.load(std::memory_order_acquire) == forwarding) {
-            page->metadata.fwdOwner.store(nullptr, std::memory_order_release);
+        ZPage* page = Heap::page(forwarding->start());
+        if (page != nullptr && page->_scratch.fwdOwner.load(std::memory_order_acquire) == forwarding) {
+            page->_scratch.fwdOwner.store(nullptr, std::memory_order_release);
         }
         forwarding->~ZForwarding();
     }
@@ -210,10 +202,18 @@ ZForwarding* ForwardingTable::GetCovering(MAddress addr, Generation gen) { retur
 void ForwardingTable::VisitAll(Generation generation, const std::function<void(ZForwarding*)>& visitor)
 {
     if (!Ready() || visitor == nullptr) return;
-    g_relocationSets[static_cast<size_t>(generation)].map.visit_unique(visitor);
+    auto& map = *g_relocationSets[static_cast<size_t>(generation)].map;
+    ZForwarding* last = nullptr;
+    for (size_t i = 0; i < map.size(); ++i) {
+        ZForwarding* value = map.at(i);
+        if (value != nullptr && value != last) {
+            visitor(value);
+            last = value;
+        }
+    }
 }
 
-bool ForwardingTable::PublishFromPageView(RegionInfo* region, ZLiveMap* livemap, uint64_t epoch,
+bool ForwardingTable::PublishFromPageView(ZPage* region, ZLiveMap* livemap, uint64_t epoch,
                                           MAddress topAtStart, uint64_t birthSequence,
                                           uint8_t owner,
                                           uint8_t largeMarked, RegionLifeId lifeId)
@@ -228,24 +228,24 @@ bool ForwardingTable::PublishFromPageView(RegionInfo* region, ZLiveMap* livemap,
     }
     carrier->publish_from_page_view(livemap, epoch, topAtStart, birthSequence,
                                     owner, largeMarked, lifeId);
-    ZForwarding* previous = region->metadata.fwdOwner.load(std::memory_order_acquire);
+    ZForwarding* previous = region->_scratch.fwdOwner.load(std::memory_order_acquire);
     if (previous != carrier) {
         CHECK_DETAIL(UnbindPageOwnerLocked(region, false),
                      "replacing retained forwarding owner region=%p", region);
-        region->metadata.fwdOwner.store(carrier, std::memory_order_release);
+        region->_scratch.fwdOwner.store(carrier, std::memory_order_release);
     }
     return true;
 }
 
-ForwardingTable::Owner ForwardingTable::RetainPageOwner(const RegionInfo* region)
+ForwardingTable::Owner ForwardingTable::RetainPageOwner(const ZPage* region)
 {
     std::lock_guard<std::mutex> lock(g_installLock);
-    return Owner(region == nullptr ? nullptr : region->metadata.fwdOwner.load(std::memory_order_acquire));
+    return Owner(region == nullptr ? nullptr : region->_scratch.fwdOwner.load(std::memory_order_acquire));
 }
 
-bool ForwardingTable::UnbindPageOwnerLocked(RegionInfo* region, bool allowExclusive)
+bool ForwardingTable::UnbindPageOwnerLocked(ZPage* region, bool allowExclusive)
 {
-    ZForwarding* owner = region->metadata.fwdOwner.load(std::memory_order_acquire);
+    ZForwarding* owner = region->_scratch.fwdOwner.load(std::memory_order_acquire);
     if (owner == nullptr) return true;
     int32_t refs = owner->ref_count().load(std::memory_order_acquire);
     // A prepared but never submitted page has only its construction token.
@@ -257,17 +257,17 @@ bool ForwardingTable::UnbindPageOwnerLocked(RegionInfo* region, bool allowExclus
         refs = 0;
     }
     if (refs != 0 && !(allowExclusive && refs == -1)) return false;
-    region->metadata.fwdOwner.store(nullptr, std::memory_order_release);
+    region->_scratch.fwdOwner.store(nullptr, std::memory_order_release);
     return true;
 }
 
-void ForwardingTable::ClearPageOwner(RegionInfo* region)
+void ForwardingTable::ClearPageOwner(ZPage* region)
 {
     std::lock_guard<std::mutex> lock(g_installLock);
     CHECK_DETAIL(UnbindPageOwnerLocked(region, true), "clearing retained forwarding owner region=%p", region);
 }
 
-const ZForwarding::FromPageView* ForwardingTable::GetFromPageView(RegionInfo* region)
+const ZForwarding::FromPageView* ForwardingTable::GetFromPageView(ZPage* region)
 {
     if (region == nullptr) return nullptr;
     auto carrier = RetainPageOwner(region);
@@ -283,13 +283,13 @@ bool ZForwarding::page_life_current() const
 }
 
 ForwardingTable::Publication ForwardingTable::EnsurePublicationBeforeCopy(
-    RegionInfo* region, MAddress from)
+    ZPage* region, MAddress from)
 {
     return RetainOpenPublicationAfterCopy(region, from);
 }
 
 ForwardingTable::Publication ForwardingTable::RetainOpenPublicationAfterCopy(
-    RegionInfo* region, MAddress from)
+    ZPage* region, MAddress from)
 {
     auto owner = RetainPageOwner(region);
     ZForwarding* forwarding = owner.get();
@@ -350,7 +350,7 @@ bool ZForwarding::DestUsable(MAddress to)
     if (!obj->IsValidObject()) {
         return false;
     }
-    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
+    ZPage* toRegion = Heap::page(to);
     if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion()) {
         return false;
     }
@@ -412,7 +412,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from, Generatio
     // routes through the source generation's forwarding, independently of
     // the current page installed by promotion. Keep the carrier while using
     // its source identity; a cleared owner supplies no routing authority.
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(from);
+    ZPage* region = Heap::page(from);
     auto carrier = RetainPageOwner(region);
     if (carrier) {
         const auto* source = carrier->from_page_view(region->GetRegionLifeId());
@@ -497,7 +497,11 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
         }
     };
     // The lookup domain is precisely the installed forwarding map.
-    for (const auto& set : g_relocationSets) visitActiveMap(set.map);
+    for (const auto& set : g_relocationSets) {
+        if (set.map != nullptr) {
+            visitActiveMap(*set.map);
+        }
+    }
     return snapshot;
 }
 

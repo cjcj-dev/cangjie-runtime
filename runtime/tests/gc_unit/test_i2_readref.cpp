@@ -59,7 +59,7 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
 
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, rs);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -85,7 +85,7 @@ GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
     collector.to = fx.obj1;
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, rs);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     const uintptr_t remap = ZPointerRemapped;
@@ -100,7 +100,7 @@ GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)
     GcHeapFixture fx;
     ToCollector collector;
     RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, rs);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);

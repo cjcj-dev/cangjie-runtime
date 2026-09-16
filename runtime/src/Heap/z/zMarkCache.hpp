@@ -8,9 +8,9 @@
 #define MRT_ZMARKCACHE_HPP
 #include <cstddef>
 #include <cstdint>
+#include "Heap/z/zPageFwd.hpp"
 
 namespace MapleRuntime {
-class RegionInfo;
 class MarkLiveCache {
 public:
     explicit MarkLiveCache(size_t stripeCount);
@@ -18,12 +18,12 @@ public:
     MarkLiveCache(const MarkLiveCache&) = delete;
     MarkLiveCache& operator=(const MarkLiveCache&) = delete;
 
-    void IncLive(RegionInfo* region, size_t bytes);
+    void IncLive(ZPage* region, size_t bytes);
     void Flush();
 
 private:
     struct Entry {
-        RegionInfo* region = nullptr;
+        ZPage* region = nullptr;
         size_t bytes = 0;
         uint32_t objects = 0;
     };

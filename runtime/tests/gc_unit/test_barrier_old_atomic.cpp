@@ -219,15 +219,15 @@ struct StoreFixture {
     {
         regionOld = heap.region0;
         regionNew = heap.region1;
-        regionOld->SetYoungRegionFlag(0);
-        regionNew->SetYoungRegionFlag(1);
+        regionOld->reset(PageAge::old);
+        regionNew->reset(PageAge::eden);
         holder = heap.obj0;
         oldValue = heap.PlaceObject(heap.heapStart + 256);
         newValue = heap.obj1;
         regionOld->SetRegionAllocPtr(reinterpret_cast<MAddress>(oldValue) + oldValue->GetSize());
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
         field->StoreColoured(to_zpointer(raw(GcUnit::StoreGoodPointer(oldValue)) ^ ZPointerMarkedOldMask));
-        remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+        remembered.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
         (void)DrainReceipts(oldValue, newValue);
     }
 
@@ -237,8 +237,8 @@ struct StoreFixture {
     RememberedSet remembered;
     Barrier barrier;
     InstalledBarrierScope installed;
-    RegionInfo* regionOld = nullptr;
-    RegionInfo* regionNew = nullptr;
+    ZPage* regionOld = nullptr;
+    ZPage* regionNew = nullptr;
     BaseObject* holder = nullptr;
     BaseObject* oldValue = nullptr;
     BaseObject* newValue = nullptr;
@@ -303,7 +303,7 @@ GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
     GcHeapFixture heap;
     BarrierCollector collector;
     RememberedSet remembered;
-    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, remembered);
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
@@ -331,7 +331,7 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
     collector.to = heap.PlaceObject(heap.heapStart + 256);
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(collector.to) + collector.to->GetSize());
     RememberedSet remembered;
-    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, remembered);
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
@@ -358,7 +358,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
     BaseObject* const winner = heap.PlaceObject(heap.heapStart + 256);
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
     RememberedSet remembered;
-    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, remembered);
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
@@ -404,7 +404,7 @@ GC_TEST(BarrierOldAtomic, NativeBulkLoadBadSourceResolvesBeforeHeapPublication)
     GcHeapFixture heap;
     BarrierCollector collector;
     RememberedSet remembered;
-    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
     Barrier barrier(collector, remembered);
     collector.from = heap.obj0;
     collector.to = heap.obj1;
@@ -432,11 +432,11 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
                           TypeKind::TYPE_KIND_ENUM, TypeKind::TYPE_KIND_VARRAY}) {
         GcHeapFixture heap;
         MarkPublicationFixture marking;
-        heap.region0->SetYoungRegionFlag(0);
-        heap.region1->SetYoungRegionFlag(1);
+        heap.region0->reset(PageAge::old);
+        heap.region1->reset(PageAge::eden);
         BarrierCollector collector;
         RememberedSet remembered;
-        remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+        remembered.Initialize(heap.heapStart, 2 * ZPage::UNIT_SIZE);
         Barrier barrier(collector, remembered);
         InstalledBarrierScope installed(barrier);
         alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};

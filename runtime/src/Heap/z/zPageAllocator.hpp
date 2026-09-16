@@ -232,7 +232,7 @@ public:
     // zPageAllocator.cpp:1470-1515 alloc_page_inner: consume the already-owned
     // vmem outside the allocator lock: claim_physical_for_increased_capacity →
     // commit_and_map (cleanup_failed_commit on a partial commit) → create_page.
-    RegionInfo* MaterializePageMemory(PageMemory& memory, RegionInfo::UnitRole role,
+    ZPage* MaterializePageMemory(PageMemory& memory, ZPageType role,
                                      bool expectPhysicalMem, bool clearPayload, size_t& committedUnits,
                                      PageAge age = PageAge::old);
     // ZPartition::free_memory_alloc_failed (zPageAllocator.cpp:1079-1101).
@@ -263,7 +263,7 @@ public:
     void decrease_capacity(uint32_t partition_id, size_t size, bool set_max_capacity);
     size_t capacity() const;
 
-    // Unit index <-> ZVirtualMemory (RegionInfo metadata is indexed per unit).
+    // Unit index <-> ZVirtualMemory (ZPage metadata is indexed per unit).
     static ZVirtualMemory VirtualMemoryOf(UnitIndex index, UnitCount count);
     static UnitIndex UnitIndexOf(const ZVirtualMemory& vmem);
     uint32_t PartitionIdOf(const ZVirtualMemory& vmem) const { return virtualMemory->lookup_partition_id(vmem); }
@@ -307,7 +307,7 @@ private:
     inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
     {
         if (expectPhysicalMem) {
-            RegionInfo::ClearUnits(idx, num);
+            ZPage::ClearUnits(idx, num);
         }
     }
     RegionManager& regionManager;
@@ -475,7 +475,7 @@ public:
     __attribute__((visibility("hidden"))) static size_t GetHeapUnitCount(size_t heapSize);
 
     // get metadataSize by regionNum or unitNumber
-    // RegionInfo and UnitInfo have the same sizeof
+    // page-table geometry, not a reverse metadata array
     __attribute__((visibility("hidden"))) static size_t GetMetadataSize(size_t num);
 #if defined(__EULER__)
     void SetCacheRatio(double minSize, double maxSize, double defaultParam);
@@ -487,17 +487,17 @@ public:
     // Address span the per-unit metadata covers: [lowest reserved offset, ZAddressOffsetMax).
     static ZVirtualMemory ReservedAddressSpan(const ZVirtualMemoryManager& virtualMemory);
     // P01 reverse-metadata ABI adapter; called only before runtime allocation.
-    static std::vector<RegionInfo::UnitSegment> ReservedSegments(ZVirtualMemoryManager& virtualMemory);
+    static std::vector<ZPage::UnitSegment> ReservedSegments(ZVirtualMemoryManager& virtualMemory);
 
-    void VisitPageOwners(const std::function<void(RegionInfo*)>& visitor) const
+    void VisitPageOwners(const std::function<void(ZPage*)>& visitor) const
     {
-        RegionInfo::VisitPageOwners(visitor);
+        ZPage::VisitPageOwners(visitor);
     }
 
     // ZPageAllocator::capacity(): sum of ZPartition::_capacity.
     size_t GetCommittedCapacity() const { return freeRegionManager.capacity(); }
 
-    size_t GetHeapCapacity() const { return heapUnitCount * RegionInfo::UNIT_SIZE; }
+    size_t GetHeapCapacity() const { return heapUnitCount * ZPage::UNIT_SIZE; }
 
 
     RegionManager();
@@ -507,7 +507,7 @@ public:
     RegionManager& operator=(const RegionManager&) = delete;
 
     // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
-    RegionInfo* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
+    ZPage* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
                                           bool allowSaferegion = true);
 
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
@@ -517,12 +517,12 @@ public:
     // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
     std::mutex& PinnedAllocationMutex() { return recentPinnedRegionList.GetListMutex(); }
 #if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT static void (*testPinnedPageAcquired)(RegionInfo*);
+    MRT_EXPORT static void (*testPinnedPageAcquired)(ZPage*);
 #endif
 
     // ZHeap::account_alloc_page/account_undo_alloc_page: backing extents,
     // independent of the thread-local requested bytes and retirement waste.
-    void UndoThreadLocalRegionAllocation(RegionInfo* region);
+    void UndoThreadLocalRegionAllocation(ZPage* region);
     // Stable cycle history: read under the statistics lock, at a safepoint,
     // or with managed access preventing the next young pause.
     size_t GetTLABUsed() const { return lastTLABUsed; }
@@ -537,7 +537,7 @@ public:
     template<Generation G>
     void ForwardFromRegions();
     template<Generation G>
-    void ForwardRegion(RegionInfo* region);
+    void ForwardRegion(ZPage* region);
     RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
     bool StallAllocation(AllocationStallRequest& request, bool requestGc);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
@@ -556,7 +556,7 @@ public:
     MRT_EXPORT size_t FailedStalledAllocations() const;
 #endif
     template<Generation G>
-    void ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed = false,
+    void ForwardClaimedPage(ZPage* region, ForwardingTable::Owner owner, bool claimed = false,
                             bool inPlace = false);
     template<Generation G>
     void StartForwardFromRegions(ZWorkers& workers);
@@ -566,24 +566,24 @@ public:
     // ZRelocateWork::update_remset_promoted, called by the relocating page worker.
     static void RememberPromotedObject(BaseObject* object);
     // ZRelocationSet::flip_promoted_pages: page pointers only; liveness belongs to the page.
-    void AddFlipPromotedPage(RegionInfo* region);
+    void AddFlipPromotedPage(ZPage* region);
     void RememberFlipPromotedPages(ZWorkers& workers);
     void ResetFlipPromotedPages();
     void StampCensusBoundaries();
     void PromoteAllRegions();
     // CompactRegion's list-ownership tail. A concurrent stay-young path may
     // already have moved the region to recent-full; never steal its links.
-    void EnlistCompactedRegionForAllocator(RegionInfo* region);
+    void EnlistCompactedRegionForAllocator(ZPage* region);
     // Put a region the forward path finished with in place back where a collection-set builder
     // will find it; CompactRegion leaves it on tlRegionList, which no builder walks.
-    void RehomeCompactedInPlaceRegion(RegionInfo* region);
-    void CompactRegion(RegionInfo* region);
+    void RehomeCompactedInPlaceRegion(ZPage* region);
+    void CompactRegion(ZPage* region);
 
-    void ExemptFromRegion(RegionInfo* region);
+    void ExemptFromRegion(ZPage* region);
     // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
     // leftover from-pages here; they were expired at cycle start and must not
     // be re-published as this cycle's done (zRelocationSetSelector.cpp:114-196).
-    void ParkUnmovableFromRegion(RegionInfo* region);
+    void ParkUnmovableFromRegion(ZPage* region);
     // ZGC zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:205-213: a page
     // not in this cycle's relocation set is an ordinary candidate next cycle.
     // Kept (IsForwardingDone via Exempt) is in-cycle only.
@@ -592,9 +592,9 @@ public:
     void FinishIncompleteFromRegions(GCCycleGeneration generation);
     // zRelocate.cpp:1346-1352 flip_survived: keep the page, reset age, leave young.
     // Must not remain LONE_FROM / FROM after TakeHead — barriers treat those as from-space.
-    void EnlistStayYoungSurvivor(RegionInfo* region, bool advanceAge = true);
-    static void BumpYoungSurvivorAge(RegionInfo* region);
-    static void FinishStayYoungInPlace(RegionInfo* region, bool advanceAge = true);
+    void EnlistStayYoungSurvivor(ZPage* region, bool advanceAge = true);
+    static void BumpYoungSurvivorAge(ZPage* region);
+    static void FinishStayYoungInPlace(ZPage* region, bool advanceAge = true);
 
     // ZGeneration::select_relocation_set iterates only pages owned by that
     // generation (zGeneration.cpp:195-221).  An old relocation pass may
@@ -606,7 +606,7 @@ public:
     }
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    void DumpRegionInfo() const;
+    void DumpZPage() const;
 #endif
 
     void DumpRegionStats(const char* msg) const;
@@ -623,7 +623,7 @@ public:
 
     // take a region with *num* units for allocation
     // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
-    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false,
+    ZPage* TakeRegion(size_t num, ZPageType, bool expectPhysicalMem = false,
                            bool allowSaferegion = true, bool clearPayload = true, PageAge age = PageAge::old);
 
 
@@ -632,9 +632,9 @@ public:
     // caller assures size is truely large (> region size)
     uintptr_t AllocLarge(size_t size, bool clearPayload = true);
 
-    void EnlistFullThreadLocalRegion(RegionInfo* region) noexcept;
+    void EnlistFullThreadLocalRegion(ZPage* region) noexcept;
 
-    void RemoveThreadLocalRegion(RegionInfo* region) noexcept;
+    void RemoveThreadLocalRegion(ZPage* region) noexcept;
 
     void RestoreToSpaceStateWords();
 
@@ -643,36 +643,36 @@ public:
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
     void AssemblePinnedGarbageCandidates(bool collectAll);
-    YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor);
+    YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor);
 
     void MergeRawPointerPinnedRegions()
     {
-        oldPinnedRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FULL_PINNED_REGION);
+        oldPinnedRegionList.MergeRegionList(rawPointerPinnedRegionList);
     }
 
     void CollectFromSpaceGarbage();
 
     size_t GetThreadLocalRegionSize() const
     {
-        return maxUnitCountPerRegion * RegionInfo::UNIT_SIZE;
+        return maxUnitCountPerRegion * ZPage::UNIT_SIZE;
     }
 
     size_t GetYoungAllocatedSize() const;
 
     template<Generation G>
-    size_t CollectRegion(RegionInfo* region);
+    size_t CollectRegion(ZPage* region);
 
     void AddRawPointerObject(BaseObject* obj);
 
     void RemoveRawPointerObject(BaseObject* obj);
 
-    void ReclaimRegion(RegionInfo* region);
+    void ReclaimRegion(ZPage* region);
     // Like ReclaimRegion but units enter mark-quarantine tree, not dirty tree.
-    void ReclaimRegionToMarkQuarantine(RegionInfo* region);
-    size_t ReleaseRegion(RegionInfo* region);
+    void ReclaimRegionToMarkQuarantine(ZPage* region);
+    size_t ReleaseRegion(ZPage* region);
     // Clear the two exact bitmap slices owned by [regionStart, regionEnd).
     // Called on both CollectRegion and the direct large-region release path.
-    static void ScrubRememberedSetForRegion(RegionInfo* region);
+    static void ScrubRememberedSetForRegion(ZPage* region);
     // Emit + reset process-local scrub cost counters (STEER3).
 
     void ReclaimGarbageRegions();
@@ -680,7 +680,7 @@ public:
     size_t CollectLargeGarbage();
 
     size_t CollectPinnedGarbage();
-    size_t CollectFreePinnedSlots(RegionInfo* region);
+    size_t CollectFreePinnedSlots(ZPage* region);
 
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
@@ -692,7 +692,7 @@ public:
                           bool skipKnownEmptyRegions = false) const;
     void ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const;
 
-    size_t GetUsedRegionSize() const { return GetUsedUnitCount() * RegionInfo::UNIT_SIZE; }
+    size_t GetUsedRegionSize() const { return GetUsedUnitCount() * ZPage::UNIT_SIZE; }
 
     size_t GetRecentAllocatedSize() const;
 
@@ -703,9 +703,9 @@ public:
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
     size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
     // Address space not yet backed by committed capacity (ZGC: current_max_capacity - capacity).
-    size_t GetInactiveUnitCount() const { return (GetHeapCapacity() - GetCommittedCapacity()) / RegionInfo::UNIT_SIZE; }
+    size_t GetInactiveUnitCount() const { return (GetHeapCapacity() - GetCommittedCapacity()) / ZPage::UNIT_SIZE; }
 
-    size_t GetActiveUnitCount() const { return GetCommittedCapacity() / RegionInfo::UNIT_SIZE; }
+    size_t GetActiveUnitCount() const { return GetCommittedCapacity() / ZPage::UNIT_SIZE; }
 
     inline size_t GetLargeObjectSize() const
     {
@@ -743,7 +743,7 @@ public:
     void ClearNotRelocatableThisCycleFlags();
 
 
-    bool RelocateClaimedPage(RegionInfo* region);
+    bool RelocateClaimedPage(ZPage* region);
 
 
 
@@ -768,16 +768,16 @@ public:
 private:
     // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
     // page table no longer publishes the old descriptor.
-    void ReclaimRetiredRegion(RegionInfo* region);
-    void ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region);
-    void ReleaseRetiredRegion(RegionInfo* region);
+    void ReclaimRetiredRegion(ZPage* region);
+    void ReclaimRetiredRegionToMarkQuarantine(ZPage* region);
+    void ReleaseRetiredRegion(ZPage* region);
     void ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion = true);
 
 
 
-    RegionInfo* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr);
+    ZPage* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr);
 
-    bool TryTakeGarbageRegionAfterDispel(RegionInfo* target);
+    bool TryTakeGarbageRegionAfterDispel(ZPage* target);
 
     size_t GetGatedGarbageBytes();
 
@@ -794,7 +794,7 @@ private:
     uintptr_t AllocPinnedLocked(size_t size);
 
     static const size_t MAX_UNIT_COUNT_PER_REGION;
-    inline void CheckRegionWhetherCreatedInFixPhase(RegionInfo* region);
+    inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
     // ZObjectAllocator::PerAge (zObjectAllocator.hpp:37-71): per-CPU shared
     // small page in ZPerCPU storage (zValue.hpp), one PerAge per page age
@@ -802,15 +802,15 @@ private:
     struct PerAgeObjectAllocator {
         explicit PerAgeObjectAllocator(PageAge pageAge);
         const PageAge age;
-        ZPerCPU<RegionInfo*> sharedSmallPage;
-        std::atomic<RegionInfo*> pinnedPage{nullptr};
+        ZPerCPU<ZPage*> sharedSmallPage;
+        std::atomic<ZPage*> pinnedPage{nullptr};
 
         // zObjectAllocator.hpp:48-49
-        RegionInfo** shared_small_page_addr();
-        RegionInfo* const* shared_small_page_addr() const;
+        ZPage** shared_small_page_addr();
+        ZPage* const* shared_small_page_addr() const;
     };
-    RegionInfo* AllocateSharedPage(size_t units, RegionInfo::UnitRole role, PageAge age, bool nonBlocking);
-    void UndoSharedPage(RegionInfo* page);
+    ZPage* AllocateSharedPage(size_t units, ZPageType role, PageAge age, bool nonBlocking);
+    void UndoSharedPage(ZPage* page);
     ZDeferredConstructed<PerAgeObjectAllocator> objectAllocators[kPageAgeCount];
     PerAgeObjectAllocator* allocator(PageAge age);
 
@@ -840,7 +840,7 @@ private:
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
     std::mutex flipPromotedMutex;
-    std::vector<std::unique_ptr<RegionInfo::PromotionPage>> flipPromotedPages;
+    std::vector<std::unique_ptr<ZPage::PromotionPage>> flipPromotedPages;
     std::mutex pageAllocatorMutex;
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };
@@ -878,7 +878,7 @@ private:
     // it is recorded here when it is full.
     RegionCache largeTraceRegions;
 
-    uintptr_t regionInfoStart = 0; // the address of first RegionInfo
+    uintptr_t regionInfoStart = 0; // the address of first ZPage
 
     uintptr_t regionHeapStart = 0; // the address of first region to allocate object
     uintptr_t regionHeapEnd = 0;

@@ -58,22 +58,22 @@ PrimitiveArrayTypeInfos& GetPrimitiveArrayTypeInfos()
 struct LargeArrayFixture {
     LargeArrayFixture()
     {
-        const size_t payload = RegionInfo::LARGE_OBJECT_DEFAULT_THRESHOLD + RegionInfo::UNIT_SIZE;
-        const size_t arrayUnits = AlignUp(payload + 128, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
+        const size_t payload = ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD + ZPage::UNIT_SIZE;
+        const size_t arrayUnits = AlignUp(payload + 128, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
         const size_t units = arrayUnits + 1;
         const size_t metadata = RegionManager::GetMetadataSize(units);
-        mappedSize = metadata + units * RegionInfo::UNIT_SIZE;
+        mappedSize = metadata + units * ZPage::UNIT_SIZE;
         reservation.reset(new ZTestHeapMapping(mappedSize));
         mapping = reservation->base();
         GC_EXPECT_TRUE(mapping != MAP_FAILED);
         const MAddress start = reinterpret_cast<MAddress>(mapping) + metadata;
         Heap::OnHeapCreated(start);
-        Heap::OnHeapExtended(start + units * RegionInfo::UNIT_SIZE);
+        Heap::OnHeapExtended(start + units * ZPage::UNIT_SIZE);
         GcHeapFixture::AdvanceGeneration(Generation::Old);
-        RegionInfo::Initialize(units, start);
-        region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-        region1 = RegionInfo::InitRegion(1, arrayUnits, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
-        region1->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
+        ZPage::Initialize(units, start);
+        region0 = ZPage::InitRegion(0, 1, ZPageType::small);
+        region1 = ZPage::InitRegion(1, arrayUnits, ZPageType::large);
+        region1->SetRegionListOwner(nullptr);
         auto* holderType = reinterpret_cast<TypeInfo*>(holderStorage);
         holderType->SetType(TypeKind::TYPE_KIND_CLASS);
         holderType->SetFlagHasRefField();
@@ -96,18 +96,18 @@ struct LargeArrayFixture {
     ~LargeArrayFixture()
     {
         // ~ZPage: release P02 livemaps before the P04 heap mapping.
-        delete region0->livemap();
-        delete region1->livemap();
-        delete region0->metadata.retiredLivemap;
-        delete region1->metadata.retiredLivemap;
+        
+        
+        delete region0->_scratch.retiredLivemap;
+        delete region1->_scratch.retiredLivemap;
         reservation.reset();
     }
     alignas(TypeInfo) unsigned char holderStorage[sizeof(TypeInfo)] {};
     std::unique_ptr<ZTestHeapMapping> reservation;
     void* mapping = nullptr;
     size_t mappedSize = 0;
-    RegionInfo* region0 = nullptr;
-    RegionInfo* region1 = nullptr;
+    ZPage* region0 = nullptr;
+    ZPage* region1 = nullptr;
     BaseObject* obj0 = nullptr;
     MArray* obj1 = nullptr;
 };
@@ -123,11 +123,11 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
     auto* bytes = reinterpret_cast<MArray*>(fx.obj1);
     bytes->SetClassInfo(infos.array);
 
-    RegionInfo* targetRegion = fx.region1;
+    ZPage* targetRegion = fx.region1;
 
     GC_EXPECT_TRUE(bytes->IsPrimitiveArray());
     GC_EXPECT_FALSE(infos.array->HasRefField());
-    GC_EXPECT_TRUE(bytes->GetSize() > RegionInfo::LARGE_OBJECT_DEFAULT_THRESHOLD);
+    GC_EXPECT_TRUE(bytes->GetSize() > ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD);
 
     // Plant holder.bytes. The holder GCTib has bit 0 set, so the exact major
     // non-array walk (WCollector::TraceObjectRefFields) must yield this slot.

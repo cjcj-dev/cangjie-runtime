@@ -196,7 +196,7 @@ void BaseObject::OnFinalizerCreated()
 
 bool BaseObject::IsInTraceRegion() const
 {
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<Uptr>(this));
+    ZPage* region = Heap::page(reinterpret_cast<Uptr>(this));
     MRT_ASSERT(region != nullptr, "region is nullptr");
     return region->IsTraceRegion();
 }

@@ -24,7 +24,7 @@ size_t RememberedSet::AddressToBit(MAddress fieldAddress) const
 
 void RememberedSet::RememberPage(size_t buffer, size_t word)
 {
-    const size_t page = word * kBitsPerWord * kFieldBytes / RegionInfo::UNIT_SIZE;
+    const size_t page = word * kBitsPerWord * kFieldBytes / ZPage::UNIT_SIZE;
     rememberedPages[buffer][page / kBitsPerWord].fetch_or(
         uint64_t{1} << (page % kBitsPerWord), std::memory_order_relaxed);
 }

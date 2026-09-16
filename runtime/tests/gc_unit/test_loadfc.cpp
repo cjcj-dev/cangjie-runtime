@@ -77,10 +77,10 @@ private:
 struct LoadFcFixture {
     LoadFcFixture() : barrier(collector, rememberedSet), installed(barrier)
     {
-        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+        rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         auto& heapRemset = Heap::GetHeap().GetRememberedSet();
         if (!heapRemset.initialized) {
-            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+            heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         }
         heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj0) + 128);
         heap.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj1) + 128);

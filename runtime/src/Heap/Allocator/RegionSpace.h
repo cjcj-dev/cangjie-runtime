@@ -71,7 +71,7 @@ public:
 
     MAddress GetSpaceEndAddress() const override { return reservedEnd; }
 
-    size_t GetCurrentCapacity() const override { return regionManager.GetActiveUnitCount() * RegionInfo::UNIT_SIZE; }
+    size_t GetCurrentCapacity() const override { return regionManager.GetActiveUnitCount() * ZPage::UNIT_SIZE; }
     size_t GetMaxCapacity() const override { return regionManager.GetHeapCapacity(); }
 
     ZMemoryUsageInfo GetMemoryUsage() const
@@ -116,12 +116,12 @@ public:
 
     size_t ReclaimGarbageMemory(bool /* releaseAll */) override
     {
-        const size_t cachedBefore = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        const size_t cachedBefore = regionManager.GetDirtyUnitCount() * ZPage::UNIT_SIZE;
         MRT_PHASE_TIMER(ZStatPhases::PReclaimGarbageRegions);
         // zPageAllocator.cpp: free pages return to the mapped cache. Physical
         // uncommit belongs to zUncommitter.cpp:367-421, including OOM reclaim.
         regionManager.ReclaimGarbageRegions();
-        const size_t cachedAfter = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        const size_t cachedAfter = regionManager.GetDirtyUnitCount() * ZPage::UNIT_SIZE;
         return cachedAfter > cachedBefore ? cachedAfter - cachedBefore : 0;
     }
 #if defined(__EULER__)
@@ -194,7 +194,7 @@ public:
     template<Generation G>
     static bool MarkObject(const BaseObject* obj)
     {
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        ZPage* regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
         (void)G;
         bool incLive = false;
         const bool newlyMarked = regionInfo->mark_object(from_object(obj), false, incLive);
@@ -209,16 +209,16 @@ public:
     static bool IsMarkedObject(const BaseObject* obj)
     {
         (void)G;
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        ZPage* regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
         return regionInfo->is_object_strongly_live(from_object(obj));
     }
 
     template<Generation G>
     static bool ShouldEnqueue(const BaseObject* obj)
     {
-        RegionInfo* regionInfo = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        ZPage* regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
         if (regionInfo == nullptr || regionInfo->IsFreeRegion() || regionInfo->IsGarbageRegion() ||
-            regionInfo->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
+            regionInfo->IsFreeRegion()) {
             return false;
         }
         (void)G;
@@ -232,7 +232,7 @@ public:
     // (zPage.inline.hpp:254-260 pair semantics).
     static bool IsResurrectedObject(const BaseObject* obj)
     {
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        ZPage* regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
         const zaddress addr = from_object(obj);
         return regionInfo->is_object_live(addr) && !regionInfo->is_object_strongly_live(addr);
     }

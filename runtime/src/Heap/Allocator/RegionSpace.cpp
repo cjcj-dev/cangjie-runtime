@@ -39,7 +39,7 @@ void RegionSpace::FeedHungryBuffers()
     allocBufferManager->SwapHungryBuffers(hungryBuffers);
     for (auto* buffer : hungryBuffers) {
         if (buffer->GetPreparedRegion() != nullptr) { continue; }
-        RegionInfo* region = regionManager.AllocateThreadLocalRegion(
+        ZPage* region = regionManager.AllocateThreadLocalRegion(
             buffer->ComputeTLABSize(0, regionManager.GetThreadLocalRegionSize()), true);
         if (region == nullptr) { return; }
         if (!buffer->SetPreparedRegion(region)) {

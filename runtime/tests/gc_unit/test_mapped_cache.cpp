@@ -266,15 +266,15 @@ struct ProductHeapFixture {
         // Match CollectorResources::Init before allocation-rate sampling.
         ZStat::Initialize();
         HeapParam parameters{};
-        parameters.regionSize = RegionInfo::UNIT_SIZE / 1024;
+        parameters.regionSize = ZPage::UNIT_SIZE / 1024;
         parameters.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, parameters, 0.5));
         Heap::GetHeap().GetRememberedSet().Initialize(manager.GetRegionHeapStart(),
-                                                    units * RegionInfo::UNIT_SIZE * ZVirtualToPhysicalRatio);
+                                                    units * ZPage::UNIT_SIZE * ZVirtualToPhysicalRatio);
     }
 };
 
-void Stamp(RegionInfo* region, uint64_t value)
+void Stamp(ZPage* region, uint64_t value)
 {
     *reinterpret_cast<uint64_t*>(region->GetRegionStart()) = value;
 }
@@ -291,14 +291,14 @@ uint64_t Read(uintptr_t address)
 // and maps the stashed backing there in backing-index order.
 GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
 {
-    const size_t unit = RegionInfo::UNIT_SIZE;
+    const size_t unit = ZPage::UNIT_SIZE;
     ProductHeapFixture fixture(8);
     RegionManager& manager = fixture.manager;
-    const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
-    RegionInfo* first = manager.TakeRegion(2, role, false, false, false);
-    RegionInfo* second = manager.TakeRegion(2, role, false, false, false);
-    RegionInfo* third = manager.TakeRegion(2, role, false, false, false);
-    RegionInfo* fourth = manager.TakeRegion(2, role, false, false, false);
+    const auto role = ZPageType::small;
+    ZPage* first = manager.TakeRegion(2, role, false, false, false);
+    ZPage* second = manager.TakeRegion(2, role, false, false, false);
+    ZPage* third = manager.TakeRegion(2, role, false, false, false);
+    ZPage* fourth = manager.TakeRegion(2, role, false, false, false);
     GC_EXPECT_TRUE(first != nullptr && second != nullptr && third != nullptr && fourth != nullptr);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 8 * unit);
     const uintptr_t heapStart = manager.GetRegionHeapStart();
@@ -310,7 +310,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     manager.ReclaimRegion(third);
     GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 4U);
     // No growth room: capacity == max capacity, so the request must harvest.
-    RegionInfo* result = manager.TakeRegion(4, role, false, false, false);
+    ZPage* result = manager.TakeRegion(4, role, false, false, false);
     GC_EXPECT_TRUE(result != nullptr);
     GC_EXPECT_EQ(result->GetUnitCount(), 4U);
     // Lowest free virtual address after the 8 committed units.
@@ -320,8 +320,8 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
     // Backing of first (indices 0,1) precedes backing of third (indices 4,5).
     GC_EXPECT_EQ(Read(result->GetRegionStart()), 0x1111U);
     GC_EXPECT_EQ(Read(result->GetRegionStart() + 2 * unit), 0x3333U);
-    GC_EXPECT_TRUE(RegionInfo::TryGetRegionInfoAt(fourthAddress) == fourth);
-    GC_EXPECT_TRUE(RegionInfo::TryGetRegionInfoAt(heapStart) == nullptr);
+    GC_EXPECT_TRUE(Heap::page(fourthAddress) == fourth);
+    GC_EXPECT_TRUE(Heap::page(heapStart) == nullptr);
 }
 
 // TestMappedCacheHarvest.java / zPageAllocator.cpp:723-743: with growth room
@@ -330,11 +330,11 @@ GC_OTHER_VM_TEST(MappedCache, ProductHarvestRemapsToLowestFreeVirtual)
 // of the new vmem (commit_increased_capacity commits the last part).
 GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
 {
-    const size_t unit = RegionInfo::UNIT_SIZE;
+    const size_t unit = ZPage::UNIT_SIZE;
     ProductHeapFixture fixture(12);
     RegionManager& manager = fixture.manager;
-    const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
-    RegionInfo* regions[5];
+    const auto role = ZPageType::small;
+    ZPage* regions[5];
     for (auto& region : regions) {
         region = manager.TakeRegion(2, role, false, false, false);
         GC_EXPECT_TRUE(region != nullptr);
@@ -347,7 +347,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     manager.ReclaimRegion(regions[2]);
     manager.ReclaimRegion(regions[4]);
     GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 6U);
-    RegionInfo* result = manager.TakeRegion(4, role, false, false, false);
+    ZPage* result = manager.TakeRegion(4, role, false, false, false);
     GC_EXPECT_TRUE(result != nullptr);
     GC_EXPECT_EQ(result->GetUnitCount(), 4U);
     // Two units of growth plus two harvested units; the cache keeps four.
@@ -359,7 +359,7 @@ GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
     GC_EXPECT_EQ(result->GetRegionStart(), heapStart + 8 * unit);
     GC_EXPECT_EQ(Read(result->GetRegionStart()), 0x4444U);
     // Capacity is exhausted now: another request must be satisfied from the cache.
-    RegionInfo* cached = manager.TakeRegion(2, role, false, false, false);
+    ZPage* cached = manager.TakeRegion(2, role, false, false, false);
     GC_EXPECT_TRUE(cached != nullptr);
     GC_EXPECT_EQ(manager.GetCommittedCapacity(), 12 * unit);
     GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 2U);

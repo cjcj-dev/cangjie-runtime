@@ -165,7 +165,7 @@ void Barrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
     if (strength != ReferenceStrength::Strong) {
         // ZBarrier::no_keep_alive_heap_store_slow_path (zBarrier.cpp:266-270).
         const MAddress address = reinterpret_cast<MAddress>(&field);
-        if (Heap::IsHeapAddress(address) && !RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
+        if (Heap::IsHeapAddress(address) && !Heap::page(address)->IsYoungRegion()) {
             theRememberedSet.Record(address, true);
         }
         return;
@@ -174,7 +174,7 @@ void Barrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
         // ZBarrier::heap_store_slow_path(..., heal=true) does not buffer.
         theCollector.MarkObjectIfActive(target);
         const MAddress address = reinterpret_cast<MAddress>(&field);
-        if (Heap::IsHeapAddress(address) && !RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
+        if (Heap::IsHeapAddress(address) && !Heap::page(address)->IsYoungRegion()) {
             theRememberedSet.Record(address, true);
         }
         const zpointer good = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(target)))));
@@ -202,7 +202,7 @@ void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     // including raw null in the slow path so that remember(p) is not skipped.
     if (!ZPointer::is_store_good(previous.GetFieldValue()) && (weakReferent || !is_null(prev))) {
         if (weakReferent) {
-            if (!RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
+            if (!Heap::page(address)->IsYoungRegion()) {
                 theRememberedSet.Record(address, true);
             }
         } else {
@@ -330,7 +330,7 @@ BaseObject* Barrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoin
     if (strength != ReferenceStrength::Strong && target != nullptr && Heap::IsHeapAddress(target)) {
         // Only the shared resurrection rendezvous publishes the blocked window.
         if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
             if (region->IsYoungRegion()) {
                 theCollector.MarkYoungObjectIfActive(target);
             } else {
@@ -800,7 +800,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         theCollector.MarkObjectIfActive(theCollector.make_load_good(previous, provenance));
     }
     (void)ref;
-    if (heapSlot && !RegionInfo::GetRegionInfoAt(fieldAddress)->IsYoungRegion()) {
+    if (heapSlot && !Heap::page(fieldAddress)->IsYoungRegion()) {
         theRememberedSet.Record(fieldAddress, true);
     }
 }

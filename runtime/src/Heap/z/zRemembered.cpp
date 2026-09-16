@@ -60,7 +60,7 @@ bool HolderObjectIsLive(BaseObject* holder)
     if (holder == nullptr || !Heap::IsHeapAddress(holder) || !holder->IsValidObject()) {
         return false;
     }
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(holder));
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
@@ -75,7 +75,7 @@ bool SlotHeldByLiveObject(const void* slot)
     if (slot == nullptr || !Heap::IsHeapAddress(slot)) {
         return false;
     }
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(slot));
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(slot));
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
@@ -110,7 +110,7 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
         if (forwarding->retain_page()) {
             forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
             std::vector<Containing> containing;
-            RegionInfo* page = forwarding->page();
+            ZPage* page = forwarding->page();
             remset.VisitPreviousInRange(forwarding->start(), forwarding->size(), [&](MAddress field) {
                 if (page == nullptr) {
                     return;
@@ -174,7 +174,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         BaseObject* target = ResolveMinorReference(HeapSlotAt<>(slot), stw);
         if (target == nullptr || !Heap::IsHeapAddress(target)) continue;
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
         if (!region->IsYoungRegion()) continue;
         PushYoungObject(target, workStack, "remset");
         remset.Record(slot);
