@@ -46,7 +46,13 @@ struct ThreadLocalData {
     ThreadType threadType;
     bool isCJProcessor;
     void* threadCache;
+#ifndef INTERPRETER_ENABLED
+    void* gcDataOffsetPadding;
+#endif
+    // Fixed ABI offset: borrowed current logical owner, followed by the
+    // native owner retained across managed bindings on this OS thread.
     ThreadGCData* gcData;
+    ThreadGCData* nativeGCData;
 
 public:
     void SetMutator(Mutator* newMutator);
@@ -61,6 +67,7 @@ void RegisterCurrentMarkFlushThread();
 struct CleanThreadLocalData {
     CleanThreadLocalData() noexcept;
     ~CleanThreadLocalData();
+    ThreadGCData nativeData;
 };
 
 class ThreadLocal { // merge this to ThreadLocalData.
@@ -84,7 +91,7 @@ public:
 
     static void SetProtectAddr(uint8_t* addr) { GetThreadLocalData()->protectAddr = addr; }
 
-    static void SetThreadType(ThreadType type) { GetThreadLocalData()->threadType = type; }
+    static void SetThreadType(ThreadType type) { InitializeCleaner(); GetThreadLocalData()->threadType = type; }
 
     static ThreadType GetThreadType() { return GetThreadLocalData()->threadType; }
 

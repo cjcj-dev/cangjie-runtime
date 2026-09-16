@@ -8,6 +8,7 @@
 #ifndef MRT_MARRAY_INLINE_H
 #define MRT_MARRAY_INLINE_H
 
+#include "ObjectModel/Field.inline.h"
 #include "Inspector/CjAllocData.h"
 // model interface
 #include "ExceptionManager.h"
@@ -58,13 +59,13 @@ inline bool MArray::IsPrimitiveArray() const
 inline ObjectPtr MArray::GetRefElement(MIndex index)
 {
     RefField<>& ref = GetRefField(MArray::GetContentOffset() + RefField<>::GetSize() * index);
-    return Heap::GetBarrier().ReadReference(this, ref);
+    return ZBarrier::ReadReference(this, ref);
 }
 
 inline void MArray::SetRefElement(MIndex index, const ObjectPtr mObj)
 {
     RefField<>& ref = GetRefField(MArray::GetContentOffset() + RefField<>::GetSize() * index);
-    Heap::GetBarrier().WriteReference(this, ref, mObj);
+    ZBarrier::WriteReference(this, ref, mObj);
 }
 
 template<typename T>
@@ -79,7 +80,7 @@ template<typename T>
 inline void MArray::SetPrimitiveElement(MIndex index, T value)
 {
     Field<T>& field = GetField<T>(MArray::GetContentOffset() + GetElementSize() * index);
-    Heap::GetBarrier().WriteField(this, field, value);
+    field.SetFieldValue(this, value);
 }
 
 static inline MIndex CalculateArraySize(MIndex nElems, const U32 elemBytes)

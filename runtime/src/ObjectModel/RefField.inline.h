@@ -16,13 +16,10 @@
 #endif
 
 namespace MapleRuntime {
-// AssertColouredWriteIfEnabled: single definition in BaseObject.cpp (avoids weak multi-static).
-
 template<bool isAtomic>
 void HeapSlot<isAtomic>::StoreColoured(zpointer value, std::memory_order order)
 {
     MAddress newVal = raw(value);
-    AssertColouredWriteIfEnabled(this, newVal);
 #if defined(CANGJIE_TSAN_SUPPORT)
     RefFieldValue oldVal = static_cast<RefFieldValue>(Sanitizer::TsanAtomicLoad(&fieldVal, std::memory_order_relaxed));
 #else

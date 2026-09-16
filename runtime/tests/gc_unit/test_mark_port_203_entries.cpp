@@ -150,6 +150,10 @@ struct MarkPort203TestAccess {
         if (major) {
             auto& old = collector.GetGenerationCycle(GCCycleGeneration::OLD);
             if (!old.Snapshot().active) old.Begin(0);
+            // The fixture bypasses the young prelude, so preserve its real
+            // old mark-start color transition before the sequence/domain.
+            // ZGenerationOld::mark_start, zGeneration.cpp:1213-1226.
+            ZGlobalsPointers::flip_old_mark_start();
             GenerationSequenceFixture::Advance(old);
             collector.StartOldMarkWork();
         }

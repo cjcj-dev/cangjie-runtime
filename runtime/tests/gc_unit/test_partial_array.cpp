@@ -18,6 +18,7 @@
 
 #include "Base/Globals.h"
 #include "Heap/z/zDriver.hpp"
+#include "Heap/z/zBarrier.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
@@ -41,6 +42,36 @@ struct PartialArrayTestAccess {
                      TracingCollector::WorkStack& workStack)
     {
         collector.PushPartialArray(addr, length, workStack);
+    }
+
+    static void StartFieldMark(WCollector& collector)
+    {
+        auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+        GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
+        auto arm = [](TracingCollector& c) {
+            auto& old = c.GetGenerationCycle(GCCycleGeneration::OLD);
+            old.InitializeWorkers(1);
+            if (!old.Snapshot().active) {
+                old.Begin(0);
+            }
+            c.StartOldMarkWork();
+            old.PublishPhase(GC_PHASE_TRACE);
+        };
+        arm(collector);
+        arm(heap);
+    }
+
+    static void ReadPublished(WCollector& collector, TracingCollector::WorkStack& result)
+    {
+        auto& heap = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
+        auto& domain = heap.MajorMarkDomain() != nullptr ? *heap.MajorMarkDomain()
+                                                         : *collector.MajorMarkDomain();
+        for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
+            if (auto* stack = domain.Stacks().StealLocal(stripe)) {
+                while (!stack->IsEmpty()) result.push_back(stack->Pop());
+                MarkStripeStack::Destroy(stack);
+            }
+        }
     }
 
     static void StoreTarget(const WCollector& collector, RefField<>& field, BaseObject* target)
@@ -186,7 +217,12 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     workStack.pop_back();
     GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(partial));
 
+    // #607 fields publish into the generation mark domain, as ZMark's
+    // barrier does; the old caller-owned staging stack is not that consumer.
+    PartialArrayTestAccess::StartFieldMark(collector);
+    ZGlobalsPointers::flip_old_mark_start();
     collector.FollowPartialArray(partial, workStack);
+    PartialArrayTestAccess::ReadPublished(collector, workStack);
     GC_EXPECT_FALSE(workStack.empty());
     const MarkStackEntry reached = workStack.back();
     workStack.pop_back();

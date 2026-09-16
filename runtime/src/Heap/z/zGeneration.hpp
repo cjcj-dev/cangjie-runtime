@@ -34,6 +34,9 @@ struct GCCycleSnapshot {
 };
 class WCollector;
 struct YoungCollectionStats;
+class GenerationCycle;
+using ZGeneration = GenerationCycle;
+
 class GenerationCycle {
 public:
     explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}

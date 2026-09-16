@@ -1,0 +1,34 @@
+{
+  "root": "/root/sym_cangjie_runtime_608_implement_r5683164869/abi-final-green",
+  "source_sha": "071fd4b2ec5c90c9bc09849b8fb6e80b789b5f4d",
+  "commands": {
+    "lib/CodeGen/CMakeFiles/LLVMCodeGen.dir/CJBarrierLowering.cpp.o": {
+      "rc": 0,
+      "stdout": "ccache /usr/lib/ccache/clang++ -DCJ_LLVM_COMMIT=\\\"unknown\\\" -DGTEST_HAS_RTTI=0 -D_DEBUG -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -I/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-build/lib/CodeGen -I/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src/llvm/lib/CodeGen -I/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-build/include -I/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src/llvm/include -ffile-prefix-map=/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src=/usr/src/cangjie-llvm -fdebug-prefix-map=/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src=/usr/src/cangjie-llvm -fmacro-prefix-map=/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src=/usr/src/cangjie-llvm -fPIC -fno-semantic-interposition -fvisibility-inlines-hidden -Werror=date-time -Werror=unguarded-availability-new -Wall -Wextra -Wno-unused-parameter -Wwrite-strings -Wfloat-equal -Wcast-qual -Wmissing-field-initializers -pedantic -Wno-long-long -Wc++98-compat-extra-semi -Wimplicit-fallthrough -Wcovered-switch-default -Wno-noexcept-type -Wnon-virtual-dtor -Wdelete-non-virtual-dtor -Wsuggest-override -Wstring-conversion -Wmisleading-indentation -fdiagnostics-color -ffunction-sections -fdata-sections -pie -fstack-protector-all -D_FORTIFY_SOURCE=2 -O3 -Qunused-arguments -ffunction-sections -fdata-sections  -O3 -DNDEBUG  -fno-exceptions -fno-rtti -UNDEBUG -std=c++14 -MD -MT lib/CodeGen/CMakeFiles/LLVMCodeGen.dir/CJBarrierLowering.cpp.o -MF lib/CodeGen/CMakeFiles/LLVMCodeGen.dir/CJBarrierLowering.cpp.o.d -o lib/CodeGen/CMakeFiles/LLVMCodeGen.dir/CJBarrierLowering.cpp.o -c /root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src/llvm/lib/CodeGen/CJBarrierLowering.cpp\n",
+      "stderr": ""
+    },
+    "bin/llc": {
+      "rc": 0,
+      "stdout": ": && /usr/lib/ccache/clang++ -ffile-prefix-map=/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src=/usr/src/cangjie-llvm -fdebug-prefix-map=/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src=/usr/src/cangjie-llvm -fmacro-prefix-map=/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-src=/usr/src/cangjie-llvm -fPIC -fno-semantic-interposition -fvisibility-inlines-hidden -Werror=date-time -Werror=unguarded-availability-new -Wall -Wextra -Wno-unused-parameter -Wwrite-strings -Wfloat-equal -Wcast-qual -Wmissing-field-initializers -pedantic -Wno-long-long -Wc++98-compat-extra-semi -Wimplicit-fallthrough -Wcovered-switch-default -Wno-noexcept-type -Wnon-virtual-dtor -Wdelete-non-virtual-dtor -Wsuggest-override -Wstring-conversion -Wmisleading-indentation -fdiagnostics-color -ffunction-sections -fdata-sections -pie -fstack-protector-all -D_FORTIFY_SOURCE=2 -O3 -Qunused-arguments -ffunction-sections -fdata-sections  -O3 -DNDEBUG -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack -Wl,-s -Wl,--gc-sections    -Wl,--export-dynamic  -Wl,-rpath-link,/root/sym_cangjie_runtime_608_implement_r5683164869/abi-canonical/llvm-build/./lib tools/llc/CMakeFiles/llc.dir/llc.cpp.o -o bin/llc  -Wl,-rpath,\"\\$ORIGIN/../lib\"  lib/libLLVMX86AsmParser.a  lib/libLLVMX86CodeGen.a  lib/libLLVMX86Desc.a  lib/libLLVMX86Info.a  lib/libLLVMAnalysis.a  lib/libLLVMAsmParser.a  lib/libLLVMAsmPrinter.a  lib/libLLVMCodeGen.a  lib/libLLVMCore.a  lib/libLLVMIRReader.a  lib/libLLVMMC.a  lib/libLLVMMIRParser.a  lib/libLLVMRemarks.a  lib/libLLVMScalarOpts.a  lib/libLLVMSelectionDAG.a  lib/libLLVMSupport.a  lib/libLLVMTarget.a  lib/libLLVMTransformUtils.a  lib/libLLVMVectorize.a  lib/libLLVMMCDisassembler.a  lib/libLLVMGlobalISel.a  lib/libLLVMSelectionDAG.a  lib/libLLVMCFGuard.a  lib/libLLVMAsmParser.a  lib/libLLVMCodeGen.a  lib/libLLVMScalarOpts.a  lib/libLLVMInstrumentation.a  lib/libLLVMAggressiveInstCombine.a  lib/libLLVMInstCombine.a  lib/libLLVMBitWriter.a  lib/libLLVMTarget.a  lib/libLLVMTransformUtils.a  lib/libLLVMAnalysis.a  lib/libLLVMProfileData.a  lib/libLLVMSymbolize.a  lib/libLLVMDebugInfoDWARF.a  lib/libLLVMDebugInfoPDB.a  lib/libLLVMDebugInfoMSF.a  lib/libLLVMObject.a  lib/libLLVMMCParser.a  lib/libLLVMMC.a  lib/libLLVMDebugInfoCodeView.a  lib/libLLVMBitReader.a  lib/libLLVMTextAPI.a  lib/libLLVMCore.a  lib/libLLVMRemarks.a  lib/libLLVMBitstreamReader.a  lib/libLLVMBinaryFormat.a  -fstack-protector-all  lib/libLLVMSupport.a  -lrt  -ldl  -lm  /usr/lib/x86_64-linux-gnu/libz.so  /usr/lib/x86_64-linux-gnu/libtinfo.so  lib/libLLVMDemangle.a && :\n",
+      "stderr": ""
+    }
+  },
+  "inputs": {
+    "llvm-build/bin/llc": {
+      "size": 51830136,
+      "sha256": "b71a256f4db199ffcb452e1ed1ec5b12b96544058b0d77c286293b252443ad30"
+    },
+    "llvm-build/lib/libLLVMCodeGen.a": {
+      "size": 25929614,
+      "sha256": "f1bcf4836823f882750032a981038062e5280e670afa5e84e067965cae144337"
+    },
+    "llvm-build/lib/CodeGen/CMakeFiles/LLVMCodeGen.dir/CJBarrierLowering.cpp.o": {
+      "size": 217736,
+      "sha256": "846fae07d33bdcf52e774da9d329867d4ccaf9a7accefd4937fa22bc4f9ce5c1"
+    },
+    "llvm-src/llvm/lib/CodeGen/CJBarrierLowering.cpp": {
+      "size": 47865,
+      "sha256": "384006c43e210d7cc667996f82b6c5b1689a04583b3b1407f0ae9b2e4d530764"
+    }
+  }
+}

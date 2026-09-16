@@ -59,7 +59,24 @@ ReferenceStatus ReferenceProcessor::DiscoverReference(BaseObject* reference, Ref
     }
     Node* node = new (std::nothrow) Node{ reference, type, nullptr };
     CHECK(node != nullptr);
-    Push(discoveredList, node);
+    if (type == ReferenceType::FINAL) {
+        // The native registration adapter has no Java discovered field. Claim
+        // once in the existing discovered list; workers only append during mark,
+        // and processing detaches the list after the mark workers have joined.
+        Node* head = discoveredList.load(std::memory_order_acquire);
+        do {
+            for (Node* existing = head; existing != nullptr; existing = existing->next) {
+                if (existing->type == type && existing->reference == reference) {
+                    delete node;
+                    return ReferenceStatus::ALREADY_DISCOVERED;
+                }
+            }
+            node->next = head;
+        } while (!discoveredList.compare_exchange_weak(head, node, std::memory_order_acq_rel,
+                                                       std::memory_order_acquire));
+    } else {
+        Push(discoveredList, node);
+    }
     discovered[TypeIndex(type)].fetch_add(1, std::memory_order_relaxed);
     return ReferenceStatus::DISCOVERED;
 }
@@ -141,8 +158,7 @@ ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithRe
         g_beforeWeakCleanCasForTest();
     }
 #endif
-    if (HealSlot(referentField, observed, to_zpointer(0), HealSite::BarrierWeakClean,
-                 HealNull::Allow, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    if (referentField.CompareExchange(observed, to_zpointer(0))) {
         return { true, false, nullptr };
     }
 

@@ -69,7 +69,6 @@
 
 
 namespace MapleRuntime {
-Barrier* Heap::barrierPtr = nullptr;
 MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
 std::vector<HeapSlotAddressRange> Heap::heapReservations;
@@ -100,9 +99,8 @@ class HeapImpl : public Heap {
 public:
     HeapImpl()
         : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
-          collectorProxy(*theSpace, collectorResources), barrier(collectorProxy, rememberedSet)
+          collectorProxy(*theSpace, collectorResources)
     {
-        Heap::barrierPtr = &barrier;
         RunType::InitRunTypeMap();
     }
 
@@ -187,7 +185,6 @@ private:
 
     ExportRootTable exportRootsTable;
     RememberedSet rememberedSet;
-    Barrier barrier;
 
     // manage gc roots entry
     StaticRootTable staticRootTable;

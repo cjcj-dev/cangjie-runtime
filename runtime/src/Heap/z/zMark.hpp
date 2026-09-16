@@ -533,8 +533,7 @@ protected:
     void EnumAllExportRoots(RootSet& foreignRootsSet);
     // let finalizerProcessor process finalizers, and mark resurrected if in light sync gc
     virtual void ProcessFinalizers() {}
-    // designed to mark resurrected finalizer, should not be call in stw gc
-    virtual void DoResurrection(WorkStack& workStack);
+    void DiscoverFinalizableRoot(NativeSlot& slot) const;
 
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);

@@ -5,7 +5,9 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Base/Macros.h"
+#include "Base/Panic.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zPage.hpp"
@@ -30,9 +32,12 @@
 #include <vector>
 
 namespace MapleRuntime {
-static_assert(!std::is_polymorphic<Barrier>::value, "Barrier must not regain virtual dispatch");
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void(ZBarrier::FieldMarkKind, RefField<>&, zpointer, zaddress)> ZBarrier::testFieldMarkResult;
+#endif
+static_assert(!std::is_polymorphic<ZBarrier>::value, "ZBarrier must not regain virtual dispatch");
 
-// ZBarrier::assert_transition_monotonicity, zBarrier.inline.hpp:40-70.
+// ZZBarrier::assert_transition_monotonicity, zBarrier.inline.hpp:40-70.
 void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr)
 {
     const uintptr_t oldRaw = raw(oldPtr), newRaw = raw(newPtr);
@@ -57,7 +62,7 @@ void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr)
 namespace {
 enum class CopySlotKind { Heap, Native, Uncolored };
 
-void CopyReferenceSlots(const Barrier& barrier,
+        void CopyOopOne(
                              MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                              std::vector<size_t> offsets, CopySlotKind sourceKind, CopySlotKind destinationKind)
 {
@@ -65,37 +70,31 @@ void CopyReferenceSlots(const Barrier& barrier,
     if (srcLen == 0) {
         return;
     }
-    std::vector<uint8_t> snapshot(srcLen);
-    CHECK_DETAIL(memcpy_s(snapshot.data(), snapshot.size(), reinterpret_cast<void*>(src), srcLen) == EOK,
-                 "full-colour source snapshot failed");
     std::sort(offsets.begin(), offsets.end());
     offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
     size_t cursor = 0;
     for (size_t offset : offsets) {
-        CHECK_DETAIL(offset >= cursor && offset + sizeof(HeapSlot<>) <= srcLen,
-                     "full-colour ref offset outside copy: offset=%zu cursor=%zu srcLen=%zu", offset, cursor, srcLen);
+        CHECK_DETAIL(offset + sizeof(HeapSlot<>) <= srcLen,
+                     "full-colour ref offset outside copy: offset=%zu srcLen=%zu", offset, srcLen);
         if (offset > cursor) {
             const size_t gap = offset - cursor;
-            CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), gap,
-                                  snapshot.data() + cursor, gap) == EOK,
+            CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst + cursor), gap,
+                                   reinterpret_cast<void*>(src + cursor), gap) == EOK,
                          "full-colour primitive-gap copy failed");
         }
-        uintptr_t sourceWord = 0;
-        std::memcpy(&sourceWord, snapshot.data() + offset, sizeof(sourceWord));
-        BaseObject* target;
+        BaseObject* target = nullptr;
         if (sourceKind == CopySlotKind::Uncolored) {
-            // Mutator-local values are load-good after the shared root protocol.
-            // They are not zpointer words and must never enter a color fast path.
-            target = to_object(safe(to_zaddress_unsafe(sourceWord)));
+            target = to_object(safe(RootSlotAt(src + offset).LoadPlain()));
+        } else if (sourceKind == CopySlotKind::Native) {
+            target = ZBarrier::ReadStaticRef(NativeSlotAt(src + offset));
         } else {
-            HeapSlot<> source(to_zpointer(sourceWord));
-            target = sourceKind == CopySlotKind::Native
-                ? barrier.ReadStaticRef(source) : barrier.ReadReference(nullptr, source);
+            target = ZBarrier::ReadReference(nullptr, HeapSlotAt<>(src + offset));
         }
         if (destinationKind == CopySlotKind::Heap) {
-            barrier.WriteReference(nullptr, HeapSlotAt<>(dst + offset), target);
+            ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(dst + offset), false);
+            HeapSlotAt<>(dst + offset).StoreColoured(ZAddress::store_good(from_object(target)));
         } else if (destinationKind == CopySlotKind::Native) {
-            barrier.WriteStaticRef(NativeSlotAt(dst + offset), target);
+            ZBarrier::WriteStaticRef(NativeSlotAt(dst + offset), target);
         } else {
             StorePlain(RootSlotAt(dst + offset), from_object(target));
         }
@@ -103,88 +102,69 @@ void CopyReferenceSlots(const Barrier& barrier,
     }
     if (cursor < srcLen) {
         const size_t tail = srcLen - cursor;
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), tail,
-                              snapshot.data() + cursor, tail) == EOK,
-                     "full-colour primitive-tail copy failed");
+        CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst + cursor), tail,
+                               reinterpret_cast<void*>(src + cursor), tail) == EOK,
+                         "full-colour primitive-tail copy failed");
     }
 }
 } // namespace
 
 // Value-type ABI entries carry their GC layout even when the optional holder
 // is null. Process the same slots as object-layout copies without guessing a base.
-void Barrier::WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib) const
+void ZBarrier::WriteStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib)
 {
     std::vector<size_t> offsets;
     gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
         offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
     }, src, src + srcLen);
-    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
-void Barrier::ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib) const
+void ZBarrier::ReadStruct(MAddress dst, MAddress src, size_t size, GCTib gctib)
 {
     std::vector<size_t> offsets;
     gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
         offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
     }, src, src + size);
-    CopyReferenceSlots(*this, dst, size, src, size, std::move(offsets),
+    CopyOopOne( dst, size, src, size, std::move(offsets),
         CopySlotKind::Heap, CopySlotKind::Uncolored);
 }
 
-void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteI32(BaseObject* obj, Field<int32_t>& field, int32_t val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteI64(BaseObject* obj, Field<int64_t>& field, int64_t val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteF32(BaseObject* obj, Field<float>& field, float val) const { field.SetFieldValue(obj, val); }
-
-void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const { field.SetFieldValue(obj, val); }
-
-// ZBarrier::store_barrier_on_heap_oop_field, zBarrier.inline.hpp:695-706.
+// ZZBarrier::store_barrier_on_heap_oop_field, zBarrier.inline.hpp:695-706.
 // Atomic operations heal before attempting the exchange, ordinary stores buffer prev.
 template<bool atomic>
-void Barrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
-                            ReferenceStrength strength) const
+void ZBarrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
+                            ReferenceStrength strength)
 {
-    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    RefField<> previous(observed);
-    auto fastPath = [this, heal, strength](zpointer word) {
-        RefField<> value(word);
-        return ZPointer::is_store_good(value.GetFieldValue()) ||
-            (strength == ReferenceStrength::Strong && !heal && is_null(word));
-    };
-    if (fastPath(observed)) {
-        return;
-    }
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    BaseObject* target = theCollector.make_load_good(previous, provenance);
+    (void)obj;
+    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
+    const zpointer prev = load_atomic(p);
     if (strength != ReferenceStrength::Strong) {
-        // ZBarrier::no_keep_alive_heap_store_slow_path (zBarrier.cpp:266-270).
-        const MAddress address = reinterpret_cast<MAddress>(&field);
-        if (Heap::IsHeapAddress(address) && !Heap::page(address)->IsYoungRegion()) {
-            theRememberedSet.Record(address, true);
-        }
+        auto slow = [p](zaddress addr) {
+            remember(p);
+            return addr;
+        };
+        barrier(is_store_good_fast_path, slow, ColorStoreGood, nullptr, prev, false);
         return;
     }
-    if (heal) {
-        // ZBarrier::heap_store_slow_path(..., heal=true) does not buffer.
-        theCollector.MarkObjectIfActive(target);
-        const MAddress address = reinterpret_cast<MAddress>(&field);
-        if (Heap::IsHeapAddress(address) && !Heap::page(address)->IsYoungRegion()) {
-            theRememberedSet.Record(address, true);
+    auto slow = [p, prev, heal](zaddress addr) {
+        StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(heal);
+        if (buffer != nullptr) {
+            buffer->add(reinterpret_cast<MAddress>(p), prev);
+        } else {
+            mark_and_remember(p, addr);
         }
-        const zpointer good = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(target)))));
-        ZgcSelfHeal(field, observed, good, fastPath, HealSite::BarrierReadReference);
+        return addr;
+    };
+    if (heal) {
+        barrier(is_store_good_fast_path, slow, ColorStoreGood, p, prev, false);
     } else {
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), target, observed);
+        barrier(is_store_good_or_null_fast_path, slow, ColorStoreGood, nullptr, prev, false);
     }
 }
 
-void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void ZBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref)
 {
     const bool weakReferent = obj != nullptr && Heap::IsHeapAddress(obj) && obj->IsWeakRef() &&
         reinterpret_cast<MAddress>(&field) == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
@@ -192,36 +172,17 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     WriteReferenceImpl(obj, field, ref);
 }
 
-void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref, zpointer prev) const
-{
-    RefField<> previous(prev);
-    const MAddress address = reinterpret_cast<MAddress>(&field);
-    const bool weakReferent = obj != nullptr && Heap::IsHeapAddress(obj) && obj->IsWeakRef() &&
-        address == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
-    // ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field uses store-good,
-    // including raw null in the slow path so that remember(p) is not skipped.
-    if (!ZPointer::is_store_good(previous.GetFieldValue()) && (weakReferent || !is_null(prev))) {
-        if (weakReferent) {
-            if (!Heap::page(address)->IsYoungRegion()) {
-                theRememberedSet.Record(address, true);
-            }
-        } else {
-            RecordCrossGenEdge(obj, address, ref, prev);
-        }
-    }
-}
-
-void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void ZBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref)
 {
     field.StoreColoured(to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(ref))))));
 }
 
-void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void ZBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen)
 {
     WriteStructImpl(obj, dst, dstLen, src, srcLen);
 }
 
-void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void ZBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen)
 {
 
     if (obj != nullptr && Heap::IsHeapAddress(obj)) {
@@ -237,43 +198,97 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 #endif
 }
 
-// ZBarrier::store_barrier_on_native_oop_field, zBarrier.inline.hpp:709.
+// ZZBarrier::store_barrier_on_native_oop_field, zBarrier.inline.hpp:709.
 // Native slots carry color but have no heap remembered-set obligation.
 template<bool atomic>
-void Barrier::NativeStoreBarrier(RefField<atomic>& field, bool heal) const
+void ZBarrier::NativeStoreBarrier(RefField<atomic>& field, bool heal)
 {
-    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
-    auto fastPath = [this, heal](zpointer word) {
-        RefField<> value(word);
-        return ZPointer::is_store_good(value.GetFieldValue()) || (!heal && is_null(word));
+    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
+    const zpointer prev = load_atomic(p);
+    auto slow = [](zaddress addr) {
+        if (!is_null(addr)) {
+            Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+        }
+        return addr;
     };
-    if (fastPath(observed)) {
-        return;
-    }
-    RefField<> previous(observed);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
-    BaseObject* target = theCollector.make_load_good(previous, provenance);
-    theCollector.MarkObjectIfActive(target);
     if (heal) {
-        const zpointer good = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(target)))));
-        ZgcSelfHeal(field, observed, good, fastPath, HealSite::BarrierReadReference);
+        barrier(is_store_good_fast_path, slow, ColorStoreGood, p, prev, false);
+    } else {
+        barrier(is_store_good_or_null_fast_path, slow, ColorStoreGood, nullptr, prev, false);
     }
 }
 
-void Barrier::WriteStaticRef(NativeSlot& field, BaseObject* ref) const
+void ZBarrier::WriteStaticRef(NativeSlot& field, BaseObject* ref)
 {
     NativeStoreBarrier(field, false);
     WriteReferenceImpl(nullptr, field, ref);
 }
 
-BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
+BaseObject* ZBarrier::ReadStaticRef(NativeSlot& field)
 {
     const zpointer observed = field.GetFieldValue();
     return LoadBarrier(nullptr, field, observed, ReferenceStrength::Strong);
 }
 
-// ZBarrier::mark_young_slow_path, zBarrier.cpp:206-215.
-zaddress Barrier::MarkYoungSlowPath(zaddress address) const
+// ZZBarrier::mark_from_young_slow_path, zBarrier.cpp:158-183.
+zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
+{
+    auto& young = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    ASSERT(young.IsPhaseMark());
+    if (is_null(address)) return address;
+    if (Heap::page(raw(address))->IsYoungRegion()) {
+        young.MarkObject<false, true, true, false>(address);
+        return address;
+    }
+    if (young.IsMajorRoots()) {
+        Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).MarkObject<false, true, true, false>(address);
+        return address;
+    }
+    return address;
+}
+
+// ZZBarrier::mark_from_old_slow_path, zBarrier.cpp:185-203.
+zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
+{
+    auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    if (is_null(address)) return address;
+    if (!Heap::page(raw(address))->IsYoungRegion()) {
+        old.MarkObject<false, true, true, false>(address);
+        return address;
+    }
+    return zaddress::null;
+}
+
+// ZZBarrier::mark_finalizable_slow_path, zBarrier.cpp:218-232.
+zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
+{
+    auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    auto& young = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    ASSERT(old.IsPhaseMark() || young.IsPhaseMark());
+    if (is_null(address)) return address;
+    if (!Heap::page(raw(address))->IsYoungRegion()) {
+        old.MarkObject<false, true, true, true>(address);
+        return address;
+    }
+    young.MarkObjectIfActive<false, true, true, false>(address);
+    return address;
+}
+
+// ZZBarrier::mark_finalizable_from_old_slow_path, zBarrier.cpp:234-250.
+zaddress ZBarrier::MarkFinalizableFromOldSlowPath(zaddress address)
+{
+    auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    CHECK(old.IsPhaseMark() || Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).IsPhaseMark());
+    if (is_null(address)) return address;
+    if (!Heap::page(raw(address))->IsYoungRegion()) {
+        old.MarkObject<false, true, true, true>(address);
+        return address;
+    }
+    return zaddress::null;
+}
+
+// ZZBarrier::mark_young_slow_path, zBarrier.cpp:206-215.
+zaddress ZBarrier::MarkYoungSlowPath(zaddress address)
 {
     if (is_null(address)) {
         return address;
@@ -282,25 +297,13 @@ zaddress Barrier::MarkYoungSlowPath(zaddress address) const
     return address;
 }
 
-// Thread-owned uncolored roots are made load-good by the shared root handshake
-// before their mutator resumes (ZStackWatermark). Mutator access does not remap.
-BaseObject* Barrier::ReadPlainRoot(RootSlot& field) const
-{
-    return to_object(safe(field.LoadPlain()));
-}
-
-void Barrier::WritePlainRoot(RootSlot& field, BaseObject* ref) const
-{
-    StorePlain(field, from_object(ref));
-}
-
-void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
+void ZBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib)
 {
     std::vector<size_t> offsets;
     gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
         offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
     }, src, src + srcLen);
-    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Native);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), srcLen);
@@ -308,68 +311,105 @@ void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_
 #endif
 }
 
-// ZBarrier::barrier and weak/phantom slow paths, zBarrier.inline.hpp:319-343,484-565.
-template<bool atomic>
-BaseObject* Barrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpointer observed,
-                                 ReferenceStrength strength) const
+// ZZBarrier::barrier and weak/phantom slow paths, zBarrier.inline.hpp:319-343,484-565.
+zaddress ZBarrier::load_good_slow_path(zaddress addr)
 {
-    auto fastPath = [this, strength](zpointer word) {
-        RefField<> value(word);
-        return strength == ReferenceStrength::Strong
-            ? ZPointer::is_load_good_or_null(to_zpointer(raw(word)))
-            : ZPointer::is_mark_good(value.GetFieldValue());
-    };
-    RefField<> value(observed);
-    if (fastPath(observed)) {
-        return to_object(value.GetTargetObject());
-    }
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    BaseObject* target = theCollector.make_load_good(value, provenance);
-    CHECK_DETAIL(target != nullptr || !(!is_null_any(to_zpointer(raw(observed)))),
-                 "load barrier relocation must preserve a non-null reference");
-    if (strength != ReferenceStrength::Strong && target != nullptr && Heap::IsHeapAddress(target)) {
-        // Only the shared resurrection rendezvous publishes the blocked window.
-        if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
-            ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
-            if (region->IsYoungRegion()) {
-                theCollector.MarkYoungObjectIfActive(target);
-            } else {
-                const zaddress targetAddr = from_object(target);
-                const bool stronglyLive = region->is_object_strongly_live(targetAddr);
-                const bool live = stronglyLive || (strength == ReferenceStrength::Phantom &&
-                                                   region->is_object_live(targetAddr));
-                if (!live) {
-                    return nullptr; // A load never clears a referent (ZBarrier::self_heal).
-                }
-            }
-        } else {
-            theCollector.MarkObjectIfActive(target);
-        }
-    }
-    const zpointer healed = strength == ReferenceStrength::Strong
-        ? ZAddress::load_good(from_object(target), observed)
-        : ZAddress::mark_good(from_object(target), observed);
-    ZgcSelfHeal(field, observed, healed, fastPath, HealSite::BarrierReadReference);
-    return target;
+    return addr;
 }
 
-BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) const
+zaddress ZBarrier::keep_alive_slow_path(zaddress addr)
+{
+    if (!is_null(addr)) {
+        Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+    }
+    return addr;
+}
+
+zaddress ZBarrier::blocking_keep_alive_on_weak_slow_path(zaddress addr)
+{
+    if (is_null(addr)) {
+        return zaddress::null;
+    }
+    BaseObject* target = to_object(addr);
+    if (!Heap::IsHeapAddress(target)) {
+        return addr;
+    }
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
+    if (region->IsYoungRegion()) {
+        Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
+        return addr;
+    }
+    if (!region->is_object_strongly_live(addr)) {
+        return zaddress::null;
+    }
+    return addr;
+}
+
+zaddress ZBarrier::blocking_keep_alive_on_phantom_slow_path(zaddress addr)
+{
+    if (is_null(addr)) {
+        return zaddress::null;
+    }
+    BaseObject* target = to_object(addr);
+    if (!Heap::IsHeapAddress(target)) {
+        return addr;
+    }
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
+    if (region->IsYoungRegion()) {
+        Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
+        return addr;
+    }
+    if (!region->is_object_live(addr)) {
+        return zaddress::null;
+    }
+    return addr;
+}
+
+zpointer ZBarrier::ColorLoadGood(zaddress address, zpointer previous)
+{
+    return ZAddress::load_good(address, previous);
+}
+
+template<bool atomic>
+BaseObject* ZBarrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpointer observed,
+                                 ReferenceStrength strength)
+{
+    (void)obj;
+    volatile zpointer* p = reinterpret_cast<volatile zpointer*>(&field);
+    if (strength == ReferenceStrength::Strong) {
+        return to_object(barrier(is_load_good_or_null_fast_path, &ZBarrier::load_good_slow_path,
+                                 ColorLoadGood, p, observed, false));
+    }
+    const bool blocked = Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked();
+    if (!blocked) {
+        return to_object(barrier(is_mark_good_fast_path, &ZBarrier::keep_alive_slow_path,
+                                 ColorMarkGood, p, observed, false));
+    }
+    if (strength == ReferenceStrength::Weak) {
+        return to_object(barrier(is_mark_good_fast_path, &ZBarrier::blocking_keep_alive_on_weak_slow_path,
+                                 ColorMarkGood, p, observed, false));
+    }
+    return to_object(barrier(is_mark_good_fast_path, &ZBarrier::blocking_keep_alive_on_phantom_slow_path,
+                             ColorMarkGood, p, observed, false));
+}
+
+BaseObject* ZBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
 {
     return LoadBarrier(obj, field, field.GetFieldValue(), ReferenceStrength::Strong);
 }
 
-BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
+BaseObject* ZBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field)
 {
     return LoadBarrier(obj, field, field.GetFieldValue(), ReferenceStrength::Weak);
 }
 
-BaseObject* Barrier::ReadPhantomRef(BaseObject* obj, RefField<false>& field) const
+BaseObject* ZBarrier::ReadPhantomRef(BaseObject* obj, RefField<false>& field)
 {
     return LoadBarrier(obj, field, field.GetFieldValue(), ReferenceStrength::Phantom);
 }
 
 // barrier for atomic operation.
-void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
+void ZBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order)
 {
     if (!Heap::IsHeapAddress(&field)) {
         NativeStoreBarrier(field, true);
@@ -380,13 +420,13 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     AtomicWriteReferenceImpl(obj, field, ref, order);
 }
 
-void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
+void ZBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order)
 {
     field.StoreColoured(to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(ref))))), order);
 }
 
-BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                         MemoryOrder order) const
+BaseObject* ZBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                         MemoryOrder order)
 {
     if (!Heap::IsHeapAddress(&field)) {
         NativeStoreBarrier(field, true);
@@ -396,21 +436,21 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     return AtomicSwapReferenceImpl(obj, field, newRef, order);
 }
 
-BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                             MemoryOrder order) const
+BaseObject* ZBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                             MemoryOrder order)
 {
     const zpointer desired = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(newRef)))));
     RefField<> previous(field.Exchange(desired, order));
     return to_object(previous.GetTargetObject());
 }
 
-BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
+BaseObject* ZBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order)
 {
     return LoadBarrier(obj, field, field.GetFieldValue(order), ReferenceStrength::Strong);
 }
 
-bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
-                                      MemoryOrder succOrder, MemoryOrder failOrder) const
+bool ZBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
+                                      MemoryOrder succOrder, MemoryOrder failOrder)
 {
     if (!Heap::IsHeapAddress(&field)) {
         NativeStoreBarrier(field, true);
@@ -420,23 +460,22 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     return CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
 }
 
-bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
-                                          BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
+bool ZBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+                                          BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder)
 {
     const zpointer expected = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(oldRef)))));
     const zpointer desired = to_zpointer(raw(ZAddress::store_good(to_zaddress(reinterpret_cast<uintptr_t>(newRef)))));
-    return HealSlot(field, expected, desired, HealSite::BarrierCompareAndSwapReference,
-                    HealNull::Allow, succOrder, failOrder);
+    return field.CompareExchange(expected, desired, succOrder, failOrder);
 }
 
-void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
-                           MIndex srcSize) const
+void ZBarrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
+                           MIndex srcSize)
 {
     CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
 }
 
-void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                               MAddress srcField, MIndex srcSize) const
+void ZBarrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                               MAddress srcField, MIndex srcSize)
 {
 
     if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
@@ -452,14 +491,14 @@ void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dst
 #endif
 }
 
-void Barrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                              MAddress srcField, MIndex srcSize) const
+void ZBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                              MAddress srcField, MIndex srcSize)
 {
     CopyStructArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
 }
 
-void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                                  MAddress srcField, MIndex srcSize) const
+void ZBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                                  MAddress srcField, MIndex srcSize)
 {
 
     if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
@@ -475,7 +514,7 @@ void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex 
 #endif
 }
 
-void Barrier::CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const
+void ZBarrier::CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, size_t size)
 {
     // STACK_ROOTS_STAY_PLAIN: never memcpy a coloured heap word onto the stack.
     // Walk GC pointer slots in address order, copy the primitive gap, then StorePlain.
@@ -496,7 +535,7 @@ void Barrier::CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddres
     const MAddress srcEnd = src + size;
     if (srcObj != nullptr) {
         srcObj->ForEachRefInStruct(
-            [this, srcObj, dst, src, srcEnd, &cursor](RefField<false>& field) {
+            [srcObj, dst, src, srcEnd, &cursor](RefField<false>& field) {
                 MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
                 if (fieldAddr < cursor || fieldAddr >= srcEnd) {
                     return;
@@ -528,9 +567,9 @@ void Barrier::CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddres
 
 
 
-void Barrier::CopyObjectStructColouredToHeap(BaseObject* layoutObj, MAddress layoutStart,
+void ZBarrier::CopyObjectStructColouredToHeap(BaseObject* layoutObj, MAddress layoutStart,
                                               MAddress dst, size_t dstLen,
-                                              MAddress src, size_t srcLen) const
+                                              MAddress src, size_t srcLen)
 {
     CHECK(layoutObj != nullptr && Heap::IsHeapAddress(dst));
     std::vector<size_t> offsets;
@@ -541,12 +580,12 @@ void Barrier::CopyObjectStructColouredToHeap(BaseObject* layoutObj, MAddress lay
                 offsets.push_back(static_cast<size_t>(address - layoutStart));
             }
         }, layoutStart, layoutStart + srcLen);
-    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
-void Barrier::CopyStaticStructColouredToHeap(MAddress dst, size_t dstLen, MAddress src,
-                                              size_t srcLen, const GCTib gctib) const
+void ZBarrier::CopyStaticStructColouredToHeap(MAddress dst, size_t dstLen, MAddress src,
+                                              size_t srcLen, const GCTib gctib)
 {
     CHECK(Heap::IsHeapAddress(dst));
     std::vector<size_t> offsets;
@@ -555,12 +594,12 @@ void Barrier::CopyStaticStructColouredToHeap(MAddress dst, size_t dstLen, MAddre
         [&offsets, src](RefField<>& field) {
             offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - src));
         }, src, src + srcLen);
-    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         CopySlotKind::Native, CopySlotKind::Heap);
 }
 
-void Barrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, size_t dstLen,
-                                             MAddress src, size_t srcLen) const
+void ZBarrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, size_t dstLen,
+                                             MAddress src, size_t srcLen)
 {
     CHECK(dstObj != nullptr && Heap::IsHeapAddress(dstObj));
     std::vector<size_t> offsets;
@@ -568,11 +607,11 @@ void Barrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, si
         [&offsets, dst](RefField<>& field) {
             offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - dst));
         }, dst, dst + srcLen);
-    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
-void Barrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void ZBarrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress src, size_t srcLen)
 {
     CHECK(Heap::IsHeapAddress(dst));
     CHECK_DETAIL(srcLen <= dstLen && srcLen % sizeof(HeapSlot<>) == 0,
@@ -581,23 +620,23 @@ void Barrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress s
     for (size_t offset = 0; offset < srcLen; offset += sizeof(HeapSlot<>)) {
         offsets.push_back(offset);
     }
-    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+    CopyOopOne( dst, dstLen, src, srcLen, std::move(offsets),
         Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
-void Barrier::CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
+void ZBarrier::CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib)
 {
     CHECK(!Heap::IsHeapAddress(dst));
     std::vector<size_t> offsets;
     gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
         offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
     }, src, src + size);
-    CopyReferenceSlots(*this, dst, size, src, size, std::move(offsets),
+    CopyOopOne( dst, size, src, size, std::move(offsets),
                        CopySlotKind::Native, CopySlotKind::Uncolored);
 }
 
-void Barrier::CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcObj, MAddress srcField,
-                                           size_t srcSize) const
+void ZBarrier::CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcObj, MAddress srcField,
+                                           size_t srcSize)
 {
     CHECK(!Heap::IsHeapAddress(dstField));
     if (srcSize == 0) {
@@ -626,7 +665,7 @@ void Barrier::CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcOb
     MAddress cursor = srcField;
     const MAddress srcEnd = srcField + srcSize;
     static_cast<MArray*>(srcObj)->ForEachRefFieldInRange(
-        [this, srcObj, dstField, srcField, srcEnd, &cursor](RefField<false>& field) {
+        [srcObj, dstField, srcField, srcEnd, &cursor](RefField<false>& field) {
             MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
             if (fieldAddr < cursor || fieldAddr >= srcEnd) {
                 return;
@@ -655,8 +694,8 @@ void Barrier::CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcOb
 #endif
 }
 
-void Barrier::CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, MIndex dstSize,
-                                         MIndex srcSize) const
+void ZBarrier::CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, MIndex dstSize,
+                                         MIndex srcSize)
 {
     CHECK(!Heap::IsHeapAddress(dst));
     if (dst == src) {
@@ -697,7 +736,7 @@ void Barrier::CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddr
 #endif
 }
 
-void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
+void ZBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size)
 {
 
     if (!Heap::IsHeapAddress(dst)) {
@@ -708,7 +747,7 @@ void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t siz
     CopyObjectStructColouredToHeap(obj, src, dst, size, src, size);
 }
 
-void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
+void ZBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib)
 {
 
     if (!Heap::IsHeapAddress(dst)) {
@@ -718,90 +757,57 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
     CopyStaticStructColouredToHeap(dst, size, src, size, gctib);
 }
 
-void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
+void ZBarrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref, zpointer prev)
 {
-    WriteGenericImpl(obj, fieldPtr, src, size);
-}
-
-void Barrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
-{
-    ObjectPtr dst = obj;
-    void* fp = fieldPtr;
-    ObjectPtr from = src;
-
-    if ((dst != nullptr && !dst->HasRefField()) || (!Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
-        CHECK_DETAIL(memcpy_s(fp, size,
-                              reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE),
-                              size) == EOK,
-                     "WriteGeneric memcpy_s failed");
-#if defined(CANGJIE_TSAN_SUPPORT)
-        if (Heap::IsHeapAddress(from)) {
-            Sanitizer::TsanReadMemoryRange(
-                reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE), size);
-        }
-        if (Heap::IsHeapAddress(dst)) {
-            Sanitizer::TsanWriteMemoryRange(fp, size);
-        }
-#endif
-    } else if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from)) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
-        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
-        ReadStruct(dstAddr, from, srcAddr, size);
-    } else if ((Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))||
-        (Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from))) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
-        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
-        WriteStruct(dst, dstAddr, size, srcAddr, size);
-    }
-}
-void Barrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
-{
-    ReadGenericImpl(dstObj, obj, fieldPtr, size);
-}
-
-void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
-{
-
-    if (!Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj)) {
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstObj) + TYPEINFO_PTR_SIZE),
-                              size, fieldPtr, size) == EOK,
-                     "ReadGeneric memcpy_s failed");
-    } else if (!Heap::IsHeapAddress(dstObj) && Heap::IsHeapAddress(obj)) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(dstObj) + TYPEINFO_PTR_SIZE;
-        MAddress srcAddr = reinterpret_cast<MAddress>(fieldPtr);
-        ReadStruct(dstAddr, obj, srcAddr, size);
-    } else if ((Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj))||
-        (Heap::IsHeapAddress(dstObj) && Heap::IsHeapAddress(obj))) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(dstObj) + TYPEINFO_PTR_SIZE;
-        MAddress srcAddr = reinterpret_cast<MAddress>(fieldPtr);
-        WriteStruct(dstObj, dstAddr, size, srcAddr, size);
-    }
-}
-
-void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref, zpointer prev) const
-{
-    // ZBarrier::heap_store_slow_path (zBarrier.cpp:253-261): buffer (p, prev)
-    // when possible; otherwise mark(addr) and remember(p) directly.
-    const bool heapSlot = Heap::IsHeapAddress(fieldAddress);
-    // ZStoreBarrierBuffer::make_load_good (zStoreBarrierBuffer.cpp:121-140)
-    // requires a heap base. Otherwise use the existing mark-and-remember path.
-    if (kBufferStoreBarriers && heapSlot && Heap::IsHeapAddress(obj) &&
-        !IsGcThread() && Mutator::GetMutator() != nullptr) {
-        ThreadLocal::GetGCData().storeBarrierBuffer.Add(fieldAddress, obj, prev, theRememberedSet);
+    (void)obj;
+    (void)ref;
+    StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false);
+    if (buffer != nullptr) {
+        buffer->add(fieldAddress, prev);
         return;
     }
-    // addr in ZGC's heap_store_slow_path is make_load_good(prev), not the
-    // incoming value (zBarrier.inline.hpp:324-334,695-705).
-    if (!is_null(prev)) {
-        RefField<> previous(prev);
-        const ForwardingProvenance provenance{
-            ForwardingHolderKind::HeapRef, obj, reinterpret_cast<const void*>(fieldAddress)
-        };
-        theCollector.MarkObjectIfActive(theCollector.make_load_good(previous, provenance));
-    }
-    (void)ref;
-    if (heapSlot && !Heap::page(fieldAddress)->IsYoungRegion()) {
-        theRememberedSet.Record(fieldAddress, true);
+    mark_and_remember(reinterpret_cast<volatile zpointer*>(fieldAddress), make_load_good(prev));
+}
+
+void ZBarrier::store_barrier_on_heap_oop_field(volatile zpointer* p, bool heal)
+{
+    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
+    StoreBarrier<false>(nullptr, field, heal);
+}
+
+void ZBarrier::store_barrier_on_native_oop_field(volatile zpointer* p, bool heal)
+{
+    auto& field = *reinterpret_cast<NativeSlot*>(const_cast<zpointer*>(p));
+    NativeStoreBarrier<false>(field, heal);
+}
+
+zaddress ZBarrier::load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
+    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Strong));
+}
+
+zaddress ZBarrier::load_barrier_on_oop_field(volatile zpointer* p)
+{
+    return load_barrier_on_oop_field_preloaded(p, load_atomic(p));
+}
+
+zaddress ZBarrier::load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
+    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Weak));
+}
+
+zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
+{
+    auto& field = *reinterpret_cast<RefField<false>*>(const_cast<zpointer*>(p));
+    return from_object(LoadBarrier(nullptr, field, o, ReferenceStrength::Phantom));
+}
+
+void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
+{
+    for (size_t i = 0; i < length; ++i) {
+        (void)load_barrier_on_oop_field(p + i);
     }
 }
 

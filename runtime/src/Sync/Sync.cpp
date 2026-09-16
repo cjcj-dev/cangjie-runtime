@@ -567,7 +567,7 @@ bool MCC_MonitorWait(const void* ptr, int64_t timeout)
     CJMonitor* monitor = CastToT<CJMonitor*>(ptr);
     // True read barrier (not uncolor_bits): pin must land on load-good / to-copy.
     BaseObject* mutexObj =
-        Heap::GetBarrier().ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
+        ZBarrier::ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
     CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(monitor));
@@ -602,7 +602,7 @@ bool MCC_MultiConditionMonitorWait(const void* ptr, void* waitQueuePtr, int64_t 
     CJMultiConditionMonitor* monitor = CastToT<CJMultiConditionMonitor*>(ptr);
     // Same as MCC_MonitorWait: HeapSlot load must go through the real barrier.
     BaseObject* mutexObj =
-        Heap::GetBarrier().ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
+        ZBarrier::ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
     CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(waitQueuePtr));
@@ -647,7 +647,7 @@ void* MRT_GetCurrentCJThreadObject()
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    auto res = Heap::GetBarrier().ReadPlainRoot(root);
+    auto res = to_object(safe(root.LoadPlain()));
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif
@@ -663,7 +663,7 @@ void MCC_SetCurrentCJThreadObject(void* ptr)
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data->threadObject), from_native_ref(ptr));
+    StorePlain(RootSlotAt(&data->threadObject), from_object(from_native_ref(ptr)));
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif

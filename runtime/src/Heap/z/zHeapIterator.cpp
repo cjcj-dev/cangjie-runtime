@@ -80,13 +80,13 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
     NativeSlotVisitor colored = [&](NativeSlot& root) {
         if (fieldVisitor) { fieldVisitor(nullptr, &root, raw(root.GetFieldValue())); }
         // Strong loads only remap/heal: no keepalive marking during inspection.
-        Push(Heap::GetBarrier().ReadStaticRef(root), objectVisitor);
+        Push(ZBarrier::ReadStaticRef(root), objectVisitor);
     };
     collector.VisitStrongColoredRoots(colored);
     if (visitWeaks) { collector.VisitWeakColoredRoots(colored); }
     RootVisitor plain = [&](ObjectRef& root) {
         if (fieldVisitor) { fieldVisitor(nullptr, &root, raw(root.LoadPlain())); }
-        Push(Heap::GetBarrier().ReadPlainRoot(root), objectVisitor);
+        Push(to_object(safe(root.LoadPlain())), objectVisitor);
     };
     collector.VisitStrongPlainRoots(plain, [&](Mutator& mutator) {
         // Complete root processing for graph traversal, after ZVerify's raw-root
@@ -100,7 +100,7 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
     });
     FieldVisitor followField = [&](BaseObject* base, RefField<>& field) {
         if (fieldVisitor) { fieldVisitor(base, &field, raw(field.GetFieldValue())); }
-        Push(Heap::GetBarrier().ReadReference(base, field), objectVisitor);
+        Push(ZBarrier::ReadReference(base, field), objectVisitor);
     };
     // zHeapIterator.cpp:480-493: drain object work, then one array chunk,
     // returning to newly discovered objects before consuming another chunk.

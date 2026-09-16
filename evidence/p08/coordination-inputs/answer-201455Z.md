@@ -1,0 +1,18 @@
+LANE=sym_cangjie_runtime_614_implement_r5687433872
+ROLE=synthesize
+201638Z反证成立，替换原绝对判据：fast path/需不需要remap按颜色/TLS决定；remap按ZGC实际forwarding/代路由；slow与store-buffer保留ZGC调用层确实需要的is_phase_mark/is_old条件。删除我方额外GCPhaseCheck/RemapPendingField的错误相位路由，不把“GCPhase消费0/不读页态”作为跨全部路径的机械指标。明确逐函数对照ASSERT与真实控制条件，分别以标记/快照/记忆集不变量及控制臂验收。
+on_new_phase调用install_base_pointers与relocate-start入口都保留，按last_installed_color/同颜色防重。原“仅relocate start一次”被ZGC实际caller证伪，写入FALSIFIED，不为满足旧句子删合法入口。
+
+201455Z坐标：runtime实际main=91f3dcc232201d4ad98ec3af6f10165edb950416（已含P02/P06）；LLVM权威主树/root/cj_build/llvm_rebase，main与cjcjdev/main=1a01451912f160219665abdc497274e574338bad。允许建立本棒独立LLVM工作树/root/cj_build/llvm_rebase_wt/sym_cangjie_runtime_614_implement_r5687433872，候选分支sym/614-p08-llvm-r5687433872；先核未存在，不动主树/原P01成果。runtime+LLVM按原同批联合候选独立Review，精确两仓ref/PR交主控，由独立publisher/merge角色发布；不自行push。
+可复用P01基线输入：kkk2:/root/sym_cangjie_runtime_608_implement_r5683164869/abi-final-green/（包含既有host/target/LLVM产物），consumer-final-green及/root/sym_cangjie_runtime_608_implement_r5683164869-finalrt/两SO；完整身份见/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_608_implement_r5683164869/evidence/p01-real-consumers/final-summary.json。LLVM产物原源071fd4b2ec5c90c9bc09849b8fb6e80b789b5f4d与main1a014519产品tree相同，不能把原产物改标新SHA。若P08实际改LLVM则构建新候选，不以旧产物证明新码；不复制/改原SDK/build树。
+
+#607当前可读产品快照efde143b243b88a6ef5733bbdd3077f53ba11680，报告REPORT-sym_cangjie_runtime_607_implement_r5684610492.md，仍WIP。后续188a711d是测试/证据续件，runtime/src tree同一（最终使用前由你回读）。这不是已放行最终接口移交：共享MarkBarrier/4 slow path、from-old/from-young field、Finalizable root/field、zMark字段消费者正在独立函数表核对。先做不撞这些函数的旧Write*删除、独立BarrierSet/Runtime/LLVM/TLS骨架与已明确P08部分；不整分支覆盖#607，不因同文件将P08全串行。具体重叠函数迁移和P10线程身份接缝由主控下一条裁定，未裁前不在那几处自行改范围。
+
+资源：较新的本轮根盘告警优先于旧10.9GB解除通知；当前先读证/本地实现，不新增大SDK/LLVM复制或大构建，等待新容量回执。已完成交付不因资源消息回滚状态。
+
+后续主控裁定入口：201638Z同名outbox已给出LLVM权威坐标、独立候选、P01产物复用身份及相位判据，请以该新裁定接续。另P04 202002Z主控答复已明确range ABI所有权：emitReservedHeapSlot/kCjHeapRangeCap及runtime真实段容量扩展到100由#610的狭窄LLVM配套拥有；P08暂不修改这两个ABI面，后续按内容消费P04配套。同一CJBarrierLowering.cpp的其它函数可按hunk并行，不把同文件交集扩为整包等待。完整来源：/root/cj_build/ops/advisor/outbox/sym_cangjie_runtime_610_implement_r5687426297-20260915T202002Z.md。
+
+## 20:4x 主控容量恢复（只适用尚未完成步骤）
+主控已完成旧CMake中间对象回收：7825个ET_REL、1721483264B，553459个非候选文件保持，free_after=3536445440。现在可按既有wf_kkk2.sh build/bsh共享2槽、unit/sh共享3槽有界恢复，优先增量，每步核容量，保留cjops windows及运行身份。不得新复制大LLVM/SDK或改原共享产物；本通知只推进未完成步骤，不撤销/重跑已完成交付。此条替代较早再次空间耗尽时的临时暂停。
+
+#607/P08共享函数裁定已到：/root/cj_build/reports/RELEASE002-CONTROL-0916/p08-p607-ownership-ruling.md。P08为表列重叠函数最终形态owner，可接efde/188a同src tree的冻结开发输入；#607继续证据，不双写共享产品修复。最终#607独审合入在先，P08按最终已审坐标核语义增量并联合验收。#614正文新增Blocked-by #607仅确保最终顺序，当前独立实现继续，不加反向依赖。runtime+LLVM联合Review放行后next_stage=Blocked等唯一merge角色两仓协调合入并统一Done。TLS的before-any-root提议未获准，等主控精确调用/目标线程身份裁定，勿先照提议改码。

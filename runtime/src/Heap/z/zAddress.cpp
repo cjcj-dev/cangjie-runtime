@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zThreadLocalData.hpp"
 #include "Base/Macros.h"
 #include "CangjieRuntime.h"
 #include "Heap/z/zGlobals.hpp"
@@ -73,6 +74,8 @@ void ZGlobalsPointers::set_good_masks()
     ZPointerMarkBadMask = ZPointerMarkGoodMask ^ ZPointerMarkMetadataMask;
     ZPointerStoreBadMask = ZPointerStoreGoodMask ^ ZPointerStoreMetadataMask;
     pd_set_good_masks();
+    ThreadGCData::PublishMasks({ZPointerLoadGoodMask, ZPointerLoadBadMask,
+                               ZPointerMarkBadMask, ZPointerStoreGoodMask, ZPointerStoreBadMask});
 }
 void ZGlobalsPointers::pd_set_good_masks()
 {

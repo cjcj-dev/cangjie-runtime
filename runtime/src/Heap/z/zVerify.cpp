@@ -94,7 +94,7 @@ void ColoredRoot(NativeSlot& root, bool afterOldMark)
         CHECK_DETAIL(ZPointer::is_marked_old(to_zpointer(raw(value))),
                      "Unmarked old root at %p", &root);
     }
-    ZVerify::Object(Heap::GetBarrier().ReadStaticRef(root), &root);
+    ZVerify::Object(ZBarrier::ReadStaticRef(root), &root);
 }
 void PlainRoot(ObjectRef& root)
 {
@@ -172,7 +172,7 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
         Object(to_object(preloaded.GetTargetObject()), &field);
         return;
     }
-    BaseObject* target = Heap::GetBarrier().ReadReference(base, field);
+    BaseObject* target = ZBarrier::ReadReference(base, field);
     Object(target, &field);
     const bool young = Heap::page(reinterpret_cast<MAddress>(target))->IsYoungRegion();
     if (verifyWeaks) {

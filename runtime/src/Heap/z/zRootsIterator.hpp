@@ -159,7 +159,7 @@ public:
         if (!ResolveLiveIndex(handle, index)) {
             return nullptr;
         }
-        return Heap::GetBarrier().ReadStaticRef(*exportRoots[index].exportObj);
+        return ZBarrier::ReadStaticRef(*exportRoots[index].exportObj);
     }
     void RemoveExportRoot(U64 handle)
     {
@@ -168,7 +168,7 @@ public:
         if (!ResolveLiveIndex(handle, index)) {
             return;
         }
-        Heap::GetBarrier().WriteStaticRef(*exportRoots[index].exportObj, nullptr);
+        ZBarrier::WriteStaticRef(*exportRoots[index].exportObj, nullptr);
         weakStorage.Release(exportRoots[index].exportObj);
         exportRoots[index].exportObj = nullptr;
         exportRoots[index].occupied = false;
@@ -195,7 +195,7 @@ public:
         }
         auto info = exportRoots[index];
         // tableMutex protects handle ownership; slot access uses the native barrier.
-        if (Heap::GetBarrier().ReadStaticRef(*info.exportObj) != obj) {
+        if (ZBarrier::ReadStaticRef(*info.exportObj) != obj) {
             return false;
         }
         return info.activeState;
@@ -207,7 +207,7 @@ private:
         // incoming reference (zBarrier.inline.hpp:709-715). The caller already
         // holds the incoming object; publish its handle before returning.
         slot.exportObj = weakStorage.Allocate();
-        Heap::GetBarrier().WriteStaticRef(*slot.exportObj, exportObj);
+        ZBarrier::WriteStaticRef(*slot.exportObj, exportObj);
     }
 
     bool ResolveLiveIndex(U64 handle, U64& index) const

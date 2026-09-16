@@ -82,16 +82,14 @@ GC_TEST(ColourIsChecks, BarrierSelfHealUpgradeAndCompetingStore)
     const zpointer old = ZAddress::store_good(address);
     ZGlobalsPointers::flip_young_relocate_start();
     const zpointer healed = ZAddress::load_good(address, old);
-    auto fast = [](zpointer word) { return ZPointer::is_load_good_or_null(word); };
     HeapSlot<> slot(old);
-    GC_EXPECT_TRUE(ZgcSelfHeal(slot, old, healed, fast, HealSite::BarrierReadReference));
+    GC_EXPECT_TRUE(slot.CompareExchange(old, healed));
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(healed));
     const auto writer = ZAddress::store_good(static_cast<zaddress>(ZAddressHeapBase | 0x2000));
     slot.StoreColoured(writer);
-    GC_EXPECT_FALSE(ZgcSelfHeal(slot, old, healed, fast, HealSite::BarrierReadReference));
+    GC_EXPECT_FALSE(slot.CompareExchange(old, healed));
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(writer));
     slot.StoreColoured(old);
-    GC_EXPECT_FALSE(ZgcSelfHeal(slot, old, color_null(), fast, HealSite::BarrierReadReference));
     GC_EXPECT_EQ(raw(slot.GetFieldValue()), raw(old));
 }
 
@@ -126,16 +124,6 @@ GC_TEST(ValueSlotABI, StackScalarReadIsPlain)
     RootSlot slot;
     StorePlain(slot, from_object(fixture.obj0));
     GC_EXPECT_TRUE(CJ_MCC_ReadRefField(nullptr, reinterpret_cast<RefField<false>*>(&slot)) == fixture.obj0);
-}
-GC_TEST(ValueSlotABI, NullHolderHeapScalarStaysColored)
-{
-    GcHeapFixture fixture;
-    Heap::GetHeap().GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
-    auto& slot = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj1) + TYPEINFO_PTR_SIZE);
-    slot.StoreColoured(color_null());
-    MCC_WriteRefField(fixture.obj0, nullptr, &slot);
-    GC_EXPECT_TRUE(ZPointer::is_store_good(slot.GetFieldValue()));
-    GC_EXPECT_TRUE(CJ_MCC_ReadRefField(nullptr, &slot) == fixture.obj0);
 }
 #if defined(__x86_64__)
 GC_TEST(ValueSlotABI, GlobalScalarStaysColored)

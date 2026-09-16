@@ -47,7 +47,7 @@ void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
     Uptr fieldAddr = reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE + GetOffset(declaringTi);
     TypeInfo* fieldTi = GetFieldType(declaringTi);
     if (fieldTi->IsRef()) {
-        return Heap::GetBarrier().ReadReference(instanceObj,
+        return ZBarrier::ReadReference(instanceObj,
             instanceObj->GetRefField(GetOffset(declaringTi) + TYPEINFO_PTR_SIZE));
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
@@ -61,8 +61,8 @@ void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
             ExceptionManager::OutOfMemory();
             return nullptr;
         }
-        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(tmp), instanceObj, fieldAddr, fieldSize);
-        Heap::GetBarrier().WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, fieldSize,
+        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(tmp), instanceObj, fieldAddr, fieldSize);
+        ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, fieldSize,
             reinterpret_cast<MAddress>(tmp), fieldSize);
         free(tmp);
         return obj;
@@ -86,7 +86,7 @@ void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
         }
         MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
         if (fieldTi->HasRefField()) {
-            Heap::GetBarrier().WriteStruct(obj, dst, vArraySize, fieldAddr, vArraySize);
+            ZBarrier::WriteStruct(obj, dst, vArraySize, fieldAddr, vArraySize);
         } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
                             reinterpret_cast<void*>(fieldAddr), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
@@ -103,7 +103,7 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
     TypeInfo* fieldTi = GetFieldType(declaringTypeInfo);
     Uptr fieldAddr = reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE + GetOffset(declaringTypeInfo);
     if (fieldTi->IsRef()) {
-        Heap::GetBarrier().WriteReference(instanceObj,
+        ZBarrier::WriteReference(instanceObj,
             instanceObj->GetRefField(TYPEINFO_PTR_SIZE + GetOffset(declaringTypeInfo)), newValue);
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize fieldSize = fieldTi->GetInstanceSize();
@@ -115,9 +115,9 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
             ExceptionManager::OutOfMemory();
             return;
         }
-        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(tmp), instanceObj,
+        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(tmp), instanceObj,
             reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE, fieldSize);
-        Heap::GetBarrier().WriteStruct(instanceObj, fieldAddr, fieldSize,
+        ZBarrier::WriteStruct(instanceObj, fieldAddr, fieldSize,
             reinterpret_cast<MAddress>(tmp), fieldSize);
         free(tmp);
     } else if (fieldTi->IsPrimitiveType()) {
@@ -134,7 +134,7 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
         }
         MAddress src = reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE;
         if (fieldTi->HasRefField()) {
-            Heap::GetBarrier().WriteStruct(instanceObj, fieldAddr, vArraySize, src, vArraySize);
+            ZBarrier::WriteStruct(instanceObj, fieldAddr, vArraySize, src, vArraySize);
         } else if (memcpy_s(reinterpret_cast<void*>(fieldAddr), vArraySize,
                             reinterpret_cast<void*>(src), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
@@ -167,7 +167,7 @@ void* InstanceFieldInfo::GetAnnotations(TypeInfo* arrayTi)
 #else
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
-    Heap::GetBarrier().WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
+    ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
     AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
     if (buffer != nullptr) {
@@ -180,7 +180,7 @@ void* StaticFieldInfo::GetValue()
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(addr));
+        return ZBarrier::ReadStaticRef(NativeSlotAt(addr));
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MSize fieldSize = fieldTi->GetInstanceSize();
@@ -188,7 +188,7 @@ void* StaticFieldInfo::GetValue()
         if (fieldSize == 0) {
             return obj;
         }
-        Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
+        ZBarrier::ReadStaticStruct(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
             addr, fieldSize, fieldTi->GetGCTib());
         return obj;
     } else if (fieldTi->IsPrimitiveType()) {
@@ -211,7 +211,7 @@ void* StaticFieldInfo::GetValue()
         }
         MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
         if (fieldTi->HasRefField()) {
-            Heap::GetBarrier().ReadStaticStruct(dst, addr, vArraySize, fieldTi->GetGCTib());
+            ZBarrier::ReadStaticStruct(dst, addr, vArraySize, fieldTi->GetGCTib());
         } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
                             reinterpret_cast<void*>(addr), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
@@ -227,13 +227,13 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        Heap::GetBarrier().WriteStaticRef(NativeSlotAt(addr), newValue);
+        ZBarrier::WriteStaticRef(NativeSlotAt(addr), newValue);
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize fieldSize = fieldTi->GetInstanceSize();
         if (fieldSize == 0) {
             return;
         }
-        Heap::GetBarrier().WriteStaticStruct(addr, fieldSize,
+        ZBarrier::WriteStaticStruct(addr, fieldSize,
             reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE, fieldSize, fieldTypeInfo->GetGCTib());
     } else if (fieldTi->IsPrimitiveType()) {
         MSize size = fieldTi->GetInstanceSize();
@@ -250,7 +250,7 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
         }
         MAddress src = reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE;
         if (fieldTi->HasRefField()) {
-            Heap::GetBarrier().WriteStaticStruct(addr, vArraySize, src, vArraySize, fieldTi->GetGCTib());
+            ZBarrier::WriteStaticStruct(addr, vArraySize, src, vArraySize, fieldTi->GetGCTib());
         } else if (memcpy_s(reinterpret_cast<void*>(addr), vArraySize,
                             reinterpret_cast<void*>(src), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
@@ -284,7 +284,7 @@ void* StaticFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     ApplyCangjieMethodStub(values.GetData(), values.GetStackSize(), annotationMethod, threadData);
 #endif
 
-    Heap::GetBarrier().WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
+    ZBarrier::WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE,
         size, reinterpret_cast<Uptr>(structRet), size);
     AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
     if (buffer != nullptr) {
@@ -329,9 +329,9 @@ bool SetStructField(ObjRef obj, Uptr argAddr, TypeInfo* argType, ObjRef argObj)
         return false;
     }
 
-    Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(tmp), argObj,
+    ZBarrier::ReadStruct(reinterpret_cast<MAddress>(tmp), argObj,
         reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE, fieldSize);
-    Heap::GetBarrier().WriteStruct(obj, argAddr, fieldSize, reinterpret_cast<MAddress>(tmp), fieldSize);
+    ZBarrier::WriteStruct(obj, argAddr, fieldSize, reinterpret_cast<MAddress>(tmp), fieldSize);
 
     free(tmp);
     return true;
@@ -346,7 +346,7 @@ bool SetVArrayField(ObjRef obj, Uptr argAddr, TypeInfo* argType, ObjRef argObj)
     MAddress src = reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE;
     // G-C2: ref-bearing VArray must post-record via WriteStruct, not bare memcpy.
     if (argType->HasRefField()) {
-        Heap::GetBarrier().WriteStruct(obj, argAddr, vArraySize, src, vArraySize);
+        ZBarrier::WriteStruct(obj, argAddr, vArraySize, src, vArraySize);
         return true;
     }
     if (memcpy_s(reinterpret_cast<void*>(argAddr), vArraySize,
@@ -364,14 +364,14 @@ void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
         cjRawArray = static_cast<CJArray*>(args)->rawPtr;
     } else {
         RefField<false> oldField(reinterpret_cast<MAddress>(args));
-        cjRawArray = reinterpret_cast<CJRawArray*>(Heap::GetBarrier().ReadReference(nullptr, oldField));
+        cjRawArray = reinterpret_cast<CJRawArray*>(ZBarrier::ReadReference(nullptr, oldField));
     }
     U64 argCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
     HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
 
     for (U64 idx = 0; idx < argCnt; ++idx) {
-        ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
+        ObjRef argObj = static_cast<ObjRef>(ZBarrier::ReadReference(rawArray, *refField));
         TypeInfo* argType = ti->GetFieldType(idx);
         U32 offset = ti->GetFieldOffset(idx);
 
@@ -460,7 +460,7 @@ BaseObject* FieldToAny(ObjRef obj, TypeInfo* fieldTi, U32 offset)
 {
     Uptr fieldAddr = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE + offset;
     if (fieldTi->IsRef()) {
-        return Heap::GetBarrier().ReadReference(obj, obj->GetRefField(offset + TYPEINFO_PTR_SIZE));
+        return ZBarrier::ReadReference(obj, obj->GetRefField(offset + TYPEINFO_PTR_SIZE));
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         return StructLikeToAny(obj, fieldTi, fieldAddr);
     } else if (fieldTi->IsPrimitiveType()) {
@@ -489,8 +489,8 @@ BaseObject* StructLikeToAny(ObjRef obj, TypeInfo* fieldTi, Uptr fieldAddr)
         return nullptr;
     }
 
-    Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(tmp), obj, fieldAddr, fieldSize);
-    Heap::GetBarrier().WriteStruct(fieldObj, reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE, fieldSize,
+    ZBarrier::ReadStruct(reinterpret_cast<MAddress>(tmp), obj, fieldAddr, fieldSize);
+    ZBarrier::WriteStruct(fieldObj, reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE, fieldSize,
         reinterpret_cast<MAddress>(tmp), fieldSize);
 
     free(tmp);
@@ -526,7 +526,7 @@ BaseObject* VArrayToAny(TypeInfo* fieldTi, Uptr fieldAddr)
     }
     MAddress dst = reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE;
     if (fieldTi->HasRefField()) {
-        Heap::GetBarrier().WriteStruct(fieldObj, dst, vArraySize, fieldAddr, vArraySize);
+        ZBarrier::WriteStruct(fieldObj, dst, vArraySize, fieldAddr, vArraySize);
     } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
                         reinterpret_cast<void*>(fieldAddr), vArraySize) != EOK) {
         LOG(RTLOG_ERROR, "FieldInitializer: memcpy_s failed for VArray field");

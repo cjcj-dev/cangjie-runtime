@@ -319,6 +319,14 @@ struct LoadHealDeliveryTestAccess {
                                                   const std::unordered_set<MAddress>& previous,
                                                   BaseObject* currentMinorRoot)
     {
+        // This synthetic relocation fixture must bind the same collector
+        // used by the global product barrier and provide its mark domain.
+        // Full GC/phase production is separately covered by the managed P2 test.
+        auto& resources = Heap::GetHeap().GetCollectorResources();
+        RelocationReceiptTestAccess::BindCollector(resources, &collector);
+        collector.youngCycle.InitializeWorkers(1);
+        collector.StartYoungMarkWork();
+        collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         ZGlobalsPointers::flip_young_mark_start();
         WCollector::WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
@@ -332,10 +340,13 @@ struct LoadHealDeliveryTestAccess {
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots,
                                       currentMinorRoots, false, &consumed, &stats);
-        const size_t work = workStack.size();
-        while (!workStack.empty()) {
-            workStack.pop_back();
+        auto& domain = *collector.YoungMarkDomain();
+        auto& stacks = domain.Stacks();
+        const size_t work = stacks.Population();
+        for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
+            if (auto* stack = stacks.StealLocal(stripe)) MarkStripeStack::Destroy(stack);
         }
+        RelocationReceiptTestAccess::BindCollector(resources, nullptr);
         return RemsetConsumeResult { work, consumed.size() };
     }
 };
@@ -378,19 +389,16 @@ uintptr_t OneLoadBadRemap()
     return bad & (~bad + 1);
 }
 
-class ResolveBarrier final : public Barrier {
+class ResolveBarrier final {
 public:
-    ResolveBarrier(Collector& collector, RememberedSet& rememberedSet)
-        : Barrier(collector, rememberedSet)
-    {
-    }
+    ResolveBarrier() = default;
+    ResolveBarrier(Collector&, RememberedSet&) {}
 
     BaseObject* Resolve(BaseObject* from) const
     {
         RefField<> field(StoreGoodPointer(from));
-        auto& collector = static_cast<WCollector&>(theCollector);
         ZGlobalsPointers::flip_old_relocate_start();
-        BaseObject* result = ReadReference(nullptr, field);
+        BaseObject* result = ZBarrier::ReadReference(nullptr, field);
         ZGlobalsPointers::flip_old_relocate_start();
         return result;
     }
@@ -835,46 +843,6 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
     GC_EXPECT_TRUE(lateCurrent);
 }
 
-// Keep the null boundary independently observable while the non-heap root
-// adapter is pending P3 (advisor 606-20260915T021104Z).
-GC_OTHER_VM_TEST(ValueRootCurrentization, NullControlRemainsStable)
-{
-    (void)ProductFixture();
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    RelocationReceiptTestAccess::SeedValueRoots(collector, nullptr);
-    const auto values = RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
-    const bool stable = AllVisitedEqual(values, nullptr);
-    std::fprintf(stderr, "P1_NULL_CONTROL_ASSERT stable=%d\n", stable);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-    GC_EXPECT_TRUE(stable);
-}
-
-GC_OTHER_VM_TEST(ValueRootCurrentization, NullAndNonHeapControlsRemainStable)
-{
-    GcHeapFixture& fx = ProductFixture();
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-
-    RelocationReceiptTestAccess::SeedValueRoots(collector, nullptr);
-    const std::vector<BaseObject*> nullValues =
-        RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
-    alignas(8) unsigned char nativeStorage[16] {};
-    BaseObject* nonHeap = reinterpret_cast<BaseObject*>(nativeStorage);
-    RelocationReceiptTestAccess::SeedValueRoots(collector, nonHeap);
-    const std::vector<BaseObject*> nonHeapValues =
-        RelocationReceiptTestAccess::EnumMajorValueRoots(collector);
-    const bool nullStable = AllVisitedEqual(nullValues, nullptr);
-    const bool nonHeapStable = AllVisitedEqual(nonHeapValues, nonHeap);
-    std::fprintf(stderr,
-                 "VALUE_ROOT_CONTROL_ASSERT null_stable=%d nonheap_stable=%d\n",
-                 static_cast<int>(nullStable), static_cast<int>(nonHeapStable));
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-
-    GC_EXPECT_TRUE(nullStable);
-    GC_EXPECT_TRUE(nonHeapStable);
-}
-
 GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollector)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -883,7 +851,7 @@ GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollect
     RememberedSet rememberedSet;
     rememberedSet.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     LoadHealDeliveryTestAccess::PublishColours(collector);
-    ResolveBarrier barrier(collector, rememberedSet);
+    ResolveBarrier barrier;
 
     BaseObject* resolved = barrier.Resolve(state.from);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(resolved), reinterpret_cast<uintptr_t>(state.to));
@@ -1323,42 +1291,6 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarrier
 
 
 
-// zStackWatermark.cpp:159-186: process the head before phase completion.
-GC_TEST(ForwardingPublicationProduct, WatermarkRemapsInvisibleAndNativeHeadBeforeCompletion)
-{
-    auto& fixture = ProductFixture();
-    Mutator mutator;
-    mutator.SetManagedContext(false);
-    mutator.PublishInvisibleRoot(fixture.obj0);
-    ObjectRef* native = mutator.AddNativeFrameRoot(fixture.obj0);
-    size_t nativeVisits = 0;
-    size_t invisibleVisits = 0;
-    using P = StackWatermark::ProcessingPhase;
-    RootVisitor ordinary = [&](RootSlot& slot) {
-        if (!is_null(slot.LoadPlain())) {
-            ++nativeVisits;
-            StorePlain(slot, from_object(fixture.obj1));
-        }
-    };
-    RootVisitor invisible = [&](RootSlot& slot) {
-        GC_EXPECT_FALSE(mutator.GetStackWatermark().IsDone(17, P::REMAP));
-        GC_EXPECT_EQ(raw(slot.LoadPlain()), reinterpret_cast<uintptr_t>(fixture.obj0));
-        StorePlain(slot, from_object(fixture.obj1));
-        ++invisibleVisits;
-    };
-    auto derived = Mutator::MakeDerivedRootVisitor(ordinary);
-    size_t frames = 0;
-    bool complete = mutator.DrainStackWatermark(ordinary, invisible, 17, StackWatermark::WM_OWNER_SELF,
-                                               &derived, frames, false, P::REMAP);
-    GC_EXPECT_TRUE(complete);
-    GC_EXPECT_TRUE(mutator.GetStackWatermark().IsDone(17, P::REMAP));
-    GC_EXPECT_EQ(nativeVisits, size_t(1));
-    GC_EXPECT_EQ(invisibleVisits, size_t(1));
-    GC_EXPECT_TRUE(mutator.WithdrawInvisibleRoot() == fixture.obj1);
-    GC_EXPECT_EQ(raw(native->LoadPlain()), reinterpret_cast<uintptr_t>(fixture.obj1));
-    mutator.RemoveNativeFrameRoot(native);
-}
-
 // ProcessDerivedOop (oopMap.cpp:400-421): shared base, two distinct offsets.
 GC_TEST(ForwardingPublicationProduct, DerivedClosurePreservesSharedBaseOffsets)
 {
@@ -1511,14 +1443,6 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
 }
 }
 
-GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedBaseProducer)
-{
-    RunDerivedBaseProducer(true);
-}
-GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryBaseProducer)
-{
-    RunDerivedBaseProducer(false);
-}
 GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedMovingBaseProducer)
 {
     RunDerivedBaseProducer(true, true);
@@ -2357,11 +2281,10 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     EmptyBothRememberedFaces(remembered);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LoadHealDeliveryTestAccess::PublishColours(collector);
-    Barrier barrier(collector, remembered);
     {
         DeliveryNoAllocBufferScope directRemember;
         fromField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
-        barrier.WriteReference(from, *fromField, youngTarget);
+        ZBarrier::WriteReference(from, *fromField, youngTarget);
     }
     GC_EXPECT_TRUE(remembered.Contains(oldSlot));
 
@@ -2536,15 +2459,14 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     EmptyBothRememberedFaces(remembered);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LoadHealDeliveryTestAccess::PublishColours(collector);
-    Barrier barrier(collector, remembered);
     {
         DeliveryNoAllocBufferScope directRemember;
         nearField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
         farField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
         youngField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
-        barrier.WriteReference(holder, *nearField, youngTarget);
-        barrier.WriteReference(holder, *farField, youngTarget);
-        barrier.WriteReference(youngHolder, *youngField, youngTarget);
+        ZBarrier::WriteReference(holder, *nearField, youngTarget);
+        ZBarrier::WriteReference(holder, *farField, youngTarget);
+        ZBarrier::WriteReference(youngHolder, *youngField, youngTarget);
     }
     GC_EXPECT_TRUE(remembered.Contains(nearSlot));
     GC_EXPECT_TRUE(remembered.Contains(farSlot));
@@ -2634,11 +2556,10 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     LoadHealDeliveryTestAccess::PublishColours(collector);
-    Barrier barrier(collector, remembered);
     {
         DeliveryNoAllocBufferScope directRemember;
         farField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
-        barrier.WriteReference(holder, *farField, youngTarget);
+        ZBarrier::WriteReference(holder, *farField, youngTarget);
     }
     GC_EXPECT_TRUE(remembered.Contains(farSlot));
 

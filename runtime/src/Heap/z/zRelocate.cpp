@@ -30,12 +30,15 @@
 
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/z/zThreadLocalData.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zUncoloredRoot.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -155,8 +158,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         // R7：写回必须经规范色单产地，禁 plain RefField<>(toObj)。
         // expected 仍是 observed-raw（oldRef.GetFieldValue()）；模板 = GetAndTryTagRefField。
         RefField<> tmpField = GetAndTryTagRefField(toObj);
-        if (HealSlot(field, oldRef.GetFieldValue(), tmpField.GetFieldValue(),
-                     HealSite::WCollectorTryUpdateRefField)) {
+        if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
                      obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
@@ -217,8 +219,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         // TRUST_STATE_KILL_PLAN Phase 1: API retained, but HeapSlot write-back is current colour
         // (not plain). Read path no longer calls this; residual callers must not re-install trust.
         RefField<> newRef = GetAndTryTagRefField(target);
-        if (HealSlot(field, oldRef.GetFieldValue(), newRef.GetFieldValue(),
-                     HealSite::WCollectorTryUntagRefField)) {
+        if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
                      &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
@@ -247,7 +248,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
         const MAddress mappedAddr = ForwardingTable::FindTo(reinterpret_cast<MAddress>(oldObj), generation);
         if (mappedAddr != 0) {
             BaseObject* mapped = reinterpret_cast<BaseObject*>(mappedAddr);
-            HealRoot(root, from_object(mapped), HealSite::WCollectorForwardRawGhost);
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
             return mapped;
         }
@@ -265,11 +266,11 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
                 reinterpret_cast<uintptr_t>(&root),
                 ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
         }
-        HealRoot(root, from_object(toVersion), HealSite::WCollectorForwardRawGhost);
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
     } else {
-        HealRoot(root, from_object(oldObj), HealSite::WCollectorNormalizeRawRoot);
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     }
 
     return oldObj;
@@ -296,15 +297,14 @@ void WCollector::RemapYoungRoots()
             continue;
         }
         RefField<> current = ColourResolvedRefField(resolved, provenance);
-        bool healed = HealSlot(field, observed.GetFieldValue(), current.GetFieldValue(),
-                               HealSite::WCollectorRemapYoungRoots);
+        bool healed = field.CompareExchange(observed.GetFieldValue(), current.GetFieldValue());
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteRemapYoungRootsTestReceipt(field, raw(observed.GetFieldValue()), healed, ZPointer::is_store_good(field.GetFieldValue()));
 #else
         (void)healed;
 #endif
     }
-    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+    VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
     RootVisitor visitor = [this](ObjectRef& root) {
         const zaddress_unsafe observed = root.LoadPlain();
         // ZGeneration::remap_object (zGeneration.inline.hpp:142-151): only
@@ -382,8 +382,9 @@ bool WCollector::Preforward()
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
         MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
-        // zGeneration.cpp:old relocate_start flips only the old remap epoch.
-        // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
+        ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+            data.storeBarrierBuffer->install_base_pointers();
+        });
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         StartRelocationTasks(GCCycleGeneration::OLD);
@@ -393,7 +394,7 @@ bool WCollector::Preforward()
     manager.DrainForwardFromRegions<Generation::Old>();
     ZWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
     const std::function<void()> families[] = {
-        [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); }); },
+        [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
         [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
             ForwardUpdateRawRef(root, Generation::Old);
         }, {}); },
@@ -571,7 +572,7 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
 // pre-encoded RefField: this controlled entry applies the current heap colour here.
 // On CAS fail, accept the peer's update (major TryUpdateRefFieldImpl shape).
 bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
-                                          HealSite site, HealNull allowNull) const
+                                          bool allowNull) const
 {
     BaseObject* object = to_object(target);
     if (object != nullptr) {
@@ -592,7 +593,10 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
     if (loadGood(observed)) {
         return true;
     }
-    const bool healed = ZgcSelfHeal(field, observed, desired, loadGood, site, allowNull);
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&field), observed, desired,
+                        allowNull);
+    const bool healed = true;
     if (healed) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
@@ -621,10 +625,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
     CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    const HealSite site = IsOldPointer(observed)
-        ? HealSite::WCollectorMinorResolveOldForward
-        : HealSite::WCollectorMinorResolveLoadGoodForward;
-    (void)CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), site);
+    (void)CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), false);
     return resolved;
 }
 BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
@@ -645,7 +646,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
     CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    HealRoot(root, from_object(resolved), HealSite::WCollectorResolveRootLoadGoodForward);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return resolved;
 }
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
@@ -682,8 +683,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         const MAddress oldVal = raw(oldField.GetFieldValue());
         const MAddress interiorAddress = reinterpret_cast<MAddress>(resolvedBase) + offset;
         if (oldVal != interiorAddress) {
-            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), resolvedBase, offset,
-                                             HealSite::WCollectorMinorFixInteriorForward);
+            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), resolvedBase, offset);
         }
         return true;
     }
@@ -723,10 +723,9 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     if (current == nullptr) {
         // zBarrier.inline.hpp:294-343 never publishes a null substitute for a
         // non-null reference whose forwarding lookup missed. The current thread
-        // must finish relocation (or fail closed); HealSlot's null arm is not a
+        // must finish relocation (or fail closed); a null CAS is not a
         // substitute for an unresolved product.
-        (void)HealSlot(field, field.GetFieldValue(), zpointer::null,
-                       HealSite::WCollectorMinorFixForwardNull, HealNull::Disallow);
+        (void)field.CompareExchange(field.GetFieldValue(), zpointer::null);
         Collector::FailClosedLoad(
             "WCollector::FixMinorEvacuatedSlot.unresolved", target,
             static_cast<uintptr_t>(raw(field.GetFieldValue())),
@@ -745,8 +744,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     if (oldVal == newVal) {
         return false;
     }
-    if (HealSlot(field, to_zpointer(oldVal), to_zpointer(newVal),
-                 HealSite::WCollectorMinorFixForwarded)) {
+    if (field.CompareExchange(to_zpointer(oldVal), to_zpointer(newVal))) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -801,7 +799,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             "WCollector::FixMinorEvacuatedSlot", provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
-            HealRoot(root, from_object(viaTable), HealSite::WCollectorFixRootForwarded);
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
             return true;
         }
         Collector::FailClosedLoad(
@@ -813,7 +811,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
         return false;
     }
-    HealRoot(root, from_object(current), HealSite::WCollectorFixRootForwarded);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return true;
 }
 
@@ -842,7 +840,7 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
         (void)FixMinorEvacuatedSlot(root, stw);
     };
     VisitStrongPlainRoots(rawRootVisitor, {});
-    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+    VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
 
 }
 
@@ -953,6 +951,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
+                ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+                    data.storeBarrierBuffer->install_base_pointers();
+                });
                 ZGlobalsPointers::flip_young_relocate_start();
                 ZVerify::OnColorFlip();
             }
@@ -1092,7 +1093,8 @@ static BaseObject* RemapPromotedField(Collector& collector, RefField<>& field, z
                  "promotion remap must preserve a non-null reference");
     // ZAddress::load_good: upgrade remap bits without claiming a marking epoch.
     const zpointer healed = ZAddress::load_good(from_object(target), observed);
-    ZgcSelfHeal(field, observed, healed, loadGood, HealSite::WCollectorMinorResolveLoadGoodForward);
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&field), observed, healed, false);
     return target;
 }
 

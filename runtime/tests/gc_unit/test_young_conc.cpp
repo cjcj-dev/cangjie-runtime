@@ -154,21 +154,6 @@ public:
     }
 };
 
-class TestBarrier final : public Barrier {
-public:
-    TestBarrier(Collector& collector, RememberedSet& rememberedSet) : Barrier(collector, rememberedSet) {}
-    void Record(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
-    {
-        RecordCrossGenEdge(obj, fieldAddress, ref);
-    }
-
-protected:
-    void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
-    {
-        field.StoreColoured(GcUnit::StoreGoodPointer(ref));
-    }
-};
-
 class YoungConcTestRuntime final : public Runtime {
 public:
     explicit YoungConcTestRuntime(MutatorManager& manager)
@@ -623,10 +608,9 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
     TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
 
     field->StoreColoured(zpointer::null);
-    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
     std::unordered_set<MAddress> records;
     rs.DrainForMinor(records);
     GC_EXPECT_EQ(records.size(), 0u);
@@ -710,7 +694,10 @@ GC_TEST(YoungConc, Y2yDirtyHolderPhaseSwitchHandsOffWholeBatch)
 // Load-good colour wrapping a FORWARDED from must remap before store-good
 // colour (zBarrier.inline.hpp:591-623). LookupTo of the coloured address is
 // then a miss on the current table.
-GC_TEST(YoungConc, TraceRefFieldRemapsPreviousRelocationEpoch)
+// The holder belongs to young and this input models a previous young
+// relocation. ZGC's load barrier remaps/heals here (:456-466); the old field
+// mark barrier is allowed to leave young references to their own consumer.
+GC_TEST(YoungConc, LoadBarrierRemapsPreviousRelocationEpoch)
 {
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
@@ -734,9 +721,8 @@ GC_TEST(YoungConc, TraceRefFieldRemapsPreviousRelocationEpoch)
     auto* field = &HeapSlotAt<>(to + TYPEINFO_PTR_SIZE);
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TracingCollector::WorkStack workStack;
     RelocationReceiptTestAccess::StartYoungRelocate(collector);
-    collector.TraceRefField(fx.obj1, *field, workStack);
+    GC_EXPECT_TRUE(ZBarrier::ReadReference(fx.obj1, *field) == fx.obj1);
 
     BaseObject* healed = to_object(field->GetTargetObject());
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(healed), to);
@@ -760,17 +746,13 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    TestCollector collector;
-    RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
 
     field->StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
-    barrier.WriteReference(fx.obj0, *field, fx.obj1);
-    std::unordered_set<MAddress> records;
-    rs.DrainForMinor(records);
-    GC_EXPECT_EQ(records.size(), 1u);
-    GC_EXPECT_TRUE(records.count(reinterpret_cast<MAddress>(field)) == 1);
+    ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
+    if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
+        mutator->GetGCData().storeBarrierBuffer->Flush();
+    }
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(field)));
 }
 
 // Major TRACE window with no young regions: a bulk write must still publish the
@@ -786,15 +768,14 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::old);
-    TestCollector collector;
-    RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    TestBarrier barrier(collector, remembered);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     BaseObject* incoming = nullptr;
-    barrier.WriteStruct(fx.obj0, reinterpret_cast<MAddress>(&field), sizeof(incoming),
+    ZBarrier::WriteStruct(fx.obj0, reinterpret_cast<MAddress>(&field), sizeof(incoming),
                         reinterpret_cast<MAddress>(&incoming), sizeof(incoming));
+    if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
+        mutator->GetGCData().storeBarrierBuffer->Flush();
+    }
     std::vector<BaseObject*> work;
     markFixture.DrainObjects(work);
     GC_EXPECT_EQ(work.size(), 1u);
@@ -815,20 +796,19 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     fx.region1->reset(PageAge::eden);
     BaseObject* incoming = fx.PlaceObject(fx.heapStart + ZPage::UNIT_SIZE + 128);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    TestCollector collector;
-    RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    TestBarrier barrier(collector, remembered);
     // ZBarrier::store_barrier_on_heap_oop_field reads prev before the store
     // (zBarrier.inline.hpp:695-705); stale mark colors force its slow path.
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
-    barrier.WriteReference(fx.obj0, field, incoming);
+    ZBarrier::WriteReference(fx.obj0, field, incoming);
+    if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
+        mutator->GetGCData().storeBarrierBuffer->Flush();
+    }
     std::vector<BaseObject*> work;
     markFixture.DrainObjects(work);
     GC_EXPECT_EQ(work.size(), 1u);
     GC_EXPECT_TRUE(work.front() == fx.obj1);
     GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == incoming);
-    GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
     GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(incoming)));
 }
 
@@ -844,17 +824,16 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     markFixture.collector.GetGenerationCycle(GCCycleGeneration::YOUNG).PublishPhase(GC_PHASE_IDLE);
     markFixture.collector.GetGenerationCycle(GCCycleGeneration::OLD).PublishPhase(GC_PHASE_IDLE);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    TestCollector collector;
-    RememberedSet remembered;
-    remembered.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    TestBarrier barrier(collector, remembered);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
-    barrier.WriteReference(fx.obj0, field, nullptr);
+    ZBarrier::WriteReference(fx.obj0, field, nullptr);
+    if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
+        mutator->GetGCData().storeBarrierBuffer->Flush();
+    }
     std::vector<BaseObject*> work;
     markFixture.DrainObjects(work);
     GC_EXPECT_TRUE(work.empty());
     GC_EXPECT_TRUE(is_null(field.GetTargetObject()));
-    GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
 }
 
 // Pin the required epoch handshake and stack scan predicates.
@@ -923,10 +902,10 @@ GC_TEST(YoungConc, StoreBufferFlushPublishesYoungMarkWork)
     StoreBarrierBuffer buffer;
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
     const zpointer previous = RefField<>(fx.obj1, ::g_cjStoreGoodMask).GetFieldValue();
-    buffer.Add(slot, fx.obj0, previous, remembered);
+    buffer.add(slot, previous);
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
     GC_EXPECT_EQ(buffer.Pending(), 1u);
-    buffer.Flush(remembered);
+    buffer.Flush();
     GC_EXPECT_TRUE(buffer.IsEmpty());
     GC_EXPECT_EQ(markFixture.YoungPending(), 1u);
     GC_EXPECT_TRUE(remembered.Contains(slot));

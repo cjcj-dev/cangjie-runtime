@@ -50,7 +50,6 @@ public:
 #ifdef MRT_TESTABLE_INTERNALS
     static size_t GetStaticRootCountForTesting();
 #endif
-    static Barrier& GetBarrier() { return *barrierPtr; }
     virtual RememberedSet& GetRememberedSet() = 0;
 
 
@@ -202,7 +201,6 @@ public:
     }
 
     virtual ~Heap() {}
-    static Barrier* barrierPtr;
     static MAddress heapCurrentEnd;
 
 private:

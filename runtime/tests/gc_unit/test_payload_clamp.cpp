@@ -49,20 +49,8 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
 };
 
-class InstalledBarrierScope {
-public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
-    {
-        Heap::barrierPtr = &barrier;
-    }
-    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
-
-private:
-    Barrier* previous;
-};
-
 struct PayloadFixture {
-    PayloadFixture() : barrier(collector, rememberedSet), installed(barrier)
+    PayloadFixture()
     {
         rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         auto& heapRemset = Heap::GetHeap().GetRememberedSet();
@@ -76,8 +64,6 @@ struct PayloadFixture {
     GcHeapFixture heap;
     NoAnswerCollector collector;
     RememberedSet rememberedSet;
-    Barrier barrier;
-    InstalledBarrierScope installed;
 };
 
 struct ArrayPayloadFixture {

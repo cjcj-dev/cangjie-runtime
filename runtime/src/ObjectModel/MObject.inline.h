@@ -8,6 +8,7 @@
 #define MRT_MOBJECT_INLINE_H
 
 // language dependence
+#include "ObjectModel/Field.inline.h"
 #include <type_traits>
 
 // cross module dependence
@@ -62,19 +63,19 @@ template<typename T>
 inline void MObject::Store(size_t offset, T value)
 {
     Field<T>& field = GetField<T>(offset);
-    Heap::GetBarrier().WriteField(this, field, value);
+    field.SetFieldValue(this, value);
 }
 
 inline MObject* MObject::LoadRef(size_t offset)
 {
     RefField<>& ref = GetRefField<false>(offset);
-    return static_cast<MObject*>(Heap::GetBarrier().ReadReference(this, ref));
+    return static_cast<MObject*>(ZBarrier::ReadReference(this, ref));
 }
 
 inline void MObject::StoreRef(size_t offset, MObject* value)
 {
     RefField<>& ref = GetRefField<false>(offset);
-    Heap::GetBarrier().WriteReference(this, ref, value);
+    ZBarrier::WriteReference(this, ref, value);
 }
 } // namespace MapleRuntime
 #endif // MRT_MOBJECT_INLINE_H

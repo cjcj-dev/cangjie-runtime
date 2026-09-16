@@ -173,6 +173,8 @@ public:
     void PublishThreadRoot(BaseObject* object, bool young, bool follow);
     bool FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* domain);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
+    bool FlushGCDataMarkProducers(ThreadGCData& data, MarkDomain* domain);
+    bool FlushGCDataMarkProducers(ThreadGCData& data);
     MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
     void MarkYoungRootObject(BaseObject* object) const override;
@@ -729,7 +731,7 @@ private:
                              WorkStack& workStack, bool finalizable) const;
 
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
-                                  HealSite site, HealNull allowNull = HealNull::Disallow) const;
+                                  bool allowNull = false) const;
     BaseObject* ResolveMinorReference(RefField<>& field,
                                      const ScopedStopTheWorld* stw = nullptr) const;
     BaseObject* ResolveMinorReference(RootSlot& root,

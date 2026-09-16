@@ -744,7 +744,7 @@ void* RunLargeYoungClosureCase(void*)
     MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
     MArray* target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
-    Heap::GetBarrier().WriteReference(holder, field, target);
+    ZBarrier::WriteReference(holder, field, target);
     const bool holderYoung = Heap::page(reinterpret_cast<uintptr_t>(holder))->IsYoungRegion();
     const U64 holderRoot = Heap::GetHeap().RegisterExportRoot(holder);
     LargeYoungClosureResult::target = target;
@@ -838,7 +838,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     if (!existing) target = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     const U64 holderRoot = heap.RegisterExportRoot(holder);
     auto& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
-    Heap::GetBarrier().WriteReference(holder, field, target);
+    ZBarrier::WriteReference(holder, field, target);
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     ZPage* targetPage = Heap::page(reinterpret_cast<uintptr_t>(target));
     const bool implicit = page->IsAllocating();
@@ -890,7 +890,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
-    BaseObject* completedTarget = Heap::GetBarrier().ReadReference(holder, completedField);
+    BaseObject* completedTarget = ZBarrier::ReadReference(holder, completedField);
     // The request includes relocation. Check the actual field result here;
     // the mark-end predicate was observed before relocation at the success exit.
     const bool completedValue = completedTarget != nullptr &&
@@ -1077,7 +1077,7 @@ void* RunVisibleArrayGraph(void*)
     Mutator::GetMutator()->SetManagedContext(false);
     MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
     NativeSlot root(zpointer::null);
-    Heap::GetBarrier().WriteStaticRef(root, array);
+    ZBarrier::WriteStaticRef(root, array);
     NativeSlot* roots[] = { &root };
     Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::vector<size_t> visits(array->GetLength(), 0);

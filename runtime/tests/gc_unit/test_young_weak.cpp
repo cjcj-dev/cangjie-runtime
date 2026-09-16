@@ -475,10 +475,9 @@ void RunYoungWeakRemsetFlow()
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    Barrier barrier(collector, rememberedSet);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
     referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ ZPointerMarkedYoungMask));
-    barrier.WriteReference(graph.weak, referentField, graph.referent);
+    ZBarrier::WriteReference(graph.weak, referentField, graph.referent);
     const MAddress weakSlot = reinterpret_cast<MAddress>(&referentField);
     const bool recordedBeforeMinor = rememberedSet.Contains(weakSlot);
 

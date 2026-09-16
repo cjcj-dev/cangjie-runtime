@@ -14,6 +14,8 @@
 #include "Common/TypeDef.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
+#include "securec.h"
 #include "Interpreter/RTInterface.h"
 #include "LoaderManager.h"
 #include "Mutator/Mutator.h"
@@ -46,7 +48,6 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
 extern "C" void MCC_WriteStructField(
     const ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen, GCTib gctib);
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib);
-extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size);
 
 namespace {
 static_assert(sizeof(uintptr_t) == sizeof(MAddress), "uintptr_t must be able to carry MAddress");
@@ -390,14 +391,14 @@ int IsSubType(struct DYN_TypeInfo* typeInfo, struct DYN_TypeInfo* superTypeInfo)
 DYN_ObjRef ReadStaticField(DYN_FieldRef source)
 {
     DLOG(INTERPRETER, "ReadStaticField %p", source);
-    BaseObject* res = Heap::GetBarrier().ReadStaticRef(NativeSlotAt(source));
+    BaseObject* res = ZBarrier::ReadStaticRef(NativeSlotAt(source));
     return static_cast<DYN_ObjRef>(res);
 }
 
 void WriteStaticField(DYN_FieldRef destination, DYN_ObjRef new_value)
 {
     DLOG(INTERPRETER, "WriteStaticField %p %p", destination, new_value);
-    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(destination), static_cast<BaseObject*>(new_value));
+    ZBarrier::WriteStaticRef(NativeSlotAt(destination), static_cast<BaseObject*>(new_value));
 }
 
 DYN_ObjRef ReadInstanceField(DYN_ObjRef source, DYN_FieldRef field)
@@ -487,8 +488,26 @@ void WriteGenericField(DYN_ObjRef dstObj, uintptr_t dstField, DYN_ObjRef src, si
 {
     DLOG(INTERPRETER, "WriteGenericField dstObj=%p dstField=%p src=%p size=%zu", dstObj, dstField, src, size);
 
-    CJ_MCC_WriteGeneric(
-        static_cast<BaseObject*>(dstObj), reinterpret_cast<void*>(dstField), static_cast<BaseObject*>(src), size);
+    auto* dst = static_cast<BaseObject*>(dstObj);
+    auto* from = static_cast<BaseObject*>(src);
+    if (from == nullptr || size == 0) {
+        return;
+    }
+    void* fp = reinterpret_cast<void*>(dstField);
+    if ((dst != nullptr && !dst->HasRefField()) || (!Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
+        CHECK_DETAIL(memcpy_s(fp, size,
+                              reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE),
+                              size) == EOK,
+                     "WriteGenericField memcpy_s failed");
+        return;
+    }
+    if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from)) {
+        ZBarrier::ReadStruct(reinterpret_cast<MAddress>(fp), from,
+                                      reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE, size);
+        return;
+    }
+    ZBarrier::WriteStruct(dst, reinterpret_cast<MAddress>(fp), size,
+                                   reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE, size);
 }
 
 DYN_ThreadLocalData GetThreadLocalData()

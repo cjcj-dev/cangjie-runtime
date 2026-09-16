@@ -8,6 +8,7 @@
 #include "Mutator.inline.h"
 #include "MutatorManager.h"
 #include "ThreadLocal.h"
+#include "Common/Runtime.h"
 
 namespace MapleRuntime {
 namespace {
@@ -21,6 +22,10 @@ HandshakeState& Handshake::Current()
     if (tlHandshakeState != nullptr) {
         tlHandshakeState->set_handshakee(ThreadLocal::GetThreadLocalData());
         return *tlHandshakeState;
+    }
+    if (Runtime::CurrentRef() == nullptr) {
+        static HandshakeState fallback(ThreadLocal::GetThreadLocalData());
+        return fallback;
     }
     MutatorManager::Instance().RegisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
     if (tlHandshakeState == nullptr) {
@@ -42,6 +47,9 @@ HandshakeState* Handshake::ForTls(ThreadLocalData* tls)
     }
     if (tls == ThreadLocal::GetThreadLocalData()) {
         return &Current();
+    }
+    if (Runtime::CurrentRef() == nullptr) {
+        return nullptr;
     }
     return MutatorManager::Instance().HandshakeStateForTls(tls);
 }
@@ -325,6 +333,9 @@ bool HasPendingCpuProfileRequest()
 
 bool GlobalPoll()
 {
+    if (Runtime::CurrentRef() == nullptr) {
+        return HasPendingCpuProfileRequest();
+    }
     return HasPendingCpuProfileRequest() ||
            MutatorManager::Instance().SyncTriggered() || MutatorManager::Instance().EpochHandshakeActive();
 }
@@ -341,6 +352,9 @@ bool HasPendingSafepoint(ThreadLocalData* tls)
     if (tls != nullptr && tls->mutator != nullptr &&
         tls->mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
         return true;
+    }
+    if (Runtime::CurrentRef() == nullptr) {
+        return false;
     }
     return MutatorManager::Instance().TlsHasMarkFlushPending(tls);
 }

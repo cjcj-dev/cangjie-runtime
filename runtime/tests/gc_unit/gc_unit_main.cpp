@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Mutator/ThreadLocal.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,6 +49,7 @@ int main(int argc, char** argv)
     // maximum before any ZPerWorker storage; logical active counts may vary.
     MapleRuntime::ConcGCThreads = 64;
     MapleRuntime::ZGlobalsPointers::initialize();
+    MapleRuntime::ThreadLocal::InitializeCleaner();
     // zInitialize.cpp:62: the CPU affinity table precedes any ZCPU::id() reader.
     MapleRuntime::ZCPU::initialize();
     constexpr const char* filterPrefix = "--gtest_filter=";
