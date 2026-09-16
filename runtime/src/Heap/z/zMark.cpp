@@ -1492,26 +1492,26 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         MarkPartialArray::FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
         return;
     }
-    TracingCollector::WorkStack staging;
-    auto publishStaging = [this, &ctx, &staging]() {
-        while (!staging.empty()) {
-            const MarkStackEntry next = staging.back();
-            staging.pop_back();
-            MAddress address = 0;
-            if (next.partial_array()) {
-                size_t length = 0;
-                MarkPartialArray::Decode(next, address, length);
-            } else {
-                address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(next.object_address()))));
-            }
-            const size_t stripeIndex = stripes.StripeForAddress(address);
-            const bool published = stripeIndex != ctx.StripeId();
-            ctx.Stacks().Push(stripes, stripeIndex, next, published);
+    auto publish = [this, &ctx](const MarkStackEntry& work) {
+        MAddress address = 0;
+        if (work.partial_array()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(work, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(to_object(ZOffset::address(to_zoffset(work.object_address()))));
+        }
+        const size_t stripeIndex = stripes.StripeForAddress(address);
+        const bool published = stripeIndex != ctx.StripeId();
+        ctx.Stacks().Push(stripes, stripeIndex, work, published);
+        if (published) {
+            terminate.Wake();
         }
     };
     if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
-        collector.FollowPartialArray(entry, staging);
-        publishStaging();
+        MarkPartialArray::FollowPartialReferences(entry, [](MAddress slot) {
+            auto& field = HeapSlotAt<>(slot);
+            ZBarrier::MarkBarrierOnOldOopField(nullptr, field, false);
+        }, publish);
         return;
     }
     BaseObject* obj = to_object(ZOffset::address(to_zoffset(entry.object_address())));
@@ -1521,11 +1521,19 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
             return;
         }
         if (UNLIKELY(obj->IsWeakRef())) {
-            collector.DiscoverWeakReference(obj, staging);
-        } else {
-            collector.TraceObjectRefFields(obj, staging, entry.finalizable());
+            WorkStack discovered;
+            collector.DiscoverWeakReference(obj, discovered);
+            while (!discovered.empty()) {
+                publish(discovered.back());
+                discovered.pop_back();
+            }
+            return;
         }
-        publishStaging();
+        auto visitSlot = [obj, &entry](MAddress slot) {
+            auto& field = HeapSlotAt<>(slot);
+            ZBarrier::MarkBarrierOnOldOopField(obj, field, entry.finalizable());
+        };
+        MarkPartialArray::FollowObjectReferences(obj, entry.finalizable(), visitSlot, publish);
     }
 }
 
