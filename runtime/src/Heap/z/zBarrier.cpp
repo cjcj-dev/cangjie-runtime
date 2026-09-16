@@ -234,7 +234,7 @@ BaseObject* ZBarrier::ReadStaticRef(NativeSlot& field)
 zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 {
     auto& young = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
-    CHECK(young.IsPhaseMark());
+    ASSERT(young.IsPhaseMark());
     if (is_null(address)) return address;
     if (Heap::page(raw(address))->IsYoungRegion()) {
         young.MarkObject<false, true, true, false>(address);
