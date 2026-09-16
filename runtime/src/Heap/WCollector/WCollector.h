@@ -292,7 +292,7 @@ public:
         if (const MAddress to = forwarding->find(from)) {
             return reinterpret_cast<BaseObject*>(to);
         }
-        ZPage::RetainScope lease{ZForwarding*(forwarding)};
+        ZPage::RetainScope lease{forwarding};
         if (lease.ok()) {
             if (BaseObject* to = TryMutatorRelocate(obj, lease)) return to;
         }
@@ -402,7 +402,7 @@ public:
             ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             return region != nullptr &&
                 (region->FromPageLiveMap() != nullptr ||
-                 forwarding_for_page(region).get() != nullptr ||
+                 forwarding_for_page(region) != nullptr ||
                  region->IsForwardingDone());
         }
         // filter const string object.

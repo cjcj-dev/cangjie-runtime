@@ -39,7 +39,7 @@ bool RegionIsInRelocationSet(const ZPage* reg)
     if (reg->IsFromRegion() || reg->IsLoneFromRegion()) {
         return true;
     }
-    return forwarding_for_page(reg).get() != nullptr && !reg->IsForwardingDone();
+    return forwarding_for_page(reg) != nullptr && !reg->IsForwardingDone();
 }
 
 } // namespace

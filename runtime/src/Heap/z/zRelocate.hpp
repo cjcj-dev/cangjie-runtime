@@ -33,7 +33,7 @@ public:
     public:
         MAddress from() const { return forwarding ? forwarding->start() : 0; }
         void* owner() const { return forwarding ? forwarding->page() : nullptr; }
-        ZForwarding* page_forwarding() const { return forwarding.get(); }
+        ZForwarding* page_forwarding() const { return forwarding; }
         State state() const
         {
             if (forwarding->is_done()) return State::COMPLETED;
