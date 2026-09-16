@@ -182,7 +182,8 @@ void ZBarrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseO
         address == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     // ZZBarrier::no_keep_alive_store_barrier_on_heap_oop_field uses store-good,
     // including raw null in the slow path so that remember(p) is not skipped.
-    if (!ZPointer::is_store_good(previous.GetFieldValue()) && (weakReferent || !is_null(prev))) {
+    if (!ZPointer::is_store_good_or_null(previous.GetFieldValue()) ||
+        (weakReferent && !ZPointer::is_store_good(previous.GetFieldValue()))) {
         if (weakReferent) {
             if (!RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
                 Heap::GetHeap().GetRememberedSet().Record(address, true);

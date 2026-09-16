@@ -947,11 +947,14 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
             rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
             StoreBufferCollector collector;
             Barrier barrier(collector, rs);
+            Mutator mutator;
+            InstalledMutatorScope mutatorScope(mutator);
             HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-            field.StoreColoured(zpointer::null);
+            const zpointer rawNull = StoreGoodPointer(nullptr);
+            field.StoreColoured(rawNull);
             if (preloaded) {
                 field.StoreColoured(StoreGoodPointer(fx.obj1));
-                barrier.PostWriteReference(fx.obj0, field, fx.obj1, zpointer::null);
+                barrier.PostWriteReference(fx.obj0, field, fx.obj1, rawNull);
             } else {
                 barrier.WriteReference(fx.obj0, field, fx.obj1);
             }
