@@ -194,7 +194,7 @@ public:
     bool undo_alloc_object_atomic(uintptr_t addr, size_t size);
     RegionInfo* reset(PageAge age);
 
-    RegionInfo(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
+    ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
 
     uint8_t GetRegionLifeSeq() const
     {
@@ -228,7 +228,7 @@ public:
     static std::atomic<uint64_t>& EnrolAfterFlip();
     void NoteEnrolPhase();
 
-    RegionInfo();
+    ZPage();
     static RegionInfo* NullRegion();
 
     // ZPage::_livemap (zPage.hpp:52). One ZLiveMap per page life, owned by
@@ -1023,7 +1023,6 @@ private:
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;
     UnitMetadata metadata;
 };
-using RegionInfo = ZPage;
 } // namespace MapleRuntime
 
 #include "Heap/z/zPage.inline.hpp"
