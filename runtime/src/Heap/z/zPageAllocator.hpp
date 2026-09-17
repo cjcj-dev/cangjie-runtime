@@ -613,6 +613,7 @@ public:
 #endif
 
     uintptr_t GetRegionHeapStart() const { return regionHeapStart; }
+    uintptr_t GetRegionHeapEnd() const { return regionHeapEnd; }
 
     ~RegionManager() = default;
 
