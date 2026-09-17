@@ -1173,8 +1173,6 @@ void GenerationCycle::SelectTenuringThreshold(const TenuringInputs& inputs)
 void GenerationCycle::free_empty_pages(ZRelocationSetSelector* selector, int bulk)
 {
     if (selector->should_free_empty_pages(bulk)) {
-        const ZGenerationId id = generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
-        Heap::free_empty_pages(id, selector->empty_pages());
         selector->clear_empty_pages();
     }
 }
