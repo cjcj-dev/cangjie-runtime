@@ -259,6 +259,36 @@ ZRemembered& Heap::remembered()
     return *GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered();
 }
 
+RememberedSet& Heap::GetRememberedSet()
+{
+    static RememberedSet remset;
+    return remset;
+}
+
+bool RememberedSet::Contains(MAddress slot) const
+{
+    ZPage* page = Heap::page(slot);
+    if (page == nullptr) {
+        return false;
+    }
+    auto* p = reinterpret_cast<volatile zpointer*>(slot);
+    return page->is_remembered(p) || page->was_remembered(p);
+}
+
+void RememberedSet::Record(MAddress slot)
+{
+    ZPage* page = Heap::page(slot);
+    if (page == nullptr) {
+        return;
+    }
+    page->remember(reinterpret_cast<volatile zpointer*>(slot));
+}
+
+void RememberedSet::FlipForMinor()
+{
+    ZRememberedSet::flip();
+}
+
 
 void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
 {

@@ -25,7 +25,21 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/Collector/Collector.h"
 namespace MapleRuntime {
-class RememberedSet;
+class RememberedSet {
+public:
+    std::atomic<int> activeBuffer { 0 };
+    bool IsInitialized() const { return initialized; }
+    void Initialize(MAddress, size_t) { initialized = true; }
+    bool Contains(MAddress slot) const;
+    void Record(MAddress slot);
+    size_t Size() const { return 0; }
+    template<typename C>
+    void DrainForMinor(C&) { FlipForMinor(); }
+    void FlipForMinor();
+
+private:
+    bool initialized = false;
+};
 enum class Generation : uint8_t;
 enum CollectorType {
     NO_COLLECTOR = 0, // No Collector

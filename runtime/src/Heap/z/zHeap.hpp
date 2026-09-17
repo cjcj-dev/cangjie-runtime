@@ -26,6 +26,7 @@
 #include "Common/BaseObject.h"
 #include "RuntimeConfig.h"
 
+#include <atomic>
 #include <unordered_set>
 extern "C" {
 extern uintptr_t g_cjHeapStart;
@@ -49,6 +50,7 @@ class Heap {
 public:
     static Heap& GetHeap();
     ZRemembered& remembered();
+    RememberedSet& GetRememberedSet();
 
 
     virtual void Init(const HeapParam& vmHeapParam) = 0;
