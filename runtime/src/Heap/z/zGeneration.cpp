@@ -1523,21 +1523,22 @@ void CopyCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
 // exact bodies from the DSO, as the existing page-mark tests do.
 #include "Heap/z/zGeneration.inline.hpp"
 namespace MapleRuntime {
-template void ZGeneration::MarkObjectIfActive<false, false, false, false>(zaddress);
-template void ZGeneration::MarkObjectIfActive<false, false, false, true>(zaddress);
-template void ZGeneration::MarkObjectIfActive<false, false, true, false>(zaddress);
-template void ZGeneration::MarkObjectIfActive<false, false, true, true>(zaddress);
-template void ZGeneration::MarkObjectIfActive<false, true, false, false>(zaddress);
-template void ZGeneration::MarkObjectIfActive<false, true, false, true>(zaddress);
-template void ZGeneration::MarkObjectIfActive<false, true, true, false>(zaddress);
-template void ZGeneration::MarkObjectIfActive<false, true, true, true>(zaddress);
-template void ZGeneration::MarkObjectIfActive<true, false, false, false>(zaddress);
-template void ZGeneration::MarkObjectIfActive<true, false, false, true>(zaddress);
-template void ZGeneration::MarkObjectIfActive<true, false, true, false>(zaddress);
-template void ZGeneration::MarkObjectIfActive<true, false, true, true>(zaddress);
-template void ZGeneration::MarkObjectIfActive<true, true, false, false>(zaddress);
-template void ZGeneration::MarkObjectIfActive<true, true, false, true>(zaddress);
-template void ZGeneration::MarkObjectIfActive<true, true, true, false>(zaddress);
-template void ZGeneration::MarkObjectIfActive<true, true, true, true>(zaddress);
+#define MRT_P14A_EXPORT __attribute__((visibility("default")))
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, false, false, false>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, false, false, true>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, false, true, false>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, false, true, true>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, true, false, false>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, true, false, true>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, true, true, false>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<false, true, true, true>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, false, false, false>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, false, false, true>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, false, true, false>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, false, true, true>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, false, false>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, false, true>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, true, false>(zaddress);
+template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, true, true>(zaddress);
 }
 #endif
