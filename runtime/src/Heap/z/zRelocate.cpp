@@ -2664,10 +2664,15 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                 const PageAge fromAge = prev->age();
                 const PageAge toAge = ZRelocate::compute_to_age(fromAge);
                 const bool promotion = toAge == PageAge::old;
-                ZPage* const newPage = promotion ? prev->clone_for_promotion() : prev->reset(toAge);
+                // RegionList owns the live ZPage*. ZGC clone+page_table replace
+                // (zPage.cpp:64-71, zGeneration.cpp:941-943) cannot move the
+                // descriptor off its list. Flip age in place (reset) instead.
+                ZPage* const newPage = prev->reset(toAge);
+                if (promotion) {
+                    prev->remset_alloc();
+                }
                 newPage->reset_livemap();
                 if (promotion) {
-                    ZPageTable::heap_table().replace(prev, newPage);
                     promoted.append(prev);
                 }
             }

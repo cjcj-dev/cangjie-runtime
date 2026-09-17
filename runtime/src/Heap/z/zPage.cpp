@@ -366,6 +366,7 @@ ZPage* ZPage::clone_for_promotion() const
     page->_scratch.allocPtr = _scratch.allocPtr;
     page->_scratch.regionEnd = _scratch.regionEnd;
     page->_top = _top;
+    ZPageTable::heap_table().replace(const_cast<ZPage*>(this), page);
     return page;
 }
 
