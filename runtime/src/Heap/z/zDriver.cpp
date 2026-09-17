@@ -229,7 +229,7 @@ void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCR
 bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
     Collector* activeCollector = testCollector != nullptr ? testCollector : &collector;
 #else
     Collector* activeCollector = &collector;

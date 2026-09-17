@@ -151,7 +151,7 @@ private:
     ZDriverPort majorDriverPort;
     // zDriver.cpp:59-72: held by young; old releases it for its body.
     std::mutex driverLock;
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 public:
     Collector* testCollector = nullptr;
 private:
