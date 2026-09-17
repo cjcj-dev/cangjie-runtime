@@ -83,10 +83,8 @@ void StackWatermark::process_head(Mutator& mutator, void* context, const RootVis
                                                                      : ZPointerLoadGoodMask;
         ZUncoloredRoot::process_invisible(invisible, color);
 #if defined(MRT_GC_UNIT_TESTS)
-        if (!is_null(*invisible)) {
-            NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED,
-                                        to_object(safe(*invisible)));
-        }
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED,
+                                    mutator.LoadInvisibleRoot());
 #endif
     }
 }
