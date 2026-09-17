@@ -43,21 +43,6 @@ void StringDedup::Stop()
     table.clear();
 }
 
-StringDedup::GCScope::GCScope()
-{
-    auto& dedup = Instance();
-    std::lock_guard<std::recursive_mutex> guard(dedup.mutex);
-    ++dedup.suspended;
-}
-
-StringDedup::GCScope::~GCScope()
-{
-    auto& dedup = Instance();
-    std::lock_guard<std::recursive_mutex> guard(dedup.mutex);
-    --dedup.suspended;
-    dedup.condition.notify_all();
-}
-
 void StringDedup::RequestString(const uint8_t* data, size_t length)
 {
     // zStringDedup.inline.hpp:38 requires String identity, not byte-array type.
@@ -101,19 +86,6 @@ void StringDedup::Clean(const std::function<bool(BaseObject*)>& isAlive)
     }
     // StringDedupTable::Cleaner/Resizer release unused bucket capacity.
     table.rehash(0);
-}
-
-void StringDedup::Remap()
-{
-    std::lock_guard<std::recursive_mutex> guard(mutex);
-    for (auto* storage : {&requests, &processing}) {
-        for (size_t i = 0, count = storage->size(); i < count; ++i) {
-            WeakSlot slot = (*storage)[i];
-            Resolve(slot);
-            (*storage)[i] = slot;
-        }
-    }
-    for (auto& entry : table) Resolve(entry.second);
 }
 
 size_t StringDedup::Hash(BaseObject* object) const
@@ -175,7 +147,7 @@ void StringDedup::Run()
 {
     std::unique_lock<std::recursive_mutex> guard(mutex);
     while (!stopped) {
-        condition.wait(guard, [this] { return stopped || (suspended == 0 && (!requests.empty() || !processing.empty())); });
+        condition.wait(guard, [this] { return stopped || !requests.empty() || !processing.empty(); });
         if (stopped) break;
         // StringDedupProcessor::process_requests: release the request slot
         // before table lookup; the mutex keeps GC from clearing this local.

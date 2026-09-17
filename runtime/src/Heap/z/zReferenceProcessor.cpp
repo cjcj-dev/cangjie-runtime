@@ -1,41 +1,80 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-
 #include "Heap/z/zReferenceProcessor.hpp"
 
 #include <new>
 
 #include "Base/Panic.h"
-#include "Heap/z/zPage.hpp"
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Base/TimeUtils.h"
+#include "Heap/z/zGenerationId.hpp"
+#include "Heap/z/zStat.hpp"
+#include "Heap/z/zTask.hpp"
+#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/workerThread.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
-#include "Heap/Collector/ReferenceProcessor.h"
 
-ReferenceProcessor::ReferenceProcessor()
+static const ZStatSubPhase ZSubPhaseConcurrentReferencesProcess("Concurrent References Process",
+                                                                ZGenerationId::old);
+static const ZStatSubPhase ZSubPhaseConcurrentReferencesEnqueue("Concurrent References Enqueue",
+                                                                ZGenerationId::old);
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::function<void()> g_beforeWeakCleanCasForTest;
+}
+#endif
+
+namespace {
+size_t g_statEncountered[4] = {};
+size_t g_statDiscovered[4] = {};
+size_t g_statEnqueued[4] = {};
+}
+
+void ZStatReferences::set_soft(size_t encountered, size_t discovered, size_t enqueued)
 {
-    for (size_t i = 0; i < REFERENCE_TYPE_COUNT; ++i) {
-        encountered[i].store(0, std::memory_order_relaxed);
-        discovered[i].store(0, std::memory_order_relaxed);
-        enqueued[i].store(0, std::memory_order_relaxed);
+    g_statEncountered[0] = encountered;
+    g_statDiscovered[0] = discovered;
+    g_statEnqueued[0] = enqueued;
+}
+void ZStatReferences::set_weak(size_t encountered, size_t discovered, size_t enqueued)
+{
+    g_statEncountered[1] = encountered;
+    g_statDiscovered[1] = discovered;
+    g_statEnqueued[1] = enqueued;
+}
+void ZStatReferences::set_final(size_t encountered, size_t discovered, size_t enqueued)
+{
+    g_statEncountered[2] = encountered;
+    g_statDiscovered[2] = discovered;
+    g_statEnqueued[2] = enqueued;
+}
+void ZStatReferences::set_phantom(size_t encountered, size_t discovered, size_t enqueued)
+{
+    g_statEncountered[3] = encountered;
+    g_statDiscovered[3] = discovered;
+    g_statEnqueued[3] = enqueued;
+}
+
+uint32_t ReferenceProcessor::worker_index()
+{
+    const uint32_t id = WorkerThread::worker_id();
+    CHECK(id != UINT32_MAX);
+    CHECK(id < ZPerWorkerStorage::count());
+    return id;
+}
+
+void ReferenceProcessor::list_append(Node*& head, Node*& tail, Node* reference)
+{
+    if (head == nullptr) {
+        head = reference;
+    } else {
+        tail->next = reference;
     }
-}
-
-ReferenceProcessor::~ReferenceProcessor()
-{
-    DeleteList(discoveredList.exchange(nullptr, std::memory_order_acq_rel));
-    DeleteList(pendingList.exchange(nullptr, std::memory_order_acq_rel));
-}
-
-void ReferenceProcessor::Push(std::atomic<Node*>& head, Node* node)
-{
-    Node* old = head.load(std::memory_order_relaxed);
-    do {
-        node->next = old;
-    } while (!head.compare_exchange_weak(old, node, std::memory_order_release, std::memory_order_relaxed));
+    tail = reference;
 }
 
 void ReferenceProcessor::DeleteList(Node* list)
@@ -47,78 +86,95 @@ void ReferenceProcessor::DeleteList(Node* list)
     }
 }
 
-ReferenceStatus ReferenceProcessor::DiscoverReference(BaseObject* reference, ReferenceType type)
+ReferenceProcessor::ReferenceProcessor(ZWorkers* workers)
+    : workers(workers),
+      clear_all_soft_references(true),
+      encountered_count(),
+      discovered_count(),
+      enqueued_count(),
+      discovered_list(nullptr),
+      pending_list(nullptr),
+      pending_list_tail(nullptr)
 {
-    CHECK(TypeIndex(type) < TypeIndex(ReferenceType::COUNT));
-    encountered[TypeIndex(type)].fetch_add(1, std::memory_order_relaxed);
-    if (!IsSupported(type)) {
-        return ReferenceStatus::UNSUPPORTED;
+    reset_statistics();
+}
+
+ReferenceProcessor::~ReferenceProcessor()
+{
+    ZPerWorkerIterator<Node*> iter(&discovered_list);
+    for (Node** start; iter.next(&start);) {
+        DeleteList(*start);
+        *start = nullptr;
     }
-    if (reference == nullptr) {
-        return ReferenceStatus::INACTIVE;
-    }
-    Node* node = new (std::nothrow) Node{ reference, type, nullptr };
-    CHECK(node != nullptr);
+    DeleteList(pending_list.get());
+    pending_list.set(nullptr);
+}
+
+void ReferenceProcessor::set_workers(ZWorkers* value) { workers = value; }
+
+void ReferenceProcessor::set_soft_reference_policy(bool clear_all)
+{
+    clear_all_soft_references = clear_all;
+}
+
+bool ReferenceProcessor::uses_clear_all_soft_reference_policy() const
+{
+    return clear_all_soft_references;
+}
+
+bool ReferenceProcessor::is_inactive(BaseObject* reference, BaseObject* referent, ReferenceType type) const
+{
+    (void)reference;
     if (type == ReferenceType::FINAL) {
-        // The native registration adapter has no Java discovered field. Claim
-        // once in the existing discovered list; workers only append during mark,
-        // and processing detaches the list after the mark workers have joined.
-        Node* head = discoveredList.load(std::memory_order_acquire);
-        do {
-            for (Node* existing = head; existing != nullptr; existing = existing->next) {
-                if (existing->type == type && existing->reference == reference) {
-                    delete node;
-                    return ReferenceStatus::ALREADY_DISCOVERED;
-                }
-            }
-            node->next = head;
-        } while (!discoveredList.compare_exchange_weak(head, node, std::memory_order_acq_rel,
-                                                       std::memory_order_acquire));
-    } else {
-        Push(discoveredList, node);
+        return false;
     }
-    discovered[TypeIndex(type)].fetch_add(1, std::memory_order_relaxed);
-    return ReferenceStatus::DISCOVERED;
+    return referent == nullptr;
 }
 
-void ReferenceProcessor::ProcessReferencesImpl(const IsStronglyLive& isStronglyLive,
-                                               const ObserveWeakFinal& observeWeakFinal)
+bool ReferenceProcessor::is_strongly_live(BaseObject* referent) const
 {
-    Node* list = discoveredList.exchange(nullptr, std::memory_order_acq_rel);
-    while (list != nullptr) {
-        Node* node = list;
-        list = list->next;
-        node->next = nullptr;
-
-        BaseObject* target = node->reference;
-        bool pending = false;
-        if (node->type == ReferenceType::WEAK) {
-            HeapSlot<>& referentField =
-                HeapSlotAt<>(reinterpret_cast<uintptr_t>(node->reference) + TYPEINFO_PTR_SIZE);
-            target = to_object(referentField.GetTargetObject(std::memory_order_acquire));
-            pending = target != nullptr && !isStronglyLive(target);
-            if (pending) {
-                // zReferenceProcessor.cpp: weak processing makes the referent
-                // inactive before the resurrection rendezvous and enqueue.
-                const WeakCleanResult result = CleanWeakReferenceWithResult(node->reference);
-                pending = result.cleared;
-                if (observeWeakFinal) {
-                    observeWeakFinal(node->reference, result.terminalReferent);
-                }
-            }
-        } else if (node->type == ReferenceType::FINAL) {
-            pending = IsFinalizable(target);
-        }
-
-        if (!pending) {
-            delete node;
-            continue;
-        }
-        Push(pendingList, node);
+    if (referent == nullptr || !Heap::IsHeapAddress(referent)) {
+        return false;
     }
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(referent));
+    if (region == nullptr) {
+        return false;
+    }
+    if (region->IsYoungRegion()) {
+        return true;
+    }
+    return region->is_object_strongly_live(from_object(referent));
 }
 
-bool ReferenceProcessor::IsFinalizable(BaseObject* reference)
+bool ReferenceProcessor::is_softly_live(BaseObject* reference, ReferenceType type) const
+{
+    (void)reference;
+    if (type != ReferenceType::SOFT) {
+        return false;
+    }
+    return !clear_all_soft_references;
+}
+
+bool ReferenceProcessor::should_discover(BaseObject* reference, ReferenceType type) const
+{
+    if (reference == nullptr) {
+        return false;
+    }
+    if (type != ReferenceType::WEAK && type != ReferenceType::FINAL) {
+        return false;
+    }
+    if (type == ReferenceType::FINAL) {
+        Node* head = discovered_list.get(worker_index());
+        for (Node* existing = head; existing != nullptr; existing = existing->next) {
+            if (existing->type == type && existing->reference == reference) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool ReferenceProcessor::is_object_finalizable(BaseObject* reference)
 {
     if (reference == nullptr || !Heap::IsHeapAddress(reference)) {
         return false;
@@ -127,146 +183,302 @@ bool ReferenceProcessor::IsFinalizable(BaseObject* reference)
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
-    // Finalizable-only marked: live bit set, strong bit clear (zPage.inline.hpp:254-260).
     const zaddress addr = from_object(reference);
     return region->is_object_live(addr) && !region->is_object_strongly_live(addr);
 }
 
-ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithResult(BaseObject* reference)
+bool ReferenceProcessor::CleanWeakReference(BaseObject* reference)
 {
     HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
     const zpointer observed = referentField.GetFieldValue(std::memory_order_acquire);
     BaseObject* referent = to_object(RefField<>(observed).GetTargetObject());
     if (referent == nullptr) {
-        return { false, false, nullptr };
+        return false;
     }
-    if (!Heap::IsHeapAddress(referent)) {
-        return { false, false, referent };
-    }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(referent));
-    if (region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion()) {
-        if (region->is_object_strongly_live(from_object(referent))) {
-            return { false, false, referent };
+    if (Heap::IsHeapAddress(referent)) {
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(referent));
+        if (region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion()) {
+            if (region->is_object_strongly_live(from_object(referent))) {
+                return false;
+            }
         }
     }
-
-    // ZReferenceProcessor::try_make_inactive uses a cleaning barrier rather
-    // than a plain null store.  Reuse the product CAS primitive with the exact
-    // observed coloured value so a concurrent mutator update wins.
 #if defined(MRT_TESTABLE_INTERNALS)
     if (g_beforeWeakCleanCasForTest) {
         g_beforeWeakCleanCasForTest();
     }
 #endif
     if (referentField.CompareExchange(observed, to_zpointer(0))) {
-        return { true, false, nullptr };
+        return true;
     }
-
-    // The enqueue consumer must not retain the stale pre-CAS value.  Match the
-    // load-barrier consumer's retry contract by observing the winning terminal
-    // value after an exact-observed CAS loses.
-    BaseObject* terminal = to_object(referentField.GetTargetObject(std::memory_order_acquire));
-    return { false, true, terminal };
+    return false;
 }
 
-bool ReferenceProcessor::CleanWeakReference(BaseObject* reference)
+bool ReferenceProcessor::try_make_inactive(BaseObject* reference, ReferenceType type) const
 {
-    return CleanWeakReferenceWithResult(reference).cleared;
+    if (type == ReferenceType::WEAK) {
+        HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
+        BaseObject* target = to_object(referentField.GetTargetObject(std::memory_order_acquire));
+        if (isStronglyLiveFn && target != nullptr && isStronglyLiveFn(target)) {
+            return false;
+        }
+        if (!isStronglyLiveFn && is_strongly_live(target)) {
+            return false;
+        }
+        const bool cleared = const_cast<ReferenceProcessor*>(this)->CleanWeakReference(reference);
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (observeWeakFinalFn) {
+            BaseObject* terminal = to_object(referentField.GetTargetObject(std::memory_order_acquire));
+            observeWeakFinalFn(reference, terminal);
+        }
+#endif
+        return cleared;
+    }
+    if (type == ReferenceType::FINAL) {
+        return is_object_finalizable(reference);
+    }
+    return false;
+}
+
+void ReferenceProcessor::discover(BaseObject* reference, ReferenceType type)
+{
+    Node* node = new (std::nothrow) Node{ reference, type, nullptr };
+    CHECK(node != nullptr);
+    Node* old = discovered_list.get(worker_index());
+    do {
+        node->next = old;
+    } while (!__atomic_compare_exchange_n(discovered_list.addr(worker_index()), &old, node, false,
+                                          __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+    discovered_count.get(worker_index())[TypeIndex(type)]++;
+}
+
+bool ReferenceProcessor::DiscoverReference(BaseObject* reference, ReferenceType type)
+{
+    encountered_count.get(worker_index())[TypeIndex(type)]++;
+    if (!should_discover(reference, type)) {
+        return false;
+    }
+    discover(reference, type);
+    return true;
+}
+
+void ReferenceProcessor::process_worker_discovered_list(Node* list)
+{
+    Node* keep_head = nullptr;
+    Node* keep_tail = nullptr;
+    for (Node* node = list; node != nullptr;) {
+        Node* next = node->next;
+        node->next = nullptr;
+        if (try_make_inactive(node->reference, node->type)) {
+            enqueued_count.get(worker_index())[TypeIndex(node->type)]++;
+            list_append(keep_head, keep_tail, node);
+        } else {
+            delete node;
+        }
+        node = next;
+        SuspendibleThreadSet::yield();
+    }
+    if (keep_head != nullptr) {
+        Node* old_pending = __atomic_exchange_n(pending_list.addr(), keep_head, __ATOMIC_ACQ_REL);
+        keep_tail->next = old_pending;
+        if (old_pending == nullptr) {
+            pending_list_tail = keep_tail;
+        }
+    }
+}
+
+void ReferenceProcessor::work()
+{
+    SuspendibleThreadSetJoiner stsJoiner;
+    ZPerWorkerIterator<Node*> iter(&discovered_list);
+    for (Node** start; iter.next(&start);) {
+        Node* list = __atomic_exchange_n(start, nullptr, __ATOMIC_ACQ_REL);
+        if (list != nullptr) {
+            process_worker_discovered_list(list);
+        }
+    }
+}
+
+void ReferenceProcessor::verify_empty() const
+{
+#ifdef ASSERT
+    ZPerWorkerIterator<Node*> iter(const_cast<ZPerWorker<Node*>*>(&discovered_list));
+    for (Node** list; iter.next(&list);) {
+        CHECK(*list == nullptr);
+    }
+    CHECK(pending_list.get() == nullptr);
+#endif
+}
+
+void ReferenceProcessor::reset_statistics()
+{
+    verify_empty();
+    ZPerWorkerIterator<Counters> iter_encountered(&encountered_count);
+    for (Counters* counters; iter_encountered.next(&counters);) {
+        for (size_t i = 0; i < REFERENCE_TYPE_COUNT; ++i) {
+            (*counters)[i] = 0;
+        }
+    }
+    ZPerWorkerIterator<Counters> iter_discovered(&discovered_count);
+    for (Counters* counters; iter_discovered.next(&counters);) {
+        for (size_t i = 0; i < REFERENCE_TYPE_COUNT; ++i) {
+            (*counters)[i] = 0;
+        }
+    }
+    ZPerWorkerIterator<Counters> iter_enqueued(&enqueued_count);
+    for (Counters* counters; iter_enqueued.next(&counters);) {
+        for (size_t i = 0; i < REFERENCE_TYPE_COUNT; ++i) {
+            (*counters)[i] = 0;
+        }
+    }
+}
+
+void ReferenceProcessor::collect_statistics()
+{
+    Counters encountered = {};
+    Counters discovered = {};
+    Counters enqueued = {};
+    ZPerWorkerConstIterator<Counters> iter_encountered(&encountered_count);
+    for (const Counters* counters; iter_encountered.next(&counters);) {
+        for (size_t i = 0; i < REFERENCE_TYPE_COUNT; ++i) {
+            encountered[i] += (*counters)[i];
+        }
+    }
+    ZPerWorkerConstIterator<Counters> iter_discovered(&discovered_count);
+    for (const Counters* counters; iter_discovered.next(&counters);) {
+        for (size_t i = 0; i < REFERENCE_TYPE_COUNT; ++i) {
+            discovered[i] += (*counters)[i];
+        }
+    }
+    ZPerWorkerConstIterator<Counters> iter_enqueued(&enqueued_count);
+    for (const Counters* counters; iter_enqueued.next(&counters);) {
+        for (size_t i = 0; i < REFERENCE_TYPE_COUNT; ++i) {
+            enqueued[i] += (*counters)[i];
+        }
+    }
+    ZStatReferences::set_soft(encountered[0], discovered[0], enqueued[0]);
+    ZStatReferences::set_weak(encountered[1], discovered[1], enqueued[1]);
+    ZStatReferences::set_final(encountered[2], discovered[2], enqueued[2]);
+    ZStatReferences::set_phantom(encountered[3], discovered[3], enqueued[3]);
+}
+
+void ReferenceProcessor::soft_reference_update_clock() {}
+
+class ZReferenceProcessorTask : public ZTask {
+private:
+    ReferenceProcessor* const reference_processor;
+public:
+    explicit ZReferenceProcessorTask(ReferenceProcessor* processor)
+        : ZTask("ZReferenceProcessorTask"), reference_processor(processor) {}
+    void work() override { reference_processor->work(); }
+};
+
+void ReferenceProcessor::process_references()
+{
+    ZStatTimerOld timer(ZSubPhaseConcurrentReferencesProcess);
+    ZReferenceProcessorTask task(this);
+    if (workers != nullptr) {
+        workers->run(&task);
+    } else {
+        work();
+    }
+    soft_reference_update_clock();
+    collect_statistics();
+}
+
+void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
+{
+    isStronglyLiveFn = isStronglyLive;
+    observeWeakFinalFn = {};
+    process_references();
+    isStronglyLiveFn = {};
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive, const ObserveWeakFinal& observe)
+{
+    isStronglyLiveFn = isStronglyLive;
+    observeWeakFinalFn = observe;
+    process_references();
+    isStronglyLiveFn = {};
+    observeWeakFinalFn = {};
+}
+
+void ReferenceProcessor::SetBeforeWeakCleanCasForTest(std::function<void()> hook)
+{
+    g_beforeWeakCleanCasForTest = std::move(hook);
+}
+#endif
+
+void ReferenceProcessor::verify_pending_references()
+{
+#ifdef ASSERT
+    SuspendibleThreadSetJoiner stsJoiner;
+    for (Node* current = pending_list.get(); current != nullptr; current = current->next) {
+        SuspendibleThreadSet::yield();
+    }
+#endif
 }
 
 void ReferenceProcessor::EnqueueReferences(const EnqueueFinal& enqueueFinal)
 {
-    Node* list = pendingList.exchange(nullptr, std::memory_order_acq_rel);
+    ZStatTimerOld timer(ZSubPhaseConcurrentReferencesEnqueue);
+    verify_pending_references();
+    Node* list = __atomic_exchange_n(pending_list.addr(), nullptr, __ATOMIC_ACQ_REL);
+    pending_list_tail = nullptr;
     while (list != nullptr) {
         Node* node = list;
         list = list->next;
         bool accepted = false;
         if (node->type == ReferenceType::WEAK) {
-            // The weak referent was already cleared during processing.
             accepted = true;
         } else if (node->type == ReferenceType::FINAL) {
             accepted = enqueueFinal(node->reference);
         }
-        if (accepted) {
-            enqueued[TypeIndex(node->type)].fetch_add(1, std::memory_order_relaxed);
-        }
+        (void)accepted;
         delete node;
     }
 }
 
-void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
-{
-    ProcessReferencesImpl(isStronglyLive, ObserveWeakFinal{});
-}
-
 size_t ReferenceProcessor::Encountered(ReferenceType type) const
 {
-    CHECK(TypeIndex(type) < TypeIndex(ReferenceType::COUNT));
-    return encountered[TypeIndex(type)].load(std::memory_order_acquire);
+    size_t sum = 0;
+    ZPerWorkerConstIterator<Counters> iter(&encountered_count);
+    for (const Counters* counters; iter.next(&counters);) {
+        sum += (*counters)[TypeIndex(type)];
+    }
+    return sum;
 }
 
 size_t ReferenceProcessor::Discovered(ReferenceType type) const
 {
-    CHECK(TypeIndex(type) < TypeIndex(ReferenceType::COUNT));
-    return discovered[TypeIndex(type)].load(std::memory_order_acquire);
+    size_t sum = 0;
+    ZPerWorkerConstIterator<Counters> iter(&discovered_count);
+    for (const Counters* counters; iter.next(&counters);) {
+        sum += (*counters)[TypeIndex(type)];
+    }
+    return sum;
 }
 
 size_t ReferenceProcessor::Enqueued(ReferenceType type) const
 {
-    CHECK(TypeIndex(type) < TypeIndex(ReferenceType::COUNT));
-    return enqueued[TypeIndex(type)].load(std::memory_order_acquire);
+    size_t sum = 0;
+    ZPerWorkerConstIterator<Counters> iter(&enqueued_count);
+    for (const Counters* counters; iter.next(&counters);) {
+        sum += (*counters)[TypeIndex(type)];
+    }
+    return sum;
 }
 
 bool ReferenceProcessor::Empty() const
 {
-    return discoveredList.load(std::memory_order_acquire) == nullptr &&
-        pendingList.load(std::memory_order_acquire) == nullptr;
+    ZPerWorkerIterator<Node*> iter(const_cast<ZPerWorker<Node*>*>(&discovered_list));
+    for (Node** list; iter.next(&list);) {
+        if (*list != nullptr) {
+            return false;
+        }
+    }
+    return pending_list.get() == nullptr;
 }
 
 } // namespace MapleRuntime
-
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
-#include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
-#include "Heap/z/zMark.hpp"
-#include "Heap/z/zMarkStack.hpp"
-#include "Heap/z/zMark.hpp"
-
-#include <algorithm>
-#include "Base/CString.h"
-#include "Common/Runtime.h"
-#include "Concurrency/Concurrency.h"
-#include "Heap/z/zThreadLocalAllocBuffer.hpp"
-#include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/z/zMarkPartialArray.hpp"
-#include "Heap/z/zMark.hpp"
-#include "ObjectModel/RefField.inline.h"
-
-namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-extern std::atomic<size_t> g_weakDiscoveryCount;
-#endif
-void CopyCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
-{
-    HeapSlot<>& referentField =
-        HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
-    BaseObject* referent = GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, reference, referentField);
-    if (referent == nullptr) {
-        return;
-    }
-    DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", reference, &referent, referent);
-    CHECK(DiscoverReference(reference, ReferenceType::WEAK) == ReferenceStatus::DISCOVERED);
-#if defined(MRT_TESTABLE_INTERNALS)
-    g_weakDiscoveryCount.fetch_add(1, std::memory_order_relaxed);
-#endif
-    // Deliberately no push/TraceObjectRefFields(referent): discovery must not
-    // publish the weak referent into the strong marking work stack.
-    (void)workStack;
-}
-
-}

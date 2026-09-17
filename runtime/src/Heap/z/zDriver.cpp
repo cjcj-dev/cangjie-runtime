@@ -208,7 +208,6 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     if (port.Abort().Poll()) {
         return false;
     }
-    StringDedup::GCScope suspendDedup;
     GCIdMark gcId;
     const uint64_t collectionStart = TimeUtil::NanoSeconds();
     size_t liveBefore = 0;
@@ -406,6 +405,8 @@ void CollectorResources::StartGCThreads()
         // ZWorkers counts participants, excluding the coordinating driver.
         collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(concurrentGcThreadCount);
         collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(concurrentGcThreadCount);
+        finalizerProcessor.GetReferenceProcessor().set_workers(
+            collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).Workers());
     }
 
     // zHeap.cpp / zCollectedHeap.cpp:65-71: the two drivers and the director

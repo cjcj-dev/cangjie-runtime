@@ -200,6 +200,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
         CopyCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, mark.get());
     }
 #endif
+    Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     collector.StartOldMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {

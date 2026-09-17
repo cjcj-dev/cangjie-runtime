@@ -372,7 +372,6 @@ bool WCollector::Preforward()
         SuspendibleThreadSetJoiner joiner;
         workers.run(&roots);
     }
-    StringDedup::Instance().Remap();
     return true;
 }
 
@@ -953,7 +952,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             manager.FinishIncompleteFromRegions(GCCycleGeneration::YOUNG);
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
-        StringDedup::Instance().Remap();
         {
             MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
             g_minorRefCasFail.store(0, std::memory_order_relaxed);

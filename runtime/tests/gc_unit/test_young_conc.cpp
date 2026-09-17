@@ -29,6 +29,7 @@
 #include "CjScheduler.h"
 
 #include "gc_heap_fixture.hpp"
+#include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
 
 #include "Concurrency/Concurrency.h"
@@ -61,6 +62,7 @@ using namespace MapleRuntime::GcUnit;
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
 {
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);

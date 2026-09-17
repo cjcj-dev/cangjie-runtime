@@ -517,9 +517,20 @@ void CopyCollector::DiscoverFinalizableRoot(NativeSlot& slot) const
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
     auto& processor = collectorResources.GetFinalizerProcessor().GetReferenceProcessor();
-    const auto status = processor.DiscoverReference(object, ReferenceType::FINAL);
-    CHECK(status == ReferenceStatus::DISCOVERED || status == ReferenceStatus::ALREADY_DISCOVERED);
+    (void)processor.DiscoverReference(object, ReferenceType::FINAL);
     ZBarrier::MarkFinalizableBarrierOnRoot(slot);
+}
+
+void CopyCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
+{
+    HeapSlot<>& referentField =
+        HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
+    BaseObject* referent = GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, reference, referentField);
+    if (referent == nullptr) {
+        return;
+    }
+    (void)DiscoverReference(reference, ReferenceType::WEAK);
+    (void)workStack;
 }
 
 namespace {

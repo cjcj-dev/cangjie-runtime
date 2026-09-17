@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "Base/TimeUtils.h"
+#include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
@@ -206,6 +208,28 @@ private:
     const ZStatCounter counter;
 };
 
+class ZStatSubPhase : public ZStatPhase {
+public:
+    ZStatSubPhase(const char* name, ZGenerationId id)
+        : ZStatPhase("Concurrent", name), generation(id)
+    {
+        (void)generation;
+    }
+private:
+    const ZGenerationId generation;
+};
+
+class ZStatTimerOld {
+public:
+    explicit ZStatTimerOld(const ZStatPhase& phase)
+        : phase(phase), start(TimeUtil::NanoSeconds())
+    {}
+    ~ZStatTimerOld() { phase.RegisterEnd(TimeUtil::NanoSeconds() - start); }
+private:
+    const ZStatPhase& phase;
+    const uint64_t start;
+};
+
 namespace ZStatPhases {
 extern const ZStatPhase PCollectFromSpaceGarbage;
 extern const ZStatPhase PCollectLargeGarbage;
@@ -322,6 +346,14 @@ private:
     std::condition_variable condition;
     bool stopped = false;
     static std::atomic<int> stwDepth;
+};
+
+class ZStatReferences {
+public:
+    static void set_soft(size_t encountered, size_t discovered, size_t enqueued);
+    static void set_weak(size_t encountered, size_t discovered, size_t enqueued);
+    static void set_final(size_t encountered, size_t discovered, size_t enqueued);
+    static void set_phantom(size_t encountered, size_t discovered, size_t enqueued);
 };
 
 } // namespace MapleRuntime

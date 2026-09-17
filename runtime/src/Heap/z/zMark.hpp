@@ -138,6 +138,7 @@ private:
 #ifndef MRT_COLLECTOR_TRACING_H
 #define MRT_COLLECTOR_TRACING_H
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 
@@ -184,12 +185,6 @@ MarkTerminateTestReceipt ReadMarkTerminateTestReceipt();
 void NoteMarkTerminatePauseDuration(uint64_t pauseNs);
 void NoteMarkTerminatePauseProducers(size_t y2y);
 void NoteTraceYoungClosureDuringPause();
-
-struct WeakDiscoveryTestReceipt {
-    size_t discovered = 0;
-};
-void ResetWeakDiscoveryTestReceipt();
-WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt();
 #endif
 
 // prefetch distance for mark.
@@ -346,7 +341,7 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override { return request.ShouldBeIgnored(); }
 
-    ReferenceStatus DiscoverReference(BaseObject* reference, ReferenceType type)
+    bool DiscoverReference(BaseObject* reference, ReferenceType type)
     {
         return collectorResources.GetFinalizerProcessor().GetReferenceProcessor().DiscoverReference(reference, type);
     }

@@ -598,8 +598,6 @@ if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
     'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)'
     'MapleRuntime::WCollector::TraceHeap()'
-    'MapleRuntime::ResetWeakDiscoveryTestReceipt()'
-    'MapleRuntime::ReadWeakDiscoveryTestReceipt()'
   )
   for consumer in "${YOUNG_WEAK_PRODUCT_CONSUMERS[@]}"; do
     if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then

@@ -390,6 +390,7 @@ struct ExportForeignGraph {
 
 void RunYoungWeakVariant(size_t helpers)
 {
+    WorkerFixture worker(0);
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
 
     MutatorManager mutatorManager;
@@ -448,6 +449,7 @@ void RunYoungWeakVariant(size_t helpers)
 
 void RunYoungWeakRemsetFlow()
 {
+    WorkerFixture worker(0);
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
 
     MutatorManager mutatorManager;
@@ -519,6 +521,7 @@ enum class MajorRootFamily {
 
 void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t helpers = 0)
 {
+    WorkerFixture worker(0);
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     if (runtimeEntry) {
     }
@@ -576,13 +579,13 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
         exportHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
     }
 
-    ResetWeakDiscoveryTestReceipt();
     if (runtimeEntry) {
         RelocationReceiptTestAccess::RunMajorCollection(collector);
     } else {
         RelocationReceiptTestAccess::RunMajorMark(collector);
     }
-    const WeakDiscoveryTestReceipt receipt = ReadWeakDiscoveryTestReceipt();
+    const size_t discovered =
+        resources.GetFinalizerProcessor().GetReferenceProcessor().Discovered(ReferenceType::WEAK);
     const bool referentCleared = is_null(WeakGraph::Field(graph.weak).GetFieldValue());
     const bool strongMarked = graph.IsMarked(graph.strongRoot);
     const bool weakMarked = graph.IsMarked(graph.weak);
@@ -591,7 +594,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     std::fprintf(stderr,
                  "DETAIL major_weak family=%s discovered=%zu strong_mark=%d weak_mark=%d "
                  "referent_mark=%d child_mark=%d referent_cleared=%d\n",
-                 family == MajorRootFamily::COMMON ? "common" : "export", receipt.discovered,
+                 family == MajorRootFamily::COMMON ? "common" : "export", discovered,
                  static_cast<int>(strongMarked), static_cast<int>(weakMarked), static_cast<int>(referentMarked),
                  static_cast<int>(childMarked), static_cast<int>(referentCleared));
     if (registeredCommonRootCount != 0) {
@@ -610,7 +613,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
         GC_EXPECT_TRUE(referentCleared);
         return;
     }
-    GC_EXPECT_EQ(receipt.discovered, 1u);
+    GC_EXPECT_EQ(discovered, 1u);
     GC_EXPECT_TRUE(strongMarked);
     GC_EXPECT_TRUE(weakMarked);
     GC_EXPECT_FALSE(referentMarked);
