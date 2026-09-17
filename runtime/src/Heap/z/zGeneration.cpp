@@ -1299,6 +1299,9 @@ void ZGenerationOld::concurrent_mark()
 
 bool ZGenerationOld::pause_mark_end()
 {
+    if (is_phase_mark_complete()) {
+        return true;
+    }
     VM_ZMarkEndOld op;
     return op.pause();
 }
@@ -1312,9 +1315,7 @@ void ZGenerationOld::concurrent_mark_free() {}
 
 void ZGenerationOld::concurrent_process_non_strong_references()
 {
-    WCollector& collector = TheCollector();
-    collector.ProcessOldNonStrongReferences(collector.oldMarkWorkStack);
-    collector.PostTrace();
+    TheCollector().PostTrace();
 }
 
 void ZGenerationOld::concurrent_reset_relocation_set() {}
@@ -1506,6 +1507,17 @@ void CopyCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
     if (ZAbort::should_abort()) {
         return;
     }
+    while (!VM_ZMarkEndOld().pause()) {
+        if (ZAbort::should_abort()) {
+            return;
+        }
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
+        TracingImpl(workStack);
+        if (ZAbort::should_abort()) {
+            return;
+        }
+    }
+    ProcessOldNonStrongReferences(workStack);
 
 #if defined(MRT_TESTABLE_INTERNALS)
     // All major tasks and finalizer work have flushed before page selection.
