@@ -61,7 +61,9 @@ bool ZDirector::wait_for_tick()
     if (resources.directorStopped) {
         return false;
     }
-    resources.directorCondition.wait_for(lock, std::chrono::milliseconds(10),
+    const uint64_t now = TimeUtil::NanoSeconds();
+    GcMetronome metronome(now);
+    resources.directorCondition.wait_for(lock, std::chrono::nanoseconds(metronome.DeadlineNs() - now),
         [this] { return resources.directorStopped || resources.directorReevaluate; });
     return !resources.directorStopped;
 }
