@@ -1736,8 +1736,8 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt
         GC_EXPECT_TRUE(manager.RelocateClaimedPage(state.region));
     }
 
-    (void)queue.Wait(request.request);
-    const MAddress receipt = request.request->page_forwarding()->find(from);
+    (void)queue.Wait(request.forwarding);
+    const MAddress receipt = request.forwarding->find(from);
     GC_EXPECT_EQ(receipt, expected);
     GC_EXPECT_TRUE(receipt != from);
     GC_EXPECT_EQ(forwarding_find(Generation::Old, from), expected);
@@ -1767,8 +1767,8 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
     manager.CompactRegion(state.region);
     state.region->MarkForwardingDone();
 
-    (void)queue.Wait(request.request);
-    const MAddress receipt = request.request->page_forwarding()->find(from);
+    (void)queue.Wait(request.forwarding);
+    const MAddress receipt = request.forwarding->find(from);
     GC_EXPECT_EQ(receipt, expected);
     GC_EXPECT_TRUE(receipt != from);
     GC_EXPECT_EQ(forwarding_find(Generation::Old, from), expected);
@@ -1839,7 +1839,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
     ZRelocateQueue::SetWaitEnterHook(nullptr);
-    const auto claimed = seeded.request;
+    const auto claimed = seeded.forwarding;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(forwarding_find(Generation::Old, from));
     const bool workerClosed = queue.PendingCount() == 0;
     waiter.join();
@@ -1914,7 +1914,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
     ZRelocateQueue::SetWaitEnterHook(nullptr);
-    const auto claimed = seeded.request;
+    const auto claimed = seeded.forwarding;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(forwarding_find(Generation::Old, from));
     const bool workerClosed = queue.PendingCount() == 0;
     waiter.join();
@@ -1978,8 +1978,8 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     manager.CompactRegion(region);
     GC_EXPECT_TRUE(region->IsForwardingDone());
 
-    (void)queue.Wait(request.request);
-    const MAddress resolved = request.request->page_forwarding()->find(from);
+    (void)queue.Wait(request.forwarding);
+    const MAddress resolved = request.forwarding->find(from);
     GC_EXPECT_EQ(resolved, start);
     GC_EXPECT_TRUE(resolved != from);
     GC_EXPECT_EQ(forwarding_find(Generation::Old, from), resolved);
@@ -2650,8 +2650,8 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     }
     manager.CompactRegion(region);
     region->MarkForwardingDone();
-    (void)queue.Wait(request.request);
-    auto* forwarding = request.request->page_forwarding();
+    (void)queue.Wait(request.forwarding);
+    auto* forwarding = request.forwarding;
     const MAddress firstTo = forwarding->find(start + size);
     const MAddress secondTo = forwarding->find(start + 2 * size);
     std::fprintf(stderr, "B09_OVERLAP_PRECONDITION size=%zu first_delta=%zu second_delta=%zu\n", size, firstTo-start, secondTo-start);

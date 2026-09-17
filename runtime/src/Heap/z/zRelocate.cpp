@@ -1297,7 +1297,7 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ZForwarding* owne
     auto& queue = manager.GetZRelocateQueue();
     const auto request = queue.Add(owner);
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
-    (void)queue.Wait(request.request);
+    queue.Wait(request.forwarding);
     return reinterpret_cast<BaseObject*>(owner->find(from));
 }
 
@@ -2438,173 +2438,275 @@ void ZRelocateQueue::SetWaitEnterHook(WaitEnterHook hook)
 }
 #endif
 
-void ZRelocateQueue::BeginWorkers(size_t workers)
+bool ZRelocateQueue::needs_attention() const
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    PruneDoneLocked();
-    CHECK_DETAIL(!accepting && workers != 0 && workerCount == 0 && synchronizedWorkers == 0 && byPage.empty(),
-                 "invalid relocation worker generation workers=%zu active=%zu synchronized=%zu accepting=%u",
-                 workers, workerCount, synchronizedWorkers, static_cast<unsigned>(accepting));
+    return needsAttention.load(std::memory_order_relaxed) != 0;
+}
+
+void ZRelocateQueue::inc_needs_attention()
+{
+    needsAttention.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void ZRelocateQueue::dec_needs_attention()
+{
+    needsAttention.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void ZRelocateQueue::activate(uint32_t workers)
+{
+    isActive.store(true, std::memory_order_release);
+    join(workers);
+}
+
+void ZRelocateQueue::deactivate()
+{
+    isActive.store(false, std::memory_order_release);
+    clear();
+}
+
+bool ZRelocateQueue::is_active() const
+{
+    return isActive.load(std::memory_order_acquire);
+}
+
+void ZRelocateQueue::join(uint32_t workers)
+{
+    CHECK_DETAIL(workers != 0 && nworkers == 0 && nsynchronized == 0,
+                 "invalid relocate queue join workers=%u nworkers=%u nsync=%u",
+                 workers, nworkers, nsynchronized);
+    nworkers = workers;
+}
+
+void ZRelocateQueue::resize_workers(uint32_t workers)
+{
+    std::lock_guard<std::mutex> guard(lock);
+    nworkers = workers;
+}
+
+void ZRelocateQueue::leave()
+{
+    std::lock_guard<std::mutex> guard(lock);
+    nworkers--;
+    const bool done = prune();
+    const bool last = synchronizeFlag && nworkers == nsynchronized;
+    if (done || last) {
+        attention.notify_all();
+    }
+}
+
+void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
+{
+    std::unique_lock<std::mutex> guard(lock);
+    if (forwarding->is_done()) {
+        return;
+    }
+    queue.append(forwarding);
+    if (queue.length() == 1) {
+        inc_needs_attention();
+        attention.notify_all();
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (WaitEnterHook hook = g_waitEnterHook.load(std::memory_order_acquire)) {
+        hook(forwarding);
+    }
+#endif
+    while (!forwarding->is_done()) {
+        attention.wait(guard);
+    }
+}
+
+bool ZRelocateQueue::prune()
+{
+    if (queue.is_empty()) {
+        return false;
+    }
+    bool done = false;
+    for (int i = 0; i < queue.length();) {
+        ZForwarding* forwarding = queue.at(i);
+        if (forwarding->is_done()) {
+            done = true;
+            queue.delete_at(i);
+            completionCount.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            i++;
+        }
+    }
+    if (queue.is_empty()) {
+        dec_needs_attention();
+    }
+    return done;
+}
+
+ZForwarding* ZRelocateQueue::prune_and_claim()
+{
+    if (prune()) {
+        attention.notify_all();
+    }
+    for (int i = 0; i < queue.length(); i++) {
+        ZForwarding* forwarding = queue.at(i);
+        if (forwarding->claim()) {
+            return forwarding;
+        }
+    }
+    return nullptr;
+}
+
+void ZRelocateQueue::synchronize_thread()
+{
+    nsynchronized++;
+    if (nsynchronized == nworkers) {
+        attention.notify_all();
+    }
+}
+
+void ZRelocateQueue::desynchronize_thread()
+{
+    nsynchronized--;
+}
+
+ZForwarding* ZRelocateQueue::synchronize_poll()
+{
+    if (!needs_attention()) {
+        return nullptr;
+    }
+    std::unique_lock<std::mutex> guard(lock);
+    if (ZForwarding* forwarding = prune_and_claim()) {
+        return forwarding;
+    }
+    if (!synchronizeFlag) {
+        return nullptr;
+    }
+    synchronize_thread();
+    do {
+        attention.wait(guard);
+        if (ZForwarding* forwarding = prune_and_claim()) {
+            desynchronize_thread();
+            return forwarding;
+        }
+    } while (synchronizeFlag);
+    desynchronize_thread();
+    return nullptr;
+}
+
+void ZRelocateQueue::clear()
+{
+    if (queue.is_empty()) {
+        return;
+    }
     queue.clear();
-    workerCount = workers;
-    accepting = true;
+    dec_needs_attention();
+}
+
+void ZRelocateQueue::synchronize()
+{
+    std::unique_lock<std::mutex> guard(lock);
+    synchronizeFlag = true;
+    inc_needs_attention();
+    while (nworkers != nsynchronized) {
+        attention.wait(guard);
+    }
+}
+
+void ZRelocateQueue::desynchronize()
+{
+    std::lock_guard<std::mutex> guard(lock);
+    synchronizeFlag = false;
+    dec_needs_attention();
+    attention.notify_all();
 }
 
 ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(void* region, MAddress from)
 {
     auto owner = forwarding_for_page(static_cast<ZPage*>(region));
     CHECK_DETAIL(!owner || owner->covers(from), "relocation request outside forwarding from=%#zx", from);
-    return Add(std::move(owner));
+    return Add(owner);
 }
 
 ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(ZForwarding* forwarding)
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    if (!forwarding) return { nullptr, false, false };
-    auto found = byPage.find(forwarding);
-    if (found != byPage.end()) return { found->second, false, true };
-    if (forwarding->is_done()) return { Handle(new Request(std::move(forwarding))), false, true };
-    // An already claimed forwarding has its own completion owner even after
-    // the queue's last worker left. An unclaimed page requires an active task.
-    if (!accepting && !forwarding->claimed().load(std::memory_order_acquire)) {
-        return { nullptr, false, false };
+    if (forwarding == nullptr) {
+        return { nullptr, false, false, nullptr };
     }
-    Handle request(new Request(std::move(forwarding)));
-    byPage.emplace(request->page_forwarding(), request);
-    queue.push_back(request);
-    queueAttention.notify_all();
-    return { request, true, true };
-}
-
-void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
-{
-    const EnqueueResult result = Add(forwarding);
-    CHECK_DETAIL(result.accepted, "forwarding wait requires a page task");
-    (void)Wait(result.request);
-}
-
-MAddress ZRelocateQueue::Wait(const Handle& request)
-{
-    return WaitUntil(request);
-}
-
-MAddress ZRelocateQueue::WaitUntil(const Handle& request, size_t maxSpins, bool* timedOut)
-{
-    if (timedOut != nullptr) *timedOut = false;
-    if (request == nullptr) return 0;
-    // ZRelocateQueue::add_and_wait runs in the barrier's non-safepoint
-    // context (zBarrierSetRuntime.cpp:29, zRelocate.cpp:134-151). Preserve
-    // that context through the wait and the caller's final forwarding find.
-    // Entering a saferegion here would let GC complete the next phase on
-    // behalf of this mutator and reset the set owning this borrowed pointer.
-    // The page retain has already been released (zRelocate.cpp:396-405);
-    // it must not prevent the worker from claiming the page in place.
-    {
-        // zRelocate.cpp:136-150: enqueue and the not-done predicate share one
-        // queue lock; wait only after is_done is false under that lock.
-        std::unique_lock<std::mutex> lock(queueMutex);
-        if (!request->page_forwarding()->is_done()) {
-#if defined(MRT_TESTABLE_INTERNALS)
-            if (WaitEnterHook hook = g_waitEnterHook.load(std::memory_order_acquire)) {
-                hook(request->page_forwarding());
-            }
-#endif
-            size_t spins = 0;
-            while (!request->page_forwarding()->is_done()) {
-                if (maxSpins != 0 && spins >= maxSpins) {
-                    if (timedOut != nullptr) *timedOut = true;
-                    break;
-                }
-                queueAttention.wait_for(lock, std::chrono::milliseconds(1));
-                ++spins;
-            }
+    std::lock_guard<std::mutex> guard(lock);
+    if (forwarding->is_done()) {
+        return { forwarding, false, true, forwarding };
+    }
+    if (!isActive.load(std::memory_order_acquire) && !forwarding->claimed().load(std::memory_order_acquire)) {
+        return { nullptr, false, false, nullptr };
+    }
+    for (int i = 0; i < queue.length(); i++) {
+        if (queue.at(i) == forwarding) {
+            return { forwarding, false, true, forwarding };
         }
     }
-    return 0;
+    queue.append(forwarding);
+    if (queue.length() == 1) {
+        inc_needs_attention();
+    }
+    attention.notify_all();
+    return { forwarding, true, true, forwarding };
+}
+
+void ZRelocateQueue::Wait(ZForwarding* forwarding)
+{
+    add_and_wait(forwarding);
 }
 
 size_t ZRelocateQueue::Complete(ZForwarding* forwarding)
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    const size_t completed = forwarding != nullptr && forwarding->is_done() && byPage.count(forwarding) != 0 ? 1 : 0;
-    PruneDoneLocked();
-    queueAttention.notify_all();
-    return completed;
+    std::lock_guard<std::mutex> guard(lock);
+    (void)forwarding;
+    const bool done = prune();
+    attention.notify_all();
+    return done ? 1 : 0;
 }
 
-void ZRelocateQueue::PruneDoneLocked()
+ZForwarding* ZRelocateQueue::PruneAndClaim()
 {
-    for (auto it = queue.begin(); it != queue.end();) {
-        if ((*it)->page_forwarding()->is_done()) {
-            byPage.erase((*it)->page_forwarding());
-            it = queue.erase(it);
-            completionCount.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            ++it;
-        }
-    }
-}
-
-ZRelocateQueue::Handle ZRelocateQueue::PruneAndClaimLocked()
-{
-    PruneDoneLocked();
-    for (const auto& request : queue) {
-        if (request->page_forwarding()->claim()) return request;
-    }
-    return nullptr;
-}
-
-ZRelocateQueue::Handle ZRelocateQueue::PruneAndClaim()
-{
-    std::lock_guard<std::mutex> lock(queueMutex);
-    return PruneAndClaimLocked();
+    std::lock_guard<std::mutex> guard(lock);
+    return prune_and_claim();
 }
 
 ZRelocateQueue::Selection ZRelocateQueue::SynchronizePoll()
 {
-    std::unique_lock<std::mutex> lock(queueMutex);
-    Handle request = PruneAndClaimLocked();
-    if (request) return { request, nullptr, false };
-    CHECK_DETAIL(workerCount != 0 && synchronizedWorkers < workerCount,
-                 "invalid relocation worker synchronization workers=%zu synchronized=%zu",
-                 workerCount, synchronizedWorkers);
-    ++synchronizedWorkers;
-    if (synchronizedWorkers == workerCount) {
-        // All real page tasks have returned before joining this rendezvous.
-        // A claimed external owner can finish independently; do not relabel it.
-        accepting = false;
-        workerCount = 0;
-        synchronizedWorkers = 0;
-        queueAttention.notify_all();
+    std::unique_lock<std::mutex> guard(lock);
+    if (ZForwarding* forwarding = prune_and_claim()) {
+        return { forwarding, nullptr, false };
+    }
+    CHECK_DETAIL(nworkers != 0 && nsynchronized < nworkers,
+                 "invalid relocation worker synchronization workers=%u synchronized=%u",
+                 nworkers, nsynchronized);
+    ++nsynchronized;
+    if (nsynchronized == nworkers) {
+        isActive.store(false, std::memory_order_release);
+        nworkers = 0;
+        nsynchronized = 0;
+        attention.notify_all();
         return { nullptr, nullptr, true };
     }
     for (;;) {
-        queueAttention.wait(lock);
-        if (!accepting) return { nullptr, nullptr, true };
-        request = PruneAndClaimLocked();
-        if (request) {
-            --synchronizedWorkers;
-            return { request, nullptr, false };
+        attention.wait(guard);
+        if (!isActive.load(std::memory_order_acquire)) {
+            return { nullptr, nullptr, true };
+        }
+        if (ZForwarding* forwarding = prune_and_claim()) {
+            --nsynchronized;
+            return { forwarding, nullptr, false };
         }
     }
 }
 
-bool ZRelocateQueue::IsActive() const
-{
-    std::lock_guard<std::mutex> lock(queueMutex);
-    return accepting;
-}
-
 size_t ZRelocateQueue::PendingCount() const
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    return byPage.size();
+    std::lock_guard<std::mutex> guard(lock);
+    return static_cast<size_t>(queue.length());
 }
 
 size_t ZRelocateQueue::SynchronizedWorkerCount() const
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    return synchronizedWorkers;
+    std::lock_guard<std::mutex> guard(lock);
+    return nsynchronized;
 }
 
 PageAge ZRelocate::compute_to_age(PageAge fromAge)

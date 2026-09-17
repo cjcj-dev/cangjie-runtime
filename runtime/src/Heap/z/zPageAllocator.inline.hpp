@@ -351,7 +351,7 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
             continue;
         }
 
-        ZPage* region = static_cast<ZPage*>(selected.request->owner());
+        ZPage* region = static_cast<ZPage*>(selected.owner());
         // If an ordinary iterator already removed the page, its worker will
         // lose the forwarding claim. This claimant still owns the page task.
         (void)fromRegionList.TryDeleteRegion(region);
