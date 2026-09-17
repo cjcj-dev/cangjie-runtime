@@ -34,7 +34,7 @@ public:
     void Record(MAddress slot);
     size_t Size() const { return 0; }
     template<typename C>
-    void DrainForMinor(C&) { FlipForMinor(); }
+    size_t DrainForMinor(C&) { FlipForMinor(); return 0; }
     void FlipForMinor();
     bool ContainsPrevious(MAddress) const { return false; }
     template<typename... A>
@@ -49,7 +49,7 @@ public:
     template<typename... A>
     size_t TakeInPlaceSlots(A&&...) { return 0; }
     template<typename... A>
-    void MoveInPlaceSlots(A&&...) {}
+    size_t MoveInPlaceSlots(A&&...) { return 0; }
     struct InPlaceSlot {};
 
 private:
