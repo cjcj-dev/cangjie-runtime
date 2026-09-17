@@ -82,6 +82,10 @@ public:
         _promoted.store(0, std::memory_order_relaxed);
         _compacted.store(0, std::memory_order_relaxed);
     }
+    void set_gc_timer(void* timer) { _gc_timer = timer; }
+    void* gc_timer() const { return _gc_timer; }
+    void at_collection_start(void* timer = nullptr);
+    void at_collection_end();
     bool is_phase_relocate() const { return _phase == Phase::Relocate; }
     bool is_phase_mark() const { return _phase == Phase::Mark; }
     bool is_phase_mark_complete() const { return _phase == Phase::MarkComplete; }
@@ -167,6 +171,7 @@ public:
     ZRelocationSet _relocation_set;
     std::unique_ptr<ZRelocate> _relocate;
     ZRemembered _remembered;
+    void* _gc_timer { nullptr };
 };
 
 // zGeneration.cpp:489-497: type is scoped to one young collection.
@@ -178,6 +183,26 @@ public:
     YoungTypeSetter& operator=(const YoungTypeSetter&) = delete;
 private:
     ZGeneration& cycle;
+};
+
+class ZGenerationCollectionScopeYoung {
+public:
+    explicit ZGenerationCollectionScopeYoung(ZGenerationYoung& generation);
+    ~ZGenerationCollectionScopeYoung();
+    ZGenerationCollectionScopeYoung(const ZGenerationCollectionScopeYoung&) = delete;
+    ZGenerationCollectionScopeYoung& operator=(const ZGenerationCollectionScopeYoung&) = delete;
+private:
+    ZGenerationYoung& generation;
+};
+
+class ZGenerationCollectionScopeOld {
+public:
+    explicit ZGenerationCollectionScopeOld(ZGenerationOld& generation);
+    ~ZGenerationCollectionScopeOld();
+    ZGenerationCollectionScopeOld(const ZGenerationCollectionScopeOld&) = delete;
+    ZGenerationCollectionScopeOld& operator=(const ZGenerationCollectionScopeOld&) = delete;
+private:
+    ZGenerationOld& generation;
 };
 
 class ZGenerationYoung : public ZGeneration {

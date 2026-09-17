@@ -43,6 +43,16 @@ GC_TEST(ZAbort, AllStaticAbortpoint)
     GC_EXPECT_TRUE(!ZAbort::should_abort());
 }
 
+GC_TEST(ZGeneration, CollectionScopeClearsTimer)
+{
+    Heap::GetHeap();
+    ZGenerationYoung* young = ZGeneration::young();
+    young->at_collection_start(young);
+    GC_EXPECT_TRUE(young->gc_timer() == young);
+    young->at_collection_end();
+    GC_EXPECT_TRUE(young->gc_timer() == nullptr);
+}
+
 GC_TEST(ZGeneration, FreedPromotedCompactedAtomics)
 {
     Heap::GetHeap();
