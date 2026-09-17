@@ -99,7 +99,7 @@ struct RelocationReceiptTestAccess {
         auto& young = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
         collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
-        auto& remembered = Heap::GetHeap().GetRememberedSet();
+        auto& remembered = HeapTestRemset();
         if (!remembered.IsInitialized()) {
             remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         }
@@ -411,7 +411,6 @@ void RunYoungWeakVariant(size_t helpers)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(graph.child);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = resources.IsGcStarted();
@@ -472,7 +471,7 @@ void RunYoungWeakRemsetFlow()
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& rememberedSet = HeapTestRemset();
     rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
     referentField.StoreColoured(to_zpointer(raw(StoreGoodPointer(graph.referent)) ^ ZPointerMarkedYoungMask));
@@ -540,7 +539,6 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.child);
     if (runtimeEntry) {
-        Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
         space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
         space.GetRegionManager().AddRawPointerObject(graph.weak);
         space.GetRegionManager().AddRawPointerObject(graph.referent);
@@ -770,8 +768,6 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);
     space.GetRegionManager().AddRawPointerObject(route.to);
-    Heap::GetHeap().GetRememberedSet().Initialize(
-        fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
 
     const bool startedBefore = resources.IsGcStarted();

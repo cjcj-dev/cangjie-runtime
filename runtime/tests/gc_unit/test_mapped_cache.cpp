@@ -269,8 +269,6 @@ struct ProductHeapFixture {
         parameters.regionSize = ZPage::UNIT_SIZE / 1024;
         parameters.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, parameters, 0.5));
-        Heap::GetHeap().GetRememberedSet().Initialize(manager.GetRegionHeapStart(),
-                                                    units * ZPage::UNIT_SIZE * ZVirtualToPhysicalRatio);
     }
 };
 

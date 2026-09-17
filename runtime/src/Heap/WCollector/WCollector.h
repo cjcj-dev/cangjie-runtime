@@ -24,40 +24,12 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Collector/CopyCollector.h"
 #include "Heap/z/zMark.hpp"
-#include "Heap/Collector/RemsetScanStats.h"
-
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
 class MarkLiveCache;
 class ScopedStopTheWorld;
 
 #if defined(MRT_TESTABLE_INTERNALS)
-// One-shot wave8 attribution receipts.  The storage is native and fixed-size;
-// production builds do not declare or emit any of this instrumentation.
-enum class RemsetFilterReceiptReason : uint8_t {
-    kNone = 0,
-    kStale = 1,
-    kDeadHolder = 2,
-    kNoOrigin = 3,
-    kBadTarget = 4,
-};
-struct RemsetFilterTestReceipt {
-    uint64_t seen = 0;
-    uint64_t consumed = 0;
-    uint64_t stale = 0;
-    uint64_t deadHolder = 0;
-    uint64_t noOrigin = 0;
-    uint64_t badTarget = 0;
-    MAddress lastConsumedSlot = 0;
-    MAddress lastStaleSlot = 0;
-    MAddress lastDeadHolderSlot = 0;
-    MAddress lastNoOriginSlot = 0;
-    MAddress lastBadTargetSlot = 0;
-};
-void ResetRemsetFilterTestReceipt();
-RemsetFilterTestReceipt ReadRemsetFilterTestReceipt();
-void NoteRemsetFilterTestReceipt(MAddress slot, RemsetFilterReceiptReason reason, bool consumed);
-
 struct Y2yHandoffTestReceipt {
     uint64_t phase0 = 0; // release-boundary observation
     uint64_t phase1 = 0; // roots consumed after release
@@ -455,7 +427,6 @@ public:
     //
     //   ResolveMinorReference(RefField&) ra1=ResolveMinorReference    (where it moved to)
     //   ResolveMinorReference(RootSlot&) same shape
-    //   RescanRememberedSet              same shape
     //
     // Reproduced 10/10 with cjcj::cjc --package packages/basic/src --output-type=staticlib on a
     // coloured host runtime:
@@ -767,13 +738,6 @@ private:
     // local-buffer flush and reports whether concurrent-mark-continue is needed.
     bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
     friend class ZMarkTask;
-    void ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots);
-    void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
-                             const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
-                             const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
-                             MinorSlotSet* consumedOut = nullptr, RemsetScanStats* statsOut = nullptr,
-                             MinorInteriorBaseMap* interiorBasesOut = nullptr,
-                             const ScopedStopTheWorld* stw = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
                                const ScopedStopTheWorld* stw = nullptr) const;
     bool FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw = nullptr) const;

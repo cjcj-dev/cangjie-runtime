@@ -287,8 +287,9 @@ ZPage::ZPage()
       _partition_id(0),
       _virtual(),
       _top(zoffset_end::invalid),
-      _livemap(object_max_count_for(ZPageType::small, 0)),
-      _relocate_promoted(false)
+       _livemap(object_max_count_for(ZPageType::small, 0)),
+       _remembered_set(),
+       _relocate_promoted(false)
     {
         _scratch.allocPtr = reinterpret_cast<uintptr_t>(nullptr);
         _scratch.regionEnd = reinterpret_cast<uintptr_t>(nullptr);
@@ -303,12 +304,23 @@ ZPage::ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem)
       _partition_id(0),
       _virtual(vmem),
       _top(to_zoffset_end(vmem.start())),
-      _livemap(object_max_count_for(type, vmem.size())),
-      _relocate_promoted(false)
+       _livemap(object_max_count_for(type, vmem.size())),
+       _remembered_set(),
+       _relocate_promoted(false)
 {
     _scratch.allocPtr = untype(ZOffset::address_unsafe(vmem.start()));
     _scratch.regionEnd = _scratch.allocPtr + vmem.size();
     reset(age);
+    if (age == PageAge::old) {
+        remset_alloc();
+    }
+}
+
+void ZPage::remset_alloc()
+{
+    CHECK(!_remembered_set.is_initialized());
+    CHECK(!IsYoungRegion());
+    _remembered_set.initialize(size());
 }
 
 const char* ZPage::type_to_string() const

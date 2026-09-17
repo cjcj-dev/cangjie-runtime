@@ -111,7 +111,6 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    heap.GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     ZPage* region = fx.region0;
     region->reset(PageAge::eden);
     region->reset(PageAge::eden);
@@ -353,7 +352,6 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     fixture.region0->reset(PageAge::old);
     GC_EXPECT_FALSE(fixture.region0->is_object_strongly_live(from_object(fixture.obj0)));
     // Seed the real scheduling input through its existing fixture operation.
@@ -386,7 +384,6 @@ void CheckRootStorageSegments(unsigned family)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, 2);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     fixture.region0->reset(family != 0 ? PageAge::eden : PageAge::old);
     auto& finalizers = resources.GetFinalizerProcessor();
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
@@ -463,7 +460,6 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    heap.GetRememberedSet().Initialize(fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     fixture.region0->reset(PageAge::eden);
     std::vector<U64> original;
     for (size_t i = 0; i < sizeof(uintptr_t) * CHAR_BIT; ++i) {

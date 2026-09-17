@@ -449,16 +449,7 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
 #else
     RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
 #endif
-#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    RootVisitor checkedRawRootVisitor = [&remset, &rawRootVisitor](ObjectRef& root) {
-        remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&root));
-        rawRootVisitor(root);
-    };
-    RootVisitor& visitedRawRootVisitor = checkedRawRootVisitor;
-#else
     RootVisitor& visitedRawRootVisitor = rawRootVisitor;
-#endif
     gMinorRootOrigin = "mutator_stack";
     size_t concurrentDone = 0;
     size_t stwFallback = 0;
@@ -642,9 +633,6 @@ public:
     void work() override
     {
         rootsColored.Apply([this](NativeSlot& slot) {
-#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-            Heap::GetHeap().GetRememberedSet().VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&slot));
-#endif
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
             if (CopyCollector::testColoredRootResult) {
@@ -687,9 +675,7 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     }, GetWorkers(GCCycleGeneration::YOUNG).active_workers());
     SuspendibleThreadSetJoiner joiner;
     GetWorkers(GCCycleGeneration::YOUNG).run(&task);
-#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    Heap::GetHeap().GetRememberedSet().CheckStaticCoverageForMinor();
-#endif
+
 }
 
 void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
@@ -1467,6 +1453,18 @@ void ZMark::FollowWorkComplete(bool partial)
     ThreadLocal::FlushCurrentThreadMarkStacks();
 }
 
+bool ZMark::FollowWorkPartial()
+{
+    const uint32_t workerId = WorkerThread::worker_id();
+    MarkContext local(nworkers, workerId, stripes, Stacks());
+    const Result result = FollowWork(local, smr, stripes, terminate, workerId, true,
+                     [this, &local](const MarkStackEntry& entry) { MarkAndFollow(local, entry); },
+                     nullptr, nullptr, this);
+    (void)local.Stacks().Flush(stripes, true);
+    local.Cache().Flush();
+    return result != Result::Aborted;
+}
+
 void ZMark::MarkFollow(bool partial)
 {
     for (;;) {
@@ -1615,15 +1613,12 @@ bool ZMark::FlushStacks()
 namespace {
 bool HeapMarkReady()
 {
-    return Heap::GetHeap().GetRememberedSet().IsInitialized();
+    return true;
 }
 
 bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
 {
-    auto& remembered = Heap::GetHeap().GetRememberedSet();
-    if (remembered.IsInitialized()) {
-        data.storeBarrierBuffer->Flush();
-    }
+    data.storeBarrierBuffer->Flush();
     if (!HeapMarkReady()) {
         return domain != nullptr ? data.FlushMarkStacks(*domain) : false;
     }

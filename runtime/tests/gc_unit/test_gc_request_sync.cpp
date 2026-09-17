@@ -193,13 +193,7 @@ public:
         }
         if (advanceEpoch) {
             youngCycle.Begin(gcIndex);
-            // Begin records the request; the mark-start event advances the
-            // sequence and flips the remembered set (ZGC zGeneration.cpp:871-880).
-            // This request fixture does not initialize or collect the heap.
-            alignas(8) uint64_t storage[16] {};
-            RememberedSet remembered;
-            remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-            GenerationSequenceFixture::AdvanceYoung(youngCycle, remembered);
+            GenerationSequenceFixture::AdvanceYoung(youngCycle);
         }
         size_t runNumber = 0;
         {

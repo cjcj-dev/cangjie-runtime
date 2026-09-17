@@ -1088,7 +1088,6 @@ EXPORTS
     _ZN12MapleRuntime10WCollector19DoGarbageCollectionENS_17GCCycleGenerationE @1124
     _ZN12MapleRuntime10WCollector19FixMinorObjectSlotsEPNS_10BaseObjectE @1125
     _ZN12MapleRuntime10WCollector19ForwardUpdateRawRefERNS_8RootSlotE @1126
-    _ZN12MapleRuntime10WCollector19RescanRememberedSetERNS_9MarkStackIPNS_10BaseObjectEEERKNSt3__113unordered_setIyNS6_4hashIyEENS6_8equal_toIyEENS6_9allocatorIyEEEESG_SG_bPSE_PNS_19DiffPathRemsetStatsE @1128
     _ZN12MapleRuntime10WCollector19ShouldIgnoreRequestERNS_9GCRequestE @1129
     _ZN12MapleRuntime10WCollector19VisitMinorRootSlotsERNSt3__18functionIFvRNS_8RootSlotEEEEy @1130
     _ZN12MapleRuntime10WCollector20EvacuateYoungRegionsERKNSt3__16vectorIPNS_10BaseObjectENS1_9allocatorIS4_EEEERKNS1_13unordered_setIyNS1_4hashIyEENS1_8equal_toIyEENS5_IyEEEE @1131
@@ -1343,7 +1342,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager25MAX_UNIT_COUNT_PER_REGIONE @1443 DATA
     _ZN12MapleRuntime13RegionManager26LockRegionListInSaferegionERNSt3__15mutexE @1446
     _ZN12MapleRuntime13RegionManager27EnlistFullThreadLocalRegionEPNS_10ZPageE @1447
-    _ZN12MapleRuntime13RegionManager27ScrubRememberedSetForRegionEPNS_10ZPageE @1449
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
     _ZN12MapleRuntime13RegionManager29PrepareYoungGarbageCandidatesERKNSt3__18functionIFvPNS_10ZPageEEEE @1451
     _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
@@ -1927,7 +1925,6 @@ EXPORTS
     _ZN12MapleRuntime8HeapImpl12GetAllocatorEv @2173
     _ZN12MapleRuntime8HeapImpl12GetCollectorEv @2174
     _ZN12MapleRuntime8HeapImpl15GetExportObjectEy @2176
-    _ZN12MapleRuntime8HeapImpl16GetRememberedSetEv @2178
     _ZN12MapleRuntime8HeapImpl16VisitStaticRootsERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @2179
     _ZN12MapleRuntime8HeapImpl17RemoveAllocBufferERNS_11AllocBufferE @2180
     _ZN12MapleRuntime8HeapImpl18CrossAccessBarrierEx @2181

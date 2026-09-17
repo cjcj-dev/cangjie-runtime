@@ -7,6 +7,8 @@
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
 
 #include <memory>
 
@@ -51,6 +53,9 @@ void ZPageTable::insert(ZPage* page)
     CHECK(_map.get(offset) == nullptr);
     std::atomic_thread_fence(std::memory_order_release);
     _map.put(offset, page->GetRegionSize(), page);
+    if (!page->IsYoungRegion()) {
+        Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).register_with_remset(page);
+    }
 }
 
 void ZPageTable::remove(ZPage* page)
@@ -67,6 +72,9 @@ void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
     CHECK(_map.offset_for_address(old_page->GetRegionStart(), &offset));
     CHECK(_map.get(offset) == old_page);
     _map.release_put(offset, old_page->GetRegionSize(), new_page);
+    if (!new_page->IsYoungRegion()) {
+        Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).register_with_remset(new_page);
+    }
 }
 
 ZPageTableIterator::ZPageTableIterator(const ZPageTable* table)

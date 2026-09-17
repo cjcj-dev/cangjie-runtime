@@ -81,8 +81,6 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
 {
     PlaceOwnerObjects(fx);
     // Relocation may compact in place and transfer remembered slots.
-    Heap::GetHeap().GetRememberedSet().Initialize(
-        fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     ZPage* region = fx.region0;
     region->SetRegionListOwner(nullptr);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));

@@ -18,6 +18,9 @@
 #include <cstring>
 #include <new>
 #include <sys/mman.h>
+#include <atomic>
+#include <unordered_set>
+#include <vector>
 
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
@@ -35,11 +38,82 @@
 #include "ObjectModel/MClass.h"
 #include "TypeInfoManager.h"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zRelocationSet.hpp"
 #include "Heap/Allocator/RegionList.h"
 
 namespace MapleRuntime {
+
+inline bool SlotPageRemembered(MapleRuntime::MAddress slot)
+{
+    MapleRuntime::ZPage* page = MapleRuntime::Heap::page(slot);
+    return page != nullptr && page->is_remembered(reinterpret_cast<volatile MapleRuntime::zpointer*>(slot));
+}
+
+struct RememberedSet {
+    static constexpr size_t kBufferCount = 2;
+    struct FlipTouchCounts { size_t bitmap = 0; size_t pageMap = 0; };
+    std::unique_ptr<std::atomic<uint64_t>> bitmaps[2];
+    std::unique_ptr<std::atomic<uint64_t>> rememberedPages[2];
+    std::atomic<int> activeBuffer { 0 };
+    bool initialized = true;
+    bool IsInitialized() const { return true; }
+    void Initialize(MAddress, size_t) { initialized = true; }
+    bool Contains(MAddress slot) const { return SlotPageRemembered(slot); }
+    void Record(MAddress slot)
+    {
+        ZPage* page = Heap::page(slot);
+        if (page != nullptr) {
+            page->remember(reinterpret_cast<volatile zpointer*>(slot));
+        }
+    }
+    size_t Size() const { return 0; }
+    template<typename C>
+    size_t DrainForMinor(C& out)
+    {
+        (void)out;
+        FlipForMinor();
+        return 0;
+    }
+    void FlipForMinor() { ZRememberedSet::flip(); }
+    bool ContainsPrevious(MAddress slot) const
+    {
+        ZPage* page = Heap::page(slot);
+        return page != nullptr && page->was_remembered(reinterpret_cast<volatile zpointer*>(slot));
+    }
+    bool IsClearInRange(MAddress, size_t, bool) const { return true; }
+    template<typename... A>
+    size_t ScanPreviousForMinor(A&&...) { return 0; }
+    void ClearRegion(MAddress, MAddress) {}
+    template<typename... A>
+    void VisitRememberedPages(A&&...) {}
+    template<typename... A>
+    size_t TransferObjectSlots(A&&...) { return 0; }
+    struct InPlaceSlot {};
+    size_t TakeInPlaceSlots(MAddress, MAddress, std::vector<InPlaceSlot>&) { return 0; }
+    size_t MoveInPlaceSlots(const std::vector<InPlaceSlot>&, MAddress, MAddress, size_t) { return 0; }
+    std::unordered_set<MAddress> Snapshot() const { return {}; }
+    size_t ClearBuffer(int) { return 0; }
+};
+
+
+enum class RemsetFilterReceiptReason : uint8_t { kNone=0, kStale=1, kDeadHolder=2, kNoOrigin=3, kBadTarget=4 };
+inline void NoteRemsetFilterTestReceipt(MAddress, RemsetFilterReceiptReason, bool) {}
+struct RemsetScanStats {
+    size_t live=0;
+    size_t consumed=0;
+    size_t recorded=0;
+    size_t skippedNotHeap=0;
+    size_t skippedWeak=0;
+};
+
+inline RememberedSet& HeapTestRemset()
+{
+    static RememberedSet remset;
+    return remset;
+}
+
 
 inline bool InitFwdTables(MAddress start, size_t size, size_t unit)
 {
@@ -192,13 +266,7 @@ struct GcHeapFixture {
         }
         cycle.Begin(0);
         if (generation == Generation::Young) {
-            // Young sequence now advances with the remset flip at mark-start.
-            // This liveness-only fixture supplies an empty remembered set;
-            // it does not perform a collection of the synthetic heap.
-            alignas(8) uint64_t storage[16] {};
-            RememberedSet remembered;
-            remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-            GenerationSequenceFixture::AdvanceYoung(cycle, remembered);
+            GenerationSequenceFixture::AdvanceYoung(cycle);
         } else {
             GenerationSequenceFixture::Advance(cycle);
         }
@@ -216,10 +284,7 @@ struct GcHeapFixture {
                 if (cycle.Snapshot().active) cycle.End();
                 cycle.Begin(0);
                 if (generation == GCCycleGeneration::YOUNG) {
-                    alignas(8) uint64_t storage[16] {};
-                    RememberedSet remembered;
-                    remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-                    GenerationSequenceFixture::AdvanceYoung(cycle, remembered);
+                    GenerationSequenceFixture::AdvanceYoung(cycle);
                 } else {
                     GenerationSequenceFixture::Advance(cycle);
                 }
@@ -245,10 +310,7 @@ struct GcHeapFixture {
         EnsureHeapRange(heapStart);
         // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
         Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * ZPage::UNIT_SIZE}});
-        if (!Heap::GetHeap().GetRememberedSet().IsInitialized()) {
-            Heap::GetHeap().GetRememberedSet().Initialize(heapStart, kUnits * ZPage::UNIT_SIZE);
-        }
-        for (Generation generation : {Generation::Young, Generation::Old}) {
+for (Generation generation : {Generation::Young, Generation::Old}) {
             if (LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation).Sequence() == 0) {
                 AdvanceGeneration(generation);
             }

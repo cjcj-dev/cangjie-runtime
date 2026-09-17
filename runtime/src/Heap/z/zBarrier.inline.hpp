@@ -329,7 +329,7 @@ inline void ZBarrier::remember(volatile zpointer* p)
     const MAddress address = reinterpret_cast<MAddress>(p);
     ZPage* page = Heap::page(address);
     if (page != nullptr && !page->IsYoungRegion()) {
-        Heap::GetHeap().GetRememberedSet().Record(address, true);
+        page->remember(reinterpret_cast<volatile zpointer*>(address));
     }
 }
 

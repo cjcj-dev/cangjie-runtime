@@ -145,7 +145,7 @@ public:
 
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
     ssize_t GetHeapPhysicalMemorySize() const override;
-    RememberedSet& GetRememberedSet() override { return rememberedSet; }
+
     FinalizerProcessor& GetFinalizerProcessor() override;
     CollectorResources& GetCollectorResources() override;
     void RegisterAllocBuffer(AllocBuffer& buffer) override;
@@ -186,7 +186,6 @@ private:
     CollectorProxy collectorProxy;
 
     ExportRootTable exportRootsTable;
-    RememberedSet rememberedSet;
 
     // manage gc roots entry
     StaticRootTable staticRootTable;
@@ -210,10 +209,12 @@ void HeapImpl::Init(const HeapParam& param)
     ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
     theSpace->Init(param);
-    rememberedSet.Initialize(theSpace->GetSpaceStartAddress(),
-                             theSpace->GetSpaceEndAddress() - theSpace->GetSpaceStartAddress());
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
+    collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered()->bind(
+        &ZPageTable::heap_table(),
+        &collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table(),
+        &static_cast<RegionSpace*>(theSpace)->GetRegionManager());
     collectorResources.Init();
 }
 
@@ -255,6 +256,10 @@ MAddress HeapImpl::GetSpaceEndAddress() const { return theSpace->GetSpaceEndAddr
 
 Heap& Heap::GetHeap() { return *g_heapInstance; }
 
+ZRemembered& Heap::remembered()
+{
+    return *GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered();
+}
 
 void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
 {
