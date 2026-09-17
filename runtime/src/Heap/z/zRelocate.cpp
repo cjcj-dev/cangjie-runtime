@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zIterator.inline.hpp"
@@ -316,7 +317,7 @@ bool WCollector::Preforward()
         DriverLocker locker(collectorResources);
         // zGeneration.cpp:1054-1063: remap under the driver lock before pausing.
         RemapYoungRoots();
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return false;
         }
         // OpenJDK zGeneration.cpp:1175-1200: isolate pause_relocate_start from the
@@ -897,7 +898,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             fwdTable.PrepareForwardTable<Generation::Young>();
             // ZGenerationYoung::collect: last abortpoint after selection,
             // before relocate-start. Once flipped, finish every remaining page.
-            if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+            if (ZAbort::should_abort()) {
                 return;
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.

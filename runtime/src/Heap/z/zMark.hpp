@@ -78,7 +78,6 @@ public:
     bool FollowWorkPartial();
     void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);
     void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
-    void BindAbort(ZAbort* token) { abortToken = token; }
     bool PollStop();
     MarkStripeSet& Stripes() { return stripes; }
     MarkTerminate& Terminate() { return terminate; }
@@ -121,7 +120,6 @@ private:
     size_t targetNStripes = 0;
     MarkingStacks::MarkingGeneration generation;
     ZWorkers* gcWorkers = nullptr;
-    ZAbort* abortToken = nullptr;
 };
 
 } // namespace MapleRuntime

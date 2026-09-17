@@ -8,8 +8,7 @@
 namespace MapleRuntime {
 inline bool GenerationCycle::IsPhaseMark() const
 {
-    const auto value = Phase();
-    return value == GC_PHASE_ENUM || value == GC_PHASE_TRACE || value == GC_PHASE_CLEAR_SATB_BUFFER;
+    return is_phase_mark();
 }
 
 // ZGeneration::mark_object / mark_object_if_active (zGeneration.inline.hpp:118-129).

@@ -31,6 +31,7 @@
 #include "Mutator/MutatorManager.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorProxy.h"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/Collector/GcStats.h"
@@ -596,14 +597,11 @@ GC_TEST(GcRequestSync, PendingReceiptProcessesCurrentThreadHandshake)
     GC_EXPECT_FALSE(state.operation_pending(&operation));
 }
 
-GC_TEST(GcRequestSync, DriverAbortIsCooperativeAndResettable)
+GC_TEST(GcRequestSync, DriverAbortIsCooperative)
 {
-    GCDriverPort port(GCDriverKind::MAJOR);
-    GC_EXPECT_FALSE(port.Abort().Poll());
-    port.Abort().Request();
-    GC_EXPECT_TRUE(port.Abort().Poll());
-    port.Abort().Reset();
-    GC_EXPECT_FALSE(port.Abort().Poll());
+    GC_EXPECT_FALSE(ZAbort::should_abort());
+    ZAbort::abort();
+    GC_EXPECT_TRUE(ZAbort::should_abort());
 }
 
 GC_TEST(GcRequestSync, StoppedPortWakesSynchronousWaiter)
@@ -689,11 +687,10 @@ GC_TEST(GcRequestSync, DriverReceiptAbortAfterDequeueIsFalse)
     const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
     GCDriverRequest request {};
     const bool dequeued = port.TryDequeue(request);
-    port.Abort().Request();
+    ZAbort::abort();
     const bool executed = dequeued && CollectorResourcesTestPeer::ProcessDriverRequest(resources, port, request);
     const bool ack = port.WaitForAck(receipt);
     const size_t executeCount = collector.RunCount();
-    port.Abort().Reset();
     CollectorResourcesTestPeer::Destroy(resources);
 
     std::fprintf(stderr, "DETAIL receipt_abort_after_dequeue execute=%zu ack=%d\n", executeCount, ack);
@@ -901,7 +898,7 @@ GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
             resources, GCDriverRequest { 2, GC_REASON_FORCE, false, {} }));
     });
     GC_EXPECT_TRUE(collector.WaitForRuns(1));
-    resources.GetMajorDriverPort().Abort().Request();
+    ZAbort::abort();
     collector.ReleaseOne();
     GC_EXPECT_EQ(completedFuture.wait_for(std::chrono::seconds(1)), std::future_status::ready);
     const bool completed = completedFuture.get();
@@ -909,7 +906,6 @@ GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
     GC_EXPECT_FALSE(completed);
     GC_EXPECT_EQ(collector.RunCount(), 1u);
     GC_EXPECT_EQ(collector.ReasonAt(0), GC_REASON_YOUNG);
-    resources.GetMajorDriverPort().Abort().Reset();
     CollectorResourcesTestPeer::Destroy(resources);
 }
 
@@ -936,7 +932,7 @@ GC_TEST(GcRequestSync, AbortDuringOldReturnsCancelledAfterCollectionJoins)
     GC_EXPECT_TRUE(collector.WaitForRuns(2));
     collector.ReleaseOne();
     GC_EXPECT_TRUE(collector.WaitForRuns(3));
-    port.Abort().Request();
+    ZAbort::abort();
     // The collection still owns its resources until it returns.
     GC_EXPECT_TRUE(result.wait_for(std::chrono::seconds(0)) != std::future_status::ready);
     collector.ReleaseOne();
@@ -945,7 +941,6 @@ GC_TEST(GcRequestSync, AbortDuringOldReturnsCancelledAfterCollectionJoins)
     GC_EXPECT_FALSE(result.get());
     GC_EXPECT_FALSE(port.WaitForAck(receipt));
     GC_EXPECT_EQ(CollectorResourcesTestPeer::CompletionCount(resources), 0u);
-    port.Abort().Reset();
     CollectorResourcesTestPeer::Destroy(resources);
 }
 

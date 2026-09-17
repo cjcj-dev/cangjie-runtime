@@ -224,7 +224,7 @@ void ZVerify::Objects(bool verifyWeaks)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
-    if (Heap::GetHeap().GetCollectorResources().GetYoungDriverPort().Abort().IsRequested()) { return; }
+    if (ZAbort::should_abort()) { return; }
     const auto young = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
     const auto old = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
     DCHECK(young.phase == GC_PHASE_MARK_COMPLETE || old.phase == GC_PHASE_MARK_COMPLETE);
@@ -347,7 +347,7 @@ void ZVerify::AfterRelocation(ZForwarding* forwarding)
 void ZVerify::AfterScan(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr ||
-        Heap::GetHeap().GetCollectorResources().GetYoungDriverPort().Abort().IsRequested()) { return; }
+        ZAbort::should_abort()) { return; }
     const auto phase = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD).phase;
     if ((phase != GC_PHASE_FORWARD && phase != GC_PHASE_PREFORWARD) ||
         !forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }

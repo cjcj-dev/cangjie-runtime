@@ -131,8 +131,8 @@ void CollectorResources::StopGCThreads()
     }
     // zCollectedHeap.cpp:106 ZAbort::abort(): cancel in-flight collections
     // before any GC thread is asked to terminate.
-    minorDriverPort.Abort().Request();
-    majorDriverPort.Abort().Request();
+    ZAbort::abort();
+    ZAbort::abort();
     for (ZThread* thread : { static_cast<ZThread*>(director), static_cast<ZThread*>(majorDriver),
                              static_cast<ZThread*>(minorDriver) }) {
         thread->stop();
@@ -205,7 +205,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     Collector* collector = static_cast<Collector*>(&collectorProxy);
 #endif
     GCDriverPort& port = request.reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
-    if (port.Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return false;
     }
     GCIdMark gcId;
@@ -248,7 +248,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         if (preclean) {
             RunYoungCollection(*collector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
             accumulate(GCCycleGeneration::YOUNG);
-            if (majorDriverPort.Abort().Poll()) {
+            if (ZAbort::should_abort()) {
                 CancelDriverRequestLifecycle(port.Kind());
                 return false;
             }
@@ -261,7 +261,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
             testAfterYoungPrelude();
         }
 #endif
-        if (majorDriverPort.Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             CancelDriverRequestLifecycle(port.Kind());
             return false;
         }
@@ -283,7 +283,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         .RegisterEnd(TimeUtil::NanoSeconds() - collectionStart);
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.
-    if (port.Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         CancelDriverRequestLifecycle(port.Kind());
         return false;
     }
@@ -298,7 +298,7 @@ bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriver
     DriverLocker locker(*this);
     const bool major = port.Kind() == GCDriverKind::MAJOR;
     if (major) ZBreakpoint::AtBeforeGC();
-    if (port.Abort().Poll() || !ExecuteDriverRequest(request)) {
+    if (ZAbort::should_abort() || !ExecuteDriverRequest(request)) {
         port.Cancel(request);
         CompleteDriverRequest(port);
         return false;
@@ -471,7 +471,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 
     GCDriverPort& port = reason == GC_REASON_YOUNG ? collectorResources.GetYoungDriverPort() :
                                                    collectorResources.GetMajorDriverPort();
-    if (port.Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         // The phase owner already joined any submitted work. Keep mark and
         // forwarding storage alive for driver shutdown; skip normal reclaim.
         GetWorkers(generation).set_inactive();

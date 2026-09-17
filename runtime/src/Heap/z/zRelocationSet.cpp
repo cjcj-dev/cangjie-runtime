@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAbort.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/Allocator/RegionList.h"
 #include "Heap/z/zAddress.hpp"
@@ -72,7 +73,7 @@ void WCollector::PostTrace()
     CollectPinnedGarbage();
     // zGeneration.cpp:1042 / :1131-1133: reset previous set before select.
     Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).reset_relocation_set();
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     RefineFromSpace();

@@ -420,7 +420,7 @@ void WCollector::TraceHeap()
         }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         DoTracing(workStack, foreignStack);
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return;
         }
 
@@ -853,7 +853,6 @@ void WCollector::StartYoungMarkWork()
 {
     ZWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
     youngCycle.Mark().BindWorkers(&workers);
-    youngCycle.Mark().BindAbort(&collectorResources.GetYoungDriverPort().Abort());
     youngCycle.Mark().Start();
     MarkingStacks::VerifyEmpty(youngCycle.Mark().Stripes().Population());
 }
@@ -887,7 +886,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, false);
     workersSet.run(&task);
-    if (!collectorResources.GetYoungDriverPort().Abort().Poll()) {
+    if (!ZAbort::should_abort()) {
         MarkingStacks::VerifyEmpty(domain.Stripes().Population());
         CHECK_DETAIL(domain.Stripes().IsEmpty(),
                      "young striped closure returned without coordinated worker termination");
@@ -948,7 +947,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
             }
             TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
         }
-        if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return false;
         }
     } while (youngCycle.Mark().TryTerminateFlush());
@@ -1128,7 +1127,6 @@ void CopyCollector::StartOldMarkWork()
     // domain before publishing old's mark phase to mutators and young workers.
     ZWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
     oldCycle.Mark().BindWorkers(&workers);
-    oldCycle.Mark().BindAbort(&collectorResources.GetMajorDriverPort().Abort());
     oldCycle.Mark().Start();
 }
 
@@ -1151,11 +1149,10 @@ size_t CopyCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
     ZWorkers& workersSet = GetWorkers(GCCycleGeneration::OLD);
     ZMark& domain = oldCycle.Mark();
     domain.BindWorkers(&workersSet);
-    domain.BindAbort(&collectorResources.GetMajorDriverPort().Abort());
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, partial);
     workersSet.run(&task);
-    if (!partial && !collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (!partial && !ZAbort::should_abort()) {
         CHECK_DETAIL(domain.Stripes().IsEmpty(),
                      "major striped closure returned without coordinated worker termination");
     }
@@ -1173,7 +1170,7 @@ void CopyCollector::TracingImpl(WorkStack& workStack)
 void CopyCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
 {
     while (!foreignRootsSet.empty()) {
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return;
         }
         const MarkStackEntry entry = foreignRootsSet.back();
@@ -1481,7 +1478,7 @@ void ZMark::MarkFollow(bool partial)
     for (;;) {
         ZMarkTask task(this, partial);
         gcWorkers->run(&task);
-        if ((abortToken != nullptr && abortToken->Poll()) || !TryTerminateFlush()) {
+        if (ZAbort::should_abort() || !TryTerminateFlush()) {
             break;
         }
     }
@@ -1602,7 +1599,7 @@ void ZMark::FinishWork()
 
 bool ZMark::PollStop()
 {
-    if (abortToken != nullptr && abortToken->Poll()) {
+    if (ZAbort::should_abort()) {
         return true;
     }
     if (gcWorkers != nullptr && gcWorkers->should_worker_resize()) {

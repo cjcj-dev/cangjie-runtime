@@ -53,6 +53,12 @@ public:
     const ZMark& Mark() const { return *mark; }
     ZMark* MarkPtr() { return mark.get(); }
     const ZMark* MarkPtr() const { return mark.get(); }
+    enum class Phase { Mark, MarkComplete, Relocate };
+    void set_phase(Phase new_phase);
+    bool is_phase_relocate() const { return _phase == Phase::Relocate; }
+    bool is_phase_mark() const { return _phase == Phase::Mark; }
+    bool is_phase_mark_complete() const { return _phase == Phase::MarkComplete; }
+    const char* phase_to_string() const;
     bool IsPhaseMark() const;
     double FragmentationLimit() const;
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
@@ -124,6 +130,7 @@ public:
     std::atomic<ZYoungType> youngType { ZYoungType::none };
     std::atomic<GCReason> reason { GC_REASON_USER };
     std::atomic<GCPhase> phase { GC_PHASE_IDLE };
+    Phase _phase { Phase::Relocate };
     bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;

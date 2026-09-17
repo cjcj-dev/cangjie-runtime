@@ -17,6 +17,7 @@
 #include "Heap/z/zThread.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Inspector/CjHeapData.h"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zResurrection.inline.hpp"
 
@@ -105,7 +106,7 @@ public:
     GCDriverPort& GetYoungDriverPort();
     void RequestAbort(GCDriverKind kind)
     {
-        (kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort).Abort().Request();
+        ZAbort::abort();
     }
 
 #if defined(MRT_TESTABLE_INTERNALS)

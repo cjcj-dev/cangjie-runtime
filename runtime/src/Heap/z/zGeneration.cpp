@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
@@ -134,6 +135,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
         CHECK(sequence != UINT64_MAX);
         ++sequence;
     }
+    set_phase(Phase::Mark);
     PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
@@ -194,6 +196,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
         ++sequence;
     }
     pinnedLock.unlock();
+    set_phase(Phase::Mark);
     PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
@@ -444,7 +447,7 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
                           reachableSlotDomain);
     }
-    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     {
@@ -456,7 +459,7 @@ void WCollector::DoYoungGarbageCollection()
     // and the concurrent mark-follow consumer has not started yet.
     PublishExportRootAfterT1TestReceipt();
 #endif
-    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     for (;;) {
@@ -526,7 +529,7 @@ void WCollector::DoYoungGarbageCollection()
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
     }
     ReportMarkTerminateContinue();
-    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     {
@@ -618,7 +621,7 @@ void WCollector::DoYoungGarbageCollection()
             GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::major_full_preclean);
     }
 
-    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     size_t allocatedBefore = space.AllocatedBytes();
@@ -640,7 +643,7 @@ void WCollector::DoYoungGarbageCollection()
     const bool refFixSlotsCoveredByReachable = false;
     EvacuateYoungRegions(reachableVec, consumedSlots, refFixSlotsCoveredByReachable,
                          remsetInteriorBases, &stw);
-    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     size_t allocatedAfter = space.AllocatedBytes();
@@ -760,7 +763,7 @@ bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsS
     ProcessExportRoots(foreignRootsSet);
     // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
     // to the phase owner before verification or publishing mark completion.
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return false;
     }
     MarkingStacks::VerifyAllEmpty(oldCycle.Mark());
@@ -991,6 +994,24 @@ void GenerationCycle::PublishPhase(GCPhase value)
     phase.store(value, std::memory_order_release);
 }
 
+void GenerationCycle::set_phase(Phase new_phase)
+{
+    _phase = new_phase;
+}
+
+const char* GenerationCycle::phase_to_string() const
+{
+    switch (_phase) {
+        case Phase::Mark:
+            return "Mark";
+        case Phase::MarkComplete:
+            return "MarkComplete";
+        case Phase::Relocate:
+            return "Relocate";
+    }
+    return "Unknown";
+}
+
 void GenerationCycle::End()
 {
     std::lock_guard<std::mutex> lock(mutex);
@@ -1026,11 +1047,11 @@ void WCollector::DoGarbageCollection(GCCycleGeneration generation)
     // ZGenerationCollectionScopeOld: overlap young with the old body.
     DriverUnlocker unlocker(collectorResources);
     TraceHeap();
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     PostTrace();
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
 
@@ -1042,7 +1063,7 @@ void WCollector::DoGarbageCollection(GCCycleGeneration generation)
 
     ForwardFromSpace(GCCycleGeneration::OLD);
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions(GCCycleGeneration::OLD);
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
 
@@ -1207,22 +1228,22 @@ void CopyCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
 
     // ZGenerationOld::collect (zGeneration.cpp:1020-1030): mark-follow
     // returns to the phase owner before any mark-end retry consumes stripes.
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     while (!TryEndOldMark(workStack, foreignRootsSet)) {
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return;
         }
         MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
         TransitionToGCPhase(GC_PHASE_TRACE, true);
         TracingImpl(workStack);
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return;
         }
     }
 
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (ZAbort::should_abort()) {
         return;
     }
     // ZGenerationOld::collect processes non-strong references only after the

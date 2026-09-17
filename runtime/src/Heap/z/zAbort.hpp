@@ -8,19 +8,22 @@
 
 namespace MapleRuntime {
 
-// Cooperative cancellation token modelled after ZGC's ZAbort (zAbort.hpp:30-45).
-// A driver owns one token for its cycle; polling is deliberately cheap and safe
-// from worker code, while Request() is used by the peer driver or shutdown path.
+// ZGC zAbort.hpp:30-45 AllStatic + abortpoint()
 class ZAbort {
 public:
-    void Request();
-    void Reset() { requested.store(false, std::memory_order_release); }
-    bool IsRequested() const;
-    bool Poll() const;
+    static bool should_abort();
+    static void abort();
 
 private:
-    std::atomic<bool> requested { false };
+    static std::atomic<bool> _should_abort;
 };
+
+#define abortpoint()                  \
+    do {                              \
+        if (ZAbort::should_abort()) { \
+            return;                   \
+        }                             \
+    } while (false)
 
 } // namespace MapleRuntime
 
