@@ -42,3 +42,18 @@ GC_TEST(ZAbort, AllStaticAbortpoint)
     ZAbort::reset();
     GC_EXPECT_TRUE(!ZAbort::should_abort());
 }
+
+GC_TEST(ZGeneration, FreedPromotedCompactedAtomics)
+{
+    Heap::GetHeap();
+    ZGenerationYoung* young = ZGeneration::young();
+    young->reset_statistics();
+    GC_EXPECT_EQ(young->freed(), static_cast<size_t>(0));
+    young->increase_freed(16);
+    young->increase_promoted(8);
+    young->increase_compacted(4);
+    GC_EXPECT_EQ(young->freed(), static_cast<size_t>(16));
+    GC_EXPECT_EQ(young->promoted(), static_cast<size_t>(8));
+    GC_EXPECT_EQ(young->compacted(), static_cast<size_t>(4));
+    young->reset_statistics();
+}

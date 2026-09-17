@@ -350,12 +350,23 @@ public:
 
 class VM_ZMarkEndOld : public VM_ZOperation {
 public:
-    bool do_operation() override { return true; }
+    bool do_operation() override
+    {
+        ZGeneration::old()->set_phase(ZGeneration::Phase::MarkComplete);
+        return true;
+    }
 };
 
 class VM_ZRelocateStartOld : public VM_ZOperation {
 public:
-    bool do_operation() override { return true; }
+    bool do_operation() override
+    {
+        ZGlobalsPointers::flip_old_relocate_start();
+        ZVerify::OnColorFlip();
+        ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
+        ZGeneration::old()->RecordYoungSequenceAtRelocateStart(ZGeneration::young()->Sequence());
+        return true;
+    }
     bool block_jni_critical() const override { return true; }
 };
 
