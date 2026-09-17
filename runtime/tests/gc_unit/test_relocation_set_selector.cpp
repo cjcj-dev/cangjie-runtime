@@ -82,7 +82,7 @@ GC_TEST(RelocationSetSelector, SemiSortUsesPartitionFingers)
     selector.register_live_page(highLive);
     selector.select();
     GC_EXPECT_TRUE(selector.selected_small()->length() >= 2);
-    GC_EXPECT_EQ(selector.selected_small()->at(0), lowLive);
+    GC_EXPECT_TRUE(selector.selected_small()->at(0) == lowLive);
 }
 
 GC_TEST(RelocationSetSelector, FragmentationLimitStopsPrefix)
