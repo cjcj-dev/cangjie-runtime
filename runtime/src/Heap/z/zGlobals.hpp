@@ -8,15 +8,6 @@
 #include <cstdint>
 #include "Common/TypeDef.h"
 namespace MapleRuntime {
-// GCPhase describes phases for stw/concurrent gc.
-enum GCPhase : uint8_t {
-    GC_PHASE_UNDEF = 0,
-    GC_PHASE_IDLE = 1,
-    GC_PHASE_ENUM = 9,
-    GC_PHASE_FORWARD = 14,
-    GC_PHASE_MARK_COMPLETE = 15,
-};
-
 }
 
 namespace MapleRuntime {

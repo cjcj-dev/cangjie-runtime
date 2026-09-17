@@ -352,7 +352,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
         if (ZPage::heapStartAddress == heapStart &&
-            Heap::GetHeap().GetGCPhase(GCCycleGeneration::YOUNG) != GCPhase::GC_PHASE_UNDEF) {
+            Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG).Snapshot().active) {
             Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
             Heap::GetHeap().GetCollector().GetZGeneration(Generation::Old).reset_relocation_set();
         }

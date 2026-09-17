@@ -153,9 +153,9 @@ public:
     bool TlsHasMarkFlushPending(ThreadLocalData* tls);
 
     // Some functions about stw
-    void StopTheWorld(bool syncGCPhase, GCPhase phase);
+    void StopTheWorld();
     void StartTheWorld() noexcept;
-    void StartLightSync(bool syncGCPhase, GCPhase phase);
+    void StartLightSync();
     void StopLightSync() noexcept;
     void WaitUntilAllMutatorStopped();
     void DumpMutators(uint32_t timeoutTimes);
@@ -199,9 +199,6 @@ public:
     void SyncMutexLock() { syncMutex.lock(); }
 
     void SyncMutexUnlock() noexcept { syncMutex.unlock(); }
-
-    void EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &undoneMutators);
-    void TransitionAllMutatorsToGCPhase(GCPhase phase, bool young = false);
 
     static bool ConcurrentStackScanEnabled();
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -352,8 +349,6 @@ public:
     std::atomic<bool> syncTriggered = { false };
     std::atomic<bool> worldStopped = { false };
     std::list<Mutator*> undoneLightSyncMutators;
-    GCPhase lightSyncGCPhase;
-    bool lightSyncDidPhase = false;
 
     // Runtime mutators are not necessarily owned by a scheduler CJThread, so
     // keep them in the same participant inventory explicitly.
@@ -379,13 +374,12 @@ public:
 // Scoped stop the world.
 class ScopedStopTheWorld {
 public:
-    __attribute__((always_inline)) explicit ScopedStopTheWorld(const char* gcReason, bool syncGCPhase = false,
-        GCPhase phase = GC_PHASE_IDLE) : reason(gcReason)
+    __attribute__((always_inline)) explicit ScopedStopTheWorld(const char* gcReason, bool = false,
+        int = 0) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
-        // Preserve the GCLOG phase-kind observation across rendezvous and held time.
         ZStat::EnterStwScope();
-        MutatorManager::Instance().StopTheWorld(syncGCPhase, phase);
+        MutatorManager::Instance().StopTheWorld();
         stoppedTime = TimeUtil::NanoSeconds();
     }
 
@@ -414,14 +408,12 @@ private:
 // Scoped light sync.
 class ScopedLightSync {
 public:
-    __attribute__((always_inline)) explicit ScopedLightSync(const char* gcReason, bool syncGCPhase = false,
-        GCPhase phase = GC_PHASE_IDLE) : reason(gcReason)
+    __attribute__((always_inline)) explicit ScopedLightSync(const char* gcReason, bool = false,
+        int = 0) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
-        // StartLightSync parks every mutator, so phases entered anywhere in this scope
-        // are observed as paused, just like phases in ScopedStopTheWorld.
         ZStat::EnterStwScope();
-        MutatorManager::Instance().StartLightSync(syncGCPhase, phase);
+        MutatorManager::Instance().StartLightSync();
         stoppedTime = TimeUtil::NanoSeconds();
     }
 

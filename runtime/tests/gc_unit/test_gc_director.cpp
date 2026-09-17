@@ -361,13 +361,13 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     old.InitializeWorkers(2);
     young.SelectReason(GC_REASON_YOUNG);
     young.Begin(1);
-    young.PublishPhase(GC_PHASE_ENUM);
+    young.PublishPhase(ZGenerationPhase::Mark);
     young.Workers()->set_active_workers(1);
     const auto before = young.Snapshot();
 
     old.SelectReason(GC_REASON_USER);
     old.Begin(2);
-    old.PublishPhase(GC_PHASE_FORWARD);
+    old.PublishPhase(ZGenerationPhase::Relocate);
     old.Workers()->set_active_workers(2);
 
     const auto after = young.Snapshot();

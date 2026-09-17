@@ -122,9 +122,6 @@ public:
     void object_iterate(ObjectClosure* object_cl, bool visit_weaks);
     void object_and_field_iterate_for_verify(ObjectClosure* object_cl, bool visit_weaks);
 
-    virtual GCPhase GetGCPhase(GCCycleGeneration generation) const = 0;
-    virtual void SetGCPhase(GCCycleGeneration generation, GCPhase phase) = 0;
-
     virtual bool ForEachObj(const std::function<void(BaseObject*)>&, bool safe) const = 0;
 
     virtual void RegisterStaticRoots(Uptr, U32) = 0;

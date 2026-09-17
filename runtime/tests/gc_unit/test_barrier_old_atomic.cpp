@@ -138,7 +138,6 @@ class MutatorScope final {
 public:
     explicit MutatorScope(Mutator& mutator) : saved(ThreadLocal::GetMutator())
     {
-        mutator.SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
         ThreadLocal::SetMutator(&mutator);
     }
     ~MutatorScope() { ThreadLocal::SetMutator(saved); }
@@ -154,16 +153,16 @@ public:
           reason(resources.GetGCStats().reason)
     {
         RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-        phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
+        phase = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD).GcPhase();
         activityCycle = &Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
         ownerWasActive = activityCycle->Snapshot().active;
         if (!ownerWasActive) activityCycle->Begin(1);
         resources.GetGCStats().reason = GC_REASON_USER;
-        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
+        Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Mark);
     }
     ~MarkWindowScope()
     {
-        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, phase);
+        Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD).set_phase(phase);
         resources.GetGCStats().reason = reason;
         if (!ownerWasActive) activityCycle->End();
     }
@@ -174,7 +173,7 @@ private:
     ZGeneration* activityCycle = nullptr;
     bool ownerWasActive = false;
     GCReason reason;
-    GCPhase phase = GCPhase::GC_PHASE_IDLE;
+    ZGenerationPhase phase = ZGenerationPhase::Relocate;
 };
 
 zpointer LoadBadPointer(BaseObject* object)

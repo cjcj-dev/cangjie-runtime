@@ -169,7 +169,6 @@ extern "C" void MRT_PreRunManagedCode(Mutator* mutator, int layers, ThreadLocalD
     }
 #endif
     uwContext.GoIntoManagedCode();
-    mutator->SetMutatorPhase(GCPhase::GC_PHASE_IDLE);
     mutator->InitStackInfo(threadData);
 }
 } // namespace MapleRuntime

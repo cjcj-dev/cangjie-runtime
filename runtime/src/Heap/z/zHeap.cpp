@@ -127,8 +127,6 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType) override;
 
-    GCPhase GetGCPhase(GCCycleGeneration generation) const override;
-    void SetGCPhase(GCCycleGeneration generation, const GCPhase phase) override;
     Collector& GetCollector() override;
     Allocator& GetAllocator() override;
 
@@ -239,10 +237,6 @@ void HeapImpl::Fini()
 Collector& HeapImpl::GetCollector() { return collectorProxy.GetCurrentCollector(); }
 
 Allocator& HeapImpl::GetAllocator() { return *theSpace; }
-
-GCPhase HeapImpl::GetGCPhase(GCCycleGeneration generation) const { return collectorProxy.GetGCPhase(generation); }
-
-void HeapImpl::SetGCPhase(GCCycleGeneration generation, const GCPhase phase) { collectorProxy.SetGCPhase(generation, phase); }
 
 size_t HeapImpl::GetMaxCapacity() const { return theSpace->GetMaxCapacity(); }
 

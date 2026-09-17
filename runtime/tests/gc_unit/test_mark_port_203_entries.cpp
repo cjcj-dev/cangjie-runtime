@@ -321,7 +321,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     }
     collector.GetZGeneration(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
         .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
-    collector.SetGCPhase(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG, major ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_MARK_COMPLETE);
+    collector.GetZGeneration(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(children.back());

@@ -40,8 +40,6 @@ public:
     Collector();
     virtual ~Collector();
 
-    static const char* GetGCPhaseName(GCPhase phase);
-
     // Initializer and finalizer.
     virtual void Init() = 0;
     virtual void Fini() {}
@@ -52,13 +50,6 @@ public:
     // async:  Trigger from unsafe context, e.g., holding a lock, in the middle of an allocation.
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
     void RequestGC(GCReason reason, bool async);
-
-    virtual GCPhase GetGCPhase(GCCycleGeneration generation) const { return GetZGeneration(generation).GcPhase(); }
-
-    virtual void SetGCPhase(GCCycleGeneration generation, const GCPhase phase)
-    {
-        PublishGenerationPhase(generation, phase);
-    }
 
     virtual ZGeneration& GetZGeneration(GCCycleGeneration generation)
     {
@@ -88,7 +79,7 @@ public:
     {
         return GetZGeneration(generation).Snapshot();
     }
-    virtual void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value);
+    virtual void PublishGenerationPhase(GCCycleGeneration generation, ZGenerationPhase value);
     bool OldActiveRemsetIsCurrent() const
     {
         return GetZGeneration(GCCycleGeneration::OLD).ActiveRemsetIsCurrent(

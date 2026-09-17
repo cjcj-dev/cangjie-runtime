@@ -163,7 +163,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     selected.PrependRegion(region);
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_FORWARD);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     manager.CompactRegion(region);
@@ -205,7 +205,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         return;
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::MarkComplete);
     Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
     // Observe the product's published old mark stacks after the root task
     // returned and before follow starts (testOldMarkStarted fires at the top
@@ -269,7 +269,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
             workerSawParked = true;
         }
     };
-    collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_ENUM);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Mark);
     collector.StartOldMarkWork();
     RelocationReceiptTestAccess::RunOldRoots(collector);
     collector.testOldMarkThreadResult = nullptr;
@@ -312,7 +312,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     fx.region0->reset(PageAge::eden);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_ENUM);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).set_phase(ZGenerationPhase::Mark);
     collector.StartYoungMarkWork();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.

@@ -250,12 +250,12 @@ bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
     return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
 }
 
-void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
+void Collector::PublishGenerationPhase(GCCycleGeneration generation, ZGenerationPhase value)
 {
     ZGeneration& cycle = GetZGeneration(generation);
-    const GCPhase before = cycle.GcPhase();
+    const ZGenerationPhase before = cycle.GcPhase();
     if (generation == GCCycleGeneration::OLD &&
-        value == GCPhase::GC_PHASE_FORWARD && before != GCPhase::GC_PHASE_FORWARD) {
+        value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
         oldCycle.RecordYoungSequenceAtRelocateStart(youngCycle.Sequence());
     }
     cycle.PublishPhase(value);
@@ -1142,20 +1142,6 @@ namespace MapleRuntime {
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
-GCPhase ZGeneration::GcPhase() const
-{
-    if (!active) {
-        return GC_PHASE_IDLE;
-    }
-    if (_phase == Phase::Mark) {
-        return GC_PHASE_ENUM;
-    }
-    if (_phase == Phase::MarkComplete) {
-        return GC_PHASE_MARK_COMPLETE;
-    }
-    return GC_PHASE_FORWARD;
-}
-
 GCCycleSnapshot ZGeneration::Snapshot() const
 {
     std::lock_guard<std::mutex> lock(mutex);
@@ -1178,15 +1164,9 @@ void ZGeneration::Begin(uint64_t index)
     active = true;
 }
 
-void ZGeneration::PublishPhase(GCPhase value)
+void ZGeneration::PublishPhase(ZGenerationPhase value)
 {
-    if (value == GC_PHASE_ENUM) {
-        set_phase(Phase::Mark);
-    } else if (value == GC_PHASE_MARK_COMPLETE) {
-        set_phase(Phase::MarkComplete);
-    } else if (value == GC_PHASE_FORWARD) {
-        set_phase(Phase::Relocate);
-    }
+    set_phase(value);
 }
 
 void ZGeneration::log_phase_switch(Phase from, Phase to)

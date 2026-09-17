@@ -55,7 +55,7 @@ struct PartialArrayTestAccess {
                 old.Begin(0);
             }
             c.StartOldMarkWork();
-            old.PublishPhase(GC_PHASE_ENUM);
+            old.PublishPhase(ZGenerationPhase::Mark);
         };
         arm(collector);
         arm(heap);

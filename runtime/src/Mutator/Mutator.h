@@ -72,7 +72,6 @@ public:
     {
         gcData.Attach(this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
         observerCnt = 0;
-        mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
         stackWatermark.Reset();
 
@@ -99,7 +98,6 @@ public:
         Mutator* mutator = new (std::nothrow) Mutator();
         CHECK_DETAIL(mutator != nullptr, "new Mutator failed");
         mutator->Init();
-        mutator->SetMutatorPhase(GCPhase::GC_PHASE_IDLE);
         return mutator;
     }
 
@@ -335,21 +333,16 @@ public:
 
     void WaitForCpuProfiling() const;
 
-    bool GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
+    bool GcPhaseEnum(bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
     AllocBuffer* GetAllocBuffer() const { return foreignThreadInfo.allocBuffer; }
     void SetAllocBuffer(AllocBuffer* buffer) { foreignThreadInfo.allocBuffer = buffer; }
-    inline void GCPhasePreForward(GCPhase newPhase);
-    inline void HandleGCPhase(GCPhase newPhase);
-    inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
+    inline void GCPhasePreForward();
     inline void HandleGCPhaseIDLE();
     inline void ForwardLocalFinalizers(Collector& collector);
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();
-
-    void TransitionToGCPhaseExclusive(GCPhase newPhase);
-    void TransitionToGCPhaseExclusive(GCPhase newPhase, bool bySelf);
 
     void TransitionToCpuProfileExclusive();
 
@@ -357,16 +350,6 @@ public:
     __attribute__((always_inline)) inline bool TransitionGCPhase(bool bySelf);
 
     bool TransitionToCpuProfile(bool bySelf);
-
-    __attribute__((always_inline)) inline void SetMutatorPhase(const GCPhase newPhase)
-    {
-        mutatorPhase.store(newPhase, std::memory_order_release);
-    }
-
-    __attribute__((always_inline)) inline GCPhase GetMutatorPhase() const
-    {
-        return mutatorPhase.load(std::memory_order_acquire);
-    }
 
     void VisitProcessedRoots(const RootVisitor& visitor);
     void VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor);
@@ -399,8 +382,8 @@ public:
 
     void DumpMutator() const
     {
-        LOG(RTLOG_ERROR, "mutator %p: inSaferegion %x, tid %u, observerCnt %zu, gc phase: %u, suspension request %u",
-            this, inSaferegion.load(std::memory_order_relaxed), tid, observerCnt.load(), mutatorPhase.load(),
+        LOG(RTLOG_ERROR, "mutator %p: inSaferegion %x, tid %u, observerCnt %zu, suspension request %u",
+            this, inSaferegion.load(std::memory_order_relaxed), tid, observerCnt.load(),
             suspensionFlag.load());
     }
 
@@ -586,9 +569,6 @@ protected:
 
 private:
     NativeRootHandles& GetLocalFinalizers() { return localFinalizers; }
-    // Indicate the current mutator phase and use which barrier in concurrent gc
-    // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
-    std::atomic<GCPhase> mutatorPhase = { GCPhase::GC_PHASE_UNDEF };
     // thread id
     uint32_t tid = 0;
     // cjthread ptr

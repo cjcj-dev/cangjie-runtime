@@ -436,7 +436,6 @@ bool MRT_NewForeignCJThread()
         ThreadLocal::SetProtectAddr(nullptr);
     }
     mutator->InitForeignCJThread();
-    mutator->SetMutatorPhase(GCPhase::GC_PHASE_IDLE);
     mutatorManager.MutatorManagementRUnlock();
     // N2C stubs call MRT_LeaveSaferegion next (all N2CStub.S); mirror MRT_PreRunManagedCode.
     if (UNLIKELY(mutatorManager.SyncTriggered())) {
@@ -575,7 +574,6 @@ void* NewFinalizerCJThread()
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
     ThreadLocal::SetMutator(mutator);
-    mutator->SetMutatorPhase(GCPhase::GC_PHASE_IDLE);
     MutatorManager::Instance().MutatorManagementRUnlock();
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
     // Managed-entry setup may block on sync/STW, so do not hold the mutator

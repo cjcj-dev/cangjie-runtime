@@ -46,7 +46,7 @@ extern "C" uintptr_t MRT_GetThreadLocalData()
         // Since the TBI(top bit ignore) feature in Aarch64,
         // set gc phase to high 8-bit of ThreadLocalData Address for gc barrier fast path.
         // 56: make gcphase value shift left 56 bit to set the high 8-bit
-        tlDataAddr = tlDataAddr | (static_cast<uint64_t>(Heap::GetHeap().GetGCPhase(mutator != nullptr && mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)) << 56);
+        (void)mutator;
     }
 #endif
     return tlDataAddr;
@@ -842,7 +842,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
     }
 }
 
-bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
+bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
     MutatorLock();
     auto& localFins = GetLocalFinalizers();
@@ -900,7 +900,7 @@ DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)
     };
 }
 
-inline void Mutator::GCPhasePreForward(GCPhase newPhase)
+inline void Mutator::GCPhasePreForward()
 {
     std::set<BaseObject*> rootSet;
     std::set<void*> rootFieldSet;
@@ -974,23 +974,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     }
 }
 
-inline void Mutator::HandleGCPhase(GCPhase newPhase)
-{
-    HandleGCPhase(newPhase, true);
-}
-
-inline void Mutator::HandleGCPhase(GCPhase newPhase, bool bySelf)
-{
-    if (newPhase == GCPhase::GC_PHASE_ENUM) {
-        GcPhaseEnum(newPhase, EnumYoung());
-    } else if (newPhase == GCPhase::GC_PHASE_FORWARD) {
-        GCPhasePreForward(newPhase);
-    } else if (newPhase == GCPhase::GC_PHASE_IDLE) {
-        HandleGCPhaseIDLE();
-    }
-}
-
-inline void Mutator::HandleGCPhaseIDLE()
+void Mutator::HandleGCPhaseIDLE()
 {
     if (IsForeignThreadExit()) {
         ReleaseForeignThread();
@@ -1004,18 +988,6 @@ inline void Mutator::HandleGCPhaseIDLE()
         }
 #endif
     }
-}
-
-void Mutator::TransitionToGCPhaseExclusive(GCPhase newPhase)
-{
-    TransitionToGCPhaseExclusive(newPhase, true);
-}
-
-void Mutator::TransitionToGCPhaseExclusive(GCPhase newPhase, bool bySelf)
-{
-    HandleGCPhase(newPhase, bySelf);
-    ClearSuspensionFlag(SUSPENSION_FOR_GC_PHASE);
-    mutatorPhase.store(newPhase, std::memory_order_release); // handshake between mutator & mainGC thread
 }
 
 inline void Mutator::HandleCpuProfile()

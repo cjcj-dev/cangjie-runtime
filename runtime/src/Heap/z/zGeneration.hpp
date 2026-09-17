@@ -109,7 +109,7 @@ public:
     GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
-    GCPhase GcPhase() const;
+    ZGenerationPhase GcPhase() const { return _phase; }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value, uint64_t index = 0);
@@ -123,7 +123,7 @@ public:
     void Begin(uint64_t index);
     YoungCollectionStats StartYoungMark(WCollector& collector);
     void StartOldMark(WCollector& collector);
-    void PublishPhase(GCPhase value);
+    void PublishPhase(ZGenerationPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
     ZRemembered* remembered() { return &_remembered; }

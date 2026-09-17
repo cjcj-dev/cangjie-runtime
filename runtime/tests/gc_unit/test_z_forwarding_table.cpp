@@ -239,13 +239,13 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
 {
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
-    const GCPhase youngPhase = collector.GetGCPhase(GCCycleGeneration::YOUNG);
-    const GCPhase oldPhase = collector.GetGCPhase(GCCycleGeneration::OLD);
+    const ZGenerationPhase youngPhase = collector.GetZGeneration(GCCycleGeneration::YOUNG).GcPhase();
+    const ZGenerationPhase oldPhase = collector.GetZGeneration(GCCycleGeneration::OLD).GcPhase();
     for (bool marking : { false, true }) {
         collector.PublishGenerationPhase(GCCycleGeneration::YOUNG,
-            marking ? GCPhase::GC_PHASE_ENUM : GCPhase::GC_PHASE_IDLE);
+            marking ? ZGenerationPhase::Mark : ZGenerationPhase::Relocate);
         collector.PublishGenerationPhase(GCCycleGeneration::OLD,
-            marking ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_ENUM);
+            marking ? ZGenerationPhase::Relocate : ZGenerationPhase::Mark);
         auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
         fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
         fwd->relocated_remembered_fields_after_relocate();

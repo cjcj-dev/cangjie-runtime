@@ -407,7 +407,7 @@ void RunYoungWeakVariant(size_t helpers)
     collector.GetZGeneration(GCCycleGeneration::YOUNG).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(GCCycleGeneration::YOUNG).Workers()->set_active_workers(helpers + 1u);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).set_phase(ZGenerationPhase::MarkComplete);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
@@ -472,7 +472,7 @@ void RunYoungWeakRemsetFlow()
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).set_phase(ZGenerationPhase::MarkComplete);
     RememberedSet& rememberedSet = HeapTestRemset();
     rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
@@ -536,7 +536,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     // zGeneration.cpp: each generation owns its worker pool before collection.
     collector.GetZGeneration(GCCycleGeneration::OLD).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget(resources, static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
@@ -733,7 +733,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
@@ -766,7 +766,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     collector.GetZGeneration(GCCycleGeneration::YOUNG).InitializeWorkers(1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).set_phase(ZGenerationPhase::MarkComplete);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);
@@ -785,7 +785,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     GC_EXPECT_TRUE(closure.calls > 0);
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
-    Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
+    Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, ZGenerationPhase::MarkComplete);
     Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
     const auto afterCoverage = LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
     const bool independentAfterCoverage =
@@ -828,7 +828,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(graph.owner);
@@ -950,7 +950,7 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_IDLE);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
     NativeSlot root(StoreGoodPointer(graph.weak));
     NativeSlot* roots[] = { &root };
     Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
@@ -992,7 +992,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_IDLE);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
     std::unordered_set<BaseObject*> strong;
     std::unordered_set<BaseObject*> inclusive;

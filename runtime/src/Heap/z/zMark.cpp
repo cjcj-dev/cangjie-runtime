@@ -369,10 +369,10 @@ void WCollector::TraceHeap()
         if (concurrentStackScan) {
             MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
                 if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                    (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false, stackScanEpoch, false);
+                    (void)mutator.GcPhaseEnum(false, stackScanEpoch, false);
                 }
                 if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                    (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false);
+                    (void)mutator.GcPhaseEnum(false);
                 }
 #if defined(MRT_GC_UNIT_TESTS)
                 NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,

@@ -113,7 +113,7 @@ void FlipToPreforwardAfterFirstHandler(BaseObject*, BaseObject*)
     if (call == 1) {
         // Publish the product phase value that can change while the carrier
         // lock is released around a managed callback.
-        context->collector->SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
+        context->collector->GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
     }
 }
 
@@ -339,14 +339,14 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     context.collector = &collector;
     phaseFlipContext = &context;
     collector.SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
     ThreadLocal::SetMutator(&resolverMutator);
 
     collector.ResolveCycleRef();
     const size_t callsBeforeResume = context.calls.load(std::memory_order_acquire);
-    const auto phaseBeforeResume = collector.GetGCPhase(GCCycleGeneration::OLD);
+    const auto phaseBeforeResume = collector.GetZGeneration(GCCycleGeneration::OLD).GcPhase();
 
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
+    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
     collector.ResolveCycleRef();
     const size_t callsAfterResume = context.calls.load(std::memory_order_acquire);
     collector.ResolveCycleRef();
@@ -368,7 +368,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     // makes before=2; a non-persistent cursor makes after=3; either fails here.
     GC_EXPECT_EQ(callsBeforeResume, 1u);
     GC_EXPECT_EQ(static_cast<unsigned>(phaseBeforeResume),
-                 static_cast<unsigned>(GCPhase::GC_PHASE_FORWARD));
+                 static_cast<unsigned>(ZGenerationPhase::Relocate));
     GC_EXPECT_EQ(callsAfterResume, 2u);
     GC_EXPECT_EQ(callsAfterDrain, 2u);
 }
