@@ -241,6 +241,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     HandlerSafepointContext context;
     handlerSafepointContext = &context;
     collector.SetCycleRefHandlerForTest(&SafepointingCycleRefHandler);
+    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     manager.SetSuspensionMutatorCount(1);
 
     std::atomic<bool> resolverReturned{ false };
@@ -339,7 +340,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     context.collector = &collector;
     phaseFlipContext = &context;
     collector.SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     ThreadLocal::SetMutator(&resolverMutator);
 
     collector.ResolveCycleRef();

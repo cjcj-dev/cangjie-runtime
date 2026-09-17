@@ -197,8 +197,9 @@ struct RelocationReceiptTestAccess {
     static void RunMajorCollection(WCollector& collector)
     {
         PrepareMajorRoots(collector);
-        DriverLocker locker(Heap::GetHeap().GetCollectorResources());
-        collector.RunGarbageCollection(2, GC_REASON_USER);
+        auto& cycle = collector.GetZGeneration(ZGenerationId::old);
+        if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_USER);
+        collector.DoGarbageCollection(ZGenerationId::old);
     }
 };
 
