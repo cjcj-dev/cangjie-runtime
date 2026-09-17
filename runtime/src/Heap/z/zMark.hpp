@@ -406,8 +406,6 @@ public:
     MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
     virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
 
-    void TransitionToGCPhase(const GCPhase, const bool, bool = false) {}
-
     GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD) override
     {
         return GetZGeneration(generation).Stats();
