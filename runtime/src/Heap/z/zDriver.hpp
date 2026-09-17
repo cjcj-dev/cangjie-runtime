@@ -105,6 +105,8 @@ public:
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
     Collector& bound_collector() { return collector; }
+    Collector& ActiveCollector() { return boundCollector != nullptr ? *boundCollector : collector; }
+    void BindCollector(Collector* c) { boundCollector = c; }
 
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
 
@@ -174,6 +176,7 @@ private:
     int32_t concurrentGcThreadCount = 1;
     std::atomic<bool> gcThreadRunning = { false };
     Collector& collector;
+    Collector* boundCollector = nullptr;
     FinalizerProcessor finalizerProcessor;
 };
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.

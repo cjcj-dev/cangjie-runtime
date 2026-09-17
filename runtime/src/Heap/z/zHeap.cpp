@@ -214,7 +214,7 @@ void HeapImpl::Fini()
     }
 }
 
-Collector& HeapImpl::GetCollector() { return collectorImpl; }
+Collector& HeapImpl::GetCollector() { return collectorResources.ActiveCollector(); }
 
 Allocator& HeapImpl::GetAllocator() { return *theSpace; }
 

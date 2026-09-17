@@ -25,6 +25,7 @@ struct MarkPublicationFixture {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *previousCollector);
         }
         resources.testCollector = &collector;
+        resources.BindCollector(&collector);
         collector.youngCycle.SelectReason(GC_REASON_YOUNG);
         collector.youngCycle.Begin(1);
         // ZGenerationYoung::mark_start advances the sequence with the remset
@@ -42,6 +43,7 @@ struct MarkPublicationFixture {
     {
         Drain([](BaseObject*, bool) {});
         resources.testCollector = previousCollector;
+        resources.BindCollector(previousCollector);
         current = previousFixture;
     }
     template<class Visitor> void DrainDomain(ZMark& domain, Visitor&& visitor)
