@@ -31,7 +31,6 @@ void CopyCollector::PostGarbageCollection(GCCycleGeneration generation, uint64_t
     reinterpret_cast<RegionSpace&>(theAllocator).DumpRegionStats("region statistics when gc ends");
     GetWorkers(generation).set_inactive();
     ReportSkippedStackMapCounts();
-    TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true, generation == GCCycleGeneration::YOUNG);
     PagePool::Instance().Trim();
     (void)gcIndex;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -43,7 +42,6 @@ void CopyCollector::PostGarbageCollection(GCCycleGeneration generation, uint64_t
 void CopyCollector::ForwardFromSpace(GCCycleGeneration generation)
 {
     ScopedEntryTrace trace("CJRT_GC_FORWARD");
-    TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true, generation == GCCycleGeneration::YOUNG);
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     GCStats& stats = GetGCStats(generation);
