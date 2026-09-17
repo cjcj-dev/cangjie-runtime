@@ -8,6 +8,7 @@
 #ifndef MRT_COLLECTOR_RESOURCES_H
 #define MRT_COLLECTOR_RESOURCES_H
 
+#include <cstdint>
 #include <functional>
 
 #include "Base/Macros.h"
@@ -22,6 +23,9 @@
 #include "Heap/z/zResurrection.inline.hpp"
 
 namespace MapleRuntime {
+
+enum class GCDriverKind : uint8_t { MINOR, MAJOR };
+
 class Collector;
 class CollectorProxy;
 class CollectorResources;
@@ -101,9 +105,9 @@ public:
 
     // ZGC-style per-generation request ports.  Requests on one port never
     // consume or coalesce requests from the other generation.
-    GCDriverPort& GetMinorDriverPort() { return minorDriverPort; }
-    GCDriverPort& GetMajorDriverPort() { return majorDriverPort; }
-    GCDriverPort& GetYoungDriverPort();
+    ZDriverPort& GetMinorDriverPort() { return minorDriverPort; }
+    ZDriverPort& GetMajorDriverPort() { return majorDriverPort; }
+    ZDriverPort& GetYoungDriverPort();
     void RequestAbort(GCDriverKind kind)
     {
         ZAbort::abort();
@@ -124,8 +128,8 @@ private:
     void RunDriverLoop(GCDriverKind kind);
     void RunDirectorLoop();
     void EvaluateDirector(uint64_t now);
-    bool TakeDriverRequest(GCDriverPort& port, GCDriverRequest& request);
-    void CompleteDriverRequest(GCDriverPort& port);
+    bool TakeDriverRequest(ZDriverPort& port, ZDriverRequest& request);
+    void CompleteDriverRequest(ZDriverPort& port);
     void RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup);
     void RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup);
     bool ShouldPrecleanYoung(GCReason reason) const;
@@ -135,11 +139,11 @@ private:
     // reason: The reason for this GC.
     void RequestAsyncGC(GCReason reason);
     void RequestGCAndWait(GCReason reason);
-    bool ExecuteDriverRequest(const GCDriverRequest& request);
-    bool ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request);
+    bool ExecuteDriverRequest(const ZDriverRequest& request);
+    bool ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request);
     void CancelDriverRequestLifecycle(GCDriverKind kind);
-    GCDriverPort minorDriverPort { GCDriverKind::MINOR };
-    GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
+    ZDriverPort minorDriverPort;
+    ZDriverPort majorDriverPort;
     // zDriver.cpp:59-72: held by young; old releases it for its body.
     std::mutex driverLock;
 #if defined(MRT_GC_UNIT_TESTS)

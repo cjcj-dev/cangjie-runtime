@@ -119,8 +119,8 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         collectorProxy.GetZGeneration(ZGenerationId::old).CycleStats(), regions,
         GetWorkers(ZGenerationId::young), GetWorkers(ZGenerationId::old),
         static_cast<uint32_t>(concurrentGcThreadCount));
-    in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
-    in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;
+    in.minorBusy = minorBusy || minorDriverPort.is_busy();
+    in.majorBusy = majorBusy || majorDriverPort.is_busy();
     const GcTriggerDecision decision = DecideGcTrigger(in);
     const GcWorkerSelection selection = SelectGcWorkers(in, in.workerCapacity,
         in.lastYoungWorkers, decision.kind == GcTriggerKind::MAJOR);
@@ -130,10 +130,9 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         NoteGcTriggerRule(decision.rule);
         if (decision.kind == GcTriggerKind::MAJOR) {
             const GCReason reason = decision.rule == GcTriggerRule::TIMER ? GC_REASON_BACKUP : GC_REASON_HEU;
-            majorDriverPort.EnqueueAsync(reason, selection.youngWorkers, selection.oldWorkers,
-                                         decision.rule == GcTriggerRule::WARMUP);
+            majorDriverPort.send_async(ZDriverRequest(reason, selection.youngWorkers, selection.oldWorkers));
         } else {
-            minorDriverPort.EnqueueAsync(GC_REASON_YOUNG, selection.youngWorkers);
+            minorDriverPort.send_async(ZDriverRequest(GC_REASON_YOUNG, selection.youngWorkers, 0));
             if (in.oldWorkersActive && in.activeOldWorkers != selection.oldWorkers) {
                 GetWorkers(ZGenerationId::old).request_resize_workers(selection.oldWorkers);
             }
