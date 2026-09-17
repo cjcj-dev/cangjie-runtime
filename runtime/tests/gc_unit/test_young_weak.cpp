@@ -65,10 +65,9 @@ struct RelocationReceiptTestAccess {
         }
         resources.testCollector = collector;
         if (collector != nullptr) {
-            // Product driver startup owns one worker set per generation
-            // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
                 auto& cycle = collector->GetZGeneration(generation);
+                if (cycle.Snapshot().active) cycle.End();
                 if (cycle.Workers() == nullptr) cycle.InitializeWorkers(2);
             }
         }
@@ -104,7 +103,9 @@ struct RelocationReceiptTestAccess {
     {
         auto& young = collector.GetZGeneration(ZGenerationId::young);
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
-        collector.GetZGeneration(ZGenerationId::old).SelectReason(GC_REASON_USER);
+        auto& oldCycle = collector.GetZGeneration(ZGenerationId::old);
+        if (oldCycle.Snapshot().active) oldCycle.End();
+        oldCycle.SelectReason(GC_REASON_USER);
         auto& remembered = HeapTestRemset();
         if (!remembered.IsInitialized()) {
             remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);

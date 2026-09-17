@@ -44,14 +44,15 @@ struct RelocationReceiptTestAccess {
         resources.concurrentGcThreadCount = workers;
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = collector.GetZGeneration(gen);
+            if (cycle.Snapshot().active) {
+                cycle.End();
+            }
             if (cycle.Workers() == nullptr) {
                 cycle.InitializeWorkers(workers);
             } else {
                 cycle.Workers()->set_active_workers(workers);
             }
-            if (!cycle.Snapshot().active) {
-                cycle.Begin(workers);
-            }
+            cycle.Begin(workers);
         }
         ZGlobalsPointers::initialize();
     }
