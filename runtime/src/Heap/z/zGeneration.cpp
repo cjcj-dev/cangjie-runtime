@@ -1129,8 +1129,36 @@ void ZGeneration::PublishPhase(GCPhase value)
 
 void ZGeneration::log_phase_switch(Phase from, Phase to)
 {
-    (void)from;
-    (void)to;
+    const char* const str[] = {
+        "Young Mark Start",
+        "Young Mark End",
+        "Young Relocate Start",
+        "Old Mark Start",
+        "Old Mark End",
+        "Old Relocate Start"
+    };
+    size_t index = 0;
+    if (is_old()) {
+        index += 3;
+    }
+    if (to == Phase::Relocate) {
+        index += 2;
+    }
+    if (from == Phase::Mark && to == Phase::MarkComplete) {
+        index += 1;
+    }
+    (void)str;
+    (void)index;
+}
+
+bool ZGenerationYoung::should_record_stats()
+{
+    return YoungType() == ZYoungType::minor || YoungType() == ZYoungType::major_partial_roots;
+}
+
+bool ZGenerationOld::should_record_stats()
+{
+    return true;
 }
 
 void ZGeneration::set_phase(Phase new_phase)

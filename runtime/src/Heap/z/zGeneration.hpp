@@ -69,6 +69,19 @@ public:
     enum class Phase { Mark, MarkComplete, Relocate };
     void set_phase(Phase new_phase);
     void log_phase_switch(Phase from, Phase to);
+    virtual bool should_record_stats() = 0;
+    size_t freed() const { return _freed.load(std::memory_order_relaxed); }
+    void increase_freed(size_t size) { _freed.fetch_add(size, std::memory_order_relaxed); }
+    size_t promoted() const { return _promoted.load(std::memory_order_relaxed); }
+    void increase_promoted(size_t size) { _promoted.fetch_add(size, std::memory_order_relaxed); }
+    size_t compacted() const { return _compacted.load(std::memory_order_relaxed); }
+    void increase_compacted(size_t size) { _compacted.fetch_add(size, std::memory_order_relaxed); }
+    void reset_statistics()
+    {
+        _freed.store(0, std::memory_order_relaxed);
+        _promoted.store(0, std::memory_order_relaxed);
+        _compacted.store(0, std::memory_order_relaxed);
+    }
     bool is_phase_relocate() const { return _phase == Phase::Relocate; }
     bool is_phase_mark() const { return _phase == Phase::Mark; }
     bool is_phase_mark_complete() const { return _phase == Phase::MarkComplete; }
@@ -146,6 +159,9 @@ public:
     std::atomic<GCReason> reason { GC_REASON_USER };
     std::atomic<GCPhase> phase { GC_PHASE_IDLE };
     ZGeneration::Phase _phase { ZGeneration::Phase::Relocate };
+    std::atomic<size_t> _freed { 0 };
+    std::atomic<size_t> _promoted { 0 };
+    std::atomic<size_t> _compacted { 0 };
     bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
@@ -167,6 +183,7 @@ private:
 class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung();
+    bool should_record_stats() override;
     void collect(WCollector& collector);
     void pause_mark_start(WCollector& collector);
     void concurrent_mark(WCollector& collector);
@@ -182,6 +199,7 @@ public:
 class ZGenerationOld : public ZGeneration {
 public:
     ZGenerationOld();
+    bool should_record_stats() override;
     void collect(WCollector& collector);
     void concurrent_mark(WCollector& collector);
     bool pause_mark_end(WCollector& collector);
