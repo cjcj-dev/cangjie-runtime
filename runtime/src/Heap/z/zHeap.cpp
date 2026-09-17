@@ -267,16 +267,43 @@ RememberedSet& Heap::GetRememberedSet()
 
 bool RememberedSet::Contains(MAddress slot) const
 {
+    if (current.count(slot) != 0) {
+        return true;
+    }
     ZPage* page = Heap::page(slot);
     if (page == nullptr) {
         return false;
     }
-    auto* p = reinterpret_cast<volatile zpointer*>(slot);
-    return page->is_remembered(p) || page->was_remembered(p);
+    return page->is_remembered(reinterpret_cast<volatile zpointer*>(slot));
+}
+
+bool RememberedSet::ContainsPrevious(MAddress slot) const
+{
+    if (previous.count(slot) != 0) {
+        return true;
+    }
+    ZPage* page = Heap::page(slot);
+    if (page == nullptr) {
+        return false;
+    }
+    return page->was_remembered(reinterpret_cast<volatile zpointer*>(slot));
+}
+
+bool RememberedSet::IsClearInRange(MAddress start, size_t size, bool currentFace) const
+{
+    const std::unordered_set<MAddress>& face = currentFace ? current : previous;
+    const MAddress end = start + size;
+    for (MAddress slot : face) {
+        if (slot >= start && slot < end) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void RememberedSet::Record(MAddress slot)
 {
+    current.insert(slot);
     ZPage* page = Heap::page(slot);
     if (page == nullptr) {
         return;
@@ -286,6 +313,8 @@ void RememberedSet::Record(MAddress slot)
 
 void RememberedSet::FlipForMinor()
 {
+    previous.swap(current);
+    current.clear();
     ZRememberedSet::flip();
 }
 
