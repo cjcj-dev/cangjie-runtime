@@ -138,6 +138,7 @@ private:
 #ifndef MRT_COLLECTOR_TRACING_H
 #define MRT_COLLECTOR_TRACING_H
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 
@@ -190,6 +191,7 @@ struct WeakDiscoveryTestReceipt {
 };
 void ResetWeakDiscoveryTestReceipt();
 WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt();
+extern std::atomic<size_t> g_weakDiscoveryCount;
 #endif
 
 // prefetch distance for mark.
@@ -346,7 +348,7 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override { return request.ShouldBeIgnored(); }
 
-    ReferenceStatus DiscoverReference(BaseObject* reference, ReferenceType type)
+    bool DiscoverReference(BaseObject* reference, ReferenceType type)
     {
         return collectorResources.GetFinalizerProcessor().GetReferenceProcessor().DiscoverReference(reference, type);
     }

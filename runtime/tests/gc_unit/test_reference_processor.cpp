@@ -20,10 +20,8 @@ GC_TEST(ReferenceProcessor, UnsupportedKindsFailClosed)
     alignas(8) unsigned char storage[16] = {};
     auto* object = reinterpret_cast<BaseObject*>(storage);
 
-    GC_EXPECT_TRUE(processor.DiscoverReference(object, ReferenceType::SOFT) ==
-                   ReferenceStatus::UNSUPPORTED);
-    GC_EXPECT_TRUE(processor.DiscoverReference(object, ReferenceType::PHANTOM) ==
-                   ReferenceStatus::UNSUPPORTED);
+    GC_EXPECT_TRUE(!processor.DiscoverReference(object, ReferenceType::SOFT));
+    GC_EXPECT_TRUE(!processor.DiscoverReference(object, ReferenceType::PHANTOM));
     GC_EXPECT_TRUE(processor.Empty());
     GC_EXPECT_EQ(processor.Discovered(ReferenceType::SOFT), static_cast<size_t>(0));
     GC_EXPECT_EQ(processor.Discovered(ReferenceType::PHANTOM), static_cast<size_t>(0));
@@ -34,8 +32,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
     GcHeapFixture fx;
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
-                   ReferenceStatus::DISCOVERED);
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
 
     processor.ProcessReferences([](BaseObject*) { return false; });
     BaseObject* enqueued = nullptr;
@@ -74,8 +71,7 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
 
     ReferenceProcessor processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
-                   ReferenceStatus::DISCOVERED);
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
     processor.ProcessReferences([](BaseObject*) { return false; });
     size_t enqueued = 0;
     processor.EnqueueReferences([&](BaseObject*) {
@@ -96,8 +92,7 @@ GC_TEST(ReferenceProcessor, StrongWeakReferentIsNotCleared)
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
     ReferenceProcessor processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
-                   ReferenceStatus::DISCOVERED);
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([&](BaseObject* value) { return value == fx.obj1; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
 
@@ -113,8 +108,7 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
     ReferenceProcessor processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
-                   ReferenceStatus::DISCOVERED);
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([](BaseObject*) { return false; });
     // Weak clearing precedes the rendezvous/unblock/enqueue boundary.
     GC_EXPECT_TRUE(is_null(referent.GetTargetObject()));
@@ -134,8 +128,7 @@ GC_TEST(ReferenceProcessor, ProcessConsumerReloadsWinningWeakCasValue)
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
     ReferenceProcessor processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
-                   ReferenceStatus::DISCOVERED);
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     ReferenceProcessor::SetBeforeWeakCleanCasForTest([&] {
         referent.StoreColoured(GcUnit::StoreGoodPointer(replacement));
     });
@@ -159,10 +152,8 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
     ReferenceProcessor processor;
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
-                   ReferenceStatus::DISCOVERED);
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
-                   ReferenceStatus::DISCOVERED);
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK));
     processor.ProcessReferences([](BaseObject*) { return false; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
 

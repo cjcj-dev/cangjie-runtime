@@ -324,5 +324,13 @@ private:
     static std::atomic<int> stwDepth;
 };
 
+class ZStatReferences {
+public:
+    static void set_soft(size_t encountered, size_t discovered, size_t enqueued);
+    static void set_weak(size_t encountered, size_t discovered, size_t enqueued);
+    static void set_final(size_t encountered, size_t discovered, size_t enqueued);
+    static void set_phantom(size_t encountered, size_t discovered, size_t enqueued);
+};
+
 } // namespace MapleRuntime
 #endif // MRT_ZSTAT_H

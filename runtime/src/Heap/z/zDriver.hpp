@@ -18,6 +18,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Inspector/CjHeapData.h"
 #include "Heap/z/zDriverPort.hpp"
+#include "Heap/z/zResurrection.inline.hpp"
 
 namespace MapleRuntime {
 class Collector;
@@ -85,9 +86,9 @@ public:
     // ZResurrection (zResurrection.cpp:35-47): shared by both generations.
     // Block only in the successful old mark-end pause; unblock after the
     // non-strong reference rendezvous, before finalizer enqueue.
-    void BlockResurrection() { resurrectionBlocked.store(true, std::memory_order_release); }
-    void UnblockResurrection() { resurrectionBlocked.store(false, std::memory_order_release); }
-    bool IsResurrectionBlocked() const { return resurrectionBlocked.load(std::memory_order_acquire); }
+    void BlockResurrection() { ZResurrection::block(); }
+    void UnblockResurrection() { ZResurrection::unblock(); }
+    bool IsResurrectionBlocked() const { return ZResurrection::is_blocked(); }
 
     bool IsGcStarted() const;
 
@@ -162,7 +163,6 @@ private:
     ZStat* statistics = nullptr;
     int32_t concurrentGcThreadCount = 1;
     std::atomic<bool> gcThreadRunning = { false };
-    std::atomic<bool> resurrectionBlocked { false };
     CollectorProxy& collectorProxy;
     FinalizerProcessor finalizerProcessor;
 };

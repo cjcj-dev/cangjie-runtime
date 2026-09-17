@@ -24,17 +24,6 @@ public:
     // RawArray type alone is insufficient: ordinary byte arrays are mutable.
     void RequestString(const uint8_t* data, size_t length);
     void Clean(const std::function<bool(BaseObject*)>& isAlive);
-    void Remap();
-
-    // Corresponds to the processor leaving the suspendible thread set before
-    // GC accesses weak storage. The current runtime serializes GC drivers.
-    class GCScope {
-    public:
-        GCScope();
-        ~GCScope();
-        GCScope(const GCScope&) = delete;
-        GCScope& operator=(const GCScope&) = delete;
-    };
 
 private:
 #if defined(MRT_TESTABLE_INTERNALS)
