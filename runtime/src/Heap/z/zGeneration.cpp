@@ -1390,7 +1390,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
         SelectTenuringThreshold(inputs);
     }
     _relocation_set.install(&selector);
-    if (generation == GCCycleGeneration::YOUNG) {
+    if (_cycle == GCCycleGeneration::YOUNG) {
         ZWorkers* w = Workers();
         if (w != nullptr) {
             ZRelocate::flip_age_pages(*w, selector.not_selected_small());
