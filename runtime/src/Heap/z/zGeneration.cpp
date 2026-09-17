@@ -948,7 +948,7 @@ bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsS
         return false;
     }
     MarkingStacks::VerifyAllEmpty(oldCycle.Mark());
-    oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+    oldCycle.set_phase(ZGeneration::Phase::MarkComplete);
     ZVerify::AfterMark();
     collectorResources.BlockResurrection();
     ReportMarkTerminateContinue();
@@ -1500,7 +1500,6 @@ void CopyCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
             return;
         }
         MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
-        TransitionToGCPhase(GC_PHASE_TRACE, true);
         TracingImpl(workStack);
         if (ZAbort::should_abort()) {
             return;
