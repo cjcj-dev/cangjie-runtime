@@ -44,7 +44,6 @@ std::atomic<bool> g_markTerminateAtexitInstalled{ false };
 std::atomic<uint64_t> g_markTerminateMaxPauseNs{ 0 };
 std::atomic<size_t> g_markTerminatePauseY2y{ 0 };
 std::atomic<size_t> g_markTerminateClosureDuringPause{ 0 };
-std::atomic<size_t> g_weakDiscoveryCount{ 0 };
 #endif
 
 void NoteMarkTerminatePause() { g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed); }
@@ -109,16 +108,6 @@ void NoteMarkTerminatePauseProducers(size_t y2y)
 void NoteTraceYoungClosureDuringPause()
 {
     g_markTerminateClosureDuringPause.fetch_add(1, std::memory_order_relaxed);
-}
-
-void ResetWeakDiscoveryTestReceipt()
-{
-    g_weakDiscoveryCount.store(0, std::memory_order_relaxed);
-}
-
-WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt()
-{
-    return { g_weakDiscoveryCount.load(std::memory_order_relaxed) };
 }
 #endif
 

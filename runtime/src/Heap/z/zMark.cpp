@@ -530,9 +530,6 @@ void CopyCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& work
         return;
     }
     (void)DiscoverReference(reference, ReferenceType::WEAK);
-#if defined(MRT_TESTABLE_INTERNALS)
-    g_weakDiscoveryCount.fetch_add(1, std::memory_order_relaxed);
-#endif
     (void)workStack;
 }
 

@@ -7,6 +7,8 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
+#include "Base/TimeUtils.h"
+#include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -14,6 +16,11 @@
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
+
+static const ZStatSubPhase ZSubPhaseConcurrentReferencesProcess("Concurrent References Process",
+                                                                ZGenerationId::old);
+static const ZStatSubPhase ZSubPhaseConcurrentReferencesEnqueue("Concurrent References Enqueue",
+                                                                ZGenerationId::old);
 
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
@@ -55,7 +62,9 @@ void ZStatReferences::set_phantom(size_t encountered, size_t discovered, size_t 
 uint32_t ReferenceProcessor::worker_index()
 {
     const uint32_t id = WorkerThread::worker_id();
-    return id == UINT32_MAX ? 0u : id;
+    CHECK(id != UINT32_MAX);
+    CHECK(id < ZPerWorkerStorage::count());
+    return id;
 }
 
 void ReferenceProcessor::list_append(Node*& head, Node*& tail, Node* reference)
@@ -366,6 +375,7 @@ public:
 
 void ReferenceProcessor::process_references()
 {
+    ZStatTimerOld timer(ZSubPhaseConcurrentReferencesProcess);
     ZReferenceProcessorTask task(this);
     if (workers != nullptr) {
         workers->run(&task);
@@ -412,6 +422,7 @@ void ReferenceProcessor::verify_pending_references()
 
 void ReferenceProcessor::EnqueueReferences(const EnqueueFinal& enqueueFinal)
 {
+    ZStatTimerOld timer(ZSubPhaseConcurrentReferencesEnqueue);
     verify_pending_references();
     Node* list = __atomic_exchange_n(pending_list.addr(), nullptr, __ATOMIC_ACQ_REL);
     pending_list_tail = nullptr;

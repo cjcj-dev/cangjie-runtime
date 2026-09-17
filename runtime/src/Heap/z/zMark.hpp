@@ -185,13 +185,6 @@ MarkTerminateTestReceipt ReadMarkTerminateTestReceipt();
 void NoteMarkTerminatePauseDuration(uint64_t pauseNs);
 void NoteMarkTerminatePauseProducers(size_t y2y);
 void NoteTraceYoungClosureDuringPause();
-
-struct WeakDiscoveryTestReceipt {
-    size_t discovered = 0;
-};
-void ResetWeakDiscoveryTestReceipt();
-WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt();
-extern std::atomic<size_t> g_weakDiscoveryCount;
 #endif
 
 // prefetch distance for mark.

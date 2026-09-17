@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "Base/TimeUtils.h"
+#include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
@@ -204,6 +206,28 @@ public:
     void RegisterEnd(uint64_t duration) const override;
 private:
     const ZStatCounter counter;
+};
+
+class ZStatSubPhase : public ZStatPhase {
+public:
+    ZStatSubPhase(const char* name, ZGenerationId id)
+        : ZStatPhase("Concurrent", name), generation(id)
+    {
+        (void)generation;
+    }
+private:
+    const ZGenerationId generation;
+};
+
+class ZStatTimerOld {
+public:
+    explicit ZStatTimerOld(const ZStatPhase& phase)
+        : phase(phase), start(TimeUtil::NanoSeconds())
+    {}
+    ~ZStatTimerOld() { phase.RegisterEnd(TimeUtil::NanoSeconds() - start); }
+private:
+    const ZStatPhase& phase;
+    const uint64_t start;
 };
 
 namespace ZStatPhases {
