@@ -1280,9 +1280,12 @@ void ZGenerationOld::collect(WCollector& collector)
     pause_verify(collector);
     concurrent_select_relocation_set();
     abortpoint();
-    concurrent_remap_young_roots(collector);
-    abortpoint();
-    pause_relocate_start(collector);
+    {
+        DriverLocker locker(collector.collectorResources);
+        concurrent_remap_young_roots(collector);
+        abortpoint();
+        pause_relocate_start(collector);
+    }
     concurrent_relocate(collector);
 }
 
