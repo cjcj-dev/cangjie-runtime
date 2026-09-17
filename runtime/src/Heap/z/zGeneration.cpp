@@ -1362,7 +1362,7 @@ void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
 void ZGeneration::select_relocation_set(bool promote_all)
 {
     ZRelocationSetSelector selector(FragmentationLimit());
-    const ZGenerationId id = generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+    const ZGenerationId id = _cycle == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
     {
         ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, nullptr);
         for (ZPage* page; pt_iter.next(&page);) {
@@ -1379,7 +1379,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
         free_empty_pages(&selector, 0);
     }
     selector.select();
-    if (generation == GCCycleGeneration::YOUNG) {
+    if (_cycle == GCCycleGeneration::YOUNG) {
         TenuringInputs inputs;
         inputs.promoteAll = promote_all;
         const ZRelocationSetSelectorStats st = selector.stats();

@@ -107,10 +107,25 @@ public:
 
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 
+class VM_ZMarkStartYoung;
+class VM_ZMarkStartYoungAndOld;
+class VM_ZMarkEndYoung;
+class VM_ZRelocateStartYoung;
+class VM_ZMarkEndOld;
+class VM_ZRelocateStartOld;
+class VM_ZVerifyOld;
+
 class WCollector : public CopyCollector {
     friend class ZGeneration;
     friend class ZGenerationYoung;
     friend class ZGenerationOld;
+    friend class VM_ZMarkStartYoung;
+    friend class VM_ZMarkStartYoungAndOld;
+    friend class VM_ZMarkEndYoung;
+    friend class VM_ZRelocateStartYoung;
+    friend class VM_ZMarkEndOld;
+    friend class VM_ZRelocateStartOld;
+    friend class VM_ZVerifyOld;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MutatorPublishTestAccess;
     friend struct PartialArrayTestAccess;
