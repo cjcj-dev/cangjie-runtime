@@ -46,14 +46,27 @@ private:
 
 // zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
 // receives requests from their port and whose terminate closes that port.
-class ZDriver final : public ZThread {
+class ZDriver : public ZThread {
 public:
     ZDriver(CollectorResources& resources, GCDriverKind kind);
     void run_thread() override;
     void terminate() override;
-private:
+    bool is_busy() const;
+protected:
     CollectorResources& resources;
     const GCDriverKind kind;
+};
+
+class ZDriverMinor final : public ZDriver {
+public:
+    explicit ZDriverMinor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MINOR) {}
+    void collect(const ZDriverRequest& request);
+};
+
+class ZDriverMajor final : public ZDriver {
+public:
+    explicit ZDriverMajor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MAJOR) {}
+    void collect(const ZDriverRequest& request);
 };
 
 // CollectorResources provides the resources that a functional collector need,
@@ -157,8 +170,8 @@ private:
     // zCollectedHeap.cpp:65-71 / zHeap.hpp: the concurrent GC threads are
     // created when GC starts and stopped through ConcurrentGCThread::stop.
     ZDirector* director = nullptr;
-    ZDriver* minorDriver = nullptr;
-    ZDriver* majorDriver = nullptr;
+    ZDriverMinor* minorDriver = nullptr;
+    ZDriverMajor* majorDriver = nullptr;
     std::mutex directorMutex;
     std::condition_variable directorCondition;
     bool directorStopped = false;

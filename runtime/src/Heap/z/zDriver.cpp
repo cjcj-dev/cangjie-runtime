@@ -73,6 +73,45 @@ void ZDriver::terminate()
         .send_async(ZDriverRequest(GC_REASON_INVALID, 0, 0));
 }
 
+bool ZDriver::is_busy() const
+{
+    return (kind == GCDriverKind::MINOR ? resources.minorDriverPort : resources.majorDriverPort).is_busy();
+}
+
+void ZDriverMinor::collect(const ZDriverRequest& request)
+{
+    switch (request.cause()) {
+        case GC_REASON_YOUNG:
+            resources.GetMinorDriverPort().send_async(request);
+            break;
+        case GC_REASON_HEU_SYNC:
+        case GC_REASON_NATIVE_SYNC:
+            resources.GetMinorDriverPort().send_sync(request);
+            break;
+        default:
+            resources.GetMinorDriverPort().send_async(request);
+            break;
+    }
+}
+
+void ZDriverMajor::collect(const ZDriverRequest& request)
+{
+    switch (request.cause()) {
+        case GC_REASON_USER:
+        case GC_REASON_FORCE:
+        case GC_REASON_OOM:
+            resources.GetMajorDriverPort().send_sync(request);
+            break;
+        case GC_REASON_WB_BREAKPOINT:
+            ZBreakpoint::StartGC();
+            resources.GetMajorDriverPort().send_async(request);
+            break;
+        default:
+            resources.GetMajorDriverPort().send_async(request);
+            break;
+    }
+}
+
 void CollectorResources::Init()
 {
     ZStat::Initialize();
@@ -409,8 +448,8 @@ void CollectorResources::StartGCThreads()
 
     // zHeap.cpp / zCollectedHeap.cpp:65-71: the two drivers and the director
     // are ZThreads that start in their constructors.
-    minorDriver = new ZDriver(*this, GCDriverKind::MINOR);
-    majorDriver = new ZDriver(*this, GCDriverKind::MAJOR);
+    minorDriver = new ZDriverMinor(*this);
+    majorDriver = new ZDriverMajor(*this);
     director = new ZDirector(*this);
 }
 
