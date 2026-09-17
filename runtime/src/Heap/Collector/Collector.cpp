@@ -240,8 +240,8 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         : 0;
     // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
     // gc_unit other-vm children, have CollectorResources but no CollectorProxy target to query.
-    const unsigned gcPhase = Heap::GetHeap().GetCollectorResources().IsGcStarted()
-        ? static_cast<unsigned>(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD))
+    const unsigned gcPhase = Heap::GetHeap().GetCollectorResources().IsGcStarted() && ZGeneration::old() != nullptr
+        ? static_cast<unsigned>(ZGeneration::old()->Snapshot().phase)
         : 0xffu;
     std::fprintf(stderr,
                  "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "

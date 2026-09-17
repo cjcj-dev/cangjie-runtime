@@ -612,7 +612,8 @@ protected:
         }
         LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
             bad, seen, static_cast<void*>(target), stateCode, typeInfo, IsFromObject(target) ? 1 : 0,
-            IsGhostFromObject(target) ? 1 : 0, static_cast<int>(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)));
+            IsGhostFromObject(target) ? 1 : 0,
+            ZGeneration::old() != nullptr ? static_cast<int>(ZGeneration::old()->Snapshot().phase) : -1);
     }
     mutable std::atomic<uint64_t> colourWhoTotal{ 0 };
     mutable std::atomic<uint64_t> colourWhoBad{ 0 };
