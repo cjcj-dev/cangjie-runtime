@@ -34,6 +34,7 @@ GC_TEST(ZDriverPort, SyncAckSatisfiesSameCauseSeqnum)
         port.send_sync(ZDriverRequest(GC_REASON_YOUNG, 0, 0));
         done.fetch_add(1);
     });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     const ZDriverRequest got = port.receive();
     GC_EXPECT_EQ(got.cause(), GC_REASON_YOUNG);
     port.ack();
