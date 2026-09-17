@@ -164,7 +164,6 @@ public:
     bool undo_alloc_object(uintptr_t addr, size_t size);
     bool undo_alloc_object_atomic(uintptr_t addr, size_t size);
     ZPage* reset(PageAge age);
-    PageAge age() const { return _age; }
 
     ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
 
