@@ -286,7 +286,7 @@ void WCollector::RemapYoungRoots()
     SuspendibleThreadSetJoiner joiner;
     MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
     // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
-    ZRemsetTableIterator remsetIter(Heap::GetHeap().remembered(), false);
+    ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
     Heap::GetHeap().remembered().remap_current(&remsetIter);
     VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
     RootVisitor visitor = [this](ObjectRef& root) {
@@ -996,7 +996,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 // buffers before the active-face Snapshot used for this ref fix.
                 (void)ZMark::FlushAllGenerations();
                 std::unordered_set<MAddress> concRemset;
-                ZRemsetTableIterator remsetIter(Heap::GetHeap().remembered(), false);
+                ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
                 for (ZRemsetTableEntry entry; remsetIter.next(&entry);) {
                     if (entry._page == nullptr) {
                         continue;

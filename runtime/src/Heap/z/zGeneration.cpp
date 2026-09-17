@@ -260,6 +260,11 @@ void WCollector::DoYoungGarbageCollection()
     RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
     MinorSlotSet rememberedSlots;
+    MinorSlotSet liveRememberedSlots;
+    MinorSlotSet consumedSlots;
+    MinorInteriorBaseMap remsetInteriorBases;
+    RemsetScanStats remsetStats;
+    size_t liveRememberedCount = 0;
 #if defined(MRT_TESTABLE_INTERNALS)
     if (testYoungMarkStarted) {
         testYoungMarkStarted();
@@ -432,7 +437,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetRescan);
-        Heap::GetHeap().remembered().scan_and_follow(MarkPtr());
+        Heap::GetHeap().remembered().scan_and_follow(youngCycle.MarkPtr());
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     // Deterministic T1->T2 export-root window: root enumeration has returned,

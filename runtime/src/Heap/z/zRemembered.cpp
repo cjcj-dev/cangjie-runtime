@@ -193,7 +193,7 @@ bool ZRemembered::scan_page_and_clear_remset(ZPage* page) const
     Collector& collector = Heap::GetHeap().GetCollector();
     const bool can_trust_live_bits =
         page->is_relocatable() && collector.GetGCPhase(GCCycleGeneration::OLD) != GCPhase::GC_PHASE_ENUM &&
-        collector.GetGCPhase(GCCycleGeneration::OLD) != GCPhase::GC_PHASE_MARK;
+        collector.GetGCPhase(GCCycleGeneration::OLD) != GCPhase::GC_PHASE_TRACE;
     bool result = false;
     if (!can_trust_live_bits) {
         page->oops_do_remembered([&](volatile zpointer* p) { result |= scan_field(p); });
