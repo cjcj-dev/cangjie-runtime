@@ -393,10 +393,6 @@ void ZGenerationYoung::concurrent_mark(WCollector&) {}
 bool ZGenerationYoung::pause_mark_end(WCollector&) { return true; }
 void ZGenerationYoung::concurrent_mark_continue(WCollector&) {}
 void ZGenerationYoung::concurrent_mark_free() {}
-void ZGenerationYoung::concurrent_reset_relocation_set() {}
-void ZGenerationYoung::concurrent_select_relocation_set() {}
-void ZGenerationYoung::pause_relocate_start(WCollector&) {}
-void ZGenerationYoung::concurrent_relocate(WCollector&) {}
 
 void WCollector::RunYoungCollection()
 {
@@ -758,15 +754,44 @@ void WCollector::RunYoungCollection()
             ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
             return !region->IsYoungRegion() || IsMarkedObject<Generation::Young>(object);
         });
-        GetZGeneration(GCCycleGeneration::YOUNG).reset_relocation_set();
-        space.GetRegionManager().ResetFlipPromotedPages();
-        GetZGeneration(GCCycleGeneration::YOUNG).select_relocation_set(
-            GetZGeneration(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::major_full_preclean);
     }
 
+    youngStw = std::move(stw);
+    youngReachableVec = std::move(reachableVec);
+    youngConsumedSlots = std::move(consumedSlots);
+    youngRemsetInteriorBases = std::move(remsetInteriorBases);
+    youngStats = stats;
+    youngStartNs = start;
+    youngLiveBytes = liveBytes;
+    youngLiveRememberedCount = liveRememberedCount;
+    youngFullScan = fullYoungScan;
+}
+
+void ZGenerationYoung::concurrent_reset_relocation_set()
+{
+    reset_relocation_set();
+    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().ResetFlipPromotedPages();
+}
+
+void ZGenerationYoung::concurrent_select_relocation_set()
+{
+    select_relocation_set(YoungType() == ZYoungType::major_full_preclean);
+}
+
+void ZGenerationYoung::pause_relocate_start(WCollector& collector)
+{
+    VM_ZRelocateStartYoung op;
+    (void)op.pause();
+    (void)collector;
+}
+
+void ZGenerationYoung::concurrent_relocate(WCollector& collector)
+{
     if (ZAbort::should_abort()) {
         return;
     }
+    RegionSpace& space = static_cast<RegionSpace&>(collector.GetAllocator());
     size_t allocatedBefore = space.AllocatedBytes();
     // ⑥⑦⑧ inside EvacuateYoungRegions: pause relocate_start / concurrent copy / evac_finish
     // Pass STW so Phase 8 can release the world for concurrent_relocate.
@@ -784,34 +809,35 @@ void WCollector::RunYoungCollection()
     // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
     // Concurrent mark force-admits slots without that proof.
     const bool refFixSlotsCoveredByReachable = false;
-    EvacuateYoungRegions(reachableVec, consumedSlots, refFixSlotsCoveredByReachable,
-                         remsetInteriorBases, &stw);
+    collector.EvacuateYoungRegions(collector.youngReachableVec, collector.youngConsumedSlots,
+                                   refFixSlotsCoveredByReachable, collector.youngRemsetInteriorBases,
+                                   &collector.youngStw);
     if (ZAbort::should_abort()) {
         return;
     }
     size_t allocatedAfter = space.AllocatedBytes();
-    stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    GetGCStats(GCCycleGeneration::YOUNG).collectedBytes = stats.reclaimedBytes;
+    collector.youngStats.reclaimedBytes =
+        allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
+    collector.GetGCStats(GCCycleGeneration::YOUNG).collectedBytes = collector.youngStats.reclaimedBytes;
 
-    // Residual Register and the remset walk now both complete in STW3, before
-    // EvacuateYoungRegions retires the forwarding receipts. Then enter IDLE.
-    if (stw != nullptr) {
-        stw.reset();
+    if (collector.youngStw != nullptr) {
+        collector.youngStw.reset();
     }
 
     {
-        // minortime: ⑧ post-evac finish
         MRT_PHASE_TIMER(ZStatPhases::PYoungPostEvacFinish);
-        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true, true);
-        MergeResurrectExportObjects(Generation::Young);
+        collector.TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true, true);
+        collector.MergeResurrectExportObjects(Generation::Young);
     }
-    ++minorTotalRuns;
-    uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
+    ++collector.minorTotalRuns;
+    uint64_t pauseUs = (TimeUtil::NanoSeconds() - collector.youngStartNs) / NS_PER_US;
     VLOG(REPORT,
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu liveBytes=%zu "
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
-         minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
-         liveBytes, liveRememberedCount, stats.reclaimedBytes, pauseUs);
+         collector.minorTotalRuns, static_cast<unsigned>(collector.youngFullScan),
+         collector.youngStats.candidateRegions, collector.youngStats.candidateBytes,
+         collector.youngLiveBytes, collector.youngLiveRememberedCount, collector.youngStats.reclaimedBytes,
+         pauseUs);
 }
 
 } // namespace MapleRuntime

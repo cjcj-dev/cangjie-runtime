@@ -19,6 +19,7 @@
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "Allocator/RegionSpace.h"
 #include "Heap/z/zForwardingTable.hpp"
@@ -773,6 +774,15 @@ private:
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint64_t minorTotalRuns = 0;
     MinorRegionSet minorCandidateRegions;
+    std::unique_ptr<ScopedStopTheWorld> youngStw;
+    std::vector<BaseObject*> youngReachableVec;
+    MinorSlotSet youngConsumedSlots;
+    MinorInteriorBaseMap youngRemsetInteriorBases;
+    YoungCollectionStats youngStats;
+    uint64_t youngStartNs = 0;
+    size_t youngLiveBytes = 0;
+    size_t youngLiveRememberedCount = 0;
+    bool youngFullScan = false;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H
