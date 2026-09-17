@@ -326,8 +326,8 @@ protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
 
     CollectorType collectorType = CollectorType::NO_COLLECTOR;
-    GenerationCycle youngCycle { GCCycleGeneration::YOUNG };
-    GenerationCycle oldCycle { GCCycleGeneration::OLD };
+    ZGenerationYoung youngCycle;
+    ZGenerationOld oldCycle;
 };
 } // namespace MapleRuntime
 

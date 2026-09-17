@@ -77,7 +77,7 @@ public:
     GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
-    GCPhase Phase() const { return phase.load(std::memory_order_acquire); }
+    GCPhase GcPhase() const { return phase.load(std::memory_order_acquire); }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value, uint64_t index = 0);
@@ -130,7 +130,7 @@ public:
     std::atomic<ZYoungType> youngType { ZYoungType::none };
     std::atomic<GCReason> reason { GC_REASON_USER };
     std::atomic<GCPhase> phase { GC_PHASE_IDLE };
-    Phase _phase { Phase::Relocate };
+    GenerationCycle::Phase _phase { GenerationCycle::Phase::Relocate };
     bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
@@ -147,6 +147,16 @@ public:
     YoungTypeSetter& operator=(const YoungTypeSetter&) = delete;
 private:
     GenerationCycle& cycle;
+};
+
+class ZGenerationYoung : public GenerationCycle {
+public:
+    ZGenerationYoung() : GenerationCycle(GCCycleGeneration::YOUNG) {}
+};
+
+class ZGenerationOld : public GenerationCycle {
+public:
+    ZGenerationOld() : GenerationCycle(GCCycleGeneration::OLD) {}
 };
 
 }

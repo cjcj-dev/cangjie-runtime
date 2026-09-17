@@ -231,7 +231,7 @@ bool GenerationCycle::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
 {
     GenerationCycle& cycle = generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
-    const GCPhase before = cycle.Phase();
+    const GCPhase before = cycle.GcPhase();
     if (generation == GCCycleGeneration::OLD &&
         (value == GCPhase::GC_PHASE_PREFORWARD || value == GCPhase::GC_PHASE_FORWARD) &&
         before != GCPhase::GC_PHASE_PREFORWARD && before != GCPhase::GC_PHASE_FORWARD) {
@@ -709,7 +709,7 @@ public:
 void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
 {
     ZBreakpoint::AtAfterReferenceProcessingStarted();
-    CHECK_DETAIL(oldCycle.Phase() == GC_PHASE_MARK_COMPLETE,
+    CHECK_DETAIL(oldCycle.GcPhase() == GC_PHASE_MARK_COMPLETE,
                  "non-strong references require completed old marking");
     {
         MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
