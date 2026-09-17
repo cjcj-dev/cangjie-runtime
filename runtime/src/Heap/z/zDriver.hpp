@@ -61,6 +61,8 @@ public:
 // CollectorResources provides the resources that a functional collector need,
 // such as GC drivers and workers.
 class CollectorResources {
+public:
+    Collector* boundCollector = nullptr;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MarkPublicationFixture;
 #endif
@@ -176,7 +178,6 @@ private:
     int32_t concurrentGcThreadCount = 1;
     std::atomic<bool> gcThreadRunning = { false };
     Collector& collector;
-    Collector* boundCollector = nullptr;
     FinalizerProcessor finalizerProcessor;
 };
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.
