@@ -37,16 +37,19 @@ public:
     void DrainForMinor(C&) { FlipForMinor(); }
     void FlipForMinor();
     bool ContainsPrevious(MAddress) const { return false; }
-    bool IsClearInRange(MAddress, MAddress) const { return true; }
     template<typename... A>
-    void ScanPreviousForMinor(A&&...) {}
+    bool IsClearInRange(A&&...) const { return true; }
+    template<typename... A>
+    size_t ScanPreviousForMinor(A&&...) { return 0; }
     void ClearRegion(MAddress, MAddress) {}
     template<typename... A>
     void VisitRememberedPages(A&&...) {}
     template<typename... A>
-    void TransferObjectSlots(A&&...) {}
+    size_t TransferObjectSlots(A&&...) { return 0; }
     template<typename... A>
-    void TakeInPlaceSlots(A&&...) {}
+    size_t TakeInPlaceSlots(A&&...) { return 0; }
+    template<typename... A>
+    void MoveInPlaceSlots(A&&...) {}
     struct InPlaceSlot {};
 
 private:
