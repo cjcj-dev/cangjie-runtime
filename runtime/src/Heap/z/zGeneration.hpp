@@ -208,7 +208,7 @@ class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung();
     bool should_record_stats() override;
-    void collect(WCollector& collector);
+    void collect();
     void pause_mark_start(WCollector& collector);
     void concurrent_mark(WCollector& collector);
     bool pause_mark_end(WCollector& collector);
@@ -224,7 +224,7 @@ class ZGenerationOld : public ZGeneration {
 public:
     ZGenerationOld();
     bool should_record_stats() override;
-    void collect(WCollector& collector);
+    void collect();
     void concurrent_mark(WCollector& collector);
     bool pause_mark_end(WCollector& collector);
     void concurrent_mark_continue(WCollector& collector);

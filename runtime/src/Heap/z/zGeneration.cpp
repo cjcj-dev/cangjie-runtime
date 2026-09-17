@@ -371,7 +371,7 @@ public:
 
 void WCollector::DoYoungGarbageCollection()
 {
-    youngCycle.collect(*this);
+    youngCycle.collect();
 }
 
 void ZGeneration::at_collection_start(void* timer)
@@ -407,8 +407,9 @@ ZGenerationCollectionScopeOld::~ZGenerationCollectionScopeOld()
     generation.at_collection_end();
 }
 
-void ZGenerationYoung::collect(WCollector& collector)
+void ZGenerationYoung::collect()
 {
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     ZGenerationCollectionScopeYoung scope(*this);
     pause_mark_start(collector);
     concurrent_mark(collector);
@@ -1251,11 +1252,12 @@ void WCollector::DoGarbageCollection(ZGenerationId generation)
         DoYoungGarbageCollection();
         return;
     }
-    oldCycle.collect(*this);
+    oldCycle.collect();
 }
 
-void ZGenerationOld::collect(WCollector& collector)
+void ZGenerationOld::collect()
 {
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     ZGenerationCollectionScopeOld scope(*this);
     DriverUnlocker unlocker(collector.collectorResources);
     concurrent_mark(collector);
@@ -1332,7 +1334,7 @@ void ZGenerationOld::concurrent_relocate(WCollector& collector)
 
 void WCollector::RunOldCollection()
 {
-    oldCycle.collect(*this);
+    oldCycle.collect();
 }
 }
 
