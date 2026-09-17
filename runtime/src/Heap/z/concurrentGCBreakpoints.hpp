@@ -6,8 +6,6 @@
 #define MRT_CONCURRENT_GC_BREAKPOINTS_HPP
 #include <mutex>
 #include <condition_variable>
-#include <functional>
-#include <memory>
 #include "Base/Macros.h"
 namespace MapleRuntime {
 // concurrentGCBreakpoints.hpp: requests are serialized by the controlling
@@ -23,7 +21,6 @@ class ConcurrentGCBreakpoints {
     static void ResetRequestState();
     static bool IsControlled(); // mutex held
     static void RunToIdleImpl(bool acquiring);
-    static void WaitHandshakeAware(std::unique_lock<std::mutex>& lock, const std::function<bool()>& blocked);
 public:
     MRT_EXPORT static void AcquireControl();
     MRT_EXPORT static void ReleaseControl();

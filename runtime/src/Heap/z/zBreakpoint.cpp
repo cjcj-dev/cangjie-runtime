@@ -4,9 +4,7 @@
 
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
-#include "Mutator/Handshake.h"
 #include "Base/Log.h"
-#include <chrono>
 namespace MapleRuntime {
 bool ZBreakpoint::startGC = false;
 void ZBreakpoint::StartGC()
@@ -21,13 +19,7 @@ void ZBreakpoint::AtBeforeGC()
 {
     std::unique_lock<std::mutex> lock(ConcurrentGCBreakpoints::mutex);
     while (ConcurrentGCBreakpoints::IsControlled() && !startGC) {
-        lock.unlock();
-        Handshake::Current().process_by_self();
-        lock.lock();
-        if (!(ConcurrentGCBreakpoints::IsControlled() && !startGC)) {
-            break;
-        }
-        (void)ConcurrentGCBreakpoints::condition.wait_for(lock, std::chrono::milliseconds(1));
+        ConcurrentGCBreakpoints::condition.wait(lock);
     }
     startGC = false;
     ConcurrentGCBreakpoints::NotifyIdleToActive();
