@@ -47,6 +47,7 @@
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zMark.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Heap/WCollector/WCollector.h"
 #if defined(MRT_TESTABLE_INTERNALS)
 #include "young_closure_observation.hpp"
@@ -316,6 +317,116 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 }
 
+// ZGC zGeneration.cpp:550-552,897-905: published work prevents mark completion.
+// Observe closure before relocation changes the page generation (zPage.cpp:64).
+GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    MarkPublicationFixture markFixture;
+    fx.region0->reset(PageAge::old);
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
+    BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
+    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ResetY2yHandoffTestReceipt();
+    Mutator producer;
+    ThreadLocal::SetMutator(&producer);
+    AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(fx.obj0);
+    ArmY2yAfterReleaseTestReceipt(fx.obj1, 2);
+    ThreadLocal::SetMutator(nullptr);
+
+    YoungClosureObservation closure;
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    const auto handoff = ReadY2yHandoffTestReceipt();
+    // ZGC zGeneration.cpp:550-552,897-905: each publication after worker
+    // termination requires another concurrent follow before mark can end.
+    std::fprintf(stderr,
+                 "TARGET y2y_repeat published=%zu pauses=%zu continues=%zu holder=%d child=%d\n",
+                 static_cast<size_t>(handoff.afterStw2), static_cast<size_t>(handoff.phase2),
+                 receipt.continues, closure.Saw(fx.obj1), closure.Saw(child));
+    // ZGC zGeneration.cpp:550-552: while (!pause_mark_end()) concurrent_mark_continue();
+    // Extra STW after y2y release is not a ZGC pause (young has 3 STW only).
+    GC_EXPECT_TRUE(receipt.continues >= 1u);
+    GC_EXPECT_TRUE(closure.Saw(fx.obj1));
+    GC_EXPECT_TRUE(closure.Saw(child));
+
+    if (!ownerWasActive) activityCycle.End();
+    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+}
+
+// Worker termination then mutator leftover y2y before STW.
+// Pause must merge leftover and continue; it must not commit mark-end.
+GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    MarkPublicationFixture markFixture;
+    fx.region1->reset(PageAge::eden);
+    fx.region1->reset(PageAge::eden);
+    BaseObject* y2yHolder = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
+    BaseObject* y2yChild = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 192);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(y2yChild) + 64);
+    auto* y2yField = &HeapSlotAt<>(reinterpret_cast<MAddress>(y2yHolder) + TYPEINFO_PTR_SIZE);
+    y2yField->StoreColoured(GcUnit::StoreGoodPointer(y2yChild));
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    space.GetRegionManager().AddRawPointerObject(y2yHolder);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
+    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ArmLeftoverBeforePauseTestReceipt(y2yHolder);
+
+    YoungClosureObservation closure;
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL leftover_mark_end pauses=%zu continues=%zu pauseY2y=%zu\n",
+                 receipt.pauses, receipt.continues, receipt.pauseY2y);
+    std::fprintf(stderr, "TARGET leftover holder=%d y2yChild=%d continues=%zu\n",
+                 closure.Saw(y2yHolder), closure.Saw(y2yChild), receipt.continues);
+    GC_EXPECT_TRUE(receipt.continues >= 1u);
+    GC_EXPECT_TRUE(receipt.pauseY2y >= 1u);
+    GC_EXPECT_TRUE(closure.Saw(y2yHolder));
+    GC_EXPECT_TRUE(closure.Saw(y2yChild));
+
+    if (!ownerWasActive) activityCycle.End();
+    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+}
 
 GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
 {
@@ -694,6 +805,148 @@ GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
     buffer->MergeY2yDirtyHolders(firstBatch);
     buffer->PushY2yDirtyHolder(fx.obj1);
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
+}
+
+// ZMark::mark_object policy matrix. These calls enter the actual product
+// ZGeneration template instantiations, not a test-compiled mark body.
+namespace {
+void CallMarkObjectIfActive(ZGeneration& cycle, zaddress address, bool resurrect, bool gcThread,
+                            bool follow, bool finalizable)
+{
+    if (!resurrect && !gcThread && !follow && !finalizable) {
+        cycle.MarkObjectIfActive<false, false, false, false>(address);
+    } else if (!resurrect && !gcThread && !follow && finalizable) {
+        cycle.MarkObjectIfActive<false, false, false, true>(address);
+    } else if (!resurrect && !gcThread && follow && !finalizable) {
+        cycle.MarkObjectIfActive<false, false, true, false>(address);
+    } else if (!resurrect && !gcThread && follow && finalizable) {
+        cycle.MarkObjectIfActive<false, false, true, true>(address);
+    } else if (!resurrect && gcThread && !follow && !finalizable) {
+        cycle.MarkObjectIfActive<false, true, false, false>(address);
+    } else if (!resurrect && gcThread && !follow && finalizable) {
+        cycle.MarkObjectIfActive<false, true, false, true>(address);
+    } else if (!resurrect && gcThread && follow && !finalizable) {
+        cycle.MarkObjectIfActive<false, true, true, false>(address);
+    } else if (!resurrect && gcThread && follow && finalizable) {
+        cycle.MarkObjectIfActive<false, true, true, true>(address);
+    } else if (resurrect && !gcThread && !follow && !finalizable) {
+        cycle.MarkObjectIfActive<true, false, false, false>(address);
+    } else if (resurrect && !gcThread && !follow && finalizable) {
+        cycle.MarkObjectIfActive<true, false, false, true>(address);
+    } else if (resurrect && !gcThread && follow && !finalizable) {
+        cycle.MarkObjectIfActive<true, false, true, false>(address);
+    } else if (resurrect && !gcThread && follow && finalizable) {
+        cycle.MarkObjectIfActive<true, false, true, true>(address);
+    } else if (resurrect && gcThread && !follow && !finalizable) {
+        cycle.MarkObjectIfActive<true, true, false, false>(address);
+    } else if (resurrect && gcThread && !follow && finalizable) {
+        cycle.MarkObjectIfActive<true, true, false, true>(address);
+    } else if (resurrect && gcThread && follow && !finalizable) {
+        cycle.MarkObjectIfActive<true, true, true, false>(address);
+    } else {
+        cycle.MarkObjectIfActive<true, true, true, true>(address);
+    }
+}
+}
+
+GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
+{
+    for (bool young : {false, true}) {
+        for (bool gcThread : {false, true}) {
+            for (bool follow : {false, true}) {
+                for (bool finalizable : {false, true}) {
+                    if (young && finalizable) continue;
+                    GcHeapFixture fx;
+                    MarkPublicationFixture publication;
+                    auto& cycle = publication.collector.GetZGeneration(
+                        young ? ZGenerationId::young : ZGenerationId::old);
+                    fx.region0->reset(young ? PageAge::eden : PageAge::old);
+                    fx.region0->ResetPageSequence();
+                    CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, gcThread, follow, finalizable);
+                    const size_t pending = young ? publication.YoungPending() : publication.OldPending();
+                    std::fprintf(stderr, "P1_ALLOCATING_ASSERT young=%d gc=%d follow=%d finalizable=%d pending=%zu live=%zu\n",
+                                 young, gcThread, follow, finalizable, pending,
+                                 static_cast<size_t>(fx.region0->live_bytes()));
+                    GC_EXPECT_EQ(pending, 0u);
+                    GC_EXPECT_FALSE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
+                    GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
+                    cycle.PublishPhase(ZGenerationPhase::Mark);
+                    CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, gcThread, follow, finalizable);
+                    ZMark& domain = young ? *publication.collector.YoungMark()
+                                              : *publication.collector.MajorMark();
+                    ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
+                    MarkStackEntry entry;
+                    size_t entries = 0;
+                    for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
+                        WorkerFixture worker;
+                        while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
+                            ++entries;
+                            GC_EXPECT_TRUE(to_object(ZOffset::address(to_zoffset(entry.object_address()))) == fx.obj0);
+                            GC_EXPECT_EQ(entry.object_address(), untype(ZAddress::offset(from_object(fx.obj0))));
+                            GC_EXPECT_EQ(entry.mark(), !gcThread);
+                            GC_EXPECT_EQ(entry.inc_live(), gcThread);
+                            GC_EXPECT_EQ(entry.follow(), follow);
+                            GC_EXPECT_EQ(entry.finalizable(), finalizable);
+                        }
+                    }
+                    std::fprintf(stderr, "P1_RELOCATABLE_ASSERT young=%d gc=%d follow=%d finalizable=%d entries=%zu\n",
+                                 young, gcThread, follow, finalizable, entries);
+                    GC_EXPECT_EQ(entries, 1u);
+                }
+            }
+        }
+    }
+}
+
+GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    ZStat::Initialize();
+    MutatorManager manager;
+    YoungConcTestRuntime runtime(manager);
+    GcHeapFixture fx;
+    MarkPublicationFixture publication;
+    fx.region0->reset(PageAge::eden);
+    fx.region0->ResetPageSequence();
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    auto& cycle = publication.collector.GetZGeneration(ZGenerationId::young);
+    cycle.PublishPhase(ZGenerationPhase::Mark);
+    CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
+    CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
+    WorkStack work;
+    std::vector<BaseObject*> reached;
+    publication.FollowYoung(work, reached);
+    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu marked=%d\n", reached.size(),
+                 static_cast<size_t>(fx.region0->live_bytes()),
+                 fx.region0->livemap().is_marked(fx.region0->generation_id()) ? 1 : 0);
+    GC_EXPECT_TRUE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
+    GC_EXPECT_EQ(fx.region0->live_bytes(), fx.obj0->GetSize());
+}
+
+
+GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture publication;
+    auto& cycle = publication.collector.GetZGeneration(ZGenerationId::old);
+    auto& domain = *publication.collector.MajorMark();
+    fx.region0->reset(PageAge::old);
+    fx.region0->ResetPageSequence();
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    cycle.PublishPhase(ZGenerationPhase::MarkComplete);
+    CallMarkObjectIfActive(cycle, from_object(fx.obj0), true, true, true, false);
+    GC_EXPECT_EQ(publication.OldPending(), 0u);
+    GC_EXPECT_FALSE(domain.Terminate().Resurrected());
+    cycle.PublishPhase(ZGenerationPhase::Mark);
+    CallMarkObjectIfActive(cycle, from_object(fx.obj0), true, true, true, false);
+    std::fprintf(stderr, "P1_RESURRECT_ASSERT pending=%zu resurrected=%d\n",
+                 publication.OldPending(), domain.Terminate().Resurrected());
+    GC_EXPECT_EQ(publication.OldPending(), 1u);
+    GC_EXPECT_TRUE(domain.Terminate().Resurrected());
+    domain.Terminate().SetResurrected(false);
+    CallMarkObjectIfActive(cycle, from_object(fx.obj0), true, true, true, false);
+    GC_EXPECT_EQ(publication.OldPending(), 1u);
+    GC_EXPECT_FALSE(domain.Terminate().Resurrected());
 }
 
 #endif // MRT_TESTABLE_INTERNALS
