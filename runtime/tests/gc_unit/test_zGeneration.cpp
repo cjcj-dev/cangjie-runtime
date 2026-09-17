@@ -15,8 +15,8 @@ GC_TEST(ZGeneration, StaticYoungOldAndId)
     GC_EXPECT_TRUE(ZGeneration::old()->is_old());
     GC_EXPECT_EQ(static_cast<int>(ZGeneration::young()->id()), static_cast<int>(ZGenerationId::young));
     GC_EXPECT_EQ(static_cast<int>(ZGeneration::old()->id()), static_cast<int>(ZGenerationId::old));
-    GC_EXPECT_EQ(ZGeneration::generation(ZGenerationId::young), static_cast<ZGeneration*>(ZGeneration::young()));
-    GC_EXPECT_EQ(ZGeneration::generation(ZGenerationId::old), static_cast<ZGeneration*>(ZGeneration::old()));
+    GC_EXPECT_TRUE(ZGeneration::generation(ZGenerationId::young) == static_cast<ZGeneration*>(ZGeneration::young()));
+    GC_EXPECT_TRUE(ZGeneration::generation(ZGenerationId::old) == static_cast<ZGeneration*>(ZGeneration::old()));
 }
 
 GC_TEST(ZGeneration, ThreeStatePhase)
