@@ -7,6 +7,7 @@
 #ifndef MRT_Z_REMEMBERED_SET_HPP
 #define MRT_Z_REMEMBERED_SET_HPP
 
+#include "Common/TypeDef.h"
 #include "Heap/z/zBitMap.hpp"
 #include "Heap/z/zAddress.hpp"
 

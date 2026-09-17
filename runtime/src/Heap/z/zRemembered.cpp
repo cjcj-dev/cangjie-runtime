@@ -125,7 +125,7 @@ ZRemembered::ZRemembered() : _page_table(nullptr), _old_forwarding_table(nullptr
 {}
 
 void ZRemembered::bind(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table,
-                       ZPageAllocator* page_allocator)
+                       RegionManager* page_allocator)
 {
     _page_table = page_table;
     _old_forwarding_table = old_forwarding_table;

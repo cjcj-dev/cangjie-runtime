@@ -20,7 +20,7 @@ class ZForwarding;
 class ZForwardingTable;
 class ZMark;
 class ZPage;
-class ZPageAllocator;
+class RegionManager;
 class ZPageTable;
 class ZRemsetTableIterator;
 struct ZRemsetTableEntry;
@@ -32,7 +32,7 @@ class ZRemembered {
 private:
     ZPageTable* _page_table;
     const ZForwardingTable* _old_forwarding_table;
-    ZPageAllocator* _page_allocator;
+    RegionManager* _page_allocator;
 
     struct FoundOld {
         std::unique_ptr<CHeapBitMap> _allocated_bitmap_0;
@@ -61,7 +61,7 @@ private:
 
 public:
     ZRemembered();
-    void bind(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table, ZPageAllocator* page_allocator);
+    void bind(ZPageTable* page_table, const ZForwardingTable* old_forwarding_table, RegionManager* page_allocator);
 
     void remember(volatile zpointer* p) const;
     void scan_and_follow(ZMark* mark);
