@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zVerify.hpp"
+#include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
@@ -152,7 +153,8 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
     if (IsLoadBad(oldRef)) {
         fromObj = to_object(oldRef.GetTargetObject());
         if (forward) {
-            toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj, static_cast<Generation>(remap_generation(oldRef)));
+            toObj = const_cast<WCollector*>(this)->relocate_or_remap_object(
+                fromObj, static_cast<ZGenerationId>(remap_generation(oldRef)));
         } else {
             toObj = FindToVersion(fromObj, static_cast<Generation>(remap_generation(oldRef))).GetOrFailClosed(
                 "WCollector::TryUpdateRefFieldImpl", provenance);
@@ -238,51 +240,6 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
     return false;
 }
 
-BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generation)
-{
-    zaddress_unsafe observed = root.LoadPlain();
-    BaseObject* oldObj = to_object(safe(observed));
-    DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
-    // Static / RO slots (e.g. .data.rel.ro under GNU_RELRO) hold non-heap objects that
-    // are never evacuated. Keep their existing plain value and skip write-back.
-    // Same heap gate as IsGhostFromObject / FindToVersion / FixMinorEvacuatedSlot resolve.
-    if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
-        return oldObj;
-    }
-    if (IsGhostFromObject(oldObj)) {
-        const MAddress mappedAddr = forwarding_find(generation, reinterpret_cast<MAddress>(oldObj));
-        if (mappedAddr != 0) {
-            BaseObject* mapped = reinterpret_cast<BaseObject*>(mappedAddr);
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
-            return mapped;
-        }
-        const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(generation));
-        if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
-            Collector::FailClosedLoad(
-                "WCollector::ForwardUpdateRawRef.unresolved", oldObj,
-                reinterpret_cast<uintptr_t>(&root),
-                ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
-        }
-        BaseObject* toVersion = TryForwardObject(oldObj, generation);
-        if (toVersion == nullptr) {
-            Collector::FailClosedLoad(
-                "WCollector::ForwardUpdateRawRef.unresolved", oldObj,
-                reinterpret_cast<uintptr_t>(&root),
-                ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
-        }
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-        DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
-        return toVersion;
-    } else {
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-    }
-
-    return oldObj;
-}
-
-
-
 void WCollector::RemapYoungRoots()
 {
     SuspendibleThreadSetJoiner joiner;
@@ -301,7 +258,9 @@ void WCollector::RemapYoungRoots()
         const MAddress observedAddr = raw(observed);
         if (observedAddr != 0 &&
             generation_forwarding_table(Generation::Young).get(observedAddr) != nullptr) {
-            ForwardUpdateRawRef(root, Generation::Young);
+            const ZGenerationId id = ZGenerationId::young;
+            (void)relocate_or_remap_object(to_object(safe(observed)), id);
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteRawRemapYoungRootsTestReceipt(root, raw(observed));
@@ -363,6 +322,7 @@ bool WCollector::Preforward()
         // OpenJDK zGeneration.cpp:1175-1200: isolate pause_relocate_start from the
         // concurrent root-preforward work below. ScopedLightSync emits its matching
         // rec=stw record, including rendezvous and held time.
+        ZJNICritical::block();
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
         ZVerify::BeforeZOperation();
         // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
@@ -375,6 +335,7 @@ bool WCollector::Preforward()
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         StartRelocationTasks(GCCycleGeneration::OLD);
+        ZJNICritical::unblock();
     }
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
@@ -383,7 +344,12 @@ bool WCollector::Preforward()
     const std::function<void()> families[] = {
         [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
         [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
-            ForwardUpdateRawRef(root, Generation::Old);
+            const zaddress_unsafe observed = root.LoadPlain();
+            BaseObject* oldObj = to_object(safe(observed));
+            if (oldObj != nullptr && Heap::IsHeapAddress(oldObj)) {
+                (void)relocate_or_remap_object(oldObj, ZGenerationId::old);
+            }
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }, {}); },
         [&] { PreforwardDiscoveredExternObjects(Generation::Old); },
         [&] { PreforwardAllResurrectExportFromObjects(Generation::Old); }
@@ -679,7 +645,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     BaseObject* target = ResolveMinorReference(field, stw);
     // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
     // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
-    // Same heap gate as ForwardUpdateRawRef / FindToVersion.
+    // Same heap gate as FindToVersion.
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
@@ -935,6 +901,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 return;
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
+            // ZGC pause() wraps VMOp_ZRelocateStartYoung with JNICritical block
+            // (zGeneration.cpp:475-483, block_jni_critical at :832).
+            ZJNICritical::block();
             if (doYoungFlip) {
                 ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
                     data.storeBarrierBuffer->install_base_pointers();
@@ -947,6 +916,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // transition may now wait for a real page task on allocation failure.
             Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_PREFORWARD);
             StartRelocationTasks(GCCycleGeneration::YOUNG);
+            ZJNICritical::unblock();
             // The pause publishes the work domain. Eager roots relocate one
             // object themselves; allocation failure uses the same in-place page
             // task on this thread (advisor 161024, compiler prerequisite #498).
@@ -1292,18 +1262,8 @@ static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
 // The three pieces map one-to-one onto machinery that already exists here:
 //
 //   forwarding->retain_page(&_queue)   ->  ZPage::TryLockReadFromRegion()
-//   relocate_object_inner(...)         ->  ForwardObjectImpl(obj, forwarding), whose
-//                                          ForwardObjectExclusive does RouteObject (= ZGC's
-//                                          alloc_object_for_relocation, except our
-//                                          to-address is pre-planned so it cannot fail for
-//                                          want of memory), CopyObject (= object_copy_disjoint)
-//                                          and UnlockObject(FORWARDED) (= forwarding->insert)
+//   relocate_object_inner(...)         ->  RelocateObjectInner
 //   forwarding->release_page()         ->  ZPage::UnlockReadFromRegion()
-//
-// TryForwardObject (below) already composes exactly these three, which is why this is a reuse
-// and not a second implementation. What was missing was a caller on the mutator's remap
-// funnel: relocate_or_remap_object never had this leg, so a mutator that arrived before the
-// copy either got the from pointer back or waited for a worker.
 //
 // nullptr means the current thread did not acquire the page. The caller may
 // consume a receipt installed by the owning copier, but may not use the from
@@ -1330,14 +1290,14 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ZForwarding* owne
     auto& queue = manager.GetZRelocateQueue();
     const auto request = queue.Add(owner);
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
-    (void)queue.Wait(request.request);
+    queue.Wait(request.forwarding);
     return reinterpret_cast<BaseObject*>(owner->find(from));
 }
 
 BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease) const
 {
-    // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
-    // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
+    // RelocateObjectInner is for relocate phase only. relocate_or_remap
+    // is reachable from barriers in other phases, so screen here.
     GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return nullptr;
@@ -1349,7 +1309,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& 
     }
     // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
     // SetGCPhase publishes before handshake, so a mutator that retained across
-    // FORWARD→IDLE must not enter ForwardObjectImpl's CHECK. Release and let
+    // FORWARD→IDLE must not copy. Release and let
     // the existing FindToVersion / wait legs consume the published table.
     phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
@@ -1527,8 +1487,8 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj, Generation generation)
 {
-    BaseObject* to = TryForwardObject(obj, generation);
-    if (to != nullptr) {
+    BaseObject* to = relocate_or_remap_object(obj, static_cast<ZGenerationId>(generation));
+    if (to != nullptr && to != obj) {
         return to;
     }
     // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
@@ -1553,58 +1513,6 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj, Generation generation)
         return nullptr;
     }
     return obj;
-}
-
-BaseObject* WCollector::TryForwardObject(BaseObject* obj, Generation generation)
-{
-    // ZRelocate::relocate_object (zRelocate.cpp:382-416): find before touching
-    // source memory, then retain, allocate/copy/CAS, release, and wait on failure.
-    if (obj == nullptr || !Heap::IsHeapAddress(obj)) return nullptr;
-    if (BaseObject* winner = FindToVersion(obj, generation).found()) return winner;
-    ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-    if (region == nullptr) return nullptr;
-    const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
-    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) return nullptr;
-    ZPage::RetainScope lease(region);
-    if (!lease.ok()) return WaitForPageForwarding(obj, lease.HoldForwarding());
-    BaseObject* winner = ForwardObjectImpl(obj, region, lease);
-    lease.Release();
-    return winner != nullptr ? winner : WaitForPageForwarding(obj, lease.HoldForwarding());
-}
-
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, ZPage* ghostFromRegion,
-                                          const ZPage::RetainScope& lease)
-{
-    if (!lease.covers(ghostFromRegion)) {
-        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
-        if (const MAddress hit = (lease.HoldForwarding() != nullptr ? lease.HoldForwarding()->find(fromAddr) : 0)) {
-            return reinterpret_cast<BaseObject*>(hit);
-        }
-        return WaitForPageForwarding(obj, lease.HoldForwarding());
-    }
-    CHECK(GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_FORWARD);
-
-    // zRelocate.cpp:382-410 relocate_object: find hit → return; else retain
-    // already held by the caller lease; inner allocate→copy→insert (CAS
-    // winner). No object-header TryLock admission.
-    const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
-    if (const MAddress hit = (lease.HoldForwarding() != nullptr ? lease.HoldForwarding()->find(fromAddr) : 0)) {
-        return reinterpret_cast<BaseObject*>(hit);
-    }
-    if (obj->IsForwarded()) {
-        auto toObj = GetForwardPointer(obj, ghostFromRegion);
-        if (toObj != nullptr) {
-            return toObj;
-        }
-    }
-    ZPage* page = ghostFromRegion;
-    if (page == nullptr) {
-        page = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-        if (page == nullptr) {
-            page = Heap::page(reinterpret_cast<MAddress>(obj));
-        }
-    }
-    return RelocateObjectInner(obj, page);
 }
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
@@ -1962,15 +1870,7 @@ void RegionManager::CollectFromSpaceGarbage()
             }
             ExemptFromRegion(region);
         } else {
-#if defined(__OHOS__)
-            if (region->IsGhostFromRegion()) {
-                garbageRegionList.PrependRegion(region);
-            } else {
-                ReclaimRegion(region);
-            }
-#else
             garbageRegionList.PrependRegion(region);
-#endif
         }
         region = fromRegionList.TakeHeadRegion();
     }
@@ -2334,7 +2234,6 @@ void RegionManager::ForwardRegion(ZPage* region)
             AddFlipPromotedPage(region);
         }
         ExemptFromRegion(region);
-        region->DispelGhostFromRegion();
         return;
         }
     }
@@ -2447,6 +2346,7 @@ template void RegionManager::ForwardRegion<Generation::Old>(ZPage*);
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zJNICritical.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -2471,173 +2371,275 @@ void ZRelocateQueue::SetWaitEnterHook(WaitEnterHook hook)
 }
 #endif
 
-void ZRelocateQueue::BeginWorkers(size_t workers)
+bool ZRelocateQueue::needs_attention() const
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    PruneDoneLocked();
-    CHECK_DETAIL(!accepting && workers != 0 && workerCount == 0 && synchronizedWorkers == 0 && byPage.empty(),
-                 "invalid relocation worker generation workers=%zu active=%zu synchronized=%zu accepting=%u",
-                 workers, workerCount, synchronizedWorkers, static_cast<unsigned>(accepting));
+    return needsAttention.load(std::memory_order_relaxed) != 0;
+}
+
+void ZRelocateQueue::inc_needs_attention()
+{
+    needsAttention.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void ZRelocateQueue::dec_needs_attention()
+{
+    needsAttention.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void ZRelocateQueue::activate(uint32_t workers)
+{
+    isActive.store(true, std::memory_order_release);
+    join(workers);
+}
+
+void ZRelocateQueue::deactivate()
+{
+    isActive.store(false, std::memory_order_release);
+    clear();
+}
+
+bool ZRelocateQueue::is_active() const
+{
+    return isActive.load(std::memory_order_acquire);
+}
+
+void ZRelocateQueue::join(uint32_t workers)
+{
+    CHECK_DETAIL(workers != 0 && nworkers == 0 && nsynchronized == 0,
+                 "invalid relocate queue join workers=%u nworkers=%u nsync=%u",
+                 workers, nworkers, nsynchronized);
+    nworkers = workers;
+}
+
+void ZRelocateQueue::resize_workers(uint32_t workers)
+{
+    std::lock_guard<std::mutex> guard(lock);
+    nworkers = workers;
+}
+
+void ZRelocateQueue::leave()
+{
+    std::lock_guard<std::mutex> guard(lock);
+    nworkers--;
+    const bool done = prune();
+    const bool last = synchronizeFlag && nworkers == nsynchronized;
+    if (done || last) {
+        attention.notify_all();
+    }
+}
+
+void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
+{
+    std::unique_lock<std::mutex> guard(lock);
+    if (forwarding->is_done()) {
+        return;
+    }
+    queue.append(forwarding);
+    if (queue.length() == 1) {
+        inc_needs_attention();
+        attention.notify_all();
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (WaitEnterHook hook = g_waitEnterHook.load(std::memory_order_acquire)) {
+        hook(forwarding);
+    }
+#endif
+    while (!forwarding->is_done()) {
+        attention.wait_for(guard, std::chrono::milliseconds(1));
+    }
+}
+
+bool ZRelocateQueue::prune()
+{
+    if (queue.is_empty()) {
+        return false;
+    }
+    bool done = false;
+    for (int i = 0; i < queue.length();) {
+        ZForwarding* forwarding = queue.at(i);
+        if (forwarding->is_done()) {
+            done = true;
+            queue.delete_at(i);
+            completionCount.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            i++;
+        }
+    }
+    if (queue.is_empty()) {
+        dec_needs_attention();
+    }
+    return done;
+}
+
+ZForwarding* ZRelocateQueue::prune_and_claim()
+{
+    if (prune()) {
+        attention.notify_all();
+    }
+    for (int i = 0; i < queue.length(); i++) {
+        ZForwarding* forwarding = queue.at(i);
+        if (forwarding->claim()) {
+            return forwarding;
+        }
+    }
+    return nullptr;
+}
+
+void ZRelocateQueue::synchronize_thread()
+{
+    nsynchronized++;
+    if (nsynchronized == nworkers) {
+        attention.notify_all();
+    }
+}
+
+void ZRelocateQueue::desynchronize_thread()
+{
+    nsynchronized--;
+}
+
+ZForwarding* ZRelocateQueue::synchronize_poll()
+{
+    if (!needs_attention()) {
+        return nullptr;
+    }
+    std::unique_lock<std::mutex> guard(lock);
+    if (ZForwarding* forwarding = prune_and_claim()) {
+        return forwarding;
+    }
+    if (!synchronizeFlag) {
+        return nullptr;
+    }
+    synchronize_thread();
+    do {
+        attention.wait(guard);
+        if (ZForwarding* forwarding = prune_and_claim()) {
+            desynchronize_thread();
+            return forwarding;
+        }
+    } while (synchronizeFlag);
+    desynchronize_thread();
+    return nullptr;
+}
+
+void ZRelocateQueue::clear()
+{
+    if (queue.is_empty()) {
+        return;
+    }
     queue.clear();
-    workerCount = workers;
-    accepting = true;
+    dec_needs_attention();
+}
+
+void ZRelocateQueue::synchronize()
+{
+    std::unique_lock<std::mutex> guard(lock);
+    synchronizeFlag = true;
+    inc_needs_attention();
+    while (nworkers != nsynchronized) {
+        attention.wait(guard);
+    }
+}
+
+void ZRelocateQueue::desynchronize()
+{
+    std::lock_guard<std::mutex> guard(lock);
+    synchronizeFlag = false;
+    dec_needs_attention();
+    attention.notify_all();
 }
 
 ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(void* region, MAddress from)
 {
     auto owner = forwarding_for_page(static_cast<ZPage*>(region));
     CHECK_DETAIL(!owner || owner->covers(from), "relocation request outside forwarding from=%#zx", from);
-    return Add(std::move(owner));
+    return Add(owner);
 }
 
 ZRelocateQueue::EnqueueResult ZRelocateQueue::Add(ZForwarding* forwarding)
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    if (!forwarding) return { nullptr, false, false };
-    auto found = byPage.find(forwarding);
-    if (found != byPage.end()) return { found->second, false, true };
-    if (forwarding->is_done()) return { Handle(new Request(std::move(forwarding))), false, true };
-    // An already claimed forwarding has its own completion owner even after
-    // the queue's last worker left. An unclaimed page requires an active task.
-    if (!accepting && !forwarding->claimed().load(std::memory_order_acquire)) {
-        return { nullptr, false, false };
+    if (forwarding == nullptr) {
+        return { nullptr, false, false, nullptr };
     }
-    Handle request(new Request(std::move(forwarding)));
-    byPage.emplace(request->page_forwarding(), request);
-    queue.push_back(request);
-    queueAttention.notify_all();
-    return { request, true, true };
-}
-
-void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
-{
-    const EnqueueResult result = Add(forwarding);
-    CHECK_DETAIL(result.accepted, "forwarding wait requires a page task");
-    (void)Wait(result.request);
-}
-
-MAddress ZRelocateQueue::Wait(const Handle& request)
-{
-    return WaitUntil(request);
-}
-
-MAddress ZRelocateQueue::WaitUntil(const Handle& request, size_t maxSpins, bool* timedOut)
-{
-    if (timedOut != nullptr) *timedOut = false;
-    if (request == nullptr) return 0;
-    // ZRelocateQueue::add_and_wait runs in the barrier's non-safepoint
-    // context (zBarrierSetRuntime.cpp:29, zRelocate.cpp:134-151). Preserve
-    // that context through the wait and the caller's final forwarding find.
-    // Entering a saferegion here would let GC complete the next phase on
-    // behalf of this mutator and reset the set owning this borrowed pointer.
-    // The page retain has already been released (zRelocate.cpp:396-405);
-    // it must not prevent the worker from claiming the page in place.
-    {
-        // zRelocate.cpp:136-150: enqueue and the not-done predicate share one
-        // queue lock; wait only after is_done is false under that lock.
-        std::unique_lock<std::mutex> lock(queueMutex);
-        if (!request->page_forwarding()->is_done()) {
-#if defined(MRT_TESTABLE_INTERNALS)
-            if (WaitEnterHook hook = g_waitEnterHook.load(std::memory_order_acquire)) {
-                hook(request->page_forwarding());
-            }
-#endif
-            size_t spins = 0;
-            while (!request->page_forwarding()->is_done()) {
-                if (maxSpins != 0 && spins >= maxSpins) {
-                    if (timedOut != nullptr) *timedOut = true;
-                    break;
-                }
-                queueAttention.wait_for(lock, std::chrono::milliseconds(1));
-                ++spins;
-            }
+    std::lock_guard<std::mutex> guard(lock);
+    if (forwarding->is_done()) {
+        return { forwarding, false, true, forwarding };
+    }
+    if (!isActive.load(std::memory_order_acquire) && !forwarding->claimed().load(std::memory_order_acquire)) {
+        return { nullptr, false, false, nullptr };
+    }
+    for (int i = 0; i < queue.length(); i++) {
+        if (queue.at(i) == forwarding) {
+            return { forwarding, false, true, forwarding };
         }
     }
-    return 0;
+    queue.append(forwarding);
+    if (queue.length() == 1) {
+        inc_needs_attention();
+    }
+    attention.notify_all();
+    return { forwarding, true, true, forwarding };
+}
+
+void ZRelocateQueue::Wait(ZForwarding* forwarding)
+{
+    add_and_wait(forwarding);
 }
 
 size_t ZRelocateQueue::Complete(ZForwarding* forwarding)
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    const size_t completed = forwarding != nullptr && forwarding->is_done() && byPage.count(forwarding) != 0 ? 1 : 0;
-    PruneDoneLocked();
-    queueAttention.notify_all();
-    return completed;
+    std::lock_guard<std::mutex> guard(lock);
+    (void)forwarding;
+    const bool done = prune();
+    attention.notify_all();
+    return done ? 1 : 0;
 }
 
-void ZRelocateQueue::PruneDoneLocked()
+ZForwarding* ZRelocateQueue::PruneAndClaim()
 {
-    for (auto it = queue.begin(); it != queue.end();) {
-        if ((*it)->page_forwarding()->is_done()) {
-            byPage.erase((*it)->page_forwarding());
-            it = queue.erase(it);
-            completionCount.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            ++it;
-        }
-    }
-}
-
-ZRelocateQueue::Handle ZRelocateQueue::PruneAndClaimLocked()
-{
-    PruneDoneLocked();
-    for (const auto& request : queue) {
-        if (request->page_forwarding()->claim()) return request;
-    }
-    return nullptr;
-}
-
-ZRelocateQueue::Handle ZRelocateQueue::PruneAndClaim()
-{
-    std::lock_guard<std::mutex> lock(queueMutex);
-    return PruneAndClaimLocked();
+    std::lock_guard<std::mutex> guard(lock);
+    return prune_and_claim();
 }
 
 ZRelocateQueue::Selection ZRelocateQueue::SynchronizePoll()
 {
-    std::unique_lock<std::mutex> lock(queueMutex);
-    Handle request = PruneAndClaimLocked();
-    if (request) return { request, nullptr, false };
-    CHECK_DETAIL(workerCount != 0 && synchronizedWorkers < workerCount,
-                 "invalid relocation worker synchronization workers=%zu synchronized=%zu",
-                 workerCount, synchronizedWorkers);
-    ++synchronizedWorkers;
-    if (synchronizedWorkers == workerCount) {
-        // All real page tasks have returned before joining this rendezvous.
-        // A claimed external owner can finish independently; do not relabel it.
-        accepting = false;
-        workerCount = 0;
-        synchronizedWorkers = 0;
-        queueAttention.notify_all();
+    std::unique_lock<std::mutex> guard(lock);
+    if (ZForwarding* forwarding = prune_and_claim()) {
+        return { forwarding, nullptr, false };
+    }
+    CHECK_DETAIL(nworkers != 0 && nsynchronized < nworkers,
+                 "invalid relocation worker synchronization workers=%u synchronized=%u",
+                 nworkers, nsynchronized);
+    ++nsynchronized;
+    if (nsynchronized == nworkers) {
+        isActive.store(false, std::memory_order_release);
+        nworkers = 0;
+        nsynchronized = 0;
+        attention.notify_all();
         return { nullptr, nullptr, true };
     }
     for (;;) {
-        queueAttention.wait(lock);
-        if (!accepting) return { nullptr, nullptr, true };
-        request = PruneAndClaimLocked();
-        if (request) {
-            --synchronizedWorkers;
-            return { request, nullptr, false };
+        attention.wait(guard);
+        if (!isActive.load(std::memory_order_acquire)) {
+            return { nullptr, nullptr, true };
+        }
+        if (ZForwarding* forwarding = prune_and_claim()) {
+            --nsynchronized;
+            return { forwarding, nullptr, false };
         }
     }
 }
 
-bool ZRelocateQueue::IsActive() const
-{
-    std::lock_guard<std::mutex> lock(queueMutex);
-    return accepting;
-}
-
 size_t ZRelocateQueue::PendingCount() const
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    return byPage.size();
+    std::lock_guard<std::mutex> guard(lock);
+    return static_cast<size_t>(queue.length());
 }
 
 size_t ZRelocateQueue::SynchronizedWorkerCount() const
 {
-    std::lock_guard<std::mutex> lock(queueMutex);
-    return synchronizedWorkers;
+    std::lock_guard<std::mutex> guard(lock);
+    return nsynchronized;
 }
 
 PageAge ZRelocate::compute_to_age(PageAge fromAge)

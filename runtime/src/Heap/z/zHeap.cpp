@@ -211,6 +211,12 @@ void HeapImpl::Init(const HeapParam& param)
     theSpace->Init(param);
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
+    {
+        collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).forwarding_table().initialize(
+            ZAddressOffsetMax, 0, ZPage::UNIT_SIZE);
+        collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table().initialize(
+            ZAddressOffsetMax, 0, ZPage::UNIT_SIZE);
+    }
     collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered()->bind(
         &ZPageTable::heap_table(),
         &collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table(),

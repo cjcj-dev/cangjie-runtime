@@ -35,6 +35,7 @@
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zRelocationSetSelector.inline.hpp"
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zWorkers.hpp"
@@ -59,9 +60,12 @@ GenerationCycle::GenerationCycle(GCCycleGeneration generation)
     : mark(std::make_unique<ZMark>(ZMarkStripesMax,
           generation == GCCycleGeneration::YOUNG ? MarkingStacks::MarkingGeneration::YOUNG
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
-      generation(generation),
-      _relocation_set(this)
-{}
+       generation(generation),
+       _relocation_set(this),
+       _relocate(std::make_unique<ZRelocate>(this))
+{
+    ZJNICritical::initialize();
+}
 
 GenerationCycle::~GenerationCycle() = default;
 
@@ -87,6 +91,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
 {
     CHECK(generation == GCCycleGeneration::YOUNG);
     CHECK(Snapshot().active);
+    ZJNICritical::block();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
         CopyCollector::testMarkStartState(generation, MarkStartPoint::Begin, mark.get());
@@ -150,6 +155,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
         CopyCollector::testMarkStartState(generation, MarkStartPoint::Complete, mark.get());
     }
 #endif
+    ZJNICritical::unblock();
     return stats;
 }
 
@@ -158,6 +164,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
 {
     CHECK(generation == GCCycleGeneration::OLD);
     CHECK(Snapshot().active);
+    ZJNICritical::block();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
         CopyCollector::testMarkStartState(generation, MarkStartPoint::Begin, mark.get());
@@ -200,6 +207,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
         CopyCollector::testMarkStartState(generation, MarkStartPoint::Complete, mark.get());
     }
 #endif
+    ZJNICritical::unblock();
 }
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the

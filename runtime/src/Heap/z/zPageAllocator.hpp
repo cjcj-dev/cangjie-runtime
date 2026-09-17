@@ -271,7 +271,7 @@ public:
 
     void AddGarbageUnits(UnitIndex idx, UnitCount num, bool allowSaferegion = true);
 
-    // mark-epoch quarantine: units reclaimed after DispelGhost must not enter the dirty
+    // mark-epoch quarantine: units reclaimed after from-page reclaim must not enter the dirty
     // tree (mutator TakeRegion → ClearUnits) until the next major concurrent mark ends.
     // INV: concurrent mark may still hold plain strong refs into this range (SATB).
     void AddMarkQuarantineUnits(UnitIndex idx, UnitCount num)
@@ -613,6 +613,7 @@ public:
 #endif
 
     uintptr_t GetRegionHeapStart() const { return regionHeapStart; }
+    uintptr_t GetRegionHeapEnd() const { return regionHeapEnd; }
 
     ~RegionManager() = default;
 

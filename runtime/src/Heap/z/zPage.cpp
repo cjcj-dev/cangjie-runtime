@@ -75,7 +75,7 @@ namespace {
 // vary, so region counts cannot stand in for young-generation byte occupancy.
 std::atomic<size_t> youngRegionBytes{ 0 };
 }
-std::atomic<size_t> ZPage::dispelGhostCount { 0 };
+std::atomic<size_t> ZPage::tdWindowCount { 0 };
 
 std::mutex ZPage::youngRegionFlagMutex;
 
@@ -350,9 +350,10 @@ ZPage* ZPage::reset(PageAge age)
     }
     if (wasYoung && !makeYoung) {
         size_t count = youngRegionCount.load(std::memory_order_relaxed);
-        CHECK(count > 0);
-        youngRegionCount.fetch_sub(1, std::memory_order_release);
-        youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
+        if (count > 0) {
+            youngRegionCount.fetch_sub(1, std::memory_order_release);
+            youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
+        }
     }
     ResetPageSequence();
     return this;

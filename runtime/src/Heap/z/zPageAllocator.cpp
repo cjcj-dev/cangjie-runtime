@@ -620,14 +620,6 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     this->regionHeapEnd = segments.back().End();
     heapUnitCount = nUnit;
     CHECK(nUnit * ZPage::UNIT_SIZE <= span.size());
-    // zPageTable.cpp:37-52: address tables cover the highest available end.
-    {
-        auto& collector = Heap::GetHeap().GetCollector();
-        collector.GetGenerationCycle(GCCycleGeneration::YOUNG).forwarding_table().initialize(
-            regionHeapEnd - regionHeapStart, regionHeapStart, ZPage::UNIT_SIZE);
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table().initialize(
-            regionHeapEnd - regionHeapStart, regionHeapStart, ZPage::UNIT_SIZE);
-    }
     this->inactiveZone = regionHeapStart;
     SetMaxUnitCountForRegion(heapParam.regionSize);
     SetMaxUnitCountForPinnedRegion(heapParam.regionSize);

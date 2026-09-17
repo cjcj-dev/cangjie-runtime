@@ -579,14 +579,7 @@ inline ZPage* ZPage::GetZPage(uint32_t idx)
 
 inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t allocAddr)
     {
-        ZPage* region = ZPageTable::heap_table().get(allocAddr);
-        if (region == nullptr || !region->IsGhostFromRegion()) {
-            return nullptr;
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        RunGhostLookupTestHook(region);
-#endif
-        return region;
+        return ZPageTable::heap_table().get(allocAddr);
     }
 
 inline MAddress ZPage::GetUnitAddress(size_t idx)
@@ -745,68 +738,8 @@ inline void ZPage::PublishFromPageMetadata()
 inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     {
         PublishFromPageMetadata<G>();
-        SetInGhostRegion(1);
         _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
-
-inline void ZPage::ClearGhostRegionBit()
-    {
-        if (IsGhostFromRegion()) {
-            SetInGhostRegion(0);
-        }
-    }
-
-inline void ZPage::ClearGhostFromRegionBits()
-    {
-        SetInGhostRegion(0);
-    }
-
-inline void ZPage::DispelGhostFromRegion()
-    {
-        // fwdinflight: this is one of the three edges that retire from-side route state, and
-        // it is unconditional -- nothing here waits for a reader. ZGC's equivalent,
-        // ZForwarding::detach_page (zForwarding.cpp:171-181), blocks until _ref_count is zero.
-        // Count what we would be invalidating. Default off; never blocks.
-
-        // portmutreloc: hold the forwarding drain across the whole body. It is held
-        // run while a retained reader is inside the route lookup or a mutator copy.
-        InPlaceClaimScope drain(this, ZForwarding::Retire::DISPEL_GHOST);
-        // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
-        // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
-        // lets step 3 change *when* it happens without changing *where*.
-        const size_t nUnit = GetGhostRegionUnitCount();
-        ClearGhostFromRegionBits();
-        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
-        // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
-        VLOG(REPORT,
-             "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
-             this, GetRegionStart(), nUnit, livemap().live_bytes(),
-              IsForwardingDone() ? 1u : 0u,
-             static_cast<unsigned>(IsYoungRegion()));
-        // The old top/livemap disappeared with the forwarding carrier above;
-        // only page-owned ghost/route state is reset in this body.
-    }
-
-inline bool ZPage::IsGhostFromRegion() const
-    {
-        const bool ghost = _scratch.regionStateBitField.GetAtomicValue(
-            RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) != 0;
-        if (!ghost) {
-            return false;
-        }
-        return __atomic_load_n(&_scratch.ghostLifeId, __ATOMIC_ACQUIRE) == GetRegionLifeId();
-    }
-
-inline void ZPage::AssertGhostClearedAfterReuse(size_t nUnit) const
-    {
-        CHECK(!IsGhostFromRegion());
-        size_t baseIdx = GetUnitIdx();
-        for (size_t i = 1; i < nUnit; i++) {
-            MAddress addr = GetUnitAddress(baseIdx + i);
-            CHECK(!InGhostFromRegion(from_region_addr(addr)));
-        }
-    }
-
 
 inline bool ZPage::RetainForwarding()
     {
@@ -860,9 +793,7 @@ inline bool ZPage::ForwardingClaimed() const
 
 inline void ZPage::SetInGhostRegion(uint8_t flag)
     {
-        const RegionLifeId life = GetRegionLifeId();
-        __atomic_store_n(&_scratch.ghostLifeId, life, __ATOMIC_RELEASE);
-        _scratch.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
+        (void)flag;
     }
 
 // ZPage::clone_for_promotion + ZPage::reset(age) (zPage.cpp:64-72, 103-113)
@@ -1101,7 +1032,7 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
             uint8_t next = static_cast<uint8_t>((cur + 1) & 0x7f);
             __atomic_store_n(&_scratch.regionLifeSequence, next, __ATOMIC_RELEASE);
         }
-        // See DispelGhostFromRegion: retire the route before detaching its compact table.
+        // Retire the forwarding owner before detaching its compact table.
         _scratch.fwdOwner.store(nullptr, std::memory_order_release);
         WaitCopiedBeforePayloadWipe(this, "InitZPage");
         delete _scratch.retiredLivemap;

@@ -879,7 +879,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     (void)reachableSlotDomain;
     (void)workStack;
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
-    const size_t dispelAtEntry = ZPage::GetDispelGhostCount();
+    const size_t dispelAtEntry = ZPage::GetTdWindowCount();
     ZWorkers& workersSet = GetWorkers(GCCycleGeneration::YOUNG);
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
     ZMark& domain = youngCycle.Mark();
@@ -892,7 +892,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
         CHECK_DETAIL(domain.Stripes().IsEmpty(),
                      "young striped closure returned without coordinated worker termination");
     }
-    const size_t dispelAtExit = ZPage::GetDispelGhostCount();
+    const size_t dispelAtExit = ZPage::GetTdWindowCount();
     CHECK_DETAIL(dispelAtExit == dispelAtEntry,
                  "T-D ghost dispel during striped mark_closure window entry=%zu exit=%zu", dispelAtEntry,
                  dispelAtExit);
