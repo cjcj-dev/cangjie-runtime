@@ -42,10 +42,7 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-static WCollector& HeapCollector()
-{
-    return static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-}
+
 
 #if defined(MRT_TESTABLE_INTERNALS)
 #include "young_closure_observation.hpp"
@@ -401,7 +398,7 @@ void RunYoungWeakVariant(size_t helpers)
     WeakGraph graph(fx, fx.region1);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = HeapCollector();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     // zGeneration.cpp: each generation owns its worker pool before collection.
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     {
@@ -472,7 +469,7 @@ void RunYoungWeakRemsetFlow()
     TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = HeapCollector();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RememberedSet& rememberedSet = HeapTestRemset();
@@ -534,7 +531,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     WeakGraph graph(fx, fx.region0);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = HeapCollector();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     // zGeneration.cpp: each generation owns its worker pool before collection.
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     {
@@ -735,7 +732,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     WeakGraph::Field(graph.weak).StoreColoured(zpointer::null);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = HeapCollector();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
@@ -767,7 +764,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     ValueRootRoute route = PrepareValueRootRoute(fx, true);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = HeapCollector();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     {
         auto& young = collector.GetZGeneration(ZGenerationId::young);
@@ -834,7 +831,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     const size_t owners = sharedCycle ? 2 : 1;
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = HeapCollector();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
@@ -955,7 +952,7 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     GcHeapFixture fx;
     WeakGraph graph(fx, fx.region0);
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = HeapCollector();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     NativeSlot root(StoreGoodPointer(graph.weak));
@@ -994,7 +991,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GcHeapFixture fx;
     WeakGraph graph(fx, fx.region0);
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = HeapCollector();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
