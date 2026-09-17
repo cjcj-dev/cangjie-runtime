@@ -894,7 +894,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
-            TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true, true);
             fwdTable.PrepareForwardTable<Generation::Young>();
             // ZGenerationYoung::collect: last abortpoint after selection,
             // before relocate-start. Once flipped, finish every remaining page.
@@ -915,13 +914,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Publish the relocate phase and submit page work while the
             // existing young pause still excludes mutator execution. Root
             // transition may now wait for a real page task on allocation failure.
-            Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_PREFORWARD);
             StartRelocationTasks(GCCycleGeneration::YOUNG);
             ZJNICritical::unblock();
-            // The pause publishes the work domain. Eager roots relocate one
-            // object themselves; allocation failure uses the same in-place page
-            // task on this thread (advisor 161024, compiler prerequisite #498).
-            TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true, true);
         }
 
         // pass1 root fix after the domain snapshot.
@@ -940,7 +934,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     }
 
     {
-        TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true, true);
         {
             if (stw != nullptr && *stw != nullptr) {
                 stw->reset();
