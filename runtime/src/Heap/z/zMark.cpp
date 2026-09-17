@@ -973,7 +973,7 @@ void WCollector::MarkNewObject(BaseObject* obj)
 {
     // Registration follows object initialization (BaseObject::RegisterFinalizer).
     // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
-    auto& cycle = ObjectGeneration(obj) == Generation::Young ? youngCycle : oldCycle;
+    GenerationCycle& cycle = GetGenerationCycle(ObjectGeneration(obj));
     cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
 }
 

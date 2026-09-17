@@ -230,7 +230,7 @@ bool GenerationCycle::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 
 void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
 {
-    GenerationCycle& cycle = generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
+    GenerationCycle& cycle = GetGenerationCycle(generation);
     const GCPhase before = cycle.GcPhase();
     if (generation == GCCycleGeneration::OLD &&
         (value == GCPhase::GC_PHASE_PREFORWARD || value == GCPhase::GC_PHASE_FORWARD) &&

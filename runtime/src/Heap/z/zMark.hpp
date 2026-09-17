@@ -508,7 +508,7 @@ protected:
     void EnumAllCommonRoots(ZWorkers& workers);
     ZWorkers& GetWorkers(GCCycleGeneration generation) const
     {
-        return *(generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Workers();
+        return *GetGenerationCycle(generation).Workers();
     }
     // enum roots referenced by foreign languages.
     void EnumAllExportRoots(RootSet& foreignRootsSet);
