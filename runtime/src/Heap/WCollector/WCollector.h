@@ -747,6 +747,7 @@ private:
     void DoYoungGarbageCollection();
     void RunYoungCollection();
     void RunOldCollection();
+    void MergeY2yDirtyWork(WorkStack& destination);
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
     // stores (zBarrier.inline.hpp:742-749). Seed them into the old TRACE stack.
@@ -783,6 +784,13 @@ private:
     size_t youngLiveBytes = 0;
     size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
+    WorkStack youngWorkStack;
+    MinorSlotSet youngReachableSlots;
+    MinorSlotSet youngWeakSlots;
+    MinorSlotSet youngRememberedSlots;
+    YoungConcWindowStats youngConcWindow;
+    uint64_t youngConcWindowStartNs = 0;
+    bool youngMarkFollowFailed = false;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H
