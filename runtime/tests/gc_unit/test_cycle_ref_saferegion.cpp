@@ -367,8 +367,6 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     Heap::GetHeap().RemoveExportObject(exportHandle);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 
-    // ZGC zGeneration.cpp:143: relocate phase stops ResolveCycleRef (preforward
-    // owns remaining callbacks). First handler runs in Mark then flips.
     GC_EXPECT_EQ(callsBeforeResume, 1u);
     GC_EXPECT_EQ(static_cast<unsigned>(phaseBeforeResume),
                  static_cast<unsigned>(ZGenerationPhase::Relocate));

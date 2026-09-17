@@ -1655,8 +1655,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
         (void)fromRegionList.TryDeleteRegion(region);
         owner->set_in_place();
         CompactRegion(region);
-    } else if (region->IsFromRegion() || region->IsLoneFromRegion() ||
-               (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()))) {
+    } else {
         ForwardRegion<G>(region);
     }
     // All page metadata and legacy helper work is finished. A nested drain

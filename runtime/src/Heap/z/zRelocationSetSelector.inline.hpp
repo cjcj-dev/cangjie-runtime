@@ -101,6 +101,8 @@ inline void ZRelocationSetSelector::register_live_page(ZPage* page)
 
 inline void ZRelocationSetSelector::add_selected_small(ZPage* page, size_t nentries)
 {
+    CHECK_DETAIL(page->is_relocatable(),
+                 "selected page must be relocatable start=%#zx", page->GetRegionStart());
     _small.append_selected(page, nentries);
 }
 
