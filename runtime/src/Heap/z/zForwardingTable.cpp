@@ -30,7 +30,7 @@ ZForwardingTable& generation_forwarding_table(Generation generation)
 
 ZRelocateQueue& generation_relocate_queue(Generation generation)
 {
-    return Heap::GetHeap().GetCollector().GetGenerationCycle(generation).relocate().queue();
+    return *Heap::GetHeap().GetCollector().GetGenerationCycle(generation).relocate().queue();
 }
 
 ZRelocateQueue& generation_relocate_queue()
