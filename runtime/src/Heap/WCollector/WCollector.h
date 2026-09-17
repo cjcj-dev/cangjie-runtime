@@ -300,16 +300,14 @@ public:
         // payload pointer the caller kept. Pinning to while handing out from both
         // underflowed the from region's count and gave C a payload the young cycle
         // was about to relocate.
-        if (obj != nullptr) {
-            ZPage* ghost = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-            if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
-                const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(ghost->GetOwnerGeneration()));
-                if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
-                    const ForwardingProvenance provenance{
-                        ForwardingHolderKind::HeapRef, this, &obj
-                    };
-                    obj = ValidateCurrentValue(obj, provenance);
-                }
+        if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+            const MAddress addr = reinterpret_cast<MAddress>(obj);
+            if (GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                GetGenerationCycle(Generation::Old).forwarding_table().get(addr) != nullptr) {
+                const ForwardingProvenance provenance{
+                    ForwardingHolderKind::HeapRef, this, &obj
+                };
+                obj = ValidateCurrentValue(obj, provenance);
             }
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -368,16 +366,9 @@ public:
             if (!Heap::IsHeapAddress(obj)) {
                 return false;
             }
-            // The table is installed over a heap span; membership still
-            // requires the per-region forwarding publication.  Unselected
-            // regions retain a NORMAL route and no forwarding face, and must
-            // not be classified as relocation-set addresses merely because
-            // their address falls inside that span (zGeneration.cpp:254).
-            ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-            return region != nullptr &&
-                (region->FromPageLiveMap() != nullptr ||
-                 forwarding_for_page(region) != nullptr ||
-                 region->IsForwardingDone());
+            const MAddress addr = reinterpret_cast<MAddress>(obj);
+            return GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                   GetGenerationCycle(Generation::Old).forwarding_table().get(addr) != nullptr;
         }
         // filter const string object.
         if (Heap::IsHeapAddress(obj)) {
@@ -399,12 +390,7 @@ public:
 
     bool IsGhostFromObject(BaseObject* obj) const override
     {
-        // filter const string object.
-        if (Heap::IsHeapAddress(obj)) {
-            return ZPage::InGhostFromRegion(obj);
-        }
-
-        return false;
+        return IsFromObject(obj);
     }
 
     bool IsUnmovableFromObject(BaseObject* obj) const override;

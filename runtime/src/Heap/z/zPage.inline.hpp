@@ -579,14 +579,7 @@ inline ZPage* ZPage::GetZPage(uint32_t idx)
 
 inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t allocAddr)
     {
-        ZPage* region = ZPageTable::heap_table().get(allocAddr);
-        if (region == nullptr || !region->IsGhostFromRegion()) {
-            return nullptr;
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        RunGhostLookupTestHook(region);
-#endif
-        return region;
+        return ZPageTable::heap_table().get(allocAddr);
     }
 
 inline MAddress ZPage::GetUnitAddress(size_t idx)
@@ -745,7 +738,6 @@ inline void ZPage::PublishFromPageMetadata()
 inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     {
         PublishFromPageMetadata<G>();
-        SetInGhostRegion(1);
         _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
 
@@ -763,28 +755,7 @@ inline void ZPage::ClearGhostFromRegionBits()
 
 inline void ZPage::DispelGhostFromRegion()
     {
-        // fwdinflight: this is one of the three edges that retire from-side route state, and
-        // it is unconditional -- nothing here waits for a reader. ZGC's equivalent,
-        // ZForwarding::detach_page (zForwarding.cpp:171-181), blocks until _ref_count is zero.
-        // Count what we would be invalidating. Default off; never blocks.
-
-        // portmutreloc: hold the forwarding drain across the whole body. It is held
-        // run while a retained reader is inside the route lookup or a mutator copy.
-        InPlaceClaimScope drain(this, ZForwarding::Retire::DISPEL_GHOST);
-        // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
-        // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
-        // lets step 3 change *when* it happens without changing *where*.
-        const size_t nUnit = GetGhostRegionUnitCount();
         ClearGhostFromRegionBits();
-        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
-        // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
-        VLOG(REPORT,
-             "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
-             this, GetRegionStart(), nUnit, livemap().live_bytes(),
-              IsForwardingDone() ? 1u : 0u,
-             static_cast<unsigned>(IsYoungRegion()));
-        // The old top/livemap disappeared with the forwarding carrier above;
-        // only page-owned ghost/route state is reset in this body.
     }
 
 inline bool ZPage::IsGhostFromRegion() const

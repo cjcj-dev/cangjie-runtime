@@ -242,43 +242,13 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
 {
     zaddress_unsafe observed = root.LoadPlain();
     BaseObject* oldObj = to_object(safe(observed));
-    DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
-    // Static / RO slots (e.g. .data.rel.ro under GNU_RELRO) hold non-heap objects that
-    // are never evacuated. Keep their existing plain value and skip write-back.
-    // Same heap gate as IsGhostFromObject / FindToVersion / FixMinorEvacuatedSlot resolve.
     if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
         return oldObj;
     }
-    if (IsGhostFromObject(oldObj)) {
-        const MAddress mappedAddr = forwarding_find(generation, reinterpret_cast<MAddress>(oldObj));
-        if (mappedAddr != 0) {
-            BaseObject* mapped = reinterpret_cast<BaseObject*>(mappedAddr);
-            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
-            return mapped;
-        }
-        const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(generation));
-        if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
-            Collector::FailClosedLoad(
-                "WCollector::ForwardUpdateRawRef.unresolved", oldObj,
-                reinterpret_cast<uintptr_t>(&root),
-                ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
-        }
-        BaseObject* toVersion = TryForwardObject(oldObj, generation);
-        if (toVersion == nullptr) {
-            Collector::FailClosedLoad(
-                "WCollector::ForwardUpdateRawRef.unresolved", oldObj,
-                reinterpret_cast<uintptr_t>(&root),
-                ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
-        }
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-        DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
-        return toVersion;
-    } else {
-        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-    }
-
-    return oldObj;
+    const ZGenerationId id = generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
+    BaseObject* mapped = relocate_or_remap_object(oldObj, id);
+    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+    return mapped;
 }
 
 
