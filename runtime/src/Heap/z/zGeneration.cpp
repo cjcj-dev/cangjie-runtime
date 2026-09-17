@@ -660,6 +660,36 @@ void WCollector::DoYoungGarbageCollection()
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
          liveBytes, liveRememberedCount, stats.reclaimedBytes, pauseUs);
+}
+
+void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
+{
+    (void)rememberedSlots;
+}
+
+void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
+                                     const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
+                                     const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
+                                     MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
+                                     MinorInteriorBaseMap* interiorBasesOut,
+                                     const ScopedStopTheWorld* stw)
+{
+    (void)workStack;
+    (void)rememberedSlots;
+    (void)reachableSlots;
+    (void)weakSlots;
+    (void)currentMinorRoots;
+    (void)fullYoungScan;
+    (void)stw;
+    if (consumedOut != nullptr) {
+        consumedOut->clear();
+    }
+    if (statsOut != nullptr) {
+        *statsOut = RemsetScanStats{};
+    }
+    if (interiorBasesOut != nullptr) {
+        interiorBasesOut->clear();
+    }
 
 
 
