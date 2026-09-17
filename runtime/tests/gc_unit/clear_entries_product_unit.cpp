@@ -627,8 +627,6 @@ void CleanupLateBackfill(GcHeapFixture& fx, LateBackfillState& state)
     // The scenario has consumed its receipt. Normalize the planted header
     // before asking product retirement to prove no source still needs it.
     state.from->SetStateCode(ObjectState::NORMAL);
-    if (state.region->IsGhostFromRegion()) {
-        state.    }
     Heap::GetHeap().GetCollector().GetGenerationCycle(state.region->GetOwnerGeneration()).reset_relocation_set();
     (void)fx;
 }
@@ -664,8 +662,6 @@ void CleanupPartialCompact(GcHeapFixture& fx, PartialCompactState& state)
 {
     RelocationReceiptTestAccess::ReleaseListOwnership(state.region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(state.region->GetOwnerGeneration()).reset_relocation_set();
-    if (state.region->IsGhostFromRegion()) {
-        state.    }
     (void)fx;
 }
 
