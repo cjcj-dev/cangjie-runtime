@@ -1,4 +1,5 @@
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "gc_unittest.hpp"
@@ -41,6 +42,15 @@ GC_TEST(ZAbort, AllStaticAbortpoint)
     GC_EXPECT_TRUE(ZAbort::should_abort());
     ZAbort::reset();
     GC_EXPECT_TRUE(!ZAbort::should_abort());
+}
+
+GC_TEST(ZCollectedHeap, StopAborts)
+{
+    Heap::GetHeap();
+    ZAbort::reset();
+    ZCollectedHeap::stop();
+    GC_EXPECT_TRUE(ZAbort::should_abort());
+    ZAbort::reset();
 }
 
 GC_TEST(ZGeneration, CollectionScopeClearsTimer)
