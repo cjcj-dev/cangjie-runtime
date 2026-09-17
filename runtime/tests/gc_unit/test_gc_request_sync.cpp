@@ -7,6 +7,7 @@
 #include "Heap/z/zDriverPort.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <thread>
 
 using namespace MapleRuntime;
@@ -56,8 +57,7 @@ GC_TEST(ZDriverPort, AckDoesNotSatisfyLaterSeqnum)
         port.send_sync(ZDriverRequest(GC_REASON_FORCE, 0, 0));
         secondDone.store(true);
     });
-    while (!port.is_busy()) {
-    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     port.ack();
     first.join();
     GC_EXPECT_TRUE(firstDone.load());
