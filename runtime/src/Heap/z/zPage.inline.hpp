@@ -356,16 +356,25 @@ inline MAddress ZPage::find_base(MAddress p)
 
 inline void ZPage::remember(volatile zpointer* p)
 {
+    if (!_remembered_set.is_initialized()) {
+        return;
+    }
     _remembered_set.set_current(local_offset(reinterpret_cast<MAddress>(p)));
 }
 
 inline bool ZPage::is_remembered(volatile zpointer* p)
 {
+    if (!_remembered_set.is_initialized()) {
+        return false;
+    }
     return _remembered_set.at_current(local_offset(reinterpret_cast<MAddress>(p)));
 }
 
 inline bool ZPage::was_remembered(volatile zpointer* p)
 {
+    if (!_remembered_set.is_initialized()) {
+        return false;
+    }
     return _remembered_set.at_previous(local_offset(reinterpret_cast<MAddress>(p)));
 }
 
