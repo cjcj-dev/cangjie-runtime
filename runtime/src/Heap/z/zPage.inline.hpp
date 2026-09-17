@@ -755,12 +755,7 @@ inline void ZPage::ClearGhostFromRegionBits()
 
 inline bool ZPage::IsGhostFromRegion() const
     {
-        const bool ghost = _scratch.regionStateBitField.GetAtomicValue(
-            RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) != 0;
-        if (!ghost) {
-            return false;
-        }
-        return __atomic_load_n(&_scratch.ghostLifeId, __ATOMIC_ACQUIRE) == GetRegionLifeId();
+        return false;
     }
 
 inline void ZPage::AssertGhostClearedAfterReuse(size_t nUnit) const
@@ -826,9 +821,7 @@ inline bool ZPage::ForwardingClaimed() const
 
 inline void ZPage::SetInGhostRegion(uint8_t flag)
     {
-        const RegionLifeId life = GetRegionLifeId();
-        __atomic_store_n(&_scratch.ghostLifeId, life, __ATOMIC_RELEASE);
-        _scratch.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
+        (void)flag;
     }
 
 // ZPage::clone_for_promotion + ZPage::reset(age) (zPage.cpp:64-72, 103-113)

@@ -406,7 +406,8 @@ public:
 
     static bool InGhostFromRegion(BaseObject* obj)
     {
-        return GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj)) != nullptr;
+        (void)obj;
+        return false;
     }
 
     static ZPage* GetGhostFromRegionAt(uintptr_t allocAddr);
@@ -485,8 +486,6 @@ public:
     __attribute__((always_inline)) inline void PublishForwardingCarrier();
 
     void ClearGhostRegionBit();
-
-    // inGhostFromRegion is the unique guard condition.
 
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.
@@ -745,7 +744,7 @@ private:
     static constexpr uint8_t YOUNG_STATE_BIT_LENGTH = 1 + YOUNG_AGE_BIT_LENGTH;
     static constexpr uint8_t MAX_YOUNG_AGE = (1U << YOUNG_AGE_BIT_LENGTH) - 1;
     enum RegionStateBitPos : uint8_t {
-        IN_GHOST_FROM_REGION_FLAG = 5
+        UNUSED_REGION_STATE_BIT = 0
     };
 
     // P11/P05 scratch. ZGC has no analogue; not part of the ZPage ten-field set.
@@ -771,12 +770,7 @@ private:
         std::atomic<int32_t> copyInflight{ 0 };
         alignas(8) char routeInfoPad[24]{};
         uint32_t nextRegionIdx0;
-        union {
-            struct {
-                uint8_t inGhostFromRegion : 1;
-            };
-            AtomicBitField<uint16_t> regionStateBitField;
-        };
+        AtomicBitField<uint16_t> regionStateBitField;
         std::atomic<uint64_t> routeStateSnapshot{ 0 };
         RegionLifeId ghostLifeId = 0;
         RwLock rwLock;

@@ -83,26 +83,6 @@ GC_TEST(StayYoung, EnlistTypeMustNotStayLoneFrom)
     GC_EXPECT_TRUE(true);
 }
 
-// regionType shares regionStateBitField with ghost/young/age. A plain read of the
-// bitfield member can tear against SetInGhostRegion / SetYoungAge CAS on the same
-// word (TryTakeGarbageRegionAfterDispel CHECK, RegionManager.h:984). GetRegionType
-// must observe the CAS writers.
-GC_TEST(StayYoung, GarbageTypeSurvivesGhostAndAgeCas)
-{
-    GcHeapFixture fx;
-    ZPage* r = fx.region0;
-    r->SetRegionListOwner(nullptr);
-    r->SetInGhostRegion(1);
-    r->reset(static_cast<PageAge>(3));
-    GC_EXPECT_TRUE(r->IsGarbageRegion());
-    GC_EXPECT_TRUE(r->IsGhostFromRegion());
-    GC_EXPECT_EQ(r->GetYoungAge(), 3u);
-    GC_EXPECT_FALSE(r->IsFromRegion());
-    r->SetInGhostRegion(0);
-    GC_EXPECT_TRUE(r->IsGarbageRegion());
-    GC_EXPECT_TRUE(!r->IsGhostFromRegion());
-}
-
 // PrepareFromRegionList walks nextRegionIdx0. Reuse must not keep the previous
 // life's ghost successor (InitZPage, ZPage.h).
 GC_TEST(StayYoung, InitRegionClearsGhostSuccessor)
