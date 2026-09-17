@@ -1,5 +1,6 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
@@ -27,9 +28,14 @@ ZForwardingTable& generation_forwarding_table(Generation generation)
     return Heap::GetHeap().GetCollector().GetGenerationCycle(generation).forwarding_table();
 }
 
+ZRelocateQueue& generation_relocate_queue(Generation generation)
+{
+    return Heap::GetHeap().GetCollector().GetGenerationCycle(generation).relocate().queue();
+}
+
 ZRelocateQueue& generation_relocate_queue()
 {
-    return static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetZRelocateQueue();
+    return generation_relocate_queue(Generation::Young);
 }
 
 ZForwarding* forwarding_for_page(const ZPage* page)

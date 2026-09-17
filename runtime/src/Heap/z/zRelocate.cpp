@@ -902,6 +902,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
+                ZJNICritical::block();
                 ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
                     data.storeBarrierBuffer->install_base_pointers();
                 });
@@ -917,6 +918,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // object themselves; allocation failure uses the same in-place page
             // task on this thread (advisor 161024, compiler prerequisite #498).
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true, true);
+            if (doYoungFlip) {
+                ZJNICritical::unblock();
+            }
         }
 
         // pass1 root fix after the domain snapshot.
@@ -1687,7 +1691,8 @@ void RegionManager::StartForwardFromRegions(ZWorkers& workers)
     relocationStarted = true;
     relocationDrained = false;
     relocationWorkers = &workers;
-    relocateQueue.BeginWorkers(workers.active_workers());
+    generation_relocate_queue(G == Generation::Young ? Generation::Young : Generation::Old)
+        .BeginWorkers(workers.active_workers());
 }
 
 template<Generation G>
@@ -1735,7 +1740,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
     owner->detach_page();
     owner->mark_done();
     // From here on only forwarding/queue state may be touched.
-    (void)relocateQueue.Complete(owner);
+    (void)generation_relocate_queue(G == Generation::Young ? Generation::Young : Generation::Old).Complete(owner);
 }
 
 

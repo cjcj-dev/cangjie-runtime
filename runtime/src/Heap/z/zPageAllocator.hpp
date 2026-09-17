@@ -533,7 +533,7 @@ public:
     void ForwardFromRegions();
     template<Generation G>
     void ForwardRegion(ZPage* region);
-    ZRelocateQueue& GetZRelocateQueue() { return relocateQueue; }
+    ZRelocateQueue& GetZRelocateQueue() { return generation_relocate_queue(); }
     bool StallAllocation(AllocationStallRequest& request, bool requestGc);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
     void ReturnPageMemory(const PageMemory& memory);
@@ -828,7 +828,6 @@ private:
     // fromRegionList is a list of full regions waiting to be collected (i.e. for forwarding).
     // region type must be FROM_REGION.
     RegionList fromRegionList;
-    ZRelocateQueue relocateQueue;
     ZWorkers* relocationWorkers{ nullptr };
     bool relocationStarted{ false };
     bool relocationDrained{ false };
