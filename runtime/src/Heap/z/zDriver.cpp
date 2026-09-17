@@ -299,8 +299,12 @@ bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriver
 {
     DriverLocker locker(*this);
     const bool major = port.Kind() == GCDriverKind::MAJOR;
+    if (!port.IsStopped()) {
+        ZAbort::reset();
+    }
     if (major) ZBreakpoint::AtBeforeGC();
     if (port.IsStopped() || ZAbort::should_abort() || !ExecuteDriverRequest(request)) {
+        if (major) ZBreakpoint::AtAfterGC();
         port.Cancel(request);
         CompleteDriverRequest(port);
         return false;
