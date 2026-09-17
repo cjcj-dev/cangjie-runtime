@@ -2512,7 +2512,7 @@ void ZRelocateQueue::add_and_wait(ZForwarding* forwarding)
     }
 #endif
     while (!forwarding->is_done()) {
-        attention.wait(guard);
+        attention.wait_for(guard, std::chrono::milliseconds(1));
     }
 }
 
