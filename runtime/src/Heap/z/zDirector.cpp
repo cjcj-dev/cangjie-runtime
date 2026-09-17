@@ -55,9 +55,23 @@ void ZDirector::evaluate_rules()
     _director->resources.directorCondition.notify_one();
 }
 
+bool ZDirector::wait_for_tick()
+{
+    std::unique_lock<std::mutex> lock(resources.directorMutex);
+    if (resources.directorStopped) {
+        return false;
+    }
+    resources.directorCondition.wait_for(lock, std::chrono::milliseconds(10),
+        [this] { return resources.directorStopped || resources.directorReevaluate; });
+    return !resources.directorStopped;
+}
+
 void ZDirector::run_thread()
 {
-    resources.RunDirectorLoop();
+    while (wait_for_tick()) {
+        resources.directorReevaluate = false;
+        resources.EvaluateDirector(TimeUtil::NanoSeconds());
+    }
 }
 
 void ZDirector::terminate()
@@ -104,19 +118,15 @@ void ZDirector::terminate()
 namespace MapleRuntime {
 void CollectorResources::RunDirectorLoop()
 {
-    GcMetronome metronome(TimeUtil::NanoSeconds());
-    std::unique_lock<std::mutex> lock(directorMutex);
-    while (!directorStopped) {
-        const uint64_t now = TimeUtil::NanoSeconds();
-        const bool tick = metronome.Poll(now);
-        if (tick || directorReevaluate) {
-            directorReevaluate = false;
-            EvaluateDirector(now);
-            continue;
-        }
-        directorCondition.wait_for(lock, std::chrono::nanoseconds(metronome.DeadlineNs() - now),
-                                   [this] { return directorStopped || directorReevaluate; });
+    if (director != nullptr) {
+        director->run_thread();
     }
+}
+
+bool CollectorResources::start_gc(uint64_t now)
+{
+    EvaluateDirector(now);
+    return minorBusy || majorBusy || minorDriverPort.is_busy() || majorDriverPort.is_busy();
 }
 
 void CollectorResources::EvaluateDirector(uint64_t now)
@@ -142,7 +152,8 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         g_gcTriggerOldWorkers.store(selection.oldWorkers, std::memory_order_relaxed);
         NoteGcTriggerRule(decision.rule);
         if (decision.kind == GcTriggerKind::MAJOR) {
-            const GCReason reason = decision.rule == GcTriggerRule::TIMER ? GC_REASON_BACKUP : GC_REASON_HEU;
+            const GCReason reason = decision.rule == GcTriggerRule::TIMER ? GC_REASON_BACKUP :
+                (decision.rule == GcTriggerRule::WARMUP ? GC_REASON_WARMUP : GC_REASON_HEU);
             majorDriverPort.send_async(ZDriverRequest(reason, selection.youngWorkers, selection.oldWorkers));
         } else {
             minorDriverPort.send_async(ZDriverRequest(GC_REASON_YOUNG, selection.youngWorkers, 0));

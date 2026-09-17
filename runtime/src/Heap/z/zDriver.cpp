@@ -90,7 +90,7 @@ void ZDriverMinor::collect(const ZDriverRequest& request)
             resources.GetMinorDriverPort().send_sync(request);
             break;
         default:
-            resources.GetMinorDriverPort().send_async(request);
+            CHECK(false);
             break;
     }
 }
@@ -103,12 +103,18 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
         case GC_REASON_OOM:
             resources.GetMajorDriverPort().send_sync(request);
             break;
+        case GC_REASON_BACKUP:
+        case GC_REASON_HEU:
+        case GC_REASON_NATIVE:
+        case GC_REASON_WARMUP:
+            resources.GetMajorDriverPort().send_async(request);
+            break;
         case GC_REASON_WB_BREAKPOINT:
             ZBreakpoint::StartGC();
             resources.GetMajorDriverPort().send_async(request);
             break;
         default:
-            resources.GetMajorDriverPort().send_async(request);
+            CHECK(false);
             break;
     }
 }
@@ -199,16 +205,12 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
             std::lock_guard<std::mutex> lock(directorMutex);
             (kind == GCDriverKind::MINOR ? minorBusy : majorBusy) = true;
         }
+        abortpoint();
         (void)ProcessDriverRequest(port, request);
+        abortpoint();
+        auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        regions.SatisfyStalledAllocations();
     }
-}
-
-bool CollectorResources::TakeDriverRequest(ZDriverPort& port, ZDriverRequest& request)
-{
-    (void)request;
-    std::lock_guard<std::mutex> lock(directorMutex);
-    (&port == &minorDriverPort ? minorBusy : majorBusy) = true;
-    return true;
 }
 
 void CollectorResources::CompleteDriverRequest(ZDriverPort& port)
@@ -271,7 +273,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     // them, including the old mark domain prepared by the young prelude.
     const uint32_t youngCount = request.young_nworkers() == 0 ? concurrentGcThreadCount : request.young_nworkers();
     const uint32_t oldCount = request.old_nworkers() == 0 ? concurrentGcThreadCount : request.old_nworkers();
-    const bool warmup = false;
+    const bool warmup = request.cause() == GC_REASON_WARMUP;
     // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
     // selected worker counts into each generation's ZWorkers.
     collector->GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);
@@ -589,6 +591,7 @@ bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
         case GC_REASON_HEU_SYNC:
         case GC_REASON_NATIVE:
         case GC_REASON_NATIVE_SYNC:
+        case GC_REASON_WARMUP:
             break;
         default:
             CHECK(false);

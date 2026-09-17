@@ -41,6 +41,7 @@ public:
     void run_thread() override;
     void terminate() override;
     static void evaluate_rules();
+    bool wait_for_tick();
 private:
     static ZDirector* _director;
     CollectorResources& resources;
@@ -143,7 +144,7 @@ private:
     void RunDriverLoop(GCDriverKind kind);
     void RunDirectorLoop();
     void EvaluateDirector(uint64_t now);
-    bool TakeDriverRequest(ZDriverPort& port, ZDriverRequest& request);
+    bool start_gc(uint64_t now);
     void CompleteDriverRequest(ZDriverPort& port);
     void RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup);
     void RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup);

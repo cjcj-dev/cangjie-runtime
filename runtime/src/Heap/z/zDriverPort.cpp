@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 
 #include "Heap/z/zDriverPort.hpp"
+#include "Base/Macros.h"
 #include "Heap/z/zFuture.inline.hpp"
 #include "Heap/z/zList.inline.hpp"
 #include "Heap/z/zLock.inline.hpp"
@@ -71,7 +72,7 @@ public:
     void wait()
     {
         const ZDriverRequest message = _result.get();
-        (void)message;
+        MRT_ASSERT(message == _message, "Message mismatch");
     }
 
     void satisfy(const ZDriverRequest& message)
