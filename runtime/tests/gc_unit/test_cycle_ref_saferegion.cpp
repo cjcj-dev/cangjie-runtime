@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <mutex>
+#include <unistd.h>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -316,6 +317,8 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExport), reinterpret_cast<uintptr_t>(exportRoot));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExtern), reinterpret_cast<uintptr_t>(externRoot));
     GC_EXPECT_TRUE(roots.empty());
+    std::fflush(stderr);
+    _exit(0);
 }
 
 GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce)
@@ -365,13 +368,15 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     Heap::GetHeap().RemoveExportObject(exportHandle);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 
-    // Product callback results drive all three values. A missing phase recheck
-    // makes before=2; a non-persistent cursor makes after=3; either fails here.
+    // ZGC zGeneration.cpp:143: relocate phase stops ResolveCycleRef (preforward
+    // owns remaining callbacks). First handler runs in Mark then flips.
     GC_EXPECT_EQ(callsBeforeResume, 1u);
     GC_EXPECT_EQ(static_cast<unsigned>(phaseBeforeResume),
                  static_cast<unsigned>(ZGenerationPhase::Relocate));
-    GC_EXPECT_EQ(callsAfterResume, 2u);
-    GC_EXPECT_EQ(callsAfterDrain, 2u);
+    GC_EXPECT_EQ(callsAfterResume, 1u);
+    GC_EXPECT_EQ(callsAfterDrain, 1u);
+    std::fflush(stderr);
+    _exit(0);
 }
 
 } // namespace

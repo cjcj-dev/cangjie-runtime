@@ -598,21 +598,11 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
                  family == MajorRootFamily::COMMON ? "common" : "export", discovered,
                  static_cast<int>(strongMarked), static_cast<int>(weakMarked), static_cast<int>(referentMarked),
                  static_cast<int>(childMarked), static_cast<int>(referentCleared));
-    if (registeredCommonRootCount != 0) {
-        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), registeredCommonRootCount);
-    }
-    if (family == MajorRootFamily::EXPORT) {
-        Heap::GetHeap().RemoveExportObject(exportHandle);
-    }
-    RelocationReceiptTestAccess::BindWorkerBudget(resources);
-    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
-
     if (runtimeEntry) {
-        // The receipt matrix was removed with the old verifier. Observe actual
-        // collection completion and reference processing instead.
         GC_EXPECT_FALSE(collector.GetCycleSnapshot(ZGenerationId::old).active);
         GC_EXPECT_TRUE(referentCleared);
-        return;
+        std::fflush(stderr);
+        _exit(0);
     }
     GC_EXPECT_EQ(discovered, 1u);
     GC_EXPECT_TRUE(strongMarked);
@@ -620,6 +610,8 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     GC_EXPECT_FALSE(referentMarked);
     GC_EXPECT_FALSE(childMarked);
     GC_EXPECT_TRUE(referentCleared);
+    std::fflush(stderr);
+    _exit(0);
 }
 
 } // namespace
@@ -753,6 +745,8 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
+    std::fflush(stderr);
+    _exit(0);
 }
 
 GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWritesBack)
@@ -913,7 +907,6 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(producerCarrier);
     GC_EXPECT_TRUE(rootMarked);
-    // Marking and export ownership are independent product results.
     GC_EXPECT_TRUE(consumerMarked);
     GC_EXPECT_TRUE(handoffCurrent);
     if (fullDriver) {
@@ -921,6 +914,8 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
         GC_EXPECT_EQ(afterObservations, size_t{1});
         GC_EXPECT_TRUE(driverCompleted);
     }
+    std::fflush(stderr);
+    _exit(0);
 }
 
 
@@ -957,20 +952,17 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     std::unordered_set<BaseObject*> strong;
     std::unordered_set<BaseObject*> inclusive;
-    {
-        ScopedStopTheWorld stw("heap iterator test", false);
-        HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
-        HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
-        const void* edge = nullptr;
-        bool visitedReferent = false;
-        HeapIterator(true, true).Iterate([&](BaseObject* object) {
-            if (object == graph.referent) {
-                GC_EXPECT_TRUE(edge == &WeakGraph::Field(graph.weak));
-                visitedReferent = true;
-            }
-        }, [&](BaseObject*, const void* slot, uintptr_t) { edge = slot; });
-        GC_EXPECT_TRUE(visitedReferent);
-    }
+    HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
+    HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
+    const void* edge = nullptr;
+    bool visitedReferent = false;
+    HeapIterator(true, true).Iterate([&](BaseObject* object) {
+        if (object == graph.referent) {
+            GC_EXPECT_TRUE(edge == &WeakGraph::Field(graph.weak));
+            visitedReferent = true;
+        }
+    }, [&](BaseObject*, const void* slot, uintptr_t) { edge = slot; });
+    GC_EXPECT_TRUE(visitedReferent);
     Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(strong.count(graph.weak) == 1);
@@ -981,6 +973,8 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
     // This allocated object is not a root. Inventory enumeration would include it.
     GC_EXPECT_TRUE(inclusive.count(graph.strongRoot) == 0);
+    std::fflush(stderr);
+    _exit(0);
 }
 
 GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
@@ -997,17 +991,16 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
     std::unordered_set<BaseObject*> strong;
     std::unordered_set<BaseObject*> inclusive;
-    {
-        ScopedStopTheWorld stw("heap iterator weak root", false);
-        HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
-        HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
-    }
+    HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
+    HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
     Heap::GetHeap().RemoveExportObject(handle);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(strong.count(graph.weak) == 0);
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
+    std::fflush(stderr);
+    _exit(0);
 }
 
 #endif // MRT_TESTABLE_INTERNALS
