@@ -107,7 +107,15 @@ public:
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
     Collector& bound_collector() { return collector; }
-    Collector& ActiveCollector() { return boundCollector != nullptr ? *boundCollector : collector; }
+    Collector& ActiveCollector()
+    {
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
+        if (testCollector != nullptr) {
+            return *testCollector;
+        }
+#endif
+        return boundCollector != nullptr ? *boundCollector : collector;
+    }
     void BindCollector(Collector* c) { boundCollector = c; }
 
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
