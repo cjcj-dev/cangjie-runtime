@@ -207,6 +207,16 @@ struct RelocationReceiptTestAccess {
 
 namespace {
 
+void FinishIsolatedCase()
+{
+    if (const char* name = std::getenv("GC_UNIT_OTHER_VM_CHILD")) {
+        std::fprintf(stderr, "GC_UNIT_OTHER_VM_OKIDOKI %s\n", name);
+        std::fflush(stderr);
+    }
+    _exit(0);
+}
+
+
 class WeakClosureTestRuntime final : public Runtime {
 public:
     explicit WeakClosureTestRuntime(MutatorManager& manager)
@@ -601,8 +611,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     if (runtimeEntry) {
         GC_EXPECT_FALSE(collector.GetCycleSnapshot(ZGenerationId::old).active);
         GC_EXPECT_TRUE(referentCleared);
-        std::fflush(stderr);
-        _exit(0);
+        FinishIsolatedCase();
     }
     GC_EXPECT_EQ(discovered, 1u);
     GC_EXPECT_TRUE(strongMarked);
@@ -610,8 +619,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     GC_EXPECT_FALSE(referentMarked);
     GC_EXPECT_FALSE(childMarked);
     GC_EXPECT_TRUE(referentCleared);
-    std::fflush(stderr);
-    _exit(0);
+    FinishIsolatedCase();
 }
 
 } // namespace
@@ -745,8 +753,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
-    std::fflush(stderr);
-    _exit(0);
+    FinishIsolatedCase();
 }
 
 GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWritesBack)
@@ -914,8 +921,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
         GC_EXPECT_EQ(afterObservations, size_t{1});
         GC_EXPECT_TRUE(driverCompleted);
     }
-    std::fflush(stderr);
-    _exit(0);
+    FinishIsolatedCase();
 }
 
 
@@ -973,8 +979,7 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
     // This allocated object is not a root. Inventory enumeration would include it.
     GC_EXPECT_TRUE(inclusive.count(graph.strongRoot) == 0);
-    std::fflush(stderr);
-    _exit(0);
+    FinishIsolatedCase();
 }
 
 GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
@@ -999,8 +1004,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
-    std::fflush(stderr);
-    _exit(0);
+    FinishIsolatedCase();
 }
 
 #endif // MRT_TESTABLE_INTERNALS

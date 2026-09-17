@@ -9,6 +9,7 @@
 #include <climits>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <unistd.h>
 #include <sstream>
@@ -317,7 +318,10 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExport), reinterpret_cast<uintptr_t>(exportRoot));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExtern), reinterpret_cast<uintptr_t>(externRoot));
     GC_EXPECT_TRUE(roots.empty());
-    std::fflush(stderr);
+    if (const char* name = std::getenv("GC_UNIT_OTHER_VM_CHILD")) {
+        std::fprintf(stderr, "GC_UNIT_OTHER_VM_OKIDOKI %s\n", name);
+        std::fflush(stderr);
+    }
     _exit(0);
 }
 
@@ -375,7 +379,10 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
                  static_cast<unsigned>(ZGenerationPhase::Relocate));
     GC_EXPECT_EQ(callsAfterResume, 1u);
     GC_EXPECT_EQ(callsAfterDrain, 1u);
-    std::fflush(stderr);
+    if (const char* name = std::getenv("GC_UNIT_OTHER_VM_CHILD")) {
+        std::fprintf(stderr, "GC_UNIT_OTHER_VM_OKIDOKI %s\n", name);
+        std::fflush(stderr);
+    }
     _exit(0);
 }
 
