@@ -1179,7 +1179,12 @@ void GenerationCycle::select_relocation_set(bool promote_all)
     }
     _relocation_set.install(&selector);
     if (generation == GCCycleGeneration::YOUNG) {
-        flip_age_pages(&selector);
+        ZWorkers* w = Workers();
+        if (w != nullptr) {
+            ZRelocate::flip_age_pages(*w, selector.not_selected_small());
+            ZRelocate::flip_age_pages(*w, selector.not_selected_medium());
+            ZRelocate::flip_age_pages(*w, selector.not_selected_large());
+        }
     }
     ZRelocationSetIterator rs_iter(&_relocation_set);
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
