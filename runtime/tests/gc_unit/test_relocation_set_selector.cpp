@@ -9,7 +9,6 @@
 #include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "gc_unittest.hpp"
@@ -46,8 +45,6 @@ struct SelectorPageFixture {
         heapParam.regionSize = 2048;
         heapParam.exemptionThreshold = 0.8;
         heapHolder.reset(new ZTestRegionHeap(4096, manager, heapParam, 0.5));
-        Heap::GetHeap().GetRememberedSet().Initialize(manager.GetRegionHeapStart(),
-                                                      4096 * ZPage::UNIT_SIZE * ZVirtualToPhysicalRatio);
     }
     ZPage* takeSmall()
     {
