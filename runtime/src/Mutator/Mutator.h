@@ -35,6 +35,7 @@ extern "C" MRT_EXPORT bool MRT_LeaveSaferegion();
 extern "C" MRT_EXPORT bool MRT_CheckRuntimeFinished();
 
 class BaseObject;
+class RememberedSet;
 
 class Mutator {
     friend class StackWatermark;
@@ -109,6 +110,7 @@ public:
     void ResetMutator();
 
     static Mutator* GetMutator() noexcept;
+    void SetStoreBarrierRememberedSetForTest(RememberedSet*) {}
     void StackGuardExpand() const;
     void StackGuardRecover() const;
 
