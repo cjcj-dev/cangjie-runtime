@@ -126,7 +126,7 @@ public:
     friend struct GenerationSequenceFixture;
 #endif
     std::unique_ptr<ZMark> mark;
-    const GCCycleGeneration generation;
+    const GCCycleGeneration _cycle;
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
     GCStats stats;

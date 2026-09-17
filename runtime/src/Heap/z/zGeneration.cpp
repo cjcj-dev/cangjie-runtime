@@ -66,7 +66,7 @@ ZGenerationOld::ZGenerationOld() : ZGeneration(GCCycleGeneration::OLD) { _old = 
 
 ZGenerationId ZGeneration::id() const
 {
-    return generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+    return _cycle == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
 }
 
 ZGenerationIdOptional ZGeneration::id_optional() const
@@ -88,7 +88,7 @@ ZGeneration::ZGeneration(GCCycleGeneration generation)
     : mark(std::make_unique<ZMark>(ZMarkStripesMax,
           generation == GCCycleGeneration::YOUNG ? MarkingStacks::MarkingGeneration::YOUNG
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
-       generation(generation),
+        _cycle(generation),
        _relocation_set(this),
        _relocate(std::make_unique<ZRelocate>(this))
 {
@@ -108,7 +108,7 @@ static double fragmentation_limit(GCCycleGeneration generation)
 }
 double ZGeneration::FragmentationLimit() const
 {
-    return fragmentation_limit(generation);
+    return fragmentation_limit(_cycle);
 }
 
 void ResetSkippedStackMapCounts();
@@ -117,19 +117,19 @@ void ReportSkippedStackMapCounts();
 // supplies the existing allocator/mark domain; this cycle owns phase and seq.
 YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
 {
-    CHECK(generation == GCCycleGeneration::YOUNG);
+    CHECK(_cycle == GCCycleGeneration::YOUNG);
     CHECK(Snapshot().active);
     ZJNICritical::block();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::Begin, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
     }
 #endif
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
     }
 #endif
 
@@ -154,7 +154,7 @@ YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
     (void)ZMark::FlushAllGenerations();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
     }
 #endif
     {
@@ -166,13 +166,13 @@ YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
     PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
     }
 #endif
     collector.StartYoungMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::BeforeRemembered, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
     }
 #endif
     {
@@ -181,7 +181,7 @@ YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::Complete, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
     }
 #endif
     ZJNICritical::unblock();
@@ -191,19 +191,19 @@ YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
 // ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
 void ZGeneration::StartOldMark(WCollector& collector)
 {
-    CHECK(generation == GCCycleGeneration::OLD);
+    CHECK(_cycle == GCCycleGeneration::OLD);
     CHECK(Snapshot().active);
     ZJNICritical::block();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::Begin, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
     }
 #endif
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::BeforeRetire, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
     }
 #endif
     auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
@@ -214,7 +214,7 @@ void ZGeneration::StartOldMark(WCollector& collector)
     space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::BeforeSequence, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
     }
 #endif
     {
@@ -227,14 +227,14 @@ void ZGeneration::StartOldMark(WCollector& collector)
     PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::BeforeDomain, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
     }
 #endif
     Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     collector.StartOldMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(generation, MarkStartPoint::Complete, mark.get());
+        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
     }
 #endif
     ZJNICritical::unblock();
@@ -244,13 +244,13 @@ void ZGeneration::StartOldMark(WCollector& collector)
 // young sequence once for the whole old relocation, not once per forwarding.
 void ZGeneration::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
 {
-    CHECK(generation == GCCycleGeneration::OLD);
+    CHECK(_cycle == GCCycleGeneration::OLD);
     youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
 }
 
 bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 {
-    CHECK(generation == GCCycleGeneration::OLD);
+    CHECK(_cycle == GCCycleGeneration::OLD);
     // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
     return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
 }
@@ -1111,7 +1111,7 @@ namespace MapleRuntime {
 GCCycleSnapshot ZGeneration::Snapshot() const
 {
     std::lock_guard<std::mutex> lock(mutex);
-    return { generation, sequence, requestIndex, reason.load(std::memory_order_relaxed),
+    return { _cycle, sequence, requestIndex, reason.load(std::memory_order_relaxed),
              phase.load(std::memory_order_relaxed), active };
 }
 
@@ -1174,8 +1174,8 @@ namespace MapleRuntime {
 void ZGeneration::InitializeWorkers(uint32_t capacity)
 {
     CHECK(workers == nullptr);
-    workers = std::make_unique<ZWorkers>(generation, capacity, &statWorkers);
-    if (generation == GCCycleGeneration::OLD) {
+    workers = std::make_unique<ZWorkers>(_cycle, capacity, &statWorkers);
+    if (_cycle == GCCycleGeneration::OLD) {
         weakRootsProcessor = std::make_unique<ZWeakRootsProcessor>(workers.get());
     }
 }
@@ -1312,7 +1312,7 @@ void CopyCollector::PreGarbageCollection(GCCycleGeneration generation, bool isCo
 namespace MapleRuntime {
 void ZGeneration::SetYoungType(ZYoungType type)
 {
-    CHECK(generation == GCCycleGeneration::YOUNG);
+    CHECK(_cycle == GCCycleGeneration::YOUNG);
     youngType.store(type, std::memory_order_release);
 }
 
@@ -1333,7 +1333,7 @@ YoungTypeSetter::~YoungTypeSetter()
 namespace MapleRuntime {
 void ZGeneration::SelectTenuringThreshold(const TenuringInputs& inputs)
 {
-    CHECK(generation == GCCycleGeneration::YOUNG);
+    CHECK(_cycle == GCCycleGeneration::YOUNG);
     // zGeneration.cpp:704-715: preclean promotes all, other types compute.
     stats.tenuringThreshold = YoungType() == ZYoungType::major_full_preclean
         ? 0 : ComputeTenuringThreshold(inputs);
