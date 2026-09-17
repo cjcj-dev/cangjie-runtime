@@ -1037,17 +1037,11 @@ inline void ZPage::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)
         (void)nUnit;
     }
 
-} // namespace MapleRuntime
-#endif
-
-namespace MapleRuntime {
 inline ZGenerationId ZPage::generation_id() const
 {
     return _generation_id;
 }
-}
 
-namespace MapleRuntime {
 inline unsigned ZPage::RelocateObserve() const
 {
     auto owner = forwarding_for_page(const_cast<ZPage*>(this));
@@ -1079,20 +1073,16 @@ inline std::atomic<uint64_t>& ZPage::EnrolAfterFlip()
     return n;
 }
 
-inline Generation ZPage::GetOwnerGeneration() const
-    {
-        return IsYoungRegion() ? Generation::Young : Generation::Old;
-    }
-}
-
-namespace MapleRuntime {
 inline bool ZPage::IsYoungRegion() const
-    {
-        return generation_id() == ZGenerationId::young;
-    }
+{
+    return generation_id() == ZGenerationId::young;
 }
 
-namespace MapleRuntime {
+inline Generation ZPage::GetOwnerGeneration() const
+{
+    return IsYoungRegion() ? Generation::Young : Generation::Old;
+}
+
 inline MAddress ZPage::GetRegionStart() const
 {
     if (!_virtual.is_null()) {
@@ -1100,25 +1090,15 @@ inline MAddress ZPage::GetRegionStart() const
     }
     return _scratch.allocPtr;
 }
-}
 
-namespace MapleRuntime {
 inline MAddress ZPage::GetRegionEnd() const { return _scratch.regionEnd; }
-}
 
-namespace MapleRuntime {
 inline MAddress ZPage::GetRegionAllocPtr() const { return _scratch.allocPtr; }
-}
 
-namespace MapleRuntime {
 inline bool ZPage::IsSmallRegion() const { return is_small(); }
-}
 
-namespace MapleRuntime {
 inline bool ZPage::IsLargeRegion() const { return is_large(); }
-}
 
-namespace MapleRuntime {
 template<typename Function>
 inline void ZGenerationPagesParallelIterator::do_pages(Function function)
 {
@@ -1129,4 +1109,6 @@ inline void ZGenerationPagesParallelIterator::do_pages(Function function)
         return true;
     });
 }
-}
+
+} // namespace MapleRuntime
+#endif

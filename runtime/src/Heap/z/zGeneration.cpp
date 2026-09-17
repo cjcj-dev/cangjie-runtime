@@ -1197,11 +1197,9 @@ void GenerationCycle::flip_age_pages(const ZRelocationSetSelector* selector)
 void GenerationCycle::select_relocation_set(bool promote_all)
 {
     ZRelocationSetSelector selector(FragmentationLimit());
-    ZPageAllocator* pageAllocator =
-        &static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     const ZGenerationId id = generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
     {
-        ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, pageAllocator);
+        ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, nullptr);
         for (ZPage* page; pt_iter.next(&page);) {
             if (!page->is_relocatable()) {
                 continue;
