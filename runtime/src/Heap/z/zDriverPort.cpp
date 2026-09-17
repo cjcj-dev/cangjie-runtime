@@ -1,6 +1,7 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDriverPort.hpp"
 
 #include <chrono>
@@ -153,7 +154,7 @@ void GCDriverPort::Stop()
 {
     std::lock_guard<std::mutex> lock(mutex);
     stopped = true;
-    abort.Request();
+    ZAbort::abort();
     for (auto& request : requests) {
         if (request.receipt.state != nullptr) {
             request.receipt.state->resolved = true;
@@ -170,7 +171,7 @@ void GCDriverPort::Reset()
     stopped = false;
     nextSequence = 2;
     highestAcknowledged = 1;
-    abort.Reset();
+
 }
 
 bool GCDriverPort::IsStopped() const
