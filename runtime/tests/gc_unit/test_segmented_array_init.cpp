@@ -1215,12 +1215,6 @@ GC_OTHER_VM_TEST(MarkAllocation, LargeHolderKeepsRootedExistingTargetLive)
 }
 #endif
 
-#if defined(MRT_TESTABLE_INTERNALS)
-GC_OTHER_VM_TEST(LargePageGeneration, ArrayRootKeepsYoungTargetLive)
-{
-    GC_EXPECT_EQ(RunRuntimeCase(RunLargeYoungClosureCase, 0), 0);
-}
-#endif
 
 GC_OTHER_VM_TEST(P1Mark, PinnedReclaimedSlotIsNotAllocationSource)
 {

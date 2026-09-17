@@ -41,17 +41,9 @@ class Mutator {
 public:
     // flag which indicates the reason why mutator should suspend. flag is set by some external thread.
     enum SuspensionType : uint32_t {
-        SUSPENSION_FOR_GC_PHASE = 1,
         SUSPENSION_FOR_SYNC = 2,
         SUSPENSION_FOR_EXIT = 4,
         SUSPENSION_FOR_CPU_PROFILE = 8,
-    };
-
-    enum GCPhaseTransitionState : uint32_t {
-        NO_TRANSITION,
-        NEED_TRANSITION,
-        IN_TRANSITION,
-        FINISH_TRANSITION,
     };
 
     enum CpuProfileState : uint32_t {
@@ -235,11 +227,6 @@ public:
         return CJThreadGetState(cjthread);
     }
 
-    __attribute__((always_inline)) inline bool FinishedTransition() const
-    {
-        return transitionState == FINISH_TRANSITION;
-    }
-
     __attribute__((always_inline)) inline bool FinishedCpuProfile() const
     {
         return cpuProfileState.load(std::memory_order_acquire) == FINISH_CPUPROFILE &&
@@ -258,9 +245,7 @@ public:
 
     __attribute__((always_inline)) inline void SetSuspensionFlag(SuspensionType flag)
     {
-        if (flag == SUSPENSION_FOR_GC_PHASE) {
-            transitionState.store(NEED_TRANSITION, std::memory_order_relaxed);
-        } else if (flag == SUSPENSION_FOR_CPU_PROFILE) {
+        if (flag == SUSPENSION_FOR_CPU_PROFILE) {
             cpuProfileState.store(NEED_CPUPROFILE, std::memory_order_relaxed);
         }
         suspensionFlag.fetch_or(flag, std::memory_order_seq_cst);
@@ -316,21 +301,6 @@ public:
         return enumYoung.load(std::memory_order_acquire) != 0;
     }
 
-    // Spin wait phase transition finished when GC is tranverting this mutator's phase
-    __attribute__((always_inline)) inline void WaitForPhaseTransition() const
-    {
-        GCPhaseTransitionState state = transitionState.load(std::memory_order_acquire);
-        while (state != FINISH_TRANSITION) {
-            if (state != IN_TRANSITION) {
-                LOG(RTLOG_INFO, "transition state has been reset for a second transition");
-                return;
-            }
-            // Give up CPU to avoid overloading
-            (void)sched_yield();
-            state = transitionState.load(std::memory_order_acquire);
-        }
-    }
-
     void WaitForCpuProfiling() const;
 
     bool GcPhaseEnum(bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
@@ -338,16 +308,12 @@ public:
     AllocBuffer* GetAllocBuffer() const { return foreignThreadInfo.allocBuffer; }
     void SetAllocBuffer(AllocBuffer* buffer) { foreignThreadInfo.allocBuffer = buffer; }
     inline void GCPhasePreForward();
-    inline void HandleGCPhaseIDLE();
     inline void ForwardLocalFinalizers(Collector& collector);
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();
 
     void TransitionToCpuProfileExclusive();
-
-    // Ensure that mutator phase is changed only once by mutator itself or GC
-    __attribute__((always_inline)) inline bool TransitionGCPhase(bool bySelf);
 
     bool TransitionToCpuProfile(bool bySelf);
 
@@ -542,8 +508,7 @@ public:
 
     void ReleaseForeignThread();
 
-    // Observe-only: in-flight SATB node (not yet FlushQueue'd). STW2 CLEAR_SATB
-    // flushes before Census; peek still covers a node that HandleGCPhase missed.
+    // Observe-only: in-flight SATB node (not yet FlushQueue'd).
     // ZMark::flush publishes this thread's single store buffer.
     void FlushStoreBarrierBuffer(bool flushStoreBarrier = true)
     {
@@ -594,8 +559,6 @@ private:
 
     // If set implies this mutator should process suspension requests
     std::atomic<uint32_t> suspensionFlag = { 0 };
-    // Indicate the state of mutator's phase transition
-    std::atomic<GCPhaseTransitionState> transitionState = { NO_TRANSITION };
     ObjectRef rawObject{};
     ThreadGCData gcData;
     std::vector<ObjectRef> nativeFrameRoots;

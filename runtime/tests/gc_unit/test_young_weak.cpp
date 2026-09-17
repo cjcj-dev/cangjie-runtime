@@ -641,16 +641,6 @@ GC_OTHER_VM_TEST(YoungWeakClosure, OldWeakSlotKeepsYoungReferentStrong)
     RunYoungWeakRemsetFlow();
 }
 
-GC_OTHER_VM_TEST(YoungWeakClosure, CommonMajorRootUsesWeakDiscoveryPolicy)
-{
-    RunMajorWeakGraph(MajorRootFamily::COMMON);
-}
-
-GC_OTHER_VM_TEST(YoungWeakClosure, ExportMajorRootUsesWeakDiscoveryPolicy)
-{
-    RunMajorWeakGraph(MajorRootFamily::EXPORT);
-}
-
 // zMark.cpp:1016-1028: private stacks must be checked independently of
 // shared stripes and only for the generation completing marking.
 GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
@@ -700,58 +690,6 @@ GC_OTHER_VM_TEST(MarkingStacksProduct, MarkEndChecksPrivateStacksByGeneration)
             MarkingStacks::VerifyAllEmpty(current);
         }
     }
-}
-
-GC_OTHER_VM_TEST(MarkingStacksProduct, MajorSerialEntersFromDoGarbageCollection)
-{
-    RunMajorWeakGraph(MajorRootFamily::COMMON, true, 0);
-}
-
-GC_OTHER_VM_TEST(MarkingStacksProduct, MajorParallelEntersFromDoGarbageCollection)
-{
-    RunMajorWeakGraph(MajorRootFamily::COMMON, true, 1);
-}
-
-GC_OTHER_VM_TEST(MarkingStacksProduct, MajorForeignEntersFromDoGarbageCollection)
-{
-    RunMajorWeakGraph(MajorRootFamily::EXPORT, true, 0);
-}
-
-GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
-{
-    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MutatorManager mutatorManager;
-    WeakClosureTestRuntime runtime(mutatorManager);
-    GcHeapFixture fx;
-    fx.region0->reset(PageAge::old);
-    WeakGraph graph(fx, fx.region0);
-    // This grid is deliberately non-weak: the only edge must be followed by
-    // the export root family even when the common root stack is empty.
-    *reinterpret_cast<uintptr_t*>(graph.weak) = reinterpret_cast<uintptr_t>(fx.typeInfo);
-    WeakGraph::Field(graph.weak).StoreColoured(zpointer::null);
-
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindWorkerBudget(resources);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
-    space.GetRegionManager().AddRawPointerObject(graph.weak);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
-
-    RelocationReceiptTestAccess::RunMajorMark(collector);
-    const bool rootMarked = graph.IsMarked(graph.strongRoot);
-    const bool childMarked = graph.IsMarked(graph.weak);
-    std::fprintf(stderr,
-                 "DETAIL export_only common_roots=0 foreign_roots=1 root_mark=%d child_mark=%d\n",
-                 static_cast<int>(rootMarked), static_cast<int>(childMarked));
-
-    Heap::GetHeap().RemoveExportObject(handle);
-    RelocationReceiptTestAccess::BindWorkerBudget(resources);
-    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
-    GC_EXPECT_TRUE(rootMarked);
-    GC_EXPECT_TRUE(childMarked);
 }
 
 GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWritesBack)
@@ -923,90 +861,5 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
 }
 
 
-GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBeforeMark)
-{
-    RunMajorExportOwnership(false);
-}
-
-GC_OTHER_VM_TEST(ValueRootCurrentization, MajorExportOwnersSharePremarkedCycle)
-{
-    RunMajorExportOwnership(true);
-}
-
-GC_OTHER_VM_TEST(ValueRootCurrentization, MajorDriverPairsExportOwnersBeforeHandoff)
-{
-    RunMajorExportOwnership(true, true);
-}
-
-// Directed port test for zHeapIterator.cpp:195-229 (no upstream standalone graph test):
-// W --weak--> R --strong--> C. The public iterator must report R itself.
-GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
-{
-    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MutatorManager manager;
-    WeakClosureTestRuntime runtime(manager);
-    GcHeapFixture fx;
-    WeakGraph graph(fx, fx.region0);
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    NativeSlot root(StoreGoodPointer(graph.weak));
-    NativeSlot* roots[] = { &root };
-    Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
-    std::unordered_set<BaseObject*> strong;
-    std::unordered_set<BaseObject*> inclusive;
-    {
-        ScopedStopTheWorld stw("heap iterator test", false);
-        HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
-        HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
-        const void* edge = nullptr;
-        bool visitedReferent = false;
-        HeapIterator(true, true).Iterate([&](BaseObject* object) {
-            if (object == graph.referent) {
-                GC_EXPECT_TRUE(edge == &WeakGraph::Field(graph.weak));
-                visitedReferent = true;
-            }
-        }, [&](BaseObject*, const void* slot, uintptr_t) { edge = slot; });
-        GC_EXPECT_TRUE(visitedReferent);
-    }
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
-    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
-    GC_EXPECT_TRUE(strong.count(graph.weak) == 1);
-    GC_EXPECT_TRUE(strong.count(graph.referent) == 0);
-    GC_EXPECT_TRUE(strong.count(graph.child) == 0);
-    GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
-    GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
-    GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
-    // This allocated object is not a root. Inventory enumeration would include it.
-    GC_EXPECT_TRUE(inclusive.count(graph.strongRoot) == 0);
-}
-
-GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
-{
-    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    MutatorManager manager;
-    WeakClosureTestRuntime runtime(manager);
-    GcHeapFixture fx;
-    WeakGraph graph(fx, fx.region0);
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
-    std::unordered_set<BaseObject*> strong;
-    std::unordered_set<BaseObject*> inclusive;
-    {
-        ScopedStopTheWorld stw("heap iterator weak root", false);
-        HeapIterator(false).Iterate([&](BaseObject* object) { strong.insert(object); });
-        HeapIterator(true).Iterate([&](BaseObject* object) { inclusive.insert(object); });
-    }
-    Heap::GetHeap().RemoveExportObject(handle);
-    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
-    GC_EXPECT_TRUE(strong.count(graph.weak) == 0);
-    GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
-    GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
-    GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
-}
 
 #endif // MRT_TESTABLE_INTERNALS

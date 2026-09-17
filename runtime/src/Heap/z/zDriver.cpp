@@ -26,6 +26,7 @@
 #include "Common/Runtime.h"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zDirector.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Common/RunType.h"
@@ -499,7 +500,11 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // One GC cycle is the roots verification scene: it covers both the minor
     // and major root visitors, including concurrent stack enumeration.  Close
     // after the collector has joined all root work (zVerify.cpp:363-384).
-    DoGarbageCollection(generation);
+    if (generation == ZGenerationId::young) {
+        ZGeneration::young()->collect();
+    } else {
+        ZGeneration::old()->collect();
+    }
 
     if (ZAbort::should_abort()) {
         // The phase owner already joined any submitted work. Keep mark and

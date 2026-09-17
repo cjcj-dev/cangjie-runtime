@@ -223,15 +223,11 @@ void Mutator::HandleSuspensionRequest()
         Handshake::Current().process_by_self();
         SetInSaferegion(SAFE_REGION_TRUE);
         MarkFlushOnEnterSaferegion();
-        if (HasSuspensionRequest(SUSPENSION_FOR_GC_PHASE)) {
-            TransitionGCPhase(true);
-        } else if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
+        if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
             TransitionToCpuProfile(true);
         } else if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
             SuspendForSync();
-            if (HasSuspensionRequest(SUSPENSION_FOR_GC_PHASE)) {
-                TransitionGCPhase(true);
-            } else if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
+            if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
                 TransitionToCpuProfile(true);
             }
         } else if (HasPreemptRequest()) {
@@ -971,22 +967,6 @@ inline void Mutator::GCPhasePreForward()
     const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
     if (!StackWatermarkSet::finish_processing(*this, visitor, visitor, epoch, &derivedPtrVisitor, frames)) {
         VisitHeapReferences(visitor, derivedPtrVisitor);
-    }
-}
-
-void Mutator::HandleGCPhaseIDLE()
-{
-    if (IsForeignThreadExit()) {
-        ReleaseForeignThread();
-    } else {
-#if defined(__OHOS__) && (__OHOS__ == 1)
-        if (foreignThreadInfo.allocBuffer != nullptr) {
-            auto status = GetUnwindContext().GetUnwindContextStatus();
-            if (status == UnwindContextStatus::RISKY) {
-                foreignThreadInfo.allocBuffer->FlushRegion();
-            }
-        }
-#endif
     }
 }
 
