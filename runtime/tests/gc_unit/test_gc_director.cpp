@@ -350,8 +350,13 @@ GC_TEST(GcDirector, MajorRateLookaheadUsesUnsignedCollectionDistance)
 // zGeneration gtest in this reference; these exercise its owner invariant.
 GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
 {
-    ZGeneration young(GCCycleGeneration::YOUNG);
-    ZGeneration old(GCCycleGeneration::OLD);
+    class Probe : public ZGeneration {
+    public:
+        using ZGeneration::ZGeneration;
+        bool should_record_stats() override { return false; }
+    };
+    Probe young(GCCycleGeneration::YOUNG);
+    Probe old(GCCycleGeneration::OLD);
     young.InitializeWorkers(2);
     old.InitializeWorkers(2);
     young.SelectReason(GC_REASON_YOUNG);
@@ -382,7 +387,12 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
 
 GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
 {
-    ZGeneration young(GCCycleGeneration::YOUNG);
+    class Probe : public ZGeneration {
+    public:
+        using ZGeneration::ZGeneration;
+        bool should_record_stats() override { return false; }
+    };
+    Probe young(GCCycleGeneration::YOUNG);
     TenuringInputs inputs;
     inputs.softMaxCapacity = 64 * 1024 * 1024;
     inputs.youngAllocated = 4096;

@@ -1023,8 +1023,13 @@ GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
     alignas(8) uint64_t storage[16] {};
     RememberedSet rs;
     rs.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-    ZGeneration young(GCCycleGeneration::YOUNG);
-    ZGeneration old(GCCycleGeneration::OLD);
+    class Probe : public ZGeneration {
+    public:
+        using ZGeneration::ZGeneration;
+        bool should_record_stats() override { return false; }
+    };
+    Probe young(GCCycleGeneration::YOUNG);
+    Probe old(GCCycleGeneration::OLD);
     for (uint64_t cycle = 0; cycle != 4; ++cycle) {
         const uint64_t sequence = young.Sequence();
         const uint8_t face = rs.activeBuffer.load(std::memory_order_acquire);

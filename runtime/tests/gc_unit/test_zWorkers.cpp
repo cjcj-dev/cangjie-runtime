@@ -368,8 +368,13 @@ GC_TEST(ZWorkers, RunAccumulatesParallelTimeInStatWorkers)
 // ZStatWorkers, and the driver reads that stat unit for the cycle.
 GC_TEST(ZWorkers, ZGenerationOwnsWorkersAndStatWorkers)
 {
-    ZGeneration young(GCCycleGeneration::YOUNG);
-    ZGeneration old(GCCycleGeneration::OLD);
+    class Probe : public ZGeneration {
+    public:
+        using ZGeneration::ZGeneration;
+        bool should_record_stats() override { return false; }
+    };
+    Probe young(GCCycleGeneration::YOUNG);
+    Probe old(GCCycleGeneration::OLD);
     young.InitializeWorkers(2);
     old.InitializeWorkers(1);
     GC_EXPECT_TRUE(young.StatWorkers() != old.StatWorkers());
