@@ -91,8 +91,8 @@ GC_TEST(RelocationSetSelector, FragmentationLimitStopsPrefix)
     ZPage* a = fx.takeSmall();
     ZPage* b = fx.takeSmall();
     GC_EXPECT_TRUE(a != nullptr && b != nullptr);
-    a->inc_live(1, a->size() / 2);
-    b->inc_live(1, b->size() / 2);
+    a->inc_live(1, 64);
+    b->inc_live(1, 64);
     ZRelocationSetSelector tight(99.0);
     tight.register_live_page(a);
     tight.register_live_page(b);
