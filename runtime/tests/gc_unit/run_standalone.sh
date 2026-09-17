@@ -295,6 +295,7 @@ MAIN_SOURCES=(
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"
+  "$SRC/test_zRememberedSet.cpp"
   "$SRC/test_zList.cpp"
   "$SRC/test_region_list.cpp"
   "$SRC/test_zArray.cpp"
@@ -306,7 +307,6 @@ MAIN_SOURCES=(
   "$SRC/test_trustp1_phase1.cpp"
 
   "$SRC/test_object_gate.cpp"
-  "$SRC/test_remset.cpp"
   "$SRC/test_defect_regressions.cpp"
   "$SRC/test_zLiveMap.cpp"
   "$SRC/test_region_age.cpp"
@@ -619,7 +619,6 @@ fi
 # the test source, so deleting a test or anchor shrinks neither guard silently.
 LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RegionManager::RememberFlipPromotedPages('
-  'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RememberPromotedObject('
   'MapleRuntime::WCollector::RemapYoungRoots('
 )

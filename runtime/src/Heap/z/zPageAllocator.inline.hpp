@@ -48,12 +48,6 @@ inline size_t RegionManager::CollectRegion(ZPage* region)
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd(), 0u);
-        // STEER3 CALLSITE_AUDIT: scrub HERE (once), not at ReclaimRegion.
-        // Linux TakeRegion often reuses garbage via ClearUnits WITHOUT ReclaimRegion
-        // (RegionManager.cpp TakeRegion same-size head path). Scrub-only-at-Reclaim
-        // therefore never ran on the hot path. Collect is the unique "region dies" edge.
-        ScrubRememberedSetForRegion(region);
-
         region->LockWriteRegion();
 #if defined(__OHOS__)
         // Do not publish an installed ghost carrier to dirtyTree before its dispel point.

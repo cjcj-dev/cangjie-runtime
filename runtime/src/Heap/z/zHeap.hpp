@@ -26,6 +26,7 @@
 #include "Common/BaseObject.h"
 #include "RuntimeConfig.h"
 
+#include <atomic>
 #include <unordered_set>
 extern "C" {
 extern uintptr_t g_cjHeapStart;
@@ -43,14 +44,13 @@ class Allocator;
 class AllocBuffer;
 class FinalizerProcessor;
 class CollectorResources;
+class ZRemembered;
 
 
 class Heap {
 public:
     static Heap& GetHeap();
-    virtual RememberedSet& GetRememberedSet() = 0;
-
-
+    ZRemembered& remembered();
     virtual void Init(const HeapParam& vmHeapParam) = 0;
     virtual void Fini() = 0;
     virtual bool IsSurvivedObject(const BaseObject*) const = 0;

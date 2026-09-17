@@ -191,10 +191,7 @@ void Mutator::ResetMutator()
     // Exit publishes the logical owner's private work before scheduler
     // unbinding can expose another owner through this OS TLS binding.
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    auto& remembered = Heap::GetHeap().GetRememberedSet();
-    if (remembered.IsInitialized()) {
-        gcData.storeBarrierBuffer->Flush();
-    }
+    gcData.storeBarrierBuffer->Flush();
     (void)collector.FlushGCDataMarkProducers(gcData);
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
@@ -1079,7 +1076,7 @@ void Mutator::ReleaseForeignThread()
 {
     AllocBuffer* buffer = foreignThreadInfo.allocBuffer;
     foreignThreadInfo.allocBuffer = nullptr;
-    storeBarrierRememberedSet = nullptr;
+
     if (buffer != nullptr) {
         buffer->Fini();
         delete buffer;

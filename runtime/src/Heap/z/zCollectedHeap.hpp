@@ -16,6 +16,7 @@
 #include <functional>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <vector>
 
 #include "Base/Macros.h"
@@ -25,7 +26,6 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/Collector/Collector.h"
 namespace MapleRuntime {
-class RememberedSet;
 enum class Generation : uint8_t;
 enum CollectorType {
     NO_COLLECTOR = 0, // No Collector

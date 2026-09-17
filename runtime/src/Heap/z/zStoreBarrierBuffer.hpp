@@ -15,8 +15,6 @@
 
 namespace MapleRuntime {
 class Collector;
-class RememberedSet;
-
 constexpr bool kBufferStoreBarriers = true;
 constexpr size_t kStoreBarrierBufferLength = 32;
 

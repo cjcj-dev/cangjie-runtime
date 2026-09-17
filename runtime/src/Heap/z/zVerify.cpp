@@ -189,7 +189,8 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
         const uintptr_t previous = (::g_cjStoreGoodMask & ZPointerRememberedMask) ^ ZPointerRememberedMask;
         CHECK_DETAIL(remset != previous, "Previous remembered color at %p", &field);
         CHECK_DETAIL(remset == ZPointerRememberedMask ||
-                     Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)) ||
+                      Heap::page(reinterpret_cast<MAddress>(&field))->is_remembered(
+                          reinterpret_cast<volatile zpointer*>(&field)) ||
                      MutatorManager::Instance().StoreBarrierBufferContains(reinterpret_cast<MAddress>(&field)),
                      "Missing remembered field at %p", &field);
     } else {
@@ -286,9 +287,8 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
         forwarding->table_generation() != static_cast<uint8_t>(Generation::Old)) { return; }
     ZPage* page = forwarding->page();
     if (page == nullptr) { return; }
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     const bool activeCurrent = Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent();
-    CHECK_DETAIL(remset.IsClearInRange(forwarding->start(), forwarding->size(), !activeCurrent),
+    CHECK_DETAIL(activeCurrent ? page->is_remset_cleared_previous() : page->is_remset_cleared_current(),
                  "Inactive remembered set is not empty for %p", page);
     // zVerify.cpp:601 forwarding->object_iterate: the source page livemap.
     page->object_iterate([&](BaseObject* object) {
@@ -297,7 +297,9 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
             const MAddress slot = reinterpret_cast<MAddress>(&field);
             if (IntentionallyUnremembered(field.GetFieldValue()) || bufferedStores.count(slot) != 0 ||
                 forwarding->find(from) != 0) { return; }
-            CHECK_DETAIL(activeCurrent ? remset.Contains(slot) : remset.ContainsPrevious(slot),
+            CHECK_DETAIL(activeCurrent
+                             ? page->is_remembered(reinterpret_cast<volatile zpointer*>(slot))
+                             : page->was_remembered(reinterpret_cast<volatile zpointer*>(slot)),
                          "Missing remembered field %p in source %p", &field, object);
         });
     });
@@ -309,7 +311,6 @@ void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
 {
     std::vector<MAddress> fromAddresses;
     forwarding->for_each_from([&](MAddress from) { fromAddresses.push_back(from); });
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     for (MAddress from : fromAddresses) {
         BaseObject* object = reinterpret_cast<BaseObject*>(forwarding->find(from));
         Object(object, nullptr);
@@ -323,7 +324,12 @@ void ZVerify::AfterRelocationInternal(ZForwarding* forwarding)
             if (IntentionallyUnremembered(value) || ZPointer::is_store_good(preloaded.GetFieldValue()) ||
                 bufferedStores.count(slot) != 0 ||
                 bufferedStores.count(from + slot - reinterpret_cast<MAddress>(object)) != 0) { return; }
-            if (remset.Contains(slot) || remset.ContainsPrevious(slot)) { return; }
+            ZPage* toPage = Heap::page(slot);
+            if (toPage != nullptr &&
+                (toPage->is_remembered(reinterpret_cast<volatile zpointer*>(slot)) ||
+                 toPage->was_remembered(reinterpret_cast<volatile zpointer*>(slot)))) {
+                return;
+            }
             std::atomic_thread_fence(std::memory_order_acquire);
             if (field.GetFieldValue(std::memory_order_acquire) != value) { return; }
             CHECK_DETAIL(ZForwarding::young_marking(), "Missing remembered field outside young marking: %p", &field);

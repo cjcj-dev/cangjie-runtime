@@ -48,6 +48,7 @@
 #include "TypeInfoManager.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zRemembered.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/WCollector/WCollectorInternal.h"
 
@@ -285,28 +286,8 @@ void WCollector::RemapYoungRoots()
     SuspendibleThreadSetJoiner joiner;
     MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
     // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
-    const auto remset = Heap::GetHeap().GetRememberedSet().Snapshot();
-    for (MAddress slot : remset) {
-        ZPage* page = Heap::page(slot);
-        if (page == nullptr || !page->IsValidRegion() || page->IsFreeRegion() ||
-            page->IsGarbageRegion() || page->IsYoungRegion()) {
-            continue;
-        }
-        RefField<>& field = HeapSlotAt<>(slot);
-        RefField<> observed(field);
-        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-        BaseObject* resolved = make_load_good(observed, provenance);
-        if (resolved == nullptr) {
-            continue;
-        }
-        RefField<> current = ColourResolvedRefField(resolved, provenance);
-        bool healed = field.CompareExchange(observed.GetFieldValue(), current.GetFieldValue());
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteRemapYoungRootsTestReceipt(field, raw(observed.GetFieldValue()), healed, ZPointer::is_store_good(field.GetFieldValue()));
-#else
-        (void)healed;
-#endif
-    }
+    ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
+    Heap::GetHeap().remembered().remap_current(&remsetIter);
     VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
     RootVisitor visitor = [this](ObjectRef& root) {
         const zaddress_unsafe observed = root.LoadPlain();
@@ -1014,8 +995,16 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 // flip (zStoreBarrierBuffer.cpp:162-187). Publish all mutator
                 // buffers before the active-face Snapshot used for this ref fix.
                 (void)ZMark::FlushAllGenerations();
-                std::unordered_set<MAddress> concRemset =
-                    Heap::GetHeap().GetRememberedSet().Snapshot();
+                std::unordered_set<MAddress> concRemset;
+                ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
+                for (ZRemsetTableEntry entry; remsetIter.next(&entry);) {
+                    if (entry._page == nullptr) {
+                        continue;
+                    }
+                    entry._page->oops_do_current_remembered([&](volatile zpointer* p) {
+                        concRemset.insert(reinterpret_cast<MAddress>(p));
+                    });
+                }
                 remsetVec.reserve(remsetVec.size() + concRemset.size());
                 for (MAddress slot : concRemset) {
                     remsetVec.push_back(slot);
@@ -1109,7 +1098,6 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
     if (!object->HasRefField()) {
         return;
     }
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     Collector& collector = Heap::GetHeap().GetCollector();
     // zRelocate.cpp:798: this relocation-work consumer uses the unsafe entry.
     ZIterator::basic_oop_iterate(object, [&](RefField<>& field) {
@@ -1122,7 +1110,10 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
                 generation_forwarding_table(Generation::Young).get(address);
             const MAddress to = forwarding == nullptr ? address : forwarding->find(address);
             if (to == 0 || Heap::page(to)->IsYoungRegion()) {
-                remset.Record(reinterpret_cast<MAddress>(&field));
+                ZPage* holder = Heap::page(reinterpret_cast<MAddress>(&field));
+                if (holder != nullptr) {
+                    holder->remember(reinterpret_cast<volatile zpointer*>(&field));
+                }
                 return;
             }
         }
@@ -1171,7 +1162,10 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
         ZArrayParallelIterator<ZPage::PromotionPage*> iter;
         const std::function<void(RefField<>&)> remember;
     } task(pages, [](RefField<>& field) {
-        Heap::GetHeap().GetRememberedSet().Record(reinterpret_cast<MAddress>(&field));
+        ZPage* holder = Heap::page(reinterpret_cast<MAddress>(&field));
+        if (holder != nullptr) {
+            holder->remember(reinterpret_cast<volatile zpointer*>(&field));
+        }
     });
     workers.run(&task);
 }
@@ -1634,16 +1628,19 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
     if (toRegion == nullptr || toRegion->IsYoungRegion()) {
         return;
     }
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     ZPage* fromRegion = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from));
     if (fromRegion == nullptr) {
         fromRegion = Heap::page(reinterpret_cast<MAddress>(from));
     }
     if (fromRegion != nullptr && !fromRegion->IsYoungRegion()) {
         const size_t sz = RegionSpace::GetAllocSize(*to);
-        ZForwarding* forwarding = generation_forwarding_table(Generation::Old).get(reinterpret_cast<MAddress>(from));
-        rememberedSet.TransferObjectSlots(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to), sz,
-                                          forwarding);
+        const uintptr_t fromLocal = fromRegion->local_offset(reinterpret_cast<MAddress>(from));
+        auto iter = fromRegion->remset_iterator_limited_previous(fromLocal, sz);
+        BitMap::idx_t index;
+        while (iter.next(&index)) {
+            const uintptr_t fieldOff = ZRememberedSet::to_offset(index) - fromLocal;
+            toRegion->remember(reinterpret_cast<volatile zpointer*>(reinterpret_cast<MAddress>(to) + fieldOff));
+        }
         return;
     }
     RegionManager::RememberPromotedObject(to);
@@ -2046,9 +2043,9 @@ void RegionManager::CompactRegion(ZPage* region)
     // to-page, so its old remembered-set bits have to leave the face before the copy walk starts
     // writing the new ones.  What the walk does not hand back is dropped, which is
     // clear_remset_before_in_place_reuse (zRelocate.cpp:1027-1035).
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    std::vector<RememberedSet::InPlaceSlot> takenSlots;
-    rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
+    if (!fromYoung) {
+        region->swap_remset_bitmaps();
+    }
     // ZGC zRelocate.cpp:862-896: establish the to-page age before publishing
     // any in-place forwarding entry. The descriptor stays in the page table,
     // so promotion publishes its old identity here. PublishFromPageMetadata
@@ -2091,7 +2088,13 @@ void RegionManager::CompactRegion(ZPage* region)
         if (fromYoung && toAge == PageAge::old) {
             RememberPromotedObject(toObj);
         } else if (!fromYoung) {
-            rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+            const uintptr_t fromLocal = region->local_offset(currentPtr);
+            auto iter = region->remset_iterator_limited_previous(fromLocal, size);
+            BitMap::idx_t index;
+            while (iter.next(&index)) {
+                const uintptr_t fieldOff = ZRememberedSet::to_offset(index) - fromLocal;
+                region->remember(reinterpret_cast<volatile zpointer*>(toAddress + fieldOff));
+            }
         }
     });
 

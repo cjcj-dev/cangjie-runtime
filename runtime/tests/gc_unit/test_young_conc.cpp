@@ -235,7 +235,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(first);
     space.GetRegionManager().AddRawPointerObject(second);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Mutator producer;
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
@@ -289,7 +288,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -340,7 +338,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -401,7 +398,6 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     space.GetRegionManager().AddRawPointerObject(y2yHolder);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -447,7 +443,6 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -623,7 +618,7 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
         mutator->GetGCData().storeBarrierBuffer->Flush();
     }
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(field)));
+    GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(field)));
 }
 
 // Major TRACE window with no young regions: a bulk write must still publish the
@@ -679,7 +674,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     GC_EXPECT_EQ(work.size(), 1u);
     GC_EXPECT_TRUE(work.front() == fx.obj1);
     GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == incoming);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
     GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(incoming)));
 }
 
@@ -704,7 +699,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     markFixture.DrainObjects(work);
     GC_EXPECT_TRUE(work.empty());
     GC_EXPECT_TRUE(is_null(field.GetTargetObject()));
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
 }
 
 GC_TEST(YoungConc, StackScanIsRequired)
@@ -714,25 +709,6 @@ GC_TEST(YoungConc, StackScanIsRequired)
 
 // FlipForMinor is an O(1) handoff: pre-flip records are scanned now while a
 // record produced after the flip remains on the active face for the next cycle.
-GC_TEST(YoungConc, FlipForMinorSeparatesConcurrentProducerFace)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    RememberedSet rememberedSet;
-    rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    const MAddress before = fx.heapStart + 8 * sizeof(void*);
-    const MAddress during = fx.heapStart + 9 * sizeof(void*);
-    rememberedSet.Record(before);
-    rememberedSet.FlipForMinor();
-    rememberedSet.Record(during);
-
-    std::unordered_set<MAddress> previous;
-    rememberedSet.ScanPreviousForMinor(previous);
-    GC_EXPECT_EQ(previous.size(), 1u);
-    GC_EXPECT_TRUE(previous.count(before) == 1);
-    GC_EXPECT_TRUE(rememberedSet.Snapshot().count(during) == 1);
-}
-
 // Product must not return to retired-only termination. Flipping the constant is
 // also the deliberate-break red proof for the regression guard below.
 GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)

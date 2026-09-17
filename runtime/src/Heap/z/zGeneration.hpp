@@ -17,8 +17,8 @@
 #include "Heap/Collector/GcRequest.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSet.hpp"
+#include "Heap/z/zRemembered.hpp"
 namespace MapleRuntime {
-class RememberedSet;
 class ZMark;
 enum class zaddress : Uptr;
 struct TenuringInputs;
@@ -86,6 +86,9 @@ public:
     void PublishPhase(GCPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
+    ZRemembered* remembered() { return &_remembered; }
+    const ZRemembered* remembered() const { return &_remembered; }
+    void register_with_remset(ZPage* page) { _remembered.register_found_old(page); }
     void End();
     ZForwardingTable& forwarding_table() { return _forwarding_table; }
     const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
@@ -118,6 +121,7 @@ private:
     bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
+    ZRemembered _remembered;
 };
 
 // zGeneration.cpp:489-497: type is scoped to one young collection.

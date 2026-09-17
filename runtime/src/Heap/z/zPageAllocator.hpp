@@ -665,10 +665,6 @@ public:
     // Like ReclaimRegion but units enter mark-quarantine tree, not dirty tree.
     void ReclaimRegionToMarkQuarantine(ZPage* region);
     size_t ReleaseRegion(ZPage* region);
-    // Clear the two exact bitmap slices owned by [regionStart, regionEnd).
-    // Called on both CollectRegion and the direct large-region release path.
-    static void ScrubRememberedSetForRegion(ZPage* region);
-    // Emit + reset process-local scrub cost counters (STEER3).
 
     void ReclaimGarbageRegions();
 

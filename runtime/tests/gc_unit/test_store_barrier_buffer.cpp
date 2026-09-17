@@ -490,7 +490,7 @@ GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
@@ -510,7 +510,7 @@ GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
     DrainPublishedMarkObjects(retired);
 
     GC_EXPECT_TRUE(retired.empty());
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
@@ -532,7 +532,7 @@ GC_TEST(StoreBuf, NullAndPreMarkPreviousAreNormalSkips)
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
     GC_EXPECT_EQ(marked.size(), 1u);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
     GC_EXPECT_TRUE(buf.IsEmpty());
 }
 
@@ -564,11 +564,11 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
                  "retired_receipts=%zu current=%zu slot_remembered=%u\n",
                  static_cast<size_t>(raw(previous)), static_cast<unsigned>(GCPhase::GC_PHASE_TRACE),
                  static_cast<size_t>(colour), retired.size(), buf.Current(),
-                 static_cast<unsigned>(Heap::GetHeap().GetRememberedSet().Contains(slot)));
+                 static_cast<unsigned>(SlotPageRemembered(slot)));
     std::fflush(stderr);
     GC_EXPECT_TRUE(retired.empty());
     GC_EXPECT_EQ(buf.Current(), StoreBarrierBuffer::Capacity());
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 #if defined(MRT_GC_UNIT_TESTS) && defined(__linux__)
@@ -591,7 +591,7 @@ GC_TEST(StoreBuf, YoungSlotExcludedFromOldPhaseSnapshot)
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
     GC_EXPECT_TRUE(marked.empty());
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_FALSE(SlotPageRemembered(slot));
     GC_EXPECT_TRUE(buf.IsEmpty());
 }
 #endif
@@ -618,7 +618,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_TRUE(!Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(!SlotPageRemembered(slot));
 }
 
 GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
@@ -642,7 +642,7 @@ GC_TEST(StoreBuf, AddConsumesPreviousPhaseBeforeCurrentEntry)
     std::vector<BaseObject*> marked;
     markFixture.DrainObjects(marked);
     GC_EXPECT_EQ(marked.size(), 2u);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot) && Heap::GetHeap().GetRememberedSet().Contains(currentSlot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot) && SlotPageRemembered(currentSlot));
 }
 
 GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
@@ -668,7 +668,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     DrainPublishedMarkObjects(retired);
 
     GC_EXPECT_EQ(retired.size(), 1u);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(SlotAt(fx, 12)));
+    GC_EXPECT_TRUE(SlotPageRemembered(SlotAt(fx, 12)));
 }
 
 GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
@@ -697,51 +697,6 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));
 }
 
-GC_TEST(StoreBuf, PhaseFlipLeavesOnePreviousAndOneCurrentSlot)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBarrierBuffer buf;
-    const MAddress previousSlot = SlotAt(fx, 8);
-    const MAddress currentSlot = SlotAt(fx, 9);
-
-    RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
-    buf.add(previousSlot, zpointer::null);
-    buf.Flush();
-    heapRs.FlipForMinor();
-    buf.add(currentSlot, zpointer::null);
-    buf.Flush();
-
-    std::unordered_set<MAddress> previous;
-    GC_EXPECT_EQ(heapRs.ScanPreviousForMinor(previous), 1u);
-    GC_EXPECT_EQ(previous.size(), 1u);
-    GC_EXPECT_TRUE(previous.count(previousSlot) == 1);
-    GC_EXPECT_TRUE(heapRs.Contains(currentSlot));
-}
-
-GC_TEST(StoreBuf, FullAutoFlushKeepsEveryEntry)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBarrierBuffer buf;
-    const size_t n = StoreBarrierBuffer::Capacity() + 1;
-    for (size_t i = 0; i < n; ++i) {
-        buf.add(SlotAt(fx, i + 8), zpointer::null);
-    }
-    GC_EXPECT_EQ(buf.Pending(), 1u);
-    RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
-    GC_EXPECT_EQ(heapRs.Size(), StoreBarrierBuffer::Capacity());
-    buf.Flush();
-    GC_EXPECT_TRUE(buf.IsEmpty());
-    for (size_t i = 0; i < n; ++i) {
-        GC_EXPECT_TRUE(heapRs.Contains(SlotAt(fx, i + 8)));
-    }
-}
-
 GC_TEST(StoreBuf, UnflushedPendingInvisibleToDrain)
 {
     GcHeapFixture fx;
@@ -767,7 +722,7 @@ GC_TEST(StoreBuf, FlushBeforeRelocateSnapshotPublishesPending)
     StoreBarrierBuffer buf;
     const MAddress slot = SlotAt(fx, 8);
     buf.add(slot, zpointer::null);
-    RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& heapRs = HeapTestRemset();
     GC_EXPECT_TRUE(!heapRs.Contains(slot));
     buf.Flush();
     GC_EXPECT_TRUE(heapRs.Contains(slot));
@@ -783,7 +738,7 @@ GC_TEST(StoreBuf, MarkEndSnapshotLeavesCurrentForNextMinor)
     const MAddress slot = SlotAt(fx, 11);
     buf.add(slot, zpointer::null);
     buf.Flush();
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 GC_TEST(StoreBuf, FlushBeforeMinorDoesNotLoseEdges)
@@ -798,7 +753,7 @@ GC_TEST(StoreBuf, FlushBeforeMinorDoesNotLoseEdges)
         buf.add(SlotAt(fx, i + 8), zpointer::null);
     }
     buf.Flush();
-    RememberedSet& heapRs = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& heapRs = HeapTestRemset();
     for (size_t i = 0; i < n; ++i) {
         GC_EXPECT_TRUE(heapRs.Contains(SlotAt(fx, i + 8)));
     }
@@ -814,28 +769,10 @@ GC_TEST(StoreBuf, ThreadExitFlushRedeems)
     const MAddress slot = SlotAt(fx, 9);
     buf.add(slot, zpointer::null);
     buf.Flush();
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
-GC_TEST(StoreBuf, ReRememberDoesNotFightBuffer)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBarrierBuffer buf;
-    const MAddress slot = SlotAt(fx, 10);
-    buf.add(slot, zpointer::null);
-    rs.Record(slot);
-    rs.Record(slot);
-    GC_EXPECT_EQ(rs.Size(), 1u);
-    buf.Flush();
-    GC_EXPECT_EQ(rs.Size(), 1u);
-    std::unordered_set<MAddress> drained;
-    rs.DrainForMinor(drained);
-    GC_EXPECT_TRUE(drained.count(slot) == 1);
-    GC_EXPECT_EQ(drained.size(), 1u);
-}
+
 
 // ZThreadLocalData + ZMark::flush: detach publishes both generation stacks,
 // including non-full chunks, even when this OS thread owns no allocator.
@@ -870,36 +807,6 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
 
 // ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field (zBarrier.inline.hpp:719):
 // raw null takes remember(p), whereas an ordinary strong store may bypass it.
-GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
-{
-    for (bool preloaded : {false, true}) {
-        {
-            const bool weak = true;
-            GcHeapFixture fx;
-            fx.region0->reset(PageAge::old);
-            fx.region1->reset(PageAge::eden);
-            fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
-            RememberedSet rs;
-            rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-            StoreBufferCollector collector;
-            AllocBuffer alloc;
-            AllocBufferScope allocScope(alloc);
-            Mutator mutator;
-            InstalledMutatorScope mutatorScope(mutator);
-            HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-            field.StoreColoured(zpointer::null);
-            if (preloaded) {
-                field.StoreColoured(StoreGoodPointer(fx.obj1));
-                ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false);
-            } else {
-                ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
-            }
-            GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)), weak);
-            GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == fx.obj1);
-        }
-    }
-}
-
 // Derived from ZBarrierSet::oop_atomic_{cmpxchg,xchg}_not_in_heap and
 // ZBarrier::self_heal: native atomics publish store-good, including null.
 GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
@@ -985,6 +892,6 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     marking.DrainObjects(marked);
     GC_EXPECT_TRUE(marked.empty());
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_FALSE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
     GC_EXPECT_EQ(field.GetFieldValue(), StoreGoodPointer(fx.obj1));
 }

@@ -14,6 +14,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zVirtualMemory.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zRememberedSet.inline.hpp"
 
 namespace MapleRuntime {
 
@@ -351,6 +352,110 @@ inline MAddress ZPage::find_base(MAddress p)
 {
     DCHECK_D(is_marked(), "Should be marked");
     return find_base_unsafe(p);
+}
+
+inline void ZPage::remember(volatile zpointer* p)
+{
+    if (!_remembered_set.is_initialized()) {
+        return;
+    }
+    _remembered_set.set_current(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline bool ZPage::is_remembered(volatile zpointer* p)
+{
+    if (!_remembered_set.is_initialized()) {
+        return false;
+    }
+    return _remembered_set.at_current(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline bool ZPage::was_remembered(volatile zpointer* p)
+{
+    if (!_remembered_set.is_initialized()) {
+        return false;
+    }
+    return _remembered_set.at_previous(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline void ZPage::clear_remset_bit_non_par_current(uintptr_t l_offset)
+{
+    _remembered_set.unset_non_par_current(l_offset);
+}
+
+inline void ZPage::clear_remset_range_non_par_current(uintptr_t l_offset, size_t size)
+{
+    _remembered_set.unset_range_non_par_current(l_offset, size);
+}
+
+inline ZBitMap::ReverseIterator ZPage::remset_reverse_iterator_previous()
+{
+    return _remembered_set.iterator_reverse_previous();
+}
+
+inline ZRememberedSet::Iterator ZPage::remset_iterator_limited_current(uintptr_t l_offset, size_t size)
+{
+    return _remembered_set.iterator_limited_current(l_offset, size);
+}
+
+inline ZRememberedSet::Iterator ZPage::remset_iterator_limited_previous(uintptr_t l_offset, size_t size)
+{
+    return _remembered_set.iterator_limited_previous(l_offset, size);
+}
+
+inline bool ZPage::is_remset_cleared_current() const
+{
+    return _remembered_set.is_cleared_current();
+}
+
+inline bool ZPage::is_remset_cleared_previous() const
+{
+    return _remembered_set.is_cleared_previous();
+}
+
+inline void ZPage::verify_remset_cleared_current() const {}
+
+inline void ZPage::verify_remset_cleared_previous() const {}
+
+inline void ZPage::clear_remset_previous()
+{
+    _remembered_set.clear_previous();
+}
+
+inline void ZPage::swap_remset_bitmaps()
+{
+    _remembered_set.swap_remset_bitmaps();
+}
+
+inline void* ZPage::remset_current()
+{
+    return _remembered_set.current();
+}
+
+template<typename Function>
+inline void ZPage::oops_do_remembered(Function function)
+{
+    _remembered_set.iterate_previous([&](uintptr_t l_offset) {
+        function(reinterpret_cast<volatile zpointer*>(global_offset(l_offset)));
+    });
+}
+
+template<typename Function>
+inline void ZPage::oops_do_remembered_in_live(Function function)
+{
+    ZRememberedSetContainingInLiveIterator iter(this);
+    for (ZRememberedSetContaining containing; iter.next(&containing);) {
+        function(reinterpret_cast<volatile zpointer*>(containing._field_addr));
+    }
+    iter.print_statistics();
+}
+
+template<typename Function>
+inline void ZPage::oops_do_current_remembered(Function function)
+{
+    _remembered_set.iterate_current([&](uintptr_t l_offset) {
+        function(reinterpret_cast<volatile zpointer*>(global_offset(l_offset)));
+    });
 }
 
 // zPage.cpp:115-117.
@@ -1004,6 +1109,9 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
         _scratch.allocPtr = GetRegionStart();
         _scratch.regionEnd = _scratch.allocPtr + nUnit * ZPage::UNIT_SIZE;
         reset(age);
+        if (age == PageAge::old && !_remembered_set.is_initialized()) {
+            remset_alloc();
+        }
         if (live) {
             reset_livemap();
         }
@@ -1037,17 +1145,11 @@ inline void ZPage::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)
         (void)nUnit;
     }
 
-} // namespace MapleRuntime
-#endif
-
-namespace MapleRuntime {
 inline ZGenerationId ZPage::generation_id() const
 {
     return _generation_id;
 }
-}
 
-namespace MapleRuntime {
 inline unsigned ZPage::RelocateObserve() const
 {
     auto owner = forwarding_for_page(const_cast<ZPage*>(this));
@@ -1083,16 +1185,12 @@ inline Generation ZPage::GetOwnerGeneration() const
     {
         return IsYoungRegion() ? Generation::Young : Generation::Old;
     }
-}
 
-namespace MapleRuntime {
 inline bool ZPage::IsYoungRegion() const
     {
         return generation_id() == ZGenerationId::young;
     }
-}
 
-namespace MapleRuntime {
 inline MAddress ZPage::GetRegionStart() const
 {
     if (!_virtual.is_null()) {
@@ -1100,25 +1198,15 @@ inline MAddress ZPage::GetRegionStart() const
     }
     return _scratch.allocPtr;
 }
-}
 
-namespace MapleRuntime {
 inline MAddress ZPage::GetRegionEnd() const { return _scratch.regionEnd; }
-}
 
-namespace MapleRuntime {
 inline MAddress ZPage::GetRegionAllocPtr() const { return _scratch.allocPtr; }
-}
 
-namespace MapleRuntime {
 inline bool ZPage::IsSmallRegion() const { return is_small(); }
-}
 
-namespace MapleRuntime {
 inline bool ZPage::IsLargeRegion() const { return is_large(); }
-}
 
-namespace MapleRuntime {
 template<typename Function>
 inline void ZGenerationPagesParallelIterator::do_pages(Function function)
 {
@@ -1129,4 +1217,6 @@ inline void ZGenerationPagesParallelIterator::do_pages(Function function)
         return true;
     });
 }
-}
+
+} // namespace MapleRuntime
+#endif
