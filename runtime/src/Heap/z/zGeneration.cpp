@@ -163,7 +163,6 @@ YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
         ++sequence;
     }
     set_phase(Phase::Mark);
-    PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
         CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
@@ -222,7 +221,6 @@ void ZGeneration::StartOldMark(WCollector& collector)
     }
     pinnedLock.unlock();
     set_phase(Phase::Mark);
-    PublishPhase(GC_PHASE_ENUM);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
         CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
@@ -704,7 +702,6 @@ bool WCollector::YoungMarkEndPause()
 
 void WCollector::ConcurrentYoungMarkContinue()
 {
-    TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
     MinorSlotSet reachableSlots;
     (void)FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
                           &youngConcWindow);
@@ -842,7 +839,6 @@ void ZGenerationYoung::concurrent_relocate(WCollector& collector)
 
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungPostEvacFinish);
-        collector.TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true, true);
         collector.MergeResurrectExportObjects(Generation::Young);
     }
     ++collector.minorTotalRuns;
@@ -1335,7 +1331,6 @@ void ZGenerationOld::concurrent_relocate(WCollector& collector)
     collector.ForwardFromSpace(GCCycleGeneration::OLD);
     reinterpret_cast<RegionSpace&>(collector.GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
         GCCycleGeneration::OLD);
-    collector.TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     collector.MergeResurrectExportObjects(Generation::Old);
     collector.PostResolveCycleTask();
     collector.CollectSmallSpace();
