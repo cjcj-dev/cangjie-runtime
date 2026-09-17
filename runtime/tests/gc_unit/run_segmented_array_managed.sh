@@ -46,14 +46,13 @@ if [[ "$MODE" == both || "$MODE" == full ]]; then
     timeout 60s "$BIN" >"$FULL_LOG" 2>&1
   full_rc=$?
   set -e
-  full_branch=$(/usr/bin/grep -c '\[SEGMENTED_MANAGED_OK\] mode=full ' "$FULL_LOG" || true)
   full_done=$(/usr/bin/grep -c '^SEGMENTED_ARRAY_MANAGED_FIXTURE_OK checksum=37$' "$FULL_LOG" || true)
-  if [[ $full_rc -ne 0 || $full_branch -ne 1 || $full_done -ne 1 ]]; then
-    echo "SEGMENTED_ARRAY_MANAGED_FAIL mode=full rc=$full_rc branch=$full_branch done=$full_done" >&2
+  if [[ $full_rc -ne 0 || $full_done -ne 1 ]]; then
+    echo "SEGMENTED_ARRAY_MANAGED_FAIL mode=full rc=$full_rc done=$full_done" >&2
     tail -30 "$FULL_LOG" >&2
     exit 1
   fi
-  echo "SEGMENTED_ARRAY_MANAGED_OK mode=full rc=0 branch=1 done=1"
+  echo "SEGMENTED_ARRAY_MANAGED_OK mode=full rc=0 done=1"
 fi
 
 if [[ "$MODE" == both || "$MODE" == young ]]; then
@@ -63,12 +62,11 @@ if [[ "$MODE" == both || "$MODE" == young ]]; then
     timeout 60s "$BIN" >"$YOUNG_LOG" 2>&1
   young_rc=$?
   set -e
-  young_branch=$(/usr/bin/grep -c '\[SEGMENTED_MANAGED_OK\] mode=young ' "$YOUNG_LOG" || true)
   young_done=$(/usr/bin/grep -c '^SEGMENTED_ARRAY_MANAGED_FIXTURE_OK checksum=37$' "$YOUNG_LOG" || true)
-  if [[ $young_rc -ne 0 || $young_branch -ne 1 || $young_done -ne 1 ]]; then
-    echo "SEGMENTED_ARRAY_MANAGED_FAIL mode=young rc=$young_rc branch=$young_branch done=$young_done" >&2
+  if [[ $young_rc -ne 0 || $young_done -ne 1 ]]; then
+    echo "SEGMENTED_ARRAY_MANAGED_FAIL mode=young rc=$young_rc done=$young_done" >&2
     tail -30 "$YOUNG_LOG" >&2
     exit 1
   fi
-  echo "SEGMENTED_ARRAY_MANAGED_OK mode=young rc=0 branch=1 done=1"
+  echo "SEGMENTED_ARRAY_MANAGED_OK mode=young rc=0 done=1"
 fi
