@@ -80,8 +80,8 @@ public:
         // zGeneration.cpp:129: every generation owns a ZWorkers; the driver
         // hands each request's worker count to it (zDriver.cpp:166-176).
         for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-            if (collector.GetGenerationCycle(generation).Workers() == nullptr) {
-                collector.GetGenerationCycle(generation).InitializeWorkers(1);
+            if (collector.GetZGeneration(generation).Workers() == nullptr) {
+                collector.GetZGeneration(generation).InitializeWorkers(1);
             }
         }
         resources.testCollector = &collector;
@@ -1232,7 +1232,7 @@ GC_TEST(GcRequestSync, MajorFullPrecleanThenCombinedRoots)
     GC_EXPECT_TRUE(collector.TypeAt(0) == ZYoungType::major_full_preclean);
     GC_EXPECT_TRUE(collector.TypeAt(1) == ZYoungType::major_full_roots);
     GC_EXPECT_TRUE(collector.TypeAt(2) == ZYoungType::none);
-    GC_EXPECT_TRUE(collector.GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::none);
+    GC_EXPECT_TRUE(collector.GetZGeneration(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::none);
     CollectorResourcesTestPeer::Destroy(resources);
 }
 

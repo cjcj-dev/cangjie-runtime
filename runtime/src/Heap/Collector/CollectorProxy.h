@@ -38,16 +38,16 @@ public:
         return currentCollector != nullptr ? currentCollector->GetGCPhase(generation) : GCPhase::GC_PHASE_UNDEF;
     }
 
-    GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) override
+    ZGeneration& GetZGeneration(GCCycleGeneration generation) override
     {
-        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
-                                           : wCollector.GetGenerationCycle(generation);
+        return currentCollector != nullptr ? currentCollector->GetZGeneration(generation)
+                                           : wCollector.GetZGeneration(generation);
     }
 
-    const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const override
+    const ZGeneration& GetZGeneration(GCCycleGeneration generation) const override
     {
-        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
-                                           : wCollector.GetGenerationCycle(generation);
+        return currentCollector != nullptr ? currentCollector->GetZGeneration(generation)
+                                           : wCollector.GetZGeneration(generation);
     }
 
     GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override

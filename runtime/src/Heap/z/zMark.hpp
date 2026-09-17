@@ -235,7 +235,7 @@ class CopyCollector : public Collector {
     friend class ZMarkTask;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
-    friend struct GenerationCycleRootTestAccess;
+    friend struct ZGenerationRootTestAccess;
 #endif
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MarkPublicationFixture;
@@ -413,7 +413,7 @@ public:
 
     GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD) override
     {
-        return GetGenerationCycle(generation).Stats();
+        return GetZGeneration(generation).Stats();
     }
 
     virtual void UpdateGCStats();
@@ -508,7 +508,7 @@ protected:
     void EnumAllCommonRoots(ZWorkers& workers);
     ZWorkers& GetWorkers(GCCycleGeneration generation) const
     {
-        return *GetGenerationCycle(generation).Workers();
+        return *GetZGeneration(generation).Workers();
     }
     // enum roots referenced by foreign languages.
     void EnumAllExportRoots(RootSet& foreignRootsSet);

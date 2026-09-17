@@ -60,7 +60,7 @@ public:
         PublishGenerationPhase(generation, phase);
     }
 
-    virtual GenerationCycle& GetGenerationCycle(GCCycleGeneration generation)
+    virtual ZGeneration& GetZGeneration(GCCycleGeneration generation)
     {
         if (generation == GCCycleGeneration::YOUNG) {
             return youngCycle;
@@ -68,31 +68,31 @@ public:
         return oldCycle;
     }
 
-    virtual const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const
+    virtual const ZGeneration& GetZGeneration(GCCycleGeneration generation) const
     {
         if (generation == GCCycleGeneration::YOUNG) {
             return youngCycle;
         }
         return oldCycle;
     }
-    GenerationCycle& GetGenerationCycle(Generation generation)
+    ZGeneration& GetZGeneration(Generation generation)
     {
-        return GetGenerationCycle(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+        return GetZGeneration(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     }
-    const GenerationCycle& GetGenerationCycle(Generation generation) const
+    const ZGeneration& GetZGeneration(Generation generation) const
     {
-        return GetGenerationCycle(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+        return GetZGeneration(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     }
 
     virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
     {
-        return GetGenerationCycle(generation).Snapshot();
+        return GetZGeneration(generation).Snapshot();
     }
     virtual void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value);
     bool OldActiveRemsetIsCurrent() const
     {
-        return GetGenerationCycle(GCCycleGeneration::OLD).ActiveRemsetIsCurrent(
-            GetGenerationCycle(GCCycleGeneration::YOUNG).Sequence());
+        return GetZGeneration(GCCycleGeneration::OLD).ActiveRemsetIsCurrent(
+            GetZGeneration(GCCycleGeneration::YOUNG).Sequence());
     }
     Generation ObjectGeneration(BaseObject* object) const;
 
@@ -135,7 +135,7 @@ public:
 
     virtual GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD)
     {
-        return GetGenerationCycle(generation).Stats();
+        return GetZGeneration(generation).Stats();
     }
 
     virtual BaseObject* ForwardObject(BaseObject*, Generation) { AbortUnimplemented("Collector::ForwardObject"); }

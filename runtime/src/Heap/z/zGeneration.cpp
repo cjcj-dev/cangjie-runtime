@@ -57,7 +57,7 @@
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
-GenerationCycle::GenerationCycle(GCCycleGeneration generation)
+ZGeneration::ZGeneration(GCCycleGeneration generation)
     : mark(std::make_unique<ZMark>(ZMarkStripesMax,
           generation == GCCycleGeneration::YOUNG ? MarkingStacks::MarkingGeneration::YOUNG
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
@@ -68,7 +68,7 @@ GenerationCycle::GenerationCycle(GCCycleGeneration generation)
     ZJNICritical::initialize();
 }
 
-GenerationCycle::~GenerationCycle() = default;
+ZGeneration::~ZGeneration() = default;
 
 // ZGC zGeneration.cpp:197-207: select policy at the generation boundary.
 static double fragmentation_limit(GCCycleGeneration generation)
@@ -79,7 +79,7 @@ static double fragmentation_limit(GCCycleGeneration generation)
         return ZYoungCompactionLimit;
     }
 }
-double GenerationCycle::FragmentationLimit() const
+double ZGeneration::FragmentationLimit() const
 {
     return fragmentation_limit(generation);
 }
@@ -88,7 +88,7 @@ void ResetSkippedStackMapCounts();
 void ReportSkippedStackMapCounts();
 // ZGenerationYoung::mark_start (zGeneration.cpp:855-880). The collector
 // supplies the existing allocator/mark domain; this cycle owns phase and seq.
-YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
+YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
 {
     CHECK(generation == GCCycleGeneration::YOUNG);
     CHECK(Snapshot().active);
@@ -162,7 +162,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
 }
 
 // ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
-void GenerationCycle::StartOldMark(WCollector& collector)
+void ZGeneration::StartOldMark(WCollector& collector)
 {
     CHECK(generation == GCCycleGeneration::OLD);
     CHECK(Snapshot().active);
@@ -215,13 +215,13 @@ void GenerationCycle::StartOldMark(WCollector& collector)
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
 // young sequence once for the whole old relocation, not once per forwarding.
-void GenerationCycle::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
+void ZGeneration::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
 {
     CHECK(generation == GCCycleGeneration::OLD);
     youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
 }
 
-bool GenerationCycle::ActiveRemsetIsCurrent(uint64_t youngSequence) const
+bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 {
     CHECK(generation == GCCycleGeneration::OLD);
     // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
@@ -230,7 +230,7 @@ bool GenerationCycle::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 
 void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
 {
-    GenerationCycle& cycle = GetGenerationCycle(generation);
+    ZGeneration& cycle = GetZGeneration(generation);
     const GCPhase before = cycle.GcPhase();
     if (generation == GCCycleGeneration::OLD &&
         (value == GCPhase::GC_PHASE_PREFORWARD || value == GCPhase::GC_PHASE_FORWARD) &&
@@ -246,7 +246,7 @@ void WCollector::MarkYoungRootObject(BaseObject* object) const
 {
     // #596's barrier already established current and selected young. Keep the
     // generation mark-phase assertion at ZGeneration::mark_object's entry.
-    auto& cycle = const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG));
+    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::YOUNG));
     cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
 }
 
@@ -256,6 +256,16 @@ void WCollector::FlushAllocationRegions()
 }
 
 void WCollector::DoYoungGarbageCollection()
+{
+    youngCycle.collect(*this);
+}
+
+void ZGenerationYoung::collect(WCollector& collector)
+{
+    collector.DoYoungGarbageCollectionBody();
+}
+
+void WCollector::DoYoungGarbageCollectionBody()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     std::unique_ptr<ScopedStopTheWorld> stw =
@@ -615,10 +625,10 @@ void WCollector::DoYoungGarbageCollection()
             ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
             return !region->IsYoungRegion() || IsMarkedObject<Generation::Young>(object);
         });
-        GetGenerationCycle(GCCycleGeneration::YOUNG).reset_relocation_set();
+        GetZGeneration(GCCycleGeneration::YOUNG).reset_relocation_set();
         space.GetRegionManager().ResetFlipPromotedPages();
-        GetGenerationCycle(GCCycleGeneration::YOUNG).select_relocation_set(
-            GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::major_full_preclean);
+        GetZGeneration(GCCycleGeneration::YOUNG).select_relocation_set(
+            GetZGeneration(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::major_full_preclean);
     }
 
     if (ZAbort::should_abort()) {
@@ -965,14 +975,14 @@ namespace MapleRuntime {
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
-GCCycleSnapshot GenerationCycle::Snapshot() const
+GCCycleSnapshot ZGeneration::Snapshot() const
 {
     std::lock_guard<std::mutex> lock(mutex);
     return { generation, sequence, requestIndex, reason.load(std::memory_order_relaxed),
              phase.load(std::memory_order_relaxed), active };
 }
 
-void GenerationCycle::SelectReason(GCReason value, uint64_t index)
+void ZGeneration::SelectReason(GCReason value, uint64_t index)
 {
     std::lock_guard<std::mutex> lock(mutex);
     CHECK(!active);
@@ -980,7 +990,7 @@ void GenerationCycle::SelectReason(GCReason value, uint64_t index)
     reason.store(value, std::memory_order_release);
 }
 
-void GenerationCycle::Begin(uint64_t index)
+void ZGeneration::Begin(uint64_t index)
 {
     std::lock_guard<std::mutex> lock(mutex);
     CHECK(!active);
@@ -988,18 +998,18 @@ void GenerationCycle::Begin(uint64_t index)
     active = true;
 }
 
-void GenerationCycle::PublishPhase(GCPhase value)
+void ZGeneration::PublishPhase(GCPhase value)
 {
     std::lock_guard<std::mutex> lock(mutex);
     phase.store(value, std::memory_order_release);
 }
 
-void GenerationCycle::set_phase(Phase new_phase)
+void ZGeneration::set_phase(Phase new_phase)
 {
     _phase = new_phase;
 }
 
-const char* GenerationCycle::phase_to_string() const
+const char* ZGeneration::phase_to_string() const
 {
     switch (_phase) {
         case Phase::Mark:
@@ -1012,7 +1022,7 @@ const char* GenerationCycle::phase_to_string() const
     return "Unknown";
 }
 
-void GenerationCycle::End()
+void ZGeneration::End()
 {
     std::lock_guard<std::mutex> lock(mutex);
     active = false;
@@ -1021,7 +1031,7 @@ void GenerationCycle::End()
 }
 
 namespace MapleRuntime {
-void GenerationCycle::InitializeWorkers(uint32_t capacity)
+void ZGeneration::InitializeWorkers(uint32_t capacity)
 {
     CHECK(workers == nullptr);
     workers = std::make_unique<ZWorkers>(generation, capacity, &statWorkers);
@@ -1030,7 +1040,7 @@ void GenerationCycle::InitializeWorkers(uint32_t capacity)
     }
 }
 
-void GenerationCycle::StopWorkers()
+void ZGeneration::StopWorkers()
 {
     weakRootsProcessor.reset();
     workers.reset();
@@ -1089,9 +1099,9 @@ void WCollector::DoGarbageCollection(GCCycleGeneration generation)
 namespace MapleRuntime {
 void CopyCollector::PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex)
 {
-    const bool continuingPrelude = GetGenerationCycle(generation).Snapshot().active;
+    const bool continuingPrelude = GetZGeneration(generation).Snapshot().active;
     if (!continuingPrelude) {
-        GetGenerationCycle(generation).Begin(gcIndex);
+        GetZGeneration(generation).Begin(gcIndex);
     }
     ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s",
@@ -1120,13 +1130,13 @@ void CopyCollector::PreGarbageCollection(GCCycleGeneration generation, bool isCo
 }
 
 namespace MapleRuntime {
-void GenerationCycle::SetYoungType(ZYoungType type)
+void ZGeneration::SetYoungType(ZYoungType type)
 {
     CHECK(generation == GCCycleGeneration::YOUNG);
     youngType.store(type, std::memory_order_release);
 }
 
-YoungTypeSetter::YoungTypeSetter(GenerationCycle& cycle, ZYoungType type) : cycle(cycle)
+YoungTypeSetter::YoungTypeSetter(ZGeneration& cycle, ZYoungType type) : cycle(cycle)
 {
     CHECK(type != ZYoungType::none);
     CHECK(cycle.YoungType() == ZYoungType::none);
@@ -1141,7 +1151,7 @@ YoungTypeSetter::~YoungTypeSetter()
 }
 
 namespace MapleRuntime {
-void GenerationCycle::SelectTenuringThreshold(const TenuringInputs& inputs)
+void ZGeneration::SelectTenuringThreshold(const TenuringInputs& inputs)
 {
     CHECK(generation == GCCycleGeneration::YOUNG);
     // zGeneration.cpp:704-715: preclean promotes all, other types compute.
@@ -1149,14 +1159,14 @@ void GenerationCycle::SelectTenuringThreshold(const TenuringInputs& inputs)
         ? 0 : ComputeTenuringThreshold(inputs);
 }
 
-void GenerationCycle::free_empty_pages(ZRelocationSetSelector* selector, int bulk)
+void ZGeneration::free_empty_pages(ZRelocationSetSelector* selector, int bulk)
 {
     if (selector->should_free_empty_pages(bulk)) {
         selector->clear_empty_pages();
     }
 }
 
-void GenerationCycle::flip_age_pages(const ZRelocationSetSelector* selector)
+void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
 {
     ZWorkers* w = Workers();
     if (w == nullptr) {
@@ -1169,7 +1179,7 @@ void GenerationCycle::flip_age_pages(const ZRelocationSetSelector* selector)
                                      _relocation_set.relocate_promoted_pages());
 }
 
-void GenerationCycle::select_relocation_set(bool promote_all)
+void ZGeneration::select_relocation_set(bool promote_all)
 {
     ZRelocationSetSelector selector(FragmentationLimit());
     const ZGenerationId id = generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
@@ -1264,21 +1274,21 @@ void CopyCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
 // exact bodies from the DSO, as the existing page-mark tests do.
 #include "Heap/z/zGeneration.inline.hpp"
 namespace MapleRuntime {
-template void GenerationCycle::MarkObjectIfActive<false, false, false, false>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<false, false, false, true>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<false, false, true, false>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<false, false, true, true>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<false, true, false, false>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<false, true, false, true>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<false, true, true, false>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<false, true, true, true>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<true, false, false, false>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<true, false, false, true>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<true, false, true, false>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<true, false, true, true>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<true, true, false, false>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<true, true, false, true>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<true, true, true, false>(zaddress);
-template void GenerationCycle::MarkObjectIfActive<true, true, true, true>(zaddress);
+template void ZGeneration::MarkObjectIfActive<false, false, false, false>(zaddress);
+template void ZGeneration::MarkObjectIfActive<false, false, false, true>(zaddress);
+template void ZGeneration::MarkObjectIfActive<false, false, true, false>(zaddress);
+template void ZGeneration::MarkObjectIfActive<false, false, true, true>(zaddress);
+template void ZGeneration::MarkObjectIfActive<false, true, false, false>(zaddress);
+template void ZGeneration::MarkObjectIfActive<false, true, false, true>(zaddress);
+template void ZGeneration::MarkObjectIfActive<false, true, true, false>(zaddress);
+template void ZGeneration::MarkObjectIfActive<false, true, true, true>(zaddress);
+template void ZGeneration::MarkObjectIfActive<true, false, false, false>(zaddress);
+template void ZGeneration::MarkObjectIfActive<true, false, false, true>(zaddress);
+template void ZGeneration::MarkObjectIfActive<true, false, true, false>(zaddress);
+template void ZGeneration::MarkObjectIfActive<true, false, true, true>(zaddress);
+template void ZGeneration::MarkObjectIfActive<true, true, false, false>(zaddress);
+template void ZGeneration::MarkObjectIfActive<true, true, false, true>(zaddress);
+template void ZGeneration::MarkObjectIfActive<true, true, true, false>(zaddress);
+template void ZGeneration::MarkObjectIfActive<true, true, true, true>(zaddress);
 }
 #endif

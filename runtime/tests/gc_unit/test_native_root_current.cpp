@@ -41,16 +41,16 @@ struct RelocationReceiptTestAccess {
         resources.collectorProxy.currentCollector = &collector;
         resources.concurrentGcThreadCount = workers;
         for (auto gen : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-            collector.GetGenerationCycle(gen).InitializeWorkers(workers);
-            collector.GetGenerationCycle(gen).Begin(workers);
+            collector.GetZGeneration(gen).InitializeWorkers(workers);
+            collector.GetZGeneration(gen).Begin(workers);
         }
         ZGlobalsPointers::initialize();
     }
     static void FlipNativeRootYoung(WCollector& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
     static void NativeRootMajorPrelude(WCollector& collector)
     {
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).End();
-        auto& young = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+        collector.GetZGeneration(GCCycleGeneration::OLD).End();
+        auto& young = collector.GetZGeneration(GCCycleGeneration::YOUNG);
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
         collector.RunGarbageCollection(1, GC_REASON_YOUNG);
     }
@@ -206,7 +206,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
     collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
-    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
+    Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
     // Observe the product's published old mark stacks after the root task
     // returned and before follow starts (testOldMarkStarted fires at the top
     // of DoTracing, after DoEnumeration). The slot visit is recorded too, so

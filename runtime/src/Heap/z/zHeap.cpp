@@ -212,14 +212,14 @@ void HeapImpl::Init(const HeapParam& param)
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
     {
-        collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).forwarding_table().initialize(
+        collectorProxy.GetCurrentCollector().GetZGeneration(GCCycleGeneration::YOUNG).forwarding_table().initialize(
             ZAddressOffsetMax, 0, ZPage::UNIT_SIZE);
-        collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table().initialize(
+        collectorProxy.GetCurrentCollector().GetZGeneration(GCCycleGeneration::OLD).forwarding_table().initialize(
             ZAddressOffsetMax, 0, ZPage::UNIT_SIZE);
     }
-    collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered()->bind(
+    collectorProxy.GetCurrentCollector().GetZGeneration(GCCycleGeneration::YOUNG).remembered()->bind(
         &ZPageTable::heap_table(),
-        &collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table(),
+        &collectorProxy.GetCurrentCollector().GetZGeneration(GCCycleGeneration::OLD).forwarding_table(),
         &static_cast<RegionSpace*>(theSpace)->GetRegionManager());
     collectorResources.Init();
 }
@@ -264,7 +264,7 @@ Heap& Heap::GetHeap() { return *g_heapInstance; }
 
 ZRemembered& Heap::remembered()
 {
-    return *GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered();
+    return *GetCollector().GetZGeneration(GCCycleGeneration::YOUNG).remembered();
 }
 
 void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)

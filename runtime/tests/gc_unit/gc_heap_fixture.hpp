@@ -118,14 +118,14 @@ inline RememberedSet& HeapTestRemset()
 inline bool InitFwdTables(MAddress start, size_t size, size_t unit)
 {
     auto& collector = Heap::GetHeap().GetCollector();
-    collector.GetGenerationCycle(Generation::Young).forwarding_table().initialize(size, start, unit);
-    collector.GetGenerationCycle(Generation::Old).forwarding_table().initialize(size, start, unit);
+    collector.GetZGeneration(Generation::Young).forwarding_table().initialize(size, start, unit);
+    collector.GetZGeneration(Generation::Old).forwarding_table().initialize(size, start, unit);
     return true;
 }
 
 inline bool BeginForwardingArena(Generation generation, RegionList& regions)
 {
-    Heap::GetHeap().GetCollector().GetGenerationCycle(generation).relocation_set().install_from_regions(regions);
+    Heap::GetHeap().GetCollector().GetZGeneration(generation).relocation_set().install_from_regions(regions);
     return true;
 }
 
@@ -245,11 +245,11 @@ inline zpointer CaptureStoreGoodThenFlipMark(BaseObject* object, RestoreMarkFlip
 
 // Access the product generation state for the same setup used by ZLiveMapTest.
 struct LiveMapCycleAccess : Collector {
-    static GenerationCycle& Cycle(Collector& collector, Generation generation)
+    static ZGeneration& Cycle(Collector& collector, Generation generation)
     {
         // ZLiveMapTest initializes the generation that page/livemap readers use
         // (test_zLiveMap.cpp:45-52). Preserve CollectorProxy's virtual routing.
-        return collector.GetGenerationCycle(generation == Generation::Young
+        return collector.GetZGeneration(generation == Generation::Young
             ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     }
 };
@@ -278,7 +278,7 @@ struct GcHeapFixture {
     {
         if (&next == &previous) return;
         for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-            auto& cycle = next.GetGenerationCycle(generation);
+            auto& cycle = next.GetZGeneration(generation);
             const uint64_t sequence = previous.GetCycleSnapshot(generation).sequence;
             while (cycle.Sequence() < sequence) {
                 if (cycle.Snapshot().active) cycle.End();
@@ -353,8 +353,8 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         // installed fixture may translate its metadata pointer here.
         if (ZPage::heapStartAddress == heapStart &&
             Heap::GetHeap().GetGCPhase(GCCycleGeneration::YOUNG) != GCPhase::GC_PHASE_UNDEF) {
-            Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
-            Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).reset_relocation_set();
+            Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
+            Heap::GetHeap().GetCollector().GetZGeneration(Generation::Old).reset_relocation_set();
         }
         // ~ZPage: the page livemaps go with the synthetic heap.
         for (ZPage* region : {region0, region1}) {

@@ -108,7 +108,8 @@ public:
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 
 class WCollector : public CopyCollector {
-    friend class GenerationCycle;
+    friend class ZGeneration;
+    friend class ZGenerationYoung;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MutatorPublishTestAccess;
     friend struct PartialArrayTestAccess;
@@ -227,7 +228,7 @@ public:
         if (address == 0) {
             return ZGenerationId::old;
         }
-        if (Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).forwarding_table().get(address) != nullptr) {
+        if (Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).forwarding_table().get(address) != nullptr) {
             return ZGenerationId::young;
         }
         return ZGenerationId::old;
@@ -257,7 +258,7 @@ public:
         const MAddress from = reinterpret_cast<MAddress>(obj);
         const Generation ownerGeneration = generation == ZGenerationId::young
             ? Generation::Young : Generation::Old;
-        ZForwarding* forwarding = Heap::GetHeap().GetCollector().GetGenerationCycle(ownerGeneration).forwarding_table().get(from);
+        ZForwarding* forwarding = Heap::GetHeap().GetCollector().GetZGeneration(ownerGeneration).forwarding_table().get(from);
         if (forwarding == nullptr) return obj;
 
         // zRelocate.cpp:383-415: lookup, retain/copy/release, then wait/find.
@@ -302,8 +303,8 @@ public:
         // was about to relocate.
         if (obj != nullptr && Heap::IsHeapAddress(obj)) {
             const MAddress addr = reinterpret_cast<MAddress>(obj);
-            if (GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr ||
-                GetGenerationCycle(Generation::Old).forwarding_table().get(addr) != nullptr) {
+            if (GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr) {
                 const ForwardingProvenance provenance{
                     ForwardingHolderKind::HeapRef, this, &obj
                 };
@@ -365,8 +366,8 @@ public:
                 return false;
             }
             const MAddress addr = reinterpret_cast<MAddress>(obj);
-            return GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr ||
-                   GetGenerationCycle(Generation::Old).forwarding_table().get(addr) != nullptr;
+            return GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                   GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
         }
         // filter const string object.
         if (Heap::IsHeapAddress(obj)) {
@@ -727,6 +728,7 @@ private:
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void DoYoungGarbageCollection();
+    void DoYoungGarbageCollectionBody();
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
     // stores (zBarrier.inline.hpp:742-749). Seed them into the old TRACE stack.

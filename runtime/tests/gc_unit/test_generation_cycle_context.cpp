@@ -41,7 +41,7 @@ namespace MapleRuntime {
 // public Allocate/Release (gtest test_oopStorage.cpp shape) and leave the
 // scheduling lists untouched, so the finalizer thread never sees a queue
 // whose predicate it did not set.
-struct GenerationCycleRootTestAccess {
+struct ZGenerationRootTestAccess {
     inline static std::array<NativeSlot*, 2> strongSlots {};
     static void Install(CopyCollector& collector, const std::array<BaseObject*, 6>& objects)
     {
@@ -137,7 +137,7 @@ void* Exercise(void*)
         const auto young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
         const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
         Expect(young.active, "young_mark_start_active");
-        if (collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
+        if (collector.GetZGeneration(GCCycleGeneration::YOUNG).IsMajorRoots()) {
             ++combinedMarkStarts;
             preludeOld = old;
             preludeOldColor = ::g_cjMarkBadMask & ZPointerMarkedOldMask;
@@ -193,7 +193,7 @@ void* Exercise(void*)
             Expect((::g_cjMarkBadMask & ZPointerMarkedOldMask) == preludeOldColor,
                    "old_body_keeps_prelude_color");
             for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
-            GenerationCycleRootTestAccess::Install(tracing, witnesses);
+            ZGenerationRootTestAccess::Install(tracing, witnesses);
             Expect(storedPending == 1u, "store_buffer_old_color");
         }
         buffer.Flush();
@@ -237,7 +237,7 @@ void* Exercise(void*)
                         observed.count(witnesses[i]) != 0);
             Expect(observed.count(witnesses[i]) != 0, names[i]);
         }
-        GenerationCycleRootTestAccess::Remove(tracing, witnesses);
+        ZGenerationRootTestAccess::Remove(tracing, witnesses);
         ++rootResults;
         const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
         std::printf("ROOT_RESULT expected_static=%zu observed_objects=%zu old_active=%u old_phase=%u\n",
@@ -255,7 +255,7 @@ void* Exercise(void*)
     Expect(!youngWorkers.is_active() && !oldWorkers.is_active(), "worker_major_completion");
     // ZStatCycle::at_end (zStat.cpp:1252-1253) reset the old generation's
     // worker accounting at the end of the major; a minor must not add to it.
-    const auto oldWorkerStats1 = collector.GetGenerationCycle(GCCycleGeneration::OLD).StatWorkers()->stats();
+    const auto oldWorkerStats1 = collector.GetZGeneration(GCCycleGeneration::OLD).StatWorkers()->stats();
     auto y1 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     auto o1 = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     Expect(y1.sequence == y0.sequence + 1, "major_prelude_young_sequence");
@@ -263,7 +263,7 @@ void* Exercise(void*)
     Expect(o1.reason == GC_REASON_USER && !o1.active, "major_reason_completion");
     collector.RequestGC(GC_REASON_YOUNG, false);
     Expect(youngWorkers.active_workers() == concurrent && !youngWorkers.is_active(), "worker_minor_phase_budget");
-    const auto oldWorkerStats2 = collector.GetGenerationCycle(GCCycleGeneration::OLD).StatWorkers()->stats();
+    const auto oldWorkerStats2 = collector.GetZGeneration(GCCycleGeneration::OLD).StatWorkers()->stats();
     Expect(oldWorkerStats2._accumulated_duration == oldWorkerStats1._accumulated_duration &&
            oldWorkerStats2._accumulated_time == oldWorkerStats1._accumulated_time &&
            oldWorkers.active_workers() == concurrent && !oldWorkers.is_active(), "worker_minor_preserves_old");

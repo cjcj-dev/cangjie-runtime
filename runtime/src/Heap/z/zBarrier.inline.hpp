@@ -219,27 +219,27 @@ inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
     CHECK_DETAIL(!ZPointer::is_load_good(ptr), "load-good reference does not need remap");
     auto& collector = Heap::GetHeap().GetCollector();
     if (ZPointer::is_old_load_good(ptr)) {
-        return &collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+        return &collector.GetZGeneration(GCCycleGeneration::YOUNG);
     }
     if (ZPointer::is_young_load_good(ptr)) {
-        return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
+        return &collector.GetZGeneration(GCCycleGeneration::OLD);
     }
     if ((raw(ptr) & ZPointerRememberedMask) == ZPointerRememberedMask) {
-        return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
+        return &collector.GetZGeneration(GCCycleGeneration::OLD);
     }
     const MAddress address = untype(RefField<>(ptr).GetTargetObject());
     if (address == 0) {
-        return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
+        return &collector.GetZGeneration(GCCycleGeneration::OLD);
     }
-    if (Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).forwarding_table().get(address) != nullptr) {
-        return &collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+    if (Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).forwarding_table().get(address) != nullptr) {
+        return &collector.GetZGeneration(GCCycleGeneration::YOUNG);
     }
-    return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
+    return &collector.GetZGeneration(GCCycleGeneration::OLD);
 }
 
 inline zaddress ZBarrier::relocate_or_remap(zaddress_unsafe addr, ZGeneration* generation)
 {
-    const ZGenerationId id = (generation == &Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG))
+    const ZGenerationId id = (generation == &Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG))
         ? ZGenerationId::young
         : ZGenerationId::old;
     return from_object(Heap::GetHeap().GetCollector().relocate_or_remap_object(to_object(safe(addr)), id));

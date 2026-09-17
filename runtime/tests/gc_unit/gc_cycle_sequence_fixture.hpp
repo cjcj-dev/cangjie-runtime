@@ -5,8 +5,8 @@
 #include "Heap/z/zRememberedSet.hpp"
 namespace MapleRuntime {
 struct GenerationSequenceFixture {
-    static void Advance(GenerationCycle& cycle);
-    static void AdvanceYoung(GenerationCycle& cycle)
+    static void Advance(ZGeneration& cycle);
+    static void AdvanceYoung(ZGeneration& cycle)
     {
         Advance(cycle);
         ZRememberedSet::flip();

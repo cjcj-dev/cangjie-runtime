@@ -72,7 +72,7 @@ void WCollector::PostTrace()
     CollectLargeGarbage();
     CollectPinnedGarbage();
     // zGeneration.cpp:1042 / :1131-1133: reset previous set before select.
-    Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).reset_relocation_set();
+    Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD).reset_relocation_set();
     if (ZAbort::should_abort()) {
         return;
     }
@@ -129,7 +129,7 @@ void RegionManager::ResetFlipPromotedPages()
     flipPromotedPages.clear();
 }
 
-ZRelocationSet::ZRelocationSet(GenerationCycle* generation)
+ZRelocationSet::ZRelocationSet(ZGeneration* generation)
     : _generation(generation),
       _allocator(),
       _forwardings(nullptr),
@@ -266,7 +266,7 @@ void ZRelocationSet::register_in_place_relocate_promoted(ZPage* page)
     _in_place_relocate_promoted_pages.push(page);
 }
 
-void GenerationCycle::reset_relocation_set()
+void ZGeneration::reset_relocation_set()
 {
     ZRelocationSetIterator iter(&_relocation_set);
     for (ZForwarding* forwarding; iter.next(&forwarding);) {

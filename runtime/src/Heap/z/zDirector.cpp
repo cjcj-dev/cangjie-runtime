@@ -115,8 +115,8 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     }
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     GcTriggerInputs in = ZStat::SampleDirectorStats(now,
-        collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).CycleStats(),
-        collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).CycleStats(), regions,
+        collectorProxy.GetZGeneration(GCCycleGeneration::YOUNG).CycleStats(),
+        collectorProxy.GetZGeneration(GCCycleGeneration::OLD).CycleStats(), regions,
         GetWorkers(GCCycleGeneration::YOUNG), GetWorkers(GCCycleGeneration::OLD),
         static_cast<uint32_t>(concurrentGcThreadCount));
     in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;

@@ -54,7 +54,7 @@ struct RelocationReceiptTestAccess {
         if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.
             for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-                resources.collectorProxy.currentCollector->GetGenerationCycle(generation).StopWorkers();
+                resources.collectorProxy.currentCollector->GetZGeneration(generation).StopWorkers();
             }
         }
         resources.collectorProxy.currentCollector = collector;
@@ -62,7 +62,7 @@ struct RelocationReceiptTestAccess {
             // Product driver startup owns one worker set per generation
             // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).
             for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-                auto& cycle = collector->GetGenerationCycle(generation);
+                auto& cycle = collector->GetZGeneration(generation);
                 if (cycle.Workers() == nullptr) cycle.InitializeWorkers(2);
             }
         }
@@ -74,8 +74,8 @@ struct RelocationReceiptTestAccess {
     {
         auto* previous = resources.collectorProxy.currentCollector;
         if (previous != nullptr) {
-            previous->GetGenerationCycle(GCCycleGeneration::YOUNG).StopWorkers();
-            previous->GetGenerationCycle(GCCycleGeneration::OLD).StopWorkers();
+            previous->GetZGeneration(GCCycleGeneration::YOUNG).StopWorkers();
+            previous->GetZGeneration(GCCycleGeneration::OLD).StopWorkers();
         }
         resources.collectorProxy.currentCollector = nullptr;
     }
@@ -88,7 +88,7 @@ struct RelocationReceiptTestAccess {
 
     static void RunYoungCollection(WCollector& collector)
     {
-        auto& cycle = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+        auto& cycle = collector.GetZGeneration(GCCycleGeneration::YOUNG);
         if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
         YoungTypeSetter type(cycle, ZYoungType::minor);
         collector.DoGarbageCollection(GCCycleGeneration::YOUNG);
@@ -96,9 +96,9 @@ struct RelocationReceiptTestAccess {
 
     static void PrepareMajorRoots(WCollector& collector)
     {
-        auto& young = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+        auto& young = collector.GetZGeneration(GCCycleGeneration::YOUNG);
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        collector.GetZGeneration(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
         auto& remembered = HeapTestRemset();
         if (!remembered.IsInitialized()) {
             remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
@@ -111,7 +111,7 @@ struct RelocationReceiptTestAccess {
     static void RunMajorMark(WCollector& collector)
     {
         PrepareMajorRoots(collector);
-        auto& cycle = collector.GetGenerationCycle(GCCycleGeneration::OLD);
+        auto& cycle = collector.GetZGeneration(GCCycleGeneration::OLD);
         if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_USER);
         if (!cycle.Snapshot().active) cycle.Begin(1);
         collector.StartOldMarkWork();
@@ -404,9 +404,9 @@ void RunYoungWeakVariant(size_t helpers)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     // zGeneration.cpp: each generation owns its worker pool before collection.
-    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(helpers + 1);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->set_active_workers(helpers + 1u);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).Workers()->set_active_workers(helpers + 1u);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -416,7 +416,7 @@ void RunYoungWeakVariant(size_t helpers)
 
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
@@ -490,7 +490,7 @@ void RunYoungWeakRemsetFlow()
 
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
@@ -534,7 +534,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     // zGeneration.cpp: each generation owns its worker pool before collection.
-    collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(helpers + 1);
+    collector.GetZGeneration(GCCycleGeneration::OLD).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindWorkerBudget(resources, static_cast<int32_t>(helpers + 1));
@@ -764,7 +764,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(1);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).InitializeWorkers(1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
@@ -775,7 +775,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
 
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
@@ -786,7 +786,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
-    Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
+    Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
     const auto afterCoverage = LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
     const bool independentAfterCoverage =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);

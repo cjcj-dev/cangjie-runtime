@@ -2669,7 +2669,7 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                     promoted.append(prev);
                 }
             }
-            Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG)
+            Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG)
                 .relocation_set().register_flip_promoted(promoted);
         }
     private:

@@ -366,10 +366,10 @@ GC_TEST(ZWorkers, RunAccumulatesParallelTimeInStatWorkers)
 
 // zGeneration.cpp:129: each generation constructs its workers over its own
 // ZStatWorkers, and the driver reads that stat unit for the cycle.
-GC_TEST(ZWorkers, GenerationCycleOwnsWorkersAndStatWorkers)
+GC_TEST(ZWorkers, ZGenerationOwnsWorkersAndStatWorkers)
 {
-    GenerationCycle young(GCCycleGeneration::YOUNG);
-    GenerationCycle old(GCCycleGeneration::OLD);
+    ZGeneration young(GCCycleGeneration::YOUNG);
+    ZGeneration old(GCCycleGeneration::OLD);
     young.InitializeWorkers(2);
     old.InitializeWorkers(1);
     GC_EXPECT_TRUE(young.StatWorkers() != old.StatWorkers());

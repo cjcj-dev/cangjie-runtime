@@ -12,7 +12,7 @@
 namespace MapleRuntime {
 // Read-only access to the existing product remset face. This test never seeds
 // intermediate phase, mark, queue, or current-address state.
-struct GenerationCycleRootTestAccess {
+struct ZGenerationRootTestAccess {
     static unsigned RemsetFace()
     {
         return 0;
@@ -67,7 +67,7 @@ extern "C" int p1MarkStartExercise()
         const auto snapshot = collector.GetCycleSnapshot(generation);
         const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
         const uintptr_t color = ::g_cjMarkBadMask & mask;
-        const unsigned face = GenerationCycleRootTestAccess::RemsetFace();
+        const unsigned face = ZGenerationRootTestAccess::RemsetFace();
         const unsigned workers = resources.GetWorkers(generation).ActiveWorkers();
         std::printf("P1_PRODUCT_STATE gen=%zu point=%u seq=%llu phase=%u color=%zx face=%u domain=%p domain_workers=%zu workers=%u\n",
                     index, static_cast<unsigned>(point), static_cast<unsigned long long>(snapshot.sequence),

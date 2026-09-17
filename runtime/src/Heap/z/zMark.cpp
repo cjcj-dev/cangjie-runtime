@@ -737,17 +737,17 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
-        if (GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
+        if (GetZGeneration(GCCycleGeneration::YOUNG).IsMajorRoots()) {
             MarkOldObjectIfActive(object, true);
         }
         return;
     }
     (void)workStack;
     if (finalizable) {
-        const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+        const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::YOUNG))
             .MarkObjectIfActive<false, true, true, true>(from_object(object));
     } else {
-        const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+        const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::YOUNG))
             .MarkObjectIfActive<false, true, true, false>(from_object(object));
     }
 }
@@ -862,7 +862,7 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+    const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::YOUNG))
         .MarkObjectIfActive<false, false, true, false>(from_object(object));
 }
 
@@ -973,7 +973,7 @@ void WCollector::MarkNewObject(BaseObject* obj)
 {
     // Registration follows object initialization (BaseObject::RegisterFinalizer).
     // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
-    GenerationCycle& cycle = GetGenerationCycle(ObjectGeneration(obj));
+    ZGeneration& cycle = GetZGeneration(ObjectGeneration(obj));
     cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
 }
 
@@ -1135,7 +1135,7 @@ void CopyCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) con
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    auto& cycle = const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::OLD));
+    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::OLD));
     if (gcThread) {
         cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
     } else {

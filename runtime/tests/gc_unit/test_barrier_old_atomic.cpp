@@ -155,7 +155,7 @@ public:
     {
         RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
         phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
-        activityCycle = &Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+        activityCycle = &Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
         ownerWasActive = activityCycle->Snapshot().active;
         if (!ownerWasActive) activityCycle->Begin(1);
         resources.GetGCStats().reason = GC_REASON_USER;
@@ -171,7 +171,7 @@ public:
 private:
     CollectorResources& resources;
     bool started;
-    GenerationCycle* activityCycle = nullptr;
+    ZGeneration* activityCycle = nullptr;
     bool ownerWasActive = false;
     GCReason reason;
     GCPhase phase = GCPhase::GC_PHASE_IDLE;

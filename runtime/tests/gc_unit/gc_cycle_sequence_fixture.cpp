@@ -4,7 +4,7 @@
 #undef MRT_GENERATION_SEQUENCE_FIXTURE
 
 namespace MapleRuntime {
-void GenerationSequenceFixture::Advance(GenerationCycle& cycle)
+void GenerationSequenceFixture::Advance(ZGeneration& cycle)
 {
     std::lock_guard<std::mutex> lock(cycle.mutex);
     CHECK(cycle.active);

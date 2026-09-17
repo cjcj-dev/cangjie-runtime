@@ -177,7 +177,7 @@ bool ZRemembered::should_scan_page(ZPage* page) const
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return true;
     }
-    ZForwarding* forwarding = collector.GetGenerationCycle(GCCycleGeneration::OLD).forwarding(
+    ZForwarding* forwarding = collector.GetZGeneration(GCCycleGeneration::OLD).forwarding(
         untype(ZOffset::address_unsafe(page->start())));
     if (forwarding == nullptr) {
         return true;
@@ -387,7 +387,7 @@ void ZRemembered::scan_and_follow(ZMark* mark)
 {
     {
         ZRememberedScanMarkFollowTask task(this, mark);
-        ZWorkers* workers = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).Workers();
+        ZWorkers* workers = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG).Workers();
         if (workers != nullptr) {
             workers->run(&task);
         } else {

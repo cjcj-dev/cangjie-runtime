@@ -161,7 +161,7 @@ public:
 
     void ForwardYoungFromRuntimeEntry()
     {
-        GetGenerationCycle(GCCycleGeneration::YOUNG).SelectReason(GC_REASON_YOUNG);
+        GetZGeneration(GCCycleGeneration::YOUNG).SelectReason(GC_REASON_YOUNG);
         ForwardFromSpace(GCCycleGeneration::YOUNG);
     }
 };
@@ -199,7 +199,7 @@ bool RunYoungRuntimeProductEntry()
 #if defined(MRT_TESTABLE_INTERNALS)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), collector);
 #endif
-    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(1);
+    collector.GetZGeneration(GCCycleGeneration::YOUNG).InitializeWorkers(1);
     ZStat::Initialize();
     collector.ForwardYoungFromRuntimeEntry();
 

@@ -179,7 +179,7 @@ extern "C" int p2FieldBarrierExercise()
             }
         }
         if (currentChild != nullptr && &field == &Slot(currentChild, 1) && kind == ZBarrier::FieldMarkKind::Young) {
-            const bool major = collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots();
+            const bool major = collector.GetZGeneration(GCCycleGeneration::YOUNG).IsMajorRoots();
             if (major) ++youngOldMajor; else ++youngOldMinor;
             Expect(to_object(result) == oldViaYoung, "young_old_returns_current");
             auto* page = Heap::page(reinterpret_cast<MAddress>(oldViaYoung));
@@ -612,7 +612,7 @@ extern "C" int p2SlowFieldInputExercise()
     };
     unsigned started = 0;
     CopyCollector::testYoungMarkStarted = [&] {
-        if (!collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) return;
+        if (!collector.GetZGeneration(GCCycleGeneration::YOUNG).IsMajorRoots()) return;
         ++started;
         Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
         auto* page = Heap::page(reinterpret_cast<MAddress>(young));
@@ -636,7 +636,7 @@ extern "C" int p2SlowFieldInputExercise()
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
             Expect(collector.MajorMark()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
         });
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->run(&task);
+        collector.GetZGeneration(GCCycleGeneration::OLD).Workers()->run(&task);
         Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");
         Expect(strongSlow == 1 && finalSlow == 1, "slow_input_both_field_entries_reached");
         Expect(strongFast == 1 && finalFast == 1, "slow_input_legal_fast_controls_reached");

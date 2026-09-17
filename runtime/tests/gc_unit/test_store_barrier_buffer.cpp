@@ -170,7 +170,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     const GCPhase phaseBefore = heap.GetGCPhase(GCCycleGeneration::OLD);
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
@@ -235,7 +235,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     const GCPhase phaseBefore = heap.GetGCPhase(GCCycleGeneration::OLD);
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
@@ -367,7 +367,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     const GCPhase phaseBefore = heap.GetGCPhase(GCCycleGeneration::OLD);
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
@@ -439,7 +439,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     const GCPhase phaseBefore = heap.GetGCPhase(GCCycleGeneration::OLD);
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;

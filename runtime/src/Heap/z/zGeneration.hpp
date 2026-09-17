@@ -39,15 +39,14 @@ struct GCCycleSnapshot {
 };
 class WCollector;
 struct YoungCollectionStats;
-class GenerationCycle;
-using ZGeneration = GenerationCycle;
+class ZGeneration;
 
-class GenerationCycle {
+class ZGeneration {
 public:
-    explicit GenerationCycle(GCCycleGeneration generation);
-    ~GenerationCycle();
-    GenerationCycle(const GenerationCycle&) = delete;
-    GenerationCycle& operator=(const GenerationCycle&) = delete;
+    explicit ZGeneration(GCCycleGeneration generation);
+    ~ZGeneration();
+    ZGeneration(const ZGeneration&) = delete;
+    ZGeneration& operator=(const ZGeneration&) = delete;
     GCCycleSnapshot Snapshot() const;
     ZMark& Mark() { return *mark; }
     const ZMark& Mark() const { return *mark; }
@@ -130,7 +129,7 @@ public:
     std::atomic<ZYoungType> youngType { ZYoungType::none };
     std::atomic<GCReason> reason { GC_REASON_USER };
     std::atomic<GCPhase> phase { GC_PHASE_IDLE };
-    GenerationCycle::Phase _phase { GenerationCycle::Phase::Relocate };
+    ZGeneration::Phase _phase { ZGeneration::Phase::Relocate };
     bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
@@ -141,22 +140,23 @@ public:
 // zGeneration.cpp:489-497: type is scoped to one young collection.
 class YoungTypeSetter {
 public:
-    YoungTypeSetter(GenerationCycle& cycle, ZYoungType type);
+    YoungTypeSetter(ZGeneration& cycle, ZYoungType type);
     ~YoungTypeSetter();
     YoungTypeSetter(const YoungTypeSetter&) = delete;
     YoungTypeSetter& operator=(const YoungTypeSetter&) = delete;
 private:
-    GenerationCycle& cycle;
+    ZGeneration& cycle;
 };
 
-class ZGenerationYoung : public GenerationCycle {
+class ZGenerationYoung : public ZGeneration {
 public:
-    ZGenerationYoung() : GenerationCycle(GCCycleGeneration::YOUNG) {}
+    ZGenerationYoung() : ZGeneration(GCCycleGeneration::YOUNG) {}
+    void collect(WCollector& collector);
 };
 
-class ZGenerationOld : public GenerationCycle {
+class ZGenerationOld : public ZGeneration {
 public:
-    ZGenerationOld() : GenerationCycle(GCCycleGeneration::OLD) {}
+    ZGenerationOld() : ZGeneration(GCCycleGeneration::OLD) {}
 };
 
 }
