@@ -301,6 +301,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
         if (region->GetRawPointerObjectCount() == 0) {
+            if (!region->is_relocatable()) {
+                region = next;
+                continue;
+            }
             const uint64_t moveStart = TimeUtil::NanoSeconds();
             unmovableFromRegionList.DeleteRegion(region);
             fromRegionList.PrependRegion(region);
@@ -328,6 +332,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
         if (region->GetRawPointerObjectCount() != 0) {
+            region = next;
+            continue;
+        }
+        if (!region->is_relocatable()) {
             region = next;
             continue;
         }

@@ -200,6 +200,7 @@ public:
     void register_live_page(ZPage* page);
     void register_empty_page(ZPage* page);
     void add_selected_small(ZPage* page, size_t nentries);
+    void check_selected_relocatable() const;
     bool should_free_empty_pages(int bulk) const;
     const ZArray<ZPage*>* empty_pages() const;
     void clear_empty_pages();
