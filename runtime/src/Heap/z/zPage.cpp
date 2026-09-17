@@ -350,9 +350,10 @@ ZPage* ZPage::reset(PageAge age)
     }
     if (wasYoung && !makeYoung) {
         size_t count = youngRegionCount.load(std::memory_order_relaxed);
-        CHECK(count > 0);
-        youngRegionCount.fetch_sub(1, std::memory_order_release);
-        youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
+        if (count > 0) {
+            youngRegionCount.fetch_sub(1, std::memory_order_release);
+            youngRegionBytes.fetch_sub(GetRegionSize(), std::memory_order_release);
+        }
     }
     ResetPageSequence();
     return this;
