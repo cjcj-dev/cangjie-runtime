@@ -119,8 +119,8 @@ extern "C" int p2FieldBarrierExercise()
                                       zpointer observed, zaddress result) {
         std::lock_guard<std::mutex> lock(resultMutex);
         if (kind == ZBarrier::FieldMarkKind::Finalizable && finalHolder != nullptr) {
-            Expect((collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_TRACE ||
-                    collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_CLEAR_SATB_BUFFER), "finalizable_follow_during_mark");
+            Expect((collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_ENUM ||
+                    collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_MARK_COMPLETE), "finalizable_follow_during_mark");
             if (&field == &Slot(finalHolder)) {
                 const bool fast = ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed);
                 if (fast) {

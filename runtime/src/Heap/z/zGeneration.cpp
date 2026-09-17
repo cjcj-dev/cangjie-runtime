@@ -255,8 +255,7 @@ void Collector::PublishGenerationPhase(GCCycleGeneration generation, GCPhase val
     ZGeneration& cycle = GetZGeneration(generation);
     const GCPhase before = cycle.GcPhase();
     if (generation == GCCycleGeneration::OLD &&
-        (value == GCPhase::GC_PHASE_PREFORWARD || value == GCPhase::GC_PHASE_FORWARD) &&
-        before != GCPhase::GC_PHASE_PREFORWARD && before != GCPhase::GC_PHASE_FORWARD) {
+        value == GCPhase::GC_PHASE_FORWARD && before != GCPhase::GC_PHASE_FORWARD) {
         oldCycle.RecordYoungSequenceAtRelocateStart(youngCycle.Sequence());
     }
     cycle.PublishPhase(value);
@@ -1181,11 +1180,11 @@ void ZGeneration::Begin(uint64_t index)
 
 void ZGeneration::PublishPhase(GCPhase value)
 {
-    if (value == GC_PHASE_ENUM || value == GC_PHASE_TRACE || value == GC_PHASE_CLEAR_SATB_BUFFER) {
+    if (value == GC_PHASE_ENUM) {
         set_phase(Phase::Mark);
-    } else if (value == GC_PHASE_MARK_COMPLETE || value == GC_PHASE_POST_TRACE) {
+    } else if (value == GC_PHASE_MARK_COMPLETE) {
         set_phase(Phase::MarkComplete);
-    } else if (value == GC_PHASE_PREFORWARD || value == GC_PHASE_FORWARD) {
+    } else if (value == GC_PHASE_FORWARD) {
         set_phase(Phase::Relocate);
     }
 }

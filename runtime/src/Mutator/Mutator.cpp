@@ -983,10 +983,8 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase, bool bySelf)
 {
     if (newPhase == GCPhase::GC_PHASE_ENUM) {
         GcPhaseEnum(newPhase, EnumYoung());
-    } else if (newPhase == GCPhase::GC_PHASE_PREFORWARD || newPhase == GCPhase::GC_PHASE_FORWARD) {
+    } else if (newPhase == GCPhase::GC_PHASE_FORWARD) {
         GCPhasePreForward(newPhase);
-    } else if (newPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || newPhase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
-        FlushStoreBarrierBuffer(bySelf);
     } else if (newPhase == GCPhase::GC_PHASE_IDLE) {
         HandleGCPhaseIDLE();
     }

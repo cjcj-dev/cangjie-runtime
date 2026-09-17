@@ -113,7 +113,7 @@ void FlipToPreforwardAfterFirstHandler(BaseObject*, BaseObject*)
     if (call == 1) {
         // Publish the product phase value that can change while the carrier
         // lock is released around a managed callback.
-        context->collector->SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+        context->collector->SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     }
 }
 
@@ -368,7 +368,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     // makes before=2; a non-persistent cursor makes after=3; either fails here.
     GC_EXPECT_EQ(callsBeforeResume, 1u);
     GC_EXPECT_EQ(static_cast<unsigned>(phaseBeforeResume),
-                 static_cast<unsigned>(GCPhase::GC_PHASE_PREFORWARD));
+                 static_cast<unsigned>(GCPhase::GC_PHASE_FORWARD));
     GC_EXPECT_EQ(callsAfterResume, 2u);
     GC_EXPECT_EQ(callsAfterDrain, 2u);
 }

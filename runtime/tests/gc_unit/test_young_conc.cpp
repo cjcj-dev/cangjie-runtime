@@ -232,7 +232,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(first);
@@ -286,7 +286,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
@@ -336,7 +336,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
@@ -395,7 +395,7 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
@@ -441,7 +441,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
@@ -843,7 +843,7 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     GC_EXPECT_EQ(pending, 0u);
                     GC_EXPECT_FALSE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
-                    cycle.PublishPhase(GC_PHASE_TRACE);
+                    cycle.PublishPhase(GC_PHASE_ENUM);
                     fn(&cycle, from_object(fx.obj0));
                     ZMark& domain = young ? *publication.collector.YoungMark()
                                               : *publication.collector.MajorMark();
@@ -883,7 +883,7 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     auto& cycle = publication.collector.GetZGeneration(GCCycleGeneration::YOUNG);
-    cycle.PublishPhase(GC_PHASE_TRACE);
+    cycle.PublishPhase(GC_PHASE_ENUM);
     auto fn = P1Entry(false, false, false, false);
     fn(&cycle, from_object(fx.obj0));
     fn(&cycle, from_object(fx.obj0));
@@ -912,7 +912,7 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
     fn(&cycle, from_object(fx.obj0));
     GC_EXPECT_EQ(publication.OldPending(), 0u);
     GC_EXPECT_FALSE(domain.Terminate().Resurrected());
-    cycle.PublishPhase(GC_PHASE_TRACE);
+    cycle.PublishPhase(GC_PHASE_ENUM);
     fn(&cycle, from_object(fx.obj0));
     std::fprintf(stderr, "P1_RESURRECT_ASSERT pending=%zu resurrected=%d\n",
                  publication.OldPending(), domain.Terminate().Resurrected());

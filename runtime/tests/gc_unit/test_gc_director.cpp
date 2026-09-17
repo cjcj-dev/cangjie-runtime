@@ -361,7 +361,7 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     old.InitializeWorkers(2);
     young.SelectReason(GC_REASON_YOUNG);
     young.Begin(1);
-    young.PublishPhase(GC_PHASE_TRACE);
+    young.PublishPhase(GC_PHASE_ENUM);
     young.Workers()->set_active_workers(1);
     const auto before = young.Snapshot();
 
@@ -372,7 +372,7 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
 
     const auto after = young.Snapshot();
     GC_EXPECT_EQ(after.sequence, before.sequence);
-    GC_EXPECT_EQ(after.phase, GC_PHASE_TRACE);
+    GC_EXPECT_EQ(after.phase, GC_PHASE_ENUM);
     GC_EXPECT_EQ(after.reason, GC_REASON_YOUNG);
     GC_EXPECT_TRUE(after.active);
     GC_EXPECT_EQ(young.Workers()->active_workers(), 1u);

@@ -163,7 +163,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     selected.PrependRegion(region);
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_PREFORWARD);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     manager.CompactRegion(region);
@@ -312,7 +312,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     fx.region0->reset(PageAge::eden);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_TRACE);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GC_PHASE_ENUM);
     collector.StartYoungMarkWork();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.

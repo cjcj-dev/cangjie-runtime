@@ -30,12 +30,12 @@ struct MarkPublicationFixture {
         // flip (zGeneration.cpp:855-881), before mark work can be published.
         GenerationSequenceFixture::AdvanceYoung(collector.youngCycle);
         collector.StartYoungMarkWork();
-        collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
+        collector.youngCycle.PublishPhase(GC_PHASE_ENUM);
         collector.oldCycle.SelectReason(GC_REASON_USER);
         collector.oldCycle.Begin(2);
         GenerationSequenceFixture::Advance(collector.oldCycle);
         collector.StartOldMarkWork();
-        collector.oldCycle.PublishPhase(GC_PHASE_TRACE);
+        collector.oldCycle.PublishPhase(GC_PHASE_ENUM);
     }
     ~MarkPublicationFixture()
     {

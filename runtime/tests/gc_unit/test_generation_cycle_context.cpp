@@ -244,7 +244,7 @@ void* Exercise(void*)
                     expected, observed.size(), unsigned(old.active), unsigned(old.phase));
         Expect(expected > 0, "worker_root_witness_exists");
         Expect(included, "worker_root_result_contains_statics");
-        Expect(old.active && old.phase == GC_PHASE_TRACE, "worker_root_result_owner");
+        Expect(old.active && old.phase == GC_PHASE_ENUM, "worker_root_result_owner");
     };
 #endif
     auto y0 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
@@ -272,7 +272,7 @@ void* Exercise(void*)
     Expect(y2.sequence == y1.sequence + 1, "minor_sequence");
     Expect(Same(o1, o2), "minor_preserves_old_state");
     Expect(y2.reason == GC_REASON_YOUNG && !y2.active, "minor_reason_completion");
-    Expect(y2.phase == GC_PHASE_RECLAIM_SATB_NODE, "minor_phase_consumer");
+    Expect(y2.phase == GC_PHASE_IDLE, "minor_phase_consumer");
     std::printf("PRODUCT_STATE young_seq=%llu old_seq=%llu young_phase=%u old_phase=%u\n",
         (unsigned long long)y2.sequence, (unsigned long long)o2.sequence,
         (unsigned)y2.phase, (unsigned)o2.phase);

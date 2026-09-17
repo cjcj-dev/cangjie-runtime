@@ -81,7 +81,7 @@ struct RemsetRearmTestAccess {
             collector.StartYoungMarkWork();
             collector.youngCycle.Begin(0);
         }
-        collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
+        collector.youngCycle.PublishPhase(GC_PHASE_ENUM);
         ZGlobalsPointers::flip_young_mark_start();
     }
 
@@ -1073,7 +1073,7 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
             rs.ClearRegion(heap.heapStart, heap.heapStart + 2 * ZPage::UNIT_SIZE);
             if (rs.activeBuffer.load() != initial) markStart();
             collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-            collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+            collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
             rs.Record(from + sizeof(void*));
             for (size_t flip = 0; flip != flips; ++flip) markStart();
             // FORWARD is the same relocation: it must not replace the snapshot.
@@ -1096,7 +1096,7 @@ GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
     RememberedSet& rs = HeapTestRemset();
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
-    collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+    collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;
     rs.Record(from + sizeof(void*));
@@ -1112,7 +1112,7 @@ GC_OTHER_VM_TEST(Remset, InPlacePreviousFieldsPublishDuringYoungMark)
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
     RememberedSet& rs = HeapTestRemset();
-    collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_TRACE);
+    collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;

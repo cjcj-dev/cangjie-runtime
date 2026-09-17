@@ -138,7 +138,7 @@ class MutatorScope final {
 public:
     explicit MutatorScope(Mutator& mutator) : saved(ThreadLocal::GetMutator())
     {
-        mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+        mutator.SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
         ThreadLocal::SetMutator(&mutator);
     }
     ~MutatorScope() { ThreadLocal::SetMutator(saved); }
@@ -159,7 +159,7 @@ public:
         ownerWasActive = activityCycle->Snapshot().active;
         if (!ownerWasActive) activityCycle->Begin(1);
         resources.GetGCStats().reason = GC_REASON_USER;
-        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
+        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
     }
     ~MarkWindowScope()
     {

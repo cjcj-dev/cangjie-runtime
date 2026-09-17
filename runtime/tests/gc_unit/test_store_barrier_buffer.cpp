@@ -174,10 +174,10 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
+    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
 
     Mutator mutator;
-    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
     InstalledMutatorScope mutatorScope(mutator);
     ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
     heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
@@ -239,13 +239,13 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
+    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
     retired.clear();
     Mutator mutator;
-    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
     ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
@@ -253,7 +253,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     InstalledMutatorScope mutatorScope(mutator);
     ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 1u);
-    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    mutator.FlushStoreBarrierBuffer();
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
     heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
@@ -371,13 +371,13 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
+    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
     retired.clear();
     Mutator mutator;
-    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
     ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
@@ -388,7 +388,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(&field), false); // oldvalue-anchor
     field.StoreColoured(newWord);
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
-    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    mutator.FlushStoreBarrierBuffer();
 
     heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
@@ -443,10 +443,10 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
+    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
 
     Mutator mutator;
-    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
     ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
@@ -457,10 +457,10 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 
     // A GC worker assisting a saferegion transition must not consume the
     // paired store entry: ZGC on_new_phase runs in the Java-thread flush.
-    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, false);
+    mutator.FlushStoreBarrierBuffer(false);
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 1u);
     // The mutator-side transition (or the next explicit safepoint) consumes it.
-    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+    mutator.FlushStoreBarrierBuffer(true);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
 
     heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
@@ -562,7 +562,7 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     std::fprintf(stderr,
                  "DETAIL arm=resolved_invalid prev=%#zx installed_phase=%u installed_store_good=%#zx "
                  "retired_receipts=%zu current=%zu slot_remembered=%u\n",
-                 static_cast<size_t>(raw(previous)), static_cast<unsigned>(GCPhase::GC_PHASE_TRACE),
+                 static_cast<size_t>(raw(previous)), static_cast<unsigned>(GCPhase::GC_PHASE_ENUM),
                  static_cast<size_t>(colour), retired.size(), buf.Current(),
                  static_cast<unsigned>(SlotPageRemembered(slot)));
     std::fflush(stderr);

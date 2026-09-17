@@ -407,7 +407,7 @@ void RunYoungWeakVariant(size_t helpers)
     collector.GetZGeneration(GCCycleGeneration::YOUNG).InitializeWorkers(helpers + 1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(GCCycleGeneration::YOUNG).Workers()->set_active_workers(helpers + 1u);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
@@ -472,7 +472,7 @@ void RunYoungWeakRemsetFlow()
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
     RememberedSet& rememberedSet = HeapTestRemset();
     rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     HeapSlot<>& referentField = WeakGraph::Field(graph.weak);
@@ -766,7 +766,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     collector.GetZGeneration(GCCycleGeneration::YOUNG).InitializeWorkers(1);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_MARK_COMPLETE);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);

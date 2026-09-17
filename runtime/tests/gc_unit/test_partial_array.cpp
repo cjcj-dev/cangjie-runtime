@@ -55,7 +55,7 @@ struct PartialArrayTestAccess {
                 old.Begin(0);
             }
             c.StartOldMarkWork();
-            old.PublishPhase(GC_PHASE_TRACE);
+            old.PublishPhase(GC_PHASE_ENUM);
         };
         arm(collector);
         arm(heap);

@@ -321,7 +321,7 @@ struct LoadHealDeliveryTestAccess {
         RelocationReceiptTestAccess::BindCollector(resources, &collector);
         collector.youngCycle.InitializeWorkers(1);
         collector.StartYoungMarkWork();
-        collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
+        collector.youngCycle.PublishPhase(GC_PHASE_ENUM);
         ZGlobalsPointers::flip_young_mark_start();
         WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
@@ -808,7 +808,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
     // The stored-root rekey below independently retains OLD-source coverage.
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     collector.ResurrectExportObject(state.to);
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     collector.ResurrectExportObject(state.to);
     const bool insertCurrent =
         RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, state.to);
@@ -1330,7 +1330,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
     } else if (moving) {
         state = PrepareValueRootForwarding(fx, collector);
     }
-    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     const bool usesState = moving || unresolvedGhost;
     const uintptr_t base = reinterpret_cast<uintptr_t>(usesState ? state.from : fx.obj0);
     const uintptr_t expected = reinterpret_cast<uintptr_t>(moving ? state.to : fx.obj0);
@@ -1347,7 +1347,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
                  tagged, moving, frame[0], frame[1]);
     if (expectFailClosed) {
         AbortCapture aborted = CaptureAbort([&]() {
-            mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_PREFORWARD, false);
+            mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_FORWARD, false);
         });
         std::fprintf(stderr, "DERIVED_BASE_FAILCLOSED status=%d\n%s", aborted.status, aborted.output.c_str());
         if (usesState) { CleanupLateBackfill(fx, state); }
@@ -1362,7 +1362,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
         return;
     }
-    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_PREFORWARD, false);
+    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_FORWARD, false);
     std::fprintf(stderr, "DERIVED_BASE_RESULT base=%zx derived=%zx expected=%zx\n", frame[0], frame[1], expected + 8);
     const bool baseCorrect = frame[0] == expected;
     const bool derivedCorrect = frame[1] == expected + 8;
@@ -2644,7 +2644,7 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     if (rootBeforeCompact) {
         collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
         collector.ResurrectExportObject(second);
-        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
         collector.ResurrectExportObject(second);
         LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     }
@@ -2664,12 +2664,12 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
         if (exportEntry) {
             const U64 handle = Heap::GetHeap().RegisterExportRoot(current);
             Heap::GetHeap().CrossAccessBarrier(handle);
-            collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+            collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
             Heap::GetHeap().CrossAccessBarrier(handle);
             Heap::GetHeap().RemoveExportObject(handle);
         } else {
             collector.ResurrectExportObject(current);
-            collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
+            collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
             collector.ResurrectExportObject(current);
         }
     }

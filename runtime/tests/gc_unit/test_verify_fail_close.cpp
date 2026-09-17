@@ -157,7 +157,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
 {
     GcVerifyFixture fixture;
     auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
-    cycle.PublishPhase(GC_PHASE_TRACE);
+    cycle.PublishPhase(GC_PHASE_ENUM);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
     ExpectSceneAbort("Raw null requires young mark complete", [&] {

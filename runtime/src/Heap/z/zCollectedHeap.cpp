@@ -60,15 +60,8 @@ const char* Collector::GetGCPhaseName(GCPhase phase)
     switch (phase) {
         case GC_PHASE_UNDEF: return "undefined phase";
         case GC_PHASE_IDLE: return "idle phase";
-        case GC_PHASE_FINISH: return "finish phase";
-        case GC_PHASE_RECLAIM_SATB_NODE: return "reclaim satb phase";
-        case GC_PHASE_INIT: return "init phase";
         case GC_PHASE_ENUM: return "enum phase";
-        case GC_PHASE_TRACE: return "trace phase";
-        case GC_PHASE_CLEAR_SATB_BUFFER: return "clear satb phase";
         case GC_PHASE_MARK_COMPLETE: return "mark complete phase";
-        case GC_PHASE_POST_TRACE: return "post trace phase";
-        case GC_PHASE_PREFORWARD: return "preforward phase";
         case GC_PHASE_FORWARD: return "forward phase";
     }
     return "unknown phase";

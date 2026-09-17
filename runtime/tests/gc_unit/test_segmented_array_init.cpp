@@ -909,7 +909,7 @@ void* RunMarkAllocationCase(void* rawExisting)
         (resampled ? 0 : 32) |
         ((markEndObservations == 1 && markEndTargetLive) ? 0 : 128) |
         (completedValue ? 0 : 256) |
-        ((completed && !MarkAllocationWindow::timedOut && phase == GC_PHASE_TRACE) ? 0 : 64);
+        ((completed && !MarkAllocationWindow::timedOut && phase == GC_PHASE_ENUM) ? 0 : 64);
     std::fprintf(stderr, "MARK_ALLOC_ASSERT_RESULT status=%zu "
                  "bits=implicit:1,live:2,target_live:4,excluded:8,next_cycle:16,resampled:32,window:64,mark_end_live:128,completed_value:256\n", status);
     return reinterpret_cast<void*>(status);
@@ -1025,7 +1025,7 @@ void* RunPinnedMarkStartCase(void*)
     const bool current = after->IsAllocating();
     const bool different = after != before;
     const bool noMark = !after->is_marked();
-    const bool window = collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_TRACE;
+    const bool window = collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == GC_PHASE_ENUM;
     std::fprintf(stderr, "P1_PINNED_WINDOW_ASSERT_EXECUTED reuse=%d different=%d current=%d no_bitmap=%d trace=%d birth=%llu owner=%llu\n",
         reused, different, current, noMark, window,
         static_cast<unsigned long long>(after->BirthSequence()),
