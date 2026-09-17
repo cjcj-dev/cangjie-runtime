@@ -140,7 +140,9 @@ void CollectorResources::Fini()
 // is also the shutdown acknowledgement for synchronous callers.
 void CollectorResources::StopGCWork()
 {
-    finalizerProcessor.Stop();
+    if (finalizerProcessor.IsRunning()) {
+        finalizerProcessor.Stop();
+    }
     // zCollectedHeap.cpp:314-319 gc_threads_do order: director, major driver,
     // minor driver, stat. StringDedup is not a ZGC thread and stops last.
     StopGCThreads();
