@@ -16,7 +16,7 @@
 #include "Heap/z/workerThread.hpp"
 
 namespace MapleRuntime {
-enum class GCCycleGeneration : uint8_t; // zGeneration.hpp
+enum class ZGenerationId : uint8_t; // zGenerationId.hpp
 class ZRestartableTask;
 class ZStatWorkers;
 class ZTask;
@@ -35,7 +35,7 @@ private:
 public:
     // zWorkers.cpp:45-65. max_nworkers is ZYoungGCThreads/ZOldGCThreads in
     // ZGC (zArguments); this runtime passes the concurrent budget in.
-    ZWorkers(GCCycleGeneration id, uint32_t max_nworkers, ZStatWorkers* stats);
+    ZWorkers(ZGenerationId id, uint32_t max_nworkers, ZStatWorkers* stats);
     ZWorkers(const ZWorkers&) = delete;
     ZWorkers& operator=(const ZWorkers&) = delete;
 

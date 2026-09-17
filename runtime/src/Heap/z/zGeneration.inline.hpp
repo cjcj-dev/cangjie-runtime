@@ -6,15 +6,14 @@
 #include "Heap/z/zMark.inline.hpp"
 
 namespace MapleRuntime {
-inline bool GenerationCycle::IsPhaseMark() const
+inline bool ZGeneration::IsPhaseMark() const
 {
-    const auto value = Phase();
-    return value == GC_PHASE_ENUM || value == GC_PHASE_TRACE || value == GC_PHASE_CLEAR_SATB_BUFFER;
+    return is_phase_mark();
 }
 
 // ZGeneration::mark_object / mark_object_if_active (zGeneration.inline.hpp:118-129).
 template<bool resurrect, bool gcThread, bool follow, bool finalizable>
-inline void GenerationCycle::MarkObject(zaddress address)
+inline void ZGeneration::MarkObject(zaddress address)
 {
     ASSERT(IsPhaseMark());
     CHECK(mark != nullptr);
@@ -22,7 +21,7 @@ inline void GenerationCycle::MarkObject(zaddress address)
 }
 
 template<bool resurrect, bool gcThread, bool follow, bool finalizable>
-inline void GenerationCycle::MarkObjectIfActive(zaddress address)
+inline void ZGeneration::MarkObjectIfActive(zaddress address)
 {
     if (IsPhaseMark()) {
         MarkObject<resurrect, gcThread, follow, finalizable>(address);

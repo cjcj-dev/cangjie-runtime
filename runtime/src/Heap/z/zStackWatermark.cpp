@@ -99,10 +99,8 @@ bool StackWatermark::start_processing_impl(Mutator& mutator, void* context, uint
     mutator.GetGCData().InstallMasks(ThreadGCData::PublishedMasks());
     AllocBuffer* buffer = mutator.GetAllocBuffer();
     if (buffer != nullptr) {
-        const bool youngMark = Heap::GetHeap().GetGCPhase(GCCycleGeneration::YOUNG) == GCPhase::GC_PHASE_ENUM ||
-            Heap::GetHeap().GetGCPhase(GCCycleGeneration::YOUNG) == GCPhase::GC_PHASE_TRACE;
-        const bool oldMark = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD) == GCPhase::GC_PHASE_ENUM ||
-            Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD) == GCPhase::GC_PHASE_TRACE;
+        const bool youngMark = ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
+        const bool oldMark = ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark();
         if (youngMark || oldMark) {
             buffer->RetireTLAB(true);
             ++allocStats.retired;

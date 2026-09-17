@@ -115,9 +115,9 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     }
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     GcTriggerInputs in = ZStat::SampleDirectorStats(now,
-        collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).CycleStats(),
-        collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).CycleStats(), regions,
-        GetWorkers(GCCycleGeneration::YOUNG), GetWorkers(GCCycleGeneration::OLD),
+        collectorProxy.GetZGeneration(ZGenerationId::young).CycleStats(),
+        collectorProxy.GetZGeneration(ZGenerationId::old).CycleStats(), regions,
+        GetWorkers(ZGenerationId::young), GetWorkers(ZGenerationId::old),
         static_cast<uint32_t>(concurrentGcThreadCount));
     in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
     in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;
@@ -135,7 +135,7 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         } else {
             minorDriverPort.EnqueueAsync(GC_REASON_YOUNG, selection.youngWorkers);
             if (in.oldWorkersActive && in.activeOldWorkers != selection.oldWorkers) {
-                GetWorkers(GCCycleGeneration::OLD).request_resize_workers(selection.oldWorkers);
+                GetWorkers(ZGenerationId::old).request_resize_workers(selection.oldWorkers);
             }
         }
         return;
@@ -154,10 +154,10 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         desired = std::min(in.workerCapacity, in.activeYoungWorkers + 2 * (desired - in.activeYoungWorkers));
         const auto adjusted = SelectWorkerThreads(in, desired, in.workerCapacity, in.oldWorkersActive);
         if (in.oldWorkersActive && in.activeOldWorkers != adjusted.oldWorkers) {
-            GetWorkers(GCCycleGeneration::OLD).request_resize_workers(adjusted.oldWorkers);
+            GetWorkers(ZGenerationId::old).request_resize_workers(adjusted.oldWorkers);
         }
         if (in.activeYoungWorkers != adjusted.youngWorkers) {
-            GetWorkers(GCCycleGeneration::YOUNG).request_resize_workers(adjusted.youngWorkers);
+            GetWorkers(ZGenerationId::young).request_resize_workers(adjusted.youngWorkers);
         }
     }
 }

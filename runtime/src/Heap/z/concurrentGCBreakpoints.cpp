@@ -32,7 +32,9 @@ void ConcurrentGCBreakpoints::RunToIdleImpl(bool acquiring)
     ResetRequestState();
     wantIdle = true;
     condition.notify_all();
-    while (!idle) condition.wait(lock);
+    while (!idle) {
+        condition.wait(lock);
+    }
 }
 void ConcurrentGCBreakpoints::AcquireControl() { RunToIdleImpl(true); }
 void ConcurrentGCBreakpoints::RunToIdle() { RunToIdleImpl(false); }
@@ -58,8 +60,12 @@ bool ConcurrentGCBreakpoints::RunTo(const char* name)
         lock.lock();
     }
     for (;;) {
-        if (wantIdle) return false;
-        if (stopped) return true;
+        if (wantIdle) {
+            return false;
+        }
+        if (stopped) {
+            return true;
+        }
         condition.wait(lock);
     }
 }
@@ -67,12 +73,21 @@ void ConcurrentGCBreakpoints::At(const char* name)
 {
     CHECK(name != nullptr);
     std::unique_lock<std::mutex> lock(mutex);
-    if (runTo == nullptr || std::strcmp(runTo, name) != 0) return;
+    if (runTo == nullptr || std::strcmp(runTo, name) != 0) {
+        return;
+    }
     runTo = nullptr;
     stopped = true;
     condition.notify_all();
-    while (stopped) condition.wait(lock);
+    while (stopped) {
+        condition.wait(lock);
+    }
 }
+void ConcurrentGCBreakpoints::NotifyIdleToActive()
+{
+    idle = false;
+}
+
 void ConcurrentGCBreakpoints::NotifyActiveToIdle()
 {
     std::lock_guard<std::mutex> lock(mutex);

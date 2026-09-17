@@ -127,8 +127,6 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType) override;
 
-    GCPhase GetGCPhase(GCCycleGeneration generation) const override;
-    void SetGCPhase(GCCycleGeneration generation, const GCPhase phase) override;
     Collector& GetCollector() override;
     Allocator& GetAllocator() override;
 
@@ -214,14 +212,14 @@ void HeapImpl::Init(const HeapParam& param)
     {
         const auto& heapMap = ZPageTable::heap_table().map();
         const size_t heapSpan = heapMap.size() * heapMap.granule();
-        collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).forwarding_table().initialize(
+        collectorProxy.GetCurrentCollector().GetZGeneration(ZGenerationId::young).forwarding_table().initialize(
             heapSpan, heapMap.base(), heapMap.granule());
-        collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table().initialize(
+        collectorProxy.GetCurrentCollector().GetZGeneration(ZGenerationId::old).forwarding_table().initialize(
             heapSpan, heapMap.base(), heapMap.granule());
     }
-    collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered()->bind(
+    collectorProxy.GetCurrentCollector().GetZGeneration(ZGenerationId::young).remembered()->bind(
         &ZPageTable::heap_table(),
-        &collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table(),
+        &collectorProxy.GetCurrentCollector().GetZGeneration(ZGenerationId::old).forwarding_table(),
         &static_cast<RegionSpace*>(theSpace)->GetRegionManager());
     collectorResources.Init();
 }
@@ -239,10 +237,6 @@ void HeapImpl::Fini()
 Collector& HeapImpl::GetCollector() { return collectorProxy.GetCurrentCollector(); }
 
 Allocator& HeapImpl::GetAllocator() { return *theSpace; }
-
-GCPhase HeapImpl::GetGCPhase(GCCycleGeneration generation) const { return collectorProxy.GetGCPhase(generation); }
-
-void HeapImpl::SetGCPhase(GCCycleGeneration generation, const GCPhase phase) { collectorProxy.SetGCPhase(generation, phase); }
 
 size_t HeapImpl::GetMaxCapacity() const { return theSpace->GetMaxCapacity(); }
 
@@ -266,7 +260,7 @@ Heap& Heap::GetHeap() { return *g_heapInstance; }
 
 ZRemembered& Heap::remembered()
 {
-    return *GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered();
+    return *GetCollector().GetZGeneration(ZGenerationId::young).remembered();
 }
 
 void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)

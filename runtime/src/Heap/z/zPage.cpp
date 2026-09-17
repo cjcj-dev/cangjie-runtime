@@ -7,6 +7,7 @@
 
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGeneration.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -201,11 +202,9 @@ void ZPage::verify_live(uint32_t liveObjects, size_t liveBytes, bool inPlace) co
             ? ZGenerationId::young : ZGenerationId::old;
         MRT_ASSERT(map->is_marked(id), "Should be marked");
         (void)id;
-        const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase(
-            static_cast<GCCycleGeneration>(from->owner));
-        MRT_ASSERT(phase != GC_PHASE_ENUM && phase != GC_PHASE_TRACE &&
-                   phase != GC_PHASE_CLEAR_SATB_BUFFER, "Wrong phase");
-        (void)phase;
+        ZGeneration* generation = ZGeneration::generation(id);
+        MRT_ASSERT(generation == nullptr || !generation->is_phase_mark(), "Wrong phase");
+        (void)generation;
     }
     CHECK_DETAIL(liveObjects == map->live_objects(), "Invalid number of live objects");
     CHECK_DETAIL(liveBytes == map->live_bytes(), "Invalid number of live bytes");
@@ -262,8 +261,8 @@ namespace MapleRuntime {
 // ZPage::reset_seqnum (zPage.cpp:90-93), after owner selection and before publication.
 void ZPage::ResetPageSequence()
 {
-    const auto owner = IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
-    const auto other = IsYoungRegion() ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG;
+    const auto owner = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
+    const auto other = IsYoungRegion() ? ZGenerationId::old : ZGenerationId::young;
     auto& collector = Heap::GetHeap().GetCollector();
     _seqnum = static_cast<uint32_t>(collector.GetCycleSnapshot(owner).sequence);
     _seqnum_other = static_cast<uint32_t>(collector.GetCycleSnapshot(other).sequence);
@@ -271,8 +270,8 @@ void ZPage::ResetPageSequence()
 
 uint64_t ZPage::GetSnapshotEpoch() const
 {
-    const GCCycleGeneration generation = GetOwnerGeneration() == Generation::Young
-        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    const ZGenerationId generation = GetOwnerGeneration() == Generation::Young
+        ? ZGenerationId::young : ZGenerationId::old;
     return Heap::GetHeap().GetCollector().GetCycleSnapshot(generation).sequence;
 }
 } // namespace MapleRuntime

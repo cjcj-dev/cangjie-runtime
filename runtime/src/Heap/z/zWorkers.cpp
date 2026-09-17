@@ -14,18 +14,18 @@
 
 namespace MapleRuntime {
 // zWorkers.cpp:33-43
-static const char* workers_name(GCCycleGeneration id)
+static const char* workers_name(ZGenerationId id)
 {
-    return (id == GCCycleGeneration::YOUNG) ? "ZWorkerYoung" : "ZWorkerOld";
+    return (id == ZGenerationId::young) ? "ZWorkerYoung" : "ZWorkerOld";
 }
 
-static const char* generation_name(GCCycleGeneration id)
+static const char* generation_name(ZGenerationId id)
 {
-    return (id == GCCycleGeneration::YOUNG) ? "Young" : "Old";
+    return (id == ZGenerationId::young) ? "Young" : "Old";
 }
 
 // zWorkers.cpp:45-65
-ZWorkers::ZWorkers(GCCycleGeneration id, uint32_t max_nworkers, ZStatWorkers* stats)
+ZWorkers::ZWorkers(ZGenerationId id, uint32_t max_nworkers, ZStatWorkers* stats)
     : _workers(workers_name(id), max_nworkers),
       _generation_name(generation_name(id)),
       _resize_lock(),

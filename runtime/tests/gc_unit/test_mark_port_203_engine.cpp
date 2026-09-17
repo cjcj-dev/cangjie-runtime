@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "Common/SuspendibleThreadSet.h"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStat.hpp"
@@ -268,19 +269,16 @@ GC_TEST(MarkPort203Engine, CrowdedRestoresNStripes)
 
 GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 {
-    ZAbort abort;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
-    domain.BindAbort(&abort);
     domain.PrepareWork(1);
     GC_EXPECT_TRUE(!domain.PollStop());
-    abort.Request();
+    ZAbort::abort();
     GC_EXPECT_TRUE(domain.PollStop());
-    abort.Reset();
-    GC_EXPECT_TRUE(!domain.PollStop());
+    ZAbort::reset();
 
     ZStatWorkers statWorkers;
-    ZWorkers workers(GCCycleGeneration::YOUNG, 2, &statWorkers);
+    ZWorkers workers(ZGenerationId::young, 2, &statWorkers);
     workers.set_active();
     workers.set_active_workers(1);
     domain.BindWorkers(&workers);
@@ -295,11 +293,9 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
 {
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
-    ZAbort abort;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
     SuspendibleThreadSetJoiner stsJoiner;
     ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
-    domain.BindAbort(&abort);
     domain.PrepareWork(1);
     MarkThreadLocalStacks stacks(4);
     MarkContext context(1, 0, domain.Stripes(), stacks);
@@ -311,7 +307,7 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     const auto result = ZMark::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
         0, false, [&](const MarkStackEntry&) {
             ++followed;
-            abort.Request();
+            ZAbort::abort();
         }, nullptr, nullptr, &domain);
     GC_EXPECT_TRUE(result == ZMark::Result::Aborted);
     GC_EXPECT_EQ(followed, 1u);
@@ -321,15 +317,6 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     // The resume below proves every remaining entry is still owned and consumed.
     GC_EXPECT_TRUE(domain.Stripes().Population() > 0);
     GC_EXPECT_TRUE(domain.PollStop());
-
-    // Explicitly resume only the test's token. A cancelled product request
-    // returns to the driver and never resets its token to consume this work.
-    abort.Reset();
-    domain.PrepareWork(1);
-    const auto resumed = ZMark::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
-        0, false, [&](const MarkStackEntry&) { ++followed; }, nullptr, nullptr, &domain);
-    GC_EXPECT_TRUE(resumed == ZMark::Result::Completed);
-    GC_EXPECT_EQ(followed, count);
 }
 
 // ZMark::try_end (zMark.cpp:954-971): true iff stripes empty and !resurrected

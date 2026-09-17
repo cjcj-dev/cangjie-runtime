@@ -21,7 +21,7 @@ using namespace MapleRuntime::GcUnit;
 extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
-struct GenerationCycleRootTestAccess {
+struct ZGenerationRootTestAccess {
     static void Seed(CopyCollector& collector, BaseObject* object)
     {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
@@ -94,7 +94,7 @@ void* RunMajorCycle(void*)
         reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
     auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(object);
-    GenerationCycleRootTestAccess::Seed(collector, object);
+    ZGenerationRootTestAccess::Seed(collector, object);
     // Read the product's published old mark stacks at the top of DoTracing
     // (after the old root task returned, before follow). The export root
     // keeping the object alive is not in this window (it feeds the driver's
@@ -109,7 +109,7 @@ void* RunMajorCycle(void*)
     };
     collector.RequestGC(GC_REASON_USER, false);
     collector.testOldMarkStarted = nullptr;
-    GenerationCycleRootTestAccess::Clear(collector);
+    ZGenerationRootTestAccess::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;
 }

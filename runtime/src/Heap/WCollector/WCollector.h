@@ -19,6 +19,7 @@
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "Allocator/RegionSpace.h"
 #include "Heap/z/zForwardingTable.hpp"
@@ -107,8 +108,25 @@ public:
 
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 
+class VM_ZMarkStartYoung;
+class VM_ZMarkStartYoungAndOld;
+class VM_ZMarkEndYoung;
+class VM_ZRelocateStartYoung;
+class VM_ZMarkEndOld;
+class VM_ZRelocateStartOld;
+class VM_ZVerifyOld;
+
 class WCollector : public CopyCollector {
-    friend class GenerationCycle;
+    friend class ZGeneration;
+    friend class ZGenerationYoung;
+    friend class ZGenerationOld;
+    friend class VM_ZMarkStartYoung;
+    friend class VM_ZMarkStartYoungAndOld;
+    friend class VM_ZMarkEndYoung;
+    friend class VM_ZRelocateStartYoung;
+    friend class VM_ZMarkEndOld;
+    friend class VM_ZRelocateStartOld;
+    friend class VM_ZVerifyOld;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MutatorPublishTestAccess;
     friend struct PartialArrayTestAccess;
@@ -227,7 +245,7 @@ public:
         if (address == 0) {
             return ZGenerationId::old;
         }
-        if (Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).forwarding_table().get(address) != nullptr) {
+        if (Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).forwarding_table().get(address) != nullptr) {
             return ZGenerationId::young;
         }
         return ZGenerationId::old;
@@ -257,7 +275,7 @@ public:
         const MAddress from = reinterpret_cast<MAddress>(obj);
         const Generation ownerGeneration = generation == ZGenerationId::young
             ? Generation::Young : Generation::Old;
-        ZForwarding* forwarding = Heap::GetHeap().GetCollector().GetGenerationCycle(ownerGeneration).forwarding_table().get(from);
+        ZForwarding* forwarding = Heap::GetHeap().GetCollector().GetZGeneration(ownerGeneration).forwarding_table().get(from);
         if (forwarding == nullptr) return obj;
 
         // zRelocate.cpp:383-415: lookup, retain/copy/release, then wait/find.
@@ -302,8 +320,8 @@ public:
         // was about to relocate.
         if (obj != nullptr && Heap::IsHeapAddress(obj)) {
             const MAddress addr = reinterpret_cast<MAddress>(obj);
-            if (GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr ||
-                GetGenerationCycle(Generation::Old).forwarding_table().get(addr) != nullptr) {
+            if (GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr) {
                 const ForwardingProvenance provenance{
                     ForwardingHolderKind::HeapRef, this, &obj
                 };
@@ -365,8 +383,8 @@ public:
                 return false;
             }
             const MAddress addr = reinterpret_cast<MAddress>(obj);
-            return GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr ||
-                   GetGenerationCycle(Generation::Old).forwarding_table().get(addr) != nullptr;
+            return GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                   GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
         }
         // filter const string object.
         if (Heap::IsHeapAddress(obj)) {
@@ -594,7 +612,8 @@ protected:
         }
         LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
             bad, seen, static_cast<void*>(target), stateCode, typeInfo, IsFromObject(target) ? 1 : 0,
-            IsGhostFromObject(target) ? 1 : 0, static_cast<int>(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)));
+            IsGhostFromObject(target) ? 1 : 0,
+            ZGeneration::old() != nullptr ? static_cast<int>(ZGeneration::old()->Snapshot().phase) : -1);
     }
     mutable std::atomic<uint64_t> colourWhoTotal{ 0 };
     mutable std::atomic<uint64_t> colourWhoBad{ 0 };
@@ -649,7 +668,7 @@ protected:
 
     void CollectSmallSpace();
 
-    void DoGarbageCollection(GCCycleGeneration generation) override;
+    void DoGarbageCollection(ZGenerationId generation) override;
     void ProcessFinalizers() override;
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const override;
 
@@ -727,6 +746,12 @@ private:
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void DoYoungGarbageCollection();
+    void RunYoungCollection();
+    void ConcurrentYoungMark();
+    bool YoungMarkEndPause();
+    void ConcurrentYoungMarkContinue();
+    void FinishYoungMarkHandoff();
+    void RunOldCollection();
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
     // stores (zBarrier.inline.hpp:742-749). Seed them into the old TRACE stack.
@@ -741,7 +766,7 @@ private:
     // two remap-bit errors.
     void RemapYoungRoots();
     bool Preforward();
-    void StartRelocationTasks(GCCycleGeneration generation);
+    void StartRelocationTasks(ZGenerationId generation);
     BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
@@ -754,6 +779,20 @@ private:
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint64_t minorTotalRuns = 0;
     MinorRegionSet minorCandidateRegions;
+    std::unique_ptr<ScopedStopTheWorld> youngStw;
+    std::vector<BaseObject*> youngReachableVec;
+    MinorSlotSet youngConsumedSlots;
+    MinorInteriorBaseMap youngRemsetInteriorBases;
+    YoungCollectionStats youngStats;
+    uint64_t youngStartNs = 0;
+    size_t youngLiveBytes = 0;
+    size_t youngLiveRememberedCount = 0;
+    bool youngFullScan = false;
+    WorkStack youngWorkStack;
+    uint64_t youngStackScanEpoch = 0;
+    YoungConcWindowStats youngConcWindow;
+    uint64_t youngConcWindowStartNs = 0;
+    MinorSlotSet youngWeakSlots;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H

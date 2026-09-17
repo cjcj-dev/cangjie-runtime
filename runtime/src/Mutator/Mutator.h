@@ -41,17 +41,9 @@ class Mutator {
 public:
     // flag which indicates the reason why mutator should suspend. flag is set by some external thread.
     enum SuspensionType : uint32_t {
-        SUSPENSION_FOR_GC_PHASE = 1,
         SUSPENSION_FOR_SYNC = 2,
         SUSPENSION_FOR_EXIT = 4,
         SUSPENSION_FOR_CPU_PROFILE = 8,
-    };
-
-    enum GCPhaseTransitionState : uint32_t {
-        NO_TRANSITION,
-        NEED_TRANSITION,
-        IN_TRANSITION,
-        FINISH_TRANSITION,
     };
 
     enum CpuProfileState : uint32_t {
@@ -72,7 +64,6 @@ public:
     {
         gcData.Attach(this, nullptr, reinterpret_cast<zaddress_unsafe*>(&rawObject));
         observerCnt = 0;
-        mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
         stackWatermark.Reset();
 
@@ -99,7 +90,6 @@ public:
         Mutator* mutator = new (std::nothrow) Mutator();
         CHECK_DETAIL(mutator != nullptr, "new Mutator failed");
         mutator->Init();
-        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
         return mutator;
     }
 
@@ -237,11 +227,6 @@ public:
         return CJThreadGetState(cjthread);
     }
 
-    __attribute__((always_inline)) inline bool FinishedTransition() const
-    {
-        return transitionState == FINISH_TRANSITION;
-    }
-
     __attribute__((always_inline)) inline bool FinishedCpuProfile() const
     {
         return cpuProfileState.load(std::memory_order_acquire) == FINISH_CPUPROFILE &&
@@ -260,9 +245,7 @@ public:
 
     __attribute__((always_inline)) inline void SetSuspensionFlag(SuspensionType flag)
     {
-        if (flag == SUSPENSION_FOR_GC_PHASE) {
-            transitionState.store(NEED_TRANSITION, std::memory_order_relaxed);
-        } else if (flag == SUSPENSION_FOR_CPU_PROFILE) {
+        if (flag == SUSPENSION_FOR_CPU_PROFILE) {
             cpuProfileState.store(NEED_CPUPROFILE, std::memory_order_relaxed);
         }
         suspensionFlag.fetch_or(flag, std::memory_order_seq_cst);
@@ -318,55 +301,21 @@ public:
         return enumYoung.load(std::memory_order_acquire) != 0;
     }
 
-    // Spin wait phase transition finished when GC is tranverting this mutator's phase
-    __attribute__((always_inline)) inline void WaitForPhaseTransition() const
-    {
-        GCPhaseTransitionState state = transitionState.load(std::memory_order_acquire);
-        while (state != FINISH_TRANSITION) {
-            if (state != IN_TRANSITION) {
-                LOG(RTLOG_INFO, "transition state has been reset for a second transition");
-                return;
-            }
-            // Give up CPU to avoid overloading
-            (void)sched_yield();
-            state = transitionState.load(std::memory_order_acquire);
-        }
-    }
-
     void WaitForCpuProfiling() const;
 
-    bool GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
+    bool GcPhaseEnum(bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
     AllocBuffer* GetAllocBuffer() const { return foreignThreadInfo.allocBuffer; }
     void SetAllocBuffer(AllocBuffer* buffer) { foreignThreadInfo.allocBuffer = buffer; }
-    inline void GCPhasePreForward(GCPhase newPhase);
-    inline void HandleGCPhase(GCPhase newPhase);
-    inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
-    inline void HandleGCPhaseIDLE();
+    inline void GCPhasePreForward();
     inline void ForwardLocalFinalizers(Collector& collector);
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();
 
-    void TransitionToGCPhaseExclusive(GCPhase newPhase);
-    void TransitionToGCPhaseExclusive(GCPhase newPhase, bool bySelf);
-
     void TransitionToCpuProfileExclusive();
 
-    // Ensure that mutator phase is changed only once by mutator itself or GC
-    __attribute__((always_inline)) inline bool TransitionGCPhase(bool bySelf);
-
     bool TransitionToCpuProfile(bool bySelf);
-
-    __attribute__((always_inline)) inline void SetMutatorPhase(const GCPhase newPhase)
-    {
-        mutatorPhase.store(newPhase, std::memory_order_release);
-    }
-
-    __attribute__((always_inline)) inline GCPhase GetMutatorPhase() const
-    {
-        return mutatorPhase.load(std::memory_order_acquire);
-    }
 
     void VisitProcessedRoots(const RootVisitor& visitor);
     void VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor);
@@ -399,8 +348,8 @@ public:
 
     void DumpMutator() const
     {
-        LOG(RTLOG_ERROR, "mutator %p: inSaferegion %x, tid %u, observerCnt %zu, gc phase: %u, suspension request %u",
-            this, inSaferegion.load(std::memory_order_relaxed), tid, observerCnt.load(), mutatorPhase.load(),
+        LOG(RTLOG_ERROR, "mutator %p: inSaferegion %x, tid %u, observerCnt %zu, suspension request %u",
+            this, inSaferegion.load(std::memory_order_relaxed), tid, observerCnt.load(),
             suspensionFlag.load());
     }
 
@@ -559,8 +508,7 @@ public:
 
     void ReleaseForeignThread();
 
-    // Observe-only: in-flight SATB node (not yet FlushQueue'd). STW2 CLEAR_SATB
-    // flushes before Census; peek still covers a node that HandleGCPhase missed.
+    // Observe-only: in-flight SATB node (not yet FlushQueue'd).
     // ZMark::flush publishes this thread's single store buffer.
     void FlushStoreBarrierBuffer(bool flushStoreBarrier = true)
     {
@@ -586,9 +534,6 @@ protected:
 
 private:
     NativeRootHandles& GetLocalFinalizers() { return localFinalizers; }
-    // Indicate the current mutator phase and use which barrier in concurrent gc
-    // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
-    std::atomic<GCPhase> mutatorPhase = { GCPhase::GC_PHASE_UNDEF };
     // thread id
     uint32_t tid = 0;
     // cjthread ptr
@@ -614,8 +559,6 @@ private:
 
     // If set implies this mutator should process suspension requests
     std::atomic<uint32_t> suspensionFlag = { 0 };
-    // Indicate the state of mutator's phase transition
-    std::atomic<GCPhaseTransitionState> transitionState = { NO_TRANSITION };
     ObjectRef rawObject{};
     ThreadGCData gcData;
     std::vector<ObjectRef> nativeFrameRoots;

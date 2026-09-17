@@ -31,6 +31,7 @@
 #include "Heap/z/zAttachedArray.hpp"
 
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 
 namespace MapleRuntime {
 
@@ -252,14 +253,12 @@ public:
     static uint32_t young_seqnum()
     {
         return static_cast<uint32_t>(
-            Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence);
+            Heap::GetHeap().GetCollector().GetCycleSnapshot(ZGenerationId::young).sequence);
     }
 
     static bool young_marking()
     {
-        const auto young = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
-        return young.phase == GCPhase::GC_PHASE_ENUM || young.phase == GCPhase::GC_PHASE_TRACE ||
-               young.phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+        return ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
     }
 
     void relocated_remembered_fields_register(MAddress field);

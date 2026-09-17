@@ -27,32 +27,69 @@ struct TenuringInputs;
 // Per-generation execution state. The snapshot lock publishes cycle identity
 // and phase together; the phase atomic serves existing barrier readers.
 // ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
-enum class GCCycleGeneration : uint8_t { YOUNG, OLD };
 enum class MarkStartPoint : uint8_t { Begin, BeforeRetire, BeforeSequence, BeforeDomain, BeforeRemembered, Complete };
+enum class ZGenerationPhase : uint8_t { Mark, MarkComplete, Relocate };
 struct GCCycleSnapshot {
-    GCCycleGeneration generation;
+    ZGenerationId generation;
     uint64_t sequence;
     uint64_t requestIndex;
     GCReason reason;
-    GCPhase phase;
+    ZGenerationPhase phase;
     bool active;
 };
 class WCollector;
 struct YoungCollectionStats;
-class GenerationCycle;
-using ZGeneration = GenerationCycle;
+class ZGeneration;
+class ZGenerationYoung;
+class ZGenerationOld;
 
-class GenerationCycle {
+class ZGeneration {
+protected:
+    static ZGenerationYoung* _young;
+    static ZGenerationOld* _old;
+
 public:
-    explicit GenerationCycle(GCCycleGeneration generation);
-    ~GenerationCycle();
-    GenerationCycle(const GenerationCycle&) = delete;
-    GenerationCycle& operator=(const GenerationCycle&) = delete;
+    explicit ZGeneration(ZGenerationId generation);
+    ~ZGeneration();
+    ZGeneration(const ZGeneration&) = delete;
+    ZGeneration& operator=(const ZGeneration&) = delete;
+    ZGenerationId id() const;
+    ZGenerationIdOptional id_optional() const;
+    bool is_young() const;
+    bool is_old() const;
+    static ZGenerationYoung* young();
+    static ZGenerationOld* old();
+    static ZGeneration* generation(ZGenerationId id);
+    uint32_t seqnum() const;
     GCCycleSnapshot Snapshot() const;
     ZMark& Mark() { return *mark; }
     const ZMark& Mark() const { return *mark; }
     ZMark* MarkPtr() { return mark.get(); }
     const ZMark* MarkPtr() const { return mark.get(); }
+    using Phase = ZGenerationPhase;
+    void set_phase(Phase new_phase);
+    void log_phase_switch(Phase from, Phase to);
+    virtual bool should_record_stats() = 0;
+    size_t freed() const { return _freed.load(std::memory_order_relaxed); }
+    void increase_freed(size_t size) { _freed.fetch_add(size, std::memory_order_relaxed); }
+    size_t promoted() const { return _promoted.load(std::memory_order_relaxed); }
+    void increase_promoted(size_t size) { _promoted.fetch_add(size, std::memory_order_relaxed); }
+    size_t compacted() const { return _compacted.load(std::memory_order_relaxed); }
+    void increase_compacted(size_t size) { _compacted.fetch_add(size, std::memory_order_relaxed); }
+    void reset_statistics()
+    {
+        _freed.store(0, std::memory_order_relaxed);
+        _promoted.store(0, std::memory_order_relaxed);
+        _compacted.store(0, std::memory_order_relaxed);
+    }
+    void set_gc_timer(void* timer) { _gc_timer = timer; }
+    void* gc_timer() const { return _gc_timer; }
+    void at_collection_start(void* timer = nullptr);
+    void at_collection_end();
+    bool is_phase_relocate() const { return _phase == Phase::Relocate; }
+    bool is_phase_mark() const { return _phase == Phase::Mark; }
+    bool is_phase_mark_complete() const { return _phase == Phase::MarkComplete; }
+    const char* phase_to_string() const;
     bool IsPhaseMark() const;
     double FragmentationLimit() const;
     template<bool resurrect, bool gcThread, bool follow, bool finalizable>
@@ -71,7 +108,7 @@ public:
     GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
-    GCPhase Phase() const { return phase.load(std::memory_order_acquire); }
+    ZGenerationPhase GcPhase() const { return _phase; }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value, uint64_t index = 0);
@@ -85,7 +122,7 @@ public:
     void Begin(uint64_t index);
     YoungCollectionStats StartYoungMark(WCollector& collector);
     void StartOldMark(WCollector& collector);
-    void PublishPhase(GCPhase value);
+    void PublishPhase(ZGenerationPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
     ZRemembered* remembered() { return &_remembered; }
@@ -106,7 +143,8 @@ public:
     friend struct GenerationSequenceFixture;
 #endif
     std::unique_ptr<ZMark> mark;
-    const GCCycleGeneration generation;
+    const ZGenerationId _id;
+    const ZGenerationId _cycle;
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
     GCStats stats;
@@ -123,23 +161,87 @@ public:
     std::atomic<uint64_t> youngSequenceAtRelocateStart{ 0 };
     std::atomic<ZYoungType> youngType { ZYoungType::none };
     std::atomic<GCReason> reason { GC_REASON_USER };
-    std::atomic<GCPhase> phase { GC_PHASE_IDLE };
+    ZGeneration::Phase _phase { ZGeneration::Phase::Relocate };
+    std::atomic<size_t> _freed { 0 };
+    std::atomic<size_t> _promoted { 0 };
+    std::atomic<size_t> _compacted { 0 };
     bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
     std::unique_ptr<ZRelocate> _relocate;
     ZRemembered _remembered;
+    void* _gc_timer { nullptr };
 };
 
 // zGeneration.cpp:489-497: type is scoped to one young collection.
 class YoungTypeSetter {
 public:
-    YoungTypeSetter(GenerationCycle& cycle, ZYoungType type);
+    YoungTypeSetter(ZGeneration& cycle, ZYoungType type);
     ~YoungTypeSetter();
     YoungTypeSetter(const YoungTypeSetter&) = delete;
     YoungTypeSetter& operator=(const YoungTypeSetter&) = delete;
 private:
-    GenerationCycle& cycle;
+    ZGeneration& cycle;
+};
+
+class ZGenerationCollectionScopeYoung {
+public:
+    explicit ZGenerationCollectionScopeYoung(ZGenerationYoung& generation);
+    ~ZGenerationCollectionScopeYoung();
+    ZGenerationCollectionScopeYoung(const ZGenerationCollectionScopeYoung&) = delete;
+    ZGenerationCollectionScopeYoung& operator=(const ZGenerationCollectionScopeYoung&) = delete;
+private:
+    ZGenerationYoung& generation;
+};
+
+class ZGenerationCollectionScopeOld {
+public:
+    explicit ZGenerationCollectionScopeOld(ZGenerationOld& generation);
+    ~ZGenerationCollectionScopeOld();
+    ZGenerationCollectionScopeOld(const ZGenerationCollectionScopeOld&) = delete;
+    ZGenerationCollectionScopeOld& operator=(const ZGenerationCollectionScopeOld&) = delete;
+private:
+    ZGenerationOld& generation;
+};
+
+class ZGenerationYoung : public ZGeneration {
+public:
+    ZGenerationYoung();
+    ~ZGenerationYoung();
+    bool should_record_stats() override;
+    void collect();
+    void pause_mark_start();
+    void concurrent_mark();
+    bool pause_mark_end();
+    void concurrent_mark_continue();
+    void concurrent_mark_free();
+    void concurrent_reset_relocation_set();
+    void concurrent_select_relocation_set();
+    void pause_relocate_start();
+    void concurrent_relocate();
+private:
+    ZGenerationYoung* previousYoung { nullptr };
+};
+
+class ZGenerationOld : public ZGeneration {
+public:
+    ZGenerationOld();
+    ~ZGenerationOld();
+    bool should_record_stats() override;
+    void collect();
+    void concurrent_mark();
+    bool pause_mark_end();
+    void concurrent_mark_continue();
+    void concurrent_mark_free();
+    void concurrent_process_non_strong_references();
+    void concurrent_reset_relocation_set();
+    void pause_verify();
+    void concurrent_select_relocation_set();
+    void concurrent_remap_young_roots();
+    void pause_relocate_start();
+    void concurrent_relocate();
+private:
+    ZGenerationOld* previousOld { nullptr };
 };
 
 }

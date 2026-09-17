@@ -114,6 +114,8 @@ void WCollector::ResolveCycleRef()
         CJ_MRT_RolveCycleRef();
         return;
     }
+    const bool enteredInRelocate =
+        ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_relocate();
     std::unordered_set<U32> resolvedIds;
     for (;;) {
         auto it = cycleRefWorkStack.begin();
@@ -139,9 +141,9 @@ void WCollector::ResolveCycleRef()
             break;
         }
 
-        auto phase = GetGCPhase(GCCycleGeneration::OLD);
         static constexpr size_t taskNum = 100;
-        if (phase == GC_PHASE_PREFORWARD || i >= taskNum) {
+        if ((!enteredInRelocate && ZGeneration::old() != nullptr &&
+             ZGeneration::old()->is_phase_relocate()) || i >= taskNum) {
             cycleLock.unlock();
             CJ_MRT_RolveCycleRef();
             return;
@@ -161,7 +163,8 @@ void WCollector::ResolveCycleRef()
             if (it == cycleRefWorkStack.end() || externIndex >= it->second.size()) {
                 break;
             }
-            if (GetGCPhase(GCCycleGeneration::OLD) == GC_PHASE_PREFORWARD) {
+            if (!enteredInRelocate && ZGeneration::old() != nullptr &&
+                ZGeneration::old()->is_phase_relocate()) {
                 cycleLock.unlock();
                 CJ_MRT_RolveCycleRef();
                 return;

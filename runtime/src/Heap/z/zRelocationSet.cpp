@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zAbort.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/Allocator/RegionList.h"
 #include "Heap/z/zAddress.hpp"
@@ -55,7 +56,6 @@ namespace MapleRuntime {
 void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
-    TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
@@ -71,8 +71,8 @@ void WCollector::PostTrace()
     CollectLargeGarbage();
     CollectPinnedGarbage();
     // zGeneration.cpp:1042 / :1131-1133: reset previous set before select.
-    Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).reset_relocation_set();
-    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).reset_relocation_set();
+    if (ZAbort::should_abort()) {
         return;
     }
     RefineFromSpace();
@@ -128,7 +128,7 @@ void RegionManager::ResetFlipPromotedPages()
     flipPromotedPages.clear();
 }
 
-ZRelocationSet::ZRelocationSet(GenerationCycle* generation)
+ZRelocationSet::ZRelocationSet(ZGeneration* generation)
     : _generation(generation),
       _allocator(),
       _forwardings(nullptr),
@@ -267,7 +267,7 @@ void ZRelocationSet::register_in_place_relocate_promoted(ZPage* page)
     _in_place_relocate_promoted_pages.push(page);
 }
 
-void GenerationCycle::reset_relocation_set()
+void ZGeneration::reset_relocation_set()
 {
     ZRelocationSetIterator iter(&_relocation_set);
     for (ZForwarding* forwarding; iter.next(&forwarding);) {

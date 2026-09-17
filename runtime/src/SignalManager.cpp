@@ -20,6 +20,7 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "LoaderManager.h"
 // paramzero: avoid #include WCollector.h (its Heap include graph needs WCollector TU paths).
 namespace MapleRuntime {
@@ -176,12 +177,13 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
     uint64_t seq = 0;
     if (Runtime::CurrentRef() != nullptr) {
         seq = GcLog::CurrentSeq();
-        GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
-        FoldToken(Collector::GetGCPhaseName(phase), phaseTok, sizeof(phaseTok));
-        if (phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
+        ZGeneration* old = ZGeneration::old();
+        const char* phaseName = old != nullptr ? old->phase_to_string() : "none";
+        FoldToken(phaseName, phaseTok, sizeof(phaseTok));
+        if (old != nullptr && old->Snapshot().active && old->is_phase_relocate()) {
             inParFix = 1;
             gcKind = "fix";
-        } else if (phase == GC_PHASE_IDLE || phase == GC_PHASE_UNDEF) {
+        } else if (old == nullptr || !old->Snapshot().active) {
             gcKind = "none";
         } else {
             gcKind = "active";

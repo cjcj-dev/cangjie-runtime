@@ -71,7 +71,7 @@ public:
     { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }
     void MarkYoungObjectIfActive(BaseObject* object) const override
     { MarkPublicationFixture::Current().collector.MarkYoungObjectIfActive(object); }
-    GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
+    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const override
     { return MarkPublicationFixture::Current().collector.GetCycleSnapshot(generation); }
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
@@ -138,7 +138,6 @@ class MutatorScope final {
 public:
     explicit MutatorScope(Mutator& mutator) : saved(ThreadLocal::GetMutator())
     {
-        mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
         ThreadLocal::SetMutator(&mutator);
     }
     ~MutatorScope() { ThreadLocal::SetMutator(saved); }
@@ -154,16 +153,16 @@ public:
           reason(resources.GetGCStats().reason)
     {
         RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-        phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
-        activityCycle = &Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+        phase = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
+        activityCycle = &Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
         ownerWasActive = activityCycle->Snapshot().active;
         if (!ownerWasActive) activityCycle->Begin(1);
         resources.GetGCStats().reason = GC_REASON_USER;
-        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
+        Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     }
     ~MarkWindowScope()
     {
-        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, phase);
+        Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phase);
         resources.GetGCStats().reason = reason;
         if (!ownerWasActive) activityCycle->End();
     }
@@ -171,10 +170,10 @@ public:
 private:
     CollectorResources& resources;
     bool started;
-    GenerationCycle* activityCycle = nullptr;
+    ZGeneration* activityCycle = nullptr;
     bool ownerWasActive = false;
     GCReason reason;
-    GCPhase phase = GCPhase::GC_PHASE_IDLE;
+    ZGenerationPhase phase = ZGenerationPhase::Relocate;
 };
 
 zpointer LoadBadPointer(BaseObject* object)

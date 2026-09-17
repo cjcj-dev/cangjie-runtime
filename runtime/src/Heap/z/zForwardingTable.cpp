@@ -26,7 +26,7 @@ void ZForwardingTable::remove(ZForwarding* forwarding)
 
 ZForwardingTable& generation_forwarding_table(Generation generation)
 {
-    return Heap::GetHeap().GetCollector().GetGenerationCycle(generation).forwarding_table();
+    return Heap::GetHeap().GetCollector().GetZGeneration(generation).forwarding_table();
 }
 
 ZRelocateQueue& generation_relocate_queue()

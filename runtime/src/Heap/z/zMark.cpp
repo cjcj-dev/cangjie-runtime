@@ -350,8 +350,10 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
 void WCollector::TraceHeap()
 {
     ZBreakpoint::AtAfterMarkingStarted();
-    WorkStack workStack = NewWorkStack();
-    WorkStack foreignStack = NewWorkStack();
+    oldMarkWorkStack.clear();
+    oldMarkForeignRoots.clear();
+    WorkStack& workStack = oldMarkWorkStack;
+    WorkStack& foreignStack = oldMarkForeignRoots;
     MarkingStacks::VerifyEmpty(workStack.size());
     MarkingStacks::VerifyEmpty(foreignStack.size());
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
@@ -359,12 +361,7 @@ void WCollector::TraceHeap()
 
     // Old mark-start belongs to the preceding young pause. The old body
     // begins with concurrent roots/follow (zGeneration.cpp:1015-1020).
-    if (concurrentStackScan) {
-        ScopedStopTheWorld stw("major stack scan prepare", false);
-        ZVerify::BeforeZOperation();
-        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
-    }
-
+    // ZGC old concurrent_mark has no extra stack-scan STW (zGeneration.cpp:1015-1020).
     if (concurrentStackScan) {
         stackScanEpoch = StackWatermark::epoch_id();
     }
@@ -372,42 +369,20 @@ void WCollector::TraceHeap()
     {
         MRT_PHASE_TIMER(ZStatPhases::PEnumRootsUpdateOldPointersWithin);
         if (concurrentStackScan) {
-            // This is major's root-enumeration closing edge. StopTheWorld establishes
-            // InSaferegion for the fixed mutator roster, so WM_OWNER_GC may finish a
-            // different mutator's epoch cursor. If completion still cannot be
-            // established, run the legacy enum but leave the watermark incomplete;
-            // the report-only postcondition below must observe that residual state.
-            {
-                ScopedStopTheWorld stw("major stack scan close", false);
-                ZVerify::BeforeZOperation();
-                TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-                MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
-                    if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false, stackScanEpoch, false);
-                    }
-                    if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false);
-                    }
+            MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
+                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                    (void)mutator.GcPhaseEnum(false, stackScanEpoch, false);
+                }
+                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                    (void)mutator.GcPhaseEnum(false);
+                }
 #if defined(MRT_GC_UNIT_TESTS)
-                    NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
-                                                mutator.GetStackWatermark().IsDone(stackScanEpoch));
+                NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
+                                            mutator.GetStackWatermark().IsDone(stackScanEpoch));
 #endif
-                });
-                // CLEAR freezes further ENUM pushes before releasing the
-                // mutator-list lock owned by StopTheWorld. DoEnumeration cannot
-                // run inside this scope: MergeMutatorRoots takes that same
-                // non-recursive write lock.
-            }
-
-            // Merge mutator alloc-buffer roots before declaring enumeration closed.
-            // Mutators are under the TRACE barrier's CLEAR phase, but DoTracing has
-            // not started; this is the last point at which an incomplete stack-root
-            // receipt can be reported before any mark-closure work consumes the roots.
+            });
             DoEnumeration(workStack, foreignStack);
-
-            TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
-            TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true, false);
             DoEnumeration(workStack, foreignStack);
         }
     }
@@ -415,12 +390,9 @@ void WCollector::TraceHeap()
     {
         MRT_PHASE_TIMER(ZStatPhases::PTraceLiveObjectsUpdateOldPointersInRefFields);
         markedObjectCount.store(0, std::memory_order_relaxed);
-        if (!concurrentStackScan) {
-            TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
-        }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         DoTracing(workStack, foreignStack);
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return;
         }
 
@@ -583,7 +555,7 @@ public:
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
             if (CopyCollector::testColoredRootResult) {
-                CopyCollector::testColoredRootResult(GCCycleGeneration::OLD, &slot);
+                CopyCollector::testColoredRootResult(ZGenerationId::old, &slot);
             }
 #endif
         });
@@ -595,7 +567,7 @@ public:
         ThreadLocal::FlushCurrentThreadMarkStacks();
 #if defined(MRT_TESTABLE_INTERNALS)
         if (CopyCollector::testColoredRootResult) {
-            CopyCollector::testColoredRootResult(GCCycleGeneration::OLD, nullptr);
+            CopyCollector::testColoredRootResult(ZGenerationId::old, nullptr);
         }
 #endif
     }
@@ -647,7 +619,7 @@ public:
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
             if (CopyCollector::testColoredRootResult) {
-                CopyCollector::testColoredRootResult(GCCycleGeneration::YOUNG, &slot);
+                CopyCollector::testColoredRootResult(ZGenerationId::young, &slot);
             }
 #endif
         });
@@ -656,7 +628,7 @@ public:
         ThreadLocal::FlushCurrentThreadMarkStacks();
 #if defined(MRT_TESTABLE_INTERNALS)
         if (CopyCollector::testColoredRootResult) {
-            CopyCollector::testColoredRootResult(GCCycleGeneration::YOUNG, nullptr);
+            CopyCollector::testColoredRootResult(ZGenerationId::young, nullptr);
         }
 #endif
     }
@@ -683,9 +655,9 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     MarkYoungRootsTask task(*this, [&] {
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
         VisitMinorValueRoots(visitor);
-    }, GetWorkers(GCCycleGeneration::YOUNG).active_workers());
+    }, GetWorkers(ZGenerationId::young).active_workers());
     SuspendibleThreadSetJoiner joiner;
-    GetWorkers(GCCycleGeneration::YOUNG).run(&task);
+    GetWorkers(ZGenerationId::young).run(&task);
 
 }
 
@@ -737,17 +709,17 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
-        if (GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
+        if (GetZGeneration(ZGenerationId::young).IsMajorRoots()) {
             MarkOldObjectIfActive(object, true);
         }
         return;
     }
     (void)workStack;
     if (finalizable) {
-        const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+        const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
             .MarkObjectIfActive<false, true, true, true>(from_object(object));
     } else {
-        const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+        const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
             .MarkObjectIfActive<false, true, true, false>(from_object(object));
     }
 }
@@ -851,9 +823,8 @@ private:
 
 void WCollector::StartYoungMarkWork()
 {
-    ZWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
+    ZWorkers& workers = GetWorkers(ZGenerationId::young);
     youngCycle.Mark().BindWorkers(&workers);
-    youngCycle.Mark().BindAbort(&collectorResources.GetYoungDriverPort().Abort());
     youngCycle.Mark().Start();
     MarkingStacks::VerifyEmpty(youngCycle.Mark().Stripes().Population());
 }
@@ -863,7 +834,7 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::YOUNG))
+    const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
         .MarkObjectIfActive<false, false, true, false>(from_object(object));
 }
 
@@ -880,14 +851,14 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     (void)workStack;
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = ZPage::GetTdWindowCount();
-    ZWorkers& workersSet = GetWorkers(GCCycleGeneration::YOUNG);
+    ZWorkers& workersSet = GetWorkers(ZGenerationId::young);
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
     ZMark& domain = youngCycle.Mark();
     (void)PublishHandshakeMarkWork(workStack, &domain);
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, false);
     workersSet.run(&task);
-    if (!collectorResources.GetYoungDriverPort().Abort().Poll()) {
+    if (!ZAbort::should_abort()) {
         MarkingStacks::VerifyEmpty(domain.Stripes().Population());
         CHECK_DETAIL(domain.Stripes().IsEmpty(),
                      "young striped closure returned without coordinated worker termination");
@@ -948,7 +919,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
             }
             TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
         }
-        if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return false;
         }
     } while (youngCycle.Mark().TryTerminateFlush());
@@ -974,7 +945,7 @@ void WCollector::MarkNewObject(BaseObject* obj)
 {
     // Registration follows object initialization (BaseObject::RegisterFinalizer).
     // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
-    auto& cycle = ObjectGeneration(obj) == Generation::Young ? youngCycle : oldCycle;
+    ZGeneration& cycle = GetZGeneration(ObjectGeneration(obj));
     cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
 }
 
@@ -1126,9 +1097,8 @@ void CopyCollector::StartOldMarkWork()
 {
     // ZGenerationOld::mark_start -> ZMark::start. Initialize the existing M3
     // domain before publishing old's mark phase to mutators and young workers.
-    ZWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
+    ZWorkers& workers = GetWorkers(ZGenerationId::old);
     oldCycle.Mark().BindWorkers(&workers);
-    oldCycle.Mark().BindAbort(&collectorResources.GetMajorDriverPort().Abort());
     oldCycle.Mark().Start();
 }
 
@@ -1137,7 +1107,7 @@ void CopyCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) con
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    auto& cycle = const_cast<GenerationCycle&>(GetGenerationCycle(GCCycleGeneration::OLD));
+    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::old));
     if (gcThread) {
         cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
     } else {
@@ -1148,14 +1118,13 @@ void CopyCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) con
 size_t CopyCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
 {
     (void)workStack;
-    ZWorkers& workersSet = GetWorkers(GCCycleGeneration::OLD);
+    ZWorkers& workersSet = GetWorkers(ZGenerationId::old);
     ZMark& domain = oldCycle.Mark();
     domain.BindWorkers(&workersSet);
-    domain.BindAbort(&collectorResources.GetMajorDriverPort().Abort());
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, partial);
     workersSet.run(&task);
-    if (!partial && !collectorResources.GetMajorDriverPort().Abort().Poll()) {
+    if (!partial && !ZAbort::should_abort()) {
         CHECK_DETAIL(domain.Stripes().IsEmpty(),
                      "major striped closure returned without coordinated worker termination");
     }
@@ -1173,7 +1142,7 @@ void CopyCollector::TracingImpl(WorkStack& workStack)
 void CopyCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
 {
     while (!foreignRootsSet.empty()) {
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        if (ZAbort::should_abort()) {
             return;
         }
         const MarkStackEntry entry = foreignRootsSet.back();
@@ -1481,7 +1450,7 @@ void ZMark::MarkFollow(bool partial)
     for (;;) {
         ZMarkTask task(this, partial);
         gcWorkers->run(&task);
-        if ((abortToken != nullptr && abortToken->Poll()) || !TryTerminateFlush()) {
+        if (ZAbort::should_abort() || !TryTerminateFlush()) {
             break;
         }
     }
@@ -1602,7 +1571,7 @@ void ZMark::FinishWork()
 
 bool ZMark::PollStop()
 {
-    if (abortToken != nullptr && abortToken->Poll()) {
+    if (ZAbort::should_abort()) {
         return true;
     }
     if (gcWorkers != nullptr && gcWorkers->should_worker_resize()) {
@@ -1764,7 +1733,8 @@ bool ZMark::TryTerminateFlush()
 {
     terminate.SetResurrected(false);
     workNTerminateFlush.fetch_add(1, std::memory_order_relaxed);
-    return Flush() || !stripes.IsEmpty() || terminate.Resurrected();
+    (void)Flush();
+    return !stripes.IsEmpty() || terminate.Resurrected();
 }
 
 bool ZMark::TryEnd()
@@ -1777,8 +1747,9 @@ bool ZMark::TryEnd()
     if (!HeapMarkReady()) {
         return stripes.IsEmpty();
     }
-    const bool flushed = HandshakeFlush(this) || FlushStacks();
-    if (flushed || !stripes.IsEmpty()) {
+    (void)HandshakeFlush(this);
+    (void)FlushStacks();
+    if (!stripes.IsEmpty()) {
         return false;
     }
     return true;

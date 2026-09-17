@@ -95,8 +95,13 @@ GC_TEST(ColourIsChecks, BarrierSelfHealUpgradeAndCompetingStore)
 
 GC_TEST(ZAddress, GenerationFragmentationPolicy)
 {
-    GenerationCycle young(GCCycleGeneration::YOUNG);
-    GenerationCycle old(GCCycleGeneration::OLD);
+    class Probe : public ZGeneration {
+    public:
+        using ZGeneration::ZGeneration;
+        bool should_record_stats() override { return false; }
+    };
+    Probe young(ZGenerationId::young);
+    Probe old(ZGenerationId::old);
     GC_EXPECT_EQ(young.FragmentationLimit(), 25.0);
     GC_EXPECT_EQ(old.FragmentationLimit(), 5.0);
 }

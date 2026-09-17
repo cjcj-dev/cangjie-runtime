@@ -15,7 +15,9 @@ namespace MapleRuntime {
     template<Generation G>
 inline void RegionManager::PrepareFromRegionList()
     {
-        (void)fromRegionList;
+        Heap::GetHeap().GetCollector().GetZGeneration(
+            G == Generation::Young ? ZGenerationId::young : ZGenerationId::old)
+            .relocation_set().install_from_regions(fromRegionList);
     }
 
 } // namespace MapleRuntime

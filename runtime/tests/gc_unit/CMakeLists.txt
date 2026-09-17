@@ -66,6 +66,7 @@ set(GC_UNIT_SOURCES
     test_uncommitter.cpp
     test_gc_thread_pool.cpp
     test_zWorkers.cpp
+    test_zGeneration.cpp
 
     test_exempt_unlock.cpp
     test_isfromreg.cpp

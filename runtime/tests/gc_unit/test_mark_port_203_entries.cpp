@@ -148,7 +148,7 @@ struct MarkPort203TestAccess {
         // The major driver normally initializes old marking in its young prelude.
         // This focused old-body fixture supplies the same product initialization.
         if (major) {
-            auto& old = collector.GetGenerationCycle(GCCycleGeneration::OLD);
+            auto& old = collector.GetZGeneration(ZGenerationId::old);
             if (!old.Snapshot().active) old.Begin(0);
             // The fixture bypasses the young prelude, so preserve its real
             // old mark-start color transition before the sequence/domain.
@@ -157,7 +157,7 @@ struct MarkPort203TestAccess {
             GenerationSequenceFixture::Advance(old);
             collector.StartOldMarkWork();
         }
-        collector.DoGarbageCollection(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
+        collector.DoGarbageCollection(major ? ZGenerationId::old : ZGenerationId::young);
     }
 };
 }
@@ -316,12 +316,12 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     MarkPort203TestAccess::Bind(resources, &collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
-    for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-        collector.GetGenerationCycle(generation).InitializeWorkers(helpers + 1);
+    for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
+        collector.GetZGeneration(generation).InitializeWorkers(helpers + 1);
     }
-    collector.GetGenerationCycle(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
+    collector.GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
         .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
-    collector.SetGCPhase(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG, major ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(children.back());
@@ -367,11 +367,11 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         }
     }
     const bool wasStarted = resources.IsGcStarted();
-    const GCReason oldReason = resources.GetGCStats(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
+    const GCReason oldReason = resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG).reason = major ? GC_REASON_USER : GC_REASON_YOUNG;
+    resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason = major ? GC_REASON_USER : GC_REASON_YOUNG;
     ArrayClosureResult result;
     result.region = fx.region1;
     result.array = array;
@@ -410,11 +410,11 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         Heap::GetHeap().RemoveExportObject(handle);
     }
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG).reason = oldReason;
+    resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason = oldReason;
 
     // Worker TLS cleanup must finish while its collector still owns publication.
-    for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-        collector.GetGenerationCycle(generation).StopWorkers();
+    for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
+        collector.GetZGeneration(generation).StopWorkers();
     }
     MarkPort203TestAccess::Bind(resources, nullptr);
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",

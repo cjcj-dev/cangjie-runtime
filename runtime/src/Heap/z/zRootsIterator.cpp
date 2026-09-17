@@ -393,7 +393,7 @@ void CopyCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 void CopyCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_ENUM");
-    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD));
+    EnumAllCommonRoots(GetWorkers(ZGenerationId::old));
     MergeMutatorRoots(workStack);
     EnumAllExportRoots(foreignRootsSet);
 }

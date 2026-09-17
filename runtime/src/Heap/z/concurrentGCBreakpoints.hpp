@@ -29,6 +29,8 @@ public:
     MRT_EXPORT static bool RunTo(const char* name);
     static void At(const char* name);
     static void NotifyActiveToIdle();
+    static void NotifyIdleToActive();
+    static std::mutex& monitor() { return mutex; }
 };
 }
 #endif

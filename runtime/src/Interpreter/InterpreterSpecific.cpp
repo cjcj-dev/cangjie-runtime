@@ -527,9 +527,9 @@ int IsActiveGCPhase(DYN_ThreadLocalData tld)
     }
     // This callback asks whether either generation needs GC barriers, not
     // which operation this thread acknowledged most recently.
-    const Heap& heap = Heap::GetHeap();
-    return heap.GetGCPhase(GCCycleGeneration::YOUNG) >= GCPhase::GC_PHASE_ENUM ||
-        heap.GetGCPhase(GCCycleGeneration::OLD) >= GCPhase::GC_PHASE_ENUM ? 1 : 0;
+    Collector& collector = Heap::GetHeap().GetCollector();
+    return collector.GetCycleSnapshot(ZGenerationId::young).active ||
+            collector.GetCycleSnapshot(ZGenerationId::old).active ? 1 : 0;
 }
 
 DYN_ExceptionWrapper GetExceptionWrapper()

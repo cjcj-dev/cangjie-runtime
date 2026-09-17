@@ -40,54 +40,6 @@ inline bool Mutator::LeaveSaferegion() noexcept
     return false;
 }
 
-// Ensure that mutator phase is changed only once by mutator itself or GC
-__attribute__((always_inline)) inline bool Mutator::TransitionGCPhase(bool bySelf)
-{
-    do {
-        GCPhaseTransitionState state = transitionState.load();
-        // If this mutator phase transition has finished, just return
-        if (state == FINISH_TRANSITION) {
-            bool result = mutatorPhase.load() == Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-            if (!bySelf && !result) { // why check bySelf?
-                LOG(RTLOG_FATAL, "gc transition mutator %p (phase %u) to gc phase %u failed",
-                    this, mutatorPhase.load(), Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
-            }
-            return result;
-        }
-
-        // If this mutator is executing phase transition by other thread, mutator should wait but GC just return
-        if (state == IN_TRANSITION) {
-            if (bySelf) {
-                WaitForPhaseTransition();
-                return true;
-            } else {
-                return false;
-            }
-        }
-
-        // L743: GC-side NO_TRANSITION must not silently succeed when phase diverges.
-        // Phase already matches ⇒ success (same as old true). Mismatch ⇒ false + log.
-        if (!bySelf && state == NO_TRANSITION) {
-            bool phaseMatch = mutatorPhase.load() == Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-            if (!phaseMatch) {
-                LOG(RTLOG_ERROR,
-                    "gc transition mutator %p (phase %u) NO_TRANSITION while gc phase %u",
-                    this, mutatorPhase.load(), Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
-            }
-            return phaseMatch;
-        }
-
-        // Current thread set atomic variable to ensure atomicity of phase transition
-        CHECK(state == NEED_TRANSITION);
-        if (transitionState.compare_exchange_weak(state, IN_TRANSITION)) {
-            TransitionToGCPhaseExclusive(Heap::GetHeap().GetGCPhase(EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
-            transitionState.store(FINISH_TRANSITION, std::memory_order_release);
-            return true;
-        }
-    } while (true);
-}
-
-
 } // namespace MapleRuntime
 
 #endif // MRT_MUTATOR_INLINE_H

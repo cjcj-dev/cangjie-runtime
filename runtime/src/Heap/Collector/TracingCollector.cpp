@@ -24,11 +24,11 @@
 namespace MapleRuntime {
 
 #if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(GCCycleGeneration, NativeSlot*)> CopyCollector::testColoredRootResult;
+std::function<void(ZGenerationId, NativeSlot*)> CopyCollector::testColoredRootResult;
 std::function<void()> CopyCollector::testCyclePrepared;
 std::function<void()> CopyCollector::testYoungMarkStarted;
 std::function<void()> CopyCollector::testOldMarkStarted;
-std::function<void(GCCycleGeneration, MarkStartPoint, const ZMark*)> CopyCollector::testMarkStartState;
+std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> CopyCollector::testMarkStartState;
 std::function<void()> CopyCollector::testYoungMarkCompleted;
 std::function<void(const ExportOwnershipTestObservation&)> CopyCollector::testExportOwnershipResult;
 std::function<void(Mutator&)> CopyCollector::testOldMarkThreadResult;

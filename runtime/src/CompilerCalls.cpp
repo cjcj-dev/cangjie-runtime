@@ -899,7 +899,7 @@ static ArrayRef PinArray(const ArrayRef array)
     BaseObject* current = array;
     const MAddress addr = reinterpret_cast<MAddress>(current);
     const ZGenerationId id =
-        collector.GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr
+        collector.GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr
             ? ZGenerationId::young
             : ZGenerationId::old;
     current = collector.relocate_or_remap_object(current, id);

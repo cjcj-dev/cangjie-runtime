@@ -11,6 +11,7 @@
 #include "Base/Log.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 
 namespace MapleRuntime {
 namespace {
@@ -30,9 +31,9 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
         });
     }
     if (n <= 8 || (n & (n - 1)) == 0) {
-        GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
+        const char* phaseName = ZGeneration::old() != nullptr ? ZGeneration::old()->phase_to_string() : "none";
         LOG(RTLOG_ERROR, "[GCV2][fwd-to-gate] refuse n=%zu site=%s to=%p phase=%s", n, site,
-            static_cast<void*>(toObj), Collector::GetGCPhaseName(phase));
+            static_cast<void*>(toObj), phaseName);
     }
 }
 
@@ -186,7 +187,7 @@ void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before)
     ZForwarding* old = generation_forwarding_table(Generation::Old).get(before);
     if (old != nullptr && !old->is_claimed() && !old->is_done() && old->find(before) == 0 &&
         !(generation_forwarding_table(Generation::Young).get(before) != nullptr) &&
-        Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD) == GCPhase::GC_PHASE_POST_TRACE) {
+        ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark_complete()) {
         g_remapYoungRootsOldPendingVisits.fetch_add(1, std::memory_order_relaxed);
     }
     g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);

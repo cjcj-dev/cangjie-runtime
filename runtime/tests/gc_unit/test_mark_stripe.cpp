@@ -286,7 +286,7 @@ GC_TEST(MarkingSMR, WorkerPopRetiresInCurrentSlot)
         }
     } task(smr, stripes);
     ZStatWorkers stats;
-    ZWorkers workers(GCCycleGeneration::OLD, count, &stats);
+    ZWorkers workers(ZGenerationId::old, count, &stats);
     workers.run(&task);
     for (uint32_t id = 0; id < count; ++id) {
         GC_EXPECT_NE(task.popped[id], uintptr_t{0});

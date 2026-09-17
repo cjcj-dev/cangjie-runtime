@@ -203,7 +203,7 @@ public:
         uint64_t fromPageLifeId{ 0 };
         bool forwardingSnapshotValid{ false };
         uint64_t neverInstalledEvent{ 0 };
-        uint8_t gcPhase{ GC_PHASE_UNDEF };
+        uint8_t gcPhase{ 0xff };
     };
 
     static FindToVersionResult Found(BaseObject* object)
@@ -326,7 +326,7 @@ private:
           unavailableInCurrentRelocationSet(false), unavailableTableId(0),
           unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
           unavailableForwardingSnapshotValid(false), unavailableNeverInstalledEvent(0),
-          unavailableGcPhase(GC_PHASE_UNDEF)
+          unavailableGcPhase(0xff)
     {
     }
 

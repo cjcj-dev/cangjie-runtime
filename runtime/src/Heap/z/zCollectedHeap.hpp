@@ -40,8 +40,6 @@ public:
     Collector();
     virtual ~Collector();
 
-    static const char* GetGCPhaseName(GCPhase phase);
-
     // Initializer and finalizer.
     virtual void Init() = 0;
     virtual void Fini() {}
@@ -53,40 +51,39 @@ public:
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
     void RequestGC(GCReason reason, bool async);
 
-    virtual GCPhase GetGCPhase(GCCycleGeneration generation) const { return GetCycleSnapshot(generation).phase; }
-
-    virtual void SetGCPhase(GCCycleGeneration generation, const GCPhase phase)
+    virtual ZGeneration& GetZGeneration(ZGenerationId generation)
     {
-        PublishGenerationPhase(generation, phase);
+        if (generation == ZGenerationId::young) {
+            return youngCycle;
+        }
+        return oldCycle;
     }
 
-    virtual GenerationCycle& GetGenerationCycle(GCCycleGeneration generation)
+    virtual const ZGeneration& GetZGeneration(ZGenerationId generation) const
     {
-        return generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
+        if (generation == ZGenerationId::young) {
+            return youngCycle;
+        }
+        return oldCycle;
+    }
+    ZGeneration& GetZGeneration(Generation generation)
+    {
+        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
+    }
+    const ZGeneration& GetZGeneration(Generation generation) const
+    {
+        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
     }
 
-    virtual const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const
+    virtual GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
     {
-        return generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
+        return GetZGeneration(generation).Snapshot();
     }
-    GenerationCycle& GetGenerationCycle(Generation generation)
-    {
-        return GetGenerationCycle(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-    }
-    const GenerationCycle& GetGenerationCycle(Generation generation) const
-    {
-        return GetGenerationCycle(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-    }
-
-    virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
-    {
-        return GetGenerationCycle(generation).Snapshot();
-    }
-    virtual void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value);
+    virtual void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
     bool OldActiveRemsetIsCurrent() const
     {
-        return GetGenerationCycle(GCCycleGeneration::OLD).ActiveRemsetIsCurrent(
-            GetGenerationCycle(GCCycleGeneration::YOUNG).Sequence());
+        return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
+            GetZGeneration(ZGenerationId::young).Sequence());
     }
     Generation ObjectGeneration(BaseObject* object) const;
 
@@ -127,9 +124,9 @@ public:
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
                                             const ForwardingProvenance& provenance);
 
-    virtual GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD)
+    virtual GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
     {
-        return GetGenerationCycle(generation).Stats();
+        return GetZGeneration(generation).Stats();
     }
 
     virtual BaseObject* ForwardObject(BaseObject*, Generation) { AbortUnimplemented("Collector::ForwardObject"); }
@@ -326,8 +323,8 @@ protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
 
     CollectorType collectorType = CollectorType::NO_COLLECTOR;
-    GenerationCycle youngCycle { GCCycleGeneration::YOUNG };
-    GenerationCycle oldCycle { GCCycleGeneration::OLD };
+    ZGenerationYoung youngCycle;
+    ZGenerationOld oldCycle;
 };
 } // namespace MapleRuntime
 

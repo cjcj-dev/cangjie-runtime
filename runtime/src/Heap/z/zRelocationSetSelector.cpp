@@ -196,6 +196,22 @@ void ZRelocationSetSelector::select()
     _small.select();
 }
 
+void ZRelocationSetSelector::check_selected_relocatable() const
+{
+    auto check = [](const ZArray<ZPage*>* pages) {
+        if (pages == nullptr) {
+            return;
+        }
+        for (int i = 0; i < pages->length(); ++i) {
+            ZPage* page = pages->at(i);
+            CHECK_DETAIL(page->is_relocatable(),
+                         "selected page must be relocatable start=%#zx", page->GetRegionStart());
+        }
+    };
+    check(selected_small());
+    check(selected_medium());
+}
+
 ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const
 {
     ZRelocationSetSelectorStats stats;
@@ -301,6 +317,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
         if (region->GetRawPointerObjectCount() == 0) {
+            if (!region->is_relocatable()) {
+                region = next;
+                continue;
+            }
             const uint64_t moveStart = TimeUtil::NanoSeconds();
             unmovableFromRegionList.DeleteRegion(region);
             fromRegionList.PrependRegion(region);
@@ -328,6 +348,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
         if (region->GetRawPointerObjectCount() != 0) {
+            region = next;
+            continue;
+        }
+        if (!region->is_relocatable()) {
             region = next;
             continue;
         }
@@ -374,7 +398,7 @@ bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
 // Semi-sort by per-page live fraction, then select the last profitable prefix.
 size_t RegionManager::ExemptFromRegions()
 {
-    auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
     old.select_relocation_set(false);
     ZRelocationSetIterator rs_iter(&old.relocation_set());
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {

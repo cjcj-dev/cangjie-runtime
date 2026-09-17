@@ -13,7 +13,6 @@
 #include <utility>
 
 #include "Heap/Collector/GcRequest.h"
-#include "Heap/z/zAbort.hpp"
 
 namespace MapleRuntime {
 
@@ -70,8 +69,6 @@ public:
     bool IsStopped() const;
     size_t Pending() const;
     GCDriverKind Kind() const { return kind; }
-    ZAbort& Abort() { return abort; }
-    const ZAbort& Abort() const { return abort; }
 
 private:
 #if defined(MRT_GC_UNIT_TESTS)
@@ -93,7 +90,6 @@ private:
     size_t waitingReceipts { 0 };
 #endif
     bool stopped { false };
-    ZAbort abort;
 };
 
 } // namespace MapleRuntime

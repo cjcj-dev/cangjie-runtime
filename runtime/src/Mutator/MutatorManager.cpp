@@ -127,14 +127,12 @@ Mutator* MutatorManager::CreateMutator()
         mutator->Init();
         mutator->InitTid();
         BindMutator(*mutator);
-        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
         ConcurrencyModel::SetMutator(mutator);
     } else {
         MutatorManagementRLock();
         mutator->Init();
         mutator->InitTid();
         BindMutator(*mutator);
-        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
     }
     MutatorManagementRUnlock();
     return mutator;
@@ -199,7 +197,6 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     mutator->InitProtectStackAddr();
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
-    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
     {
         std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
         runtimeMutators.insert(mutator);
@@ -396,6 +393,9 @@ void MutatorManager::EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<Hands
         if (kv.first == nullptr || kv.second->dying.load(std::memory_order_acquire) != 0) {
             continue;
         }
+        if (kv.first->mutator == nullptr) {
+            continue;
+        }
         HandshakeState* state = kv.second->handshake;
         if (state == nullptr) {
             kv.second->ownedHandshake = std::make_unique<HandshakeState>(kv.first);
@@ -550,11 +550,10 @@ bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
     return pending;
 }
 
-void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
+void MutatorManager::StopTheWorld()
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool saferegionEntered = false;
-    // Ensure an active mutator entered saferegion before STW (aka. stop all other mutators).
     if (!IsGcThread()) {
         Mutator* mutator = Mutator::GetMutator();
         if (mutator != nullptr) {
@@ -562,33 +561,25 @@ void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
         }
     }
 #endif
-    // Block if another thread is holding the syncMutex.
-    // Prevent multi-thread doing STW concurrently.
     syncMutex.lock();
     syncTriggered.store(true);
 
     AcquireMutatorManagementWLock();
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    // If current mutator saferegion state changed,
-    // we should restore it after the mutator called StartTheWorld().
     saferegionStateChanged = saferegionEntered;
 #endif
 
     size_t mutatorCount = GetMutatorCount();
     if (UNLIKELY(mutatorCount == 0)) {
         worldStopped.store(true, std::memory_order_release);
-        if (syncGCPhase) { TransitionAllMutatorsToGCPhase(phase); }
         return;
     }
-    // set mutatorCount as countOfMutatorsToStop.
     SetSuspensionMutatorCount(static_cast<uint32_t>(mutatorCount));
     DemandSuspensionForSync();
     WaitUntilAllMutatorStopped();
 
-    // the world is stopped.
     worldStopped.store(true, std::memory_order_release);
-    if (syncGCPhase) { TransitionAllMutatorsToGCPhase(phase); }
 }
 
 void MutatorManager::StartTheWorld() noexcept
@@ -624,11 +615,10 @@ void MutatorManager::StartTheWorld() noexcept
 #endif
 }
 
-void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
+void MutatorManager::StartLightSync()
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool saferegionEntered = false;
-    // Ensure an active mutator entered saferegion before stw.
     if (!IsGcThread()) {
         Mutator* mutator = Mutator::GetMutator();
         if (mutator != nullptr) {
@@ -636,16 +626,12 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
         }
     }
 #endif
-    // Block if another thread is holding the syncMutex.
-    // Prevent multi-thread doing lsync concurrently.
     syncMutex.lock();
     syncTriggered.store(true);
 
     AcquireMutatorManagementWLock();
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    // If current mutator saferegion state changed,
-    // we should restore it after the mutator called StopLightSync().
     saferegionStateChanged = saferegionEntered;
 #endif
 
@@ -653,28 +639,11 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
     if (UNLIKELY(mutatorCount == 0)) {
         worldStopped.store(true, std::memory_order_release);
     } else {
-        // set mutatorCount as countOfMutatorsToStop.
         SetSuspensionMutatorCount(static_cast<uint32_t>(mutatorCount));
         DemandSuspensionForSync();
         WaitUntilAllMutatorStopped();
         worldStopped.store(true, std::memory_order_release);
     }
-
-    DLOG(GCPHASE, "transition gc: %s(%u) -> %s(%u)",
-         Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)), Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD),
-         Collector::GetGCPhaseName(phase), phase);
-
-    // Set global gc phase in the scope of mutatorlist lock
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, phase);
-    lightSyncGCPhase = phase;
-    undoneLightSyncMutators.clear();
-    // Broadcast mutator phase transition signal to all mutators
-    VisitAllMutators([this](Mutator& mutator) {
-        mutator.SetEnumYoung(false);
-        mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_GC_PHASE);
-        this->undoneLightSyncMutators.push_back(&mutator);
-    });
-    ArmAllThreadPolls();
 }
 
 void MutatorManager::StopLightSync() noexcept
@@ -695,7 +664,6 @@ void MutatorManager::StopLightSync() noexcept
 #else
     (void)MapleRuntime::Futex(GetSyncFutexWord(), FUTEX_WAKE, INT_MAX);
 #endif
-    EnsurePhaseTransition(lightSyncGCPhase, undoneLightSyncMutators);
     MutatorManagementWUnlock();
     // Release syncMutex to allow other thread call lsync.
     syncMutex.unlock();
@@ -755,70 +723,7 @@ void MutatorManager::WaitUntilAllMutatorStopped()
     }
 }
 
-void MutatorManager::EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &undoneMutators)
-{
-    // Traverse through undoneMutators to select mutators that have not yet completed transition
-    // 1. ignore mutators which have completed transition
-    // 2. gc compete phase transition with mutators which are in saferegion
-    // 3. fill mutators which are running state in undoneMutators
-    while (undoneMutators.size() > 0) {
-        for (auto it = undoneMutators.begin(); it != undoneMutators.end();) {
-            Mutator* mutator = *it;
-            if (mutator->GetMutatorPhase() == phase && mutator->FinishedTransition()) {
-                it = undoneMutators.erase(it);
-                continue;
-            }
-            if (mutator->InSaferegion() && mutator->TransitionGCPhase(false)) {
-                it = undoneMutators.erase(it);
-                continue;
-            }
-            ++it;
-        }
-    }
-}
 
-void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
-{
-    // VM operations serialize pauses, not entire generation collections.
-    ScopedSTWLock operationLock;
-    // Try to occupy mutatorListLock prevent some mutators from exiting
-    bool worldStopped = WorldStopped();
-    if (!worldStopped) {
-        AcquireMutatorManagementWLock();
-    }
-
-    DLOG(GCPHASE, "transition gc: %s(%u) -> %s(%u)",
-         Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)), Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD),
-         Collector::GetGCPhaseName(phase), phase);
-
-    // Set global gc phase in the scope of mutatorlist lock
-    Heap::GetHeap().SetGCPhase(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD, phase);
-
-    std::list<Mutator*> undoneMutators;
-    // Broadcast mutator phase transition signal to all mutators
-    VisitAllMutators([&undoneMutators, young](Mutator& mutator) {
-        mutator.SetEnumYoung(young);
-        mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_GC_PHASE);
-        undoneMutators.push_back(&mutator);
-    });
-    class PhaseHandshakeClosure : public HandshakeClosure {
-    public:
-        PhaseHandshakeClosure() : HandshakeClosure("GCPhase") {}
-        void do_thread(ThreadLocalData* tls) override
-        {
-            Mutator* mutator = tls != nullptr ? tls->mutator : nullptr;
-            if (mutator == nullptr) {
-                return;
-            }
-            (void)mutator->TransitionGCPhase(tls == ThreadLocal::GetThreadLocalData());
-        }
-    } phaseCl;
-    Handshake::execute(&phaseCl);
-    EnsurePhaseTransition(phase, undoneMutators);
-    if (!worldStopped) {
-        MutatorManagementWUnlock();
-    }
-}
 
 void MutatorManager::TransitionAllMutatorsToCpuProfile()
 {

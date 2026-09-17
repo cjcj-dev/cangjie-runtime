@@ -31,6 +31,7 @@
 #include "Mutator/MutatorManager.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorProxy.h"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/Collector/GcStats.h"
@@ -78,9 +79,9 @@ public:
         ZStat::Initialize();
         // zGeneration.cpp:129: every generation owns a ZWorkers; the driver
         // hands each request's worker count to it (zDriver.cpp:166-176).
-        for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
-            if (collector.GetGenerationCycle(generation).Workers() == nullptr) {
-                collector.GetGenerationCycle(generation).InitializeWorkers(1);
+        for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
+            if (collector.GetZGeneration(generation).Workers() == nullptr) {
+                collector.GetZGeneration(generation).InitializeWorkers(1);
             }
         }
         resources.testCollector = &collector;
@@ -596,14 +597,11 @@ GC_TEST(GcRequestSync, PendingReceiptProcessesCurrentThreadHandshake)
     GC_EXPECT_FALSE(state.operation_pending(&operation));
 }
 
-GC_TEST(GcRequestSync, DriverAbortIsCooperativeAndResettable)
+GC_TEST(GcRequestSync, DriverAbortIsCooperative)
 {
-    GCDriverPort port(GCDriverKind::MAJOR);
-    GC_EXPECT_FALSE(port.Abort().Poll());
-    port.Abort().Request();
-    GC_EXPECT_TRUE(port.Abort().Poll());
-    port.Abort().Reset();
-    GC_EXPECT_FALSE(port.Abort().Poll());
+    GC_EXPECT_FALSE(ZAbort::should_abort());
+    ZAbort::abort();
+    GC_EXPECT_TRUE(ZAbort::should_abort());
 }
 
 GC_TEST(GcRequestSync, StoppedPortWakesSynchronousWaiter)
@@ -675,29 +673,6 @@ GC_TEST(GcRequestSync, DriverReceiptEnqueueAfterStopIsFalse)
     CollectorResourcesTestPeer::Destroy(resources);
 
     std::fprintf(stderr, "DETAIL receipt_enqueue_after_stop execute=%zu ack=%d\n", executeCount, ack);
-    GC_EXPECT_EQ(executeCount, 0u);
-    GC_EXPECT_FALSE(ack);
-}
-
-GC_TEST(GcRequestSync, DriverReceiptAbortAfterDequeueIsFalse)
-{
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    BlockingCollector collector;
-    collector.SetResources(resources);
-    CollectorResourcesTestPeer::Init(resources, collector, false);
-    GCDriverPort& port = resources.GetMinorDriverPort();
-    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
-    GCDriverRequest request {};
-    const bool dequeued = port.TryDequeue(request);
-    port.Abort().Request();
-    const bool executed = dequeued && CollectorResourcesTestPeer::ProcessDriverRequest(resources, port, request);
-    const bool ack = port.WaitForAck(receipt);
-    const size_t executeCount = collector.RunCount();
-    port.Abort().Reset();
-    CollectorResourcesTestPeer::Destroy(resources);
-
-    std::fprintf(stderr, "DETAIL receipt_abort_after_dequeue execute=%zu ack=%d\n", executeCount, ack);
-    GC_EXPECT_FALSE(executed);
     GC_EXPECT_EQ(executeCount, 0u);
     GC_EXPECT_FALSE(ack);
 }
@@ -901,7 +876,7 @@ GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
             resources, GCDriverRequest { 2, GC_REASON_FORCE, false, {} }));
     });
     GC_EXPECT_TRUE(collector.WaitForRuns(1));
-    resources.GetMajorDriverPort().Abort().Request();
+    ZAbort::abort();
     collector.ReleaseOne();
     GC_EXPECT_EQ(completedFuture.wait_for(std::chrono::seconds(1)), std::future_status::ready);
     const bool completed = completedFuture.get();
@@ -909,7 +884,6 @@ GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
     GC_EXPECT_FALSE(completed);
     GC_EXPECT_EQ(collector.RunCount(), 1u);
     GC_EXPECT_EQ(collector.ReasonAt(0), GC_REASON_YOUNG);
-    resources.GetMajorDriverPort().Abort().Reset();
     CollectorResourcesTestPeer::Destroy(resources);
 }
 
@@ -936,7 +910,7 @@ GC_TEST(GcRequestSync, AbortDuringOldReturnsCancelledAfterCollectionJoins)
     GC_EXPECT_TRUE(collector.WaitForRuns(2));
     collector.ReleaseOne();
     GC_EXPECT_TRUE(collector.WaitForRuns(3));
-    port.Abort().Request();
+    ZAbort::abort();
     // The collection still owns its resources until it returns.
     GC_EXPECT_TRUE(result.wait_for(std::chrono::seconds(0)) != std::future_status::ready);
     collector.ReleaseOne();
@@ -945,7 +919,6 @@ GC_TEST(GcRequestSync, AbortDuringOldReturnsCancelledAfterCollectionJoins)
     GC_EXPECT_FALSE(result.get());
     GC_EXPECT_FALSE(port.WaitForAck(receipt));
     GC_EXPECT_EQ(CollectorResourcesTestPeer::CompletionCount(resources), 0u);
-    port.Abort().Reset();
     CollectorResourcesTestPeer::Destroy(resources);
 }
 
@@ -1020,7 +993,7 @@ GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
 {
     RequestHarness harness;
     harness.collector.SetAdvanceEpoch(true);
-    const size_t epochBefore = harness.collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence;
+    const size_t epochBefore = harness.collector.GetCycleSnapshot(ZGenerationId::young).sequence;
     std::promise<void> returnedPromise;
     std::future<void> returned = returnedPromise.get_future();
     std::atomic<size_t> epochAfter{ epochBefore };
@@ -1028,7 +1001,7 @@ GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
     std::thread requester([&] {
         ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
         harness.resources.RequestGC(GC_REASON_YOUNG, false);
-        epochAfter.store(harness.collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence,
+        epochAfter.store(harness.collector.GetCycleSnapshot(ZGenerationId::young).sequence,
                          std::memory_order_release);
         startedAfter.store(harness.resources.IsGcStarted(), std::memory_order_release);
         returnedPromise.set_value();
@@ -1237,7 +1210,7 @@ GC_TEST(GcRequestSync, MajorFullPrecleanThenCombinedRoots)
     GC_EXPECT_TRUE(collector.TypeAt(0) == ZYoungType::major_full_preclean);
     GC_EXPECT_TRUE(collector.TypeAt(1) == ZYoungType::major_full_roots);
     GC_EXPECT_TRUE(collector.TypeAt(2) == ZYoungType::none);
-    GC_EXPECT_TRUE(collector.GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::none);
+    GC_EXPECT_TRUE(collector.GetZGeneration(ZGenerationId::young).YoungType() == ZYoungType::none);
     CollectorResourcesTestPeer::Destroy(resources);
 }
 

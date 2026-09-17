@@ -350,24 +350,29 @@ GC_TEST(GcDirector, MajorRateLookaheadUsesUnsignedCollectionDistance)
 // zGeneration gtest in this reference; these exercise its owner invariant.
 GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
 {
-    GenerationCycle young(GCCycleGeneration::YOUNG);
-    GenerationCycle old(GCCycleGeneration::OLD);
+    class Probe : public ZGeneration {
+    public:
+        using ZGeneration::ZGeneration;
+        bool should_record_stats() override { return false; }
+    };
+    Probe young(ZGenerationId::young);
+    Probe old(ZGenerationId::old);
     young.InitializeWorkers(2);
     old.InitializeWorkers(2);
     young.SelectReason(GC_REASON_YOUNG);
     young.Begin(1);
-    young.PublishPhase(GC_PHASE_TRACE);
+    young.PublishPhase(ZGenerationPhase::Mark);
     young.Workers()->set_active_workers(1);
     const auto before = young.Snapshot();
 
     old.SelectReason(GC_REASON_USER);
     old.Begin(2);
-    old.PublishPhase(GC_PHASE_FORWARD);
+    old.PublishPhase(ZGenerationPhase::Relocate);
     old.Workers()->set_active_workers(2);
 
     const auto after = young.Snapshot();
     GC_EXPECT_EQ(after.sequence, before.sequence);
-    GC_EXPECT_EQ(after.phase, GC_PHASE_TRACE);
+    GC_EXPECT_TRUE(after.phase == ZGenerationPhase::Mark);
     GC_EXPECT_EQ(after.reason, GC_REASON_YOUNG);
     GC_EXPECT_TRUE(after.active);
     GC_EXPECT_EQ(young.Workers()->active_workers(), 1u);
@@ -382,7 +387,12 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
 
 GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
 {
-    GenerationCycle young(GCCycleGeneration::YOUNG);
+    class Probe : public ZGeneration {
+    public:
+        using ZGeneration::ZGeneration;
+        bool should_record_stats() override { return false; }
+    };
+    Probe young(ZGenerationId::young);
     TenuringInputs inputs;
     inputs.softMaxCapacity = 64 * 1024 * 1024;
     inputs.youngAllocated = 4096;

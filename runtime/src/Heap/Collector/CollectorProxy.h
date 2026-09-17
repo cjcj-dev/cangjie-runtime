@@ -33,24 +33,19 @@ public:
     void Init() override;
     void Fini() override;
 
-    GCPhase GetGCPhase(GCCycleGeneration generation) const override
+    ZGeneration& GetZGeneration(ZGenerationId generation) override
     {
-        return currentCollector != nullptr ? currentCollector->GetGCPhase(generation) : GCPhase::GC_PHASE_UNDEF;
+        return currentCollector != nullptr ? currentCollector->GetZGeneration(generation)
+                                           : wCollector.GetZGeneration(generation);
     }
 
-    GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) override
+    const ZGeneration& GetZGeneration(ZGenerationId generation) const override
     {
-        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
-                                           : wCollector.GetGenerationCycle(generation);
+        return currentCollector != nullptr ? currentCollector->GetZGeneration(generation)
+                                           : wCollector.GetZGeneration(generation);
     }
 
-    const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const override
-    {
-        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
-                                           : wCollector.GetGenerationCycle(generation);
-    }
-
-    GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
+    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const override
     {
         return currentCollector != nullptr ? currentCollector->GetCycleSnapshot(generation)
                                            : wCollector.GetCycleSnapshot(generation);
@@ -70,14 +65,9 @@ public:
         currentCollector->MarkOldObjectIfActive(object, gcThread);
     }
 
-    void PublishGenerationPhase(GCCycleGeneration generation, GCPhase phase) override
+    void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase phase) override
     {
         (currentCollector != nullptr ? *currentCollector : wCollector).PublishGenerationPhase(generation, phase);
-    }
-
-    void SetGCPhase(GCCycleGeneration generation, const GCPhase phase) override
-    {
-        currentCollector->SetGCPhase(generation, phase);
     }
 
     // dispatch garbage collection to the right collector
@@ -85,7 +75,10 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override { return currentCollector->ShouldIgnoreRequest(request); }
 
-    CopyCollector& GetCurrentCollector() const { return *currentCollector; }
+    CopyCollector& GetCurrentCollector() const
+    {
+        return currentCollector != nullptr ? *currentCollector : const_cast<WCollector&>(wCollector);
+    }
 
     FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {

@@ -12,7 +12,7 @@
 namespace MapleRuntime {
 // Read-only access to the existing product remset face. This test never seeds
 // intermediate phase, mark, queue, or current-address state.
-struct GenerationCycleRootTestAccess {
+struct ZGenerationRootTestAccess {
     static unsigned RemsetFace()
     {
         return 0;
@@ -60,14 +60,14 @@ extern "C" int p1MarkStartExercise()
 
     std::array<StartState, 2> state {};
     bool youngComplete = false;
-    CopyCollector::testMarkStartState = [&](GCCycleGeneration generation, MarkStartPoint point,
+    CopyCollector::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point,
                                                const ZMark* domain) {
-        const size_t index = generation == GCCycleGeneration::YOUNG ? 0 : 1;
+        const size_t index = generation == ZGenerationId::young ? 0 : 1;
         auto& before = state[index];
         const auto snapshot = collector.GetCycleSnapshot(generation);
         const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
         const uintptr_t color = ::g_cjMarkBadMask & mask;
-        const unsigned face = GenerationCycleRootTestAccess::RemsetFace();
+        const unsigned face = ZGenerationRootTestAccess::RemsetFace();
         const unsigned workers = resources.GetWorkers(generation).ActiveWorkers();
         std::printf("P1_PRODUCT_STATE gen=%zu point=%u seq=%llu phase=%u color=%zx face=%u domain=%p domain_workers=%zu workers=%u\n",
                     index, static_cast<unsigned>(point), static_cast<unsigned long long>(snapshot.sequence),
@@ -103,14 +103,14 @@ extern "C" int p1MarkStartExercise()
                 Expect(retired, "current_and_prepared_tlabs_retired");
             }
         } else if (point == MarkStartPoint::BeforeDomain) {
-            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == GC_PHASE_ENUM,
+            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == ZGenerationPhase::Mark,
                    "sequence_and_mark_phase_before_domain");
             if (index == 0) Expect(face == before.face, "young_remset_unchanged_before_domain");
         } else if (point == MarkStartPoint::BeforeRemembered) {
             Expect(domain != nullptr && domain->NWorkers() == workers, "young_domain_ready_before_remset");
             Expect(face == before.face, "young_remset_unchanged_after_domain_start");
         } else if (point == MarkStartPoint::Complete) {
-            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == GC_PHASE_ENUM,
+            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == ZGenerationPhase::Mark,
                    "completed_start_has_new_identity_and_mark_phase");
             Expect(domain != nullptr && domain->NWorkers() == workers, "completed_start_has_prepared_domain");
             Expect(face == (before.face ^ (index == 0 ? 1U : 0U)), "only_young_start_flips_remset");
@@ -121,13 +121,13 @@ extern "C" int p1MarkStartExercise()
             std::fflush(stdout);
         }
     };
-    const auto youngBefore = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
-    const auto oldBefore = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    const auto youngBefore = collector.GetCycleSnapshot(ZGenerationId::young);
+    const auto oldBefore = collector.GetCycleSnapshot(ZGenerationId::old);
     collector.RequestGC(GC_REASON_USER, false);
-    const auto oldAfterMajor = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    const auto oldAfterMajor = collector.GetCycleSnapshot(ZGenerationId::old);
     collector.RequestGC(GC_REASON_YOUNG, false);
-    const auto youngAfter = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
-    const auto oldAfter = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    const auto youngAfter = collector.GetCycleSnapshot(ZGenerationId::young);
+    const auto oldAfter = collector.GetCycleSnapshot(ZGenerationId::old);
     CopyCollector::testMarkStartState = nullptr;
     Expect(oldAfterMajor.sequence > oldBefore.sequence, "major_request_started_old");
     Expect(oldAfter.sequence == oldAfterMajor.sequence, "minor_preserves_old_identity");

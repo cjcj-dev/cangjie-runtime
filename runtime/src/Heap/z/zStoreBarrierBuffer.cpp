@@ -57,7 +57,7 @@ void StoreBarrierBuffer::install_base_pointers_inner()
         const zpointer ptr = ZAddress::color(pUnsafe, lastProcessedColor);
         ZGeneration* generation = ZBarrier::remap_generation(ptr);
         const Generation gen =
-            (generation == &Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG))
+            (generation == &Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young))
                 ? Generation::Young
                 : Generation::Old;
         ZForwarding* forwarding = (entry.p == 0) ? nullptr : generation_forwarding_table(gen).get(entry.p);
@@ -117,7 +117,7 @@ void StoreBarrierBuffer::on_new_phase_remember(size_t i)
 
 bool StoreBarrierBuffer::is_old_mark() const
 {
-    return Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).IsPhaseMark();
+    return Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).IsPhaseMark();
 }
 
 bool StoreBarrierBuffer::stored_during_old_mark() const

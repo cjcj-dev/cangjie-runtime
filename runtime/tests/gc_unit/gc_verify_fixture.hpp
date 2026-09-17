@@ -29,7 +29,7 @@ struct GcVerifyFixture : GcHeapFixture {
         region1->reset(PageAge::old);
         (void)RegionSpace::MarkObject<Generation::Old>(obj0);
         LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Old)
-            .PublishPhase(GC_PHASE_MARK_COMPLETE);
+            .PublishPhase(ZGenerationPhase::MarkComplete);
         // zRelocationSet.cpp:110-118: select pages and install the arena before
         // preparing a source page or verifying its forwarding entries.
         region0->SetRegionListOwner(nullptr);

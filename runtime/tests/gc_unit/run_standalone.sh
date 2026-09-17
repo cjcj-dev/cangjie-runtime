@@ -51,7 +51,7 @@ run_ohos_host_arm() {
       'MRT_GC_UNIT_OHOS_HOST_RECEIPT' \
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
-      'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)' \
+      'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::ZGenerationId)' \
       'MapleRuntime::WCollector::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
@@ -100,7 +100,7 @@ run_ohos_host_arm() {
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
-      'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)' \
+      'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::ZGenerationId)' \
       'MapleRuntime::WCollector::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
       echo "GC_UNIT_OHOS_HOST_LOCAL_PRODUCT_DEFINITION symbol=$symbol" >&2
@@ -346,6 +346,7 @@ MAIN_SOURCES=(
   "$SRC/test_uncommitter.cpp"
   "$SRC/test_gc_thread_pool.cpp"
   "$SRC/test_zWorkers.cpp"
+  "$SRC/test_zGeneration.cpp"
 
   "$SRC/test_exempt_unlock.cpp"
   "$SRC/test_isfromreg.cpp"
@@ -596,7 +597,7 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
-    'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::GCCycleGeneration)'
+    'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::ZGenerationId)'
     'MapleRuntime::WCollector::TraceHeap()'
   )
   for consumer in "${YOUNG_WEAK_PRODUCT_CONSUMERS[@]}"; do

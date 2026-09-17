@@ -14,6 +14,11 @@
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 
+#include <csignal>
+#include <string>
+#include <sys/wait.h>
+#include <unistd.h>
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -101,3 +106,62 @@ GC_TEST(RelocationSetSelector, FragmentationLimitStopsPrefix)
     loose.select();
     GC_EXPECT_TRUE(loose.selected_small()->length() >= 1);
 }
+
+// TakeHeadRegion unlinks before ForwardClaimedPage (zPageAllocator.inline.hpp:317-330).
+// IsFromRegion is then false; relocatable pages remain IsLoneFromRegion.
+// Allocating pages match neither. Fail-closed is ZGeneration::select_relocation_set
+// skip (zGeneration.cpp:1471) plus check_selected_relocatable after select(),
+// not a silent skip at ForwardClaimedPage.
+GC_TEST(RelocationSetSelector, AllocatingUnlinkedIsNotLoneFrom)
+{
+    SelectorPageFixture fx;
+    ZPage* page = fx.takeSmall();
+    GC_EXPECT_TRUE(page != nullptr);
+    GC_EXPECT_TRUE(page->is_allocating());
+    GC_EXPECT_FALSE(page->is_relocatable());
+    GC_EXPECT_FALSE(page->IsFromRegion());
+    GC_EXPECT_FALSE(page->IsLoneFromRegion());
+}
+
+GC_TEST(RelocationSetSelector, CheckSelectedRejectsAllocating)
+{
+    SelectorPageFixture fx;
+    ZPage* page = fx.takeSmall();
+    GC_EXPECT_TRUE(page != nullptr);
+    GC_EXPECT_TRUE(page->is_allocating());
+    int childStderr[2];
+    GC_EXPECT_EQ(pipe(childStderr), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(childStderr[0]);
+        if (dup2(childStderr[1], STDERR_FILENO) < 0) {
+            _exit(126);
+        }
+        close(childStderr[1]);
+        (void)signal(SIGABRT, SIG_DFL);
+        ZRelocationSetSelector selector;
+        selector.add_selected_small(page, 1);
+        selector.check_selected_relocatable();
+        _exit(0);
+    }
+    close(childStderr[1]);
+    std::string transcript;
+    char buffer[512];
+    for (;;) {
+        const ssize_t count = read(childStderr[0], buffer, sizeof(buffer));
+        if (count <= 0) {
+            break;
+        }
+        transcript.append(buffer, static_cast<size_t>(count));
+    }
+    close(childStderr[0]);
+    (void)std::fwrite(transcript.data(), 1, transcript.size(), stderr);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    GC_EXPECT_TRUE(transcript.find("selected page must be relocatable") != std::string::npos);
+}
+
+
