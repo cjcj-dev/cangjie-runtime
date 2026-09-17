@@ -1198,5 +1198,16 @@ inline bool ZPage::IsSmallRegion() const { return is_small(); }
 
 inline bool ZPage::IsLargeRegion() const { return is_large(); }
 
+template<typename Function>
+inline void ZGenerationPagesParallelIterator::do_pages(Function function)
+{
+    _iterator.do_pages([&](ZPage* page) {
+        if (page->generation_id() == _generation_id) {
+            return function(page);
+        }
+        return true;
+    });
+}
+
 } // namespace MapleRuntime
 #endif

@@ -30,15 +30,4 @@ inline void ZPageTableParallelIterator<T>::do_pages(Function function)
     });
 }
 
-template<typename Function>
-inline void ZGenerationPagesParallelIterator::do_pages(Function function)
-{
-    _iterator.do_pages([&](ZPage* page) {
-        if (page->generation_id() == _generation_id) {
-            return function(page);
-        }
-        return true;
-    });
-}
-
 } // namespace MapleRuntime
