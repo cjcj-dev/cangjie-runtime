@@ -13,18 +13,12 @@ struct MarkPublicationFixture {
     MarkPublicationFixture* previousFixture = current;
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector { Heap::GetHeap().GetAllocator(), resources };
-    Collector* previousCollector;
+    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     MarkPublicationFixture()
-        : previousCollector(resources.testCollector)
     {
         current = this;
         collector.youngCycle.InitializeWorkers(1);
         collector.oldCycle.InitializeWorkers(1);
-        if (previousCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *previousCollector);
-        }
-        resources.testCollector = &collector;
         collector.youngCycle.SelectReason(GC_REASON_YOUNG);
         collector.youngCycle.Begin(1);
         // ZGenerationYoung::mark_start advances the sequence with the remset
@@ -41,7 +35,6 @@ struct MarkPublicationFixture {
     ~MarkPublicationFixture()
     {
         Drain([](BaseObject*, bool) {});
-        resources.testCollector = previousCollector;
         current = previousFixture;
     }
     template<class Visitor> void DrainDomain(ZMark& domain, Visitor&& visitor)
