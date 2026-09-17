@@ -6,12 +6,11 @@
 
 set(SRC_LIST
     "../Collector/Generation.cpp"
-    "../Collector/Mark.cpp"
-    "../Collector/Remembered.cpp"
     "WCollector.cpp"
     "../z/zGeneration.cpp"
     "../z/zMark.cpp"
     "../z/zRelocate.cpp"
+    "../z/zJNICritical.cpp"
     "../z/zRemembered.cpp"
     "../z/zRelocationSet.cpp"
 )

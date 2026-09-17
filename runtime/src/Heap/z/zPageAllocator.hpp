@@ -271,7 +271,7 @@ public:
 
     void AddGarbageUnits(UnitIndex idx, UnitCount num, bool allowSaferegion = true);
 
-    // mark-epoch quarantine: units reclaimed after DispelGhost must not enter the dirty
+    // mark-epoch quarantine: units reclaimed after from-page reclaim must not enter the dirty
     // tree (mutator TakeRegion → ClearUnits) until the next major concurrent mark ends.
     // INV: concurrent mark may still hold plain strong refs into this range (SATB).
     void AddMarkQuarantineUnits(UnitIndex idx, UnitCount num)
@@ -420,9 +420,7 @@ struct YoungCollectionStats {
 
 struct FreePinnedSlotLists {
     static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
-    static constexpr size_t SYNC_OBJECT_SIZE = CJFuture::SYNC_OBJECT_SIZE;
     SlotList freeAtomicSlotList;
-    SlotList freeSyncSlotList;
 
 private:
     friend class RegionManager;
@@ -431,8 +429,6 @@ private:
         switch (size) {
             case ATOMIC_OBJECT_SIZE:
                 return freeAtomicSlotList.PopFront(size);
-            case SYNC_OBJECT_SIZE:
-                return freeSyncSlotList.PopFront(size);
             default:
                 return 0;
         }
@@ -446,9 +442,6 @@ public:
             case ATOMIC_OBJECT_SIZE:
                 freeAtomicSlotList.PushFront(slot);
                 break;
-            case SYNC_OBJECT_SIZE:
-                freeSyncSlotList.PushFront(slot);
-                break;
             default:
                 return;
         }
@@ -457,7 +450,6 @@ public:
     void Clear()
     {
         freeAtomicSlotList.Clear();
-        freeSyncSlotList.Clear();
     }
 };
 
@@ -541,7 +533,7 @@ public:
     void ForwardFromRegions();
     template<Generation G>
     void ForwardRegion(ZPage* region);
-    RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
+    ZRelocateQueue& GetZRelocateQueue() { return relocateQueue; }
     bool StallAllocation(AllocationStallRequest& request, bool requestGc);
     bool ClaimAllocationLocked(AllocationStallRequest& request);
     void ReturnPageMemory(const PageMemory& memory);
@@ -559,7 +551,7 @@ public:
     MRT_EXPORT size_t FailedStalledAllocations() const;
 #endif
     template<Generation G>
-    void ForwardClaimedPage(ZPage* region, ForwardingTable::Owner owner, bool claimed = false,
+    void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
                             bool inPlace = false);
     template<Generation G>
     void StartForwardFromRegions(ZWorkers& workers);
@@ -621,6 +613,7 @@ public:
 #endif
 
     uintptr_t GetRegionHeapStart() const { return regionHeapStart; }
+    uintptr_t GetRegionHeapEnd() const { return regionHeapEnd; }
 
     ~RegionManager() = default;
 
@@ -673,10 +666,6 @@ public:
     // Like ReclaimRegion but units enter mark-quarantine tree, not dirty tree.
     void ReclaimRegionToMarkQuarantine(ZPage* region);
     size_t ReleaseRegion(ZPage* region);
-    // Clear the two exact bitmap slices owned by [regionStart, regionEnd).
-    // Called on both CollectRegion and the direct large-region release path.
-    static void ScrubRememberedSetForRegion(ZPage* region);
-    // Emit + reset process-local scrub cost counters (STEER3).
 
     void ReclaimGarbageRegions();
 
@@ -840,7 +829,7 @@ private:
     // fromRegionList is a list of full regions waiting to be collected (i.e. for forwarding).
     // region type must be FROM_REGION.
     RegionList fromRegionList;
-    RelocationRequestQueue relocationRequestQueue;
+    ZRelocateQueue relocateQueue;
     ZWorkers* relocationWorkers{ nullptr };
     bool relocationStarted{ false };
     bool relocationDrained{ false };

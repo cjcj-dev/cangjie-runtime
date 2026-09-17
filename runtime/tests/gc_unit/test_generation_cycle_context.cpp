@@ -43,7 +43,7 @@ namespace MapleRuntime {
 // whose predicate it did not set.
 struct GenerationCycleRootTestAccess {
     inline static std::array<NativeSlot*, 2> strongSlots {};
-    static void Install(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
+    static void Install(CopyCollector& collector, const std::array<BaseObject*, 6>& objects)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (size_t i = 0; i < strongSlots.size(); ++i) {
@@ -62,7 +62,7 @@ struct GenerationCycleRootTestAccess {
             collector.cycleRefWorkStack[objects[4]].push_back(objects[5]);
         }
     }
-    static void Remove(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
+    static void Remove(CopyCollector& collector, const std::array<BaseObject*, 6>& objects)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (NativeSlot*& slot : strongSlots) {
@@ -123,7 +123,7 @@ void* Exercise(void*)
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent);
 #if defined(MRT_TESTABLE_INTERNALS)
-    auto& tracing = static_cast<TracingCollector&>(collector);
+    auto& tracing = static_cast<CopyCollector&>(collector);
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;
@@ -205,7 +205,7 @@ void* Exercise(void*)
     // ProcessExportRoots consumes, so a witness is observed here only if its
     // family scan published it.
     tracing.testOldMarkStarted = [&]() {
-        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*tracing.MajorMarkDomain());
+        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*tracing.MajorMark());
         size_t expected = 0;
         bool included = true;
         Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {

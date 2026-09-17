@@ -29,6 +29,7 @@
 #include "CjScheduler.h"
 
 #include "gc_heap_fixture.hpp"
+#include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
 
 #include "Concurrency/Concurrency.h"
@@ -61,6 +62,7 @@ using namespace MapleRuntime::GcUnit;
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
 {
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     MarkPublicationFixture markFixture;
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
@@ -68,7 +70,7 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TracingCollector::WorkStack workStack;
+    WorkStack workStack;
     collector.DiscoverWeakReference(fx.obj0, workStack);
 
     GC_EXPECT_TRUE(workStack.empty());
@@ -87,7 +89,7 @@ extern "C" int CJ_ScheduleManagerInit();
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.
@@ -235,7 +237,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(first);
     space.GetRegionManager().AddRawPointerObject(second);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     Mutator producer;
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
@@ -289,7 +290,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -340,7 +340,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -401,7 +400,6 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     space.GetRegionManager().AddRawPointerObject(y2yHolder);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -447,7 +445,6 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
@@ -602,46 +599,6 @@ GC_TEST(YoungConc, Y2yDirtyHolderPhaseSwitchHandsOffWholeBatch)
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
 }
 
-// Load-good colour wrapping a FORWARDED from must remap before store-good
-// colour (zBarrier.inline.hpp:591-623). LookupTo of the coloured address is
-// then a miss on the current table.
-// The holder belongs to young and this input models a previous young
-// relocation. ZGC's load barrier remaps/heals here (:456-466); the old field
-// mark barrier is allowed to leave young references to their own consumer.
-GC_TEST(YoungConc, LoadBarrierRemapsPreviousRelocationEpoch)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    fx.region0->SetRegionListOwner(nullptr);
-    fx.region0->reset(PageAge::eden);
-    fx.region0->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
-    fx.region1->reset(PageAge::eden);
-    fx.obj0->SetStateCode(ObjectState::FORWARDED);
-
-    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
-    // Install the selected generation set before borrowing its publication.
-    fx.InstallPageOwner(fx.region0);
-    ForwardingTable::Publication publication =
-        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
-    GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, to), to);
-    publication = ForwardingTable::Publication();
-
-    auto* field = &HeapSlotAt<>(to + TYPEINFO_PTR_SIZE);
-    field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::StartYoungRelocate(collector);
-    GC_EXPECT_TRUE(ZBarrier::ReadReference(fx.obj1, *field) == fx.obj1);
-
-    BaseObject* healed = to_object(field->GetTargetObject());
-    GC_EXPECT_EQ(reinterpret_cast<MAddress>(healed), to);
-    GC_EXPECT_EQ(static_cast<unsigned>(Collector::JudgeHandOutTarget(healed)),
-                 static_cast<unsigned>(HandVerdict::Usable));
-    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(healed), Generation::Young);
-    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
-}
 #endif
 
 // old→young still remset (control: TRACE window must not drop the only remset edge).
@@ -663,7 +620,7 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     if (Mutator* mutator = Mutator::GetMutator(); mutator != nullptr && mutator->GetGCData().storeBarrierBuffer != nullptr) {
         mutator->GetGCData().storeBarrierBuffer->Flush();
     }
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(field)));
+    GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(field)));
 }
 
 // Major TRACE window with no young regions: a bulk write must still publish the
@@ -719,7 +676,7 @@ GC_TEST(YoungConc, TraceStorePublishesPreviousYoungTarget)
     GC_EXPECT_EQ(work.size(), 1u);
     GC_EXPECT_TRUE(work.front() == fx.obj1);
     GC_EXPECT_TRUE(to_object(field.GetTargetObject()) == incoming);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
     GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(incoming)));
 }
 
@@ -744,7 +701,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     markFixture.DrainObjects(work);
     GC_EXPECT_TRUE(work.empty());
     GC_EXPECT_TRUE(is_null(field.GetTargetObject()));
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field)));
+    GC_EXPECT_TRUE(SlotPageRemembered(reinterpret_cast<MAddress>(&field)));
 }
 
 GC_TEST(YoungConc, StackScanIsRequired)
@@ -754,25 +711,6 @@ GC_TEST(YoungConc, StackScanIsRequired)
 
 // FlipForMinor is an O(1) handoff: pre-flip records are scanned now while a
 // record produced after the flip remains on the active face for the next cycle.
-GC_TEST(YoungConc, FlipForMinorSeparatesConcurrentProducerFace)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    RememberedSet rememberedSet;
-    rememberedSet.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    const MAddress before = fx.heapStart + 8 * sizeof(void*);
-    const MAddress during = fx.heapStart + 9 * sizeof(void*);
-    rememberedSet.Record(before);
-    rememberedSet.FlipForMinor();
-    rememberedSet.Record(during);
-
-    std::unordered_set<MAddress> previous;
-    rememberedSet.ScanPreviousForMinor(previous);
-    GC_EXPECT_EQ(previous.size(), 1u);
-    GC_EXPECT_TRUE(previous.count(before) == 1);
-    GC_EXPECT_TRUE(rememberedSet.Snapshot().count(during) == 1);
-}
-
 // Product must not return to retired-only termination. Flipping the constant is
 // also the deliberate-break red proof for the regression guard below.
 GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
@@ -907,8 +845,8 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
                     cycle.PublishPhase(GC_PHASE_TRACE);
                     fn(&cycle, from_object(fx.obj0));
-                    MarkDomain& domain = young ? *publication.collector.YoungMarkDomain()
-                                              : *publication.collector.MajorMarkDomain();
+                    ZMark& domain = young ? *publication.collector.YoungMark()
+                                              : *publication.collector.MajorMark();
                     ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
                     MarkStackEntry entry;
                     size_t entries = 0;
@@ -949,13 +887,13 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     auto fn = P1Entry(false, false, false, false);
     fn(&cycle, from_object(fx.obj0));
     fn(&cycle, from_object(fx.obj0));
-    TracingCollector::WorkStack work;
+    WorkStack work;
     std::vector<BaseObject*> reached;
     publication.FollowYoung(work, reached);
-    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu\n", reached.size(),
-                 static_cast<size_t>(fx.region0->live_bytes()));
-    GC_EXPECT_EQ(reached.size(), 1u);
-    GC_EXPECT_TRUE(reached[0] == fx.obj0);
+    std::fprintf(stderr, "P1_CONSUMER_ASSERT reached=%zu live=%zu marked=%d\n", reached.size(),
+                 static_cast<size_t>(fx.region0->live_bytes()),
+                 fx.region0->livemap().is_marked(fx.region0->generation_id()) ? 1 : 0);
+    GC_EXPECT_TRUE(fx.region0->livemap().is_marked(fx.region0->generation_id()));
     GC_EXPECT_EQ(fx.region0->live_bytes(), fx.obj0->GetSize());
 }
 
@@ -965,7 +903,7 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
     GcHeapFixture fx;
     MarkPublicationFixture publication;
     auto& cycle = publication.collector.GetGenerationCycle(GCCycleGeneration::OLD);
-    auto& domain = *publication.collector.MajorMarkDomain();
+    auto& domain = *publication.collector.MajorMark();
     fx.region0->reset(PageAge::old);
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Old);

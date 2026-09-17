@@ -7,7 +7,8 @@
 #include "Heap/z/zForwarding.hpp"
 
 #include "Heap/z/zPage.hpp"
-#include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zRelocate.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 
 #include <cstdio>
@@ -20,17 +21,31 @@
 
 namespace MapleRuntime {
 
+uint32_t ZForwarding::nentries(const ZPage* page)
+{
+    return static_cast<uint32_t>(nentries(static_cast<size_t>(page->live_objects())));
+}
+
+ZForwarding* ZForwarding::alloc(ZForwardingAllocator* allocator, ZPage* page, PageAge to_age)
+{
+    const size_t nentries = ZForwarding::nentries(page);
+    void* const addr = AttachedArray::alloc(allocator, nentries);
+    return ::new (addr) ZForwarding(page, page->GetRegionStart(), ZAddressHeapBase, page->GetRegionSize(), nentries,
+                                    page->GetRegionLifeId(), page->age(), to_age,
+                                    static_cast<size_t>(page->object_alignment_shift()));
+}
+
 namespace {
 thread_local ZForwarding* currentPageWork = nullptr;
 }
 
-ZForwardingLife::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
+ZForwarding::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
     : previous(currentPageWork), forwarding(forwarding), complete(complete)
 {
     if (complete) CHECK(forwarding != nullptr && forwarding->claim());
     currentPageWork = forwarding;
 }
-ZForwardingLife::PageWorkScope::~PageWorkScope()
+ZForwarding::PageWorkScope::~PageWorkScope()
 {
     if (complete) {
         if (forwarding->ref_count().load(std::memory_order_acquire) != 0) forwarding->release_page();
@@ -39,25 +54,10 @@ ZForwardingLife::PageWorkScope::~PageWorkScope()
     }
     currentPageWork = previous;
 }
-ZForwarding* ZForwardingLife::CurrentPageWork() { return currentPageWork; }
+ZForwarding* ZForwarding::CurrentPageWork() { return currentPageWork; }
 
-void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect)
-{
-    if (refCount.load(std::memory_order_acquire) == expect) {
-        return;
-    }
-    // Yield, do not park on the process-wide cv: a mutator in cv.wait is
-    // not in a saferegion and blocks STW (fifth-face all-futex hang).
-    // MRT_EnterSaferegion around cv.wait was tried; FormatLog FATAL in a
-    // forked gc_unit child then SEGV'd the parent (logger lock). Observe
-    // the published word via acquire load instead.
-    while (refCount.load(std::memory_order_acquire) != expect) {
-        sched_yield();
-    }
-}
-
-ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Retire site)
-    : owner(ForwardingTable::RetainPageOwner(region))
+ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwarding::Retire site)
+    : owner(forwarding_for_page(region))
 {
     (void)site;
     if (region == nullptr) return;
@@ -65,7 +65,7 @@ ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Reti
         return;
     }
     const int32_t before = owner->ref_count().load(std::memory_order_acquire);
-    const bool borrowed = ZForwardingLife::CurrentPageWork() == owner.get();
+    const bool borrowed = ZForwarding::CurrentPageWork() == owner;
     if (before == 0 || (!borrowed && !owner->claim())) {
         owner->detach_page();
     } else if (before > 0) {
@@ -74,17 +74,17 @@ ZPage::InPlaceClaimScope::InPlaceClaimScope(ZPage* region, ZForwardingLife::Reti
     }
 }
 
-void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
+void ZForwarding::WaitPageDone(ZForwarding* forwarding)
 {
     if (forwarding == nullptr) {
         return;
     }
     // Legacy page cleanup runs inside the completion owner itself.
     if (CurrentPageWork() == forwarding || forwarding->is_done()) return;
-    auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetRelocationRequestQueue();
-    const auto request = queue.Add(ForwardingTable::Owner(forwarding));
+    auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetZRelocateQueue();
+    const auto request = queue.Add(forwarding);
     CHECK_DETAIL(request.accepted, "forwarding wait requires a page task");
-    (void)queue.Wait(request.request);
+    queue.Wait(request.forwarding);
 }
 
 
@@ -92,12 +92,27 @@ void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
 
 namespace MapleRuntime {
 bool ZForwarding::claim()
-{ return ZForwardingLife::claim(_claimed); }
-
-bool ZForwarding::retain_page()
 {
-        return ZForwardingLife::retain_page(_ref_count, [this] { ZForwardingLife::WaitPageDone(this); });
+    bool expected = false;
+    return _claimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+}
+
+bool ZForwarding::retain_page(ZRelocateQueue* queue)
+{
+    for (;;) {
+        int32_t n = _ref_count.load(std::memory_order_acquire);
+        if (n == 0) {
+            return false;
+        }
+        if (n < 0) {
+            queue->add_and_wait(this);
+            return false;
+        }
+        if (_ref_count.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return true;
+        }
     }
+}
 
 void ZForwarding::release_page()
 {
@@ -116,105 +131,74 @@ void ZForwarding::release_page()
         }
     }
 
-void ZForwarding::detach_page()
+ZPage* ZForwarding::detach_page()
 {
-        std::unique_lock<std::mutex> lock(_ref_lock);
-        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == 0; });
+        if (_ref_count.load(std::memory_order_acquire) != 0) {
+            std::unique_lock<std::mutex> lock(_ref_lock);
+            _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == 0; });
+        }
+        return _page;
     }
 
 void ZForwarding::mark_done()
-{ ZForwardingLife::mark_done(_done); }
+{
+    _done.store(true, std::memory_order_release);
+}
 
 bool ZForwarding::is_done() const
-{ return ZForwardingLife::is_done(_done); }
+{
+    return _done.load(std::memory_order_acquire);
+}
 
 void ZForwarding::in_place_relocation_claim_page()
 {
-        int32_t count = _ref_count.load(std::memory_order_relaxed);
-        do {
+        for (;;) {
+            int32_t count = _ref_count.load(std::memory_order_relaxed);
             CHECK(count > 0);
-        } while (!_ref_count.compare_exchange_weak(count, -count, std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed));
-        std::unique_lock<std::mutex> lock(_ref_lock);
-        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
-    }
-}
-
-namespace MapleRuntime {
-bool ZForwardingLife::claim(std::atomic<bool>& claimed)
-    {
-        bool expected = false;
-        return claimed.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
-    }
-}
-
-namespace MapleRuntime {
-void ZForwardingLife::mark_done(std::atomic<bool>& done)
-    {
-        done.store(true, std::memory_order_release);
-        NotifyAll();
-    }
-}
-
-namespace MapleRuntime {
-bool ZForwardingLife::is_done(const std::atomic<bool>& done) { return done.load(std::memory_order_acquire); }
-}
-
-namespace MapleRuntime {
-void ZForwardingLife::release_page(std::atomic<int32_t>& refCount)
-    {
-        for (;;) {
-            int32_t n = refCount.load(std::memory_order_relaxed);
-            CHECK(n != 0);
-            if (n > 0) {
-                if (!refCount.compare_exchange_weak(n, n - 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                    continue;
-                }
-                if (n == 1) {
-                    NotifyAll();
-                }
-            } else {
-                if (!refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                    continue;
-                }
-                if (n == -2 || n == -1) {
-                    NotifyAll();
-                }
-            }
-            return;
-        }
-    }
-}
-
-namespace MapleRuntime {
-void ZForwardingLife::in_place_relocation_claim_page(std::atomic<int32_t>& refCount)
-    {
-        for (;;) {
-            int32_t n = refCount.load(std::memory_order_relaxed);
-            CHECK(n > 0);
-            if (!refCount.compare_exchange_weak(n, -n, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            if (!_ref_count.compare_exchange_weak(count, -count, std::memory_order_acq_rel,
+                                                  std::memory_order_relaxed)) {
                 continue;
             }
-            if (n != 1) {
-                WaitUntilRef(refCount, -1);
+            if (count != 1) {
+                std::unique_lock<std::mutex> lock(_ref_lock);
+                _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
             }
-            return;
+            break;
         }
     }
+
+void ZForwarding::in_place_relocation_start(MAddress relocated_watermark)
+{
+    (void)relocated_watermark;
+    _in_place.store(true, std::memory_order_release);
+    _in_place_thread.store(std::this_thread::get_id(), std::memory_order_relaxed);
+    _in_place_top_at_start = _page != nullptr ? _page->GetRegionAllocPtr() : 0;
 }
 
-namespace MapleRuntime {
-void ZForwardingLife::detach_page(std::atomic<int32_t>& refCount)
-    {
-        if (refCount.load(std::memory_order_acquire) == 0) {
-            return;
+void ZForwarding::in_place_relocation_finish()
+{
+    if (_from_age == PageAge::old || _to_age != PageAge::old) {
+        if (_page != nullptr) {
+            _page->reset_livemap();
         }
-        WaitUntilRef(refCount, 0);
     }
+    _in_place_thread.store(std::thread::id(), std::memory_order_relaxed);
+}
+
+bool ZForwarding::in_place_relocation_is_below_top_at_start(MAddress offset) const
+{
+    return _in_place_thread.load(std::memory_order_relaxed) == std::this_thread::get_id() &&
+           offset < _in_place_top_at_start;
+}
 }
 
 namespace MapleRuntime {
 ZPage* ZForwarding::page() const { return _page; }
+
+bool ZForwarding::page_life_current() const
+{
+    return _page != nullptr && _page->GetRegionLifeId() == _page_life_id;
+}
 }
 
 namespace MapleRuntime {

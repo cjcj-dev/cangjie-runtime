@@ -620,8 +620,6 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     this->regionHeapEnd = segments.back().End();
     heapUnitCount = nUnit;
     CHECK(nUnit * ZPage::UNIT_SIZE <= span.size());
-    // zPageTable.cpp:37-52: address tables cover the highest available end.
-    CHECK(ForwardingTable::Initialize(regionHeapStart, regionHeapEnd - regionHeapStart, ZPage::UNIT_SIZE));
     this->inactiveZone = regionHeapStart;
     SetMaxUnitCountForRegion(heapParam.regionSize);
     SetMaxUnitCountForPinnedRegion(heapParam.regionSize);
@@ -637,18 +635,6 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
          regionHeapStart, regionHeapEnd, nUnit);
 }
-
-void RegionManager::ScrubRememberedSetForRegion(ZPage* region)
-{
-    if (region == nullptr) {
-        return;
-    }
-    MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
-    MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
-    (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
-}
-
-
 
 void RegionManager::ReclaimRegion(ZPage* region)
 {
@@ -671,7 +657,7 @@ void RegionManager::ReclaimRetiredRegion(ZPage* region)
     // must not re-scan O(N) under remset mutex.
 
     {
-        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_DIRTY);
+        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_DIRTY);
     }
     region->InitFreeUnits();
     ReturnPageMemory(PageMemory{ unitIndex, num, 0, true });
@@ -792,7 +778,7 @@ void RegionManager::ReclaimRetiredRegionToMarkQuarantine(ZPage* region)
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
     {
-        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_MARK_QUARANTINE);
+        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RECLAIM_MARK_QUARANTINE);
     }
     region->InitFreeUnits();
     ScopedEnterSaferegion enterSaferegion(true);
@@ -819,13 +805,11 @@ void RegionManager::ReleaseRetiredRegion(ZPage* region)
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
     // Large regions above the release threshold bypass CollectRegion. Invalidate
-    // their two owned bitmap slices before the address range can be unmapped/reused.
-    ScrubRememberedSetForRegion(region);
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 
     {
-        ZPage::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RELEASE_REGION);
+        ZPage::InPlaceClaimScope drain(region, ZForwarding::Retire::RELEASE_REGION);
     }
     region->InitFreeUnits();
     // ZPageAllocator::free_page (zPageAllocator.cpp:2083-2165): freed memory

@@ -2,14 +2,14 @@
 #ifndef MRT_GC_CYCLE_SEQUENCE_FIXTURE_HPP
 #define MRT_GC_CYCLE_SEQUENCE_FIXTURE_HPP
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zRememberedSet.hpp"
 namespace MapleRuntime {
 struct GenerationSequenceFixture {
     static void Advance(GenerationCycle& cycle);
-    template<class Remembered>
-    static void AdvanceYoung(GenerationCycle& cycle, Remembered& remembered)
+    static void AdvanceYoung(GenerationCycle& cycle)
     {
         Advance(cycle);
-        remembered.FlipForMinor();
+        ZRememberedSet::flip();
     }
 };
 

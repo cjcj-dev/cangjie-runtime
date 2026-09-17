@@ -93,7 +93,7 @@ struct RemsetRearmTestAccess {
     static ConsumeResult ConsumePrevious(WCollector& collector, const std::unordered_set<MAddress>& previous,
                                           BaseObject* currentMinorRoot)
     {
-        WCollector::WorkStack workStack = collector.NewWorkStack();
+        WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
@@ -103,12 +103,10 @@ struct RemsetRearmTestAccess {
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
-        collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots, currentMinorRoots,
-                                      /*fullYoungScan=*/false, &consumed, &stats);
         // Mark work now belongs to the generation domain, not the obsolete
         // caller staging vector. Only dispose fixture-owned pending work here;
         // real follow/termination is covered by p2FieldBarrierExercise.
-        auto& domain = *collector.YoungMarkDomain();
+        auto& domain = *collector.YoungMark();
         auto& stacks = domain.Stacks();
         const size_t work = stacks.Population();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
@@ -267,7 +265,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(ExpectRecorded(Heap::GetHeap().GetRememberedSet(), reinterpret_cast<MAddress>(field)));
+    GC_EXPECT_TRUE(ExpectRecorded(HeapTestRemset(), reinterpret_cast<MAddress>(field)));
 }
 
 // ZGC zBarrier.inline.hpp:695-706: store-good fast path, old epoch slow path.
@@ -289,12 +287,12 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_FALSE(SlotPageRemembered(slot));
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 // ZGC zRemembered.cpp:591 and zBarrier.inline.hpp:695: bitmap and colour epochs differ.
@@ -315,18 +313,18 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
     std::unordered_set<MAddress> firstMinor;
-    Heap::GetHeap().GetRememberedSet().DrainForMinor(firstMinor);
+    HeapTestRemset().DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
-    GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Size(), 0u);
+    GC_EXPECT_EQ(HeapTestRemset().Size(), 0u);
     GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
 
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
 
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_FALSE(SlotPageRemembered(slot));
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     GC_EXPECT_FALSE(ZPointer::is_store_good((*field).GetFieldValue()));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 // Product-path form of the r6b failure arm. Generation drains the previous
@@ -353,7 +351,7 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     BaseObject* objectB = fx.PlaceObject(fx.heapStart + ZPage::UNIT_SIZE + 128);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
 
-    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& rs = HeapTestRemset();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
@@ -376,7 +374,7 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     RefField<> taggedB = RemsetRearmTestAccess::Tag(collector, objectB);
     field->StoreColoured(taggedB.GetFieldValue());
     const uintptr_t fieldBeforeSecondDrain = raw(field->GetFieldValue());
-    const bool containsBeforeSecondDrain = Heap::GetHeap().GetRememberedSet().Contains(slot);
+    const bool containsBeforeSecondDrain = SlotPageRemembered(slot);
     RemsetRearmTestAccess::BeginMinor(collector);
     std::unordered_set<MAddress> secondMinor;
     const size_t secondDrainCount = rs.DrainForMinor(secondMinor);
@@ -449,7 +447,7 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     BaseObject* objectB = fx.PlaceObject(fx.heapStart + ZPage::UNIT_SIZE + 128);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
 
-    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& rs = HeapTestRemset();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
@@ -462,10 +460,10 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     RefField<> taggedB = RemsetRearmTestAccess::Tag(collector, objectB);
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     const uintptr_t fieldBeforeHook = raw(field->GetFieldValue());
-    const bool containsBeforeHook = Heap::GetHeap().GetRememberedSet().Contains(slot);
+    const bool containsBeforeHook = SlotPageRemembered(slot);
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
     const uintptr_t fieldAfterHook = raw(field->GetFieldValue());
-    const bool containsAfterHook = Heap::GetHeap().GetRememberedSet().Contains(slot);
+    const bool containsAfterHook = SlotPageRemembered(slot);
     const size_t sizeAfterHook = rs.Size();
     std::unordered_set<MAddress> controlMinor;
     const size_t controlDrainCount = rs.DrainForMinor(controlMinor);
@@ -510,10 +508,10 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
     const uintptr_t good = raw(GcUnit::StoreGoodPointer(fx.obj0));
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_FALSE(SlotPageRemembered(slot));
     field->StoreColoured(PreviousRememberedPointer(fx.obj0));
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 // ZGC zBarrier.inline.hpp:729-733: remember tests slot generation on the slow path.
@@ -533,14 +531,14 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
     field->StoreColoured(zpointer::null);
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj0);
     GC_EXPECT_TRUE(ZPointer::is_store_good((*field).GetFieldValue()));
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_FALSE(SlotPageRemembered(slot));
 
     fx.region1->reset(PageAge::eden);
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
-    GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_FALSE(SlotPageRemembered(slot));
 
     ZBarrier::store_barrier_on_heap_oop_field(reinterpret_cast<volatile zpointer*>(field), false);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
@@ -557,7 +555,7 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
 
     field->StoreColoured(zpointer::null);
     ZBarrier::AtomicWriteReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
@@ -575,7 +573,7 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
     field->StoreColoured(zpointer::null);
     BaseObject* old = ZBarrier::AtomicSwapReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
     GC_EXPECT_TRUE(old == nullptr);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
@@ -594,13 +592,13 @@ GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
     GC_EXPECT_FALSE(ZBarrier::CompareAndSwapReference(fx.obj0, *field, fx.obj1, fx.obj1,
                                                     std::memory_order_seq_cst,
                                                     std::memory_order_seq_cst));
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
     GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == nullptr);
 
     GC_EXPECT_TRUE(ZBarrier::CompareAndSwapReference(fx.obj0, *field, nullptr, fx.obj1,
                                                    std::memory_order_seq_cst,
                                                    std::memory_order_seq_cst));
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 // ZGC zBarrier.inline.hpp:695-733: old heap slow-path stores remember during idle too.
@@ -617,7 +615,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(ExpectRecorded(Heap::GetHeap().GetRememberedSet(), reinterpret_cast<MAddress>(field)));
+    GC_EXPECT_TRUE(ExpectRecorded(HeapTestRemset(), reinterpret_cast<MAddress>(field)));
 }
 
 // Static roots are enumerated directly by every minor and must not enter the
@@ -695,7 +693,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(ExpectRecorded(Heap::GetHeap().GetRememberedSet(), reinterpret_cast<MAddress>(field)));
+    GC_EXPECT_TRUE(ExpectRecorded(HeapTestRemset(), reinterpret_cast<MAddress>(field)));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -738,12 +736,12 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
 
     std::unordered_set<MAddress> firstMinor;
-    Heap::GetHeap().GetRememberedSet().DrainForMinor(firstMinor);
+    HeapTestRemset().DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(reinterpret_cast<MAddress>(field)) == 1);
 
     // No second write: the edge is still in the heap, the record is not.
     std::unordered_set<MAddress> secondMinor;
-    Heap::GetHeap().GetRememberedSet().DrainForMinor(secondMinor);
+    HeapTestRemset().DrainForMinor(secondMinor);
     GC_EXPECT_EQ(secondMinor.size(), 0u);
 }
 
@@ -764,7 +762,7 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
 
-    auto& heapRs = Heap::GetHeap().GetRememberedSet();
+    auto& heapRs = HeapTestRemset();
     std::unordered_set<MAddress> firstMinor;
     heapRs.DrainForMinor(firstMinor);
     GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
@@ -1034,7 +1032,7 @@ GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
         young.Begin(cycle + 1);
         GC_EXPECT_EQ(young.Sequence(), sequence);
         GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face);
-        GenerationSequenceFixture::AdvanceYoung(young, rs);
+        GenerationSequenceFixture::AdvanceYoung(young);
         GC_EXPECT_EQ(young.Sequence(), sequence + 1);
         GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face ^ 1U);
         GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(young.Sequence()));
@@ -1052,13 +1050,13 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
     GcHeapFixture heap;
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     GenerationCycle& young = RemsetRearmTestAccess::YoungCycle(collector);
-    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& rs = HeapTestRemset();
     // The fixture may leave its liveness-setup cycle active. Complete that
     // setup before issuing the first independent mark-start request.
     if (young.Snapshot().active) young.End();
     auto markStart = [&] {
         young.Begin(young.Sequence() + 1);
-        GenerationSequenceFixture::AdvanceYoung(young, rs);
+        GenerationSequenceFixture::AdvanceYoung(young);
         young.End();
     };
     const MAddress from = heap.heapStart + 256;
@@ -1077,7 +1075,7 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
             collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
             GC_EXPECT_EQ(collector.OldActiveRemsetIsCurrent(), flips % 2 == 0);
             GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
-            GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(to + sizeof(void*)));
+            GC_EXPECT_TRUE(SlotPageRemembered(to + sizeof(void*)));
             ++checked;
             std::fprintf(stderr, "DETAIL remset_face initial=%u flips=%zu assertions_executed=1\n",
                          static_cast<unsigned>(initial), flips);
@@ -1090,7 +1088,7 @@ GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
 {
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
-    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& rs = HeapTestRemset();
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
@@ -1108,7 +1106,7 @@ GC_OTHER_VM_TEST(Remset, InPlacePreviousFieldsPublishDuringYoungMark)
 {
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
-    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& rs = HeapTestRemset();
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_TRACE);
     collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     const MAddress from = heap.heapStart + 256;

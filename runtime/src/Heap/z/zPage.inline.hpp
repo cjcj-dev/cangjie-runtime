@@ -13,18 +13,20 @@
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zVirtualMemory.inline.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zRememberedSet.inline.hpp"
 
 namespace MapleRuntime {
 
 inline bool ZPage::IsCompacted() const
     {
-        auto owner = ForwardingTable::RetainPageOwner(const_cast<ZPage*>(this));
+        auto owner = forwarding_for_page(const_cast<ZPage*>(this));
         return owner && owner->is_done() && owner->in_place();
     }
 
 inline bool ZPage::IsRoutingState()
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
+        auto owner = forwarding_for_page(this);
         return owner && owner->is_claimed() && !owner->is_done();
     }
 
@@ -40,7 +42,11 @@ inline const ZLiveMap& ZPage::livemap() const
 
 inline ZForwarding* ZPage::GetFromPageCarrier() const
     {
-        ZForwarding* carrier = ForwardingTable::RetainPageOwner(this).get();
+        const MAddress start = GetRegionStart();
+        if (start == 0) {
+            return nullptr;
+        }
+        ZForwarding* carrier = Heap::GetHeap().GetCollector().GetGenerationCycle(GetOwnerGeneration()).forwarding_table().get(start);
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 
@@ -144,13 +150,12 @@ inline void ZPage::BindFromPageLiveMapIfNull()
             return;
         }
         const RegionLifeId life = GetRegionLifeId();
-        CHECK_DETAIL(ForwardingTable::PublishFromPageView(
-                         this, &livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
-                         static_cast<uint8_t>(GetOwnerGeneration()),
-                         static_cast<uint8_t>(IsLargeRegion() && is_marked() &&
-                                              is_live_bit_set(to_zaddress(GetRegionStart()))),
-                         life),
-                     "from-page forwarding carrier missing while binding live face region=%p", this);
+        ZForwarding* forwarding = forwarding_for_page(this);
+        CHECK_DETAIL(forwarding != nullptr, "from-page forwarding carrier missing while binding live face region=%p", this);
+        forwarding->publish_from_page_view(&livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
+            static_cast<uint8_t>(GetOwnerGeneration()),
+            static_cast<uint8_t>(IsLargeRegion() && is_marked() && is_live_bit_set(to_zaddress(GetRegionStart()))),
+            life);
     }
 
 inline void ZPage::StampCensusBoundary()
@@ -349,6 +354,110 @@ inline MAddress ZPage::find_base(MAddress p)
     return find_base_unsafe(p);
 }
 
+inline void ZPage::remember(volatile zpointer* p)
+{
+    if (!_remembered_set.is_initialized()) {
+        return;
+    }
+    _remembered_set.set_current(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline bool ZPage::is_remembered(volatile zpointer* p)
+{
+    if (!_remembered_set.is_initialized()) {
+        return false;
+    }
+    return _remembered_set.at_current(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline bool ZPage::was_remembered(volatile zpointer* p)
+{
+    if (!_remembered_set.is_initialized()) {
+        return false;
+    }
+    return _remembered_set.at_previous(local_offset(reinterpret_cast<MAddress>(p)));
+}
+
+inline void ZPage::clear_remset_bit_non_par_current(uintptr_t l_offset)
+{
+    _remembered_set.unset_non_par_current(l_offset);
+}
+
+inline void ZPage::clear_remset_range_non_par_current(uintptr_t l_offset, size_t size)
+{
+    _remembered_set.unset_range_non_par_current(l_offset, size);
+}
+
+inline ZBitMap::ReverseIterator ZPage::remset_reverse_iterator_previous()
+{
+    return _remembered_set.iterator_reverse_previous();
+}
+
+inline ZRememberedSet::Iterator ZPage::remset_iterator_limited_current(uintptr_t l_offset, size_t size)
+{
+    return _remembered_set.iterator_limited_current(l_offset, size);
+}
+
+inline ZRememberedSet::Iterator ZPage::remset_iterator_limited_previous(uintptr_t l_offset, size_t size)
+{
+    return _remembered_set.iterator_limited_previous(l_offset, size);
+}
+
+inline bool ZPage::is_remset_cleared_current() const
+{
+    return _remembered_set.is_cleared_current();
+}
+
+inline bool ZPage::is_remset_cleared_previous() const
+{
+    return _remembered_set.is_cleared_previous();
+}
+
+inline void ZPage::verify_remset_cleared_current() const {}
+
+inline void ZPage::verify_remset_cleared_previous() const {}
+
+inline void ZPage::clear_remset_previous()
+{
+    _remembered_set.clear_previous();
+}
+
+inline void ZPage::swap_remset_bitmaps()
+{
+    _remembered_set.swap_remset_bitmaps();
+}
+
+inline void* ZPage::remset_current()
+{
+    return _remembered_set.current();
+}
+
+template<typename Function>
+inline void ZPage::oops_do_remembered(Function function)
+{
+    _remembered_set.iterate_previous([&](uintptr_t l_offset) {
+        function(reinterpret_cast<volatile zpointer*>(global_offset(l_offset)));
+    });
+}
+
+template<typename Function>
+inline void ZPage::oops_do_remembered_in_live(Function function)
+{
+    ZRememberedSetContainingInLiveIterator iter(this);
+    for (ZRememberedSetContaining containing; iter.next(&containing);) {
+        function(reinterpret_cast<volatile zpointer*>(containing._field_addr));
+    }
+    iter.print_statistics();
+}
+
+template<typename Function>
+inline void ZPage::oops_do_current_remembered(Function function)
+{
+    _remembered_set.iterate_current([&](uintptr_t l_offset) {
+        function(reinterpret_cast<volatile zpointer*>(global_offset(l_offset)));
+    });
+}
+
 // zPage.cpp:115-117.
 inline void ZPage::reset_livemap()
 {
@@ -470,14 +579,7 @@ inline ZPage* ZPage::GetZPage(uint32_t idx)
 
 inline ZPage* ZPage::GetGhostFromRegionAt(uintptr_t allocAddr)
     {
-        ZPage* region = ZPageTable::heap_table().get(allocAddr);
-        if (region == nullptr || !region->IsGhostFromRegion()) {
-            return nullptr;
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        RunGhostLookupTestHook(region);
-#endif
-        return region;
+        return ZPageTable::heap_table().get(allocAddr);
     }
 
 inline MAddress ZPage::GetUnitAddress(size_t idx)
@@ -532,7 +634,7 @@ inline void ZPage::WaitCopiedBeforePayloadWipe(ZPage* region, const char* site)
             return;
         }
         (void)site;
-        ZForwardingLife::WaitPageDone(region->_scratch.fwdOwner.load(std::memory_order_acquire));
+        ZForwarding::WaitPageDone(forwarding_for_page(region));
     }
 
 inline void ZPage::ClearUnits(size_t idx, size_t cnt)
@@ -612,7 +714,7 @@ inline void ZPage::InitFreeUnits()
 inline bool ZPage::IsCompactRouteDestination(MAddress address) const
     {
         // The generation relocation set owns the sole from-to mapping.
-        auto owner = ForwardingTable::RetainPageOwner(this);
+        auto owner = forwarding_for_page(this);
         return IsCompacted() && owner && owner->find_from_by_to(address, nullptr);
     }
 
@@ -624,166 +726,62 @@ inline bool ZPage::IsCompactRouteDestination(MAddress address) const
 inline void ZPage::PublishFromPageMetadata()
     {
         const RegionLifeId life = GetRegionLifeId();
-        CHECK_DETAIL(ForwardingTable::PublishFromPageView(
-                         this, &livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
-                         static_cast<uint8_t>(G),
-                         static_cast<uint8_t>(IsLargeRegion() && is_marked() &&
-                                              is_live_bit_set(to_zaddress(GetRegionStart()))),
-                         life),
-                     "forwarding carrier missing at from-page publication region=%p", this);
+        ZForwarding* forwarding = forwarding_for_page(this);
+        CHECK_DETAIL(forwarding != nullptr, "forwarding carrier missing at from-page publication region=%p", this);
+        forwarding->publish_from_page_view(&livemap(), GetSnapshotEpoch(), GetRegionAllocPtr(), BirthSequence(),
+            static_cast<uint8_t>(G),
+            static_cast<uint8_t>(IsLargeRegion() && is_marked() && is_live_bit_set(to_zaddress(GetRegionStart()))),
+            life);
     }
 
     template<Generation G>
 inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
     {
         PublishFromPageMetadata<G>();
-        SetInGhostRegion(1);
         _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
 
-    template<Generation G>
-inline void ZPage::PrepareForwardableRegion()
-    {
-        CHECK(IsFromRegion());
-        CHECK(is_small());
-        CHECK(_scratch.inGhostFromRegion == 0);
-        (void)IsForwardingDone();
-        // The preceding generation reset removed its forwarding set.
-        ClearRelocationResiduals();
-        // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
-        // parallel with the region machinery so the two answers can be compared before either is
-        // trusted; nothing reads it for decisions yet.
-        CHECK_DETAIL(ForwardingTable::InstallPublicationBeforeCopy(GetRegionStart(), GetRegionSize(), this, G),
-                     "forwarding table install failed before relocation region=%p range=[%#zx,%#zx)",
-                     this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
-        // enrolphase: which side of the relocate-start flip does this enrolment land on?
-        //
-        // OpenJDK installs the relocation set once, in the concurrent select_relocation_set
-        // (zGeneration.cpp:254 ZRelocationSet::install), and only then flips
-        // (relocate_start -> flip_relocate_start, :918 -> :922).  Post-flip the set is closed, so
-        // "painted with the current colour after the flip" implies "will not move this cycle".
-        //
-        // EvacuateYoungRegions calls PrepareForwardTable<Young> twice -- WCollector.cpp:6483 and
-        // again at :6952 -- with the young flip between them.  An enrolment on the far side leaves
-        // a window in which a region is still NORMAL while the current colour is already the new
-        // one, and a value painted there is load-good but names an object that is about to move.
-        // That matches the measured FORWARD population exactly (afterFlip=1, slotGood=1, hasTo=1,
-        // 20/20), and it is why moving only the first flip (kFlipAfterFromSpace) changed nothing.
-        //
-        // The staleness predicate is not the hole: over ~2^20 non-NORMAL targets per run, across
-        // six runs, zero escaped it.
-        // gc_unit fixtures do not run Heap::Init, so CollectorProxy has no
-        // current collector for this diagnostic-only phase sample.  Skip only
-        // in the test configuration; product (macro off) always samples.
-#if !defined(MRT_GC_UNIT_TESTS)
-        NoteEnrolPhase();
-#endif
-        // Shared boundary: publish immutable from-page metadata, forwarding
-        // construction token, and ghost membership through one product edge.
-        PublishForwardingCarrier<G>();
-
-    }
-
-inline void ZPage::ClearGhostRegionBit()
-    {
-        if (IsGhostFromRegion()) {
-            SetInGhostRegion(0);
-        }
-    }
-
-inline void ZPage::ClearGhostFromRegionBits()
-    {
-        SetInGhostRegion(0);
-    }
-
-inline void ZPage::DispelGhostFromRegion()
-    {
-        // fwdinflight: this is one of the three edges that retire from-side route state, and
-        // it is unconditional -- nothing here waits for a reader. ZGC's equivalent,
-        // ZForwarding::detach_page (zForwarding.cpp:171-181), blocks until _ref_count is zero.
-        // Count what we would be invalidating. Default off; never blocks.
-
-        // portmutreloc: hold the forwarding drain across the whole body. It is held
-        // run while a retained reader is inside the route lookup or a mutator copy.
-        InPlaceClaimScope drain(this, ZForwardingLife::Retire::DISPEL_GHOST);
-        // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
-        // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
-        // lets step 3 change *when* it happens without changing *where*.
-        const size_t nUnit = GetGhostRegionUnitCount();
-        ClearGhostFromRegionBits();
-        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
-        // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
-        VLOG(REPORT,
-             "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
-             this, GetRegionStart(), nUnit, livemap().live_bytes(),
-              IsForwardingDone() ? 1u : 0u,
-             static_cast<unsigned>(IsYoungRegion()));
-        // The old top/livemap disappeared with the forwarding carrier above;
-        // only page-owned ghost/route state is reset in this body.
-    }
-
-inline bool ZPage::IsGhostFromRegion() const
-    {
-        const bool ghost = _scratch.regionStateBitField.GetAtomicValue(
-            RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) != 0;
-        if (!ghost) {
-            return false;
-        }
-        return __atomic_load_n(&_scratch.ghostLifeId, __ATOMIC_ACQUIRE) == GetRegionLifeId();
-    }
-
-inline void ZPage::AssertGhostClearedAfterReuse(size_t nUnit) const
-    {
-        CHECK(!IsGhostFromRegion());
-        size_t baseIdx = GetUnitIdx();
-        for (size_t i = 1; i < nUnit; i++) {
-            MAddress addr = GetUnitAddress(baseIdx + i);
-            CHECK(!InGhostFromRegion(from_region_addr(addr)));
-        }
-    }
-
-
 inline bool ZPage::RetainForwarding()
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
-        return owner && owner->retain_page();
+        auto owner = forwarding_for_page(this);
+        return owner && owner->retain_page(&generation_relocate_queue());
     }
 
 inline void ZPage::ReleaseForwarding()
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
+        auto owner = forwarding_for_page(this);
         CHECK(owner);
         owner->release_page();
     }
 
 inline bool ZPage::ClaimForwarding()
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
+        auto owner = forwarding_for_page(this);
         return owner && owner->claim();
     }
 
 inline void ZPage::MarkForwardingDone()
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
-        if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();
+        auto owner = forwarding_for_page(this);
+        if (owner && ZForwarding::CurrentPageWork() != owner) owner->mark_done();
     }
 
 inline bool ZPage::IsForwardingDone() const
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
+        auto owner = forwarding_for_page(this);
         return owner && owner->is_done();
     }
 
 
 inline int32_t ZPage::ForwardingRefCount() const
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
+        auto owner = forwarding_for_page(this);
         return owner ? owner->ref_count().load(std::memory_order_acquire) : 0;
     }
 
 inline bool ZPage::ForwardingClaimed() const
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
+        auto owner = forwarding_for_page(this);
         return owner && owner->claimed().load(std::memory_order_acquire);
     }
 
@@ -795,11 +793,7 @@ inline bool ZPage::ForwardingClaimed() const
 
 inline void ZPage::SetInGhostRegion(uint8_t flag)
     {
-        const RegionLifeId life = GetRegionLifeId();
-        __atomic_store_n(&_scratch.ghostLifeId, life, __ATOMIC_RELEASE);
-        _scratch.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
-        if (flag != 0) {
-        }
+        (void)flag;
     }
 
 // ZPage::clone_for_promotion + ZPage::reset(age) (zPage.cpp:64-72, 103-113)
@@ -1038,14 +1032,17 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
             uint8_t next = static_cast<uint8_t>((cur + 1) & 0x7f);
             __atomic_store_n(&_scratch.regionLifeSequence, next, __ATOMIC_RELEASE);
         }
-        // See DispelGhostFromRegion: retire the route before detaching its compact table.
-        ForwardingTable::ClearPageOwner(this);
+        // Retire the forwarding owner before detaching its compact table.
+        _scratch.fwdOwner.store(nullptr, std::memory_order_release);
         WaitCopiedBeforePayloadWipe(this, "InitZPage");
         delete _scratch.retiredLivemap;
         _scratch.retiredLivemap = nullptr;
         _scratch.allocPtr = GetRegionStart();
         _scratch.regionEnd = _scratch.allocPtr + nUnit * ZPage::UNIT_SIZE;
         reset(age);
+        if (age == PageAge::old && !_remembered_set.is_initialized()) {
+            remset_alloc();
+        }
         if (live) {
             reset_livemap();
         }
@@ -1079,20 +1076,14 @@ inline void ZPage::InitRegion(size_t nUnit, ZPageType uClass, PageAge age)
         (void)nUnit;
     }
 
-} // namespace MapleRuntime
-#endif
-
-namespace MapleRuntime {
 inline ZGenerationId ZPage::generation_id() const
 {
     return _generation_id;
 }
-}
 
-namespace MapleRuntime {
 inline unsigned ZPage::RelocateObserve() const
 {
-    auto owner = ForwardingTable::RetainPageOwner(const_cast<ZPage*>(this));
+    auto owner = forwarding_for_page(const_cast<ZPage*>(this));
     if (!owner) {
         return 0;
     }
@@ -1121,20 +1112,16 @@ inline std::atomic<uint64_t>& ZPage::EnrolAfterFlip()
     return n;
 }
 
-inline Generation ZPage::GetOwnerGeneration() const
-    {
-        return IsYoungRegion() ? Generation::Young : Generation::Old;
-    }
-}
-
-namespace MapleRuntime {
 inline bool ZPage::IsYoungRegion() const
-    {
-        return generation_id() == ZGenerationId::young;
-    }
+{
+    return generation_id() == ZGenerationId::young;
 }
 
-namespace MapleRuntime {
+inline Generation ZPage::GetOwnerGeneration() const
+{
+    return IsYoungRegion() ? Generation::Young : Generation::Old;
+}
+
 inline MAddress ZPage::GetRegionStart() const
 {
     if (!_virtual.is_null()) {
@@ -1142,25 +1129,15 @@ inline MAddress ZPage::GetRegionStart() const
     }
     return _scratch.allocPtr;
 }
-}
 
-namespace MapleRuntime {
 inline MAddress ZPage::GetRegionEnd() const { return _scratch.regionEnd; }
-}
 
-namespace MapleRuntime {
 inline MAddress ZPage::GetRegionAllocPtr() const { return _scratch.allocPtr; }
-}
 
-namespace MapleRuntime {
 inline bool ZPage::IsSmallRegion() const { return is_small(); }
-}
 
-namespace MapleRuntime {
 inline bool ZPage::IsLargeRegion() const { return is_large(); }
-}
 
-namespace MapleRuntime {
 template<typename Function>
 inline void ZGenerationPagesParallelIterator::do_pages(Function function)
 {
@@ -1171,4 +1148,6 @@ inline void ZGenerationPagesParallelIterator::do_pages(Function function)
         return true;
     });
 }
-}
+
+} // namespace MapleRuntime
+#endif

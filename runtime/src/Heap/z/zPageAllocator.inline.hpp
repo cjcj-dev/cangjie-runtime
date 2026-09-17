@@ -48,23 +48,8 @@ inline size_t RegionManager::CollectRegion(ZPage* region)
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->is_marked() ? region->live_bytes() : 0, region->GetRegionEnd(), 0u);
-        // STEER3 CALLSITE_AUDIT: scrub HERE (once), not at ReclaimRegion.
-        // Linux TakeRegion often reuses garbage via ClearUnits WITHOUT ReclaimRegion
-        // (RegionManager.cpp TakeRegion same-size head path). Scrub-only-at-Reclaim
-        // therefore never ran on the hot path. Collect is the unique "region dies" edge.
-        ScrubRememberedSetForRegion(region);
-
         region->LockWriteRegion();
-#if defined(__OHOS__)
-        // Do not publish an installed ghost carrier to dirtyTree before its dispel point.
-        if (region->IsGhostFromRegion()) {
-            garbageRegionList.PrependRegion(region);
-        } else {
-            ReclaimRegion(region);
-        }
-#else
         garbageRegionList.PrependRegion(region);
-#endif
         region->UnlockWriteRegion();
 
         if (region->IsLargeRegion()) {
@@ -92,9 +77,6 @@ inline void RegionManager::AddRawPointerObject(BaseObject* obj)
                 garbageRegionList.TryDeleteRegion(region)) {
                 GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
                 CHECK(phase != GCPhase::GC_PHASE_FORWARD && phase != GCPhase::GC_PHASE_PREFORWARD);
-                if (phase == GCPhase::GC_PHASE_POST_TRACE) {
-                    region->ClearGhostRegionBit();
-                }
                 rawPointerPinnedRegionList.PrependRegion(region);
                 break;
             }
@@ -246,9 +228,7 @@ inline ZPage* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedBytes)
         size_t bytes = 0;
         for (ZPage* region = garbageRegionList.GetHeadRegion(); region != nullptr;
              region = region->GetNextRegion()) {
-            if (region->IsGhostFromRegion()) {
-                bytes += region->GetGhostRegionSize();
-            } else if (candidate == nullptr && region->GetRawPointerObjectCount() == 0) {
+            if (candidate == nullptr && region->GetRawPointerObjectCount() == 0) {
                 // routedest: defence in depth. A held region should never have reached
                 // garbageRegionList — the two Assemble gates and the two young gates refuse
                 // it first — so a non-zero count at this site means one of those was
@@ -274,11 +254,9 @@ inline bool RegionManager::TryTakeGarbageRegionAfterDispel(ZPage* target)
              region = region->GetNextRegion()) {
             if (region == target) {
                 CHECK_DETAIL(region->IsGarbageRegion(),
-                             "TryTakeGarbageRegionAfterDispel region=%p type=%u ghost=%u "
+                             "TryTakeGarbageRegionAfterDispel region=%p type=%u "
                              "(garbage list still names a non-GARBAGE region)",
-                             region, static_cast<unsigned>(0u),
-                             static_cast<unsigned>(region->IsGhostFromRegion()));
-                CHECK(!region->IsGhostFromRegion());
+                             region, static_cast<unsigned>(0u));
                 // routedest: refuse a held region here too, so it is neither quarantined nor
                 // reclaimed. Same defence-in-depth role as TakeReclaimableGarbageRegion.
                 if (region->GetRawPointerObjectCount() > 0) {
@@ -294,14 +272,8 @@ inline bool RegionManager::TryTakeGarbageRegionAfterDispel(ZPage* target)
 inline size_t RegionManager::GetGatedGarbageBytes()
     {
         std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
-        size_t bytes = 0;
-        for (ZPage* region = garbageRegionList.GetHeadRegion(); region != nullptr;
-             region = region->GetNextRegion()) {
-            if (region->IsGhostFromRegion()) {
-                bytes += region->GetGhostRegionSize();
-            }
-        }
-        return bytes;
+        (void)garbageRegionList;
+        return 0;
     }
 
 inline void RegionManager::LockRegionListInSaferegion(std::mutex& listMutex)
@@ -338,12 +310,12 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
     while (true) {
         // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
         // before advancing the ordinary relocation iterator.
-        RelocationRequestQueue::Selection selected =
-            regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
+        ZRelocateQueue::Selection selected =
+            regionManager.GetZRelocateQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
                 return fromRegionList.TakeHeadRegion();
             });
         if (!selected) {
-            selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
+            selected = regionManager.GetZRelocateQueue().SynchronizePoll();
             if (selected.workersDone) {
                 break;
             }
@@ -353,16 +325,16 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
         }
         if (!selected.is_request()) {
             ZPage* region = static_cast<ZPage*>(selected.ordinary);
-            regionManager.ForwardClaimedPage<G>(region, ForwardingTable::RetainPageOwner(region));
+            regionManager.ForwardClaimedPage<G>(region, forwarding_for_page(region));
             continue;
         }
 
-        ZPage* region = static_cast<ZPage*>(selected.request->owner());
+        ZPage* region = static_cast<ZPage*>(selected.owner());
         // If an ordinary iterator already removed the page, its worker will
         // lose the forwarding claim. This claimant still owns the page task.
         (void)fromRegionList.TryDeleteRegion(region);
         regionManager.ForwardClaimedPage<G>(region,
-            ForwardingTable::RetainPageOwner(region), true);
+            forwarding_for_page(region), true);
     }
 }
 

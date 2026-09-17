@@ -28,7 +28,7 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zIterator.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -406,7 +406,7 @@ bool AllSlotsAreRawNull(MArray* array)
 {
     bool allNull = true;
     array->ForEachRefField([&](RefField<>& slot) {
-        if (!is_null(slot.GetFieldValue())) {
+        if (!is_null_any(slot.GetFieldValue())) {
             allNull = false;
         }
     });
@@ -846,7 +846,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool targetLive = productLive(targetPage, target);
     const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty();
     auto& productCollector = static_cast<WCollector&>(collector);
-    MarkDomain* domain = productCollector.YoungMarkDomain();
+    ZMark* domain = productCollector.YoungMark();
     const size_t pendingBefore = domain->Stripes().Population() + domain->Stacks().Population();
     holder->OnFinalizerCreated();
     const size_t pendingAfter = domain->Stripes().Population() + domain->Stacks().Population();
@@ -864,7 +864,7 @@ void* RunMarkAllocationCase(void* rawExisting)
                  page->IsYoungRegion(), page->IsLargeRegion(), implicit, live, targetLive, excluded);
     size_t markEndObservations = 0;
     bool markEndTargetLive = false;
-    TracingCollector::testYoungMarkCompleted = [&, target, productLive]() {
+    CopyCollector::testYoungMarkCompleted = [&, target, productLive]() {
         const auto markEnd = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
         if (markEnd.sequence != during.sequence) return;
         ZPage* endPage = Heap::page(reinterpret_cast<uintptr_t>(target));
@@ -886,7 +886,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     // watermark resampling using the same rooted holder.
     collector.RequestGC(GC_REASON_YOUNG, false);
     SetMarkClosureObserverForTest(nullptr);
-    TracingCollector::testYoungMarkCompleted = nullptr;
+    CopyCollector::testYoungMarkCompleted = nullptr;
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
@@ -955,7 +955,7 @@ void* RunPinnedPublicationCase(void*)
     MarkAllocationWindow::completed = false;
     MarkAllocationWindow::timedOut = false;
     pinnedAcquiredWindow = false;
-    TracingCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
+    CopyCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
     RegionManager::testPinnedPageAcquired = PausePinnedPageBeforeInstall;
     TypeInfo* type = GetReferenceArrayTypeInfos().component;
     const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
@@ -981,7 +981,7 @@ void* RunPinnedPublicationCase(void*)
         MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
     }
     collector.RequestGC(GC_REASON_USER, false);
-    TracingCollector::testOldMarkStarted = nullptr;
+    CopyCollector::testOldMarkStarted = nullptr;
     const bool retained = heap.GetExportObject(root) == fresh;
     heap.RemoveExportObject(root);
     mutator->SetManagedContext(true);
@@ -1005,7 +1005,7 @@ void* RunPinnedMarkStartCase(void*)
     MarkAllocationWindow::released = false;
     MarkAllocationWindow::completed = false;
     MarkAllocationWindow::timedOut = false;
-    TracingCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
+    CopyCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
     mutator->SetManagedContext(false);
     collector.RequestGC(GC_REASON_USER, true);
     bool entered;
@@ -1015,7 +1015,7 @@ void* RunPinnedMarkStartCase(void*)
     }
     if (!entered) {
         MarkAllocationWindow::released = true;
-        TracingCollector::testOldMarkStarted = nullptr;
+        CopyCollector::testOldMarkStarted = nullptr;
         mutator->SetManagedContext(true);
         return reinterpret_cast<void*>(2);
     }
@@ -1037,7 +1037,7 @@ void* RunPinnedMarkStartCase(void*)
         MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
     }
     collector.RequestGC(GC_REASON_USER, false);
-    TracingCollector::testOldMarkStarted = nullptr;
+    CopyCollector::testOldMarkStarted = nullptr;
     const bool retained = heap.GetExportObject(root) == first;
     heap.RemoveExportObject(root);
     mutator->SetManagedContext(true);

@@ -14,6 +14,7 @@
 namespace MapleRuntime {
 class MarkStripeSet;
 class MarkTerminate {
+    friend class ZMark;
 public:
     void SetResurrected(bool value) { resurrected.store(value, std::memory_order_relaxed); }
     bool Resurrected() const { return resurrected.load(std::memory_order_relaxed); }
@@ -22,8 +23,6 @@ public:
     bool TryTerminate(MarkStripeSet& stripes, size_t usedNStripes);
     void Wake();
     bool Saturated() const;
-    bool Terminated() const;
-    size_t WorkerCount() const;
 
 private:
     void MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStripes);
@@ -32,7 +31,6 @@ private:
     size_t workerCount = 0;
     size_t working = 0;
     size_t awakening = 0;
-    bool terminated = false;
     mutable std::mutex mutex;
     std::condition_variable condition;
 };

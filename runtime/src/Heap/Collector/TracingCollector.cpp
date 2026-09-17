@@ -17,21 +17,21 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
 
 #if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(GCCycleGeneration, NativeSlot*)> TracingCollector::testColoredRootResult;
-std::function<void()> TracingCollector::testCyclePrepared;
-std::function<void()> TracingCollector::testYoungMarkStarted;
-std::function<void()> TracingCollector::testOldMarkStarted;
-std::function<void(GCCycleGeneration, MarkStartPoint, const MarkDomain*)> TracingCollector::testMarkStartState;
-std::function<void()> TracingCollector::testYoungMarkCompleted;
-std::function<void(const ExportOwnershipTestObservation&)> TracingCollector::testExportOwnershipResult;
-std::function<void(Mutator&)> TracingCollector::testOldMarkThreadResult;
+std::function<void(GCCycleGeneration, NativeSlot*)> CopyCollector::testColoredRootResult;
+std::function<void()> CopyCollector::testCyclePrepared;
+std::function<void()> CopyCollector::testYoungMarkStarted;
+std::function<void()> CopyCollector::testOldMarkStarted;
+std::function<void(GCCycleGeneration, MarkStartPoint, const ZMark*)> CopyCollector::testMarkStartState;
+std::function<void()> CopyCollector::testYoungMarkCompleted;
+std::function<void(const ExportOwnershipTestObservation&)> CopyCollector::testExportOwnershipResult;
+std::function<void(Mutator&)> CopyCollector::testOldMarkThreadResult;
 #endif
 
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
@@ -44,7 +44,6 @@ std::atomic<bool> g_markTerminateAtexitInstalled{ false };
 std::atomic<uint64_t> g_markTerminateMaxPauseNs{ 0 };
 std::atomic<size_t> g_markTerminatePauseY2y{ 0 };
 std::atomic<size_t> g_markTerminateClosureDuringPause{ 0 };
-std::atomic<size_t> g_weakDiscoveryCount{ 0 };
 #endif
 
 void NoteMarkTerminatePause() { g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed); }
@@ -110,25 +109,15 @@ void NoteTraceYoungClosureDuringPause()
 {
     g_markTerminateClosureDuringPause.fetch_add(1, std::memory_order_relaxed);
 }
-
-void ResetWeakDiscoveryTestReceipt()
-{
-    g_weakDiscoveryCount.store(0, std::memory_order_relaxed);
-}
-
-WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt()
-{
-    return { g_weakDiscoveryCount.load(std::memory_order_relaxed) };
-}
 #endif
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void TracingCollector::DumpHeap(const CString& tag)
+void CopyCollector::DumpHeap(const CString& tag)
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "Not In STW");
     DLOG(FRAGMENT, "DumpHeap %s", tag.Str());
     // dump roots
-
+    DumpRoots(FRAGMENT);
     // dump object contents
     auto dumpVisitor = [](BaseObject* obj) { obj->DumpObject(FRAGMENT); };
     bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
@@ -152,6 +141,48 @@ void TracingCollector::DumpHeap(const CString& tag)
     DLOG(FRAGMENT, "Dump Allocator");
 }
 
+ATTR_NO_SANITIZE_ADDRESS
+void CopyCollector::DumpRoots(LogType logType)
+{
+    RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
+        zaddress_unsafe value = ref.LoadPlain();
+        if (is_null(value)) {
+            return;
+        }
+        // DumpRoots is called while the root owner retains the target for inspection.
+        auto obj = to_object(safe(value));
+        DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
+             theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+             theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
+    };
+
+    DLOG(logType, "stack roots");
+    MutatorManager::Instance().VisitAllMutators(
+        [&rootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rootVisitor); });
+
+    DLOG(logType, "finalizer processor roots");
+
+    NativeSlotVisitor rootSlotVisitor = [this, logType](NativeSlot& ref) {
+        zpointer value = ref.GetFieldValue();
+        if (is_null(value)) {
+            return;
+        }
+        // StaticRootTable keeps the referent live while DumpRoots inspects it.
+        auto obj = ZBarrier::ReadStaticRef(ref);
+        if (obj == nullptr) {
+            return;
+        }
+        DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
+             theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+             theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
+    };
+
+    DLOG(logType, "static fields");
+    VisitFinalizerRoots(rootSlotVisitor);
+    VisitStaticRoots(rootSlotVisitor);
+
+    DLOG(logType, "Dump GCRoots end");
+}
 #endif
 
 } // namespace MapleRuntime
@@ -234,7 +265,7 @@ void ReportSkippedStackMapCounts()
             zeroEntries, pcMiss, zeroRootIndices);
     }
 }
-size_t TracingCollector::CurrentThreadRootMapMissCount()
+size_t CopyCollector::CurrentThreadRootMapMissCount()
 {
     return g_currentThreadRootMapMissCount;
 }
@@ -245,7 +276,7 @@ size_t TracingCollector::CurrentThreadRootMapMissCount()
 
 namespace MapleRuntime {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void TracingCollector::DumpBeforeGC()
+void CopyCollector::DumpBeforeGC()
     {
         if (ENABLE_LOG(FRAGMENT)) {
             if (MutatorManager::Instance().WorldStopped()) {
@@ -257,7 +288,7 @@ void TracingCollector::DumpBeforeGC()
         }
     }
 
-void TracingCollector::DumpAfterGC()
+void CopyCollector::DumpAfterGC()
     {
         if (ENABLE_LOG(FRAGMENT)) {
             if (MutatorManager::Instance().WorldStopped()) {
@@ -270,9 +301,3 @@ void TracingCollector::DumpAfterGC()
     }
 #endif
 }
-
-namespace MapleRuntime {
-
-
-
-} // namespace MapleRuntime

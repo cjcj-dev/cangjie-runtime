@@ -15,6 +15,7 @@ set(GC_UNIT_SOURCES
     test_colour_address.cpp
     test_zBitField.cpp
     test_zBitMap.cpp
+    test_zRememberedSet.cpp
     test_zList.cpp
     test_region_list.cpp
     test_zArray.cpp
@@ -26,7 +27,6 @@ set(GC_UNIT_SOURCES
     test_trustp1_phase1.cpp
 
     test_object_gate.cpp
-    test_remset.cpp
     test_defect_regressions.cpp
     test_zLiveMap.cpp
     test_region_age.cpp
@@ -35,11 +35,9 @@ set(GC_UNIT_SOURCES
     test_gctibzero.cpp
     test_pinroot.cpp
     test_followedge.cpp
-    test_z_forwarding_life.cpp
     test_colour_is_checks.cpp
     test_remap_young_roots.cpp
     test_zForwarding.cpp
-    test_forwarding_no_geometry.cpp
     test_z_forwarding_table.cpp
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp
@@ -66,7 +64,6 @@ set(GC_UNIT_SOURCES
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp
     test_uncommitter.cpp
-    test_relocation_request_queue.cpp
     test_gc_thread_pool.cpp
     test_zWorkers.cpp
 
@@ -76,7 +73,6 @@ set(GC_UNIT_SOURCES
     test_fillerobj.cpp
     test_i2_readref.cpp
     test_loadfc.cpp
-    test_ghost_region_lookup.cpp
     test_fnlz_roots.cpp
     test_reference_processor.cpp
     test_mark_stack_entry.cpp
@@ -89,6 +85,8 @@ set(GC_UNIT_SOURCES
     test_package_init.cpp
     test_verify_roots.cpp
     test_p10_roots_iterator.cpp
+    test_weak_roots.cpp
+    test_sync_native_wait.cpp
     test_verify_fail_close.cpp
     test_verify_phase.cpp
     test_verify_marking_stacks.cpp

@@ -24,40 +24,12 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Collector/CopyCollector.h"
 #include "Heap/z/zMark.hpp"
-#include "Heap/Collector/RemsetScanStats.h"
-
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
 class MarkLiveCache;
 class ScopedStopTheWorld;
 
 #if defined(MRT_TESTABLE_INTERNALS)
-// One-shot wave8 attribution receipts.  The storage is native and fixed-size;
-// production builds do not declare or emit any of this instrumentation.
-enum class RemsetFilterReceiptReason : uint8_t {
-    kNone = 0,
-    kStale = 1,
-    kDeadHolder = 2,
-    kNoOrigin = 3,
-    kBadTarget = 4,
-};
-struct RemsetFilterTestReceipt {
-    uint64_t seen = 0;
-    uint64_t consumed = 0;
-    uint64_t stale = 0;
-    uint64_t deadHolder = 0;
-    uint64_t noOrigin = 0;
-    uint64_t badTarget = 0;
-    MAddress lastConsumedSlot = 0;
-    MAddress lastStaleSlot = 0;
-    MAddress lastDeadHolderSlot = 0;
-    MAddress lastNoOriginSlot = 0;
-    MAddress lastBadTargetSlot = 0;
-};
-void ResetRemsetFilterTestReceipt();
-RemsetFilterTestReceipt ReadRemsetFilterTestReceipt();
-void NoteRemsetFilterTestReceipt(MAddress slot, RemsetFilterReceiptReason reason, bool consumed);
-
 struct Y2yHandoffTestReceipt {
     uint64_t phase0 = 0; // release-boundary observation
     uint64_t phase1 = 0; // roots consumed after release
@@ -169,13 +141,14 @@ public:
     void MarkNewObject(BaseObject* obj) override;
     void StartYoungMarkWork();
     void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
-    bool PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain);
+    bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
     void PublishThreadRoot(BaseObject* object, bool young, bool follow);
-    bool FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* domain);
+    bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
-    bool FlushGCDataMarkProducers(ThreadGCData& data, MarkDomain* domain);
+    bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
-    MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
+    ZMark* YoungMark() { return youngCycle.MarkPtr(); }
+    const ZMark* YoungMark() const { return youngCycle.MarkPtr(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
     void MarkYoungRootObject(BaseObject* object) const override;
 
@@ -251,8 +224,10 @@ public:
             return ZGenerationId::old;
         }
         const MAddress address = raw(ref.GetTargetObject());
-        if (ForwardingTable::get(address, Generation::Young) != nullptr) {
-            CHECK(ForwardingTable::get(address, Generation::Old) == nullptr);
+        if (address == 0) {
+            return ZGenerationId::old;
+        }
+        if (Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).forwarding_table().get(address) != nullptr) {
             return ZGenerationId::young;
         }
         return ZGenerationId::old;
@@ -278,11 +253,11 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
                                          const ForwardingProvenance& provenance) const override
     {
-        if (!Heap::IsHeapAddress(obj)) return obj;
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) return obj;
         const MAddress from = reinterpret_cast<MAddress>(obj);
         const Generation ownerGeneration = generation == ZGenerationId::young
             ? Generation::Young : Generation::Old;
-        ZForwarding* forwarding = ForwardingTable::get(from, ownerGeneration);
+        ZForwarding* forwarding = Heap::GetHeap().GetCollector().GetGenerationCycle(ownerGeneration).forwarding_table().get(from);
         if (forwarding == nullptr) return obj;
 
         // zRelocate.cpp:383-415: lookup, retain/copy/release, then wait/find.
@@ -291,7 +266,7 @@ public:
         if (const MAddress to = forwarding->find(from)) {
             return reinterpret_cast<BaseObject*>(to);
         }
-        ZPage::RetainScope lease{ForwardingTable::Owner(forwarding)};
+        ZPage::RetainScope lease{forwarding};
         if (lease.ok()) {
             if (BaseObject* to = TryMutatorRelocate(obj, lease)) return to;
         }
@@ -325,16 +300,14 @@ public:
         // payload pointer the caller kept. Pinning to while handing out from both
         // underflowed the from region's count and gave C a payload the young cycle
         // was about to relocate.
-        if (obj != nullptr) {
-            ZPage* ghost = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-            if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
-                const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(ghost->GetOwnerGeneration()));
-                if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
-                    const ForwardingProvenance provenance{
-                        ForwardingHolderKind::HeapRef, this, &obj
-                    };
-                    obj = ValidateCurrentValue(obj, provenance);
-                }
+        if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+            const MAddress addr = reinterpret_cast<MAddress>(obj);
+            if (GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                GetGenerationCycle(Generation::Old).forwarding_table().get(addr) != nullptr) {
+                const ForwardingProvenance provenance{
+                    ForwardingHolderKind::HeapRef, this, &obj
+                };
+                obj = ValidateCurrentValue(obj, provenance);
             }
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -351,8 +324,6 @@ public:
     void ResolveCycleRef() override;
 
     // BaseObject* ForwardFixRefField(RefField<>& field) const;
-    BaseObject* ForwardUpdateRawRef(ObjectRef& ref, Generation generation);
-
     // lonefrom: "is this object being relocated in this cycle" must not be asked as
     // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
     // from-list with TakeHeadRegion() (RegionManager.cpp:1638), so a
@@ -385,7 +356,7 @@ public:
     // region type is rewritten as relocation progresses, and a predicate reading it can be right
     // one instant and wrong the next -- that shape produced several of this session's dead ends.
     // An address either is in the set or is not.
-    static constexpr bool kMembershipFromTable = ForwardingTable::kZfwdTableConsume;
+    static constexpr bool kMembershipFromTable = true;
 
     bool IsFromObject(BaseObject* obj) const override
     {
@@ -393,16 +364,9 @@ public:
             if (!Heap::IsHeapAddress(obj)) {
                 return false;
             }
-            // The table is installed over a heap span; membership still
-            // requires the per-region forwarding publication.  Unselected
-            // regions retain a NORMAL route and no forwarding face, and must
-            // not be classified as relocation-set addresses merely because
-            // their address falls inside that span (zGeneration.cpp:254).
-            ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-            return region != nullptr &&
-                (region->FromPageLiveMap() != nullptr ||
-                 ForwardingTable::RetainPageOwner(region).get() != nullptr ||
-                 region->IsForwardingDone());
+            const MAddress addr = reinterpret_cast<MAddress>(obj);
+            return GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                   GetGenerationCycle(Generation::Old).forwarding_table().get(addr) != nullptr;
         }
         // filter const string object.
         if (Heap::IsHeapAddress(obj)) {
@@ -424,22 +388,10 @@ public:
 
     bool IsGhostFromObject(BaseObject* obj) const override
     {
-        // filter const string object.
-        if (Heap::IsHeapAddress(obj)) {
-            return ZPage::InGhostFromRegion(obj);
-        }
-
-        return false;
+        return IsFromObject(obj);
     }
 
     bool IsUnmovableFromObject(BaseObject* obj) const override;
-
-    BaseObject* GetForwardPointer(BaseObject* fromObj, ZPage* region) const
-    {
-        // ZRelocate::forward_object consumes only the installed CAS winner.
-        auto owner = ForwardingTable::RetainPageOwner(region);
-        return owner ? reinterpret_cast<BaseObject*>(owner->find(reinterpret_cast<MAddress>(fromObj))) : nullptr;
-    }
 
     // Refuses a non-heap address the way FindToVersion does below, and for the same reason:
     // GetGhostFromRegionAt -> GetUnitIdxAt has no heap range
@@ -452,7 +404,6 @@ public:
     //
     //   ResolveMinorReference(RefField&) ra1=ResolveMinorReference    (where it moved to)
     //   ResolveMinorReference(RootSlot&) same shape
-    //   RescanRememberedSet              same shape
     //
     // Reproduced 10/10 with cjcj::cjc --package packages/basic/src --output-type=staticlib on a
     // coloured host runtime:
@@ -465,16 +416,14 @@ public:
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return FindToVersionResult::NotManaged();
         }
-        const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(obj), generation);
-        return lookup.to != 0 ? FindToVersionResult::Found(reinterpret_cast<BaseObject*>(lookup.to))
-                              : FindToVersionResult::NotForwarded();
+        const MAddress to = forwarding_find(generation, reinterpret_cast<MAddress>(obj));
+        return to != 0 ? FindToVersionResult::Found(reinterpret_cast<BaseObject*>(to))
+                       : FindToVersionResult::NotForwarded();
     }
 
 protected:
     void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
                               const ForwardingProvenance& provenance) const;
-    BaseObject* ForwardObjectImpl(BaseObject* obj, ZPage* ghostFromRegion,
-                                  const ZPage::RetainScope& lease);
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
     BaseObject* RelocateObjectInner(BaseObject* obj, ZPage* copyPage);
@@ -486,8 +435,6 @@ protected:
     BaseObject* TryMutatorRelocate(BaseObject* from, ZPage::RetainScope& lease) const;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
-
-    BaseObject* TryForwardObject(BaseObject* fromVersion, Generation generation);
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
     bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
@@ -668,7 +615,7 @@ protected:
     {
         return target != nullptr && Heap::IsHeapAddress(target) &&
             Collector::JudgeHandOutTarget(target) == HandVerdict::Usable &&
-            ForwardingTable::get(reinterpret_cast<MAddress>(target), generation) == nullptr;
+            generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(target)) == nullptr;
     }
 
 
@@ -763,14 +710,7 @@ private:
     // ZMark::try_end sibling: called with mutators stopped; performs exactly one
     // local-buffer flush and reports whether concurrent-mark-continue is needed.
     bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
-    friend class YoungStripedMarkingWork;
-    void ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots);
-    void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
-                             const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
-                             const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
-                             MinorSlotSet* consumedOut = nullptr, RemsetScanStats* statsOut = nullptr,
-                             MinorInteriorBaseMap* interiorBasesOut = nullptr,
-                             const ScopedStopTheWorld* stw = nullptr);
+    friend class ZMarkTask;
     bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
                                const ScopedStopTheWorld* stw = nullptr) const;
     bool FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw = nullptr) const;
@@ -802,7 +742,7 @@ private:
     void RemapYoungRoots();
     bool Preforward();
     void StartRelocationTasks(GCCycleGeneration generation);
-    BaseObject* WaitForPageForwarding(BaseObject* obj, ForwardingTable::Owner owner) const;
+    BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);
@@ -810,7 +750,6 @@ private:
     CrossRefHandler cycleRefHandlerForTest = nullptr;
 #endif
 
-    std::unique_ptr<MarkDomain> youngMarkDomain;
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint64_t minorTotalRuns = 0;

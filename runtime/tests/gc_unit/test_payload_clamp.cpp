@@ -53,7 +53,7 @@ struct PayloadFixture {
     PayloadFixture()
     {
         rememberedSet.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
-        auto& heapRemset = Heap::GetHeap().GetRememberedSet();
+        auto& heapRemset = HeapTestRemset();
         if (!heapRemset.initialized) {
             heapRemset.Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         }

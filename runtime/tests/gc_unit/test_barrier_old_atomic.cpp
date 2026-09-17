@@ -242,7 +242,7 @@ GC_TEST(BarrierOldAtomic, NoAllocBufferOverwriteRetiresOldValue)
     ZBarrier::WriteReference(fixture.holder, *fixture.field, fixture.newValue);
     ThreadLocal::GetGCData().storeBarrierBuffer->Flush();
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
-    const bool slotRemembered = Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(fixture.field));
+    const bool slotRemembered = SlotPageRemembered(reinterpret_cast<MAddress>(fixture.field));
     std::fprintf(stderr,
                  "DETAIL arm=no_alloc old_receipt=%zu new_receipt=%zu remset=%u final_target=%p\n",
                  receipts.oldValue, receipts.newValue, static_cast<unsigned>(slotRemembered),
@@ -269,7 +269,7 @@ GC_TEST(BarrierOldAtomic, AllocBufferOverwriteRetiresOldValueControl)
     ThreadLocal::GetGCData().storeBarrierBuffer->Flush();
     mutator.FlushStoreBarrierBuffer(false);
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
-    const bool slotRemembered = Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(fixture.field));
+    const bool slotRemembered = SlotPageRemembered(reinterpret_cast<MAddress>(fixture.field));
     std::fprintf(stderr,
                  "DETAIL arm=with_alloc pending=%zu old_receipt=%zu new_receipt=%zu remset=%u final_target=%p\n",
                  pending, receipts.oldValue, receipts.newValue, static_cast<unsigned>(slotRemembered),
@@ -401,6 +401,6 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
             oldValueRetained |= object == heap.obj0;
         });
         GC_EXPECT_TRUE(oldValueRetained);
-        GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&destination)));
+        GC_EXPECT_FALSE(SlotPageRemembered(reinterpret_cast<MAddress>(&destination)));
     }
 }

@@ -13,7 +13,7 @@ struct MarkPublicationFixture {
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector { Heap::GetHeap().GetAllocator(), resources };
-    TracingCollector* previousCollector;
+    CopyCollector* previousCollector;
     MarkPublicationFixture()
         : previousCollector(resources.collectorProxy.currentCollector)
     {
@@ -28,10 +28,7 @@ struct MarkPublicationFixture {
         collector.youngCycle.Begin(1);
         // ZGenerationYoung::mark_start advances the sequence with the remset
         // flip (zGeneration.cpp:855-881), before mark work can be published.
-        alignas(8) uint64_t storage[16] {};
-        RememberedSet remembered;
-        remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-        GenerationSequenceFixture::AdvanceYoung(collector.youngCycle, remembered);
+        GenerationSequenceFixture::AdvanceYoung(collector.youngCycle);
         collector.StartYoungMarkWork();
         collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
         collector.oldCycle.SelectReason(GC_REASON_USER);
@@ -46,7 +43,7 @@ struct MarkPublicationFixture {
         resources.collectorProxy.currentCollector = previousCollector;
         current = previousFixture;
     }
-    template<class Visitor> void DrainDomain(MarkDomain& domain, Visitor&& visitor)
+    template<class Visitor> void DrainDomain(ZMark& domain, Visitor&& visitor)
     {
         GcUnit::WorkerFixture worker;
         // ZMark::flush publishes the mutator's partial stack before workers drain it.
@@ -60,9 +57,9 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void DrainOld(Visitor&& visitor)
     {
-        DrainDomain(*collector.majorMarkDomain, std::forward<Visitor>(visitor));
+        DrainDomain(*collector.MajorMark(), std::forward<Visitor>(visitor));
     }
-    bool FollowYoung(TracingCollector::WorkStack& work, std::vector<BaseObject*>& reached)
+    bool FollowYoung(WorkStack& work, std::vector<BaseObject*>& reached)
     {
         WCollector::MinorSlotSet slots;
         WCollector::MinorSlotSet weakSlots;
@@ -74,17 +71,21 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void Drain(Visitor&& visitor)
     {
-        DrainDomain(*collector.youngMarkDomain, visitor);
-        DrainDomain(*collector.majorMarkDomain, visitor);
+        DrainDomain(*collector.YoungMark(), visitor);
+        DrainDomain(*collector.MajorMark(), visitor);
     }
     template<class Stack> void DrainObjects(Stack& stack)
     {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
-    size_t YoungPending() const { return collector.youngMarkDomain->Stripes().Population() +
-        collector.youngMarkDomain->Stacks().Population(); }
-    size_t OldPending() const { return collector.majorMarkDomain->Stripes().Population() +
-        collector.majorMarkDomain->Stacks().Population(); }
+    size_t YoungPending() const {
+        auto* mark = const_cast<WCollector&>(collector).YoungMark();
+        return mark->Stripes().Population() + mark->Stacks().Population();
+    }
+    size_t OldPending() const {
+        auto* mark = const_cast<WCollector&>(collector).MajorMark();
+        return mark->Stripes().Population() + mark->Stacks().Population();
+    }
 };
 template<class Stack> void DrainPublishedMarkObjects(Stack& stack)
 {

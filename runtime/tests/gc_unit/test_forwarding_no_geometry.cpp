@@ -16,11 +16,10 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 void InstallReceipt(GcHeapFixture& heap, MAddress from, MAddress to)
 {
-    Heap::GetHeap().GetRememberedSet().Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     heap.InstallPageOwner(heap.region0);
-    auto publication = ForwardingTable::EnsurePublicationBeforeCopy(heap.region0, from);
+    auto publication = forwarding_for_page(heap.region0, from);
     GC_EXPECT_TRUE(static_cast<bool>(publication));
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, to), to);
+    GC_EXPECT_EQ(UNUSED_InsertMapping(publication, from, to), to);
 }
 }
 
@@ -30,10 +29,10 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     heap.InstallPageOwner(heap.region0);
     const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
     const Generation generation = heap.region0->GetOwnerGeneration();
-    const auto result = ForwardingTable::LookupTo(from, generation);
-    GC_EXPECT_TRUE(result.answer == ForwardingTable::ToAnswer::ArmedMiss);
+    const auto result = LookupTo(from, generation);
+    GC_EXPECT_TRUE(result.answer == FwdLookup::ArmedMiss);
     GC_EXPECT_EQ(result.to, static_cast<MAddress>(0));
-    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, generation) != nullptr);
+    GC_EXPECT_TRUE(generation_forwarding_table(generation).get(from) != nullptr);
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -48,7 +47,7 @@ struct MutatorPublishTestAccess {
         collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
         ZPage::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
-        return collector.ForwardObjectImpl(from, page, lease);
+        return collector.RelocateObjectInner(from, page);
     }
 };
 }

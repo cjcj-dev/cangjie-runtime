@@ -46,8 +46,6 @@ int ExercisePageRetirement(RetirementPath path, bool concurrent)
         (void)heap;
         // ReleaseRetiredRegion clears the product remembered set before
         // returning the page. Its address space must exist as after heap init.
-        Heap::GetHeap().GetRememberedSet().Initialize(manager.GetRegionHeapStart(),
-                                                    4 * unit * ZVirtualToPhysicalRatio);
         const auto role = ZPageType::small;
         ZPage* first = manager.TakeRegion(2, role, false, false, false);
         ZPage* second = manager.TakeRegion(2, role, false, false, false);

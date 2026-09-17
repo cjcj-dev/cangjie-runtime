@@ -7,6 +7,7 @@
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Base/Log.h"
+#include "Common/SuspendibleThreadSet.h"
 namespace MapleRuntime {
 void MarkTerminate::Reset(size_t workers)
 {
@@ -15,11 +16,11 @@ void MarkTerminate::Reset(size_t workers)
     workerCount = workers;
     working = workers;
     awakening = 0;
-    terminated = false;
 }
 
 void MarkTerminate::Leave()
 {
+    SuspendibleThreadSetLeaver stsLeaver;
     std::lock_guard<std::mutex> lock(mutex);
     CHECK_DETAIL(working != 0, "mark worker left twice");
     --working;
@@ -38,12 +39,12 @@ void MarkTerminate::MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStrip
 
 bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
 {
+    SuspendibleThreadSetLeaver stsLeaver;
     std::unique_lock<std::mutex> lock(mutex);
     CHECK_DETAIL(working != 0, "mark worker left termination twice");
     --working;
     if (working == 0) {
         MarkingStacks::VerifyEmpty(stripes.Population());
-        terminated = true;
         condition.notify_all();
         return true;
     }
@@ -77,18 +78,5 @@ bool MarkTerminate::Saturated() const
     std::lock_guard<std::mutex> lock(mutex);
     return working + awakening == workerCount;
 }
-
-bool MarkTerminate::Terminated() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return terminated && working == 0;
-}
-
-size_t MarkTerminate::WorkerCount() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return workerCount;
-}
-
 
 } // namespace MapleRuntime

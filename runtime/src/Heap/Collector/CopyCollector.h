@@ -13,25 +13,5 @@
 #include "Heap/z/zMark.hpp"
 
 namespace MapleRuntime {
-class CopyCollector : public TracingCollector {
-public:
-    explicit CopyCollector(Allocator& allocator, CollectorResources& resources) : TracingCollector(allocator, resources)
-    {
-        collectorType = CollectorType::COPY_COLLECTOR;
-    }
-    ~CopyCollector() override = default;
-
-    MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
-    void PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex) override;
-    virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
-
-protected:
-    virtual void ForwardFromSpace(GCCycleGeneration generation);
-    virtual void RefineFromSpace();
-
-    virtual void DoGarbageCollection(GCCycleGeneration generation) = 0;
-
-private:
-};
 } // namespace MapleRuntime
 #endif // MRT_COPY_COLLECTOR_H

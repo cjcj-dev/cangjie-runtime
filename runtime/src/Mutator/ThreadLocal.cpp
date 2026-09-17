@@ -50,13 +50,13 @@ ThreadGCData& ThreadLocal::GetGCData()
     return *tls->gcData;
 }
 
-MarkThreadLocalStacks& ThreadLocal::GetMarkStacks(MarkDomain& domain)
+MarkThreadLocalStacks& ThreadLocal::GetMarkStacks(ZMark& domain)
 {
     const size_t index = domain.Generation() == MarkingStacks::MarkingGeneration::YOUNG ? 0 : 1;
     return GetGCData().markStacks[index];
 }
 
-bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain)
+bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, ZMark& domain)
 {
     if (tls == nullptr || tls->gcData == nullptr) {
         return false;

@@ -1042,19 +1042,17 @@ EXPORTS
     _ZN12MapleRuntime10ZPage15VisitAllObjectsEOKNSt3__18functionIFvPNS_10BaseObjectEEEE @1044
     _ZN12MapleRuntime10ZPage16IsSafeKnownEmptyEv @1045
     _ZN12MapleRuntime10ZPage16IsSurvivedObjectEy @1046
-    _ZN12MapleRuntime10ZPage16dispelGhostCountE @1047 DATA
+    _ZN12MapleRuntime10ZPage13tdWindowCountE @1047 DATA
     _ZN12MapleRuntime10ZPage16youngRegionCountE @1048 DATA
 
-    _ZN12MapleRuntime10ZPage19ClearGhostRegionBitEv @1051
     _ZN12MapleRuntime10ZPage19GetYoungRegionCountEv @1052
     _ZN12MapleRuntime10ZPage19IsResurrectedObjectEPKNS_10BaseObjectE @1053
     _ZN12MapleRuntime10ZPage19StampCensusBoundaryEv @1054
     _ZN12MapleRuntime10ZPage20GetGhostFromRegionAtEy @1055
     _ZN12MapleRuntime10ZPage20GetOrAllocMarkBitmapEv @1056
     _ZN12MapleRuntime10ZPage20youngRegionFlagMutexE @1057 DATA
-    _ZN12MapleRuntime10ZPage21DispelGhostFromRegionEv @1058
+
     _ZN12MapleRuntime10ZPage24IncRawPointerObjectCountEv @1060
-    _ZN12MapleRuntime10ZPage24PrepareForwardableRegionEv @1061
     _ZN12MapleRuntime10ZPage26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10ZPage27BindLiveInfo0FromLiveIfNullEv @1065
     _ZN12MapleRuntime10ZPage30LARGE_OBJECT_DEFAULT_THRESHOLDE @1068 DATA
@@ -1077,10 +1075,8 @@ EXPORTS
     _ZN12MapleRuntime10WCollector15ResolveCycleRefEv @1110
     _ZN12MapleRuntime10WCollector15ResurrectObjectEPNS_10BaseObjectEyPNS_10ZPageE @1111
     _ZN12MapleRuntime10WCollector15VisitMinorRootsERKNSt3__18functionIFvPNS_10BaseObjectEEEEy @1112
-    _ZN12MapleRuntime10WCollector16TryForwardObjectEPNS_10BaseObjectE @1113
     _ZN12MapleRuntime10WCollector17CollectSmallSpaceEv @1115
     _ZN12MapleRuntime10WCollector17FixMinorRootSlotsEv @1116
-    _ZN12MapleRuntime10WCollector17ForwardObjectImplEPNS_10BaseObjectEPNS_10ZPageE @1117
     _ZN12MapleRuntime10WCollector17ProcessFinalizersEv @1119
     _ZN12MapleRuntime10WCollector17TraceYoungClosureERNS_9MarkStackIPNS_10BaseObjectEEEbRNSt3__113unordered_setIS3_NS6_4hashIS3_EENS6_8equal_toIS3_EENS6_9allocatorIS3_EEEERNS6_6vectorIS3_SD_EERNS7_IyNS8_IyEENSA_IyEENSC_IyEEEESN_b @1120
     _ZN12MapleRuntime10WCollector18GetCrossRefHandlerEPNS_10BaseObjectE @1121
@@ -1088,8 +1084,7 @@ EXPORTS
     _ZN12MapleRuntime10WCollector19CollectLargeGarbageEv @1123
     _ZN12MapleRuntime10WCollector19DoGarbageCollectionENS_17GCCycleGenerationE @1124
     _ZN12MapleRuntime10WCollector19FixMinorObjectSlotsEPNS_10BaseObjectE @1125
-    _ZN12MapleRuntime10WCollector19ForwardUpdateRawRefERNS_8RootSlotE @1126
-    _ZN12MapleRuntime10WCollector19RescanRememberedSetERNS_9MarkStackIPNS_10BaseObjectEEERKNSt3__113unordered_setIyNS6_4hashIyEENS6_8equal_toIyEENS6_9allocatorIyEEEESG_SG_bPSE_PNS_19DiffPathRemsetStatsE @1128
+
     _ZN12MapleRuntime10WCollector19ShouldIgnoreRequestERNS_9GCRequestE @1129
     _ZN12MapleRuntime10WCollector19VisitMinorRootSlotsERNSt3__18functionIFvRNS_8RootSlotEEEEy @1130
     _ZN12MapleRuntime10WCollector20EvacuateYoungRegionsERKNSt3__16vectorIPNS_10BaseObjectENS1_9allocatorIS4_EEEERKNS1_13unordered_setIyNS1_4hashIyEENS1_8equal_toIyEENS5_IyEEEE @1131
@@ -1344,7 +1339,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager25MAX_UNIT_COUNT_PER_REGIONE @1443 DATA
     _ZN12MapleRuntime13RegionManager26LockRegionListInSaferegionERNSt3__15mutexE @1446
     _ZN12MapleRuntime13RegionManager27EnlistFullThreadLocalRegionEPNS_10ZPageE @1447
-    _ZN12MapleRuntime13RegionManager27ScrubRememberedSetForRegionEPNS_10ZPageE @1449
     _ZN12MapleRuntime13RegionManager28TakeReclaimableGarbageRegionEPy @1450
     _ZN12MapleRuntime13RegionManager29PrepareYoungGarbageCandidatesERKNSt3__18functionIFvPNS_10ZPageEEEE @1451
     _ZN12MapleRuntime13RegionManager29ReclaimRegionToMarkQuarantineEPNS_10ZPageE @1452
@@ -1728,8 +1722,6 @@ EXPORTS
     _ZN12MapleRuntime20PrintSignalStackInfoD0Ev @1936
     _ZN12MapleRuntime20PrintSignalStackInfoD2Ev @1937
     _ZN12MapleRuntime20g_installDomainGrantE @1948 DATA
-    _ZN12MapleRuntime21ConcurrentMarkingWorkD0Ev @1951
-    _ZN12MapleRuntime21ConcurrentMarkingWorkD2Ev @1952
     _ZN12MapleRuntime21ScopedEnterSaferegionC2Eb @1954
     _ZN12MapleRuntime22CompressedStackMapHead15GetStackMapHeadEyRKNSt3__18functionIFvNS_23PrologueRegisterClosure4TypeEjEEEPy @1955
     _ZN12MapleRuntime22IsHaveCommandInjectionERKNS_7CStringE @1960
@@ -1930,7 +1922,6 @@ EXPORTS
     _ZN12MapleRuntime8HeapImpl12GetAllocatorEv @2173
     _ZN12MapleRuntime8HeapImpl12GetCollectorEv @2174
     _ZN12MapleRuntime8HeapImpl15GetExportObjectEy @2176
-    _ZN12MapleRuntime8HeapImpl16GetRememberedSetEv @2178
     _ZN12MapleRuntime8HeapImpl16VisitStaticRootsERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @2179
     _ZN12MapleRuntime8HeapImpl17RemoveAllocBufferERNS_11AllocBufferE @2180
     _ZN12MapleRuntime8HeapImpl18CrossAccessBarrierEx @2181
@@ -2164,7 +2155,6 @@ EXPORTS
     _ZNK12MapleRuntime10ZPage13GetRegionSizeEv @2417
     _ZNK12MapleRuntime10ZPage14GetRegionStartEv @2418
     _ZNK12MapleRuntime10ZPage23ReportInvalidObjectSizeEPKNS_10BaseObjectEyyy @2420
-    _ZNK12MapleRuntime10ZPage28AssertGhostClearedAfterReuseEy @2421
     _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE @2422
     _ZNK12MapleRuntime10WCollector12IsFromObjectEPNS_10BaseObjectE @2423
     _ZNK12MapleRuntime10WCollector12IsOldPointerERNS_8HeapSlotILb0EEE @2424
@@ -2792,7 +2782,6 @@ EXPORTS
     _ZTVN12MapleRuntime18StackGrowStackInfoE @3181 DATA
     _ZTVN12MapleRuntime19SigHandlerFrameinfoE @3182 DATA
     _ZTVN12MapleRuntime20PrintSignalStackInfoE @3183 DATA
-    _ZTVN12MapleRuntime21ConcurrentMarkingWorkE @3184 DATA
     _ZTVN12MapleRuntime6CJFileE @3186 DATA
     _ZTVN12MapleRuntime6GCTaskE @3187 DATA
     _ZTVN12MapleRuntime7BarrierE @3188 DATA

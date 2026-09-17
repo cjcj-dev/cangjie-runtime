@@ -10,6 +10,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zPageTable.hpp"
+#include "Heap/z/zArray.hpp"
 
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zDriver.hpp"
@@ -26,6 +27,7 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.hpp"
+#include "Heap/Allocator/RegionList.h"
 
 #include <algorithm>
 #include <atomic>
@@ -143,7 +145,7 @@ public:
 
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
     ssize_t GetHeapPhysicalMemorySize() const override;
-    RememberedSet& GetRememberedSet() override { return rememberedSet; }
+
     FinalizerProcessor& GetFinalizerProcessor() override;
     CollectorResources& GetCollectorResources() override;
     void RegisterAllocBuffer(AllocBuffer& buffer) override;
@@ -184,7 +186,6 @@ private:
     CollectorProxy collectorProxy;
 
     ExportRootTable exportRootsTable;
-    RememberedSet rememberedSet;
 
     // manage gc roots entry
     StaticRootTable staticRootTable;
@@ -208,10 +209,20 @@ void HeapImpl::Init(const HeapParam& param)
     ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
     theSpace->Init(param);
-    rememberedSet.Initialize(theSpace->GetSpaceStartAddress(),
-                             theSpace->GetSpaceEndAddress() - theSpace->GetSpaceStartAddress());
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
+    {
+        const auto& heapMap = ZPageTable::heap_table().map();
+        const size_t heapSpan = heapMap.size() * heapMap.granule();
+        collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).forwarding_table().initialize(
+            heapSpan, heapMap.base(), heapMap.granule());
+        collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table().initialize(
+            heapSpan, heapMap.base(), heapMap.granule());
+    }
+    collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered()->bind(
+        &ZPageTable::heap_table(),
+        &collectorProxy.GetCurrentCollector().GetGenerationCycle(GCCycleGeneration::OLD).forwarding_table(),
+        &static_cast<RegionSpace*>(theSpace)->GetRegionManager());
     collectorResources.Init();
 }
 
@@ -253,6 +264,10 @@ MAddress HeapImpl::GetSpaceEndAddress() const { return theSpace->GetSpaceEndAddr
 
 Heap& Heap::GetHeap() { return *g_heapInstance; }
 
+ZRemembered& Heap::remembered()
+{
+    return *GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).remembered();
+}
 
 void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
 {
@@ -396,7 +411,7 @@ void HeapImpl::CrossAccessBarrier(I64 id)
     // Preserve that current identity, including an in-place destination whose
     // address is also another object's from-key (ZUncoloredRoot::make_load_good,
     // zUncoloredRoot.inline.hpp:62-69). Page ownership cannot reclassify it.
-    reinterpret_cast<TracingCollector&>(GetCollector()).ResurrectExportObject(recordObj);
+    reinterpret_cast<CopyCollector&>(GetCollector()).ResurrectExportObject(recordObj);
     SetExportObjActiveState(id, true);
 }
 
@@ -466,6 +481,27 @@ void Heap::free_page(ZPage* page)
         return;
     }
     ZPage::RetirePage(page, [] {});
+}
+
+size_t Heap::free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
+{
+    (void)id;
+    size_t freed = 0;
+    if (pages == nullptr) {
+        return 0;
+    }
+    for (int i = 0; i < pages->length(); ++i) {
+        ZPage* page = pages->at(i);
+        if (page == nullptr) {
+            continue;
+        }
+        if (RegionList* owner = page->GetRegionListOwner()) {
+            owner->DeleteRegion(page);
+        }
+        freed += page->size();
+        free_page(page);
+    }
+    return freed;
 }
 
 bool Heap::is_in(MAddress addr)

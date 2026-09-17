@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "Common/SuspendibleThreadSet.h"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStat.hpp"
@@ -29,7 +30,8 @@ void DrainFollow(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, 
                  size_t workerId, std::vector<size_t>& seen, bool partial)
 {
     MapleRuntime::GcUnit::WorkerFixture workerThread(workerId);
-    (void)MarkEngine::FollowWork(context, smr, stripes, terminate, workerId, partial,
+    SuspendibleThreadSetJoiner stsJoiner;
+    (void)ZMark::FollowWork(context, smr, stripes, terminate, workerId, partial,
                                  [&seen](const MarkStackEntry& entry) {
                                      seen.push_back(entry.partial_array_offset());
                                  });
@@ -68,7 +70,7 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
         for (auto& t : threads) {
             t.join();
         }
-        GC_EXPECT_TRUE(terminate.Terminated());
+        GC_EXPECT_TRUE(stripes.IsEmpty());
         size_t total = 0;
         for (size_t w = 0; w < workers; ++w) {
             total += seen[w].size();
@@ -157,12 +159,11 @@ GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
     MarkThreadLocalStacks stacks(1);
     MarkContext context(1, 0, stripes, stacks);
     std::vector<size_t> seen;
-    auto result = MarkEngine::FollowWork(context, smr, stripes, terminate, 0, true,
+    auto result = ZMark::FollowWork(context, smr, stripes, terminate, 0, true,
                                          [&seen](const MarkStackEntry& entry) {
                                              seen.push_back(entry.partial_array_offset());
                                          });
-    GC_EXPECT_TRUE(result == MarkEngine::Result::Partial);
-    GC_EXPECT_TRUE(!terminate.Terminated());
+    GC_EXPECT_TRUE(result == ZMark::Result::Partial);
     GC_EXPECT_TRUE(terminate.Saturated());
     GC_EXPECT_EQ(seen.size(), 0u);
 }
@@ -195,7 +196,7 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     std::vector<size_t> producerSeen;
     DrainFollow(producer, smr, stripes, terminate, 1, producerSeen, false);
     waitThread.join();
-    GC_EXPECT_TRUE(terminate.Terminated());
+    GC_EXPECT_TRUE(stripes.IsEmpty());
     GC_EXPECT_EQ(seen.size() + producerSeen.size(), 1u);
 }
 
@@ -208,6 +209,7 @@ GC_TEST(MarkPort203Engine, LeaveUnblocksTryTerminateWaiter)
     std::atomic<bool> waiting{ false };
     std::atomic<bool> finished{ false };
     std::thread waiter([&]() {
+        SuspendibleThreadSetJoiner stsJoiner;
         waiting.store(true, std::memory_order_release);
         GC_EXPECT_TRUE(terminate.TryTerminate(stripes, stripes.NStripes()));
         finished.store(true, std::memory_order_release);
@@ -216,6 +218,7 @@ GC_TEST(MarkPort203Engine, LeaveUnblocksTryTerminateWaiter)
         std::this_thread::yield();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    SuspendibleThreadSetJoiner stsJoiner;
     terminate.Leave();
     waiter.join();
     GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
@@ -237,7 +240,7 @@ GC_TEST(MarkPort203Engine, TrySetNStripesIsAtomicSnapshot)
 GC_TEST(MarkPort203Engine, DomainPrepareResizeKeepsCapacity)
 {
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
-    MarkDomain domain(8, MarkingStacks::MarkingGeneration::YOUNG);
+    ZMark domain(8, MarkingStacks::MarkingGeneration::YOUNG);
     domain.PrepareWork(2);
     GC_EXPECT_EQ(domain.Stripes().Count(), 8u);
     GC_EXPECT_TRUE(domain.Stripes().NStripes() <= 8u);
@@ -267,7 +270,7 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
 {
     ZAbort abort;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
-    MarkDomain domain(4, MarkingStacks::MarkingGeneration::YOUNG);
+    ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
     domain.BindAbort(&abort);
     domain.PrepareWork(1);
     GC_EXPECT_TRUE(!domain.PollStop());
@@ -294,7 +297,8 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     MapleRuntime::GcUnit::B09RuntimeFixture runtime;
     ZAbort abort;
     MapleRuntime::GcUnit::WorkerFixture domainWorker;
-    MarkDomain domain(4, MarkingStacks::MarkingGeneration::MAJOR);
+    SuspendibleThreadSetJoiner stsJoiner;
+    ZMark domain(4, MarkingStacks::MarkingGeneration::MAJOR);
     domain.BindAbort(&abort);
     domain.PrepareWork(1);
     MarkThreadLocalStacks stacks(4);
@@ -304,12 +308,12 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
         stacks.Push(domain.Stripes(), 0, Entry(i), true);
     }
     size_t followed = 0;
-    const auto result = MarkEngine::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
+    const auto result = ZMark::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
         0, false, [&](const MarkStackEntry&) {
             ++followed;
             abort.Request();
         }, nullptr, nullptr, &domain);
-    GC_EXPECT_TRUE(result == MarkEngine::Result::Aborted);
+    GC_EXPECT_TRUE(result == ZMark::Result::Aborted);
     GC_EXPECT_EQ(followed, 1u);
     (void)stacks.Flush(domain.Stripes(), true);
     context.Cache().Flush();
@@ -322,8 +326,26 @@ GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
     // returns to the driver and never resets its token to consume this work.
     abort.Reset();
     domain.PrepareWork(1);
-    const auto resumed = MarkEngine::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
+    const auto resumed = ZMark::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
         0, false, [&](const MarkStackEntry&) { ++followed; }, nullptr, nullptr, &domain);
-    GC_EXPECT_TRUE(resumed == MarkEngine::Result::Completed);
+    GC_EXPECT_TRUE(resumed == ZMark::Result::Completed);
     GC_EXPECT_EQ(followed, count);
+}
+
+// ZMark::try_end (zMark.cpp:954-971): true iff stripes empty and !resurrected
+// after a terminate flush of thread-local stacks.
+GC_TEST(MarkPort203Engine, TryEndFalseWhenResurrectedOrUnflushed)
+{
+    MapleRuntime::GcUnit::B09RuntimeFixture runtime;
+    MapleRuntime::GcUnit::WorkerFixture domainWorker;
+    ZMark domain(4, MarkingStacks::MarkingGeneration::YOUNG);
+    domain.PrepareWork(1);
+    GC_EXPECT_TRUE(domain.Stripes().IsEmpty());
+    GC_EXPECT_TRUE(!domain.Terminate().Resurrected());
+    GC_EXPECT_TRUE(domain.TryEnd());
+
+    domain.Terminate().SetResurrected(true);
+    GC_EXPECT_TRUE(!domain.TryEnd());
+    domain.Terminate().SetResurrected(false);
+    GC_EXPECT_TRUE(domain.TryEnd());
 }

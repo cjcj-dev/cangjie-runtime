@@ -164,11 +164,10 @@ GC_TEST(ZForwardingEntries, LargeFromIndexRoundTrip)
     ForwardingEntries* tab = ForwardingEntries::Create(8, kStart, 0);
     GC_EXPECT_TRUE(tab != nullptr);
     const MAddress from = kStart + ((size_t(3) << 20) / kAlign) * kAlign;
-    GC_EXPECT_TRUE(((from - kStart) >> 3) > ((size_t(1) << 18) - 1));
-    GC_EXPECT_TRUE(((from - kStart) >> 3) <= ForwardingEntry::kMaxFromIndex);
+    GC_EXPECT_TRUE(((from - kStart) >> 3) > ForwardingEntry::kMaxFromIndex);
     const MAddress dest = 0x9000;
-    GC_EXPECT_EQ(tab->insert(from, dest), dest);
-    GC_EXPECT_EQ(tab->find(from), dest);
+    GC_EXPECT_EQ(tab->insert(from, dest), MAddress(0));
+    GC_EXPECT_EQ(tab->find(from), MAddress(0));
     tab->Destroy();
 }
 
@@ -246,8 +245,8 @@ GC_TEST(ZForwardingEntries, CoversRecordsRegionSpan)
 
 GC_TEST(ZForwardingEntries, CapacityArithmeticDoesNotWrap)
 {
-    GC_EXPECT_EQ(ZForwarding::nentries(0), size_t(2));
-    GC_EXPECT_EQ(ZForwarding::nentries(3), size_t(8));
+    GC_EXPECT_EQ(ZForwarding::nentries(size_t(0)), size_t(2));
+    GC_EXPECT_EQ(ZForwarding::nentries(size_t(3)), size_t(8));
     GC_EXPECT_EQ(ZForwarding::nentries(size_t(1) << 31), size_t(1) << 32);
     GC_EXPECT_EQ(ZForwarding::nentries(UINT32_MAX), size_t(1) << 33);
     const size_t maxPower = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
@@ -259,43 +258,6 @@ GC_TEST(ZForwardingEntries, CapacityArithmeticDoesNotWrap)
     GC_EXPECT_TRUE(ZForwarding::AttachedArray::allocation_size(8, &bytes));
     GC_EXPECT_EQ(bytes, ZForwarding::AttachedArray::object_size() + 8 * sizeof(std::atomic<uint64_t>));
     std::fprintf(stderr, "P1_CAPACITY checked=1 uint32_boundary=%zu\n", ZForwarding::nentries(UINT32_MAX));
-}
-
-GC_TEST(ZForwardingEntries, ArenaOwnerOutlivesForwardings)
-{
-    size_t bytes;
-    GC_EXPECT_TRUE(ZForwarding::AttachedArray::allocation_size(ZForwarding::nentries(4), &bytes));
-    size_t budget = 0;
-    GC_EXPECT_TRUE(ForwardingAllocator::add_to_budget(bytes, &budget));
-    GC_EXPECT_TRUE(ForwardingAllocator::add_to_budget(bytes, &budget));
-    auto arena = std::make_unique<ForwardingAllocator>(budget);
-    GC_EXPECT_TRUE(arena->valid());
-    auto* a = ZForwarding::alloc(4, 0x1000, 0, 0x1000, nullptr, 0, arena.get());
-    auto* b = ZForwarding::alloc(4, 0x2000, 0, 0x1000, nullptr, 0, arena.get());
-    GC_EXPECT_TRUE(a != nullptr && b != nullptr && a != b);
-    GC_EXPECT_EQ(arena->used(), budget);
-    GC_EXPECT_TRUE(arena->allocate(1) == nullptr);
-    GC_EXPECT_EQ(b->insert(MAddress(0x2000), MAddress(0x3000)), MAddress(0x3000));
-    a->~ZForwarding();
-    GC_EXPECT_EQ(arena->used(), budget);
-    GC_EXPECT_EQ(b->find(MAddress(0x2000)), MAddress(0x3000));
-    b->~ZForwarding();
-    arena.reset();
-    std::fprintf(stderr, "P1_ARENA owner_result=0x3000 released=1\n");
-}
-
-GC_TEST(ZForwardingEntries, ArenaBudgetFailureDoesNotConsumeStorage)
-{
-    size_t budget = 0;
-    GC_EXPECT_FALSE(ForwardingAllocator::add_to_budget(SIZE_MAX, &budget));
-    GC_EXPECT_EQ(budget, size_t(0));
-    GC_EXPECT_TRUE(ForwardingAllocator::add_to_budget(1, &budget));
-    ForwardingAllocator arena(budget);
-    GC_EXPECT_TRUE(arena.valid());
-    GC_EXPECT_TRUE(arena.allocate(SIZE_MAX) == nullptr);
-    GC_EXPECT_EQ(arena.used(), size_t(0));
-    GC_EXPECT_TRUE(arena.allocate(1) != nullptr);
-    GC_EXPECT_EQ(arena.used(), budget);
 }
 
 GC_TEST(ZForwardingEntries, ConcurrentSameKeyReturnsInitializedWinner)

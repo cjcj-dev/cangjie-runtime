@@ -13,10 +13,14 @@
 #include "gc_worker_fixture.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
 #include <memory>
+#include <utility>
 #include <cstdlib>
 #include <cstring>
 #include <new>
 #include <sys/mman.h>
+#include <atomic>
+#include <unordered_set>
+#include <vector>
 
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
@@ -34,8 +38,161 @@
 #include "ObjectModel/MClass.h"
 #include "TypeInfoManager.h"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zRelocationSet.hpp"
+#include "Heap/Allocator/RegionList.h"
 
 namespace MapleRuntime {
+
+inline bool SlotPageRemembered(MapleRuntime::MAddress slot)
+{
+    MapleRuntime::ZPage* page = MapleRuntime::Heap::page(slot);
+    return page != nullptr && page->is_remembered(reinterpret_cast<volatile MapleRuntime::zpointer*>(slot));
+}
+
+struct RememberedSet {
+    static constexpr size_t kBufferCount = 2;
+    struct FlipTouchCounts { size_t bitmap = 0; size_t pageMap = 0; };
+    std::unique_ptr<std::atomic<uint64_t>> bitmaps[2];
+    std::unique_ptr<std::atomic<uint64_t>> rememberedPages[2];
+    std::atomic<int> activeBuffer { 0 };
+    bool initialized = true;
+    bool IsInitialized() const { return true; }
+    void Initialize(MAddress, size_t) { initialized = true; }
+    bool Contains(MAddress slot) const { return SlotPageRemembered(slot); }
+    void Record(MAddress slot)
+    {
+        ZPage* page = Heap::page(slot);
+        if (page != nullptr) {
+            page->remember(reinterpret_cast<volatile zpointer*>(slot));
+        }
+    }
+    size_t Size() const { return 0; }
+    template<typename C>
+    size_t DrainForMinor(C& out)
+    {
+        (void)out;
+        FlipForMinor();
+        return 0;
+    }
+    void FlipForMinor() { ZRememberedSet::flip(); }
+    bool ContainsPrevious(MAddress slot) const
+    {
+        ZPage* page = Heap::page(slot);
+        return page != nullptr && page->was_remembered(reinterpret_cast<volatile zpointer*>(slot));
+    }
+    bool IsClearInRange(MAddress, size_t, bool) const { return true; }
+    template<typename... A>
+    size_t ScanPreviousForMinor(A&&...) { return 0; }
+    void ClearRegion(MAddress, MAddress) {}
+    template<typename... A>
+    void VisitRememberedPages(A&&...) {}
+    template<typename... A>
+    size_t TransferObjectSlots(A&&...) { return 0; }
+    struct InPlaceSlot {};
+    size_t TakeInPlaceSlots(MAddress, MAddress, std::vector<InPlaceSlot>&) { return 0; }
+    size_t MoveInPlaceSlots(const std::vector<InPlaceSlot>&, MAddress, MAddress, size_t) { return 0; }
+    std::unordered_set<MAddress> Snapshot() const { return {}; }
+    size_t ClearBuffer(int) { return 0; }
+};
+
+
+enum class RemsetFilterReceiptReason : uint8_t { kNone=0, kStale=1, kDeadHolder=2, kNoOrigin=3, kBadTarget=4 };
+inline void NoteRemsetFilterTestReceipt(MAddress, RemsetFilterReceiptReason, bool) {}
+struct RemsetScanStats {
+    size_t live=0;
+    size_t consumed=0;
+    size_t recorded=0;
+    size_t skippedNotHeap=0;
+    size_t skippedWeak=0;
+};
+
+inline RememberedSet& HeapTestRemset()
+{
+    static RememberedSet remset;
+    return remset;
+}
+
+
+inline bool InitFwdTables(MAddress start, size_t size, size_t unit)
+{
+    auto& collector = Heap::GetHeap().GetCollector();
+    collector.GetGenerationCycle(Generation::Young).forwarding_table().initialize(size, start, unit);
+    collector.GetGenerationCycle(Generation::Old).forwarding_table().initialize(size, start, unit);
+    return true;
+}
+
+inline bool BeginForwardingArena(Generation generation, RegionList& regions)
+{
+    Heap::GetHeap().GetCollector().GetGenerationCycle(generation).relocation_set().install_from_regions(regions);
+    return true;
+}
+
+struct FwdLookup {
+    MAddress to{ 0 };
+    enum Answer : uint8_t { ArmedHit, ArmedMiss, Unarmed } answer{ Unarmed };
+    uint32_t tableId{ 0 };
+    uint64_t fromPageEpoch{ 0 };
+    RegionLifeId fromPageLifeId{ 0 };
+    bool forwardingSnapshotValid{ false };
+    MAddress carrierStart{ 0 };
+};
+inline MAddress UNUSED_InsertMapping(ZForwarding* forwarding, MAddress from, MAddress to)
+{
+    return forwarding == nullptr ? 0 : forwarding->insert(from, to);
+}
+inline MAddress UNUSED_InstallMapping(ZForwarding* forwarding, MAddress from, MAddress to)
+{
+    return UNUSED_InsertMapping(forwarding, from, to);
+}
+inline void UNUSED_ClearPageOwner(ZPage* region)
+{
+    if (region != nullptr) {
+        region->_scratch.fwdOwner.store(nullptr, std::memory_order_release);
+    }
+}
+inline const ZForwarding::FromPageView* UNUSED_GetFromPageView(ZPage* region)
+{
+    return region == nullptr ? nullptr : region->GetFromPageView();
+}
+inline bool UNUSED_InstallPublication(MAddress, size_t, ZPage* region, Generation)
+{
+    return forwarding_for_page(region) != nullptr;
+}
+template<typename... Args>
+inline bool UNUSED_PublishFromPageView(ZPage* region, Args&&... args)
+{
+    ZForwarding* forwarding = forwarding_for_page(region);
+    if (forwarding == nullptr) {
+        return false;
+    }
+    forwarding->publish_from_page_view(std::forward<Args>(args)...);
+    return true;
+}
+struct UNUSED_Snap {
+    struct Carrier {
+        uintptr_t tableId{ 0 };
+        uint8_t tableGeneration{ 0 };
+        MAddress start{ 0 };
+    };
+    size_t carrierCount{ 0 };
+    size_t carrierTotal{ 0 };
+    bool carrierOverflow{ false };
+    Carrier carriers[4]{};
+};
+inline UNUSED_Snap UNUSED_Snapshot(MAddress) { return {}; }
+
+inline FwdLookup LookupTo(MAddress from, Generation generation)
+{
+    ZForwarding* forwarding = generation_forwarding_table(generation).get(from);
+    if (forwarding == nullptr) {
+        return FwdLookup{ 0, FwdLookup::Unarmed };
+    }
+    const MAddress to = forwarding->find(from);
+    return FwdLookup{ to, to != 0 ? FwdLookup::ArmedHit : FwdLookup::ArmedMiss };
+}
+
 namespace GcUnit {
 
 inline zpointer ColouredPointer(BaseObject* object, uintptr_t remap)
@@ -109,13 +266,7 @@ struct GcHeapFixture {
         }
         cycle.Begin(0);
         if (generation == Generation::Young) {
-            // Young sequence now advances with the remset flip at mark-start.
-            // This liveness-only fixture supplies an empty remembered set;
-            // it does not perform a collection of the synthetic heap.
-            alignas(8) uint64_t storage[16] {};
-            RememberedSet remembered;
-            remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-            GenerationSequenceFixture::AdvanceYoung(cycle, remembered);
+            GenerationSequenceFixture::AdvanceYoung(cycle);
         } else {
             GenerationSequenceFixture::Advance(cycle);
         }
@@ -133,10 +284,7 @@ struct GcHeapFixture {
                 if (cycle.Snapshot().active) cycle.End();
                 cycle.Begin(0);
                 if (generation == GCCycleGeneration::YOUNG) {
-                    alignas(8) uint64_t storage[16] {};
-                    RememberedSet remembered;
-                    remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-                    GenerationSequenceFixture::AdvanceYoung(cycle, remembered);
+                    GenerationSequenceFixture::AdvanceYoung(cycle);
                 } else {
                     GenerationSequenceFixture::Advance(cycle);
                 }
@@ -162,10 +310,7 @@ struct GcHeapFixture {
         EnsureHeapRange(heapStart);
         // ZHeap::is_in queries the allocated heap ranges, not the address envelope.
         Heap::OnHeapCreated(heapStart, {{heapStart, heapStart + kUnits * ZPage::UNIT_SIZE}});
-        if (!Heap::GetHeap().GetRememberedSet().IsInitialized()) {
-            Heap::GetHeap().GetRememberedSet().Initialize(heapStart, kUnits * ZPage::UNIT_SIZE);
-        }
-        for (Generation generation : {Generation::Young, Generation::Old}) {
+for (Generation generation : {Generation::Young, Generation::Old}) {
             if (LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation).Sequence() == 0) {
                 AdvanceGeneration(generation);
             }
@@ -178,7 +323,7 @@ struct GcHeapFixture {
         // The bitmap fixture uses relocatable pages, as ZLiveMapTest does.
         AdvanceGeneration(Generation::Old);
         AdvanceGeneration(Generation::Young);
-        ForwardingTable::Initialize(heapStart, kUnits * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
+        InitFwdTables(heapStart, kUnits * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
         typeInfo = reinterpret_cast<TypeInfo*>(typeInfoStorage);
@@ -206,9 +351,10 @@ struct GcHeapFixture {
         // Some life-clock tests intentionally keep several fixtures alive.
         // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
-        if (ZPage::heapStartAddress == heapStart) {
-            ForwardingTable::ResetRelocationSet(Generation::Young);
-            ForwardingTable::ResetRelocationSet(Generation::Old);
+        if (ZPage::heapStartAddress == heapStart &&
+            Heap::GetHeap().GetGCPhase(GCCycleGeneration::YOUNG) != GCPhase::GC_PHASE_UNDEF) {
+            Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).reset_relocation_set();
+            Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).reset_relocation_set();
         }
         // ~ZPage: the page livemaps go with the synthetic heap.
         for (ZPage* region : {region0, region1}) {
@@ -259,7 +405,7 @@ struct GcHeapFixture {
     void InstallPageOwner(ZPage* region)
     {
         if (region->_scratch.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
-        if (ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration()) == nullptr) {
+        if (generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart()) == nullptr) {
             RegionList selected("fixture-forwardings");
             const Generation generation = region->GetOwnerGeneration();
             if (region0->GetOwnerGeneration() == generation) {
@@ -268,14 +414,15 @@ struct GcHeapFixture {
             if (region1->GetOwnerGeneration() == generation) {
                 selected.PrependRegion(region1);
             }
-            CHECK(ForwardingTable::BeginForwardingArena(generation, selected));
+            CHECK(BeginForwardingArena(generation, selected));
             while (selected.TakeHeadRegion() != nullptr) {}
         }
-        CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region, region->GetOwnerGeneration()));
-        CHECK(ForwardingTable::PublishFromPageView(region, &region->livemap(), region->GetSnapshotEpoch(),
+        ZForwarding* forwarding = forwarding_for_page(region);
+        CHECK(forwarding != nullptr);
+        forwarding->publish_from_page_view(&region->livemap(), region->GetSnapshotEpoch(),
             region->GetRegionAllocPtr(), region->BirthSequence(),
             static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
-            0, region->GetRegionLifeId()));
+            0, region->GetRegionLifeId());
     }
 
     // ZPage::mark_object followed by the caller's inc_live (zMark.cpp:405-425):

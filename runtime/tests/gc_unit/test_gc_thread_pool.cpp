@@ -37,7 +37,7 @@ struct RelocationReceiptTestAccess {
     }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-    static void BindCollector(CollectorResources& resources, TracingCollector& collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector& collector)
     {
         resources.collectorProxy.currentCollector = &collector;
     }
@@ -81,18 +81,15 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
 {
     PlaceOwnerObjects(fx);
     // Relocation may compact in place and transfer remembered slots.
-    Heap::GetHeap().GetRememberedSet().Initialize(
-        fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     ZPage* region = fx.region0;
     region->SetRegionListOwner(nullptr);
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, fx.obj0));
     // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
     RegionList selected("runtime-workers-selected");
     selected.PrependRegion(region);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
-    (void)selected.TakeHeadRegion();
-    region->PrepareForwardableRegion<Generation::Old>();
-    region->MarkForwardingDone();
+        GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
+        (void)selected.TakeHeadRegion();
+        region->MarkForwardingDone();
 }
 
 bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
@@ -110,10 +107,9 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     // zRelocationSet.cpp:79-134 freezes the selected set before preparation.
     RegionList selected("runtime-workers-selected");
     selected.PrependRegion(region);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
-    (void)selected.TakeHeadRegion();
-    region->PrepareForwardableRegion<Generation::Old>();
-    ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration());
+        GC_EXPECT_TRUE(BeginForwardingArena(Generation::Old, selected));
+        (void)selected.TakeHeadRegion();
+        ForwardingEntries* entries = generation_forwarding_table(region->GetOwnerGeneration()).get(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
     }
@@ -129,7 +125,7 @@ bool RunParallelProductEntryClosesGeneration()
     RegionManager manager;
     PrepareOwnerRegion(fx);
 
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     ZStatWorkers statWorkers;
     ZWorkers workers(GCCycleGeneration::OLD, 3, &statWorkers);
@@ -146,7 +142,7 @@ bool RunSerialProductEntryClosesGeneration()
     RegionManager manager;
     PrepareOwnerRegion(fx);
 
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     // ZRelocate uses the generation worker entry even with one participant.
     ZStatWorkers statWorkers;
@@ -197,7 +193,7 @@ bool RunYoungRuntimeProductEntry()
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = space.GetRegionManager();
 
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
 
     YoungForwardRuntimeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -223,7 +219,7 @@ bool RunActualTaskClaimedOwnerSuccess()
         return false;
     }
 
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    ZRelocateQueue& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(1);
     const auto added = queue.Add(fx.region0, from);
     if (!added.accepted) {
@@ -232,8 +228,8 @@ bool RunActualTaskClaimedOwnerSuccess()
     fromSpace.PrependRegion(fx.region0);
     ForwardTask<Generation::Old> task(manager, fromSpace);
     task.work();
-    return added.request->state() == RelocationRequestQueue::State::COMPLETED &&
-        added.request->page_forwarding()->find(from) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
+    return added.state() == ZRelocateQueue::State::COMPLETED &&
+        added.forwarding->find(from) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
 }
 #endif
 
@@ -308,7 +304,7 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
     GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
-    RelocationRequestQueue queue;
+    ZRelocateQueue queue;
     constexpr size_t kWorkers = 3;
     queue.BeginWorkers(kWorkers);
     const auto added = queue.Add(fx.region0, from);
@@ -319,7 +315,7 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
     ZWorkers workers(GCCycleGeneration::OLD, kWorkers, &statWorkers);
     class RequestTask : public ZTask {
     public:
-        RequestTask(RelocationRequestQueue& queue, std::atomic<size_t>& owners)
+        RequestTask(ZRelocateQueue& queue, std::atomic<size_t>& owners)
             : ZTask("ZWorkersUnitRequest"), queue(queue), completionOwners(owners) {}
         void work() override
         {
@@ -328,7 +324,7 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
                 if (!selected) selected = queue.SynchronizePoll();
                 if (selected.workersDone) return;
                 if (selected.is_request()) {
-                    auto* forwarding = selected.request->page_forwarding();
+                    auto* forwarding = selected.forwarding;
                     forwarding->release_page();
                     forwarding->mark_done();
                     completionOwners.fetch_add(1, std::memory_order_relaxed);
@@ -339,12 +335,12 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
             }
         }
     private:
-        RelocationRequestQueue& queue;
+        ZRelocateQueue& queue;
         std::atomic<size_t>& completionOwners;
     } task(queue, completionOwners);
     workers.run(&task);
-    (void)queue.Wait(added.request);
-    GC_EXPECT_EQ(added.request->page_forwarding()->find(from), to);
+    (void)queue.Wait(added.forwarding);
+    GC_EXPECT_EQ(added.forwarding->find(from), to);
     GC_EXPECT_EQ(completionOwners.load(), 1U);
     GC_EXPECT_EQ(queue.CompletionCount(), 1U);
     GC_EXPECT_FALSE(queue.IsActive());
@@ -356,21 +352,21 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
     GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
-    auto owner = ForwardingTable::RetainPageOwner(fx.region0);
+    auto owner = forwarding_for_page(fx.region0);
     GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
     RegionList empty("gc-unit-claimed-page");
-    auto& queue = manager.GetRelocationRequestQueue();
+    auto& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(1);
     const auto request = queue.Add(owner);
     ForwardTask<Generation::Old> task(manager, empty);
     task.work();
     GC_EXPECT_FALSE(owner->is_done());
-    GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::CLAIMED);
+    GC_EXPECT_TRUE(request.state() == ZRelocateQueue::State::CLAIMED);
     owner->release_page();
     owner->mark_done();
-    GC_EXPECT_EQ(queue.Complete(owner.get()), 1U);
-    GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::COMPLETED);
+    GC_EXPECT_EQ(queue.Complete(owner), 1U);
+    GC_EXPECT_TRUE(request.state() == ZRelocateQueue::State::COMPLETED);
 }
 
 GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
@@ -378,16 +374,16 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     GcHeapFixture fx;
     MAddress from = 0, to = 0;
     GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
-    auto owner = ForwardingTable::RetainPageOwner(fx.region0);
+    auto owner = forwarding_for_page(fx.region0);
     GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
     RegionList empty("gc-unit-external-owner");
-    auto& queue = manager.GetRelocationRequestQueue();
+    auto& queue = manager.GetZRelocateQueue();
     queue.BeginWorkers(2);
     const auto request = queue.Add(owner);
     std::atomic<MAddress> answer{ 0 };
     std::thread waiter([&] {
-        (void)queue.Wait(request.request);
+        (void)queue.Wait(request.forwarding);
         answer.store(owner->find(from), std::memory_order_release);
     });
     ForwardTask<Generation::Old> task(manager, empty);
@@ -396,7 +392,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     const bool pending = !owner->is_done() && answer.load(std::memory_order_acquire) == 0;
     owner->release_page();
     owner->mark_done();
-    (void)queue.Complete(owner.get());
+    (void)queue.Complete(owner);
     const bool closed = queue.SynchronizePoll().workersDone;
     worker.join(); waiter.join();
     GC_EXPECT_TRUE(pending);

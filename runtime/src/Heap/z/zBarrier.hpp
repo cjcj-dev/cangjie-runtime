@@ -84,6 +84,8 @@ public:
     static zaddress load_barrier_on_oop_field_preloaded(volatile zpointer* p, zpointer o);
     static zaddress load_barrier_on_weak_oop_field_preloaded(volatile zpointer* p, zpointer o);
     static zaddress load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static zaddress no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o);
+    static bool clean_barrier_on_phantom_oop_field(volatile zpointer* p);
     static void load_barrier_on_oop_array(volatile zpointer* p, size_t length);
 
     static void WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref);
@@ -168,7 +170,10 @@ public:
     static zaddress keep_alive_slow_path(zaddress addr);
     static zaddress blocking_keep_alive_on_weak_slow_path(zaddress addr);
     static zaddress blocking_keep_alive_on_phantom_slow_path(zaddress addr);
+    static zaddress blocking_load_barrier_on_phantom_slow_path(zaddress addr);
     static zpointer ColorLoadGood(zaddress address, zpointer previous);
+    static zaddress promote_slow_path(zaddress addr);
+    static void promote_barrier_on_young_oop_field(volatile zpointer* p);
 };
 
 } // namespace MapleRuntime

@@ -9,6 +9,7 @@
 #define MRT_BARRIER_INLINE_H
 
 #include "Heap/z/zBarrier.hpp"
+#include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
@@ -202,6 +203,17 @@ inline zpointer ZBarrier::load_atomic(volatile zpointer* p)
     return reinterpret_cast<RefField<>*>(const_cast<zpointer*>(p))->GetFieldValue(std::memory_order_relaxed);
 }
 
+inline zaddress ZBarrier::promote_slow_path(zaddress addr)
+{
+    return addr;
+}
+
+inline void ZBarrier::promote_barrier_on_young_oop_field(volatile zpointer* p)
+{
+    const zpointer o = load_atomic(p);
+    barrier(is_store_good_fast_path, promote_slow_path, ColorStoreGood, p, o);
+}
+
 inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
 {
     CHECK_DETAIL(!ZPointer::is_load_good(ptr), "load-good reference does not need remap");
@@ -216,8 +228,10 @@ inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
         return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
     }
     const MAddress address = untype(RefField<>(ptr).GetTargetObject());
-    if (ForwardingTable::get(address, Generation::Young) != nullptr) {
-        CHECK(ForwardingTable::get(address, Generation::Old) == nullptr);
+    if (address == 0) {
+        return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
+    }
+    if (Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Young).forwarding_table().get(address) != nullptr) {
         return &collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
     }
     return &collector.GetGenerationCycle(GCCycleGeneration::OLD);
@@ -315,7 +329,7 @@ inline void ZBarrier::remember(volatile zpointer* p)
     const MAddress address = reinterpret_cast<MAddress>(p);
     ZPage* page = Heap::page(address);
     if (page != nullptr && !page->IsYoungRegion()) {
-        Heap::GetHeap().GetRememberedSet().Record(address, true);
+        page->remember(reinterpret_cast<volatile zpointer*>(address));
     }
 }
 

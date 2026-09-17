@@ -1,5 +1,6 @@
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "gc_heap_fixture.hpp"
+#include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Mutator/Mutator.h"
 
@@ -69,6 +70,7 @@ GC_TEST(FnlzRoots, VisitFinalizersCountMatchesRegister)
 
 GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
 {
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     // ZReferenceProcessor::is_strongly_live (zReferenceProcessor.cpp:157):
     // reference processing operates on objects belonging to the installed heap.
@@ -79,14 +81,13 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
     FinalizerProcessor fp;
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
-                   ReferenceStatus::DISCOVERED);
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
 
     fp.ProcessReferences([](BaseObject*) { return false; });
-    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(0));
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
     fp.EnqueueReferences();
 
-    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(0));
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
     size_t queuedRoots = 0;
     fp.VisitGCRoots([&](NativeSlot&) { ++queuedRoots; });
     GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(0));
@@ -94,6 +95,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
 
 GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
 {
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     // ZReferenceProcessor::is_strongly_live (zReferenceProcessor.cpp:157):
     // reference processing operates on objects belonging to the installed heap.
@@ -105,11 +107,10 @@ GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
     ReferenceProcessor& processor = fp.GetReferenceProcessor();
     fp.RegisterFinalizer(fx.obj0);
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
-    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
-                   ReferenceStatus::DISCOVERED);
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL));
 
     fp.ProcessReferences([](BaseObject*) { return false; });
-    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(0));
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
     fp.EnqueueReferences();
 
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));

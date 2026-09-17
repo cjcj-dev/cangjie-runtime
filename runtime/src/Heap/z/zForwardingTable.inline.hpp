@@ -1,12 +1,31 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-//
-// See https://cangjie-lang.cn/pages/LICENSE for license information.
-
 #pragma once
 #include "Heap/z/zForwardingTable.hpp"
+#include "Base/Log.h"
 
 namespace MapleRuntime {
-ZForwarding* ForwardingTable::Get(MAddress addr, Generation gen) { return get(addr, gen); }
+
+inline ZForwardingTable::ZForwardingTable() : _map() {}
+
+inline void ZForwardingTable::initialize(size_t max_offset, MAddress base, size_t granule)
+{
+    _map.reset(new ZGranuleMap<ZForwarding*>(max_offset, base, granule));
 }
+
+inline ZForwarding* ZForwardingTable::at(size_t index) const
+{
+    return _map != nullptr ? _map->at(index) : nullptr;
+}
+
+inline ZForwarding* ZForwardingTable::get(MAddress addr) const
+{
+    if (addr == 0) {
+        return nullptr;
+    }
+    if (_map == nullptr) {
+        return nullptr;
+    }
+    zoffset offset;
+    return _map->offset_for_address(addr, &offset) ? _map->get(offset) : nullptr;
+}
+
+} // namespace MapleRuntime

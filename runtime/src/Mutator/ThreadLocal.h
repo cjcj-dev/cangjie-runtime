@@ -20,7 +20,7 @@
 namespace MapleRuntime {
 class AllocBuffer;
 class Mutator;
-class MarkDomain;
+class ZMark;
 
 enum class ThreadType { CJ_PROCESSOR = 0, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD, UNCOMMITTER_THREAD };
 
@@ -76,8 +76,8 @@ public:
     static void InitializeCleaner();
     static ThreadGCData& GetGCData();
     static void FlushCurrentThreadMarkStacks();
-    static MarkThreadLocalStacks& GetMarkStacks(MarkDomain& domain);
-    static bool FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain);
+    static MarkThreadLocalStacks& GetMarkStacks(ZMark& domain);
+    static bool FlushMarkStacks(ThreadLocalData* tls, ZMark& domain);
 
     static void SetMutator(Mutator* newMutator) { GetThreadLocalData()->SetMutator(newMutator); }
 

@@ -17,8 +17,8 @@ template<bool resurrect, bool gcThread, bool follow, bool finalizable>
 inline void GenerationCycle::MarkObject(zaddress address)
 {
     ASSERT(IsPhaseMark());
-    CHECK(markDomain != nullptr);
-    markDomain->MarkObject<resurrect, gcThread, follow, finalizable>(address);
+    CHECK(mark != nullptr);
+    mark->MarkObject<resurrect, gcThread, follow, finalizable>(address);
 }
 
 template<bool resurrect, bool gcThread, bool follow, bool finalizable>

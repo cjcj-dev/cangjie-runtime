@@ -4,47 +4,96 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#pragma once
+#ifndef MRT_Z_REMEMBERED_SET_INLINE_HPP
+#define MRT_Z_REMEMBERED_SET_INLINE_HPP
+
 #include "Heap/z/zRememberedSet.hpp"
+#include "ObjectModel/RefField.h"
+#include "Heap/z/zBitMap.inline.hpp"
+
 namespace MapleRuntime {
-void RememberedSet::CheckInitialized() const
+
+inline CHeapBitMap* ZRememberedSet::current()
 {
-    CHECK_DETAIL(initialized, "remembered set used before initialization");
+    return &_bitmap[_current];
 }
 
-size_t RememberedSet::AddressToBit(MAddress fieldAddress) const
+inline const CHeapBitMap* ZRememberedSet::current() const
 {
-    CHECK_DETAIL(fieldAddress >= heapStart && fieldAddress < heapStart + heapSize,
-                 "remembered field %#zx is outside heap [%#zx, %#zx)", fieldAddress, heapStart,
-                 heapStart + heapSize);
-    size_t offset = fieldAddress - heapStart;
-    CHECK_DETAIL(offset % kFieldBytes == 0, "remembered field %#zx is not field-aligned", fieldAddress);
-    return offset / kFieldBytes;
+    return &_bitmap[_current];
 }
 
-void RememberedSet::RememberPage(size_t buffer, size_t word)
+inline CHeapBitMap* ZRememberedSet::previous()
 {
-    const size_t page = word * kBitsPerWord * kFieldBytes / ZPage::UNIT_SIZE;
-    rememberedPages[buffer][page / kBitsPerWord].fetch_or(
-        uint64_t{1} << (page % kBitsPerWord), std::memory_order_relaxed);
+    return &_bitmap[_current ^ 1];
 }
 
-void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
+inline const CHeapBitMap* ZRememberedSet::previous() const
 {
-    CheckInitialized();
-    size_t bit = AddressToBit(fieldAddress);
-    size_t word = bit / kBitsPerWord;
-    uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
-    size_t buffer = activeBuffer.load(std::memory_order_acquire);
-    uint64_t old = bitmaps[buffer][word].fetch_or(mask, std::memory_order_relaxed);
-    RememberPage(buffer, word);
-    if ((old & mask) == 0) {
-        recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
-    }
-#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    std::lock_guard<std::mutex> guard(oracleLock);
-    oracleRecords[buffer].insert(fieldAddress);
+    return &_bitmap[_current ^ 1];
+}
+
+inline uintptr_t ZRememberedSet::to_offset(BitMap::idx_t index)
+{
+    return index * sizeof(RefField<>);
+}
+
+inline BitMap::idx_t ZRememberedSet::to_index(uintptr_t offset)
+{
+    return offset / sizeof(RefField<>);
+}
+
+inline BitMap::idx_t ZRememberedSet::to_bit_size(size_t size)
+{
+    return size / sizeof(RefField<>);
+}
+
+inline bool ZRememberedSet::at_current(uintptr_t offset) const
+{
+    return current()->at(to_index(offset));
+}
+
+inline bool ZRememberedSet::at_previous(uintptr_t offset) const
+{
+    return previous()->at(to_index(offset));
+}
+
+inline bool ZRememberedSet::set_current(uintptr_t offset)
+{
+    return current()->par_set_bit(to_index(offset), std::memory_order_relaxed);
+}
+
+inline void ZRememberedSet::unset_non_par_current(uintptr_t offset)
+{
+    current()->clear_bit(to_index(offset));
+}
+
+inline void ZRememberedSet::unset_range_non_par_current(uintptr_t offset, size_t size)
+{
+    current()->clear_range(to_index(offset), to_index(offset + size));
+}
+
+template<typename Function>
+void ZRememberedSet::iterate_bitmap(Function function, CHeapBitMap* bitmap)
+{
+    bitmap->iterate([&](BitMap::idx_t index) {
+        function(to_offset(index));
+        return true;
+    });
+}
+
+template<typename Function>
+void ZRememberedSet::iterate_previous(Function function)
+{
+    iterate_bitmap(function, previous());
+}
+
+template<typename Function>
+void ZRememberedSet::iterate_current(Function function)
+{
+    iterate_bitmap(function, current());
+}
+
+} // namespace MapleRuntime
+
 #endif
-}
-
-}

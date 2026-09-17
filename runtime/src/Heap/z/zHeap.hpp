@@ -19,6 +19,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
 #include "Heap/Allocator/RegionListTypes.hpp"
@@ -26,6 +27,7 @@
 #include "Common/BaseObject.h"
 #include "RuntimeConfig.h"
 
+#include <atomic>
 #include <unordered_set>
 extern "C" {
 extern uintptr_t g_cjHeapStart;
@@ -35,6 +37,7 @@ extern uintptr_t g_cjHeapRangeStart[];
 extern uintptr_t g_cjHeapRangeEnd[];
 }
 namespace MapleRuntime {
+template<typename T> class ZArray;
 class ZPageTable;
 class OopStorage;
 class ObjectClosure;
@@ -43,14 +46,13 @@ class Allocator;
 class AllocBuffer;
 class FinalizerProcessor;
 class CollectorResources;
+class ZRemembered;
 
 
 class Heap {
 public:
     static Heap& GetHeap();
-    virtual RememberedSet& GetRememberedSet() = 0;
-
-
+    ZRemembered& remembered();
     virtual void Init(const HeapParam& vmHeapParam) = 0;
     virtual void Fini() = 0;
     virtual bool IsSurvivedObject(const BaseObject*) const = 0;
@@ -113,6 +115,7 @@ public:
                                   bool allowSaferegion = true, bool clearPayload = true,
                                   PageAge age = PageAge::eden);
     static void free_page(ZPage* page);
+    static size_t free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages);
 
 
     void DumpHeap(HeapDumpKind kind);

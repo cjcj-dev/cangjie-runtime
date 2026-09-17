@@ -11,7 +11,7 @@
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "ObjectModel/MArray.inline.h"
-#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/z/zMarkPartialArray.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
@@ -48,7 +48,7 @@ TypeInfo* Type(unsigned char* storage, bool refs, unsigned fields)
 }
 bool IsFinalizable(BaseObject* object)
 {
-    auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     return page->is_live_bit_set(from_object(object)) && !page->is_strong_bit_set(from_object(object));
 }
 RefField<>& Slot(BaseObject* object, unsigned index = 0)
@@ -109,8 +109,8 @@ extern "C" int p2FieldBarrierExercise()
     if (finalizableCase) ZBarrier::WriteReference(finalHolder, Slot(finalHolder), child);
     auto* rootedControl = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     const U64 controlRoot = heap.RegisterExportRoot(rootedControl);
-    Expect(!ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(holder))->IsYoungRegion(), "real_holder_is_old");
-    Expect(ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(child))->IsYoungRegion(), "real_child_is_young");
+    Expect(!Heap::page(reinterpret_cast<MAddress>(holder))->IsYoungRegion(), "real_holder_is_old");
+    Expect(Heap::page(reinterpret_cast<MAddress>(child))->IsYoungRegion(), "real_child_is_young");
     unsigned finalOldOld = 0, finalOldYoung = 0, finalFollow = 0, finalYoungFast = 0;
     unsigned remsetChild = 0, oldOld = 0, oldYoung = 0, youngFollow = 0, oldYoungFast = 0;
     unsigned youngOldMajor = 0, youngOldMinor = 0;
@@ -136,7 +136,7 @@ extern "C" int p2FieldBarrierExercise()
             if (&field == &Slot(finalHolder, 1)) {
                 ++finalOldOld;
                 Expect(to_object(result) == finalOld, "finalizable_old_returns_current");
-                auto* page = ZPage::GetRegionInfoAt(raw(result));
+                auto* page = Heap::page(raw(result));
                 Expect(IsFinalizable(finalOld), "finalizable_old_is_finalizable");
                 Expect(!page->is_strong_bit_set(from_object(finalOld)), "finalizable_old_not_strong");
                 Expect(ZPointer::is_marked_finalizable(field.GetFieldValue()), "finalizable_old_slot_color");
@@ -151,7 +151,7 @@ extern "C" int p2FieldBarrierExercise()
             currentChild = to_object(result);
             Expect(currentChild != nullptr, "remset_returns_child");
             if (currentChild != nullptr) {
-                auto* page = ZPage::GetRegionInfoAt(raw(result));
+                auto* page = Heap::page(raw(result));
                 if (page->IsYoungRegion()) {
                     Expect(page->is_strong_bit_set(from_object(currentChild)), "remset_child_marked");
                 } else {
@@ -164,7 +164,7 @@ extern "C" int p2FieldBarrierExercise()
         if (&field == &Slot(holder, 1) && kind == ZBarrier::FieldMarkKind::Old) {
             ++oldOld;
             Expect(to_object(result) == oldChild, "old_old_returns_current");
-            auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(oldChild));
+            auto* page = Heap::page(reinterpret_cast<MAddress>(oldChild));
             Expect(page->is_strong_bit_set(from_object(oldChild)), "old_old_marked");
         }
         if (&field == &Slot(holder) && kind == ZBarrier::FieldMarkKind::Old) {
@@ -182,7 +182,7 @@ extern "C" int p2FieldBarrierExercise()
             const bool major = collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots();
             if (major) ++youngOldMajor; else ++youngOldMinor;
             Expect(to_object(result) == oldViaYoung, "young_old_returns_current");
-            auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(oldViaYoung));
+            auto* page = Heap::page(reinterpret_cast<MAddress>(oldViaYoung));
             const bool marked = page->is_strong_bit_set(from_object(oldViaYoung));
             Expect(marked == major, major ? "young_old_major_marks" : "young_old_minor_does_not_mark");
             Expect(ZPointer::is_store_good(field.GetFieldValue()), "young_old_heals_store_good");
@@ -196,10 +196,10 @@ extern "C" int p2FieldBarrierExercise()
     const bool minorOnly = std::getenv("P2_MINOR_ONLY") != nullptr;
     // Read the actual bitmap before relocation can make an unmarked target
     // unavailable. These are the target invariants, not existence guards.
-    TracingCollector::testYoungMarkCompleted = [&] {
-        auto* childPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(child));
-        auto* sentinelPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(sentinel));
-        auto* controlPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(rootedControl));
+    CopyCollector::testYoungMarkCompleted = [&] {
+        auto* childPage = Heap::page(reinterpret_cast<MAddress>(child));
+        auto* sentinelPage = Heap::page(reinterpret_cast<MAddress>(sentinel));
+        auto* controlPage = Heap::page(reinterpret_cast<MAddress>(rootedControl));
         Expect(childPage->is_strong_bit_set(from_object(child)),
                "remset_retains_child_first_cycle");
         Expect(sentinelPage->is_strong_bit_set(from_object(sentinel)),
@@ -208,7 +208,7 @@ extern "C" int p2FieldBarrierExercise()
                "independent_young_root_control");
     };
     collector.RequestGC(GC_REASON_YOUNG, false);
-    TracingCollector::testYoungMarkCompleted = nullptr;
+    CopyCollector::testYoungMarkCompleted = nullptr;
     if (failures.load() != 0) {
         // The target state has been observed. Do not dereference an object
         // that the faulty product has just classified as unreachable.
@@ -225,17 +225,17 @@ extern "C" int p2FieldBarrierExercise()
     currentChild = childBeforeNext;
     BaseObject* sentinelBeforeNext = ZBarrier::ReadReference(childBeforeNext, Slot(childBeforeNext));
     unsigned completed = 0;
-    TracingCollector::testYoungMarkCompleted = [&] {
+    CopyCollector::testYoungMarkCompleted = [&] {
         ++completed;
-        auto* childPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(childBeforeNext));
-        auto* sentinelPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(sentinelBeforeNext));
+        auto* childPage = Heap::page(reinterpret_cast<MAddress>(childBeforeNext));
+        auto* sentinelPage = Heap::page(reinterpret_cast<MAddress>(sentinelBeforeNext));
         Expect(childPage->is_strong_bit_set(from_object(childBeforeNext)),
                "remset_retains_child_next_cycle");
         Expect(sentinelPage->is_strong_bit_set(from_object(sentinelBeforeNext)),
                "remset_retains_sentinel_next_cycle");
     };
     collector.RequestGC(GC_REASON_YOUNG, false);
-    TracingCollector::testYoungMarkCompleted = nullptr;
+    CopyCollector::testYoungMarkCompleted = nullptr;
     Expect(completed != 0, "young_completion_observation_reached");
     if (!minorOnly) {
         // The control was needed only for remset liveness. End its real export
@@ -256,7 +256,7 @@ extern "C" int p2FieldBarrierExercise()
         Expect(finalFollow != 0, "real_finalizable_follow_reached");
         Expect(references.Discovered(ReferenceType::FINAL) - discoveredBefore == 2, "finalizable_discovered_once_each");
         Expect(references.Enqueued(ReferenceType::FINAL) - enqueuedBefore == 1, "finalizable_only_unupgraded_enqueued");
-        auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(upgraded));
+        auto* page = Heap::page(reinterpret_cast<MAddress>(upgraded));
         Expect(page->is_strong_bit_set(from_object(upgraded)), "finalizable_upgraded_to_strong");
         Expect(!IsFinalizable(upgraded), "finalizable_upgraded_not_pending");
         heap.RemoveExportObject(upgradeRoot);
@@ -307,17 +307,17 @@ extern "C" int p2FinalizerRegistrationExercise()
     large->OnFinalizerCreated();
     pinned->OnFinalizerCreated();
     delayedOld->OnFinalizerCreated();
-    Expect(ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(small))->IsAllocating(), "late_small_allocating");
-    Expect(ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(large))->IsAllocating(), "late_large_allocating");
-    Expect(ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(pinned))->IsAllocating(), "late_pinned_allocating");
-    auto* oldPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(delayedOld));
+    Expect(Heap::page(reinterpret_cast<MAddress>(small))->IsAllocating(), "late_small_allocating");
+    Expect(Heap::page(reinterpret_cast<MAddress>(large))->IsAllocating(), "late_large_allocating");
+    Expect(Heap::page(reinterpret_cast<MAddress>(pinned))->IsAllocating(), "late_pinned_allocating");
+    auto* oldPage = Heap::page(reinterpret_cast<MAddress>(delayedOld));
     Expect(!oldPage->IsAllocating(), "late_old_registration_is_not_new_allocation");
     auto dumpRegistrations = [&](const char* stage) {
         heap.GetFinalizerProcessor().VisitFinalizers([&](NativeSlot& slot) {
             const auto word = slot.GetFieldValue();
             if (is_null_any(word)) return;
             auto* object = to_object(RefField<>(word).GetTargetObject());
-            auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            auto* page = Heap::page(reinterpret_cast<MAddress>(object));
             std::printf("P2_REGISTERED stage=%s slot=%p word=%#zx object=%p young=%d birth=%llu epoch=%llu\n",
                         stage, &slot, raw(word), object, page->IsYoungRegion(),
                         static_cast<unsigned long long>(page->BirthSequence()),
@@ -335,12 +335,12 @@ extern "C" int p2FinalizerRegistrationExercise()
     bool youngSmall = false, youngLarge = false;
     size_t oldCandidates = 0;
     bool pinnedDiscovered = false, delayedDiscovered = false;
-    TracingCollector::testYoungMarkCompleted = [&] {
+    CopyCollector::testYoungMarkCompleted = [&] {
         heap.GetFinalizerProcessor().VisitFinalizers([&](NativeSlot& slot) {
             const auto word = slot.GetFieldValue();
             if (is_null_any(word)) return;
             auto* object = to_object(RefField<>(word).GetTargetObject());
-            auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            auto* page = Heap::page(reinterpret_cast<MAddress>(object));
             if (!page->IsYoungRegion()) return;
             if (object->GetTypeInfo() == smallType) {
                 youngSmall = true;
@@ -351,12 +351,12 @@ extern "C" int p2FinalizerRegistrationExercise()
             }
         });
     };
-    TracingCollector::testOldMarkStarted = [&] {
+    CopyCollector::testOldMarkStarted = [&] {
         heap.GetFinalizerProcessor().VisitFinalizers([&](NativeSlot& slot) {
             const auto word = slot.GetFieldValue();
             if (is_null_any(word)) return;
             auto* object = to_object(RefField<>(word).GetTargetObject());
-            auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            auto* page = Heap::page(reinterpret_cast<MAddress>(object));
             if (page->IsYoungRegion()) return;
             ++oldCandidates;
             Expect(IsFinalizable(object), "late_old_candidate_discovered_during_mark");
@@ -373,8 +373,8 @@ extern "C" int p2FinalizerRegistrationExercise()
         }
     };
     collector.RequestGC(GC_REASON_USER, false);
-    TracingCollector::testYoungMarkCompleted = nullptr;
-    TracingCollector::testOldMarkStarted = nullptr;
+    CopyCollector::testYoungMarkCompleted = nullptr;
+    CopyCollector::testOldMarkStarted = nullptr;
     dumpRegistrations("next-complete");
     Expect(youngSmall, "late_small_next_young_consumer_reached");
     Expect(youngLarge, "late_large_next_young_consumer_reached");
@@ -421,7 +421,7 @@ extern "C" int p2FinalizerClosureExercise()
         return IsFinalizable(object);
     };
     auto isStrong = [](BaseObject* object) {
-        auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        auto* page = Heap::page(reinterpret_cast<MAddress>(object));
         return page->is_strong_bit_set(from_object(object));
     };
     Expect(isFinal(holder), "finalizable_registered_holder_live");
@@ -500,10 +500,10 @@ extern "C" int p2ArrayFieldExercise()
     ConcurrentGCBreakpoints::AcquireControl();
     Expect(ConcurrentGCBreakpoints::RunTo("BEFORE MARKING COMPLETED"), "array_product_mark_end_breakpoint");
     auto* current = reinterpret_cast<MArray*>(arrayAddress());
-    auto* firstPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(first));
-    auto* lastPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(last));
-    auto* controlPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(control));
-    Expect(!ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(current))->IsYoungRegion(), "array_real_old_owner");
+    auto* firstPage = Heap::page(reinterpret_cast<MAddress>(first));
+    auto* lastPage = Heap::page(reinterpret_cast<MAddress>(last));
+    auto* controlPage = Heap::page(reinterpret_cast<MAddress>(control));
+    Expect(!Heap::page(reinterpret_cast<MAddress>(current))->IsYoungRegion(), "array_real_old_owner");
     Expect(fields.load() == fieldCount, structArray ? "struct_array_visits_all_members" : "array_full_and_range_visit_all_fields");
     Expect(rangeTarget.load(), structArray ? "struct_array_last_member_reached" : "array_range_target_reached");
     Expect(finalizable ? IsFinalizable(first) :
@@ -532,8 +532,8 @@ public:
         if (!claimed.exchange(true)) exercise();
         // Same GC-worker tail protocol as MarkOldRootsTask. The field entry
         // produced these entries; the test never supplies mark/current output.
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.MajorMarkDomain());
-        Expect(collector.MajorMarkDomain()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.MajorMark());
+        Expect(collector.MajorMark()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
     }
 private:
     WCollector& collector;
@@ -611,20 +611,20 @@ extern "C" int p2SlowFieldInputExercise()
         if (&field == &Slot(finalChild) && kind == ZBarrier::FieldMarkKind::Finalizable) ++finalFollow;
     };
     unsigned started = 0;
-    TracingCollector::testYoungMarkStarted = [&] {
+    CopyCollector::testYoungMarkStarted = [&] {
         if (!collector.GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) return;
         ++started;
         Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
-        auto* page = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(young));
+        auto* page = Heap::page(reinterpret_cast<MAddress>(young));
         auto bit = [&] {
-            return page->livemap()->get(page->generation_id(), page->bit_index(from_object(young)) + 1);
+            return page->livemap().get(page->generation_id(), page->bit_index(from_object(young)) + 1);
         };
         const bool before = bit();
         P2FieldInputTask task(collector, [&] {
-            auto& youngStacks = collector.YoungMarkDomain()->Stacks();
+            auto& youngStacks = collector.YoungMark()->Stacks();
             const size_t youngBefore = youngStacks.Population();
-            const size_t oldBefore = collector.MajorMarkDomain()->Stacks().Population();
-            TracingCollector::WorkStack work;
+            const size_t oldBefore = collector.MajorMark()->Stacks().Population();
+            WorkStack work;
             inputTask = true;
             collector.TraceRefField(strongHolder, Slot(strongHolder), work, false);
             collector.TraceRefField(finalHolder, Slot(finalHolder), work, true);
@@ -634,9 +634,9 @@ extern "C" int p2SlowFieldInputExercise()
             collector.TraceRefField(finalHolder, Slot(finalHolder, 1), work, true);
             inputTask = false;
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
-            Expect(collector.MajorMarkDomain()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
+            Expect(collector.MajorMark()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
         });
-        collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->Run(task);
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).Workers()->run(&task);
         Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");
         Expect(strongSlow == 1 && finalSlow == 1, "slow_input_both_field_entries_reached");
         Expect(strongFast == 1 && finalFast == 1, "slow_input_legal_fast_controls_reached");
@@ -647,11 +647,11 @@ extern "C" int p2SlowFieldInputExercise()
         }
     };
     collector.RequestGC(GC_REASON_HEU_SYNC, false);
-    TracingCollector::testYoungMarkStarted = nullptr;
+    CopyCollector::testYoungMarkStarted = nullptr;
     ZBarrier::testFieldMarkResult = nullptr;
     Expect(started == 1, "slow_input_real_major_roots_phase_reached");
-    auto* strongPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(oldSentinel));
-    auto* finalPage = ZPage::GetRegionInfoAt(reinterpret_cast<MAddress>(finalSentinel));
+    auto* strongPage = Heap::page(reinterpret_cast<MAddress>(oldSentinel));
+    auto* finalPage = Heap::page(reinterpret_cast<MAddress>(finalSentinel));
     Expect(strongFollow != 0 && strongPage->is_strong_bit_set(from_object(oldSentinel)),
            "slow_old_strong_control_followed_by_product");
     Expect(finalFollow != 0 && IsFinalizable(finalSentinel),

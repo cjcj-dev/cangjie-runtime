@@ -7,6 +7,8 @@
 set(SRC_LIST
     "BaseObject.cpp"
     "OopStorage.cpp"
+    "WeakHandle.cpp"
+    "SuspendibleThreadSet.cpp"
     "../Heap/z/zAddress.cpp"
     "RunType.cpp"
     "PageCache.cpp"

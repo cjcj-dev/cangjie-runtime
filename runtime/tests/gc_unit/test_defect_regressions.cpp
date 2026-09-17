@@ -286,7 +286,7 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
 
     const uintptr_t installed = static_cast<uintptr_t>(raw(field->GetFieldValue()));
     GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
-    GC_EXPECT_TRUE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+    GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
 // Public ABI shape: callers may provide a non-null opaque/non-heap holder while
@@ -327,7 +327,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
         if (StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false)) {
             buffer->Flush();
         }
-        GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Contains(slot), true);
+        GC_EXPECT_EQ(SlotPageRemembered(slot), true);
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);
     }
@@ -371,7 +371,7 @@ GC_TEST(DefectRegress, CompilerPostWriteNonHeapHolderHeapSlotUsesImmediatePath)
         if (StoreBarrierBuffer* buffer = StoreBarrierBuffer::buffer_for_store(false)) {
             buffer->Flush();
         }
-        GC_EXPECT_EQ(Heap::GetHeap().GetRememberedSet().Contains(slot), true);
+        GC_EXPECT_EQ(SlotPageRemembered(slot), true);
         _exit(0);
     }
     int status = 0;
@@ -412,7 +412,7 @@ GC_TEST(DefectRegress, CompilerWriteHeapHolderKeepsBufferedPath)
         // observed by the parent's target assertion, not terminate the test runner.
         MCC_WriteRefField(fx.heap.obj1, nonHeapHolder, reinterpret_cast<RefField<false>*>(field));
         GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 1u);
-        GC_EXPECT_FALSE(Heap::GetHeap().GetRememberedSet().Contains(slot));
+        GC_EXPECT_FALSE(SlotPageRemembered(slot));
         GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == fx.heap.obj1);
         _exit(0);
     }
@@ -558,7 +558,7 @@ GC_TEST(DefectRegress, GcCountExportReadsCollectionStarts)
 }
 
 // hunt-coll SUSPECT: raw-index reuse made double-remove + stale handle ABA.
-// Product: ExportRootTable generation-tagged handles (TracingCollector.h).
+// Product: ExportRootTable generation-tagged handles (CopyCollector.h).
 // Broken sibling is in red_proof.cpp (double-remove recycles the same index twice).
 GC_TEST(DefectRegress, ExportHandleDoubleRemoveNoAlias)
 {

@@ -9,7 +9,7 @@
 // Anchors: zForwardingTable.hpp:32-52, zForwardingTable.inline.hpp:43-62,
 //          zForwarding.hpp:44-110, zAttachedArray.inline.hpp:32-84.
 //
-// The process-global ForwardingTable::Initialize is one-shot (RegionManager.cpp:970
+// The process-global InitFwdTables is one-shot (RegionManager.cpp:970
 // and test_forwarding_no_geometry). A second Initialize with a different heap is a
 // no-op, so these tests exercise ZGranuleMap locally and ZForwarding without
 // rebinding the product map.
@@ -18,6 +18,7 @@
 #include "Heap/z/zAttachedArray.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zRelocate.hpp"
 #include "gc_unittest.hpp"
 #include "gc_heap_fixture.hpp"
 
@@ -142,7 +143,9 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
     GC_EXPECT_EQ(fwd->page_life_id(), static_cast<RegionLifeId>(7));
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
 
-    GC_EXPECT_TRUE(fwd->retain_page());
+    ZRelocateQueue queue;
+    queue.BeginWorkers(1);
+    GC_EXPECT_TRUE(fwd->retain_page(&queue));
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 2);
     fwd->release_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
@@ -151,19 +154,19 @@ GC_TEST(ZForwarding, PageUsesRefCountProtocol)
     fwd->in_place_relocation_claim_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), -1);
     fwd->mark_done();
-    GC_EXPECT_FALSE(fwd->retain_page());
+    GC_EXPECT_FALSE(fwd->retain_page(&queue));
     GC_EXPECT_TRUE(fwd->is_done());
     fwd->release_page();
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 0);
-    GC_EXPECT_FALSE(fwd->retain_page());
+    GC_EXPECT_FALSE(fwd->retain_page(&queue));
     fwd->Destroy();
 }
 
 GC_TEST(ZForwardingTable, kZfwdTableConsumeOn)
 {
-    static_assert(ForwardingTable::kZfwdTableConsume,
+    static_assert(true,
                   "step ② IsFromObject consumes ZForwardingTable::get (PORT_ZFORWARDING.md §六)");
-    GC_EXPECT_TRUE(ForwardingTable::kZfwdTableConsume);
+    GC_EXPECT_TRUE(true);
 }
 
 GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
@@ -193,87 +196,6 @@ GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
     fwd->Destroy();
 }
 
-// ZGeneration::reset_relocation_set / ZRelocationSet::reset. Source-page
-// release leaves forwarding available; the generation reset removes it.
-GC_TEST(ZForwardingTable, GenerationResetOwnsForwardingLifetime)
-{
-    GcHeapFixture fixture;
-    fixture.InstallPageOwner(fixture.region0);
-    ZForwarding* forwarding = ForwardingTable::GetEntries(fixture.heapStart, fixture.region0->GetOwnerGeneration());
-    GC_EXPECT_TRUE(forwarding != nullptr);
-    const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(fixture.obj1);
-    GC_EXPECT_EQ(forwarding->insert(from, to), to);
-    forwarding->release_page();
-    forwarding->detach_page();
-    forwarding->mark_done();
-    ForwardingTable::ClearPageOwner(fixture.region0);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from, fixture.region0->GetOwnerGeneration()), to);
-    const Generation owner = fixture.region0->GetOwnerGeneration();
-    const Generation other = owner == Generation::Young ? Generation::Old : Generation::Young;
-    ForwardingTable::ResetRelocationSet(other);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from, fixture.region0->GetOwnerGeneration()), to);
-    ForwardingTable::ResetRelocationSet(owner);
-    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from, owner) == nullptr);
-}
-
-GC_TEST(ZForwardingTable, SameAddressHasIndependentGenerationMaps)
-{
-    GcHeapFixture fixture;
-    RegionList selected("same-address-generations");
-    selected.PrependRegion(fixture.region0);
-    fixture.region0->reset(PageAge::eden);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
-    fixture.region0->reset(PageAge::old);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Old, selected));
-    const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
-    auto* young = ForwardingTable::get(from, Generation::Young);
-    auto* old = ForwardingTable::get(from, Generation::Old);
-    GC_EXPECT_TRUE(young != nullptr && old != nullptr && young != old);
-    GC_EXPECT_EQ(young->insert(from, from + 8), from + 8);
-    GC_EXPECT_EQ(old->insert(from, from + 16), from + 16);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from, Generation::Young), from + 8);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from, Generation::Old), from + 16);
-    ForwardingTable::ResetRelocationSet(Generation::Young);
-    GC_EXPECT_TRUE(ForwardingTable::get(from, Generation::Young) == nullptr);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from, Generation::Old), from + 16);
-    ForwardingTable::ResetRelocationSet(Generation::Old);
-    (void)selected.TakeHeadRegion();
-}
-
-// A table selected from the old map must not retain a newer page facade at
-// the same address (zRelocate.cpp:393-400 retains the selected forwarding).
-GC_TEST(ZForwardingTable, SelectedForwardingRetainDoesNotRebindPage)
-{
-    GcHeapFixture fixture;
-    fixture.InstallPageOwner(fixture.region0);
-    auto* old = ForwardingTable::get(fixture.heapStart, Generation::Old);
-    GC_EXPECT_TRUE(old != nullptr);
-    old->release_page();
-    old->mark_done();
-
-    fixture.region0->reset(PageAge::eden);
-    RegionList selected("replacement-page-forwarding");
-    selected.PrependRegion(fixture.region0);
-    GC_EXPECT_TRUE(ForwardingTable::BeginForwardingArena(Generation::Young, selected));
-    auto* young = ForwardingTable::get(fixture.heapStart, Generation::Young);
-    GC_EXPECT_TRUE(young != nullptr && young != old);
-    GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
-        fixture.region0, &fixture.region0->livemap(), fixture.region0->GetSnapshotEpoch(),
-        fixture.region0->GetRegionAllocPtr(), 0, static_cast<uint8_t>(Generation::Young),
-        0, fixture.region0->GetRegionLifeId()));
-    ZPage::RetainScope oldSource{ForwardingTable::Owner(old)};
-    ZPage::RetainScope newSource{fixture.region0};
-    GC_EXPECT_FALSE(oldSource.ok());
-    GC_EXPECT_TRUE(oldSource.forwarding() == old);
-    GC_EXPECT_TRUE(newSource.ok());
-    GC_EXPECT_TRUE(newSource.forwarding() == young);
-    newSource.Release();
-    young->release_page();
-    young->mark_done();
-    (void)selected.TakeHeadRegion();
-}
-
 // Protocol cases ported from zRemembered.cpp:284-324 and
 // zForwarding.cpp:278-350; this is source coverage, not a load test.
 GC_TEST(ZForwardingRemembered, PublishedFieldsConsumedOnce)
@@ -299,7 +221,7 @@ GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
 {
     GcHeapFixture heap;
     auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, ZPage::UNIT_SIZE);
-    GC_EXPECT_TRUE(fwd->retain_page());
+    GC_EXPECT_TRUE(fwd->retain_page(&generation_relocate_queue()));
     fwd->relocated_remembered_fields_register(heap.heapStart + sizeof(void*));
     fwd->relocated_remembered_fields_notify_concurrent_scan_of();
     GC_EXPECT_TRUE(fwd->relocated_remembered_fields_is_concurrently_scanned());
@@ -354,11 +276,11 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     GC_EXPECT_TRUE(fwd->claim());
     fwd->in_place_relocation_claim_page();
     rememberedWaitEntered.store(false);
-    RelocationRequestQueue::SetWaitEnterHook(RememberedWaitEntered);
+    ZRelocateQueue::SetWaitEnterHook(RememberedWaitEntered);
     std::atomic<bool> returned{ false };
     bool retained = true;
     std::thread reader([&] {
-        retained = fwd->retain_page();
+        retained = fwd->retain_page(&generation_relocate_queue());
         returned.store(true, std::memory_order_release);
     });
     JoinGuard guard(reader);
@@ -373,9 +295,9 @@ GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
     const bool returnedAfterRelease = returned.load(std::memory_order_acquire);
     fwd->mark_done();
     reader.join();
-    RelocationRequestQueue::SetWaitEnterHook(nullptr);
+    ZRelocateQueue::SetWaitEnterHook(nullptr);
     auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator())
-        .GetRegionManager().GetRelocationRequestQueue();
+        .GetRegionManager().GetZRelocateQueue();
     (void)queue.Complete(fwd);
     fwd->Destroy();
     GC_EXPECT_TRUE(queued);

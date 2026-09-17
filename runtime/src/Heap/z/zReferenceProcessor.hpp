@@ -1,23 +1,16 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
-// This source file is part of the Cangjie project, licensed under Apache-2.0
-// with Runtime Library Exception.
-
 #ifndef MRT_REFERENCE_PROCESSOR_H
 #define MRT_REFERENCE_PROCESSOR_H
 
-#include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 
 #include "Common/TypeDef.h"
+#include "Heap/z/zValue.hpp"
+#include "Heap/z/zValue.inline.hpp"
 
 namespace MapleRuntime {
 
-// Cangjie currently has product objects for weak references and finalizers.
-// Soft/phantom are named here so discovery cannot silently pretend that a JVM
-// object layout exists when it does not.
 enum class ReferenceType : uint8_t {
     SOFT = 0,
     WEAK,
@@ -26,39 +19,36 @@ enum class ReferenceType : uint8_t {
     COUNT,
 };
 
-enum class ReferenceStatus : uint8_t {
-    DISCOVERED,
-    ALREADY_DISCOVERED,
-    INACTIVE,
-    UNSUPPORTED,
-};
+class ZWorkers;
 
 class ReferenceProcessor {
+    friend class ZReferenceProcessorTask;
+
 public:
     static constexpr size_t REFERENCE_TYPE_COUNT = static_cast<size_t>(ReferenceType::COUNT);
     using IsStronglyLive = std::function<bool(BaseObject*)>;
     using EnqueueFinal = std::function<bool(BaseObject*)>;
     using ObserveWeakFinal = std::function<void(BaseObject*, BaseObject*)>;
 
-    ReferenceProcessor();
+    explicit ReferenceProcessor(ZWorkers* workers = nullptr);
     ~ReferenceProcessor();
     ReferenceProcessor(const ReferenceProcessor&) = delete;
     ReferenceProcessor& operator=(const ReferenceProcessor&) = delete;
 
-    static constexpr bool IsSupported(ReferenceType type)
-    {
-        return type == ReferenceType::WEAK || type == ReferenceType::FINAL;
-    }
+    void set_workers(ZWorkers* workers);
+    void set_soft_reference_policy(bool clear_all_soft_references);
+    bool uses_clear_all_soft_reference_policy() const;
 
-    ReferenceStatus DiscoverReference(BaseObject* reference, ReferenceType type);
+    void reset_statistics();
+    bool DiscoverReference(BaseObject* reference, ReferenceType type);
+    void process_references();
     void ProcessReferences(const IsStronglyLive& isStronglyLive);
     void EnqueueReferences(const EnqueueFinal& enqueueFinal);
 #if defined(MRT_TESTABLE_INTERNALS)
     void ProcessReferences(const IsStronglyLive& isStronglyLive, const ObserveWeakFinal& observeWeakFinal);
     static void SetBeforeWeakCleanCasForTest(std::function<void()> hook);
 #endif
-    static bool IsFinalizable(BaseObject* reference);
-    static bool CleanWeakReference(BaseObject* reference);
+    void verify_pending_references();
 
     size_t Encountered(ReferenceType type) const;
     size_t Discovered(ReferenceType type) const;
@@ -71,25 +61,38 @@ private:
         ReferenceType type;
         Node* next;
     };
+    using Counters = size_t[REFERENCE_TYPE_COUNT];
 
     static constexpr size_t TypeIndex(ReferenceType type) { return static_cast<size_t>(type); }
-    struct WeakCleanResult {
-        bool cleared;
-        bool casLost;
-        BaseObject* terminalReferent;
-    };
-
-    static void Push(std::atomic<Node*>& head, Node* node);
+    static uint32_t worker_index();
+    static void list_append(Node*& head, Node*& tail, Node* reference);
     static void DeleteList(Node* list);
-    static WeakCleanResult CleanWeakReferenceWithResult(BaseObject* reference);
-    void ProcessReferencesImpl(const IsStronglyLive& isStronglyLive, const ObserveWeakFinal& observeWeakFinal);
+    static bool is_object_finalizable(BaseObject* reference);
 
-    std::atomic<Node*> discoveredList{ nullptr };
-    std::atomic<Node*> pendingList{ nullptr };
-    std::array<std::atomic<size_t>, REFERENCE_TYPE_COUNT> encountered{};
-    std::array<std::atomic<size_t>, REFERENCE_TYPE_COUNT> discovered{};
-    std::array<std::atomic<size_t>, REFERENCE_TYPE_COUNT> enqueued{};
+    bool is_inactive(BaseObject* reference, BaseObject* referent, ReferenceType type) const;
+    bool is_strongly_live(BaseObject* referent) const;
+    bool is_softly_live(BaseObject* reference, ReferenceType type) const;
+    bool should_discover(BaseObject* reference, ReferenceType type) const;
+    bool try_make_inactive(BaseObject* reference, ReferenceType type) const;
+    void discover(BaseObject* reference, ReferenceType type);
+    void verify_empty() const;
+    void process_worker_discovered_list(Node* discovered_list);
+    void work();
+    void collect_statistics();
+    void soft_reference_update_clock();
+    bool CleanWeakReference(BaseObject* reference);
+
+    ZWorkers* workers;
+    bool clear_all_soft_references;
+    ZPerWorker<Counters> encountered_count;
+    ZPerWorker<Counters> discovered_count;
+    ZPerWorker<Counters> enqueued_count;
+    ZPerWorker<Node*> discovered_list;
+    ZContended<Node*> pending_list;
+    Node* pending_list_tail;
+    IsStronglyLive isStronglyLiveFn;
+    ObserveWeakFinal observeWeakFinalFn;
 };
 
 } // namespace MapleRuntime
-#endif // MRT_REFERENCE_PROCESSOR_H
+#endif
