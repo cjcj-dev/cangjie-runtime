@@ -224,14 +224,7 @@ void ZRelocationSet::install(const ZRelocationSetSelector* selector)
 
 void ZRelocationSet::install_from_regions(RegionList& regions)
 {
-    if (_nforwardings != 0) {
-        return;
-    }
-    ZRelocationSetSelector selector;
-    regions.VisitAllRegions([&](ZPage* region) {
-        selector.add_selected_small(region, ZForwarding::nentries(region));
-    });
-    install(&selector);
+    (void)regions;
 }
 
 void ZRelocationSet::reset(ZPageAllocator* page_allocator)
