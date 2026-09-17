@@ -1186,8 +1186,6 @@ void GenerationCycle::flip_age_pages(const ZRelocationSetSelector* selector)
     ZRelocate::flip_age_pages(*w, selector->not_selected_small());
     ZRelocate::flip_age_pages(*w, selector->not_selected_medium());
     ZRelocate::flip_age_pages(*w, selector->not_selected_large());
-    ZRendezvousHandshakeClosure cl;
-    Handshake::execute(&cl);
     ZRelocate::barrier_promoted_pages(*w, _relocation_set.flip_promoted_pages(),
                                      _relocation_set.relocate_promoted_pages());
 }
