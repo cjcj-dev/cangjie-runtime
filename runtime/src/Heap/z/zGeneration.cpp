@@ -406,8 +406,7 @@ void ZGenerationYoung::concurrent_mark(WCollector& collector)
     if (ZAbort::should_abort() || collector.youngMarkFollowFailed) {
         return;
     }
-    if (collector.youngWorkStack == nullptr ||
-        !collector.FollowYoungMark(*collector.youngWorkStack, collector.youngFullScan, collector.youngReachableVec,
+    if (!collector.FollowYoungMark(collector.youngWorkStack, collector.youngFullScan, collector.youngReachableVec,
                                    collector.youngReachableSlots, collector.youngWeakSlots,
                                    &collector.youngConcWindow)) {
         collector.youngMarkFollowFailed = true;
@@ -424,10 +423,10 @@ bool ZGenerationYoung::pause_mark_end(WCollector& collector)
     collector.youngStw = std::make_unique<ScopedStopTheWorld>("young mark terminate", true,
                                                               GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     ZVerify::BeforeZOperation();
-    collector.MergeY2yDirtyWork(*collector.youngWorkStack);
-    const bool markEndSucceeded = collector.TryEndYoungMark(*collector.youngWorkStack, &collector.youngConcWindow);
+    collector.MergeY2yDirtyWork(collector.youngWorkStack);
+    const bool markEndSucceeded = collector.TryEndYoungMark(collector.youngWorkStack, &collector.youngConcWindow);
     if (markEndSucceeded) {
-        MarkingStacks::VerifyEmpty(collector.youngWorkStack->size());
+        MarkingStacks::VerifyEmpty(collector.youngWorkStack.size());
 #if defined(MRT_TESTABLE_INTERNALS)
         if (CopyCollector::testYoungMarkCompleted) {
             CopyCollector::testYoungMarkCompleted();
@@ -471,7 +470,7 @@ bool ZGenerationYoung::pause_mark_end(WCollector& collector)
         }
         return true;
     }
-    NoteMarkTerminateContinue(collector.youngWorkStack->size());
+    collector.NoteMarkTerminateContinue(collector.youngWorkStack.size());
     ++collector.youngConcWindow.reenters;
     collector.youngStw.reset();
     collector.TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
@@ -692,7 +691,7 @@ void WCollector::RunYoungCollection()
     if (ZAbort::should_abort()) {
         return;
     }
-    youngWorkStack = std::make_unique<WorkStack>(std::move(workStack));
+    youngWorkStack = std::move(workStack);
     youngReachableVec = std::move(reachableVec);
     youngReachableSlots = std::move(reachableSlots);
     youngWeakSlots = std::move(weakSlots);

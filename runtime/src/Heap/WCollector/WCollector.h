@@ -784,7 +784,7 @@ private:
     size_t youngLiveBytes = 0;
     size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
-    std::unique_ptr<WorkStack> youngWorkStack;
+    WorkStack youngWorkStack;
     MinorSlotSet youngReachableSlots;
     MinorSlotSet youngWeakSlots;
     MinorSlotSet youngRememberedSlots;
