@@ -324,8 +324,6 @@ public:
     void ResolveCycleRef() override;
 
     // BaseObject* ForwardFixRefField(RefField<>& field) const;
-    BaseObject* ForwardUpdateRawRef(ObjectRef& ref, Generation generation);
-
     // lonefrom: "is this object being relocated in this cycle" must not be asked as
     // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
     // from-list with TakeHeadRegion() (RegionManager.cpp:1638), so a

@@ -753,11 +753,6 @@ inline void ZPage::ClearGhostFromRegionBits()
         SetInGhostRegion(0);
     }
 
-inline void ZPage::DispelGhostFromRegion()
-    {
-        ClearGhostFromRegionBits();
-    }
-
 inline bool ZPage::IsGhostFromRegion() const
     {
         const bool ghost = _scratch.regionStateBitField.GetAtomicValue(

@@ -28,6 +28,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zBarrier.hpp"
+#include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/CollectorProxy.h"
@@ -120,7 +121,14 @@ struct RelocationReceiptTestAccess {
 
     static BaseObject* ForwardUpdateRawRef(WCollector& collector, ObjectRef& root)
     {
-        return collector.ForwardUpdateRawRef(root, Generation::Old);
+        const zaddress_unsafe observed = root.LoadPlain();
+        BaseObject* oldObj = to_object(safe(observed));
+        if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
+            return oldObj;
+        }
+        BaseObject* mapped = collector.relocate_or_remap_object(oldObj, ZGenerationId::old);
+        ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
+        return mapped;
     }
 
     static bool FixMinorField(WCollector& collector, RefField<>& field, BaseObject* knownBase = nullptr)
@@ -565,8 +573,7 @@ ZLiveMap* PrepareForwardable(GcHeapFixture& fx, ZPage* region, MAddress liveObje
 void DestroyAfterGhostCleared(ZPage* region, const char* why)
 {
     if (region != nullptr && region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
     PublishGenerationMarkComplete(Generation::Young);
     PublishGenerationMarkComplete(Generation::Old);
     (void)why;
@@ -621,8 +628,7 @@ void CleanupLateBackfill(GcHeapFixture& fx, LateBackfillState& state)
     // before asking product retirement to prove no source still needs it.
     state.from->SetStateCode(ObjectState::NORMAL);
     if (state.region->IsGhostFromRegion()) {
-        state.region->DispelGhostFromRegion();
-    }
+        state.    }
     Heap::GetHeap().GetCollector().GetGenerationCycle(state.region->GetOwnerGeneration()).reset_relocation_set();
     (void)fx;
 }
@@ -659,8 +665,7 @@ void CleanupPartialCompact(GcHeapFixture& fx, PartialCompactState& state)
     RelocationReceiptTestAccess::ReleaseListOwnership(state.region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(state.region->GetOwnerGeneration()).reset_relocation_set();
     if (state.region->IsGhostFromRegion()) {
-        state.region->DispelGhostFromRegion();
-    }
+        state.    }
     (void)fx;
 }
 
@@ -877,8 +882,7 @@ void ExerciseMutatorCopy(bool runtimeEntry)
     collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     Heap::GetHeap().GetCollector().GetGenerationCycle(Generation::Old).reset_relocation_set();
-    region->DispelGhostFromRegion();
-}
+    }
 }
 
 GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
@@ -968,8 +972,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
     if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
     GC_EXPECT_TRUE(ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(liveObject)) == nullptr);
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, liveObject);
     GC_EXPECT_TRUE(resolved == liveObject);
@@ -1016,8 +1019,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
@@ -1502,8 +1504,7 @@ static void CheckForwardingWinner(bool identity)
     GC_EXPECT_FALSE(region->RetainForwarding());
     GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), reinterpret_cast<MAddress>(winner));
 
-    region->DispelGhostFromRegion();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, ForwardingIdentityWinnerSurvivesDoneAndRelease)
@@ -1594,8 +1595,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     (void)queue.SynchronizePoll();
 
     if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 #endif
 }
@@ -1631,8 +1631,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
@@ -1658,8 +1657,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 #endif
 }
@@ -1715,11 +1713,9 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
     Heap::GetHeap().GetCollector().GetGenerationCycle(firstRegion->GetOwnerGeneration()).reset_relocation_set();
     Heap::GetHeap().GetCollector().GetGenerationCycle(secondRegion->GetOwnerGeneration()).reset_relocation_set();
     if (firstRegion->IsGhostFromRegion()) {
-        firstRegion->DispelGhostFromRegion();
-    }
+            }
     if (secondRegion->IsGhostFromRegion()) {
-        secondRegion->DispelGhostFromRegion();
-    }
+            }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
@@ -1866,8 +1862,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
 }
 #endif // MRT_PRODUCT_TESTABLE_INTERNALS
 
@@ -1942,8 +1937,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
 
     // Keep fault-injection failures after all product/global cleanup. The test
     // harness reports assertions with exceptions; throwing before this point
@@ -2044,8 +2038,7 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
+            }
 }
 
 // ZGC zRelocate.cpp:1256-1279: the promoted page keeps the relocation-set
@@ -2072,8 +2065,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierProducerCapturesOldTopAndLivemap)
     GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
     GC_EXPECT_FALSE(region->IsOwnerSurvivedObject(0));
 
-    region->DispelGhostFromRegion();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 // zForwarding.cpp:55-84 / zRelocate.cpp:871-877: resetting the to-page
@@ -2100,8 +2092,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierConsumerSurvivesCurrentPageResetUnti
     GC_EXPECT_EQ(from == nullptr ? 0 : from->topAtStart, oldTop);
     GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
 
-    region->DispelGhostFromRegion();
-    // Source-page release does not end forwarding lifetime (zRelocationSet.cpp:197).
+        // Source-page release does not end forwarding lifetime (zRelocationSet.cpp:197).
     GC_EXPECT_TRUE(UNUSED_GetFromPageView(region) != nullptr);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     GC_EXPECT_TRUE(UNUSED_GetFromPageView(region) == nullptr);

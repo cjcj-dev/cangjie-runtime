@@ -238,21 +238,6 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
     return false;
 }
 
-BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generation)
-{
-    zaddress_unsafe observed = root.LoadPlain();
-    BaseObject* oldObj = to_object(safe(observed));
-    if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
-        return oldObj;
-    }
-    const ZGenerationId id = generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
-    BaseObject* mapped = relocate_or_remap_object(oldObj, id);
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
-    return mapped;
-}
-
-
-
 void WCollector::RemapYoungRoots()
 {
     SuspendibleThreadSetJoiner joiner;
@@ -271,7 +256,9 @@ void WCollector::RemapYoungRoots()
         const MAddress observedAddr = raw(observed);
         if (observedAddr != 0 &&
             generation_forwarding_table(Generation::Young).get(observedAddr) != nullptr) {
-            ForwardUpdateRawRef(root, Generation::Young);
+            const ZGenerationId id = ZGenerationId::young;
+            (void)relocate_or_remap_object(to_object(safe(observed)), id);
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteRawRemapYoungRootsTestReceipt(root, raw(observed));
@@ -353,7 +340,12 @@ bool WCollector::Preforward()
     const std::function<void()> families[] = {
         [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
         [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
-            ForwardUpdateRawRef(root, Generation::Old);
+            const zaddress_unsafe observed = root.LoadPlain();
+            BaseObject* oldObj = to_object(safe(observed));
+            if (oldObj != nullptr && Heap::IsHeapAddress(oldObj)) {
+                (void)relocate_or_remap_object(oldObj, ZGenerationId::old);
+            }
+            ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }, {}); },
         [&] { PreforwardDiscoveredExternObjects(Generation::Old); },
         [&] { PreforwardAllResurrectExportFromObjects(Generation::Old); }
@@ -2306,7 +2298,6 @@ void RegionManager::ForwardRegion(ZPage* region)
             AddFlipPromotedPage(region);
         }
         ExemptFromRegion(region);
-        region->DispelGhostFromRegion();
         return;
         }
     }

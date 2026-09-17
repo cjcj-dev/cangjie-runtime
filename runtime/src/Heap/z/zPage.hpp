@@ -505,8 +505,6 @@ public:
 
     void ClearGhostFromRegionBits();
 
-    void DispelGhostFromRegion();
-
     bool IsGhostFromRegion() const;
 
     // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).

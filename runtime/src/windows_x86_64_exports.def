@@ -1052,7 +1052,7 @@ EXPORTS
     _ZN12MapleRuntime10ZPage20GetGhostFromRegionAtEy @1055
     _ZN12MapleRuntime10ZPage20GetOrAllocMarkBitmapEv @1056
     _ZN12MapleRuntime10ZPage20youngRegionFlagMutexE @1057 DATA
-    _ZN12MapleRuntime10ZPage21DispelGhostFromRegionEv @1058
+
     _ZN12MapleRuntime10ZPage24IncRawPointerObjectCountEv @1060
     _ZN12MapleRuntime10ZPage26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10ZPage27BindLiveInfo0FromLiveIfNullEv @1065
@@ -1087,7 +1087,7 @@ EXPORTS
     _ZN12MapleRuntime10WCollector19CollectLargeGarbageEv @1123
     _ZN12MapleRuntime10WCollector19DoGarbageCollectionENS_17GCCycleGenerationE @1124
     _ZN12MapleRuntime10WCollector19FixMinorObjectSlotsEPNS_10BaseObjectE @1125
-    _ZN12MapleRuntime10WCollector19ForwardUpdateRawRefERNS_8RootSlotE @1126
+
     _ZN12MapleRuntime10WCollector19ShouldIgnoreRequestERNS_9GCRequestE @1129
     _ZN12MapleRuntime10WCollector19VisitMinorRootSlotsERNSt3__18functionIFvRNS_8RootSlotEEEEy @1130
     _ZN12MapleRuntime10WCollector20EvacuateYoungRegionsERKNSt3__16vectorIPNS_10BaseObjectENS1_9allocatorIS4_EEEERKNS1_13unordered_setIyNS1_4hashIyEENS1_8equal_toIyEENS5_IyEEEE @1131
