@@ -83,7 +83,7 @@ private:
     bool CleanWeakReference(BaseObject* reference);
 
     ZWorkers* workers;
-    bool uses_clear_all_soft_reference_policy;
+    bool clear_all_soft_references;
     ZPerWorker<Counters> encountered_count;
     ZPerWorker<Counters> discovered_count;
     ZPerWorker<Counters> enqueued_count;

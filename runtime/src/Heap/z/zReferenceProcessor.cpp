@@ -79,7 +79,7 @@ void ReferenceProcessor::DeleteList(Node* list)
 
 ReferenceProcessor::ReferenceProcessor(ZWorkers* workers)
     : workers(workers),
-      uses_clear_all_soft_reference_policy(true),
+      clear_all_soft_references(true),
       encountered_count(),
       discovered_count(),
       enqueued_count(),
@@ -103,14 +103,14 @@ ReferenceProcessor::~ReferenceProcessor()
 
 void ReferenceProcessor::set_workers(ZWorkers* value) { workers = value; }
 
-void ReferenceProcessor::set_soft_reference_policy(bool clear_all_soft_references)
+void ReferenceProcessor::set_soft_reference_policy(bool clear_all)
 {
-    uses_clear_all_soft_reference_policy = clear_all_soft_references;
+    clear_all_soft_references = clear_all;
 }
 
 bool ReferenceProcessor::uses_clear_all_soft_reference_policy() const
 {
-    return uses_clear_all_soft_reference_policy;
+    return clear_all_soft_references;
 }
 
 bool ReferenceProcessor::is_inactive(BaseObject* reference, BaseObject* referent, ReferenceType type) const
@@ -143,7 +143,7 @@ bool ReferenceProcessor::is_softly_live(BaseObject* reference, ReferenceType typ
     if (type != ReferenceType::SOFT) {
         return false;
     }
-    return !uses_clear_all_soft_reference_policy;
+    return !clear_all_soft_references;
 }
 
 bool ReferenceProcessor::should_discover(BaseObject* reference, ReferenceType type) const
@@ -293,8 +293,8 @@ void ReferenceProcessor::work()
 void ReferenceProcessor::verify_empty() const
 {
 #ifdef ASSERT
-    ZPerWorkerConstIterator<Node*> iter(&discovered_list);
-    for (const Node* const* list; iter.next(&list);) {
+    ZPerWorkerIterator<Node*> iter(const_cast<ZPerWorker<Node*>*>(&discovered_list));
+    for (Node** list; iter.next(&list);) {
         CHECK(*list == nullptr);
     }
     CHECK(pending_list.get() == nullptr);
@@ -461,8 +461,8 @@ size_t ReferenceProcessor::Enqueued(ReferenceType type) const
 
 bool ReferenceProcessor::Empty() const
 {
-    ZPerWorkerConstIterator<Node*> iter(&discovered_list);
-    for (const Node* const* list; iter.next(&list);) {
+    ZPerWorkerIterator<Node*> iter(const_cast<ZPerWorker<Node*>*>(&discovered_list));
+    for (Node** list; iter.next(&list);) {
         if (*list != nullptr) {
             return false;
         }
