@@ -7,6 +7,7 @@
 
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/z/zDriver.hpp"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 
 #include <algorithm>
@@ -74,6 +75,7 @@ void ZDriver::terminate()
 
 void CollectorResources::Init()
 {
+    ZAbort::reset();
     minorDriverPort.Reset();
     majorDriverPort.Reset();
     ZStat::Initialize();
@@ -298,7 +300,7 @@ bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriver
     DriverLocker locker(*this);
     const bool major = port.Kind() == GCDriverKind::MAJOR;
     if (major) ZBreakpoint::AtBeforeGC();
-    if (ZAbort::should_abort() || !ExecuteDriverRequest(request)) {
+    if (port.IsStopped() || ZAbort::should_abort() || !ExecuteDriverRequest(request)) {
         port.Cancel(request);
         CompleteDriverRequest(port);
         return false;

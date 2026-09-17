@@ -209,15 +209,15 @@ public:
     ZGenerationYoung();
     bool should_record_stats() override;
     void collect();
-    void pause_mark_start(WCollector& collector);
-    void concurrent_mark(WCollector& collector);
-    bool pause_mark_end(WCollector& collector);
-    void concurrent_mark_continue(WCollector& collector);
-    void concurrent_mark_free(WCollector& collector);
+    void pause_mark_start();
+    void concurrent_mark();
+    bool pause_mark_end();
+    void concurrent_mark_continue();
+    void concurrent_mark_free();
     void concurrent_reset_relocation_set();
     void concurrent_select_relocation_set();
-    void pause_relocate_start(WCollector& collector);
-    void concurrent_relocate(WCollector& collector);
+    void pause_relocate_start();
+    void concurrent_relocate();
 };
 
 class ZGenerationOld : public ZGeneration {
@@ -225,17 +225,17 @@ public:
     ZGenerationOld();
     bool should_record_stats() override;
     void collect();
-    void concurrent_mark(WCollector& collector);
-    bool pause_mark_end(WCollector& collector);
-    void concurrent_mark_continue(WCollector& collector);
+    void concurrent_mark();
+    bool pause_mark_end();
+    void concurrent_mark_continue();
     void concurrent_mark_free();
-    void concurrent_process_non_strong_references(WCollector& collector);
+    void concurrent_process_non_strong_references();
     void concurrent_reset_relocation_set();
-    void pause_verify(WCollector& collector);
+    void pause_verify();
     void concurrent_select_relocation_set();
-    void concurrent_remap_young_roots(WCollector& collector);
-    void pause_relocate_start(WCollector& collector);
-    void concurrent_relocate(WCollector& collector);
+    void concurrent_remap_young_roots();
+    void pause_relocate_start();
+    void concurrent_relocate();
 };
 
 }

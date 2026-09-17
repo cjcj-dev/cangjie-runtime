@@ -407,29 +407,34 @@ ZGenerationCollectionScopeOld::~ZGenerationCollectionScopeOld()
     generation.at_collection_end();
 }
 
+static WCollector& TheCollector()
+{
+    return static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+}
+
 void ZGenerationYoung::collect()
 {
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     ZGenerationCollectionScopeYoung scope(*this);
-    pause_mark_start(collector);
-    concurrent_mark(collector);
+    pause_mark_start();
+    concurrent_mark();
     abortpoint();
-    while (!pause_mark_end(collector)) {
-        concurrent_mark_continue(collector);
+    while (!pause_mark_end()) {
+        concurrent_mark_continue();
         abortpoint();
     }
-    concurrent_mark_free(collector);
+    concurrent_mark_free();
     abortpoint();
     concurrent_reset_relocation_set();
     abortpoint();
     concurrent_select_relocation_set();
     abortpoint();
-    pause_relocate_start(collector);
-    concurrent_relocate(collector);
+    pause_relocate_start();
+    concurrent_relocate();
 }
 
-void ZGenerationYoung::pause_mark_start(WCollector& collector)
+void ZGenerationYoung::pause_mark_start()
 {
+    WCollector& collector = TheCollector();
     if (IsMajorRoots()) {
         VM_ZMarkStartYoungAndOld op(collector);
         (void)op.pause();
@@ -439,22 +444,22 @@ void ZGenerationYoung::pause_mark_start(WCollector& collector)
     }
 }
 
-void ZGenerationYoung::concurrent_mark(WCollector& collector)
+void ZGenerationYoung::concurrent_mark()
 {
-    collector.ConcurrentYoungMark();
+    TheCollector().ConcurrentYoungMark();
 }
-bool ZGenerationYoung::pause_mark_end(WCollector& collector)
+bool ZGenerationYoung::pause_mark_end()
 {
-    VM_ZMarkEndYoung op(collector);
+    VM_ZMarkEndYoung op(TheCollector());
     return op.pause();
 }
-void ZGenerationYoung::concurrent_mark_continue(WCollector& collector)
+void ZGenerationYoung::concurrent_mark_continue()
 {
-    collector.ConcurrentYoungMarkContinue();
+    TheCollector().ConcurrentYoungMarkContinue();
 }
-void ZGenerationYoung::concurrent_mark_free(WCollector& collector)
+void ZGenerationYoung::concurrent_mark_free()
 {
-    collector.FinishYoungMarkHandoff();
+    TheCollector().FinishYoungMarkHandoff();
 }
 
 void WCollector::RunYoungCollection()
@@ -786,15 +791,15 @@ void ZGenerationYoung::concurrent_select_relocation_set()
     select_relocation_set(YoungType() == ZYoungType::major_full_preclean);
 }
 
-void ZGenerationYoung::pause_relocate_start(WCollector& collector)
+void ZGenerationYoung::pause_relocate_start()
 {
     VM_ZRelocateStartYoung op;
     (void)op.pause();
-    (void)collector;
 }
 
-void ZGenerationYoung::concurrent_relocate(WCollector& collector)
+void ZGenerationYoung::concurrent_relocate()
 {
+    WCollector& collector = TheCollector();
     if (ZAbort::should_abort()) {
         return;
     }
@@ -1257,55 +1262,55 @@ void WCollector::DoGarbageCollection(ZGenerationId generation)
 
 void ZGenerationOld::collect()
 {
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    WCollector& collector = TheCollector();
     ZGenerationCollectionScopeOld scope(*this);
     DriverUnlocker unlocker(collector.collectorResources);
-    concurrent_mark(collector);
+    concurrent_mark();
     abortpoint();
-    while (!pause_mark_end(collector)) {
-        concurrent_mark_continue(collector);
+    while (!pause_mark_end()) {
+        concurrent_mark_continue();
         abortpoint();
     }
     concurrent_mark_free();
     abortpoint();
-    concurrent_process_non_strong_references(collector);
+    concurrent_process_non_strong_references();
     abortpoint();
     concurrent_reset_relocation_set();
     abortpoint();
-    pause_verify(collector);
+    pause_verify();
     concurrent_select_relocation_set();
     abortpoint();
     {
         DriverLocker locker(collector.collectorResources);
-        concurrent_remap_young_roots(collector);
+        concurrent_remap_young_roots();
         abortpoint();
-        pause_relocate_start(collector);
+        pause_relocate_start();
     }
-    concurrent_relocate(collector);
+    concurrent_relocate();
 }
 
-void ZGenerationOld::concurrent_mark(WCollector& collector)
+void ZGenerationOld::concurrent_mark()
 {
-    collector.TraceHeap();
+    TheCollector().TraceHeap();
 }
 
-bool ZGenerationOld::pause_mark_end(WCollector&)
+bool ZGenerationOld::pause_mark_end()
 {
     VM_ZMarkEndOld op;
     return op.pause();
 }
 
-void ZGenerationOld::concurrent_mark_continue(WCollector&) {}
+void ZGenerationOld::concurrent_mark_continue() {}
 void ZGenerationOld::concurrent_mark_free() {}
 
-void ZGenerationOld::concurrent_process_non_strong_references(WCollector& collector)
+void ZGenerationOld::concurrent_process_non_strong_references()
 {
-    collector.PostTrace();
+    TheCollector().PostTrace();
 }
 
 void ZGenerationOld::concurrent_reset_relocation_set() {}
 
-void ZGenerationOld::pause_verify(WCollector&)
+void ZGenerationOld::pause_verify()
 {
     VM_ZVerifyOld op;
     (void)op.pause();
@@ -1313,17 +1318,18 @@ void ZGenerationOld::pause_verify(WCollector&)
 
 void ZGenerationOld::concurrent_select_relocation_set() {}
 
-void ZGenerationOld::concurrent_remap_young_roots(WCollector&) {}
+void ZGenerationOld::concurrent_remap_young_roots() {}
 
-void ZGenerationOld::pause_relocate_start(WCollector& collector)
+void ZGenerationOld::pause_relocate_start()
 {
     VM_ZRelocateStartOld op;
     (void)op.pause();
-    (void)collector.Preforward();
+    (void)TheCollector().Preforward();
 }
 
-void ZGenerationOld::concurrent_relocate(WCollector& collector)
+void ZGenerationOld::concurrent_relocate()
 {
+    WCollector& collector = TheCollector();
     collector.ForwardFromSpace(ZGenerationId::old);
     reinterpret_cast<RegionSpace&>(collector.GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
         ZGenerationId::old);
