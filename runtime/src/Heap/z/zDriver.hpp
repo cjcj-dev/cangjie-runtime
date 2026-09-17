@@ -8,6 +8,7 @@
 #ifndef MRT_COLLECTOR_RESOURCES_H
 #define MRT_COLLECTOR_RESOURCES_H
 
+#include <cstdint>
 #include <functional>
 
 #include "Base/Macros.h"
@@ -18,10 +19,14 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Inspector/CjHeapData.h"
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zResurrection.inline.hpp"
 
 namespace MapleRuntime {
+
+enum class GCDriverKind : uint8_t { MINOR, MAJOR };
+
 class Collector;
 class CollectorProxy;
 class CollectorResources;
@@ -29,27 +34,29 @@ class CollectorResources;
 class CollectorResourcesTestPeer;
 #endif
 
-// zDirector.hpp:30-42: the director is a ZThread; run_thread is its sampling
-// loop and terminate wakes it out of the monitor wait.
-class ZDirector final : public ZThread {
-public:
-    explicit ZDirector(CollectorResources& resources);
-    void run_thread() override;
-    void terminate() override;
-private:
-    CollectorResources& resources;
-};
-
 // zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
 // receives requests from their port and whose terminate closes that port.
-class ZDriver final : public ZThread {
+class ZDriver : public ZThread {
 public:
     ZDriver(CollectorResources& resources, GCDriverKind kind);
     void run_thread() override;
     void terminate() override;
-private:
+    bool is_busy() const;
+protected:
     CollectorResources& resources;
     const GCDriverKind kind;
+};
+
+class ZDriverMinor final : public ZDriver {
+public:
+    explicit ZDriverMinor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MINOR) {}
+    void collect(const ZDriverRequest& request);
+};
+
+class ZDriverMajor final : public ZDriver {
+public:
+    explicit ZDriverMajor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MAJOR) {}
+    void collect(const ZDriverRequest& request);
 };
 
 // CollectorResources provides the resources that a functional collector need,
@@ -101,9 +108,9 @@ public:
 
     // ZGC-style per-generation request ports.  Requests on one port never
     // consume or coalesce requests from the other generation.
-    GCDriverPort& GetMinorDriverPort() { return minorDriverPort; }
-    GCDriverPort& GetMajorDriverPort() { return majorDriverPort; }
-    GCDriverPort& GetYoungDriverPort();
+    ZDriverPort& GetMinorDriverPort() { return minorDriverPort; }
+    ZDriverPort& GetMajorDriverPort() { return majorDriverPort; }
+    ZDriverPort& GetYoungDriverPort();
     void RequestAbort(GCDriverKind kind)
     {
         ZAbort::abort();
@@ -124,8 +131,8 @@ private:
     void RunDriverLoop(GCDriverKind kind);
     void RunDirectorLoop();
     void EvaluateDirector(uint64_t now);
-    bool TakeDriverRequest(GCDriverPort& port, GCDriverRequest& request);
-    void CompleteDriverRequest(GCDriverPort& port);
+    bool start_gc(uint64_t now);
+    void CompleteDriverRequest(ZDriverPort& port);
     void RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup);
     void RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup);
     bool ShouldPrecleanYoung(GCReason reason) const;
@@ -135,11 +142,11 @@ private:
     // reason: The reason for this GC.
     void RequestAsyncGC(GCReason reason);
     void RequestGCAndWait(GCReason reason);
-    bool ExecuteDriverRequest(const GCDriverRequest& request);
-    bool ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request);
+    bool ExecuteDriverRequest(const ZDriverRequest& request);
+    bool ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request);
     void CancelDriverRequestLifecycle(GCDriverKind kind);
-    GCDriverPort minorDriverPort { GCDriverKind::MINOR };
-    GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
+    ZDriverPort minorDriverPort;
+    ZDriverPort majorDriverPort;
     // zDriver.cpp:59-72: held by young; old releases it for its body.
     std::mutex driverLock;
 #if defined(MRT_GC_UNIT_TESTS)
@@ -153,8 +160,8 @@ private:
     // zCollectedHeap.cpp:65-71 / zHeap.hpp: the concurrent GC threads are
     // created when GC starts and stopped through ConcurrentGCThread::stop.
     ZDirector* director = nullptr;
-    ZDriver* minorDriver = nullptr;
-    ZDriver* majorDriver = nullptr;
+    ZDriverMinor* minorDriver = nullptr;
+    ZDriverMajor* majorDriver = nullptr;
     std::mutex directorMutex;
     std::condition_variable directorCondition;
     bool directorStopped = false;

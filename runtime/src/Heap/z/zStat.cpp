@@ -15,8 +15,6 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zPageAllocator.hpp"
-#include "Heap/z/zDirector.hpp"
-
 namespace MapleRuntime {
 // zStat.cpp:65-240: rolling ten-second, ten-minute and ten-hour windows.
 struct ZStatSamplerData {
@@ -214,7 +212,7 @@ ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
     std::lock_guard<std::mutex> guard(lock);
     return {warmupCycles, static_cast<double>(now - std::min(now, end)) / SECOND_TO_NANO_SECOND,
             serial.average, std::sqrt(serial.variance), parallel.average, std::sqrt(parallel.variance),
-            lastActiveWorkers};
+            lastActiveWorkers, static_cast<double>(now - start) / SECOND_TO_NANO_SECOND};
 }
 
 ZStatCollection& ZStat::Collections()
@@ -238,79 +236,6 @@ ZStatCollectionStats ZStatCollection::Stats() const
     return counts;
 }
 
-namespace {
-// zDirector.cpp:651-678: read is_active and active_workers under the
-// resizing lock; an inactive generation contributes no worker count.
-struct WorkerResizeSample {
-    bool isActive;
-    uint32_t activeWorkers;
-};
-
-WorkerResizeSample SampleWorkerResizeStats(ZWorkers& workers)
-{
-    std::lock_guard<std::mutex> locker(*workers.resizing_lock());
-    if (!workers.is_active()) {
-        // If the workers are not active, it isn't safe to read stats
-        // from the stat_cycle, so return early.
-        return { false, 0 };
-    }
-    return { true, workers.active_workers() };
-}
-} // namespace
-
-GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                    RegionManager& regions, ZWorkers& youngWorkers, ZWorkers& oldWorkers,
-                                    uint32_t workerCapacity)
-{
-    const WorkerResizeSample youngState = SampleWorkerResizeStats(youngWorkers);
-    const WorkerResizeSample oldState = SampleWorkerResizeStats(oldWorkers);
-    const uint32_t concurrentWorkers = workerCapacity;
-    const auto rate = ZStatMutatorAllocRate::stats();
-    const auto youngCycle = young.Stats(now);
-    const auto oldCycle = old.Stats(now);
-    GcTriggerInputs in;
-    in.workerCapacity = concurrentWorkers;
-    in.youngWorkersActive = youngState.isActive;
-    in.oldWorkersActive = oldState.isActive;
-    in.activeYoungWorkers = youngState.activeWorkers;
-    in.activeOldWorkers = oldState.activeWorkers;
-    in.allocationStalling = regions.IsAllocationStalling();
-    in.allocRateAvgBps = rate.avg;
-    in.allocRatePredictBps = rate.predict;
-    in.allocRateSdBps = rate.sd;
-    in.usedBytes = Heap::GetHeap().GetAllocator().AllocatedBytes();
-    in.youngUsedBytes = regions.GetYoungAllocatedSize();
-    in.oldUsedBytes = in.usedBytes - std::min(in.usedBytes, in.youngUsedBytes);
-    in.capacityBytes = Heap::GetHeap().GetMaxCapacity();
-    in.softMaxBytes = ZStatMutatorAllocRate::soft_max_heap_size();
-    // zHeuristics.cpp:61-66: one small relocation page per concurrent
-    // worker. This allocator has no shared medium-page/NUMA allocation tier.
-    in.relocationHeadroomBytes = concurrentWorkers * regions.GetThreadLocalRegionSize();
-    in.youngSerialTimeSec = youngCycle.serialTime + youngCycle.serialTimeSd * kGcTriggerOneIn1000;
-    in.youngParallelTimeSec = youngCycle.parallelTime + youngCycle.parallelTimeSd * kGcTriggerOneIn1000;
-    in.lastYoungGcDurationSec = in.youngSerialTimeSec + in.youngParallelTimeSec;
-    in.lastYoungWorkers = youngCycle.lastActiveWorkers;
-    in.lastOldGcDurationSec = oldCycle.serialTime + oldCycle.serialTimeSd * kGcTriggerOneIn1000 +
-        oldCycle.parallelTime + oldCycle.parallelTimeSd * kGcTriggerOneIn1000;
-    in.lastGcDurationSec = in.youngSerialTimeSec + in.youngParallelTimeSec / concurrentWorkers;
-    in.timeSinceLastGcSec = youngCycle.timeSinceLast;
-    in.timeSinceLastMajorSec = oldCycle.timeSinceLast;
-    in.collectionIntervalSec = static_cast<double>(CangjieRuntime::GetGCParam().backupGCInterval) /
-        SECOND_TO_NANO_SECOND;
-    in.warmupCyclesDone = oldCycle.warmupCycles;
-    in.isWarm = oldCycle.warmupCycles >= 3;
-    in.isTimeTrustable = oldCycle.warmupCycles > 0;
-    const auto collectionStats = Collections().Stats();
-    in.totalCollections = collectionStats.totalCollections;
-    in.collectionsAtLastMajor = collectionStats.collectionsAtMajorStart;
-    const auto youngHeap = YoungHeap().Stats();
-    const auto oldHeap = OldHeap().Stats();
-    in.usedAtLastMajorEnd = oldHeap.usedAtRelocateEnd;
-    in.oldLiveAtMarkEnd = oldHeap.liveAtMarkEnd;
-    in.reclaimedPerYoungAvg = youngHeap.reclaimedAverage;
-    in.reclaimedPerOldAvg = oldHeap.reclaimedAverage;
-    return in;
-}
 } // namespace MapleRuntime
 
 

@@ -243,7 +243,7 @@ public:
     }
 
     // Non-blocking control-plane dequeue used by the generation drivers.  GC
-    // work itself lives in GCDriverPort; this method only services shutdown and
+    // work itself lives in ZDriverPort; this method only services shutdown and
     // diagnostic tasks without allowing one generation to consume the other.
     bool TryDequeue(T& task)
     {

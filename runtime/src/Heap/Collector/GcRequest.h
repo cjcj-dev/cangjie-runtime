@@ -35,6 +35,7 @@ enum GCReason : uint32_t {
     GC_REASON_FORCE,       // force gc is triggered when runtime triggers gc actively.
     GC_REASON_YOUNG,       // Young-region allocation reaches the minor collection threshold.
     GC_REASON_WB_BREAKPOINT, // ZGC WhiteBox concurrent phase control.
+    GC_REASON_WARMUP,      // ZGC GCCause::_z_warmup
     GC_REASON_MAX,
     GC_REASON_INVALID = std::numeric_limits<uint32_t>::max(),
 };

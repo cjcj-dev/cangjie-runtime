@@ -1,204 +1,166 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 
-#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDriverPort.hpp"
-
-#include <chrono>
-#include <limits>
-#include "Common/Runtime.h"
-#include "Mutator/MutatorManager.h"
+#include "Base/Panic.h"
+#include "Heap/z/zFuture.inline.hpp"
+#include "Heap/z/zList.inline.hpp"
+#include "Heap/z/zLock.inline.hpp"
 
 namespace MapleRuntime {
 
-struct GCDriverReceiptState {
-    explicit GCDriverReceiptState(uint64_t sequence) : sequence(sequence) {}
+ZDriverRequest::ZDriverRequest()
+    : ZDriverRequest(GC_REASON_INVALID, 0, 0)
+{}
 
-    const uint64_t sequence;
-    bool resolved { false };
-    bool completed { false };
+ZDriverRequest::ZDriverRequest(GCReason cause, uint32_t young_nworkers, uint32_t old_nworkers)
+    : _cause(cause),
+      _young_nworkers(young_nworkers),
+      _old_nworkers(old_nworkers)
+{}
+
+bool ZDriverRequest::operator==(const ZDriverRequest& other) const
+{
+    return _cause == other._cause;
+}
+
+GCReason ZDriverRequest::cause() const
+{
+    return _cause;
+}
+
+uint32_t ZDriverRequest::young_nworkers() const
+{
+    return _young_nworkers;
+}
+
+uint32_t ZDriverRequest::old_nworkers() const
+{
+    return _old_nworkers;
+}
+
+class ZDriverPortEntry {
+    friend class ZList<ZDriverPortEntry>;
+
+private:
+    const ZDriverRequest _message;
+    uint64_t _seqnum;
+    ZFuture<ZDriverRequest> _result;
+    ZListNode<ZDriverPortEntry> _node;
+
+public:
+    explicit ZDriverPortEntry(const ZDriverRequest& message)
+        : _message(message),
+          _seqnum(0)
+    {}
+
+    void set_seqnum(uint64_t seqnum)
+    {
+        _seqnum = seqnum;
+    }
+
+    uint64_t seqnum() const
+    {
+        return _seqnum;
+    }
+
+    ZDriverRequest message() const
+    {
+        return _message;
+    }
+
+    void wait()
+    {
+        const ZDriverRequest message = _result.get();
+        MRT_ASSERT(message == _message, "Message mismatch");
+    }
+
+    void satisfy(const ZDriverRequest& message)
+    {
+        _result.set(message);
+    }
 };
 
-uint64_t GCDriverReceipt::Sequence() const
+ZDriverPort::ZDriverPort()
+    : _lock(),
+      _has_message(false),
+      _seqnum(0),
+      _queue()
+{}
+
+bool ZDriverPort::is_busy() const
 {
-    return state == nullptr ? 0 : state->sequence;
+    ZLocker<ZConditionLock> locker(&_lock);
+    return _has_message;
 }
 
-bool GCDriverReceipt::IsValid() const
+void ZDriverPort::send_sync(const ZDriverRequest& message)
 {
-    return state != nullptr;
-}
+    ZDriverPortEntry entry(message);
 
-uint64_t GCDriverPort::NextSequenceLocked()
-{
-    const uint64_t sequence = nextSequence;
-    ++nextSequence;
-    if (nextSequence == 0 || nextSequence == std::numeric_limits<uint64_t>::max()) {
-        nextSequence = 2;
+    {
+        ZLocker<ZConditionLock> locker(&_lock);
+        entry.set_seqnum(_seqnum);
+        _queue.insert_last(&entry);
+        _lock.notify();
     }
-    return sequence;
+
+    entry.wait();
+
+    {
+        ZLocker<ZConditionLock> locker(&_lock);
+    }
 }
 
-GCDriverReceipt GCDriverPort::EnqueueSync(GCReason reason)
+void ZDriverPort::send_async(const ZDriverRequest& message)
 {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (stopped) {
-        return {};
+    ZLocker<ZConditionLock> locker(&_lock);
+    if (!_has_message) {
+        _message = message;
+        _has_message = true;
+        _lock.notify();
     }
-    for (auto& pending : requests) {
-        if (pending.reason == reason) {
-            if (!pending.receipt.IsValid()) {
-                pending.receipt = GCDriverReceipt(std::make_shared<GCDriverReceiptState>(pending.sequence));
-            }
-            return pending.receipt;
+}
+
+ZDriverRequest ZDriverPort::receive()
+{
+    ZLocker<ZConditionLock> locker(&_lock);
+
+    while (!_has_message && _queue.is_empty()) {
+        _lock.wait();
+    }
+
+    _seqnum++;
+
+    if (!_has_message) {
+        _message = _queue.first()->message();
+        _has_message = true;
+    }
+
+    return _message;
+}
+
+void ZDriverPort::ack()
+{
+    ZLocker<ZConditionLock> locker(&_lock);
+
+    if (!_has_message) {
+        return;
+    }
+
+    ZListIterator<ZDriverPortEntry> iter(&_queue);
+    for (ZDriverPortEntry* entry; iter.next(&entry);) {
+        if (entry->message() == _message && entry->seqnum() < _seqnum) {
+            _queue.remove(entry);
+            entry->satisfy(_message);
         }
     }
-    const uint64_t sequence = NextSequenceLocked();
-    GCDriverReceipt receipt(std::make_shared<GCDriverReceiptState>(sequence));
-    requests.push_back({ sequence, reason, false, receipt });
-    condition.notify_all();
-    return receipt;
-}
 
-uint64_t GCDriverPort::EnqueueAsync(GCReason reason, uint32_t youngWorkers, uint32_t oldWorkers, bool warmup)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    if (stopped) {
-        return 0;
+    if (_queue.is_empty()) {
+        _has_message = false;
+    } else {
+        _message = _queue.first()->message();
     }
-    // ZGC zDriverPort.cpp:126-135,149-157: an outstanding message includes
-    // the collection in progress. Async requests merge until its ack; sync
-    // requests still enqueue a receipt for a subsequent collection.
-    if (activeSequence != 0) {
-        return activeSequence;
-    }
-    // Async requests are intentionally deduplicated only within this port.
-    for (const auto& pending : requests) {
-        if (pending.reason == reason) {
-            return pending.sequence;
-        }
-    }
-    const uint64_t sequence = NextSequenceLocked();
-    requests.push_back({ sequence, reason, true, {}, youngWorkers, oldWorkers, warmup });
-    condition.notify_all();
-    return sequence;
-}
-
-bool GCDriverPort::TryDequeue(GCDriverRequest& request)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    if (requests.empty()) {
-        return false;
-    }
-    request = requests.front();
-    requests.pop_front();
-    activeSequence = request.sequence;
-    return true;
-}
-
-void GCDriverPort::Acknowledge(const GCDriverRequest& request)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    if (activeSequence == request.sequence) {
-        activeSequence = 0;
-    }
-    if (request.receipt.state != nullptr) {
-        request.receipt.state->completed = true;
-        request.receipt.state->resolved = true;
-    }
-    if (request.sequence > highestAcknowledged) {
-        highestAcknowledged = request.sequence;
-    }
-    condition.notify_all();
-}
-
-void GCDriverPort::Cancel(const GCDriverRequest& request)
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    if (activeSequence == request.sequence) {
-        activeSequence = 0;
-    }
-    if (request.receipt.state != nullptr) {
-        request.receipt.state->resolved = true;
-    }
-    condition.notify_all();
-}
-
-bool GCDriverPort::WaitForAck(const GCDriverReceipt& receipt)
-{
-    std::unique_lock<std::mutex> lock(mutex);
-    if (receipt.state == nullptr) {
-        return false;
-    }
-#if defined(MRT_GC_UNIT_TESTS)
-    ++waitingReceipts;
-    condition.notify_all();
-#endif
-    while (!stopped && !receipt.state->resolved) {
-        lock.unlock();
-        if (Runtime::CurrentRef() != nullptr && MutatorManager::Instance().MarkFlushHandshakeActive()) {
-            (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
-        }
-        lock.lock();
-        condition.wait_for(lock, std::chrono::milliseconds(1),
-                           [this, &receipt] { return stopped || receipt.state->resolved; });
-    }
-#if defined(MRT_GC_UNIT_TESTS)
-    --waitingReceipts;
-    condition.notify_all();
-#endif
-    return receipt.state->completed;
-}
-
-void GCDriverPort::Stop()
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    stopped = true;
-    ZAbort::abort();
-    for (auto& request : requests) {
-        if (request.receipt.state != nullptr) {
-            request.receipt.state->resolved = true;
-        }
-    }
-    condition.notify_all();
-}
-
-void GCDriverPort::Reset()
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    requests.clear();
-    activeSequence = 0;
-    stopped = false;
-    nextSequence = 2;
-    highestAcknowledged = 1;
-
-}
-
-bool GCDriverPort::IsStopped() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return stopped;
-}
-
-size_t GCDriverPort::Pending() const
-{
-    std::lock_guard<std::mutex> lock(mutex);
-    return requests.size();
 }
 
 } // namespace MapleRuntime
-
-namespace MapleRuntime {
-bool GCDriverPort::Receive(GCDriverRequest& request)
-{
-    std::unique_lock<std::mutex> lock(mutex);
-    condition.wait(lock, [this] { return stopped || !requests.empty(); });
-    if (stopped) {
-        return false;
-    }
-    request = std::move(requests.front());
-    requests.pop_front();
-    activeSequence = request.sequence;
-    return true;
-}
-}
