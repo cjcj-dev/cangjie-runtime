@@ -1432,7 +1432,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 0u,
                 0ull,
                 0ull,
-                static_cast<unsigned>(GetGCPhase(GCCycleGeneration::OLD)),
+                ZGeneration::old() != nullptr ? static_cast<unsigned>(ZGeneration::old()->Snapshot().phase) : 0xffu,
                 live != nullptr && live->IsCompacted() ? 1u : 0u,
                 live != nullptr ? live->RelocateObserve() : 0u,
                 reinterpret_cast<void*>(lookupTo),
