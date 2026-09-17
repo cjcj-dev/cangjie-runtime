@@ -127,14 +127,38 @@ private:
 
 class ZWorkers;
 class ZPage;
+class ZGeneration;
 template<typename T> class ZArray;
+
+class ZRelocationTargets {
+public:
+    static constexpr size_t kAges = 16;
+    ZPage* get(uint32_t partitionId, PageAge age) const
+    {
+        (void)partitionId;
+        return targets[static_cast<size_t>(age) % kAges];
+    }
+    void set(uint32_t partitionId, PageAge age, ZPage* page)
+    {
+        (void)partitionId;
+        targets[static_cast<size_t>(age) % kAges] = page;
+    }
+private:
+    ZPage* targets[kAges]{};
+};
 
 class ZRelocate {
 public:
+    explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
+    ZRelocateQueue* queue() { return &relocateQueue; }
+    bool is_queue_active() const { return relocateQueue.IsActive(); }
     static PageAge compute_to_age(PageAge fromAge);
     static void flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages);
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
+private:
+    ZGeneration* const generation;
+    ZRelocateQueue relocateQueue;
 };
 
 } // namespace MapleRuntime

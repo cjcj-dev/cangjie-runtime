@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zVerify.hpp"
+#include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
@@ -320,6 +321,7 @@ bool WCollector::Preforward()
         // OpenJDK zGeneration.cpp:1175-1200: isolate pause_relocate_start from the
         // concurrent root-preforward work below. ScopedLightSync emits its matching
         // rec=stw record, including rendezvous and held time.
+        ZJNICritical::block();
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
         ZVerify::BeforeZOperation();
         // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
@@ -332,6 +334,7 @@ bool WCollector::Preforward()
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
         StartRelocationTasks(GCCycleGeneration::OLD);
+        ZJNICritical::unblock();
     }
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
@@ -2410,6 +2413,7 @@ template void RegionManager::ForwardRegion<Generation::Old>(ZPage*);
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zJNICritical.hpp"
 
 #include <atomic>
 #include <chrono>

@@ -35,6 +35,7 @@
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zRelocationSetSelector.inline.hpp"
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zWorkers.hpp"
@@ -59,9 +60,12 @@ GenerationCycle::GenerationCycle(GCCycleGeneration generation)
     : mark(std::make_unique<ZMark>(ZMarkStripesMax,
           generation == GCCycleGeneration::YOUNG ? MarkingStacks::MarkingGeneration::YOUNG
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
-      generation(generation),
-      _relocation_set(this)
-{}
+       generation(generation),
+       _relocation_set(this),
+       _relocate(std::make_unique<ZRelocate>(this))
+{
+    ZJNICritical::initialize();
+}
 
 GenerationCycle::~GenerationCycle() = default;
 
