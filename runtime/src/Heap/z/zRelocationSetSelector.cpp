@@ -220,66 +220,9 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
     region->inc_live(1, obj->GetSize());
 }
 
-namespace {
-// ZGenerationPagesIterator + ZPage::is_relocatable (zGeneration.cpp:209-213).
-// Existing intrusive allocation lists are the Cangjie page-table adapter.
-bool IsOldRelocationCandidate(const ZPage* region)
-{
-    return region->GetOwnerGeneration() == Generation::Old && region->IsRelocatable();
-}
-}
+void RegionManager::AssembleSmallGarbageCandidates() {}
 
-void RegionManager::AssembleSmallGarbageCandidates()
-{
-    // The young collection and old selection share the physical FROM list.
-    // Establish the old selector's input here, before cleanup or forwarding.
-    ZPage* region = fromRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (!IsOldRelocationCandidate(region)) {
-            fromRegionList.DeleteRegion(region);
-            ParkUnmovableFromRegion(region);
-        }
-        region = next;
-    }
-    auto select = [this](RegionList& list, bool recent) {
-        ZPage* region = list.GetHeadRegion();
-        while (region != nullptr) {
-            ZPage* next = region->GetNextRegion();
-            if (IsOldRelocationCandidate(region) && !region->IsNotRelocatableThisCycle()) {
-                list.DeleteRegion(region);
-                if (recent) RecentFullAccounting::Dequeue(1, region->GetUnitCount());
-                fromRegionList.PrependRegion(region);
-            }
-            region = next;
-        }
-    };
-    select(rawPointerPinnedRegionList, false);
-    select(recentFullRegionList, true);
-    select(unmovableFromRegionList, false);
-}
-
-void RegionManager::AssembleLargeGarbageCandidates()
-{
-    ZPage* region = oldLargeRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (!IsOldRelocationCandidate(region)) {
-            oldLargeRegionList.DeleteRegion(region);
-            recentLargeRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
-    region = recentLargeRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (IsOldRelocationCandidate(region)) {
-            recentLargeRegionList.DeleteRegion(region);
-            oldLargeRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
-}
+void RegionManager::AssembleLargeGarbageCandidates() {}
 
 void RegionManager::ClearNotRelocatableThisCycleFlags()
 {
@@ -314,33 +257,7 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
-    ZPage* region = oldPinnedRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (!IsOldRelocationCandidate(region)) {
-            oldPinnedRegionList.DeleteRegion(region);
-            recentPinnedRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
-    region = recentPinnedRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (IsOldRelocationCandidate(region)) {
-            recentPinnedRegionList.DeleteRegion(region);
-            oldPinnedRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
-    region = oldPinnedRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (collectAll && region->GetRawPointerObjectCount() > 0) {
-            oldPinnedRegionList.DeleteRegion(region);
-            rawPointerPinnedRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
+    (void)collectAll;
 }
 
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor)
@@ -457,7 +374,23 @@ bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
 // Semi-sort by per-page live fraction, then select the last profitable prefix.
 size_t RegionManager::ExemptFromRegions()
 {
-    Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).select_relocation_set(false);
+    auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    old.select_relocation_set(false);
+    ZRelocationSetIterator rs_iter(&old.relocation_set());
+    for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
+        ZPage* page = forwarding->page();
+        if (page == nullptr) {
+            continue;
+        }
+        RegionList* owner = page->GetRegionListOwner();
+        if (owner == &fromRegionList) {
+            continue;
+        }
+        if (owner != nullptr) {
+            owner->DeleteRegion(page);
+        }
+        fromRegionList.PrependRegion(page);
+    }
     return fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
 }
 
