@@ -242,8 +242,6 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
         CHECK_DETAIL(std::all_of(managedIteratorVisits.begin(), managedIteratorVisits.end(),
                                  [](size_t count) { return count == 0; }),
                      "invisible segmented-array safe iterator exposed payload");
-        std::fprintf(stderr, "[SEGMENTED_MANAGED_OK] mode=%s root_sites=%#x\n",
-                     managedTestGc == ManagedSegmentedGc::YOUNG ? "young" : "full", sites);
         g_managedSegmentedActive.store(false, std::memory_order_release);
     }
     if (g_largeArrayInitTestHooks.onWithdraw != nullptr) {
