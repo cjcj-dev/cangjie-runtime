@@ -830,7 +830,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     auto liveStw = [stw]() -> const ScopedStopTheWorld* {
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
     };
-    const bool doYoungFlip = true;
+    const bool doYoungFlip = !Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG).is_phase_relocate();
     ZWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
 
     std::vector<MAddress> remsetVec;

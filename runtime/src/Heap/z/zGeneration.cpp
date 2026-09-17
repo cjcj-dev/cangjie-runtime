@@ -338,7 +338,13 @@ private:
 
 class VM_ZRelocateStartYoung : public VM_ZOperation {
 public:
-    bool do_operation() override { return true; }
+    bool do_operation() override
+    {
+        ZGlobalsPointers::flip_young_relocate_start();
+        ZVerify::OnColorFlip();
+        ZGeneration::young()->set_phase(ZGeneration::Phase::Relocate);
+        return true;
+    }
     bool block_jni_critical() const override { return true; }
 };
 
@@ -643,6 +649,7 @@ bool WCollector::YoungMarkEndPause()
         }
 #endif
         ReportMarkTerminateContinue();
+        youngCycle.set_phase(ZGeneration::Phase::MarkComplete);
         return true;
     }
     NoteMarkTerminateContinue(workStack.size());
