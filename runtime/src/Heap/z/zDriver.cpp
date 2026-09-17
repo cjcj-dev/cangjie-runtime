@@ -348,6 +348,9 @@ bool CollectorResources::ProcessDriverRequest(ZDriverPort& port, const ZDriverRe
 #endif
     if (major) ZBreakpoint::AtAfterGC();
     CompleteDriverRequest(port);
+    if (!major) {
+        ZDirector::evaluate_rules();
+    }
     return true;
 }
 

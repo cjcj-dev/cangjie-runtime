@@ -36,10 +36,23 @@ namespace MapleRuntime {
 // zDirector.cpp:73-80: the director names itself and starts in its
 // constructor; run_thread (:916-930) is the sampling loop and terminate
 // (:932-936) sets the stop flag under the monitor and notifies.
+ZDirector* ZDirector::_director = nullptr;
+
 ZDirector::ZDirector(CollectorResources& resources) : resources(resources)
 {
+    _director = this;
     set_name("ZDirector");
     create_and_start();
+}
+
+void ZDirector::evaluate_rules()
+{
+    if (_director == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(_director->resources.directorMutex);
+    _director->resources.directorReevaluate = true;
+    _director->resources.directorCondition.notify_one();
 }
 
 void ZDirector::run_thread()

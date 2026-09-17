@@ -40,7 +40,9 @@ public:
     explicit ZDirector(CollectorResources& resources);
     void run_thread() override;
     void terminate() override;
+    static void evaluate_rules();
 private:
+    static ZDirector* _director;
     CollectorResources& resources;
 };
 
