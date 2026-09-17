@@ -326,6 +326,11 @@ protected:
     ZGenerationYoung youngCycle;
     ZGenerationOld oldCycle;
 };
+
+class ZCollectedHeap {
+public:
+    static void stop();
+};
 } // namespace MapleRuntime
 
 #endif // MRT_COLLECTOR_H

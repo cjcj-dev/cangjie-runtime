@@ -346,7 +346,7 @@ FinalizerProcessor& HeapImpl::GetFinalizerProcessor() { return collectorResource
 
 CollectorResources& HeapImpl::GetCollectorResources() { return collectorResources; }
 
-void HeapImpl::StopGCWork() { collectorResources.StopGCWork(); }
+void HeapImpl::StopGCWork() { ZCollectedHeap::stop(); }
 
 void HeapImpl::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().RegisterAllocBuffer(buffer); }
 

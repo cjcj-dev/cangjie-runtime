@@ -160,10 +160,6 @@ void CollectorResources::StopGCThreads()
     if (gcThreadRunning.load(std::memory_order_acquire) == false) {
         return;
     }
-    // zCollectedHeap.cpp:106 ZAbort::abort(): cancel in-flight collections
-    // before any GC thread is asked to terminate.
-    ZAbort::abort();
-    ZAbort::abort();
     for (ZThread* thread : { static_cast<ZThread*>(director), static_cast<ZThread*>(majorDriver),
                              static_cast<ZThread*>(minorDriver) }) {
         thread->stop();

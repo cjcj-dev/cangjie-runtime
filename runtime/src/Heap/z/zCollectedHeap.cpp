@@ -21,6 +21,7 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
@@ -62,6 +63,12 @@ const char* Collector::GetCollectorName() const { return COLLECTOR_NAME[collecto
 void Collector::RequestGC(GCReason reason, bool async)
 {
     RequestGCInternal(reason, async);
+}
+
+void ZCollectedHeap::stop()
+{
+    ZAbort::abort();
+    Heap::GetHeap().GetCollectorResources().StopGCWork();
 }
 
 } // namespace MapleRuntime.
