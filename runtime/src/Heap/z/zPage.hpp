@@ -404,11 +404,6 @@ public:
 
     static ZPage* GetZPage(uint32_t idx);
 
-    static bool InGhostFromRegion(BaseObject* obj)
-    {
-        return GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj)) != nullptr;
-    }
-
     static ZPage* GetGhostFromRegionAt(uintptr_t allocAddr);
 
 #if defined(MRT_GC_UNIT_TESTS)
@@ -465,7 +460,7 @@ public:
     // After-copy Exempt parks FORWARDED residuals (zRelocate.cpp:1041-1047).
     // CSet empty-select still needs those headers; strip only at the next install,
     // after the table is retired (zRelocationSet.cpp:91-96). A leftover FORWARDED
-    // with no table entry makes ForwardObjectImpl recopy rather than return dest
+    // with no table entry makes RelocateObjectInner recopy rather than return dest
     // (si_addr=0x8 / near-golden drift). Does not touch LOCKED (live copier).
     void ClearRelocationResiduals();
 
@@ -484,33 +479,20 @@ public:
     template<Generation G>
     __attribute__((always_inline)) inline void PublishForwardingCarrier();
 
-    void ClearGhostRegionBit();
-
-    // inGhostFromRegion is the unique guard condition.
-
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.
-    static std::atomic<size_t> dispelGhostCount;
+    static std::atomic<size_t> tdWindowCount;
 #if defined(MRT_GC_UNIT_TESTS)
     static std::atomic<GhostLookupTestHook> ghostLookupTestHook;
     static std::atomic<size_t> ghostLookupTestHookCalls;
     static void RunGhostLookupTestHook(ZPage* region);
 #endif
 
-    static size_t GetDispelGhostCount()
+    static size_t GetTdWindowCount()
     {
-        return dispelGhostCount.load(std::memory_order_relaxed);
+        return tdWindowCount.load(std::memory_order_relaxed);
     }
 
-
-    void ClearGhostFromRegionBits();
-
-    void DispelGhostFromRegion();
-
-    bool IsGhostFromRegion() const;
-
-    // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).
-    void AssertGhostClearedAfterReuse(size_t nUnit) const;
 
     // ZForwarding::retain_page (zForwarding.cpp:86-108). Three-state: 0 refuses,
     // <0 waits for done then refuses, >0 CAS +1.
@@ -747,7 +729,7 @@ private:
     static constexpr uint8_t YOUNG_STATE_BIT_LENGTH = 1 + YOUNG_AGE_BIT_LENGTH;
     static constexpr uint8_t MAX_YOUNG_AGE = (1U << YOUNG_AGE_BIT_LENGTH) - 1;
     enum RegionStateBitPos : uint8_t {
-        IN_GHOST_FROM_REGION_FLAG = 5
+        UNUSED_REGION_STATE_BIT = 0
     };
 
     // P11/P05 scratch. ZGC has no analogue; not part of the ZPage ten-field set.
@@ -774,9 +756,7 @@ private:
         alignas(8) char routeInfoPad[24]{};
         uint32_t nextRegionIdx0;
         union {
-            struct {
-                uint8_t inGhostFromRegion : 1;
-            };
+            uint8_t unusedRegionStatePad;
             AtomicBitField<uint16_t> regionStateBitField;
         };
         std::atomic<uint64_t> routeStateSnapshot{ 0 };

@@ -228,8 +228,8 @@ bool RunActualTaskClaimedOwnerSuccess()
     fromSpace.PrependRegion(fx.region0);
     ForwardTask<Generation::Old> task(manager, fromSpace);
     task.work();
-    return added.request->state() == ZRelocateQueue::State::COMPLETED &&
-        added.request->page_forwarding()->find(from) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
+    return added.state() == ZRelocateQueue::State::COMPLETED &&
+        added.forwarding->find(from) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
 }
 #endif
 
@@ -324,7 +324,7 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
                 if (!selected) selected = queue.SynchronizePoll();
                 if (selected.workersDone) return;
                 if (selected.is_request()) {
-                    auto* forwarding = selected.request->page_forwarding();
+                    auto* forwarding = selected.forwarding;
                     forwarding->release_page();
                     forwarding->mark_done();
                     completionOwners.fetch_add(1, std::memory_order_relaxed);
@@ -339,8 +339,8 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
         std::atomic<size_t>& completionOwners;
     } task(queue, completionOwners);
     workers.run(&task);
-    (void)queue.Wait(added.request);
-    GC_EXPECT_EQ(added.request->page_forwarding()->find(from), to);
+    (void)queue.Wait(added.forwarding);
+    GC_EXPECT_EQ(added.forwarding->find(from), to);
     GC_EXPECT_EQ(completionOwners.load(), 1U);
     GC_EXPECT_EQ(queue.CompletionCount(), 1U);
     GC_EXPECT_FALSE(queue.IsActive());
@@ -362,11 +362,11 @@ GC_TEST(RelocateWorkers, ActualForwardTaskPreservesExternalClaimant)
     ForwardTask<Generation::Old> task(manager, empty);
     task.work();
     GC_EXPECT_FALSE(owner->is_done());
-    GC_EXPECT_TRUE(request.request->state() == ZRelocateQueue::State::CLAIMED);
+    GC_EXPECT_TRUE(request.state() == ZRelocateQueue::State::CLAIMED);
     owner->release_page();
     owner->mark_done();
     GC_EXPECT_EQ(queue.Complete(owner), 1U);
-    GC_EXPECT_TRUE(request.request->state() == ZRelocateQueue::State::COMPLETED);
+    GC_EXPECT_TRUE(request.state() == ZRelocateQueue::State::COMPLETED);
 }
 
 GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
@@ -383,7 +383,7 @@ GC_TEST(RelocateWorkers, ClaimLoserWaitsForPageCompletionAndFindsEntry)
     const auto request = queue.Add(owner);
     std::atomic<MAddress> answer{ 0 };
     std::thread waiter([&] {
-        (void)queue.Wait(request.request);
+        (void)queue.Wait(request.forwarding);
         answer.store(owner->find(from), std::memory_order_release);
     });
     ForwardTask<Generation::Old> task(manager, empty);

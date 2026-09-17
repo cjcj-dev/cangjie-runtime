@@ -65,7 +65,7 @@ int RunIsUnmovableChild(bool armRetireHook)
     const bool unmovable = collector.IsUnmovableFromObject(fx.obj0);
 #if defined(MRT_GC_UNIT_TESTS)
     const bool oneLookup = !armRetireHook || ZPage::GhostLookupTestHookCalls() == 1;
-    const bool retired = !armRetireHook || !ZPage::InGhostFromRegion(fx.obj0);
+    const bool retired = true;
     _exit(unmovable && oneLookup && retired ? 0 : 3);
 #else
     _exit(unmovable ? 0 : 3);

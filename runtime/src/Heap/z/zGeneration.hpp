@@ -20,6 +20,7 @@
 #include "Heap/z/zRemembered.hpp"
 namespace MapleRuntime {
 class ZMark;
+class ZRelocate;
 class ZRelocationSetSelector;
 enum class zaddress : Uptr;
 struct TenuringInputs;
@@ -94,6 +95,7 @@ public:
     ZForwardingTable& forwarding_table() { return _forwarding_table; }
     const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
     ZRelocationSet& relocation_set() { return _relocation_set; }
+    ZRelocate& relocate() { return *_relocate; }
     ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
     void reset_relocation_set();
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
@@ -125,6 +127,7 @@ public:
     bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
+    std::unique_ptr<ZRelocate> _relocate;
     ZRemembered _remembered;
 };
 
