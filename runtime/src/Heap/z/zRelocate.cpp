@@ -153,7 +153,8 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
     if (IsLoadBad(oldRef)) {
         fromObj = to_object(oldRef.GetTargetObject());
         if (forward) {
-            toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj, static_cast<Generation>(remap_generation(oldRef)));
+            toObj = const_cast<WCollector*>(this)->relocate_or_remap_object(
+                fromObj, static_cast<ZGenerationId>(remap_generation(oldRef)));
         } else {
             toObj = FindToVersion(fromObj, static_cast<Generation>(remap_generation(oldRef))).GetOrFailClosed(
                 "WCollector::TryUpdateRefFieldImpl", provenance);
@@ -1263,18 +1264,8 @@ static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
 // The three pieces map one-to-one onto machinery that already exists here:
 //
 //   forwarding->retain_page(&_queue)   ->  ZPage::TryLockReadFromRegion()
-//   relocate_object_inner(...)         ->  ForwardObjectImpl(obj, forwarding), whose
-//                                          ForwardObjectExclusive does RouteObject (= ZGC's
-//                                          alloc_object_for_relocation, except our
-//                                          to-address is pre-planned so it cannot fail for
-//                                          want of memory), CopyObject (= object_copy_disjoint)
-//                                          and UnlockObject(FORWARDED) (= forwarding->insert)
+//   relocate_object_inner(...)         ->  RelocateObjectInner
 //   forwarding->release_page()         ->  ZPage::UnlockReadFromRegion()
-//
-// TryForwardObject (below) already composes exactly these three, which is why this is a reuse
-// and not a second implementation. What was missing was a caller on the mutator's remap
-// funnel: relocate_or_remap_object never had this leg, so a mutator that arrived before the
-// copy either got the from pointer back or waited for a worker.
 //
 // nullptr means the current thread did not acquire the page. The caller may
 // consume a receipt installed by the owning copier, but may not use the from
@@ -1307,8 +1298,8 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ZForwarding* owne
 
 BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease) const
 {
-    // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
-    // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
+    // RelocateObjectInner is for relocate phase only. relocate_or_remap
+    // is reachable from barriers in other phases, so screen here.
     GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return nullptr;
@@ -1320,7 +1311,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& 
     }
     // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
     // SetGCPhase publishes before handshake, so a mutator that retained across
-    // FORWARD→IDLE must not enter ForwardObjectImpl's CHECK. Release and let
+    // FORWARD→IDLE must not copy. Release and let
     // the existing FindToVersion / wait legs consume the published table.
     phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
@@ -1498,8 +1489,8 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj, Generation generation)
 {
-    BaseObject* to = TryForwardObject(obj, generation);
-    if (to != nullptr) {
+    BaseObject* to = relocate_or_remap_object(obj, static_cast<ZGenerationId>(generation));
+    if (to != nullptr && to != obj) {
         return to;
     }
     // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
@@ -1524,58 +1515,6 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj, Generation generation)
         return nullptr;
     }
     return obj;
-}
-
-BaseObject* WCollector::TryForwardObject(BaseObject* obj, Generation generation)
-{
-    // ZRelocate::relocate_object (zRelocate.cpp:382-416): find before touching
-    // source memory, then retain, allocate/copy/CAS, release, and wait on failure.
-    if (obj == nullptr || !Heap::IsHeapAddress(obj)) return nullptr;
-    if (BaseObject* winner = FindToVersion(obj, generation).found()) return winner;
-    ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-    if (region == nullptr) return nullptr;
-    const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
-    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) return nullptr;
-    ZPage::RetainScope lease(region);
-    if (!lease.ok()) return WaitForPageForwarding(obj, lease.HoldForwarding());
-    BaseObject* winner = ForwardObjectImpl(obj, region, lease);
-    lease.Release();
-    return winner != nullptr ? winner : WaitForPageForwarding(obj, lease.HoldForwarding());
-}
-
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, ZPage* ghostFromRegion,
-                                          const ZPage::RetainScope& lease)
-{
-    if (!lease.covers(ghostFromRegion)) {
-        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
-        if (const MAddress hit = (lease.HoldForwarding() != nullptr ? lease.HoldForwarding()->find(fromAddr) : 0)) {
-            return reinterpret_cast<BaseObject*>(hit);
-        }
-        return WaitForPageForwarding(obj, lease.HoldForwarding());
-    }
-    CHECK(GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_FORWARD);
-
-    // zRelocate.cpp:382-410 relocate_object: find hit → return; else retain
-    // already held by the caller lease; inner allocate→copy→insert (CAS
-    // winner). No object-header TryLock admission.
-    const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
-    if (const MAddress hit = (lease.HoldForwarding() != nullptr ? lease.HoldForwarding()->find(fromAddr) : 0)) {
-        return reinterpret_cast<BaseObject*>(hit);
-    }
-    if (obj->IsForwarded()) {
-        auto toObj = GetForwardPointer(obj, ghostFromRegion);
-        if (toObj != nullptr) {
-            return toObj;
-        }
-    }
-    ZPage* page = ghostFromRegion;
-    if (page == nullptr) {
-        page = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-        if (page == nullptr) {
-            page = Heap::page(reinterpret_cast<MAddress>(obj));
-        }
-    }
-    return RelocateObjectInner(obj, page);
 }
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)

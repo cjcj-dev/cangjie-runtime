@@ -393,13 +393,6 @@ public:
 
     bool IsUnmovableFromObject(BaseObject* obj) const override;
 
-    BaseObject* GetForwardPointer(BaseObject* fromObj, ZPage* region) const
-    {
-        // ZRelocate::forward_object consumes only the installed CAS winner.
-        auto owner = forwarding_for_page(region);
-        return owner ? reinterpret_cast<BaseObject*>(owner->find(reinterpret_cast<MAddress>(fromObj))) : nullptr;
-    }
-
     // Refuses a non-heap address the way FindToVersion does below, and for the same reason:
     // GetGhostFromRegionAt -> GetUnitIdxAt has no heap range
     //
@@ -431,8 +424,6 @@ public:
 protected:
     void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
                               const ForwardingProvenance& provenance) const;
-    BaseObject* ForwardObjectImpl(BaseObject* obj, ZPage* ghostFromRegion,
-                                  const ZPage::RetainScope& lease);
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
     BaseObject* RelocateObjectInner(BaseObject* obj, ZPage* copyPage);
@@ -444,8 +435,6 @@ protected:
     BaseObject* TryMutatorRelocate(BaseObject* from, ZPage::RetainScope& lease) const;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
-
-    BaseObject* TryForwardObject(BaseObject* fromVersion, Generation generation);
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
     bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,

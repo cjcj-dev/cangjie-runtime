@@ -143,7 +143,7 @@ struct RelocationReceiptTestAccess {
 
     static BaseObject* TryForward(WCollector& collector, BaseObject* object)
     {
-        return collector.TryForwardObject(object, Generation::Old);
+        return collector.relocate_or_remap_object(object, ZGenerationId::old);
     }
 
     static BaseObject* WaitRoutedTipReady(
@@ -151,7 +151,7 @@ struct RelocationReceiptTestAccess {
     {
         (void)to;
         ZPage::RetainScope lease(forwarding);
-        return collector.ForwardObjectImpl(from, forwarding, lease);
+        return collector.RelocateObjectInner(from, forwarding);
     }
 
     static bool TryUpdateRefField(WCollector& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
@@ -212,7 +212,7 @@ struct RelocationReceiptTestAccess {
     static BaseObject* ForwardImpl(WCollector& collector, BaseObject* from, ZPage* copyPage)
     {
         ZPage::RetainScope lease(copyPage);
-        return lease.ok() ? collector.ForwardObjectImpl(from, copyPage, lease) : nullptr;
+        return lease.ok() ? collector.RelocateObjectInner(from, copyPage) : nullptr;
     }
 
     static void RemapYoungRoots(WCollector& collector) { collector.RemapYoungRoots(); }
