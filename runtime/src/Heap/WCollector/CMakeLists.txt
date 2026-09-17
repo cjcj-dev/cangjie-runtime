@@ -10,6 +10,7 @@ set(SRC_LIST
     "../z/zGeneration.cpp"
     "../z/zMark.cpp"
     "../z/zRelocate.cpp"
+    "../z/zJNICritical.cpp"
     "../z/zRemembered.cpp"
     "../z/zRelocationSet.cpp"
 )

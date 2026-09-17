@@ -35,6 +35,9 @@
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zJNICritical.hpp"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGenerationId.hpp"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
@@ -892,8 +895,16 @@ static ArrayRef PinArray(const ArrayRef array)
     // The pin may resolve a movable from-copy to its to-version (oracleblack face c):
     // the caller must hand out the RESOLVED payload, and MCC_ReleaseRawData will Dec the
     // same region the pin Inc'd.
-    BaseObject* pinned = Heap::GetHeap().GetCollector().PinRawPointerObject(array);
-    return static_cast<ArrayRef>(pinned);
+    auto& collector = Heap::GetHeap().GetCollector();
+    BaseObject* current = array;
+    const MAddress addr = reinterpret_cast<MAddress>(current);
+    const ZGenerationId id =
+        collector.GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr
+            ? ZGenerationId::young
+            : ZGenerationId::old;
+    current = collector.relocate_or_remap_object(current, id);
+    ZJNICritical::enter();
+    return static_cast<ArrayRef>(current);
 }
 
 // Return the raw pointer of input array object, isCopy records whether memory copy occurs.
@@ -978,9 +989,9 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     StackManager::RecordLiteFrameInfos(frame, 4); // record 4 frames
     pinnedArrayRecorder.RemoveBtInfo(rawPtr, Mutator::GetMutator(), frame);
 #endif
-    auto regionInfo = Heap::page(reinterpret_cast<uintptr_t>(rawPtr));
-    (void)regionInfo->DecRawPointerObjectCount();
+    ZJNICritical::exit();
     (void)CJThreadPreemptOffCntSub();
+    (void)rawPtr;
 }
 
 enum LoadPackageStatus {

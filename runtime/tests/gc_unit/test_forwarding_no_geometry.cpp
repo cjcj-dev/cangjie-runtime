@@ -47,7 +47,7 @@ struct MutatorPublishTestAccess {
         collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
         ZPage::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
-        return collector.ForwardObjectImpl(from, page, lease);
+        return collector.RelocateObjectInner(from, page);
     }
 };
 }

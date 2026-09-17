@@ -10,98 +10,77 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <functional>
-#include <memory>
 #include <mutex>
-#include <unordered_map>
 
 #include "Common/TypeDef.h"
+#include "Heap/z/zArray.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zPageAge.hpp"
 
 namespace MapleRuntime {
 
-// ZRelocateQueue::add_and_wait/prune_and_claim (zRelocate.cpp:134-191).
-// One handle per forwarding, shared by every object on the page. Claim and
-// completion live in ZForwarding; the queue stores neither an object address
-// nor an independent answer. Worker rendezvous is atomic with enqueue.
+// ZRelocateQueue (zRelocate.hpp:39-77; zRelocate.cpp:57-307).
 class ZRelocateQueue {
 public:
     enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED };
 
-    class Request {
-    public:
-        MAddress from() const { return forwarding ? forwarding->start() : 0; }
-        void* owner() const { return forwarding ? forwarding->page() : nullptr; }
-        ZForwarding* page_forwarding() const { return forwarding; }
-        State state() const
-        {
-            if (forwarding->is_done()) return State::COMPLETED;
-            return forwarding->claimed().load(std::memory_order_acquire) ? State::CLAIMED : State::QUEUED;
-        }
-    private:
-        friend class ZRelocateQueue;
-        explicit Request(ZForwarding* value) : forwarding(std::move(value)) {}
-        ZForwarding* forwarding;
-    };
-
-    using Handle = std::shared_ptr<Request>;
-
     struct EnqueueResult {
-        Handle request;
+        ZForwarding* forwarding;
         bool inserted;
         bool accepted;
+        ZForwarding* request;
+        State state() const
+        {
+            if (forwarding == nullptr) {
+                return State::QUEUED;
+            }
+            if (forwarding->is_done()) {
+                return State::COMPLETED;
+            }
+            return forwarding->claimed().load(std::memory_order_acquire) ? State::CLAIMED : State::QUEUED;
+        }
     };
 
     struct Selection {
-        Handle request;
+        ZForwarding* forwarding;
         void* ordinary;
         bool workersDone{ false };
 
-        bool is_request() const { return request != nullptr; }
-        explicit operator bool() const { return request != nullptr || ordinary != nullptr; }
+        bool is_request() const { return forwarding != nullptr; }
+        void* owner() const { return forwarding != nullptr ? forwarding->page() : nullptr; }
+        explicit operator bool() const { return forwarding != nullptr || ordinary != nullptr; }
     };
 
-    // ZRelocateQueue::activate(nworkers) (zRelocate.cpp:80-83) makes queue
-    // acceptance and worker registration one lifetime transition. There is no
-    // preparation-only opener: accepting requests without a registered worker
-    // generation would leave a waiter with no completion owner.
-    void BeginWorkers(size_t workers);
+    void activate(uint32_t nworkers);
+    void deactivate();
+    bool is_active() const;
+    void join(uint32_t nworkers);
+    void resize_workers(uint32_t nworkers);
+    void leave();
+    void add_and_wait(ZForwarding* forwarding);
+    ZForwarding* synchronize_poll();
+    void synchronize();
+    void desynchronize();
+    void clear();
+
+    void BeginWorkers(size_t workers) { activate(static_cast<uint32_t>(workers)); }
     EnqueueResult Add(void* owner, MAddress from);
     EnqueueResult Add(ZForwarding* forwarding);
-    void add_and_wait(ZForwarding* forwarding);
-    MAddress Wait(const Handle& request);
-
-    // Wait for the canonical forwarding completion. Always returns zero;
-    // callers resolve their own object through the forwarding table afterward.
-    // Preserve the caller's non-safepoint barrier context until that lookup
-    // finishes: Request borrows forwarding storage owned by the relocation set.
-    // GC worker callers are instead bounded by the joined relocation task.
-    MAddress WaitUntil(const Handle& request, size_t maxSpins = 0, bool* timedOut = nullptr);
-
+    void Wait(ZForwarding* forwarding);
     size_t Complete(ZForwarding* forwarding);
-
-    Handle PruneAndClaim();
-
-    // This is the worker ordering point corresponding to zRelocate.cpp:1193-1203:
-    // a queued request is claimed before the ordinary relocation iterator runs.
+    ZForwarding* PruneAndClaim();
     Selection SelectBeforeOrdinary(const std::function<void*()>& claimOrdinary)
     {
-        Handle request = PruneAndClaim();
-        if (request != nullptr) {
-            return Selection{ request, nullptr, false };
+        ZForwarding* forwarding = PruneAndClaim();
+        if (forwarding != nullptr) {
+            return Selection{ forwarding, nullptr, false };
         }
         return Selection{ nullptr, claimOrdinary(), false };
     }
-
-    // Called only after both request and ordinary polls were empty. Idle
-    // workers rendezvous here. Add wakes them while any worker remains; the
-    // last synchronized worker closes the generation atomically with Add.
     Selection SynchronizePoll();
-
-    bool IsActive() const;
+    bool IsActive() const { return is_active(); }
     size_t PendingCount() const;
     size_t SynchronizedWorkerCount() const;
     uint64_t CompletionCount() const { return completionCount.load(std::memory_order_relaxed); }
@@ -112,29 +91,59 @@ public:
 #endif
 
 private:
-    Handle PruneAndClaimLocked();
-    void PruneDoneLocked();
+    bool needs_attention() const;
+    void inc_needs_attention();
+    void dec_needs_attention();
+    bool prune();
+    ZForwarding* prune_and_claim();
+    void synchronize_thread();
+    void desynchronize_thread();
 
-    mutable std::mutex queueMutex;
-    std::condition_variable queueAttention;
-    std::deque<Handle> queue;
-    std::unordered_map<ZForwarding*, Handle> byPage;
-    bool accepting{ false };
-    size_t workerCount{ 0 };
-    size_t synchronizedWorkers{ 0 };
+    mutable std::mutex lock;
+    std::condition_variable attention;
+    ZArray<ZForwarding*> queue;
+    uint32_t nworkers{ 0 };
+    uint32_t nsynchronized{ 0 };
+    bool synchronizeFlag{ false };
+    std::atomic<bool> isActive{ false };
+    std::atomic<int> needsAttention{ 0 };
     std::atomic<uint64_t> completionCount{ 0 };
 };
 
 class ZWorkers;
 class ZPage;
+class GenerationCycle;
 template<typename T> class ZArray;
+
+class ZRelocationTargets {
+public:
+    static constexpr size_t kAges = 16;
+    ZPage* get(uint32_t partitionId, PageAge age) const
+    {
+        (void)partitionId;
+        return targets[static_cast<size_t>(age) % kAges];
+    }
+    void set(uint32_t partitionId, PageAge age, ZPage* page)
+    {
+        (void)partitionId;
+        targets[static_cast<size_t>(age) % kAges] = page;
+    }
+private:
+    ZPage* targets[kAges]{};
+};
 
 class ZRelocate {
 public:
+    explicit ZRelocate(GenerationCycle* generation) : generation(generation) {}
+    ZRelocateQueue* queue() { return &relocateQueue; }
+    bool is_queue_active() const { return relocateQueue.IsActive(); }
     static PageAge compute_to_age(PageAge fromAge);
     static void flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages);
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
+private:
+    GenerationCycle* const generation;
+    ZRelocateQueue relocateQueue;
 };
 
 } // namespace MapleRuntime

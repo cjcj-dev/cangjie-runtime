@@ -126,7 +126,7 @@ GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
     auto request = f.queue.Add(f.owner);
     WaitContext context;
     bool timedOut = false;
-    (void)f.queue.WaitUntil(request.request, 1, &timedOut);
+    f.queue.Wait(request.forwarding);
     GC_EXPECT_TRUE(context.entered);
     GC_EXPECT_TRUE(context.observed == f.owner);
     GC_EXPECT_TRUE(timedOut);
@@ -138,8 +138,8 @@ GC_OTHER_VM_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
     f.Publish();
     f.owner->release_page();
     f.Complete();
-    (void)f.queue.Wait(request.request);
-    GC_EXPECT_EQ(request.request->page_forwarding()->find(reinterpret_cast<MAddress>(f.heap.obj0)),
+    (void)f.queue.Wait(request.forwarding);
+    GC_EXPECT_EQ(request.forwarding->find(reinterpret_cast<MAddress>(f.heap.obj0)),
                  reinterpret_cast<MAddress>(f.heap.obj1));
     GC_EXPECT_FALSE(context.mutator.InSaferegion());
     GC_EXPECT_FALSE(context.handshake.observed_safe());
@@ -156,14 +156,14 @@ GC_TEST(RelocationPageQueue, TwoObjectsShareOnePageClaim)
     auto first = f.queue.Add(f.heap.region0, reinterpret_cast<MAddress>(f.heap.obj0));
     auto second = f.queue.Add(f.heap.region0, reinterpret_cast<MAddress>(f.heap.obj0) + 8);
     GC_EXPECT_TRUE(first.accepted && first.inserted && second.accepted && !second.inserted);
-    GC_EXPECT_TRUE(first.request == second.request);
+    GC_EXPECT_TRUE(first.forwarding == second.forwarding);
     GC_EXPECT_EQ(f.queue.PendingCount(), 1U);
     std::atomic<unsigned> winners{ 0 };
     std::thread a([&] { if (f.queue.PruneAndClaim()) ++winners; });
     std::thread b([&] { if (f.queue.PruneAndClaim()) ++winners; });
     a.join(); b.join();
     GC_EXPECT_EQ(winners.load(), 1U);
-    GC_EXPECT_TRUE(first.request->page_forwarding() == f.owner);
+    GC_EXPECT_TRUE(first.forwarding == f.owner);
     f.Complete();
     GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
 }
@@ -175,13 +175,13 @@ GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
     auto request = f.queue.Add(f.owner);
     f.Publish();
     bool timedOut = false;
-    (void)f.queue.WaitUntil(request.request, 1, &timedOut);
+    f.queue.Wait(request.forwarding);
     GC_EXPECT_TRUE(timedOut);
     GC_EXPECT_FALSE(f.owner->is_done());
     GC_EXPECT_EQ(forwarding_find(f.heap.region0->GetOwnerGeneration(), reinterpret_cast<MAddress>(f.heap.obj0)),
                  reinterpret_cast<MAddress>(f.heap.obj1));
     f.Complete();
-    (void)f.queue.WaitUntil(request.request, 1, &timedOut);
+    f.queue.Wait(request.forwarding);
     GC_EXPECT_FALSE(timedOut);
     GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
 }
@@ -206,9 +206,9 @@ GC_TEST(RelocationPageQueue, DoneBeforeEnqueueNeedsNoWorker)
     auto request = f.queue.Add(f.owner);
     GC_EXPECT_TRUE(request.accepted && !request.inserted);
     bool timedOut = true;
-    (void)f.queue.WaitUntil(request.request, 1, &timedOut);
+    f.queue.Wait(request.forwarding);
     GC_EXPECT_FALSE(timedOut);
-    GC_EXPECT_TRUE(request.request->page_forwarding() == f.owner);
+    GC_EXPECT_TRUE(request.forwarding == f.owner);
 }
 
 GC_TEST(RelocationPageQueue, ClosedGenerationRejectsUnownedWork)
@@ -218,14 +218,14 @@ GC_TEST(RelocationPageQueue, ClosedGenerationRejectsUnownedWork)
     GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
     const auto rejected = f.queue.Add(f.owner);
     GC_EXPECT_FALSE(rejected.accepted);
-    GC_EXPECT_TRUE(rejected.request == nullptr);
+    GC_EXPECT_TRUE(rejected.forwarding == nullptr);
     GC_EXPECT_FALSE(f.owner->is_done());
     // Positive control: a real already-claimed page retains its completion owner.
     GC_EXPECT_TRUE(f.owner->claim());
     const auto claimed = f.queue.Add(f.owner);
     GC_EXPECT_TRUE(claimed.accepted);
     f.Complete();
-    (void)f.queue.Wait(claimed.request);
+    (void)f.queue.Wait(claimed.forwarding);
 }
 
 GC_TEST(RelocationPageQueue, EnqueueWakesSynchronizedWorker)
@@ -237,7 +237,7 @@ GC_TEST(RelocationPageQueue, EnqueueWakesSynchronizedWorker)
     while (f.queue.SynchronizedWorkerCount() != 1) std::this_thread::yield();
     const auto request = f.queue.Add(f.owner);
     worker.join();
-    GC_EXPECT_TRUE(selected.request == request.request);
+    GC_EXPECT_TRUE(selected.forwarding == request.forwarding);
     GC_EXPECT_TRUE(f.owner->claimed().load(std::memory_order_acquire));
     f.Complete();
     std::thread first([&] { GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone); });

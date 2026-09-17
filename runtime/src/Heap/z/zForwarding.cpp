@@ -84,7 +84,7 @@ void ZForwarding::WaitPageDone(ZForwarding* forwarding)
     auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().GetZRelocateQueue();
     const auto request = queue.Add(forwarding);
     CHECK_DETAIL(request.accepted, "forwarding wait requires a page task");
-    (void)queue.Wait(request.request);
+    queue.Wait(request.forwarding);
 }
 
 
