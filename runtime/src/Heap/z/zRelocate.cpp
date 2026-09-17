@@ -645,7 +645,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     BaseObject* target = ResolveMinorReference(field, stw);
     // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
     // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
-    // Same heap gate as ForwardUpdateRawRef / FindToVersion.
+    // Same heap gate as FindToVersion.
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }

@@ -1060,7 +1060,7 @@ inline void ZPage::InitZPage(size_t nUnit, ZPageType uClass, PageAge age, bool l
             uint8_t next = static_cast<uint8_t>((cur + 1) & 0x7f);
             __atomic_store_n(&_scratch.regionLifeSequence, next, __ATOMIC_RELEASE);
         }
-        // See DispelGhostFromRegion: retire the route before detaching its compact table.
+        // Retire the forwarding owner before detaching its compact table.
         _scratch.fwdOwner.store(nullptr, std::memory_order_release);
         WaitCopiedBeforePayloadWipe(this, "InitZPage");
         delete _scratch.retiredLivemap;

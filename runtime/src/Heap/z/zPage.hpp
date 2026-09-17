@@ -489,16 +489,16 @@ public:
 
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.
-    static std::atomic<size_t> dispelGhostCount;
+    static std::atomic<size_t> tdWindowCount;
 #if defined(MRT_GC_UNIT_TESTS)
     static std::atomic<GhostLookupTestHook> ghostLookupTestHook;
     static std::atomic<size_t> ghostLookupTestHookCalls;
     static void RunGhostLookupTestHook(ZPage* region);
 #endif
 
-    static size_t GetDispelGhostCount()
+    static size_t GetTdWindowCount()
     {
-        return dispelGhostCount.load(std::memory_order_relaxed);
+        return tdWindowCount.load(std::memory_order_relaxed);
     }
 
 

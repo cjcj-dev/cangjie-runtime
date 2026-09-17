@@ -1042,7 +1042,7 @@ EXPORTS
     _ZN12MapleRuntime10ZPage15VisitAllObjectsEOKNSt3__18functionIFvPNS_10BaseObjectEEEE @1044
     _ZN12MapleRuntime10ZPage16IsSafeKnownEmptyEv @1045
     _ZN12MapleRuntime10ZPage16IsSurvivedObjectEy @1046
-    _ZN12MapleRuntime10ZPage16dispelGhostCountE @1047 DATA
+    _ZN12MapleRuntime10ZPage13tdWindowCountE @1047 DATA
     _ZN12MapleRuntime10ZPage16youngRegionCountE @1048 DATA
 
     _ZN12MapleRuntime10ZPage19ClearGhostRegionBitEv @1051

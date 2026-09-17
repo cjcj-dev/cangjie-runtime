@@ -75,7 +75,7 @@ namespace {
 // vary, so region counts cannot stand in for young-generation byte occupancy.
 std::atomic<size_t> youngRegionBytes{ 0 };
 }
-std::atomic<size_t> ZPage::dispelGhostCount { 0 };
+std::atomic<size_t> ZPage::tdWindowCount { 0 };
 
 std::mutex ZPage::youngRegionFlagMutex;
 
