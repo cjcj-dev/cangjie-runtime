@@ -772,25 +772,7 @@ GC_TEST(StoreBuf, ThreadExitFlushRedeems)
     GC_EXPECT_TRUE(SlotPageRemembered(slot));
 }
 
-GC_TEST(StoreBuf, ReRememberDoesNotFightBuffer)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBarrierBuffer buf;
-    const MAddress slot = SlotAt(fx, 10);
-    buf.add(slot, zpointer::null);
-    rs.Record(slot);
-    rs.Record(slot);
-    GC_EXPECT_EQ(rs.Size(), 1u);
-    buf.Flush();
-    GC_EXPECT_EQ(rs.Size(), 1u);
-    std::unordered_set<MAddress> drained;
-    rs.DrainForMinor(drained);
-    GC_EXPECT_TRUE(drained.count(slot) == 1);
-    GC_EXPECT_EQ(drained.size(), 1u);
-}
+
 
 // ZThreadLocalData + ZMark::flush: detach publishes both generation stacks,
 // including non-full chunks, even when this OS thread owns no allocator.

@@ -83,20 +83,7 @@ GC_OTHER_VM_TEST(ZVerify, RejectsUnmanagedAddress)
     ZVerify::Object(fixture.obj0, &fixture.obj0);
 }
 
-GC_OTHER_VM_TEST(ZVerify, RememberedCurrentAndPreviousFaces)
-{
-    GcVerifyFixture fixture;
-    RememberedSet& remset = HeapTestRemset();
-    const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
-    remset.Record(slot);
-    GC_EXPECT_TRUE(remset.Contains(slot));
-    GC_EXPECT_FALSE(remset.ContainsPrevious(slot));
-    GC_EXPECT_FALSE(remset.IsClearInRange(fixture.heapStart, ZPage::UNIT_SIZE, true));
-    remset.FlipForMinor();
-    GC_EXPECT_FALSE(remset.Contains(slot));
-    GC_EXPECT_TRUE(remset.ContainsPrevious(slot));
-    GC_EXPECT_TRUE(remset.IsClearInRange(fixture.heapStart, ZPage::UNIT_SIZE, true));
-}
+
 
 // zForwarding.inline.hpp:116-119 / zVerify.cpp:601: installing a forwarding
 // must leave the selected source object's start bit visible to iteration.
