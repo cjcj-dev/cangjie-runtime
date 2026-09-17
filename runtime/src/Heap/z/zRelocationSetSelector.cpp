@@ -26,6 +26,7 @@
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/CopyCollector.h"
@@ -47,8 +48,167 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "Sync/Sync.h"
+#include "Heap/z/zRelocationSetSelector.inline.hpp"
+#include "Heap/z/zForwarding.inline.hpp"
 
 namespace MapleRuntime {
+
+ZRelocationSetSelectorGroupStats::ZRelocationSetSelectorGroupStats() = default;
+
+ZRelocationSetSelectorGroup::ZRelocationSetSelectorGroup(const char* name, ZPageType page_type, size_t max_page_size,
+                                                         size_t object_size_limit, double fragmentation_limit)
+    : _name(name),
+      _page_type(page_type),
+      _max_page_size(max_page_size),
+      _object_size_limit(object_size_limit),
+      _fragmentation_limit(fragmentation_limit),
+      _page_fragmentation_limit(static_cast<size_t>(max_page_size * (fragmentation_limit / 100.0))),
+      _live_pages(),
+      _not_selected_pages(),
+      _forwarding_entries(0),
+      _stats()
+{}
+
+bool ZRelocationSetSelectorGroup::is_disabled()
+{
+    return _page_type == ZPageType::medium && !ZPageSizeMediumEnabled;
+}
+
+bool ZRelocationSetSelectorGroup::is_selectable()
+{
+    return _page_type != ZPageType::large;
+}
+
+size_t ZRelocationSetSelectorGroup::partition_index(const ZPage* page) const
+{
+    const size_t partitionSize = page->size() >> NumPartitionsShift;
+    if (partitionSize == 0) {
+        return 0;
+    }
+    const size_t index = page->live_bytes() / partitionSize;
+    return index < static_cast<size_t>(NumPartitions) ? index : static_cast<size_t>(NumPartitions - 1);
+}
+
+void ZRelocationSetSelectorGroup::semi_sort()
+{
+    int partitions[NumPartitions] = {};
+    ZArrayIterator<ZPage*> iter1(&_live_pages);
+    for (ZPage* page; iter1.next(&page);) {
+        partitions[partition_index(page)]++;
+    }
+    int finger = 0;
+    for (int i = 0; i < NumPartitions; i++) {
+        const int slots = partitions[i];
+        partitions[i] = finger;
+        finger += slots;
+    }
+    const int npages = _live_pages.length();
+    ZArray<ZPage*> sorted_live_pages(npages, npages, nullptr);
+    ZArrayIterator<ZPage*> iter2(&_live_pages);
+    for (ZPage* page; iter2.next(&page);) {
+        const size_t index = partition_index(page);
+        const int dest = partitions[index]++;
+        sorted_live_pages.at_put(dest, page);
+    }
+    _live_pages.swap(&sorted_live_pages);
+}
+
+void ZRelocationSetSelectorGroup::select_inner()
+{
+    const int npages = _live_pages.length();
+    int selected_from = 0;
+    int selected_to = 0;
+    size_t selected_forwarding_entries = 0;
+    size_t from_live_bytes = 0;
+    size_t from_forwarding_entries = 0;
+    size_t live_bytes_per_age[kPageAgeCount] = {};
+    size_t npages_per_age[kPageAgeCount] = {};
+    semi_sort();
+    const double denom = static_cast<double>(_max_page_size - _object_size_limit);
+    for (int from = 1; from <= npages; from++) {
+        ZPage* const page = _live_pages.at(from - 1);
+        const size_t page_live_bytes = page->live_bytes();
+        from_live_bytes += page_live_bytes;
+        from_forwarding_entries += ZForwarding::nentries(page);
+        live_bytes_per_age[untype(page->age())] += page_live_bytes;
+        npages_per_age[untype(page->age())] += 1;
+        const int to = denom <= 0.0 ? from : static_cast<int>(std::ceil(static_cast<double>(from_live_bytes) / denom));
+        const int diff_from = from - selected_from;
+        const int diff_to = to - selected_to;
+        const double percentToOfFrom =
+            (diff_from != 0) ? (static_cast<double>(diff_to) / static_cast<double>(diff_from) * 100.0) : 0.0;
+        const double diff_reclaimable = 100.0 - percentToOfFrom;
+        if (diff_reclaimable > _fragmentation_limit) {
+            selected_from = from;
+            selected_to = to;
+            selected_forwarding_entries = from_forwarding_entries;
+        }
+    }
+    size_t rejected_live_bytes_per_age[kPageAgeCount] = {};
+    size_t rejected_npages_per_age[kPageAgeCount] = {};
+    for (int i = selected_from; i < _live_pages.length(); i++) {
+        ZPage* const page = _live_pages.at(i);
+        if (page->is_young()) {
+            _not_selected_pages.append(page);
+        }
+        rejected_live_bytes_per_age[untype(page->age())] += page->live_bytes();
+        rejected_npages_per_age[untype(page->age())] += 1;
+    }
+    _live_pages.trunc_to(selected_from);
+    _forwarding_entries = selected_forwarding_entries;
+    for (uint32_t i = 0; i < kPageAgeCount; ++i) {
+        _stats[i]._relocate = live_bytes_per_age[i] - rejected_live_bytes_per_age[i];
+        _stats[i]._npages_selected = npages_per_age[i] - rejected_npages_per_age[i];
+    }
+    (void)selected_to;
+}
+
+void ZRelocationSetSelectorGroup::select()
+{
+    if (is_disabled()) {
+        return;
+    }
+    if (is_selectable()) {
+        select_inner();
+    } else {
+        const int npages = _live_pages.length();
+        for (int from = 1; from <= npages; from++) {
+            _not_selected_pages.append(_live_pages.at(from - 1));
+        }
+    }
+}
+
+ZRelocationSetSelector::ZRelocationSetSelector()
+    : ZRelocationSetSelector(0.0)
+{}
+
+ZRelocationSetSelector::ZRelocationSetSelector(double fragmentation_limit)
+    : _small("Small", ZPageType::small, ZPageSizeSmall, ZObjectSizeLimitSmall, fragmentation_limit),
+      _medium("Medium", ZPageType::medium, ZPageSizeMediumMax, ZObjectSizeLimitMedium, fragmentation_limit),
+      _large("Large", ZPageType::large, 0, 0, fragmentation_limit),
+      _empty_pages()
+{}
+
+void ZRelocationSetSelector::select()
+{
+    _large.select();
+    _medium.select();
+    _small.select();
+}
+
+ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const
+{
+    ZRelocationSetSelectorStats stats;
+    for (PageAge age : kPageAgeRangeAll) {
+        const uint32_t i = untype(age);
+        stats._small[i] = _small.stats(age);
+        stats._medium[i] = _medium.stats(age);
+        stats._large[i] = _large.stats(age);
+    }
+    stats._has_relocatable_pages = total() > 0 ? 1 : 0;
+    return stats;
+}
+
 void RegionManager::ReassembleFromSpace()
 {
     fromRegionList.MergeRegionList(unmovableFromRegionList);
@@ -60,66 +220,9 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
     region->inc_live(1, obj->GetSize());
 }
 
-namespace {
-// ZGenerationPagesIterator + ZPage::is_relocatable (zGeneration.cpp:209-213).
-// Existing intrusive allocation lists are the Cangjie page-table adapter.
-bool IsOldRelocationCandidate(const ZPage* region)
-{
-    return region->GetOwnerGeneration() == Generation::Old && region->IsRelocatable();
-}
-}
+void RegionManager::AssembleSmallGarbageCandidates() {}
 
-void RegionManager::AssembleSmallGarbageCandidates()
-{
-    // The young collection and old selection share the physical FROM list.
-    // Establish the old selector's input here, before cleanup or forwarding.
-    ZPage* region = fromRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (!IsOldRelocationCandidate(region)) {
-            fromRegionList.DeleteRegion(region);
-            ParkUnmovableFromRegion(region);
-        }
-        region = next;
-    }
-    auto select = [this](RegionList& list, bool recent) {
-        ZPage* region = list.GetHeadRegion();
-        while (region != nullptr) {
-            ZPage* next = region->GetNextRegion();
-            if (IsOldRelocationCandidate(region) && !region->IsNotRelocatableThisCycle()) {
-                list.DeleteRegion(region);
-                if (recent) RecentFullAccounting::Dequeue(1, region->GetUnitCount());
-                fromRegionList.PrependRegion(region);
-            }
-            region = next;
-        }
-    };
-    select(rawPointerPinnedRegionList, false);
-    select(recentFullRegionList, true);
-    select(unmovableFromRegionList, false);
-}
-
-void RegionManager::AssembleLargeGarbageCandidates()
-{
-    ZPage* region = oldLargeRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (!IsOldRelocationCandidate(region)) {
-            oldLargeRegionList.DeleteRegion(region);
-            recentLargeRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
-    region = recentLargeRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (IsOldRelocationCandidate(region)) {
-            recentLargeRegionList.DeleteRegion(region);
-            oldLargeRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
-}
+void RegionManager::AssembleLargeGarbageCandidates() {}
 
 void RegionManager::ClearNotRelocatableThisCycleFlags()
 {
@@ -154,33 +257,7 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
-    ZPage* region = oldPinnedRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (!IsOldRelocationCandidate(region)) {
-            oldPinnedRegionList.DeleteRegion(region);
-            recentPinnedRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
-    region = recentPinnedRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (IsOldRelocationCandidate(region)) {
-            recentPinnedRegionList.DeleteRegion(region);
-            oldPinnedRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
-    region = oldPinnedRegionList.GetHeadRegion();
-    while (region != nullptr) {
-        ZPage* next = region->GetNextRegion();
-        if (collectAll && region->GetRawPointerObjectCount() > 0) {
-            oldPinnedRegionList.DeleteRegion(region);
-            rawPointerPinnedRegionList.PrependRegion(region);
-        }
-        region = next;
-    }
+    (void)collectAll;
 }
 
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(ZPage*)>& visitor)
@@ -297,168 +374,24 @@ bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
 // Semi-sort by per-page live fraction, then select the last profitable prefix.
 size_t RegionManager::ExemptFromRegions()
 {
-    size_t forwardBytes = 0;
-    size_t floatingGarbage = 0;
-    size_t oldFromBytes = fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
-    std::vector<ZPage*> snapshot;
-    fromRegionList.VisitAllRegions([&snapshot](ZPage* r) { snapshot.push_back(r); });
-    std::vector<RelocRegionDesc> descs;
-    std::vector<ZPage*> descRegions;
-    descs.reserve(snapshot.size());
-    descRegions.reserve(snapshot.size());
-    for (ZPage* fromRegion : snapshot) {
-        // ZGeneration::select_relocation_set (zGeneration.cpp:211-213).
-        if (!fromRegion->IsRelocatable()) {
-            if (ClaimFromRegion(fromRegionList, fromRegion, "allocating")) {
-                ExemptFromRegion(fromRegion);
-            }
+    auto& old = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    old.select_relocation_set(false);
+    ZRelocationSetIterator rs_iter(&old.relocation_set());
+    for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
+        ZPage* page = forwarding->page();
+        if (page == nullptr) {
             continue;
         }
-        // ZGeneration::select_relocation_set (zGeneration.cpp:216-221): a page
-        // not marked this cycle registers as empty.
-        size_t liveBytes = fromRegion->is_marked() ? fromRegion->live_bytes() : 0;
-        long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        static constexpr bool kFreeEmptyAtCSetSelect = true;
-        if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
-            !fromRegion->IsAllocating() && !fromRegion->IsYoungRegion()) {
-            ZPage* del = fromRegion;
-            const unsigned rs = static_cast<unsigned>(del->RelocateObserve());
-            const unsigned ke = del->IsKnownEmpty() ? 1u : 0u;
-            size_t residual = 0;
-            size_t residualFwd = 0;
-            size_t marked = 0;
-            const uintptr_t start = del->GetRegionStart();
-            const uintptr_t alloc = del->GetRegionAllocPtr();
-            if (alloc > start && !del->IsLargeRegion()) {
-                uintptr_t pos = start;
-                while (pos < alloc) {
-                    BaseObject* o = from_region_addr(pos);
-                    if (!o->IsValidObject()) {
-                        break;
-                    }
-                    const size_t sz = o->GetSize();
-                    if (sz == 0) {
-                        break;
-                    }
-                    ++residual;
-                    if (o->IsForwarded()) {
-                        ++residualFwd;
-                    }
-                    if (del->is_object_strongly_live(from_object(o))) {
-                        ++marked;
-                    }
-                    pos += sz;
-                }
-            }
-            const bool deadFromCopy = residual == residualFwd;
-            // zGeneration.cpp:216-221 register_empty_page iff !is_marked.
-            // Held until in-place claim waits readers even at fwdRefCount==0
-            // (LEAD-NOTE 0820 21:1x / PORT_ZFORWARDING step 3). oldroots2
-            // 152ccd59 SEGV+drift was ClearUnits racing a naked mutator ref.
-            const bool unmarkedResidual = residual != 0 && marked == 0;
-            const bool freeEmpty = (ke != 0) || deadFromCopy || unmarkedResidual;
-            {
-                static std::atomic<size_t> gCsetEmpty{ 0 };
-                static std::atomic<size_t> gCsetEmptyResidual{ 0 };
-                static std::atomic<size_t> gCsetEmptyMarked{ 0 };
-                static std::atomic<size_t> gCsetEmptyKeep{ 0 };
-                static std::atomic<bool> gCsetEmptyAtexit{ false };
-                const size_t n = gCsetEmpty.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (residual != 0) {
-                    gCsetEmptyResidual.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (marked != 0) {
-                    gCsetEmptyMarked.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!freeEmpty) {
-                    gCsetEmptyKeep.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!gCsetEmptyAtexit.exchange(true, std::memory_order_relaxed)) {
-                    std::atexit([]() {
-                        std::fprintf(stderr,
-                                     "[WHODEAD][cset-empty] atexit n=%zu residualPages=%zu markedPages=%zu keep=%zu\n",
-                                     gCsetEmpty.load(std::memory_order_relaxed),
-                                     gCsetEmptyResidual.load(std::memory_order_relaxed),
-                                     gCsetEmptyMarked.load(std::memory_order_relaxed),
-                                     gCsetEmptyKeep.load(std::memory_order_relaxed));
-                        std::fflush(stderr);
-                    });
-                }
-                if (n <= 8 || (n & (n - 1)) == 0) {
-                    LOG(RTLOG_ERROR,
-                        "[WHODEAD][cset-empty] n=%zu region=%p start=%#zx live=%zu residual=%zu fwd=%zu marked=%zu "
-                        "route=%u ke=%u ghost=%u alloc=%u reason=%u free=%u",
-                        n, del, start, liveBytes, residual, residualFwd, marked, rs, ke,
-                        static_cast<unsigned>(del->IsGhostFromRegion()),
-                        static_cast<unsigned>(del->IsAllocating()),
-                        static_cast<unsigned>(Heap::GetHeap().GetCollector().GetGCStats().reason),
-                        static_cast<unsigned>(freeEmpty));
-                }
-            }
-            if (!freeEmpty) {
-                continue;
-            }
-            if (!ClaimFromRegion(fromRegionList, del, "cset-empty")) {
-                continue;
-            }
-            if (del->GetRawPointerObjectCount() > 0) {
-                rawPointerPinnedRegionList.PrependRegion(del);
-                continue;
-            }
-
-            garbageRegionList.PrependRegion(del);
+        RegionList* owner = page->GetRegionListOwner();
+        if (owner == &fromRegionList) {
             continue;
         }
-        if (rawPtrCnt > 0) {
-            ZPage* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
-                del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
-                del->GetUnitCount(), liveBytes, rawPtrCnt);
-            if (!ClaimFromRegion(fromRegionList, del, "cset-rawpin")) {
-                continue;
-            }
-            rawPointerPinnedRegionList.PrependRegion(del);
-            floatingGarbage += (del->GetRegionSize() - liveBytes);
-            continue;
+        if (owner != nullptr) {
+            owner->DeleteRegion(page);
         }
-        RelocRegionDesc d;
-        d.liveBytes = liveBytes;
-        d.capacity = fromRegion->GetRegionSize();
-        d.kind = fromRegion->IsLargeRegion() ? RelocRegionKind::Large : RelocRegionKind::Small;
-        d.id = static_cast<uint32_t>(descs.size());
-        d.allocating = fromRegion->IsAllocating();
-        descs.push_back(d);
-        descRegions.push_back(fromRegion);
+        fromRegionList.PrependRegion(page);
     }
-    const RelocSelectResult selected = SelectRelocationSet(descs,
-        Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).FragmentationLimit());
-    std::vector<char> keep(descs.size(), 0);
-    for (uint32_t id : selected.selectedIds) {
-        if (id < keep.size()) {
-            keep[id] = 1;
-        }
-    }
-    for (size_t i = 0; i < descs.size(); ++i) {
-        if (keep[i] != 0) {
-            continue;
-        }
-        ZPage* del = descRegions[i];
-        DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by relocsel: %zu units, %zu live bytes", del,
-            del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
-            del->GetUnitCount(), descs[i].liveBytes);
-        if (!ClaimFromRegion(fromRegionList, del, "cset-relocsel")) {
-            continue;
-        }
-        ExemptFromRegion(del);
-        floatingGarbage += (del->GetRegionSize() - descs[i].liveBytes);
-    }
-
-    size_t newFromBytes = fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
-    size_t exemptedFromBytes = unmovableFromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
-    VLOG(REPORT, "exempt from-space: %zu B - %zu B -> %zu B, %zu B floating garbage, %zu B to forward",
-         oldFromBytes, exemptedFromBytes, newFromBytes, floatingGarbage, forwardBytes);
-    return newFromBytes - forwardBytes;
+    return fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
 }
-
 
 } // namespace MapleRuntime

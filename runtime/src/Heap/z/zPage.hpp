@@ -144,6 +144,8 @@ public:
     bool is_relocatable() const { return IsRelocatable(); }
 
     ZPageType type() const { return _type; }
+    PageAge age() const { return _age; }
+    bool is_young() const { return IsYoungRegion(); }
     bool is_small() const { return _type == ZPageType::small; }
     bool is_medium() const { return _type == ZPageType::medium; }
     bool is_large() const { return _type == ZPageType::large; }
@@ -164,7 +166,6 @@ public:
     bool undo_alloc_object(uintptr_t addr, size_t size);
     bool undo_alloc_object_atomic(uintptr_t addr, size_t size);
     ZPage* reset(PageAge age);
-    PageAge age() const { return _age; }
 
     ZPage(ZPageType type, PageAge age, const ZVirtualMemory& vmem);
 

@@ -34,6 +34,8 @@
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zArray.inline.hpp"
+#include "Heap/z/zPage.inline.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zAddress.inline.hpp"
@@ -2450,7 +2452,14 @@ template void RegionManager::ForwardRegion<Generation::Old>(ZPage*);
 
 #include <atomic>
 #include <chrono>
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/zArray.inline.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zPage.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zTask.hpp"
+#include "Heap/z/zWorkers.hpp"
 
 namespace MapleRuntime {
 
@@ -2631,6 +2640,73 @@ size_t ZRelocateQueue::SynchronizedWorkerCount() const
 {
     std::lock_guard<std::mutex> lock(queueMutex);
     return synchronizedWorkers;
+}
+
+PageAge ZRelocate::compute_to_age(PageAge fromAge)
+{
+    const uint32_t threshold = Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold;
+    return ComputeToAge(fromAge, threshold);
+}
+
+void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
+{
+    class ZFlipAgePagesTask : public ZTask {
+    public:
+        explicit ZFlipAgePagesTask(const ZArray<ZPage*>* pages)
+            : ZTask("ZFlipAgePagesTask"), iter(pages)
+        {}
+        void work() override
+        {
+            ZArray<ZPage*> promoted;
+            for (ZPage* prev; iter.next(&prev);) {
+                const PageAge fromAge = prev->age();
+                const PageAge toAge = ZRelocate::compute_to_age(fromAge);
+                const bool promotion = toAge == PageAge::old;
+                ZPage* const newPage = promotion ? prev->clone_for_promotion() : prev->reset(toAge);
+                newPage->reset_livemap();
+                if (promotion) {
+                    promoted.append(prev);
+                }
+            }
+            Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG)
+                .relocation_set().register_flip_promoted(promoted);
+        }
+    private:
+        ZArrayParallelIterator<ZPage*> iter;
+    };
+    ZFlipAgePagesTask task(pages);
+    workers.run(&task);
+}
+
+void ZRelocate::barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
+                                       const ZArray<ZPage*>* relocatePromoted)
+{
+    class ZPromoteBarrierTask : public ZTask {
+    public:
+        ZPromoteBarrierTask(const ZArray<ZPage*>* flip, const ZArray<ZPage*>* relocate)
+            : ZTask("ZPromoteBarrierTask"), flipIter(flip), relocateIter(relocate)
+        {}
+        void work() override
+        {
+            auto promoteBarriers = [](ZArrayParallelIterator<ZPage*>* iter) {
+                for (ZPage* page; iter->next(&page);) {
+                    page->object_iterate([](BaseObject* obj) {
+                        ZIterator::basic_oop_iterate_safe(obj, [](RefField<>& field) {
+                            ZBarrier::promote_barrier_on_young_oop_field(
+                                reinterpret_cast<volatile zpointer*>(&field));
+                        });
+                    });
+                }
+            };
+            promoteBarriers(&flipIter);
+            promoteBarriers(&relocateIter);
+        }
+    private:
+        ZArrayParallelIterator<ZPage*> flipIter;
+        ZArrayParallelIterator<ZPage*> relocateIter;
+    };
+    ZPromoteBarrierTask task(flipPromoted, relocatePromoted);
+    workers.run(&task);
 }
 
 } // namespace MapleRuntime

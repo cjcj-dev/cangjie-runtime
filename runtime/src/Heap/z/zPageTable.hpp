@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #pragma once
+#include <functional>
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 #include "Heap/z/zIndexDistributor.hpp"
@@ -71,6 +72,7 @@ public:
     ZGenerationPagesIterator(const ZPageTable* page_table, ZGenerationId id, ZPageAllocator* page_allocator);
     ~ZGenerationPagesIterator();
     bool next(ZPage** page);
+    void yield(const std::function<void()>& function);
 };
 
 class ZGenerationPagesParallelIterator {

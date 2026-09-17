@@ -10,6 +10,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zPageTable.hpp"
+#include "Heap/z/zArray.hpp"
 
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zDriver.hpp"
@@ -26,6 +27,7 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.hpp"
+#include "Heap/Allocator/RegionList.h"
 
 #include <algorithm>
 #include <atomic>
@@ -471,6 +473,27 @@ void Heap::free_page(ZPage* page)
         return;
     }
     ZPage::RetirePage(page, [] {});
+}
+
+size_t Heap::free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages)
+{
+    (void)id;
+    size_t freed = 0;
+    if (pages == nullptr) {
+        return 0;
+    }
+    for (int i = 0; i < pages->length(); ++i) {
+        ZPage* page = pages->at(i);
+        if (page == nullptr) {
+            continue;
+        }
+        if (RegionList* owner = page->GetRegionListOwner()) {
+            owner->DeleteRegion(page);
+        }
+        freed += page->size();
+        free_page(page);
+    }
+    return freed;
 }
 
 bool Heap::is_in(MAddress addr)

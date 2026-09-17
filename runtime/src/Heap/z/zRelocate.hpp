@@ -19,6 +19,7 @@
 #include "Common/TypeDef.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zPageAge.hpp"
 
 namespace MapleRuntime {
 
@@ -122,6 +123,18 @@ private:
     size_t workerCount{ 0 };
     size_t synchronizedWorkers{ 0 };
     std::atomic<uint64_t> completionCount{ 0 };
+};
+
+class ZWorkers;
+class ZPage;
+template<typename T> class ZArray;
+
+class ZRelocate {
+public:
+    static PageAge compute_to_age(PageAge fromAge);
+    static void flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages);
+    static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
+                                       const ZArray<ZPage*>* relocatePromoted);
 };
 
 } // namespace MapleRuntime

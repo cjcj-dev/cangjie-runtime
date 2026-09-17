@@ -36,6 +36,7 @@
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zRelocationSetSelector.inline.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zForwardingEntry.hpp"
@@ -67,22 +68,14 @@ void WCollector::PostTrace()
 #if defined(MRT_TESTABLE_INTERNALS)
     ObserveExportOwnershipForTest(true);
 #endif
-    // ZGeneration::select_relocation_set (zGeneration.cpp:205-225): selection
-    // consumes the completed mark, and only this generation's relocatable pages.
-    space.AssembleGarbageCandidates();
-    // reclaim large objects immediately after tracing is done.
     CollectLargeGarbage();
     CollectPinnedGarbage();
-    RefineFromSpace();
-    // zGeneration.cpp:1042 / :1131-1133: old resets its own previous set
-    // after non-strong processing and before select. Young tables stay
-    // until young's ResetRelocationSet.
+    // zGeneration.cpp:1042 / :1131-1133: reset previous set before select.
     Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).reset_relocation_set();
-    // ZGenerationOld::collect (zGeneration.cpp:1044): stop after reset,
-    // before selecting the next relocation set.
     if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
         return;
     }
+    RefineFromSpace();
     fwdTable.PrepareForwardTable<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
@@ -229,6 +222,9 @@ void ZRelocationSet::install(const ZRelocationSetSelector* selector)
 
 void ZRelocationSet::install_from_regions(RegionList& regions)
 {
+    if (_nforwardings != 0) {
+        return;
+    }
     ZRelocationSetSelector selector;
     regions.VisitAllRegions([&](ZPage* region) {
         selector.add_selected_small(region, ZForwarding::nentries(region));

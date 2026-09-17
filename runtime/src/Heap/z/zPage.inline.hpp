@@ -1181,15 +1181,15 @@ inline std::atomic<uint64_t>& ZPage::EnrolAfterFlip()
     return n;
 }
 
-inline Generation ZPage::GetOwnerGeneration() const
-    {
-        return IsYoungRegion() ? Generation::Young : Generation::Old;
-    }
-
 inline bool ZPage::IsYoungRegion() const
-    {
-        return generation_id() == ZGenerationId::young;
-    }
+{
+    return generation_id() == ZGenerationId::young;
+}
+
+inline Generation ZPage::GetOwnerGeneration() const
+{
+    return IsYoungRegion() ? Generation::Young : Generation::Old;
+}
 
 inline MAddress ZPage::GetRegionStart() const
 {
