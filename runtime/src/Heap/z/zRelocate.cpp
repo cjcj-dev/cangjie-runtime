@@ -2667,7 +2667,6 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                 ZPage* const newPage = promotion ? prev->clone_for_promotion() : prev->reset(toAge);
                 newPage->reset_livemap();
                 if (promotion) {
-                    ZPageTable::heap_table().replace(prev, newPage);
                     promoted.append(prev);
                 }
             }
