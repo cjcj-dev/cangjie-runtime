@@ -746,6 +746,10 @@ private:
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void DoYoungGarbageCollection();
     void RunYoungCollection();
+    void ConcurrentYoungMark();
+    bool YoungMarkEndPause();
+    void ConcurrentYoungMarkContinue();
+    void FinishYoungMarkHandoff();
     void RunOldCollection();
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
@@ -783,6 +787,11 @@ private:
     size_t youngLiveBytes = 0;
     size_t youngLiveRememberedCount = 0;
     bool youngFullScan = false;
+    WorkStack youngWorkStack;
+    uint64_t youngStackScanEpoch = 0;
+    YoungConcWindowStats youngConcWindow;
+    uint64_t youngConcWindowStartNs = 0;
+    MinorSlotSet youngWeakSlots;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H

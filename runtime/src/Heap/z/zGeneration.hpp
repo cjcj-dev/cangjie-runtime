@@ -171,7 +171,7 @@ public:
     void concurrent_mark(WCollector& collector);
     bool pause_mark_end(WCollector& collector);
     void concurrent_mark_continue(WCollector& collector);
-    void concurrent_mark_free();
+    void concurrent_mark_free(WCollector& collector);
     void concurrent_reset_relocation_set();
     void concurrent_select_relocation_set();
     void pause_relocate_start(WCollector& collector);

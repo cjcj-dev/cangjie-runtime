@@ -119,7 +119,6 @@ YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
 {
     CHECK(_cycle == GCCycleGeneration::YOUNG);
     CHECK(Snapshot().active);
-    ZJNICritical::block();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
         CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
@@ -184,7 +183,6 @@ YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
         CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
     }
 #endif
-    ZJNICritical::unblock();
     return stats;
 }
 
@@ -193,7 +191,6 @@ void ZGeneration::StartOldMark(WCollector& collector)
 {
     CHECK(_cycle == GCCycleGeneration::OLD);
     CHECK(Snapshot().active);
-    ZJNICritical::block();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
         CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
@@ -237,7 +234,6 @@ void ZGeneration::StartOldMark(WCollector& collector)
         CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
     }
 #endif
-    ZJNICritical::unblock();
 }
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
@@ -292,8 +288,12 @@ public:
         if (block_jni_critical()) {
             ZJNICritical::block();
         }
-        ZVerify::BeforeZOperation();
-        const bool success = do_operation();
+        bool success = false;
+        {
+            ScopedStopTheWorld stw("zoperation", false);
+            ZVerify::BeforeZOperation();
+            success = do_operation();
+        }
         if (block_jni_critical()) {
             ZJNICritical::unblock();
         }
@@ -329,7 +329,10 @@ private:
 
 class VM_ZMarkEndYoung : public VM_ZOperation {
 public:
-    bool do_operation() override { return true; }
+    explicit VM_ZMarkEndYoung(WCollector& collector) : collector(collector) {}
+    bool do_operation() override { return collector.YoungMarkEndPause(); }
+private:
+    WCollector& collector;
 };
 
 class VM_ZRelocateStartYoung : public VM_ZOperation {
@@ -368,7 +371,7 @@ void ZGenerationYoung::collect(WCollector& collector)
         concurrent_mark_continue(collector);
         abortpoint();
     }
-    concurrent_mark_free();
+    concurrent_mark_free(collector);
     abortpoint();
     concurrent_reset_relocation_set();
     abortpoint();
@@ -389,21 +392,28 @@ void ZGenerationYoung::pause_mark_start(WCollector& collector)
     }
 }
 
-void ZGenerationYoung::concurrent_mark(WCollector&) {}
-bool ZGenerationYoung::pause_mark_end(WCollector&) { return true; }
-void ZGenerationYoung::concurrent_mark_continue(WCollector&) {}
-void ZGenerationYoung::concurrent_mark_free() {}
+void ZGenerationYoung::concurrent_mark(WCollector& collector)
+{
+    collector.ConcurrentYoungMark();
+}
+bool ZGenerationYoung::pause_mark_end(WCollector& collector)
+{
+    VM_ZMarkEndYoung op(collector);
+    return op.pause();
+}
+void ZGenerationYoung::concurrent_mark_continue(WCollector& collector)
+{
+    collector.ConcurrentYoungMarkContinue();
+}
+void ZGenerationYoung::concurrent_mark_free(WCollector& collector)
+{
+    collector.FinishYoungMarkHandoff();
+}
 
 void WCollector::RunYoungCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
-    std::unique_ptr<ScopedStopTheWorld> stw =
-        std::make_unique<ScopedStopTheWorld>("young prepare", false);
-    ZVerify::BeforeZOperation();
-    // Full-colour gate: reject any plain HeapSlot before young mark mutates colours.
-    // VM_ZMarkStartYoungAndOld / VM_ZMarkStartYoung (zGeneration.cpp:583-659).
-    // A major starts old exactly once in this young pause. An independent
-    // minor leaves the old cycle identity and mark color untouched.
+    // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
     collectorResources.NoteYoungMarkStart(youngCycle.YoungType());
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
@@ -458,28 +468,18 @@ void WCollector::RunYoungCollection()
     // Corresponds to ZGC reset_relocation_set before the new young collection.
     // flippromo: open broad-vs-product window for regions demoted last minor.
 
-    uint64_t stackScanEpoch = 0;
-    {
-        // Publish S1/S3/S5 while every mutator is stopped. SetGCPhase is the
-        // release publication point before stack-watermark processing.
-        Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
-        stw.reset();
+    youngStackScanEpoch = StackWatermark::epoch_id();
+    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
+    youngStats = stats;
+    youngStartNs = start;
+    youngWorkStack = NewWorkStack();
+}
 
-
-        stackScanEpoch = StackWatermark::epoch_id();
-        stw = std::make_unique<ScopedStopTheWorld>("young collection", false);
-        ZVerify::BeforeZOperation();
-        TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true, true);
-        MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
-            if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, true, stackScanEpoch, false);
-            }
-        });
-
-    }
-
+void WCollector::ConcurrentYoungMark()
+{
+    uint64_t stackScanEpoch = youngStackScanEpoch;
+    WorkStack& workStack = youngWorkStack;
     constexpr bool fullYoungScan = false;
-    WorkStack workStack = NewWorkStack();
     MarkingStacks::VerifyEmpty(workStack.size());
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
@@ -487,9 +487,6 @@ void WCollector::RunYoungCollection()
     MinorObjectSet currentMinorRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
-    if (fullYoungScan) {
-        reachableSlots.reserve(rememberedSlots.size());
-    }
     auto mergeY2yDirtyWork = [&](WorkStack& destination) {
         theAllocator.VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
             buffer.MergeY2yDirtyHolders(destination);
@@ -557,20 +554,15 @@ void WCollector::RunYoungCollection()
     // Release here before invoking the existing root producer so mark_follow runs
     // with mutators alive.
     {
-        CHECK_DETAIL(stw != nullptr, "young concurrent mark start without pause owner");
         CHECK_DETAIL(stackScanEpoch != 0,
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
-        // wave8 y2y handoff (8d4253522 content): consume the pre-window batch
-        // before reset releases mutators. New stores after reset remain owned
-        // by the STW2 consumer and cannot race this allocator-buffer merge.
         mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyWorkCount());
 #endif
-        stw.reset();
         concWindowStartNs = TimeUtil::NanoSeconds();
         produceYoungRoots();
         VLOG(REPORT,
@@ -601,117 +593,99 @@ void WCollector::RunYoungCollection()
     if (ZAbort::should_abort()) {
         return;
     }
-    for (;;) {
-        // Concurrent mark-follow drains work published by the previous pause.
-        // Its worker completion is coordinated by YoungMarkTerminate (the
-        // ZMarkTerminate worker-count/wakeup state machine), not pool polling.
-        const bool workersTerminated =
-            FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots,
-                                weakSlots, &concWindow);
-        if (!workersTerminated) {
-            return;
-        }
+    (void)FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots, &concWindow);
 #if defined(MRT_TESTABLE_INTERNALS)
-        FlushExportRootAfterT1TestReceipt();
-        // Adversarial mutator publication point: workers have terminated, but
-        // the pause has not started. The pause must flush once and return
-        // failure; it must not consume closure in an in-pause loop.
-        PublishMarkBeforeMarkEndTestReceipt();
-        PublishLeftoverBeforePauseTestReceipt();
-        // Publish after concurrent consumers have terminated. Publishing just
-        // after mark-start release lets FollowYoungMark consume this work
-        // before the pause, so it cannot exercise mark-end failure/continue.
-        // ZGC zGeneration.cpp:897-904: only incomplete mark-end continues.
-        PublishY2yAfterReleaseTestReceipt();
+    FlushExportRootAfterT1TestReceipt();
+    PublishMarkBeforeMarkEndTestReceipt();
+    PublishLeftoverBeforePauseTestReceipt();
+    PublishY2yAfterReleaseTestReceipt();
 #endif
+    youngReachableVec = std::move(reachableVec);
+    youngConsumedSlots = std::move(consumedSlots);
+    youngRemsetInteriorBases = std::move(remsetInteriorBases);
+    youngConcWindow = concWindow;
+    youngConcWindowStartNs = concWindowStartNs;
+    youngWeakSlots = std::move(weakSlots);
+    youngFullScan = fullYoungScan;
+}
 
-        // ZGenerationYoung::pause_mark_end() does one flush. Work found here is
-        // not processed in the pause: releasing this owner and restoring TRACE
-        // is the existing concurrent_mark_continue edge.
+bool WCollector::YoungMarkEndPause()
+{
+    WorkStack& workStack = youngWorkStack;
 #if defined(MRT_TESTABLE_INTERNALS)
-        const uint64_t markEndPauseStartNs = TimeUtil::NanoSeconds();
+    const uint64_t markEndPauseStartNs = TimeUtil::NanoSeconds();
+    const size_t y2yBatchAtMarkEnd = 0;
+    (void)y2yBatchAtMarkEnd;
 #endif
-        stw = std::make_unique<ScopedStopTheWorld>("young mark terminate", true,
-                                                   GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-        ZVerify::BeforeZOperation();
+    theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) {
 #if defined(MRT_TESTABLE_INTERNALS)
-        const size_t y2yBatchAtMarkEnd = pendingY2yDirtyWorkCount();
-#endif
-        theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) {
-#if defined(MRT_TESTABLE_INTERNALS)
-            NoteMarkTerminatePauseProducers(buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
+        NoteMarkTerminatePauseProducers(buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
 #else
-            (void)buffer;
+        (void)buffer;
 #endif
+    });
+    theAllocator.VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
+        buffer.MergeY2yDirtyHolders(workStack);
+        buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
+            RefField<>& field = HeapSlotAt<>(slot);
+            BaseObject* target = ResolveMinorReference(field);
+            PushYoungObject(target, workStack, "y2y_slot");
         });
-        mergeY2yDirtyWork(workStack);
+    });
+    const bool markEndSucceeded = TryEndYoungMark(workStack, &youngConcWindow);
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yAfterStw2TestReceipt(y2yBatchAtMarkEnd);
+    NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
 #endif
-        const bool markEndSucceeded = TryEndYoungMark(workStack, &concWindow);
+    if (markEndSucceeded) {
+        MarkingStacks::VerifyEmpty(workStack.size());
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
-#endif
-        if (workersTerminated && markEndSucceeded) {
-            MarkingStacks::VerifyEmpty(workStack.size());
-#if defined(MRT_TESTABLE_INTERNALS)
-            NoteExportRootPublicationAtT2TestReceipt();
-            if (testYoungMarkCompleted) {
-                testYoungMarkCompleted();
-            }
-#endif
-            break;
+        NoteExportRootPublicationAtT2TestReceipt();
+        if (testYoungMarkCompleted) {
+            testYoungMarkCompleted();
         }
-        NoteMarkTerminateContinue(workStack.size());
-        ++concWindow.reenters;
-        stw.reset();
-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
+#endif
+        ReportMarkTerminateContinue();
+        return true;
     }
-    ReportMarkTerminateContinue();
+    NoteMarkTerminateContinue(workStack.size());
+    ++youngConcWindow.reenters;
+    return false;
+}
+
+void WCollector::ConcurrentYoungMarkContinue()
+{
+    TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
+    MinorSlotSet reachableSlots;
+    (void)FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
+                          &youngConcWindow);
+}
+
+void WCollector::FinishYoungMarkHandoff()
+{
     if (ZAbort::should_abort()) {
         return;
     }
+    RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
     {
-        // Window closes here: the next statement asks every mutator to stop. Read the pair
-        // (windowNs, MarkedInWindow) together -- duration alone proves nothing.
-        concWindow.markedAtExit = reachableVec.size();
-        if (concWindowStartNs != 0) {
-            concWindow.windowNs = TimeUtil::NanoSeconds() - concWindowStartNs;
-        }
-        // The successful mark-end owner is retained for evacuation handoff.
-        // Every allocator/y2y batch was either empty at this pause or forced a
-        // failed mark-end and was processed by concurrent_mark_continue.
-        // Rebuild liveRememberedSlots after concurrent remset merge (stats/audit only;
-        // EvacuateYoungRegions remset authority is consumedSlots — fysfixa 3f27f0c4).
-        liveRememberedSlots.clear();
-        liveRememberedCount = 0;
-        for (MAddress slot : rememberedSlots) {
-            if (LedgerCount(weakSlots, slot) == 0 &&
-                (!fullYoungScan ||
-                 LedgerCount(reachableSlots, slot) != 0)) {
-                liveRememberedSlots.insert(slot);
-                ++liveRememberedCount;
-            }
+        youngConcWindow.markedAtExit = youngReachableVec.size();
+        if (youngConcWindowStartNs != 0) {
+            youngConcWindow.windowNs = TimeUtil::NanoSeconds() - youngConcWindowStartNs;
         }
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 evacuation handoff reachable=%zu",
-             reachableVec.size());
+             youngReachableVec.size());
     }
-    // portyoungconc positive control. Emitted on EVERY minor, including the closed arm, so
-    // "no line" and "a line of zeros" are distinguishable. window_ns is the only field that
-    // a merely-existing window can raise; marked_in_window / closure_calls
-    // are GC work, and it is the work fields that decide whether the window is real.
     VLOG(REPORT,
          "[GCV2][youngconc][concwork] run=%zu conc=%d follow=%d window_ns=%llu marked_in_window=%zu "
          "closure_calls=%zu remset_slots=%zu reenters=%zu "
          "marked_at_entry=%zu reachable_total=%zu",
          minorTotalRuns + 1, 1, 1,
-         static_cast<unsigned long long>(concWindow.windowNs), concWindow.MarkedInWindow(),
-         concWindow.closureCalls, concWindow.remsetSlots,
-         concWindow.reenters, concWindow.markedAtEntry, reachableVec.size());
+         static_cast<unsigned long long>(youngConcWindow.windowNs), youngConcWindow.MarkedInWindow(),
+         youngConcWindow.closureCalls, youngConcWindow.remsetSlots,
+         youngConcWindow.reenters, youngConcWindow.markedAtEntry, youngReachableVec.size());
     size_t liveBytes = 0;
     TenuringInputs tenuringIn;
     tenuringIn.softMaxCapacity = Heap::GetHeap().GetMaxCapacity();
-    tenuringIn.youngAllocated = stats.candidateBytes;
+    tenuringIn.youngAllocated = youngStats.candidateBytes;
     for (ZPage* region : minorCandidateRegions) {
         const size_t live = region->is_marked() ? region->live_bytes() : 0;
         liveBytes += live;
@@ -721,9 +695,9 @@ void WCollector::RunYoungCollection()
         }
         tenuringIn.liveByAge[age] += live;
     }
-    tenuringIn.youngGarbage = stats.candidateBytes > liveBytes ? (stats.candidateBytes - liveBytes) : 0;
+    tenuringIn.youngGarbage = youngStats.candidateBytes > liveBytes ? (youngStats.candidateBytes - liveBytes) : 0;
     GCStats& gcStats = GetGCStats(GCCycleGeneration::YOUNG);
-    gcStats.youngCandidateBytes = stats.candidateBytes;
+    gcStats.youngCandidateBytes = youngStats.candidateBytes;
     gcStats.youngPromotedBytes = liveBytes;
     for (uint32_t i = 0; i < kPageAgeCount; ++i) {
         gcStats.liveByAge[i] = tenuringIn.liveByAge[i];
@@ -756,15 +730,7 @@ void WCollector::RunYoungCollection()
         });
     }
 
-    youngStw = std::move(stw);
-    youngReachableVec = std::move(reachableVec);
-    youngConsumedSlots = std::move(consumedSlots);
-    youngRemsetInteriorBases = std::move(remsetInteriorBases);
-    youngStats = stats;
-    youngStartNs = start;
     youngLiveBytes = liveBytes;
-    youngLiveRememberedCount = liveRememberedCount;
-    youngFullScan = fullYoungScan;
 }
 
 void ZGenerationYoung::concurrent_reset_relocation_set()
