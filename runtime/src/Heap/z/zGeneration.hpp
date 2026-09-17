@@ -29,12 +29,13 @@ struct TenuringInputs;
 // ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
 enum class GCCycleGeneration : uint8_t { YOUNG, OLD };
 enum class MarkStartPoint : uint8_t { Begin, BeforeRetire, BeforeSequence, BeforeDomain, BeforeRemembered, Complete };
+enum class ZGenerationPhase : uint8_t { Mark, MarkComplete, Relocate };
 struct GCCycleSnapshot {
     GCCycleGeneration generation;
     uint64_t sequence;
     uint64_t requestIndex;
     GCReason reason;
-    GCPhase phase;
+    ZGenerationPhase phase;
     bool active;
 };
 class WCollector;
@@ -66,7 +67,7 @@ public:
     const ZMark& Mark() const { return *mark; }
     ZMark* MarkPtr() { return mark.get(); }
     const ZMark* MarkPtr() const { return mark.get(); }
-    enum class Phase { Mark, MarkComplete, Relocate };
+    using Phase = ZGenerationPhase;
     void set_phase(Phase new_phase);
     void log_phase_switch(Phase from, Phase to);
     virtual bool should_record_stats() = 0;

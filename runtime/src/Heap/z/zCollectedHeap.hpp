@@ -53,7 +53,7 @@ public:
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
     void RequestGC(GCReason reason, bool async);
 
-    virtual GCPhase GetGCPhase(GCCycleGeneration generation) const { return GetCycleSnapshot(generation).phase; }
+    virtual GCPhase GetGCPhase(GCCycleGeneration generation) const { return GetZGeneration(generation).GcPhase(); }
 
     virtual void SetGCPhase(GCCycleGeneration generation, const GCPhase phase)
     {

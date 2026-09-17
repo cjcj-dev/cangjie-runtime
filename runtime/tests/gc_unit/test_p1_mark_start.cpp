@@ -103,14 +103,14 @@ extern "C" int p1MarkStartExercise()
                 Expect(retired, "current_and_prepared_tlabs_retired");
             }
         } else if (point == MarkStartPoint::BeforeDomain) {
-            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == GC_PHASE_ENUM,
+            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == ZGenerationPhase::Mark,
                    "sequence_and_mark_phase_before_domain");
             if (index == 0) Expect(face == before.face, "young_remset_unchanged_before_domain");
         } else if (point == MarkStartPoint::BeforeRemembered) {
             Expect(domain != nullptr && domain->NWorkers() == workers, "young_domain_ready_before_remset");
             Expect(face == before.face, "young_remset_unchanged_after_domain_start");
         } else if (point == MarkStartPoint::Complete) {
-            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == GC_PHASE_ENUM,
+            Expect(snapshot.sequence == before.sequence + 1 && snapshot.phase == ZGenerationPhase::Mark,
                    "completed_start_has_new_identity_and_mark_phase");
             Expect(domain != nullptr && domain->NWorkers() == workers, "completed_start_has_prepared_domain");
             Expect(face == (before.face ^ (index == 0 ? 1U : 0U)), "only_young_start_flips_remset");

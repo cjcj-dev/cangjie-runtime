@@ -1159,7 +1159,7 @@ GCPhase ZGeneration::GcPhase() const
 GCCycleSnapshot ZGeneration::Snapshot() const
 {
     std::lock_guard<std::mutex> lock(mutex);
-    return { _cycle, sequence, requestIndex, reason.load(std::memory_order_relaxed), GcPhase(), active };
+    return { _cycle, sequence, requestIndex, reason.load(std::memory_order_relaxed), _phase, active };
 }
 
 void ZGeneration::SelectReason(GCReason value, uint64_t index)
