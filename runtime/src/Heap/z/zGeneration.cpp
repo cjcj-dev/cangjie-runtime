@@ -606,7 +606,6 @@ void WCollector::ConcurrentYoungMark()
         CHECK_DETAIL(stackScanEpoch != 0,
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true, true);
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -753,7 +752,6 @@ void WCollector::FinishYoungMarkHandoff()
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
-        TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true, true);
         // tracecache: PrepareTrace above switched the TRACE-phase region caches on
         // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
         // same place WCollector::PostTrace drains them for a major (RelocationSet.cpp:73-78).
