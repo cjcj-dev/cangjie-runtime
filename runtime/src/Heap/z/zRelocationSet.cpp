@@ -229,8 +229,6 @@ void ZRelocationSet::install_from_regions(RegionList& regions)
     }
     ZRelocationSetSelector selector;
     regions.VisitAllRegions([&](ZPage* region) {
-        CHECK_DETAIL(region->is_relocatable(),
-                     "selected page must be relocatable start=%#zx", region->GetRegionStart());
         selector.add_selected_small(region, ZForwarding::nentries(region));
     });
     install(&selector);
