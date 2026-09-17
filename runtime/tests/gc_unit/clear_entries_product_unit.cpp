@@ -572,7 +572,7 @@ ZLiveMap* PrepareForwardable(GcHeapFixture& fx, ZPage* region, MAddress liveObje
 
 void DestroyAfterGhostCleared(ZPage* region, const char* why)
 {
-    if (region != nullptr && region->IsGhostFromRegion()) {
+    if (region != nullptr && region->IsYoungRegion() && false) {
             }
     PublishGenerationMarkComplete(Generation::Young);
     PublishGenerationMarkComplete(Generation::Old);
@@ -967,7 +967,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
     DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
-    if (region->IsGhostFromRegion()) {
+    if (region->IsYoungRegion() && false) {
             }
     GC_EXPECT_TRUE(ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(liveObject)) == nullptr);
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, liveObject);
@@ -1014,7 +1014,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
 
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
-    if (region->IsGhostFromRegion()) {
+    if (region->IsYoungRegion() && false) {
             }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
@@ -1590,7 +1590,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     GC_EXPECT_FALSE(aborted);
     (void)queue.SynchronizePoll();
 
-    if (region->IsGhostFromRegion()) {
+    if (region->IsYoungRegion() && false) {
             }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 #endif
@@ -1626,7 +1626,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     publication = nullptr;
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
-    if (region->IsGhostFromRegion()) {
+    if (region->IsYoungRegion() && false) {
             }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
@@ -1652,7 +1652,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
     });
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
-    if (region->IsGhostFromRegion()) {
+    if (region->IsYoungRegion() && false) {
             }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 #endif
@@ -1708,9 +1708,9 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
     secondPublication = nullptr;
     Heap::GetHeap().GetCollector().GetGenerationCycle(firstRegion->GetOwnerGeneration()).reset_relocation_set();
     Heap::GetHeap().GetCollector().GetGenerationCycle(secondRegion->GetOwnerGeneration()).reset_relocation_set();
-    if (firstRegion->IsGhostFromRegion()) {
+    if (firstRegion->IsYoungRegion() && false) {
             }
-    if (secondRegion->IsGhostFromRegion()) {
+    if (secondRegion->IsYoungRegion() && false) {
             }
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
@@ -1857,7 +1857,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
-    if (region->IsGhostFromRegion()) {
+    if (region->IsYoungRegion() && false) {
             }
 }
 #endif // MRT_PRODUCT_TESTABLE_INTERNALS
@@ -1932,7 +1932,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
-    if (region->IsGhostFromRegion()) {
+    if (region->IsYoungRegion() && false) {
             }
 
     // Keep fault-injection failures after all product/global cleanup. The test
@@ -2033,7 +2033,7 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
 
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     Heap::GetHeap().GetCollector().GetGenerationCycle(region->GetOwnerGeneration()).reset_relocation_set();
-    if (region->IsGhostFromRegion()) {
+    if (region->IsYoungRegion() && false) {
             }
 }
 

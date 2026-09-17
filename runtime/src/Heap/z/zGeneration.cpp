@@ -91,6 +91,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
 {
     CHECK(generation == GCCycleGeneration::YOUNG);
     CHECK(Snapshot().active);
+    ZJNICritical::block();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
         CopyCollector::testMarkStartState(generation, MarkStartPoint::Begin, mark.get());
@@ -154,6 +155,7 @@ YoungCollectionStats GenerationCycle::StartYoungMark(WCollector& collector)
         CopyCollector::testMarkStartState(generation, MarkStartPoint::Complete, mark.get());
     }
 #endif
+    ZJNICritical::unblock();
     return stats;
 }
 
@@ -162,6 +164,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
 {
     CHECK(generation == GCCycleGeneration::OLD);
     CHECK(Snapshot().active);
+    ZJNICritical::block();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
         CopyCollector::testMarkStartState(generation, MarkStartPoint::Begin, mark.get());
@@ -203,6 +206,7 @@ void GenerationCycle::StartOldMark(WCollector& collector)
         CopyCollector::testMarkStartState(generation, MarkStartPoint::Complete, mark.get());
     }
 #endif
+    ZJNICritical::unblock();
 }
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the

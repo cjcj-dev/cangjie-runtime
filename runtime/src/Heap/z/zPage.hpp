@@ -404,12 +404,6 @@ public:
 
     static ZPage* GetZPage(uint32_t idx);
 
-    static bool InGhostFromRegion(BaseObject* obj)
-    {
-        (void)obj;
-        return false;
-    }
-
     static ZPage* GetGhostFromRegionAt(uintptr_t allocAddr);
 
 #if defined(MRT_GC_UNIT_TESTS)
@@ -485,8 +479,6 @@ public:
     template<Generation G>
     __attribute__((always_inline)) inline void PublishForwardingCarrier();
 
-    void ClearGhostRegionBit();
-
     // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
     // Public for reffix parallel window assert + positive-control inject.
     static std::atomic<size_t> tdWindowCount;
@@ -501,13 +493,6 @@ public:
         return tdWindowCount.load(std::memory_order_relaxed);
     }
 
-
-    void ClearGhostFromRegionBits();
-
-    bool IsGhostFromRegion() const;
-
-    // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).
-    void AssertGhostClearedAfterReuse(size_t nUnit) const;
 
     // ZForwarding::retain_page (zForwarding.cpp:86-108). Three-state: 0 refuses,
     // <0 waits for done then refuses, >0 CAS +1.

@@ -901,6 +901,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 return;
             }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
+            // ZGC pause() wraps VMOp_ZRelocateStartYoung with JNICritical block
+            // (zGeneration.cpp:475-483, block_jni_critical at :832).
+            ZJNICritical::block();
             if (doYoungFlip) {
                 ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
                     data.storeBarrierBuffer->install_base_pointers();
@@ -913,6 +916,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // transition may now wait for a real page task on allocation failure.
             Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_PREFORWARD);
             StartRelocationTasks(GCCycleGeneration::YOUNG);
+            ZJNICritical::unblock();
             // The pause publishes the work domain. Eager roots relocate one
             // object themselves; allocation failure uses the same in-place page
             // task on this thread (advisor 161024, compiler prerequisite #498).
@@ -1929,15 +1933,7 @@ void RegionManager::CollectFromSpaceGarbage()
             }
             ExemptFromRegion(region);
         } else {
-#if defined(__OHOS__)
-            if (region->IsGhostFromRegion()) {
-                garbageRegionList.PrependRegion(region);
-            } else {
-                ReclaimRegion(region);
-            }
-#else
             garbageRegionList.PrependRegion(region);
-#endif
         }
         region = fromRegionList.TakeHeadRegion();
     }

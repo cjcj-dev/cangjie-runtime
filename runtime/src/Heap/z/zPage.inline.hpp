@@ -741,34 +741,6 @@ inline __attribute__((always_inline)) void ZPage::PublishForwardingCarrier()
         _scratch.nextRegionIdx0 = _scratch.nextRegionIdx;
     }
 
-inline void ZPage::ClearGhostRegionBit()
-    {
-        if (IsGhostFromRegion()) {
-            SetInGhostRegion(0);
-        }
-    }
-
-inline void ZPage::ClearGhostFromRegionBits()
-    {
-        SetInGhostRegion(0);
-    }
-
-inline bool ZPage::IsGhostFromRegion() const
-    {
-        return false;
-    }
-
-inline void ZPage::AssertGhostClearedAfterReuse(size_t nUnit) const
-    {
-        CHECK(!IsGhostFromRegion());
-        size_t baseIdx = GetUnitIdx();
-        for (size_t i = 1; i < nUnit; i++) {
-            MAddress addr = GetUnitAddress(baseIdx + i);
-            CHECK(!InGhostFromRegion(from_region_addr(addr)));
-        }
-    }
-
-
 inline bool ZPage::RetainForwarding()
     {
         auto owner = forwarding_for_page(this);

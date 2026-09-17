@@ -1045,7 +1045,6 @@ EXPORTS
     _ZN12MapleRuntime10ZPage13tdWindowCountE @1047 DATA
     _ZN12MapleRuntime10ZPage16youngRegionCountE @1048 DATA
 
-    _ZN12MapleRuntime10ZPage19ClearGhostRegionBitEv @1051
     _ZN12MapleRuntime10ZPage19GetYoungRegionCountEv @1052
     _ZN12MapleRuntime10ZPage19IsResurrectedObjectEPKNS_10BaseObjectE @1053
     _ZN12MapleRuntime10ZPage19StampCensusBoundaryEv @1054
@@ -2158,7 +2157,6 @@ EXPORTS
     _ZNK12MapleRuntime10ZPage13GetRegionSizeEv @2417
     _ZNK12MapleRuntime10ZPage14GetRegionStartEv @2418
     _ZNK12MapleRuntime10ZPage23ReportInvalidObjectSizeEPKNS_10BaseObjectEyyy @2420
-    _ZNK12MapleRuntime10ZPage28AssertGhostClearedAfterReuseEy @2421
     _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE @2422
     _ZNK12MapleRuntime10WCollector12IsFromObjectEPNS_10BaseObjectE @2423
     _ZNK12MapleRuntime10WCollector12IsOldPointerERNS_8HeapSlotILb0EEE @2424
