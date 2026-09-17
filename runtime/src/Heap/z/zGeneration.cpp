@@ -472,7 +472,6 @@ void WCollector::RunYoungCollection()
     Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
     youngStats = stats;
     youngStartNs = start;
-    youngWorkStack = NewWorkStack();
 }
 
 void WCollector::ConcurrentYoungMark()
@@ -601,8 +600,6 @@ void WCollector::ConcurrentYoungMark()
     PublishY2yAfterReleaseTestReceipt();
 #endif
     youngReachableVec = std::move(reachableVec);
-    youngConsumedSlots = std::move(consumedSlots);
-    youngRemsetInteriorBases = std::move(remsetInteriorBases);
     youngConcWindow = concWindow;
     youngConcWindowStartNs = concWindowStartNs;
     youngWeakSlots = std::move(weakSlots);
