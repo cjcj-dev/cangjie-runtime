@@ -888,7 +888,7 @@ public:
 void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
 {
     ZBreakpoint::AtAfterReferenceProcessingStarted();
-    CHECK_DETAIL(oldCycle.GcPhase() == GC_PHASE_MARK_COMPLETE,
+    CHECK_DETAIL(oldCycle.is_phase_mark_complete(),
                  "non-strong references require completed old marking");
     {
         MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
@@ -925,7 +925,7 @@ bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsS
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
     MarkStripeSet& stripes = oldCycle.Mark().Stripes();
-    ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
+    ScopedStopTheWorld stw("old mark end", false);
     ZVerify::BeforeZOperation();
     NoteMarkTerminatePause();
     const size_t before = stripes.Population();
