@@ -16,6 +16,7 @@
 #include <functional>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <vector>
 
 #include "Base/Macros.h"
@@ -51,6 +52,8 @@ public:
     template<typename... A>
     size_t MoveInPlaceSlots(A&&...) { return 0; }
     struct InPlaceSlot {};
+    std::unordered_set<MAddress> Snapshot() const { return {}; }
+    size_t ClearBuffer(int) { return 0; }
 
 private:
     bool initialized = false;
