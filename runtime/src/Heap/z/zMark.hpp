@@ -516,6 +516,8 @@ protected:
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
+    WorkStack oldMarkWorkStack;
+    WorkStack oldMarkForeignRoots;
     bool FlushMarkProducers(ZMark* domain);
     void ProcessOldNonStrongReferences(WorkStack& workStack);
     void ProcessExportRoots(WorkStack& foreignRootsSet);

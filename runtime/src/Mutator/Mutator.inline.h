@@ -40,14 +40,6 @@ inline bool Mutator::LeaveSaferegion() noexcept
     return false;
 }
 
-__attribute__((always_inline)) inline bool Mutator::TransitionGCPhase(bool bySelf)
-{
-    (void)bySelf;
-    ClearSuspensionFlag(SUSPENSION_FOR_GC_PHASE);
-    return true;
-}
-
-
 } // namespace MapleRuntime
 
 #endif // MRT_MUTATOR_INLINE_H

@@ -350,8 +350,10 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
 void WCollector::TraceHeap()
 {
     ZBreakpoint::AtAfterMarkingStarted();
-    WorkStack workStack = NewWorkStack();
-    WorkStack foreignStack = NewWorkStack();
+    oldMarkWorkStack = NewWorkStack();
+    oldMarkForeignRoots = NewWorkStack();
+    WorkStack& workStack = oldMarkWorkStack;
+    WorkStack& foreignStack = oldMarkForeignRoots;
     MarkingStacks::VerifyEmpty(workStack.size());
     MarkingStacks::VerifyEmpty(foreignStack.size());
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();

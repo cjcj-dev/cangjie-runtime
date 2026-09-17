@@ -346,8 +346,8 @@ class VM_ZMarkEndOld : public VM_ZOperation {
 public:
     bool do_operation() override
     {
-        ZGeneration::old()->set_phase(ZGeneration::Phase::MarkComplete);
-        return true;
+        WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        return collector.TryEndOldMark(collector.oldMarkWorkStack, collector.oldMarkForeignRoots);
     }
 };
 
@@ -366,7 +366,13 @@ public:
 
 class VM_ZVerifyOld : public VM_ZOperation {
 public:
-    bool do_operation() override { return true; }
+    bool do_operation() override
+    {
+        if (ZVerifyRoots || ZVerifyObjects) {
+            ZVerify::AfterWeakProcessing();
+        }
+        return true;
+    }
 };
 
 void WCollector::DoYoungGarbageCollection()
@@ -919,21 +925,12 @@ void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     gcRendezvous.doit();
     collectorResources.UnblockResurrection();
     collectorResources.GetFinalizerProcessor().EnqueueReferences();
-    // zGeneration.cpp:1147-1168: the serial driver excludes young collections
-    // while this verification safepoint observes the weak-inclusive graph.
-    if (ZVerifyRoots || ZVerifyObjects) {
-        ScopedStopTheWorld stw("verify after weak processing", false);
-        ZVerify::BeforeZOperation();
-        ZVerify::AfterWeakProcessing();
-    }
 }
 
 bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
     MarkStripeSet& stripes = oldCycle.Mark().Stripes();
-    ScopedStopTheWorld stw("old mark end", false);
-    ZVerify::BeforeZOperation();
     NoteMarkTerminatePause();
     const size_t before = stripes.Population();
     (void)workStack;
@@ -1306,12 +1303,18 @@ bool ZGenerationOld::pause_mark_end()
     return op.pause();
 }
 
-void ZGenerationOld::concurrent_mark_continue() {}
+void ZGenerationOld::concurrent_mark_continue()
+{
+    WCollector& collector = TheCollector();
+    collector.TracingImpl(collector.oldMarkWorkStack);
+}
 void ZGenerationOld::concurrent_mark_free() {}
 
 void ZGenerationOld::concurrent_process_non_strong_references()
 {
-    TheCollector().PostTrace();
+    WCollector& collector = TheCollector();
+    collector.ProcessOldNonStrongReferences(collector.oldMarkWorkStack);
+    collector.PostTrace();
 }
 
 void ZGenerationOld::concurrent_reset_relocation_set() {}
@@ -1503,23 +1506,6 @@ void CopyCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
     if (ZAbort::should_abort()) {
         return;
     }
-    while (!TryEndOldMark(workStack, foreignRootsSet)) {
-        if (ZAbort::should_abort()) {
-            return;
-        }
-        MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
-        TracingImpl(workStack);
-        if (ZAbort::should_abort()) {
-            return;
-        }
-    }
-
-    if (ZAbort::should_abort()) {
-        return;
-    }
-    // ZGenerationOld::collect processes non-strong references only after the
-    // successful mark-end pause has closed ordinary mark publication.
-    ProcessOldNonStrongReferences(workStack);
 
 #if defined(MRT_TESTABLE_INTERNALS)
     // All major tasks and finalizer work have flushed before page selection.

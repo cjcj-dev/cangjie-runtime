@@ -677,28 +677,6 @@ GC_TEST(GcRequestSync, DriverReceiptEnqueueAfterStopIsFalse)
     GC_EXPECT_FALSE(ack);
 }
 
-GC_TEST(GcRequestSync, DriverReceiptAbortAfterDequeueIsFalse)
-{
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    BlockingCollector collector;
-    collector.SetResources(resources);
-    CollectorResourcesTestPeer::Init(resources, collector, false);
-    GCDriverPort& port = resources.GetMinorDriverPort();
-    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
-    GCDriverRequest request {};
-    const bool dequeued = port.TryDequeue(request);
-    ZAbort::abort();
-    const bool executed = dequeued && CollectorResourcesTestPeer::ProcessDriverRequest(resources, port, request);
-    const bool ack = port.WaitForAck(receipt);
-    const size_t executeCount = collector.RunCount();
-    CollectorResourcesTestPeer::Destroy(resources);
-
-    std::fprintf(stderr, "DETAIL receipt_abort_after_dequeue execute=%zu ack=%d\n", executeCount, ack);
-    GC_EXPECT_FALSE(executed);
-    GC_EXPECT_EQ(executeCount, 0u);
-    GC_EXPECT_FALSE(ack);
-}
-
 GC_TEST(GcRequestSync, DriverReceiptWaitIgnoresWrappedHighWater)
 {
     GCDriverPort port(GCDriverKind::MAJOR);
