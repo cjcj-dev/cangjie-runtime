@@ -1265,6 +1265,7 @@ void ZGeneration::InitializeWorkers(uint32_t capacity)
 {
     CHECK(workers == nullptr);
     workers = std::make_unique<ZWorkers>(_cycle, capacity, &statWorkers);
+    mark->BindWorkers(workers.get());
     if (_cycle == ZGenerationId::old) {
         weakRootsProcessor = std::make_unique<ZWeakRootsProcessor>(workers.get());
     }
@@ -1272,6 +1273,7 @@ void ZGeneration::InitializeWorkers(uint32_t capacity)
 
 void ZGeneration::StopWorkers()
 {
+    mark->BindWorkers(nullptr);
     weakRootsProcessor.reset();
     workers.reset();
 }
