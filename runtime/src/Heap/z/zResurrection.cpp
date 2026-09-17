@@ -9,7 +9,9 @@ std::atomic<bool> ZResurrection::blocked{ false };
 
 void ZResurrection::block()
 {
+#ifdef MRT_DEBUG
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "Should be at safepoint");
+#endif
     blocked.store(true, std::memory_order_release);
 }
 
