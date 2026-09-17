@@ -655,6 +655,9 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     MarkYoungRootsTask task(*this, [&] {
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
         VisitMinorValueRoots(visitor);
+        gMinorRootOrigin = "export";
+        VisitExportColoredRoots([&](NativeSlot& slot) { visitor(ZBarrier::ReadStaticRef(slot)); });
+        gMinorRootOrigin = "unknown";
     }, GetWorkers(ZGenerationId::young).active_workers());
     SuspendibleThreadSetJoiner joiner;
     GetWorkers(ZGenerationId::young).run(&task);
