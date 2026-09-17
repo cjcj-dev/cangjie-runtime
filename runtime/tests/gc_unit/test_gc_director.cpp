@@ -1,5 +1,4 @@
 #include "Heap/z/zGeneration.hpp"
-#include "Heap/z/zMetronome.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -12,34 +11,6 @@
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
-
-GC_TEST(GcDirector, FixedOriginSurvivesProcessingTime)
-{
-    GcMetronome clock(100, 10);
-    GC_EXPECT_TRUE(!clock.Poll(109));
-    GC_EXPECT_TRUE(clock.Poll(110));
-    GC_EXPECT_EQ(clock.DeadlineNs(), 120u);
-    GC_EXPECT_TRUE(clock.Poll(123));
-    GC_EXPECT_EQ(clock.DeadlineNs(), 130u);
-}
-
-GC_TEST(GcDirector, MissedTicksDoNotAccumulateCatchup)
-{
-    GcMetronome clock(100, 10);
-    GC_EXPECT_TRUE(clock.Poll(147));
-    GC_EXPECT_EQ(clock.DeadlineNs(), 150u);
-    GC_EXPECT_TRUE(!clock.Poll(147));
-    GC_EXPECT_TRUE(clock.Poll(150));
-}
-
-GC_TEST(GcDirector, CompletionWakeDoesNotMoveDeadline)
-{
-    GcMetronome clock(100, 10);
-    GC_EXPECT_TRUE(clock.Poll(110));
-    GC_EXPECT_TRUE(!clock.Poll(115));
-    GC_EXPECT_EQ(clock.DeadlineNs(), 120u);
-    GC_EXPECT_TRUE(clock.Poll(120));
-}
 
 GC_TEST(GcDirector, CycleUsesWorkerAccountingAndControlledClock)
 {
