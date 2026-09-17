@@ -9,10 +9,9 @@
 #include "Mutator/Handshake.h"
 #include <chrono>
 #include <cstring>
-#include <functional>
 namespace MapleRuntime {
-namespace {
-void WaitHandshakeAware(std::unique_lock<std::mutex>& lock, const std::function<bool()>& blocked)
+void ConcurrentGCBreakpoints::WaitHandshakeAware(std::unique_lock<std::mutex>& lock,
+                                                 const std::function<bool()>& blocked)
 {
     while (blocked()) {
         lock.unlock();
@@ -21,10 +20,9 @@ void WaitHandshakeAware(std::unique_lock<std::mutex>& lock, const std::function<
         if (!blocked()) {
             return;
         }
-        (void)ConcurrentGCBreakpoints::condition.wait_for(lock, std::chrono::milliseconds(1));
+        (void)condition.wait_for(lock, std::chrono::milliseconds(1));
     }
 }
-} // namespace
 std::mutex ConcurrentGCBreakpoints::mutex;
 std::condition_variable ConcurrentGCBreakpoints::condition;
 const char* ConcurrentGCBreakpoints::runTo = nullptr;
