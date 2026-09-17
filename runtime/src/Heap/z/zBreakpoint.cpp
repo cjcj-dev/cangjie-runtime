@@ -22,7 +22,7 @@ void ZBreakpoint::AtBeforeGC()
         ConcurrentGCBreakpoints::condition.wait(lock);
     }
     startGC = false;
-    ConcurrentGCBreakpoints::idle = false;
+    ConcurrentGCBreakpoints::NotifyIdleToActive();
 }
 void ZBreakpoint::AtAfterGC() { ConcurrentGCBreakpoints::NotifyActiveToIdle(); }
 void ZBreakpoint::AtAfterMarkingStarted()

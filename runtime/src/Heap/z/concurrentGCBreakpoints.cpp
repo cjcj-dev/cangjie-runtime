@@ -73,6 +73,11 @@ void ConcurrentGCBreakpoints::At(const char* name)
     condition.notify_all();
     while (stopped) condition.wait(lock);
 }
+void ConcurrentGCBreakpoints::NotifyIdleToActive()
+{
+    idle = false;
+}
+
 void ConcurrentGCBreakpoints::NotifyActiveToIdle()
 {
     std::lock_guard<std::mutex> lock(mutex);
