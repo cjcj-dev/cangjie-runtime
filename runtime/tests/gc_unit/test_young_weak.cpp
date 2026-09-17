@@ -57,13 +57,8 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
-        if (collector == nullptr && resources.testCollector != nullptr) {
-            // Worker TLS teardown flushes through the still-bound collector.
-            for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-                resources.testCollector->GetZGeneration(generation).StopWorkers();
-            }
-        }
         resources.testCollector = collector;
+        resources.BindCollector(collector);
         if (collector != nullptr) {
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
                 auto& cycle = collector->GetZGeneration(generation);
@@ -77,12 +72,8 @@ struct RelocationReceiptTestAccess {
     // Do not put this file's teardown into a coalesced inline peer definition.
     static void StopWeakFixtureWorkersAndUnbind(CollectorResources& resources)
     {
-        auto* previous = resources.testCollector;
-        if (previous != nullptr) {
-            previous->GetZGeneration(ZGenerationId::young).StopWorkers();
-            previous->GetZGeneration(ZGenerationId::old).StopWorkers();
-        }
         resources.testCollector = nullptr;
+        resources.BindCollector(nullptr);
     }
 
     // zArguments: the concurrent worker budget the driver hands each request.

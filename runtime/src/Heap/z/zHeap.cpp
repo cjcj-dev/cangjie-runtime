@@ -201,12 +201,20 @@ void HeapImpl::Init(const HeapParam& param)
         &ZPageTable::heap_table(),
         &collectorImpl.GetZGeneration(ZGenerationId::old).forwarding_table(),
         &static_cast<RegionSpace*>(theSpace)->GetRegionManager());
+    if (collectorImpl.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
+        collectorImpl.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
+    }
+    if (collectorImpl.GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
+        collectorImpl.GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
+    }
     collectorResources.Init();
 }
 
 void HeapImpl::Fini()
 {
     collectorResources.Fini();
+    collectorImpl.GetZGeneration(ZGenerationId::young).StopWorkers();
+    collectorImpl.GetZGeneration(ZGenerationId::old).StopWorkers();
     collectorImpl.Fini();
     if (theSpace != nullptr) {
         delete theSpace;

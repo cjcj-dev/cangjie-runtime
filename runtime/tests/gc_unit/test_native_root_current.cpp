@@ -41,6 +41,7 @@ struct RelocationReceiptTestAccess {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.testCollector);
         }
         resources.testCollector = &collector;
+        resources.BindCollector(&collector);
         resources.concurrentGcThreadCount = workers;
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = collector.GetZGeneration(gen);
