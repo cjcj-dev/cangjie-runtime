@@ -214,19 +214,7 @@ void HeapImpl::Fini()
     }
 }
 
-Collector& HeapImpl::GetCollector()
-{
-    Collector& c = collectorResources.ActiveCollector();
-#if defined(MRT_TESTABLE_INTERNALS) || defined(MRT_GC_UNIT_TESTS)
-    if (c.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
-        c.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
-    }
-    if (c.GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
-        c.GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
-    }
-#endif
-    return c;
-}
+Collector& HeapImpl::GetCollector() { return collectorResources.ActiveCollector(); }
 
 Allocator& HeapImpl::GetAllocator() { return *theSpace; }
 
