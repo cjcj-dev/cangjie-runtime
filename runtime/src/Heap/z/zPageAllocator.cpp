@@ -644,13 +644,6 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
          regionHeapStart, regionHeapEnd, nUnit);
 }
 
-void RegionManager::ScrubRememberedSetForRegion(ZPage* region)
-{
-    (void)region;
-}
-
-
-
 void RegionManager::ReclaimRegion(ZPage* region)
 {
     ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
@@ -820,8 +813,6 @@ void RegionManager::ReleaseRetiredRegion(ZPage* region)
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
     // Large regions above the release threshold bypass CollectRegion. Invalidate
-    // their two owned bitmap slices before the address range can be unmapped/reused.
-    ScrubRememberedSetForRegion(region);
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), 0u);
 

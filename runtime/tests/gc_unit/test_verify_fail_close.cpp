@@ -86,7 +86,7 @@ GC_OTHER_VM_TEST(ZVerify, RejectsUnmanagedAddress)
 GC_OTHER_VM_TEST(ZVerify, RememberedCurrentAndPreviousFaces)
 {
     GcVerifyFixture fixture;
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& remset = HeapTestRemset();
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     remset.Record(slot);
     GC_EXPECT_TRUE(remset.Contains(slot));
@@ -157,7 +157,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     GC_EXPECT_TRUE(static_cast<bool>(owner));
     const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
     HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& remset = HeapTestRemset();
     remset.Initialize(fixture.heapStart, 2 * ZPage::UNIT_SIZE);
     ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner); });
     remset.Record(slot);

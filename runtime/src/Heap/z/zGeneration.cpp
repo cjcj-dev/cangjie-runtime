@@ -263,7 +263,6 @@ void WCollector::DoYoungGarbageCollection()
     MinorSlotSet liveRememberedSlots;
     MinorSlotSet consumedSlots;
     MinorInteriorBaseMap remsetInteriorBases;
-    RemsetScanStats remsetStats;
     size_t liveRememberedCount = 0;
 #if defined(MRT_TESTABLE_INTERNALS)
     if (testYoungMarkStarted) {
@@ -539,7 +538,6 @@ void WCollector::DoYoungGarbageCollection()
                 ++liveRememberedCount;
             }
         }
-        remsetStats.live = liveRememberedCount;
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 evacuation handoff reachable=%zu",
              reachableVec.size());
     }
@@ -621,14 +619,7 @@ void WCollector::DoYoungGarbageCollection()
     // "invalid object route" (fysfloor B10). FYS=1 masked via reachableSlots
     // filtering both live-build and Rescan. Unifying on consumed restores
     // fix-domain ⊆ mark/route-domain without widening AdmitForRoute.
-    if (remsetStats.live != remsetStats.consumed) {
-        VLOG(REPORT,
-             "[GCV2][fysfixa] remset_slot_authority live=%zu consumed=%zu gap=%zu "
-             "(evac uses consumed)",
-             remsetStats.live, remsetStats.consumed,
-             remsetStats.live > remsetStats.consumed ? remsetStats.live - remsetStats.consumed : 0);
-    }
-    // In non-concurrent FYS, RescanRememberedSet only consumes slots in reachableSlots;
+    // In non-concurrent FYS, remset consume is scan_and_follow;
     // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
     // Concurrent mark force-admits slots without that proof.
     const bool refFixSlotsCoveredByReachable = false;
@@ -662,38 +653,6 @@ void WCollector::DoYoungGarbageCollection()
          liveBytes, liveRememberedCount, stats.reclaimedBytes, pauseUs);
 }
 
-void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
-{
-    (void)rememberedSlots;
-}
-
-void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
-                                     const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
-                                     const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
-                                     MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
-                                     MinorInteriorBaseMap* interiorBasesOut,
-                                     const ScopedStopTheWorld* stw)
-{
-    (void)workStack;
-    (void)rememberedSlots;
-    (void)reachableSlots;
-    (void)weakSlots;
-    (void)currentMinorRoots;
-    (void)fullYoungScan;
-    (void)stw;
-    if (consumedOut != nullptr) {
-        consumedOut->clear();
-    }
-    if (statsOut != nullptr) {
-        *statsOut = RemsetScanStats{};
-    }
-    if (interiorBasesOut != nullptr) {
-        interiorBasesOut->clear();
-    }
-
-
-
-}
 } // namespace MapleRuntime
 
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.

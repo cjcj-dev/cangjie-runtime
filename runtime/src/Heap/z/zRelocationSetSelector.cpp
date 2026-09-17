@@ -406,7 +406,6 @@ size_t RegionManager::ExemptFromRegions()
                 continue;
             }
 
-            ScrubRememberedSetForRegion(del);
             garbageRegionList.PrependRegion(del);
             continue;
         }

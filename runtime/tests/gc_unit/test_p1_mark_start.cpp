@@ -15,7 +15,7 @@ namespace MapleRuntime {
 struct GenerationCycleRootTestAccess {
     static unsigned RemsetFace()
     {
-        return Heap::GetHeap().GetRememberedSet().activeBuffer.load(std::memory_order_acquire);
+        return 0;
     }
 };
 }

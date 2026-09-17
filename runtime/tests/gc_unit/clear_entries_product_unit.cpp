@@ -89,7 +89,7 @@ struct RelocationReceiptTestAccess {
                 alignas(8) uint64_t storage[16] {};
                 RememberedSet empty;
                 empty.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-                GenerationSequenceFixture::AdvanceYoung(cycle, empty);
+                GenerationSequenceFixture::AdvanceYoung(cycle);
             } else {
                 GenerationSequenceFixture::Advance(cycle);
             }
@@ -325,8 +325,6 @@ struct LoadHealDeliveryTestAccess {
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
-        collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots,
-                                      currentMinorRoots, false, &consumed, &stats);
         auto& domain = *collector.YoungMark();
         auto& stacks = domain.Stacks();
         const size_t work = stacks.Population();
@@ -404,8 +402,6 @@ GcHeapFixture& ProductFixture()
     // independent product-test process does not run Heap::Init, so initialize
     // the Heap-owned remembered set alongside its forwarding table.
     static const bool rememberedInitialized = [&]() {
-        Heap::GetHeap().GetRememberedSet().Initialize(
-            fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
         return true;
     }();
     GC_EXPECT_TRUE(initialized);
@@ -670,7 +666,7 @@ void CleanupPartialCompact(GcHeapFixture& fx, PartialCompactState& state)
 
 RememberedSet& DeliveryRememberedSet(GcHeapFixture& fx)
 {
-    RememberedSet& remembered = Heap::GetHeap().GetRememberedSet();
+    RememberedSet& remembered = HeapTestRemset();
     (void)fx;
     return remembered;
 }

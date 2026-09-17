@@ -16,7 +16,6 @@ using namespace MapleRuntime::GcUnit;
 namespace {
 void InstallReceipt(GcHeapFixture& heap, MAddress from, MAddress to)
 {
-    Heap::GetHeap().GetRememberedSet().Initialize(heap.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     heap.InstallPageOwner(heap.region0);
     auto publication = forwarding_for_page(heap.region0, from);
     GC_EXPECT_TRUE(static_cast<bool>(publication));

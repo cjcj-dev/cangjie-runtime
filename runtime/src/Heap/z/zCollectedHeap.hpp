@@ -26,45 +26,6 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/Collector/Collector.h"
 namespace MapleRuntime {
-class RememberedSet {
-public:
-    std::atomic<int> activeBuffer { 0 };
-    bool IsInitialized() const { return initialized; }
-    void Initialize(MAddress, size_t) { initialized = true; }
-    bool Contains(MAddress slot) const;
-    void Record(MAddress slot);
-    size_t Size() const { return current.size(); }
-    template<typename C>
-    size_t DrainForMinor(C& out)
-    {
-        for (MAddress slot : current) {
-            out.insert(slot);
-        }
-        const size_t n = current.size();
-        FlipForMinor();
-        return n;
-    }
-    void FlipForMinor();
-    bool ContainsPrevious(MAddress slot) const;
-    bool IsClearInRange(MAddress start, size_t size, bool currentFace) const;
-    template<typename... A>
-    size_t ScanPreviousForMinor(A&&...) { return 0; }
-    void ClearRegion(MAddress, MAddress) {}
-    template<typename... A>
-    void VisitRememberedPages(A&&...) {}
-    template<typename... A>
-    size_t TransferObjectSlots(A&&...) { return 0; }
-    struct InPlaceSlot {};
-    size_t TakeInPlaceSlots(MAddress, MAddress, std::vector<InPlaceSlot>&) { return 0; }
-    size_t MoveInPlaceSlots(const std::vector<InPlaceSlot>& takenSlots, MAddress from, MAddress to, size_t objectSize);
-    std::unordered_set<MAddress> Snapshot() const { return current; }
-    size_t ClearBuffer(int) { current.clear(); return 0; }
-
-private:
-    bool initialized = false;
-    std::unordered_set<MAddress> current;
-    std::unordered_set<MAddress> previous;
-};
 enum class Generation : uint8_t;
 enum CollectorType {
     NO_COLLECTOR = 0, // No Collector

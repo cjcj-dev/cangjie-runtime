@@ -199,7 +199,7 @@ public:
             alignas(8) uint64_t storage[16] {};
             RememberedSet remembered;
             remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
-            GenerationSequenceFixture::AdvanceYoung(youngCycle, remembered);
+            GenerationSequenceFixture::AdvanceYoung(youngCycle);
         }
         size_t runNumber = 0;
         {
