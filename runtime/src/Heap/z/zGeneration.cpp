@@ -1221,9 +1221,6 @@ void GenerationCycle::select_relocation_set(bool promote_all)
         SelectTenuringThreshold(inputs);
     }
     _relocation_set.install(&selector);
-    if (generation == GCCycleGeneration::YOUNG) {
-        flip_age_pages(&selector);
-    }
     ZRelocationSetIterator rs_iter(&_relocation_set);
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
         _forwarding_table.insert(forwarding);
