@@ -393,6 +393,9 @@ void MutatorManager::EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<Hands
         if (kv.first == nullptr || kv.second->dying.load(std::memory_order_acquire) != 0) {
             continue;
         }
+        if (kv.first->mutator == nullptr) {
+            continue;
+        }
         HandshakeState* state = kv.second->handshake;
         if (state == nullptr) {
             kv.second->ownedHandshake = std::make_unique<HandshakeState>(kv.first);

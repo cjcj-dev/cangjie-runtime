@@ -1731,7 +1731,8 @@ bool ZMark::TryTerminateFlush()
 {
     terminate.SetResurrected(false);
     workNTerminateFlush.fetch_add(1, std::memory_order_relaxed);
-    return Flush() || !stripes.IsEmpty() || terminate.Resurrected();
+    (void)Flush();
+    return !stripes.IsEmpty() || terminate.Resurrected();
 }
 
 bool ZMark::TryEnd()
@@ -1744,8 +1745,9 @@ bool ZMark::TryEnd()
     if (!HeapMarkReady()) {
         return stripes.IsEmpty();
     }
-    const bool flushed = HandshakeFlush(this) || FlushStacks();
-    if (flushed || !stripes.IsEmpty()) {
+    (void)HandshakeFlush(this);
+    (void)FlushStacks();
+    if (!stripes.IsEmpty()) {
         return false;
     }
     return true;

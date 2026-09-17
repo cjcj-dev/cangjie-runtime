@@ -6,8 +6,23 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Common/ScopedObjectAccess.h"
+#include "Mutator/Handshake.h"
+#include <chrono>
 #include <cstring>
 namespace MapleRuntime {
+void ConcurrentGCBreakpoints::WaitHandshakeAware(std::unique_lock<std::mutex>& lock,
+                                                 const std::function<bool()>& blocked)
+{
+    while (blocked()) {
+        lock.unlock();
+        Handshake::Current().process_by_self();
+        lock.lock();
+        if (!blocked()) {
+            return;
+        }
+        (void)condition.wait_for(lock, std::chrono::milliseconds(1));
+    }
+}
 std::mutex ConcurrentGCBreakpoints::mutex;
 std::condition_variable ConcurrentGCBreakpoints::condition;
 const char* ConcurrentGCBreakpoints::runTo = nullptr;
@@ -32,7 +47,7 @@ void ConcurrentGCBreakpoints::RunToIdleImpl(bool acquiring)
     ResetRequestState();
     wantIdle = true;
     condition.notify_all();
-    while (!idle) condition.wait(lock);
+    WaitHandshakeAware(lock, [] { return !idle; });
 }
 void ConcurrentGCBreakpoints::AcquireControl() { RunToIdleImpl(true); }
 void ConcurrentGCBreakpoints::RunToIdle() { RunToIdleImpl(false); }
@@ -57,11 +72,8 @@ bool ConcurrentGCBreakpoints::RunTo(const char* name)
         Heap::GetHeap().GetCollectorResources().RequestGC(GC_REASON_WB_BREAKPOINT, true);
         lock.lock();
     }
-    for (;;) {
-        if (wantIdle) return false;
-        if (stopped) return true;
-        condition.wait(lock);
-    }
+    WaitHandshakeAware(lock, [] { return !wantIdle && !stopped; });
+    return !wantIdle && stopped;
 }
 void ConcurrentGCBreakpoints::At(const char* name)
 {
@@ -71,7 +83,7 @@ void ConcurrentGCBreakpoints::At(const char* name)
     runTo = nullptr;
     stopped = true;
     condition.notify_all();
-    while (stopped) condition.wait(lock);
+    WaitHandshakeAware(lock, [] { return stopped; });
 }
 void ConcurrentGCBreakpoints::NotifyIdleToActive()
 {

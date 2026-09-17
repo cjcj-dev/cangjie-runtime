@@ -314,8 +314,7 @@ bool WCollector::Preforward()
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
     MRT_PHASE_TIMER(ZStatPhases::PPreforward);
     {
-        DriverLocker locker(collectorResources);
-        // zGeneration.cpp:1054-1063: remap under the driver lock before pausing.
+        // Caller holds DriverLocker (ZGenerationOld::collect zGeneration.cpp:1054-1063).
         RemapYoungRoots();
         if (ZAbort::should_abort()) {
             return false;

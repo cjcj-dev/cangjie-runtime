@@ -416,6 +416,7 @@ void ZGenerationYoung::collect()
 {
     ZGenerationCollectionScopeYoung scope(*this);
     pause_mark_start();
+    DriverUnlocker unlocker(TheCollector().collectorResources);
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -521,6 +522,11 @@ void WCollector::RunYoungCollection()
     // flippromo: open broad-vs-product window for regions demoted last minor.
 
     youngStackScanEpoch = StackWatermark::epoch_id();
+    MutatorManager::Instance().VisitAllMutators([epoch = youngStackScanEpoch](Mutator& mutator) {
+        if (!mutator.GetStackWatermark().IsDone(epoch)) {
+            (void)mutator.GcPhaseEnum(true, epoch, false);
+        }
+    });
     youngStats = stats;
     youngStartNs = start;
 }

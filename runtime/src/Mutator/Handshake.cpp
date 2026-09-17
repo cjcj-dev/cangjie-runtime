@@ -126,7 +126,11 @@ void HandshakeState::process_by_self()
 
 bool HandshakeState::possibly_can_process()
 {
-    return observed_safe();
+    if (observed_safe()) {
+        return true;
+    }
+    Mutator* mutator = handshakee_ != nullptr ? handshakee_->mutator : nullptr;
+    return mutator != nullptr && mutator->InSaferegion();
 }
 
 bool HandshakeState::claim_handshake()
