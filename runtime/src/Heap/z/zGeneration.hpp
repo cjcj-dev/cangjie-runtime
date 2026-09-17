@@ -207,6 +207,7 @@ private:
 class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung();
+    ~ZGenerationYoung();
     bool should_record_stats() override;
     void collect();
     void pause_mark_start();
@@ -218,11 +219,14 @@ public:
     void concurrent_select_relocation_set();
     void pause_relocate_start();
     void concurrent_relocate();
+private:
+    ZGenerationYoung* previousYoung { nullptr };
 };
 
 class ZGenerationOld : public ZGeneration {
 public:
     ZGenerationOld();
+    ~ZGenerationOld();
     bool should_record_stats() override;
     void collect();
     void concurrent_mark();
@@ -236,6 +240,8 @@ public:
     void concurrent_remap_young_roots();
     void pause_relocate_start();
     void concurrent_relocate();
+private:
+    ZGenerationOld* previousOld { nullptr };
 };
 
 }

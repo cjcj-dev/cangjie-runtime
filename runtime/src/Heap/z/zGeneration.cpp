@@ -61,8 +61,28 @@ namespace MapleRuntime {
 ZGenerationYoung* ZGeneration::_young = nullptr;
 ZGenerationOld* ZGeneration::_old = nullptr;
 
-ZGenerationYoung::ZGenerationYoung() : ZGeneration(ZGenerationId::young) { _young = this; }
-ZGenerationOld::ZGenerationOld() : ZGeneration(ZGenerationId::old) { _old = this; }
+ZGenerationYoung::ZGenerationYoung() : ZGeneration(ZGenerationId::young)
+{
+    previousYoung = _young;
+    _young = this;
+}
+ZGenerationYoung::~ZGenerationYoung()
+{
+    if (_young == this) {
+        _young = previousYoung;
+    }
+}
+ZGenerationOld::ZGenerationOld() : ZGeneration(ZGenerationId::old)
+{
+    previousOld = _old;
+    _old = this;
+}
+ZGenerationOld::~ZGenerationOld()
+{
+    if (_old == this) {
+        _old = previousOld;
+    }
+}
 
 ZGenerationId ZGeneration::id() const { return _id; }
 
@@ -93,7 +113,10 @@ ZGeneration::ZGeneration(ZGenerationId generation)
     ZJNICritical::initialize();
 }
 
-ZGeneration::~ZGeneration() = default;
+ZGeneration::~ZGeneration()
+{
+    StopWorkers();
+}
 
 // ZGC zGeneration.cpp:197-207: select policy at the generation boundary.
 static double fragmentation_limit(ZGenerationId generation)
@@ -389,6 +412,7 @@ void ZGeneration::at_collection_start(void* timer)
 void ZGeneration::at_collection_end()
 {
     set_gc_timer(nullptr);
+    End();
 }
 
 ZGenerationCollectionScopeYoung::ZGenerationCollectionScopeYoung(ZGenerationYoung& generation)

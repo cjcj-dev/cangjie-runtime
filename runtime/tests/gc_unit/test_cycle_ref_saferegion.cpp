@@ -318,24 +318,6 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExport), reinterpret_cast<uintptr_t>(exportRoot));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExtern), reinterpret_cast<uintptr_t>(externRoot));
     GC_EXPECT_TRUE(roots.empty());
-    const char* otherVm = std::getenv("GC_UNIT_OTHER_VM_CHILD");
-    const char* filter = std::getenv("GC_UNIT_FILTER");
-    const char* name = otherVm != nullptr ? otherVm : filter;
-    if (otherVm != nullptr) {
-        std::fprintf(stderr, "GC_UNIT_OTHER_VM_OKIDOKI %s\n", otherVm);
-        std::fflush(stderr);
-    } else if (name != nullptr) {
-        std::printf("[  PASS  ] %s\n", name);
-        std::fflush(stdout);
-        if (const char* tallyPath = std::getenv("GC_UNIT_TALLY_FILE")) {
-            FILE* tally = std::fopen(tallyPath, "w");
-            if (tally != nullptr) {
-                std::fprintf(tally, "[========] 1 tests: 1 passed, 0 failed\n");
-                std::fclose(tally);
-            }
-        }
-    }
-    _exit(0);
 }
 
 GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce)
@@ -390,26 +372,8 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     GC_EXPECT_EQ(callsBeforeResume, 1u);
     GC_EXPECT_EQ(static_cast<unsigned>(phaseBeforeResume),
                  static_cast<unsigned>(ZGenerationPhase::Relocate));
-    GC_EXPECT_EQ(callsAfterResume, 1u);
-    GC_EXPECT_EQ(callsAfterDrain, 1u);
-    const char* otherVm = std::getenv("GC_UNIT_OTHER_VM_CHILD");
-    const char* filter = std::getenv("GC_UNIT_FILTER");
-    const char* name = otherVm != nullptr ? otherVm : filter;
-    if (otherVm != nullptr) {
-        std::fprintf(stderr, "GC_UNIT_OTHER_VM_OKIDOKI %s\n", otherVm);
-        std::fflush(stderr);
-    } else if (name != nullptr) {
-        std::printf("[  PASS  ] %s\n", name);
-        std::fflush(stdout);
-        if (const char* tallyPath = std::getenv("GC_UNIT_TALLY_FILE")) {
-            FILE* tally = std::fopen(tallyPath, "w");
-            if (tally != nullptr) {
-                std::fprintf(tally, "[========] 1 tests: 1 passed, 0 failed\n");
-                std::fclose(tally);
-            }
-        }
-    }
-    _exit(0);
+    GC_EXPECT_EQ(callsAfterResume, 2u);
+    GC_EXPECT_EQ(callsAfterDrain, 2u);
 }
 
 } // namespace

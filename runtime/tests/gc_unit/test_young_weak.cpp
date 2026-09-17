@@ -207,29 +207,6 @@ struct RelocationReceiptTestAccess {
 
 namespace {
 
-void FinishIsolatedCase()
-{
-    const char* otherVm = std::getenv("GC_UNIT_OTHER_VM_CHILD");
-    const char* filter = std::getenv("GC_UNIT_FILTER");
-    const char* name = otherVm != nullptr ? otherVm : filter;
-    if (otherVm != nullptr) {
-        std::fprintf(stderr, "GC_UNIT_OTHER_VM_OKIDOKI %s\n", otherVm);
-        std::fflush(stderr);
-    } else if (name != nullptr) {
-        std::printf("[  PASS  ] %s\n", name);
-        std::fflush(stdout);
-        if (const char* tallyPath = std::getenv("GC_UNIT_TALLY_FILE")) {
-            FILE* tally = std::fopen(tallyPath, "w");
-            if (tally != nullptr) {
-                std::fprintf(tally, "[========] 1 tests: 1 passed, 0 failed\n");
-                std::fclose(tally);
-            }
-        }
-    }
-    _exit(0);
-}
-
-
 class WeakClosureTestRuntime final : public Runtime {
 public:
     explicit WeakClosureTestRuntime(MutatorManager& manager)
@@ -621,9 +598,19 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
                  family == MajorRootFamily::COMMON ? "common" : "export", discovered,
                  static_cast<int>(strongMarked), static_cast<int>(weakMarked), static_cast<int>(referentMarked),
                  static_cast<int>(childMarked), static_cast<int>(referentCleared));
+    if (registeredCommonRootCount != 0) {
+        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), registeredCommonRootCount);
+    }
+    if (family == MajorRootFamily::EXPORT) {
+        Heap::GetHeap().RemoveExportObject(exportHandle);
+    }
+    RelocationReceiptTestAccess::BindWorkerBudget(resources);
+    RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
+
     if (runtimeEntry) {
+        GC_EXPECT_FALSE(collector.GetCycleSnapshot(ZGenerationId::old).active);
         GC_EXPECT_TRUE(referentCleared);
-        FinishIsolatedCase();
+        return;
     }
     GC_EXPECT_EQ(discovered, 1u);
     GC_EXPECT_TRUE(strongMarked);
@@ -631,7 +618,6 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     GC_EXPECT_FALSE(referentMarked);
     GC_EXPECT_FALSE(childMarked);
     GC_EXPECT_TRUE(referentCleared);
-    FinishIsolatedCase();
 }
 
 } // namespace
@@ -765,7 +751,6 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
-    FinishIsolatedCase();
 }
 
 GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWritesBack)
@@ -931,9 +916,8 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     if (fullDriver) {
         GC_EXPECT_EQ(beforeObservations, size_t{1});
         GC_EXPECT_EQ(afterObservations, size_t{1});
+        GC_EXPECT_TRUE(driverCompleted);
     }
-    (void)driverCompleted;
-    FinishIsolatedCase();
 }
 
 
@@ -991,7 +975,6 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
     // This allocated object is not a root. Inventory enumeration would include it.
     GC_EXPECT_TRUE(inclusive.count(graph.strongRoot) == 0);
-    FinishIsolatedCase();
 }
 
 GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
@@ -1016,7 +999,6 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GC_EXPECT_TRUE(inclusive.count(graph.weak) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.referent) == 1);
     GC_EXPECT_TRUE(inclusive.count(graph.child) == 1);
-    FinishIsolatedCase();
 }
 
 #endif // MRT_TESTABLE_INTERNALS

@@ -2141,12 +2141,8 @@ void RegionManager::ForwardRegion(ZPage* region)
         }
     } verifyAfterRelocation { verifyForwarding };
 
-    // ZGC zRelocate.cpp:993-1003 only relocates pages in the selected set
-    // (from-space). Allocating/large pages that were not flipped are skipped.
-    if (!(region->IsFromRegion() || region->IsLoneFromRegion() ||
-          (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted())))) {
-        return;
-    }
+    CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
+        (region->IsRoutingState() || region->IsCompacted())), "region type %u", 0u);
 
     DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
