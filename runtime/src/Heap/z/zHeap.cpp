@@ -289,6 +289,11 @@ void RememberedSet::FlipForMinor()
     ZRememberedSet::flip();
 }
 
+size_t RememberedSet::MoveInPlaceSlots(const std::vector<RememberedSet::InPlaceSlot>&, MAddress, MAddress, size_t)
+{
+    return 0;
+}
+
 
 void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
 {

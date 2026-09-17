@@ -47,11 +47,9 @@ public:
     void VisitRememberedPages(A&&...) {}
     template<typename... A>
     size_t TransferObjectSlots(A&&...) { return 0; }
-    template<typename... A>
-    size_t TakeInPlaceSlots(A&&...) { return 0; }
-    template<typename... A>
-    size_t MoveInPlaceSlots(A&&...) { return 0; }
     struct InPlaceSlot {};
+    size_t TakeInPlaceSlots(MAddress, MAddress, std::vector<InPlaceSlot>&) { return 0; }
+    size_t MoveInPlaceSlots(const std::vector<InPlaceSlot>& takenSlots, MAddress from, MAddress to, size_t objectSize);
     std::unordered_set<MAddress> Snapshot() const { return {}; }
     size_t ClearBuffer(int) { return 0; }
 
