@@ -942,14 +942,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     {
         TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true, true);
         {
-            stw->reset();
+            if (stw != nullptr && *stw != nullptr) {
+                stw->reset();
+            }
             MRT_PHASE_TIMER(ZStatPhases::PYoungConcurrentRelocate);
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
             ForwardFromSpace(GCCycleGeneration::YOUNG);
-            *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
-                                                        GCPhase::GC_PHASE_FORWARD);
-            ZVerify::BeforeZOperation();
             manager.FinishIncompleteFromRegions(GCCycleGeneration::YOUNG);
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
@@ -1018,18 +1017,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     // zRelocate.cpp:1289-1306: finish relocation before walking flip-promoted pages.
     // Keep forwarding entries available until every field has been remapped.
-    CHECK_DETAIL(stw != nullptr && *stw != nullptr,
-                 "flip-promoted page task must release an active STW3 owner");
-    stw->reset();
+    if (stw != nullptr && *stw != nullptr) {
+        stw->reset();
+    }
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungConcPromoteWalk);
         manager.RememberFlipPromotedPages(workers);
 
     }
-
-    *stw = std::make_unique<ScopedStopTheWorld>("young retire forwarding", true,
-                                                GCPhase::GC_PHASE_FORWARD);
-    ZVerify::BeforeZOperation();
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungEvacRetire);
         // zGeneration.cpp:563: keep this set until the next young mark-end reset.

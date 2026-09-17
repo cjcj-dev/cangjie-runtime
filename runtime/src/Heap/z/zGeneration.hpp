@@ -18,9 +18,9 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSet.hpp"
 #include "Heap/z/zRemembered.hpp"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zRelocate.hpp"
 namespace MapleRuntime {
-class ZMark;
-class ZRelocate;
 class ZRelocationSetSelector;
 enum class zaddress : Uptr;
 struct TenuringInputs;
@@ -62,10 +62,10 @@ public:
     static ZGeneration* generation(ZGenerationId id);
     uint32_t seqnum() const;
     GCCycleSnapshot Snapshot() const;
-    ZMark& Mark() { return *mark; }
-    const ZMark& Mark() const { return *mark; }
-    ZMark* MarkPtr() { return mark.get(); }
-    const ZMark* MarkPtr() const { return mark.get(); }
+    ZMark& Mark() { return mark; }
+    const ZMark& Mark() const { return mark; }
+    ZMark* MarkPtr() { return &mark; }
+    const ZMark* MarkPtr() const { return &mark; }
     enum class Phase { Mark, MarkComplete, Relocate };
     void set_phase(Phase new_phase);
     void log_phase_switch(Phase from, Phase to);
@@ -115,7 +115,7 @@ public:
     ZForwardingTable& forwarding_table() { return _forwarding_table; }
     const ZForwardingTable& forwarding_table() const { return _forwarding_table; }
     ZRelocationSet& relocation_set() { return _relocation_set; }
-    ZRelocate& relocate() { return *_relocate; }
+    ZRelocate& relocate() { return _relocate; }
     ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
     void reset_relocation_set();
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
@@ -125,7 +125,8 @@ public:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
 #endif
-    std::unique_ptr<ZMark> mark;
+    ZMark mark;
+    const ZGenerationId _id;
     const GCCycleGeneration _cycle;
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
@@ -148,7 +149,7 @@ public:
     bool active = false;
     ZForwardingTable _forwarding_table;
     ZRelocationSet _relocation_set;
-    std::unique_ptr<ZRelocate> _relocate;
+    ZRelocate _relocate;
     ZRemembered _remembered;
 };
 
