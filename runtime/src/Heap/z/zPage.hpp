@@ -770,7 +770,10 @@ private:
         std::atomic<int32_t> copyInflight{ 0 };
         alignas(8) char routeInfoPad[24]{};
         uint32_t nextRegionIdx0;
-        AtomicBitField<uint16_t> regionStateBitField;
+        union {
+            uint8_t unusedRegionStatePad;
+            AtomicBitField<uint16_t> regionStateBitField;
+        };
         std::atomic<uint64_t> routeStateSnapshot{ 0 };
         RegionLifeId ghostLifeId = 0;
         RwLock rwLock;
