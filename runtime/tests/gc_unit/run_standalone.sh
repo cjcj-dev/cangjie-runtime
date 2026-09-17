@@ -295,6 +295,7 @@ MAIN_SOURCES=(
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"
+  "$SRC/test_zRememberedSet.cpp"
   "$SRC/test_zList.cpp"
   "$SRC/test_region_list.cpp"
   "$SRC/test_zArray.cpp"

@@ -15,6 +15,7 @@ set(GC_UNIT_SOURCES
     test_colour_address.cpp
     test_zBitField.cpp
     test_zBitMap.cpp
+    test_zRememberedSet.cpp
     test_zList.cpp
     test_region_list.cpp
     test_zArray.cpp
