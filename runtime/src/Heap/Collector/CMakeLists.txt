@@ -8,7 +8,6 @@ set(SRC_LIST
     "../z/zBreakpoint.cpp"
     "../z/concurrentGCBreakpoints.cpp"
     "../z/zAbort.cpp"
-    "../z/zMetronome.cpp"
     "zRelocate.cpp"
 
     "../z/zHeapIterator.cpp"

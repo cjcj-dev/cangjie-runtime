@@ -429,6 +429,8 @@ void CollectorResources::StartGCThreads()
         // zArguments.cpp:67-81: ConcGCThreads is the per-generation maximum and
         // sizes every ZPerWorker (zValue.inline.hpp:108-110); set before workers.
         ConcGCThreads = static_cast<uint32_t>(concurrentGcThreadCount);
+        ZYoungGCThreads = ConcGCThreads;
+        ZOldGCThreads = ConcGCThreads;
         VLOG(REPORT,
              "concurrent gc thread count %d, active processor count %u, affinity detected %d, region bytes %zu",
              concurrentGcThreadCount, activeProcessorCount, affinityDetected, regionBytes);

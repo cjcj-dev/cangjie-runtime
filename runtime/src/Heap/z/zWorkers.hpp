@@ -53,6 +53,7 @@ public:
 
     // Worker resizing
     std::mutex* resizing_lock();
+    ZStatWorkers* stat_workers() { return _stats; }
     void request_resize_workers(uint32_t nworkers);
 
     bool should_worker_resize();

@@ -12,8 +12,10 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zStat.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "Heap/z/z_globals.hpp"
 
 namespace MapleRuntime {
@@ -91,14 +93,14 @@ bool ZDirector::wait_for_tick()
     return !resources.directorStopped;
 }
 
-static uint32_t young_gc_threads(const ZDirectorStats& stats)
+static uint32_t young_gc_threads(const ZDirectorStats&)
 {
-    return stats.conc_gc_threads == 0 ? 1 : stats.conc_gc_threads;
+    return ZYoungGCThreads == 0 ? 1 : ZYoungGCThreads;
 }
 
-static uint32_t old_gc_threads(const ZDirectorStats& stats)
+static uint32_t old_gc_threads(const ZDirectorStats&)
 {
-    return young_gc_threads(stats);
+    return ZOldGCThreads == 0 ? 1 : ZOldGCThreads;
 }
 
 static bool rule_minor_timer(const ZDirectorStats& stats)
@@ -261,19 +263,25 @@ static bool is_major_urgent(const ZDirectorStats& stats)
 
 static bool rule_minor_allocation_rate(const ZDirectorStats& stats)
 {
+    if (ZCollectionIntervalOnly) {
+        return false;
+    }
     if (stats.allocation_stalling) {
         return false;
     }
     if (is_young_small(stats)) {
         return false;
     }
-    if (rule_soft_minor_allocation_rate_dynamic(stats, 0.0, 0.0).cause() != GC_REASON_INVALID) {
-        return true;
+    if (UseDynamicNumberOfGCThreads) {
+        if (rule_soft_minor_allocation_rate_dynamic(stats, 0.0, 0.0).cause() != GC_REASON_INVALID) {
+            return true;
+        }
+        if (rule_hard_minor_allocation_rate_dynamic(stats, 0.0, 0.0).cause() != GC_REASON_INVALID) {
+            return true;
+        }
+        return false;
     }
-    if (rule_hard_minor_allocation_rate_dynamic(stats, 0.0, 0.0).cause() != GC_REASON_INVALID) {
-        return true;
-    }
-    return false;
+    return rule_minor_allocation_rate_static(stats);
 }
 
 static bool rule_minor_high_usage(const ZDirectorStats& stats)
@@ -371,6 +379,12 @@ static double calculate_young_to_old_worker_ratio(const ZDirectorStats& stats)
 
 static bool rule_major_proactive(const ZDirectorStats& stats)
 {
+    if (ZCollectionIntervalOnly) {
+        return false;
+    }
+    if (!ZProactive) {
+        return false;
+    }
     if (stats.old_stats.cycle.warmupCycles < 3) {
         return false;
     }
@@ -433,30 +447,39 @@ struct ZWorkerCounts {
     uint32_t old_workers;
 };
 
+static uint32_t clamp_workers(uint32_t count, uint32_t hi)
+{
+    const uint32_t cap = hi == 0 ? 1 : hi;
+    if (count < 1) {
+        return 1;
+    }
+    return count > cap ? cap : count;
+}
+
 static ZWorkerCounts select_worker_threads(const ZDirectorStats& stats, uint32_t young_workers,
     ZWorkerSelectionType type)
 {
-    const uint32_t cap = young_gc_threads(stats);
     const uint32_t active_young_workers = stats.young_stats.resize.nworkers_current;
     const uint32_t active_old_workers = stats.old_stats.resize.nworkers_current;
     if (stats.allocation_stalling) {
-        return {cap, cap};
+        return {ZYoungGCThreads, ZOldGCThreads};
     }
-    if (active_young_workers + active_old_workers > cap) {
+    if (active_young_workers + active_old_workers > ConcGCThreads) {
         return {active_young_workers, active_old_workers};
     }
     const double young_to_old_ratio = calculate_young_to_old_worker_ratio(stats);
-    const auto clamp_u = [cap](double count) {
-        return static_cast<uint32_t>(std::max(1.0, std::min(count, static_cast<double>(cap))));
-    };
-    uint32_t old_workers = clamp_u(young_workers * young_to_old_ratio);
-    if (type != ZWorkerSelectionType::normal && old_workers + young_workers > cap) {
-        const uint32_t young_workers_clamped = clamp_u(cap / (1.0 + young_to_old_ratio));
-        const uint32_t old_workers_clamped = std::max(1u, cap - young_workers_clamped);
+    uint32_t old_workers = clamp_workers(static_cast<uint32_t>(young_workers * young_to_old_ratio), ZOldGCThreads);
+    if (type != ZWorkerSelectionType::normal && old_workers + young_workers > ConcGCThreads) {
+        const double old_ratio = young_to_old_ratio / (1.0 + young_to_old_ratio);
+        const double young_ratio = 1.0 - old_ratio;
+        const uint32_t young_workers_clamped =
+            clamp_workers(static_cast<uint32_t>(ConcGCThreads * young_ratio), ZYoungGCThreads);
+        const uint32_t old_workers_clamped =
+            clamp_workers(ConcGCThreads - young_workers_clamped, ZOldGCThreads);
         if (type == ZWorkerSelectionType::start_major) {
             old_workers = old_workers_clamped;
-            young_workers = clamp_u(std::max(old_workers, young_workers));
-        } else {
+            young_workers = clamp_workers(std::max(old_workers, young_workers), ZYoungGCThreads);
+        } else if (type == ZWorkerSelectionType::minor_during_old) {
             young_workers = young_workers_clamped;
             old_workers = old_workers_clamped;
         }
@@ -466,6 +489,9 @@ static ZWorkerCounts select_worker_threads(const ZDirectorStats& stats, uint32_t
 
 static void adjust_gc(CollectorResources& resources, const ZDirectorStats& stats)
 {
+    if (!UseDynamicNumberOfGCThreads) {
+        return;
+    }
     if (!stats.young_stats.resize.is_active) {
         return;
     }
@@ -478,7 +504,7 @@ static void adjust_gc(CollectorResources& resources, const ZDirectorStats& stats
     if (desired_young_workers > stats.young_stats.resize.nworkers_current) {
         const uint32_t needed_young_increase = desired_young_workers - stats.young_stats.resize.nworkers_current;
         desired_young_workers = std::min(stats.young_stats.resize.nworkers_current + needed_young_increase * 2,
-            young_gc_threads(stats));
+            ZYoungGCThreads);
     }
     const ZWorkerSelectionType type = stats.old_stats.resize.is_active ? ZWorkerSelectionType::minor_during_old :
                                                                        ZWorkerSelectionType::normal;
@@ -494,6 +520,9 @@ static void adjust_gc(CollectorResources& resources, const ZDirectorStats& stats
 
 static ZWorkerCounts initial_workers(const ZDirectorStats& stats, ZWorkerSelectionType type)
 {
+    if (!UseDynamicNumberOfGCThreads) {
+        return {ZYoungGCThreads, ZOldGCThreads};
+    }
     const ZDriverRequest soft_request = rule_soft_minor_allocation_rate_dynamic(stats, 0.0, 0.0);
     const ZDriverRequest hard_request = rule_hard_minor_allocation_rate_dynamic(stats, 0.0, 0.0);
     const uint32_t young_workers =
@@ -537,13 +566,17 @@ static bool start_gc(CollectorResources& resources, const ZDirectorStats& stats)
     return false;
 }
 
-static ZWorkerResizeStats sample_worker_resize_stats(ZWorkers& workers)
+static ZWorkerResizeStats sample_worker_resize_stats(const ZStatCycleStats& cycle_stats,
+    ZStatWorkersStats worker_stats, ZWorkers* workers)
 {
-    std::lock_guard<std::mutex> locker(*workers.resizing_lock());
-    if (!workers.is_active()) {
+    std::lock_guard<std::mutex> locker(*workers->resizing_lock());
+    if (!workers->is_active()) {
         return {};
     }
-    return {true, 0.0, 0.0, workers.active_workers()};
+    const double parallel_gc_duration_passed = worker_stats._accumulated_duration;
+    const double parallel_gc_time_passed = worker_stats._accumulated_time;
+    const double serial_gc_time_passed = cycle_stats.durationSinceStart - parallel_gc_duration_passed;
+    return {true, serial_gc_time_passed, parallel_gc_time_passed, workers->active_workers()};
 }
 
 static ZDirectorStats sample_stats(CollectorResources& resources, uint64_t now, bool minorBusy, bool majorBusy,
@@ -563,8 +596,12 @@ static ZDirectorStats sample_stats(CollectorResources& resources, uint64_t now, 
     stats.heap.total_collections = collectionStats.totalCollections;
     stats.young_stats.cycle = collector.GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
     stats.old_stats.cycle = collector.GetZGeneration(ZGenerationId::old).CycleStats().Stats(now);
-    stats.young_stats.resize = sample_worker_resize_stats(resources.GetWorkers(ZGenerationId::young));
-    stats.old_stats.resize = sample_worker_resize_stats(resources.GetWorkers(ZGenerationId::old));
+    stats.young_stats.workers = collector.GetZGeneration(ZGenerationId::young).StatWorkers()->stats();
+    stats.old_stats.workers = collector.GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
+    stats.young_stats.resize = sample_worker_resize_stats(stats.young_stats.cycle, stats.young_stats.workers,
+        &resources.GetWorkers(ZGenerationId::young));
+    stats.old_stats.resize = sample_worker_resize_stats(stats.old_stats.cycle, stats.old_stats.workers,
+        &resources.GetWorkers(ZGenerationId::old));
     stats.young_stats.stat_heap = ZStat::YoungHeap().Stats();
     stats.old_stats.stat_heap = ZStat::OldHeap().Stats();
     stats.young_stats.general.used = regions.GetYoungAllocatedSize();

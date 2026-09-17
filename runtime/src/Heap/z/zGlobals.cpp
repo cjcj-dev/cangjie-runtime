@@ -23,4 +23,6 @@ namespace MapleRuntime {
 // heap comes up. Until CollectorResources::Init publishes the concurrent budget,
 // one worker is the minimum any per-worker storage must hold.
 uint32_t ConcGCThreads = 64;
+uint32_t ZYoungGCThreads = 64;
+uint32_t ZOldGCThreads = 64;
 }

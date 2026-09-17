@@ -212,7 +212,7 @@ ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
     std::lock_guard<std::mutex> guard(lock);
     return {warmupCycles, static_cast<double>(now - std::min(now, end)) / SECOND_TO_NANO_SECOND,
             serial.average, std::sqrt(serial.variance), parallel.average, std::sqrt(parallel.variance),
-            lastActiveWorkers};
+            lastActiveWorkers, static_cast<double>(now - start) / SECOND_TO_NANO_SECOND};
 }
 
 ZStatCollection& ZStat::Collections()

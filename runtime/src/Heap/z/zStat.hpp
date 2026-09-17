@@ -65,6 +65,7 @@ struct ZStatCycleStats {
     double parallelTime = 0;
     double parallelTimeSd = 0;
     double lastActiveWorkers = 1;
+    double durationSinceStart = 0;
 };
 
 class ZStatCycle {
