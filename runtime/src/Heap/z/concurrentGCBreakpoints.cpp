@@ -6,23 +6,8 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Common/ScopedObjectAccess.h"
-#include "Mutator/Handshake.h"
-#include <chrono>
 #include <cstring>
 namespace MapleRuntime {
-void ConcurrentGCBreakpoints::WaitHandshakeAware(std::unique_lock<std::mutex>& lock,
-                                                 const std::function<bool()>& blocked)
-{
-    while (blocked()) {
-        lock.unlock();
-        Handshake::Current().process_by_self();
-        lock.lock();
-        if (!blocked()) {
-            return;
-        }
-        (void)condition.wait_for(lock, std::chrono::milliseconds(1));
-    }
-}
 std::mutex ConcurrentGCBreakpoints::mutex;
 std::condition_variable ConcurrentGCBreakpoints::condition;
 const char* ConcurrentGCBreakpoints::runTo = nullptr;
@@ -47,7 +32,9 @@ void ConcurrentGCBreakpoints::RunToIdleImpl(bool acquiring)
     ResetRequestState();
     wantIdle = true;
     condition.notify_all();
-    WaitHandshakeAware(lock, [] { return !idle; });
+    while (!idle) {
+        condition.wait(lock);
+    }
 }
 void ConcurrentGCBreakpoints::AcquireControl() { RunToIdleImpl(true); }
 void ConcurrentGCBreakpoints::RunToIdle() { RunToIdleImpl(false); }
@@ -72,18 +59,29 @@ bool ConcurrentGCBreakpoints::RunTo(const char* name)
         Heap::GetHeap().GetCollectorResources().RequestGC(GC_REASON_WB_BREAKPOINT, true);
         lock.lock();
     }
-    WaitHandshakeAware(lock, [] { return !wantIdle && !stopped; });
-    return !wantIdle && stopped;
+    for (;;) {
+        if (wantIdle) {
+            return false;
+        }
+        if (stopped) {
+            return true;
+        }
+        condition.wait(lock);
+    }
 }
 void ConcurrentGCBreakpoints::At(const char* name)
 {
     CHECK(name != nullptr);
     std::unique_lock<std::mutex> lock(mutex);
-    if (runTo == nullptr || std::strcmp(runTo, name) != 0) return;
+    if (runTo == nullptr || std::strcmp(runTo, name) != 0) {
+        return;
+    }
     runTo = nullptr;
     stopped = true;
     condition.notify_all();
-    WaitHandshakeAware(lock, [] { return stopped; });
+    while (stopped) {
+        condition.wait(lock);
+    }
 }
 void ConcurrentGCBreakpoints::NotifyIdleToActive()
 {
