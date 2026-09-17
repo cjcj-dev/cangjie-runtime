@@ -390,6 +390,7 @@ struct ExportForeignGraph {
 
 void RunYoungWeakVariant(size_t helpers)
 {
+    WorkerFixture worker(0);
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
 
     MutatorManager mutatorManager;
@@ -448,6 +449,7 @@ void RunYoungWeakVariant(size_t helpers)
 
 void RunYoungWeakRemsetFlow()
 {
+    WorkerFixture worker(0);
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
 
     MutatorManager mutatorManager;
@@ -519,6 +521,7 @@ enum class MajorRootFamily {
 
 void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t helpers = 0)
 {
+    WorkerFixture worker(0);
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     if (runtimeEntry) {
     }
