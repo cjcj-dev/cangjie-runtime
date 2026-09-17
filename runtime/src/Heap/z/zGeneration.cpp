@@ -519,7 +519,6 @@ void WCollector::RunYoungCollection()
     // flippromo: open broad-vs-product window for regions demoted last minor.
 
     youngStackScanEpoch = StackWatermark::epoch_id();
-    Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_ENUM);
     youngStats = stats;
     youngStartNs = start;
 }

@@ -7,6 +7,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zDriver.hpp"
@@ -161,7 +162,7 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
     auto& collector = Heap::GetHeap().GetCollector();
     if (!verifyWeaks && value == zpointer::null) {
         // zVerify.cpp:133-136: raw null is only possible when flip promoting.
-        CHECK_DETAIL(collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).phase == GC_PHASE_MARK_COMPLETE,
+        CHECK_DETAIL(ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark_complete(),
                      "Raw null requires young mark complete at %p", &field);
         ZPage* holder = Heap::page(reinterpret_cast<MAddress>(base));
         // ZPage::is_allocating (zPage.inline.hpp:180-182).
@@ -194,7 +195,7 @@ void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
                      MutatorManager::Instance().StoreBarrierBufferContains(reinterpret_cast<MAddress>(&field)),
                      "Missing remembered field at %p", &field);
     } else {
-        const bool youngMarking = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).phase == GC_PHASE_TRACE;
+        const bool youngMarking = ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark();
         if (!young || !youngMarking) {
             CHECK_DETAIL(ZPointer::is_marked_old(to_zpointer(raw(value))),
                          "Unmarked old oop at %p", &field);
@@ -225,9 +226,8 @@ void ZVerify::Objects(bool verifyWeaks)
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
     if (ZAbort::should_abort()) { return; }
-    const auto young = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
-    const auto old = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
-    DCHECK(young.phase == GC_PHASE_MARK_COMPLETE || old.phase == GC_PHASE_MARK_COMPLETE);
+    DCHECK((ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark_complete()) ||
+           (ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark_complete()));
     threads_start_processing();
     BaseObject* visitedBase = nullptr;
     const void* visitedSlot = nullptr;
@@ -348,8 +348,7 @@ void ZVerify::AfterScan(ZForwarding* forwarding)
 {
     if (!ZVerifyRemembered || forwarding == nullptr ||
         ZAbort::should_abort()) { return; }
-    const auto phase = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD).phase;
-    if ((phase != GC_PHASE_FORWARD && phase != GC_PHASE_PREFORWARD) ||
+    if ((ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_relocate()) ||
         !forwarding->relocated_remembered_fields_is_concurrently_scanned()) { return; }
     AfterRelocationInternal(forwarding);
 }

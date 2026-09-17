@@ -353,6 +353,7 @@ public:
     std::atomic<bool> worldStopped = { false };
     std::list<Mutator*> undoneLightSyncMutators;
     GCPhase lightSyncGCPhase;
+    bool lightSyncDidPhase = false;
 
     // Runtime mutators are not necessarily owned by a scheduler CJThread, so
     // keep them in the same participant inventory explicitly.

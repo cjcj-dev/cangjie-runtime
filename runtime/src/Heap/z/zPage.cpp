@@ -7,6 +7,7 @@
 
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zAddress.inline.hpp"
+#include "Heap/z/zGeneration.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -201,11 +202,9 @@ void ZPage::verify_live(uint32_t liveObjects, size_t liveBytes, bool inPlace) co
             ? ZGenerationId::young : ZGenerationId::old;
         MRT_ASSERT(map->is_marked(id), "Should be marked");
         (void)id;
-        const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase(
-            static_cast<GCCycleGeneration>(from->owner));
-        MRT_ASSERT(phase != GC_PHASE_ENUM && phase != GC_PHASE_TRACE &&
-                   phase != GC_PHASE_CLEAR_SATB_BUFFER, "Wrong phase");
-        (void)phase;
+        ZGeneration* generation = ZGeneration::generation(id);
+        MRT_ASSERT(generation == nullptr || !generation->is_phase_mark(), "Wrong phase");
+        (void)generation;
     }
     CHECK_DETAIL(liveObjects == map->live_objects(), "Invalid number of live objects");
     CHECK_DETAIL(liveBytes == map->live_bytes(), "Invalid number of live bytes");

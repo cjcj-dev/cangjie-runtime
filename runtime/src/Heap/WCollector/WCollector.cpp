@@ -139,9 +139,8 @@ void WCollector::ResolveCycleRef()
             break;
         }
 
-        auto phase = GetGCPhase(GCCycleGeneration::OLD);
         static constexpr size_t taskNum = 100;
-        if (phase == GC_PHASE_PREFORWARD || i >= taskNum) {
+        if ((ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_relocate()) || i >= taskNum) {
             cycleLock.unlock();
             CJ_MRT_RolveCycleRef();
             return;
@@ -161,7 +160,7 @@ void WCollector::ResolveCycleRef()
             if (it == cycleRefWorkStack.end() || externIndex >= it->second.size()) {
                 break;
             }
-            if (GetGCPhase(GCCycleGeneration::OLD) == GC_PHASE_PREFORWARD) {
+            if (ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_relocate()) {
                 cycleLock.unlock();
                 CJ_MRT_RolveCycleRef();
                 return;

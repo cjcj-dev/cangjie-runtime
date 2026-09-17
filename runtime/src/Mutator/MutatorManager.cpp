@@ -660,6 +660,10 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
         worldStopped.store(true, std::memory_order_release);
     }
 
+    lightSyncDidPhase = syncGCPhase;
+    if (!syncGCPhase) {
+        return;
+    }
     DLOG(GCPHASE, "transition gc: %s(%u) -> %s(%u)",
          Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)), Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD),
          Collector::GetGCPhaseName(phase), phase);
@@ -695,7 +699,10 @@ void MutatorManager::StopLightSync() noexcept
 #else
     (void)MapleRuntime::Futex(GetSyncFutexWord(), FUTEX_WAKE, INT_MAX);
 #endif
-    EnsurePhaseTransition(lightSyncGCPhase, undoneLightSyncMutators);
+    if (lightSyncDidPhase) {
+        EnsurePhaseTransition(lightSyncGCPhase, undoneLightSyncMutators);
+        lightSyncDidPhase = false;
+    }
     MutatorManagementWUnlock();
     // Release syncMutex to allow other thread call lsync.
     syncMutex.unlock();

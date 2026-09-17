@@ -173,8 +173,7 @@ void ZRemembered::oops_do_forwarded_via_containing(const std::vector<ZRemembered
 bool ZRemembered::should_scan_page(ZPage* page) const
 {
     Collector& collector = Heap::GetHeap().GetCollector();
-    const GCPhase phase = collector.GetGCPhase(GCCycleGeneration::OLD);
-    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+    if (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_relocate()) {
         return true;
     }
     ZForwarding* forwarding = collector.GetZGeneration(GCCycleGeneration::OLD).forwarding(
@@ -192,8 +191,7 @@ bool ZRemembered::scan_page_and_clear_remset(ZPage* page) const
 {
     Collector& collector = Heap::GetHeap().GetCollector();
     const bool can_trust_live_bits =
-        page->is_relocatable() && collector.GetGCPhase(GCCycleGeneration::OLD) != GCPhase::GC_PHASE_ENUM &&
-        collector.GetGCPhase(GCCycleGeneration::OLD) != GCPhase::GC_PHASE_TRACE;
+        page->is_relocatable() && (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_mark());
     bool result = false;
     if (!can_trust_live_bits) {
         page->oops_do_remembered([&](volatile zpointer* p) { result |= scan_field(p); });
@@ -265,9 +263,7 @@ bool ZRemsetTableIterator::next(ZRemsetTableEntry* entry_addr)
             continue;
         }
         ZForwarding* forwarding = nullptr;
-        Collector& collector = Heap::GetHeap().GetCollector();
-        const GCPhase phase = collector.GetGCPhase(GCCycleGeneration::OLD);
-        if (phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD) {
+        if (ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_relocate()) {
             forwarding = _old_forwarding_table->at(page_index);
         }
         ZPage* page = _page_table->at(page_index);

@@ -324,7 +324,7 @@ bool WCollector::Preforward()
         // concurrent root-preforward work below. ScopedLightSync emits its matching
         // rec=stw record, including rendezvous and held time.
         ZJNICritical::block();
-        ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
+        ScopedLightSync scopedLightSync("Preforward", false);
         ZVerify::BeforeZOperation();
         // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
         // ScopedLightSync first. Destruction order also closes this timer before mutators
@@ -1287,8 +1287,9 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& 
 {
     // RelocateObjectInner is for relocate phase only. relocate_or_remap
     // is reachable from barriers in other phases, so screen here.
-    GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
-    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+    ZGeneration* generation = ObjectGeneration(obj) == Generation::Young ?
+        static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old());
+    if (generation == nullptr || !generation->is_phase_relocate()) {
         return nullptr;
     }
     // zForwarding.cpp:86-108: a claimed page waits for its task before
@@ -1300,8 +1301,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& 
     // SetGCPhase publishes before handshake, so a mutator that retained across
     // FORWARD→IDLE must not copy. Release and let
     // the existing FindToVersion / wait legs consume the published table.
-    phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
-    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+    if (generation == nullptr || !generation->is_phase_relocate()) {
         lease.Release();
         return nullptr;
     }

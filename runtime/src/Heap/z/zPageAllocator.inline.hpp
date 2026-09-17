@@ -8,6 +8,7 @@
 #define MRT_REGIONMANAGER_INLINE_H
 
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zGeneration.hpp"
 
 namespace MapleRuntime {
 
@@ -75,8 +76,9 @@ inline void RegionManager::AddRawPointerObject(BaseObject* obj)
         for (;;) {
             if (fromRegionList.TryDeleteRegion(region) ||
                 garbageRegionList.TryDeleteRegion(region)) {
-                GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-                CHECK(phase != GCPhase::GC_PHASE_FORWARD && phase != GCPhase::GC_PHASE_PREFORWARD);
+                ZGeneration* generation = region->IsYoungRegion() ? static_cast<ZGeneration*>(ZGeneration::young())
+                                                                  : static_cast<ZGeneration*>(ZGeneration::old());
+                CHECK(generation == nullptr || !generation->is_phase_relocate());
                 rawPointerPinnedRegionList.PrependRegion(region);
                 break;
             }

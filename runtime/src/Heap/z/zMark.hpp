@@ -313,9 +313,10 @@ public:
 
     void ResurrectExportObject(BaseObject* obj)
     {
-        auto phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
+        ZGeneration* generation = ObjectGeneration(obj) == Generation::Young ?
+            static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old());
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+        if (generation == nullptr || !generation->is_phase_relocate()) {
             resurrectedExportObjectes.erase(obj);
             resurrectedExportObjectes.insert(ValueRoot(ResolveCurrentValueRoot(
                 obj, &resurrectedExportObjectes, ObjectGeneration(obj), ForwardingStage::IncomingNew),
