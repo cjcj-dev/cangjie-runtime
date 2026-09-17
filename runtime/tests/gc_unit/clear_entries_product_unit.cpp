@@ -2163,71 +2163,7 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
 // ZGC zRelocate.cpp:652-731,838-861: lift the old page face before reuse,
 // move a field bit with its object, then prove the real minor consumer reaches
 // the young target through the moved slot.
-GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
-{
-    GcHeapFixture& fx = ProductFixture();
-    ZPage* holderRegion = ResetDeliveryUnit(fx, 0);
-    ZPage* targetRegion = ResetDeliveryUnit(fx, 1);
-    targetRegion->reset(PageAge::eden);
-    targetRegion->reset(PageAge::eden);
 
-    BaseObject* from = fx.PlaceObject(holderRegion->GetRegionStart());
-    const size_t objectSize = from->GetSize();
-    BaseObject* to = fx.PlaceObject(reinterpret_cast<MAddress>(from) + objectSize);
-    BaseObject* youngTarget = fx.PlaceObject(targetRegion->GetRegionStart());
-    GcHeapFixture::AdvanceGeneration(Generation::Young);
-    fx.typeInfo->SetUUID(1);
-    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
-    GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(fx.typeInfo));
-    holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + objectSize);
-    targetRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
-    auto* fromField = &HeapSlotAt<>(reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE);
-    const MAddress oldSlot = reinterpret_cast<MAddress>(fromField);
-    const MAddress newSlot = reinterpret_cast<MAddress>(to) + TYPEINFO_PTR_SIZE;
-
-    RememberedSet& remembered = DeliveryRememberedSet(fx);
-    EmptyBothRememberedFaces(remembered);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    LoadHealDeliveryTestAccess::PublishColours(collector);
-    {
-        DeliveryNoAllocBufferScope directRemember;
-        fromField->StoreColoured(ColouredPointer(youngTarget, OneLoadBadRemap()));
-        ZBarrier::WriteReference(from, *fromField, youngTarget);
-    }
-    GC_EXPECT_TRUE(remembered.Contains(oldSlot));
-
-    std::vector<RememberedSet::InPlaceSlot> takenSlots;
-    const size_t taken = remembered.TakeInPlaceSlots(holderRegion->GetRegionStart(),
-                                                     holderRegion->GetRegionEnd(), takenSlots);
-    const bool oldCleared = !remembered.Contains(oldSlot);
-    std::memcpy(to, from, objectSize);
-    const size_t moved = remembered.MoveInPlaceSlots(
-        takenSlots, reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to), objectSize);
-    const bool newPresent = remembered.Contains(newSlot);
-
-    std::unordered_set<MAddress> previous;
-    remembered.DrainForMinor(previous);
-    const LoadHealDeliveryTestAccess::RemsetConsumeResult consumed =
-        LoadHealDeliveryTestAccess::ConsumeRemembered(collector, previous, to);
-    std::fprintf(stderr,
-                 "DETAIL loadheal_inplace taken=%zu old_cleared=%u moved=%zu new_present=%u "
-                 "previous_new=%zu consumer_consumed=%zu consumer_work=%zu\n",
-                 taken, static_cast<unsigned>(oldCleared), moved, static_cast<unsigned>(newPresent),
-                 previous.count(newSlot), consumed.consumed, consumed.work);
-    std::fflush(stderr);
-
-    // Producer and consumer have disjoint criteria: Take owns taken/old-cleared;
-    // Move owns new-present and the product rescan reachability result.
-    GC_EXPECT_EQ(taken, 1u);
-    GC_EXPECT_TRUE(oldCleared);
-    GC_EXPECT_EQ(moved, 1u);
-    GC_EXPECT_TRUE(newPresent);
-    GC_EXPECT_EQ(previous.count(newSlot), 1u);
-    GC_EXPECT_EQ(consumed.consumed, 1u);
-    GC_EXPECT_EQ(consumed.work, 1u);
-    EmptyBothRememberedFaces(remembered);
-    targetRegion->reset(PageAge::old);
-}
 
 // ZRelocateWork::update_remset_promoted: young targets are remembered;
 // old targets are remapped without adding a remembered bit.

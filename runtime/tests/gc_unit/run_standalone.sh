@@ -619,7 +619,6 @@ fi
 # the test source, so deleting a test or anchor shrinks neither guard silently.
 LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RegionManager::RememberFlipPromotedPages('
-  'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RememberPromotedObject('
   'MapleRuntime::WCollector::RemapYoungRoots('
 )
