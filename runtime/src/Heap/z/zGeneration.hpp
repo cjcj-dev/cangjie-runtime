@@ -108,7 +108,7 @@ public:
     GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
-    GCPhase GcPhase() const { return phase.load(std::memory_order_acquire); }
+    GCPhase GcPhase() const;
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value, uint64_t index = 0);
@@ -161,7 +161,6 @@ public:
     std::atomic<uint64_t> youngSequenceAtRelocateStart{ 0 };
     std::atomic<ZYoungType> youngType { ZYoungType::none };
     std::atomic<GCReason> reason { GC_REASON_USER };
-    std::atomic<GCPhase> phase { GC_PHASE_IDLE };
     ZGeneration::Phase _phase { ZGeneration::Phase::Relocate };
     std::atomic<size_t> _freed { 0 };
     std::atomic<size_t> _promoted { 0 };

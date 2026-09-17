@@ -1143,11 +1143,24 @@ namespace MapleRuntime {
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
+GCPhase ZGeneration::GcPhase() const
+{
+    if (!active) {
+        return GC_PHASE_IDLE;
+    }
+    if (_phase == Phase::Mark) {
+        return GC_PHASE_ENUM;
+    }
+    if (_phase == Phase::MarkComplete) {
+        return GC_PHASE_MARK_COMPLETE;
+    }
+    return GC_PHASE_FORWARD;
+}
+
 GCCycleSnapshot ZGeneration::Snapshot() const
 {
     std::lock_guard<std::mutex> lock(mutex);
-    return { _cycle, sequence, requestIndex, reason.load(std::memory_order_relaxed),
-             phase.load(std::memory_order_relaxed), active };
+    return { _cycle, sequence, requestIndex, reason.load(std::memory_order_relaxed), GcPhase(), active };
 }
 
 void ZGeneration::SelectReason(GCReason value, uint64_t index)
@@ -1168,8 +1181,13 @@ void ZGeneration::Begin(uint64_t index)
 
 void ZGeneration::PublishPhase(GCPhase value)
 {
-    std::lock_guard<std::mutex> lock(mutex);
-    phase.store(value, std::memory_order_release);
+    if (value == GC_PHASE_ENUM || value == GC_PHASE_TRACE || value == GC_PHASE_CLEAR_SATB_BUFFER) {
+        set_phase(Phase::Mark);
+    } else if (value == GC_PHASE_MARK_COMPLETE || value == GC_PHASE_POST_TRACE) {
+        set_phase(Phase::MarkComplete);
+    } else if (value == GC_PHASE_PREFORWARD || value == GC_PHASE_FORWARD) {
+        set_phase(Phase::Relocate);
+    }
 }
 
 void ZGeneration::log_phase_switch(Phase from, Phase to)
