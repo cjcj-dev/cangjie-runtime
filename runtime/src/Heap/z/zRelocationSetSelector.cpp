@@ -196,6 +196,22 @@ void ZRelocationSetSelector::select()
     _small.select();
 }
 
+void ZRelocationSetSelector::check_selected_relocatable() const
+{
+    auto check = [](const ZArray<ZPage*>* pages) {
+        if (pages == nullptr) {
+            return;
+        }
+        for (int i = 0; i < pages->length(); ++i) {
+            ZPage* page = pages->at(i);
+            CHECK_DETAIL(page->is_relocatable(),
+                         "selected page must be relocatable start=%#zx", page->GetRegionStart());
+        }
+    };
+    check(selected_small());
+    check(selected_medium());
+}
+
 ZRelocationSetSelectorStats ZRelocationSetSelector::stats() const
 {
     ZRelocationSetSelectorStats stats;
