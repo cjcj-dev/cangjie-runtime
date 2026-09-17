@@ -53,8 +53,9 @@ inline bool SlotPageRemembered(MapleRuntime::MAddress slot)
 
 struct RememberedSet {
     std::atomic<int> activeBuffer { 0 };
+    bool initialized = true;
     bool IsInitialized() const { return true; }
-    void Initialize(MAddress, size_t) {}
+    void Initialize(MAddress, size_t) { initialized = true; }
     bool Contains(MAddress slot) const { return SlotPageRemembered(slot); }
     void Record(MAddress slot)
     {
@@ -95,7 +96,13 @@ struct RememberedSet {
 
 enum class RemsetFilterReceiptReason : uint8_t { kNone=0, kStale=1, kDeadHolder=2, kNoOrigin=3, kBadTarget=4 };
 inline void NoteRemsetFilterTestReceipt(MAddress, RemsetFilterReceiptReason, bool) {}
-struct RemsetScanStats { size_t live=0; size_t consumed=0; };
+struct RemsetScanStats {
+    size_t live=0;
+    size_t consumed=0;
+    size_t recorded=0;
+    size_t skippedNotHeap=0;
+    size_t skippedWeak=0;
+};
 
 inline RememberedSet& HeapTestRemset()
 {
