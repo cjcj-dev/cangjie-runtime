@@ -350,8 +350,8 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
 void WCollector::TraceHeap()
 {
     ZBreakpoint::AtAfterMarkingStarted();
-    oldMarkWorkStack = NewWorkStack();
-    oldMarkForeignRoots = NewWorkStack();
+    oldMarkWorkStack.clear();
+    oldMarkForeignRoots.clear();
     WorkStack& workStack = oldMarkWorkStack;
     WorkStack& foreignStack = oldMarkForeignRoots;
     MarkingStacks::VerifyEmpty(workStack.size());
