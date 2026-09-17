@@ -56,7 +56,6 @@ namespace MapleRuntime {
 void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
-    TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
