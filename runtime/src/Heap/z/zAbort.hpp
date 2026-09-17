@@ -13,6 +13,7 @@ class ZAbort {
 public:
     static bool should_abort();
     static void abort();
+    static void reset();
 
 private:
     static std::atomic<bool> _should_abort;

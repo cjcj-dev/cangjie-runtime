@@ -40,13 +40,27 @@ struct GCCycleSnapshot {
 class WCollector;
 struct YoungCollectionStats;
 class ZGeneration;
+class ZGenerationYoung;
+class ZGenerationOld;
 
 class ZGeneration {
+protected:
+    static ZGenerationYoung* _young;
+    static ZGenerationOld* _old;
+
 public:
     explicit ZGeneration(GCCycleGeneration generation);
     ~ZGeneration();
     ZGeneration(const ZGeneration&) = delete;
     ZGeneration& operator=(const ZGeneration&) = delete;
+    ZGenerationId id() const;
+    ZGenerationIdOptional id_optional() const;
+    bool is_young() const;
+    bool is_old() const;
+    static ZGenerationYoung* young();
+    static ZGenerationOld* old();
+    static ZGeneration* generation(ZGenerationId id);
+    uint32_t seqnum() const;
     GCCycleSnapshot Snapshot() const;
     ZMark& Mark() { return *mark; }
     const ZMark& Mark() const { return *mark; }
@@ -54,6 +68,7 @@ public:
     const ZMark* MarkPtr() const { return mark.get(); }
     enum class Phase { Mark, MarkComplete, Relocate };
     void set_phase(Phase new_phase);
+    void log_phase_switch(Phase from, Phase to);
     bool is_phase_relocate() const { return _phase == Phase::Relocate; }
     bool is_phase_mark() const { return _phase == Phase::Mark; }
     bool is_phase_mark_complete() const { return _phase == Phase::MarkComplete; }
@@ -150,7 +165,7 @@ private:
 
 class ZGenerationYoung : public ZGeneration {
 public:
-    ZGenerationYoung() : ZGeneration(GCCycleGeneration::YOUNG) {}
+    ZGenerationYoung();
     void collect(WCollector& collector);
     void pause_mark_start(WCollector& collector);
     void concurrent_mark(WCollector& collector);
@@ -165,8 +180,19 @@ public:
 
 class ZGenerationOld : public ZGeneration {
 public:
-    ZGenerationOld() : ZGeneration(GCCycleGeneration::OLD) {}
+    ZGenerationOld();
     void collect(WCollector& collector);
+    void concurrent_mark(WCollector& collector);
+    bool pause_mark_end(WCollector& collector);
+    void concurrent_mark_continue(WCollector& collector);
+    void concurrent_mark_free();
+    void concurrent_process_non_strong_references(WCollector& collector);
+    void concurrent_reset_relocation_set();
+    void pause_verify(WCollector& collector);
+    void concurrent_select_relocation_set();
+    void concurrent_remap_young_roots(WCollector& collector);
+    void pause_relocate_start(WCollector& collector);
+    void concurrent_relocate(WCollector& collector);
 };
 
 }

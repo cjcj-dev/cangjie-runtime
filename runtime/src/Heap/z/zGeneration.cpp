@@ -32,6 +32,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zRelocationSetSelector.inline.hpp"
@@ -57,6 +58,32 @@
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
+ZGenerationYoung* ZGeneration::_young = nullptr;
+ZGenerationOld* ZGeneration::_old = nullptr;
+
+ZGenerationYoung::ZGenerationYoung() : ZGeneration(GCCycleGeneration::YOUNG) { _young = this; }
+ZGenerationOld::ZGenerationOld() : ZGeneration(GCCycleGeneration::OLD) { _old = this; }
+
+ZGenerationId ZGeneration::id() const
+{
+    return generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+}
+
+ZGenerationIdOptional ZGeneration::id_optional() const
+{
+    return static_cast<ZGenerationIdOptional>(id());
+}
+
+bool ZGeneration::is_young() const { return id() == ZGenerationId::young; }
+bool ZGeneration::is_old() const { return id() == ZGenerationId::old; }
+uint32_t ZGeneration::seqnum() const { return static_cast<uint32_t>(Sequence()); }
+ZGenerationYoung* ZGeneration::young() { return _young; }
+ZGenerationOld* ZGeneration::old() { return _old; }
+ZGeneration* ZGeneration::generation(ZGenerationId id)
+{
+    return id == ZGenerationId::young ? static_cast<ZGeneration*>(_young) : static_cast<ZGeneration*>(_old);
+}
+
 ZGeneration::ZGeneration(GCCycleGeneration generation)
     : mark(std::make_unique<ZMark>(ZMarkStripesMax,
           generation == GCCycleGeneration::YOUNG ? MarkingStacks::MarkingGeneration::YOUNG
@@ -259,14 +286,72 @@ class VM_ZOperation {
 public:
     virtual ~VM_ZOperation() = default;
     virtual bool do_operation() = 0;
+    virtual bool block_jni_critical() const { return false; }
     bool pause()
     {
-        ZJNICritical::block();
+        if (block_jni_critical()) {
+            ZJNICritical::block();
+        }
         ZVerify::BeforeZOperation();
         const bool success = do_operation();
-        ZJNICritical::unblock();
+        if (block_jni_critical()) {
+            ZJNICritical::unblock();
+        }
         return success;
     }
+};
+
+class VM_ZMarkStartYoung : public VM_ZOperation {
+public:
+    explicit VM_ZMarkStartYoung(WCollector& collector) : collector(collector) {}
+    bool do_operation() override
+    {
+        collector.RunYoungCollection();
+        return true;
+    }
+    bool block_jni_critical() const override { return true; }
+private:
+    WCollector& collector;
+};
+
+class VM_ZMarkStartYoungAndOld : public VM_ZOperation {
+public:
+    explicit VM_ZMarkStartYoungAndOld(WCollector& collector) : collector(collector) {}
+    bool do_operation() override
+    {
+        collector.RunYoungCollection();
+        return true;
+    }
+    bool block_jni_critical() const override { return true; }
+private:
+    WCollector& collector;
+};
+
+class VM_ZMarkEndYoung : public VM_ZOperation {
+public:
+    bool do_operation() override { return true; }
+};
+
+class VM_ZRelocateStartYoung : public VM_ZOperation {
+public:
+    bool do_operation() override { return true; }
+    bool block_jni_critical() const override { return true; }
+};
+
+class VM_ZMarkEndOld : public VM_ZOperation {
+public:
+    bool do_operation() override { return true; }
+};
+
+class VM_ZRelocateStartOld : public VM_ZOperation {
+public:
+    bool do_operation() override { return true; }
+    bool block_jni_critical() const override { return true; }
+};
+
+class VM_ZVerifyOld : public VM_ZOperation {
+public:
+    bool do_operation() override { return true; }
 };
 
 void WCollector::DoYoungGarbageCollection()
@@ -295,7 +380,13 @@ void ZGenerationYoung::collect(WCollector& collector)
 
 void ZGenerationYoung::pause_mark_start(WCollector& collector)
 {
-    collector.RunYoungCollection();
+    if (IsMajorRoots()) {
+        VM_ZMarkStartYoungAndOld op(collector);
+        (void)op.pause();
+    } else {
+        VM_ZMarkStartYoung op(collector);
+        (void)op.pause();
+    }
 }
 
 void ZGenerationYoung::concurrent_mark(WCollector&) {}
@@ -1046,8 +1137,15 @@ void ZGeneration::PublishPhase(GCPhase value)
     phase.store(value, std::memory_order_release);
 }
 
+void ZGeneration::log_phase_switch(Phase from, Phase to)
+{
+    (void)from;
+    (void)to;
+}
+
 void ZGeneration::set_phase(Phase new_phase)
 {
+    log_phase_switch(_phase, new_phase);
     _phase = new_phase;
 }
 
@@ -1101,50 +1199,80 @@ void WCollector::DoGarbageCollection(GCCycleGeneration generation)
 
 void ZGenerationOld::collect(WCollector& collector)
 {
-    collector.RunOldCollection();
+    DriverUnlocker unlocker(collector.collectorResources);
+    concurrent_mark(collector);
+    abortpoint();
+    while (!pause_mark_end(collector)) {
+        concurrent_mark_continue(collector);
+        abortpoint();
+    }
+    concurrent_mark_free();
+    abortpoint();
+    concurrent_process_non_strong_references(collector);
+    abortpoint();
+    concurrent_reset_relocation_set();
+    abortpoint();
+    pause_verify(collector);
+    concurrent_select_relocation_set();
+    abortpoint();
+    concurrent_remap_young_roots(collector);
+    abortpoint();
+    pause_relocate_start(collector);
+    concurrent_relocate(collector);
+}
+
+void ZGenerationOld::concurrent_mark(WCollector& collector)
+{
+    collector.TraceHeap();
+}
+
+bool ZGenerationOld::pause_mark_end(WCollector&)
+{
+    VM_ZMarkEndOld op;
+    return op.pause();
+}
+
+void ZGenerationOld::concurrent_mark_continue(WCollector&) {}
+void ZGenerationOld::concurrent_mark_free() {}
+
+void ZGenerationOld::concurrent_process_non_strong_references(WCollector& collector)
+{
+    collector.PostTrace();
+}
+
+void ZGenerationOld::concurrent_reset_relocation_set() {}
+
+void ZGenerationOld::pause_verify(WCollector&)
+{
+    VM_ZVerifyOld op;
+    (void)op.pause();
+}
+
+void ZGenerationOld::concurrent_select_relocation_set() {}
+
+void ZGenerationOld::concurrent_remap_young_roots(WCollector&) {}
+
+void ZGenerationOld::pause_relocate_start(WCollector& collector)
+{
+    VM_ZRelocateStartOld op;
+    (void)op.pause();
+    (void)collector.Preforward();
+}
+
+void ZGenerationOld::concurrent_relocate(WCollector& collector)
+{
+    collector.ForwardFromSpace(GCCycleGeneration::OLD);
+    reinterpret_cast<RegionSpace&>(collector.GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
+        GCCycleGeneration::OLD);
+    collector.TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+    collector.MergeResurrectExportObjects(Generation::Old);
+    collector.PostResolveCycleTask();
+    collector.CollectSmallSpace();
 }
 
 void WCollector::RunOldCollection()
 {
-    // ZGenerationCollectionScopeOld: overlap young with the old body.
-    DriverUnlocker unlocker(collectorResources);
-    TraceHeap();
-    if (ZAbort::should_abort()) {
-        return;
-    }
-    PostTrace();
-    if (ZAbort::should_abort()) {
-        return;
-    }
-
-    if (!Preforward()) {
-        return;
-    }
-    // ZGenerationOld::collect: no abort boundary after relocate-start.
-    // Complete the remaining pages before returning to the request owner.
-
-    ForwardFromSpace(GCCycleGeneration::OLD);
-    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions(GCCycleGeneration::OLD);
-    if (ZAbort::should_abort()) {
-        return;
-    }
-
-    // Preserve young remembered-set faces across old/full collection. ZGC old
-    // relocation transfers remembered fields; it does not globally erase the
-    // young current face. ClearRegion/TransferObjectSlots remain the authorities
-    // for reclaimed or moved holders (zRelocate.cpp:652-731).
-    TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
-    MergeResurrectExportObjects(Generation::Old);
-    PostResolveCycleTask();
-
-    CollectSmallSpace();
-    // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
-    // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.
-    // Ablation D (both major STWs disabled) restores mid_alloc 5/5; any of
-    // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
-    // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
-    // in-place promote paths that already preserve page liveness.
-
+    oldCycle.collect(*this);
 }
 }
 
