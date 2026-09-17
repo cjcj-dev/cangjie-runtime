@@ -527,7 +527,6 @@ void WCollector::RunYoungCollection()
 
 void WCollector::ConcurrentYoungMark()
 {
-    ZBreakpoint::AtAfterMarkingStarted();
     uint64_t stackScanEpoch = youngStackScanEpoch;
     WorkStack& workStack = youngWorkStack;
     constexpr bool fullYoungScan = false;
@@ -659,7 +658,6 @@ void WCollector::ConcurrentYoungMark()
 
 bool WCollector::YoungMarkEndPause()
 {
-    ZBreakpoint::AtBeforeMarkingCompleted();
     WorkStack& workStack = youngWorkStack;
 #if defined(MRT_TESTABLE_INTERNALS)
     const uint64_t markEndPauseStartNs = TimeUtil::NanoSeconds();
