@@ -110,6 +110,7 @@ using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 class WCollector : public CopyCollector {
     friend class ZGeneration;
     friend class ZGenerationYoung;
+    friend class ZGenerationOld;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MutatorPublishTestAccess;
     friend struct PartialArrayTestAccess;
@@ -728,7 +729,8 @@ private:
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void DoYoungGarbageCollection();
-    void DoYoungGarbageCollectionBody();
+    void RunYoungCollection();
+    void RunOldCollection();
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
     // stores (zBarrier.inline.hpp:742-749). Seed them into the old TRACE stack.

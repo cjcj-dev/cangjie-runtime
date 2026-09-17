@@ -255,6 +255,20 @@ void WCollector::FlushAllocationRegions()
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
 }
 
+class VM_ZOperation {
+public:
+    virtual ~VM_ZOperation() = default;
+    virtual bool do_operation() = 0;
+    bool pause()
+    {
+        ZJNICritical::block();
+        ZVerify::BeforeZOperation();
+        const bool success = do_operation();
+        ZJNICritical::unblock();
+        return success;
+    }
+};
+
 void WCollector::DoYoungGarbageCollection()
 {
     youngCycle.collect(*this);
@@ -262,10 +276,38 @@ void WCollector::DoYoungGarbageCollection()
 
 void ZGenerationYoung::collect(WCollector& collector)
 {
-    collector.DoYoungGarbageCollectionBody();
+    pause_mark_start(collector);
+    concurrent_mark(collector);
+    abortpoint();
+    while (!pause_mark_end(collector)) {
+        concurrent_mark_continue(collector);
+        abortpoint();
+    }
+    concurrent_mark_free();
+    abortpoint();
+    concurrent_reset_relocation_set();
+    abortpoint();
+    concurrent_select_relocation_set();
+    abortpoint();
+    pause_relocate_start(collector);
+    concurrent_relocate(collector);
 }
 
-void WCollector::DoYoungGarbageCollectionBody()
+void ZGenerationYoung::pause_mark_start(WCollector& collector)
+{
+    collector.RunYoungCollection();
+}
+
+void ZGenerationYoung::concurrent_mark(WCollector&) {}
+bool ZGenerationYoung::pause_mark_end(WCollector&) { return true; }
+void ZGenerationYoung::concurrent_mark_continue(WCollector&) {}
+void ZGenerationYoung::concurrent_mark_free() {}
+void ZGenerationYoung::concurrent_reset_relocation_set() {}
+void ZGenerationYoung::concurrent_select_relocation_set() {}
+void ZGenerationYoung::pause_relocate_start(WCollector&) {}
+void ZGenerationYoung::concurrent_relocate(WCollector&) {}
+
+void WCollector::RunYoungCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     std::unique_ptr<ScopedStopTheWorld> stw =
@@ -1054,6 +1096,16 @@ void WCollector::DoGarbageCollection(GCCycleGeneration generation)
         DoYoungGarbageCollection();
         return;
     }
+    oldCycle.collect(*this);
+}
+
+void ZGenerationOld::collect(WCollector& collector)
+{
+    collector.RunOldCollection();
+}
+
+void WCollector::RunOldCollection()
+{
     // ZGenerationCollectionScopeOld: overlap young with the old body.
     DriverUnlocker unlocker(collectorResources);
     TraceHeap();

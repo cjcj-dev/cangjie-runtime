@@ -152,11 +152,21 @@ class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung() : ZGeneration(GCCycleGeneration::YOUNG) {}
     void collect(WCollector& collector);
+    void pause_mark_start(WCollector& collector);
+    void concurrent_mark(WCollector& collector);
+    bool pause_mark_end(WCollector& collector);
+    void concurrent_mark_continue(WCollector& collector);
+    void concurrent_mark_free();
+    void concurrent_reset_relocation_set();
+    void concurrent_select_relocation_set();
+    void pause_relocate_start(WCollector& collector);
+    void concurrent_relocate(WCollector& collector);
 };
 
 class ZGenerationOld : public ZGeneration {
 public:
     ZGenerationOld() : ZGeneration(GCCycleGeneration::OLD) {}
+    void collect(WCollector& collector);
 };
 
 }
