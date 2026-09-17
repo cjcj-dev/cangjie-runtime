@@ -219,27 +219,27 @@ inline ZGeneration* ZBarrier::remap_generation(zpointer ptr)
     CHECK_DETAIL(!ZPointer::is_load_good(ptr), "load-good reference does not need remap");
     auto& collector = Heap::GetHeap().GetCollector();
     if (ZPointer::is_old_load_good(ptr)) {
-        return &collector.GetZGeneration(GCCycleGeneration::YOUNG);
+        return &collector.GetZGeneration(ZGenerationId::young);
     }
     if (ZPointer::is_young_load_good(ptr)) {
-        return &collector.GetZGeneration(GCCycleGeneration::OLD);
+        return &collector.GetZGeneration(ZGenerationId::old);
     }
     if ((raw(ptr) & ZPointerRememberedMask) == ZPointerRememberedMask) {
-        return &collector.GetZGeneration(GCCycleGeneration::OLD);
+        return &collector.GetZGeneration(ZGenerationId::old);
     }
     const MAddress address = untype(RefField<>(ptr).GetTargetObject());
     if (address == 0) {
-        return &collector.GetZGeneration(GCCycleGeneration::OLD);
+        return &collector.GetZGeneration(ZGenerationId::old);
     }
     if (Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).forwarding_table().get(address) != nullptr) {
-        return &collector.GetZGeneration(GCCycleGeneration::YOUNG);
+        return &collector.GetZGeneration(ZGenerationId::young);
     }
-    return &collector.GetZGeneration(GCCycleGeneration::OLD);
+    return &collector.GetZGeneration(ZGenerationId::old);
 }
 
 inline zaddress ZBarrier::relocate_or_remap(zaddress_unsafe addr, ZGeneration* generation)
 {
-    const ZGenerationId id = (generation == &Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG))
+    const ZGenerationId id = (generation == &Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young))
         ? ZGenerationId::young
         : ZGenerationId::old;
     return from_object(Heap::GetHeap().GetCollector().relocate_or_remap_object(to_object(safe(addr)), id));

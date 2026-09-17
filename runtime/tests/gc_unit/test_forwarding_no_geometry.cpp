@@ -44,7 +44,7 @@ struct MutatorPublishTestAccess {
     }
     static BaseObject* ForwardImpl(WCollector& collector, BaseObject* from, ZPage* page)
     {
-        collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
+        collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         ZPage::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
         return collector.RelocateObjectInner(from, page);

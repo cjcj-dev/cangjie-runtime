@@ -71,7 +71,7 @@ void WCollector::PostTrace()
     CollectLargeGarbage();
     CollectPinnedGarbage();
     // zGeneration.cpp:1042 / :1131-1133: reset previous set before select.
-    Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD).reset_relocation_set();
+    Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).reset_relocation_set();
     if (ZAbort::should_abort()) {
         return;
     }

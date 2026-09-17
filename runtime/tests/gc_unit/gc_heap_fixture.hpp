@@ -250,7 +250,7 @@ struct LiveMapCycleAccess : Collector {
         // ZLiveMapTest initializes the generation that page/livemap readers use
         // (test_zLiveMap.cpp:45-52). Preserve CollectorProxy's virtual routing.
         return collector.GetZGeneration(generation == Generation::Young
-            ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+            ? ZGenerationId::young : ZGenerationId::old);
     }
 };
 
@@ -277,13 +277,13 @@ struct GcHeapFixture {
     static void AdoptGenerationIdentity(Collector& next, Collector& previous)
     {
         if (&next == &previous) return;
-        for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+        for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = next.GetZGeneration(generation);
             const uint64_t sequence = previous.GetCycleSnapshot(generation).sequence;
             while (cycle.Sequence() < sequence) {
                 if (cycle.Snapshot().active) cycle.End();
                 cycle.Begin(0);
-                if (generation == GCCycleGeneration::YOUNG) {
+                if (generation == ZGenerationId::young) {
                     GenerationSequenceFixture::AdvanceYoung(cycle);
                 } else {
                     GenerationSequenceFixture::Advance(cycle);
@@ -352,7 +352,7 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         // ZPage's unit map is process-global, so only the most recently
         // installed fixture may translate its metadata pointer here.
         if (ZPage::heapStartAddress == heapStart &&
-            Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG).Snapshot().active) {
+            Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).Snapshot().active) {
             Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
             Heap::GetHeap().GetCollector().GetZGeneration(Generation::Old).reset_relocation_set();
         }

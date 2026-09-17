@@ -234,9 +234,9 @@ struct SegmentedArrayContext {
             ctx.requestedGc = true;
             ++ctx.gcRequests;
             ctx.youngSequenceBefore = Heap::GetHeap().GetCollector().GetCycleSnapshot(
-                GCCycleGeneration::YOUNG).sequence;
+                ZGenerationId::young).sequence;
             ctx.oldSequenceBefore = Heap::GetHeap().GetCollector().GetCycleSnapshot(
-                GCCycleGeneration::OLD).sequence;
+                ZGenerationId::old).sequence;
             ctx.colorBefore = ::g_cjStoreGoodMask;
             Mutator* mutator = Mutator::GetMutator();
             ctx.requestingMutator = mutator;
@@ -263,9 +263,9 @@ struct SegmentedArrayContext {
                 Heap::GetHeap().RemoveExportObject(youngSeedRoot);
             }
             ctx.youngSequenceAfter = Heap::GetHeap().GetCollector().GetCycleSnapshot(
-                GCCycleGeneration::YOUNG).sequence;
+                ZGenerationId::young).sequence;
             ctx.oldSequenceAfter = Heap::GetHeap().GetCollector().GetCycleSnapshot(
-                GCCycleGeneration::OLD).sequence;
+                ZGenerationId::old).sequence;
             ctx.colorAfter = ::g_cjStoreGoodMask;
             MArray* rootAfter = static_cast<MArray*>(Mutator::GetMutator()->LoadInvisibleRoot());
             if (!ctx.GcSafepointHappened() || rootAfter == nullptr ||
@@ -857,7 +857,7 @@ void* RunMarkAllocationCase(void* rawExisting)
                  static_cast<unsigned long long>(page->BirthSequence()),
                  static_cast<unsigned long long>(page->GetSnapshotEpoch()), noExplicitMark,
                  pendingBefore, pendingAfter);
-    const auto during = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+    const auto during = collector.GetCycleSnapshot(ZGenerationId::young);
     const auto phase = during.phase;
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
                  "implicit=%d live=%d target_live=%d excluded=%d\n",                   existing, static_cast<unsigned>(phase),
@@ -865,7 +865,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     size_t markEndObservations = 0;
     bool markEndTargetLive = false;
     CopyCollector::testYoungMarkCompleted = [&, target, productLive]() {
-        const auto markEnd = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+        const auto markEnd = collector.GetCycleSnapshot(ZGenerationId::young);
         if (markEnd.sequence != during.sequence) return;
         ZPage* endPage = Heap::page(reinterpret_cast<uintptr_t>(target));
         markEndTargetLive = productLive(endPage, target);
@@ -897,7 +897,7 @@ void* RunMarkAllocationCase(void* rawExisting)
         static_cast<MArray*>(completedTarget)->GetLength() == 16;
     std::fprintf(stderr, "MARK_ALLOC_COMPLETED_VALUE_ASSERT_EXECUTED length_valid=%d\n", completedValue);
     const bool resampled = !page->IsAllocating();
-    const auto after = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+    const auto after = collector.GetCycleSnapshot(ZGenerationId::young);
     const bool nextCycle = after.sequence > during.sequence;
     std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=%llu after=%llu resampled=%d\n",
                  static_cast<unsigned long long>(during.sequence),
@@ -1025,7 +1025,7 @@ void* RunPinnedMarkStartCase(void*)
     const bool current = after->IsAllocating();
     const bool different = after != before;
     const bool noMark = !after->is_marked();
-    const bool window = collector.GetCycleSnapshot(GCCycleGeneration::OLD).phase == ZGenerationPhase::Mark;
+    const bool window = collector.GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark;
     std::fprintf(stderr, "P1_PINNED_WINDOW_ASSERT_EXECUTED reuse=%d different=%d current=%d no_bitmap=%d trace=%d birth=%llu owner=%llu\n",
         reused, different, current, noMark, window,
         static_cast<unsigned long long>(after->BirthSequence()),

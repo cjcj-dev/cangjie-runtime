@@ -128,7 +128,7 @@ bool RunParallelProductEntryClosesGeneration()
     ZRelocateQueue& queue = manager.GetZRelocateQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     ZStatWorkers statWorkers;
-    ZWorkers workers(GCCycleGeneration::OLD, 3, &statWorkers);
+    ZWorkers workers(ZGenerationId::old, 3, &statWorkers);
     workers.set_active();
     manager.ForwardFromRegions<Generation::Old>(workers);
     workers.set_inactive();
@@ -146,7 +146,7 @@ bool RunSerialProductEntryClosesGeneration()
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     // ZRelocate uses the generation worker entry even with one participant.
     ZStatWorkers statWorkers;
-    ZWorkers workers(GCCycleGeneration::OLD, 1, &statWorkers);
+    ZWorkers workers(ZGenerationId::old, 1, &statWorkers);
     workers.set_active();
     manager.ForwardFromRegions<Generation::Old>(workers);
     workers.set_inactive();
@@ -161,8 +161,8 @@ public:
 
     void ForwardYoungFromRuntimeEntry()
     {
-        GetZGeneration(GCCycleGeneration::YOUNG).SelectReason(GC_REASON_YOUNG);
-        ForwardFromSpace(GCCycleGeneration::YOUNG);
+        GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+        ForwardFromSpace(ZGenerationId::young);
     }
 };
 
@@ -199,7 +199,7 @@ bool RunYoungRuntimeProductEntry()
 #if defined(MRT_TESTABLE_INTERNALS)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), collector);
 #endif
-    collector.GetZGeneration(GCCycleGeneration::YOUNG).InitializeWorkers(1);
+    collector.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
     ZStat::Initialize();
     collector.ForwardYoungFromRuntimeEntry();
 
@@ -254,7 +254,7 @@ GC_TEST(RelocateWorkers, FixedParticipantsCompleteEachBorrowedTask)
 {
     for (uint32_t count : { 1u, 3u }) {
         ZStatWorkers statWorkers;
-        ZWorkers workers(GCCycleGeneration::OLD, count, &statWorkers);
+        ZWorkers workers(ZGenerationId::old, count, &statWorkers);
         class Task : public ZTask {
         public:
             explicit Task(uint32_t count) : ZTask("ZWorkersUnitVisits"), visits(count, 0), handles(count) {}
@@ -286,8 +286,8 @@ GC_TEST(RelocateWorkers, FixedParticipantsCompleteEachBorrowedTask)
 GC_TEST(RelocateWorkers, YoungAndOldOwnDistinctThreads)
 {
     ZStatWorkers youngStats, oldStats;
-    ZWorkers young(GCCycleGeneration::YOUNG, 1, &youngStats);
-    ZWorkers old(GCCycleGeneration::OLD, 1, &oldStats);
+    ZWorkers young(ZGenerationId::young, 1, &youngStats);
+    ZWorkers old(ZGenerationId::old, 1, &oldStats);
     std::vector<pthread_t> youngThreads;
     young.threads_do([&](WorkerThread* thread) { youngThreads.push_back(thread->os_thread()); });
     GC_EXPECT_EQ(youngThreads.size(), 1u);
@@ -312,7 +312,7 @@ GC_TEST(RelocateWorkers, RelocationRequestHasOneCompletionOwnerBeforeRunReturns)
     GC_EXPECT_TRUE(queue.IsActive());
     std::atomic<size_t> completionOwners{ 0 };
     ZStatWorkers statWorkers;
-    ZWorkers workers(GCCycleGeneration::OLD, kWorkers, &statWorkers);
+    ZWorkers workers(ZGenerationId::old, kWorkers, &statWorkers);
     class RequestTask : public ZTask {
     public:
         RequestTask(ZRelocateQueue& queue, std::atomic<size_t>& owners)

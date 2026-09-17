@@ -137,8 +137,8 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
     // zObjArrayAllocator.cpp:132-141: a safepoint may change either
     // generation sequence before its collection has completed.
     Collector& collector = Heap::GetHeap().GetCollector();
-    const uint64_t youngSequenceBefore = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence;
-    const uint64_t oldSequenceBefore = collector.GetCycleSnapshot(GCCycleGeneration::OLD).sequence;
+    const uint64_t youngSequenceBefore = collector.GetCycleSnapshot(ZGenerationId::young).sequence;
+    const uint64_t oldSequenceBefore = collector.GetCycleSnapshot(ZGenerationId::old).sequence;
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
     bool seenGcSafepoint = false;
     // ZObjArrayAllocator::initialize (zObjArrayAllocator.cpp:140-200):
@@ -184,8 +184,8 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                     std::fprintf(stderr, "[SEGMENTED_MANAGED_ITERATORS] safe=%zu safe_klass=%zu basic=%zu basic_klass=%zu\n",
                                  managedIteratorVisits[0], managedIteratorVisits[1],
                                  managedIteratorVisits[2], managedIteratorVisits[3]);
-                    const GCCycleGeneration generation = managedTestGc == ManagedSegmentedGc::YOUNG
-                        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+                    const ZGenerationId generation = managedTestGc == ManagedSegmentedGc::YOUNG
+                        ? ZGenerationId::young : ZGenerationId::old;
                     const uint64_t sequenceBefore = collector.GetCycleSnapshot(generation).sequence;
                     if (managedTestGc == ManagedSegmentedGc::YOUNG) {
                         Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
@@ -199,8 +199,8 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
             }
 
             if (isRefArray && !seenGcSafepoint &&
-                (collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence != youngSequenceBefore ||
-                 collector.GetCycleSnapshot(GCCycleGeneration::OLD).sequence != oldSequenceBefore ||
+                (collector.GetCycleSnapshot(ZGenerationId::young).sequence != youngSequenceBefore ||
+                 collector.GetCycleSnapshot(ZGenerationId::old).sequence != oldSequenceBefore ||
                  static_cast<uintptr_t>(::g_cjStoreGoodMask) != colorBefore)) {
                 seenGcSafepoint = true;
                 return false;

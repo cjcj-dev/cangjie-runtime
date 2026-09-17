@@ -91,13 +91,13 @@ struct Record {
 struct Fixture {
     ZStatWorkers stats;
     ZWorkers workers;
-    Fixture(GCCycleGeneration id, uint32_t max) : workers(id, max, &stats) {}
+    Fixture(ZGenerationId id, uint32_t max) : workers(id, max, &stats) {}
 };
 } // namespace
 
 GC_TEST(ZWorkers, RunGivesEachActiveWorkerOneDistinctIdBelowActive)
 {
-    Fixture fx(GCCycleGeneration::YOUNG, 4);
+    Fixture fx(ZGenerationId::young, 4);
     // zWorkers.cpp:60-64: all workers are created and active at construction.
     GC_EXPECT_EQ(fx.workers.active_workers(), 4u);
     fx.workers.set_active_workers(3);
@@ -122,7 +122,7 @@ GC_TEST(ZWorkers, RunGivesEachActiveWorkerOneDistinctIdBelowActive)
 
 GC_TEST(ZWorkers, RunAllUsesMaxWorkersAndRestoresActive)
 {
-    Fixture fx(GCCycleGeneration::YOUNG, 4);
+    Fixture fx(ZGenerationId::young, 4);
     fx.workers.set_active_workers(1);
     for (unsigned count : {1u, 4u, 1u}) {
         Record result;
@@ -137,7 +137,7 @@ GC_TEST(ZWorkers, RunAllUsesMaxWorkersAndRestoresActive)
 
 GC_TEST(ZWorkers, IndependentGenerationSets)
 {
-    Fixture young(GCCycleGeneration::YOUNG, 3), old(GCCycleGeneration::OLD, 2);
+    Fixture young(ZGenerationId::young, 3), old(ZGenerationId::old, 2);
     young.workers.set_active_workers(1);
     young.workers.set_active();
     old.workers.set_active();
@@ -167,7 +167,7 @@ GC_OTHER_VM_TEST(ZWorkers, CoordinatorReturnsAfterEveryWorkerCompleted)
 {
     // Isolate a broken completion protocol: a failing pool cannot safely run
     // its destructor's next dispatch. The child process owns that lifetime.
-    auto fx = std::make_unique<Fixture>(GCCycleGeneration::OLD, 3);
+    auto fx = std::make_unique<Fixture>(ZGenerationId::old, 3);
     Latch entered, releaseFirst, releaseOthers, finished;
     std::atomic<unsigned> completed{0};
     std::atomic<bool> returned{false};
@@ -211,7 +211,7 @@ GC_OTHER_VM_TEST(ZWorkers, CoordinatorReturnsAfterEveryWorkerCompleted)
 GC_TEST(ZWorkers, RestartableTaskResizesOnRequest)
 {
     for (auto counts : {std::make_pair(3u, 1u), std::make_pair(1u, 3u)}) {
-        Fixture fx(GCCycleGeneration::YOUNG, 3);
+        Fixture fx(ZGenerationId::young, 3);
         fx.workers.set_active_workers(counts.first);
         fx.workers.set_active();
         struct Restart : ZRestartableTask {
@@ -256,7 +256,7 @@ GC_TEST(ZWorkers, RestartableTaskResizesOnRequest)
 
 GC_TEST(ZWorkers, RestartableTaskWithoutRequestRunsOnce)
 {
-    Fixture fx(GCCycleGeneration::OLD, 2);
+    Fixture fx(ZGenerationId::old, 2);
     struct Restart : ZRestartableTask {
         Record result;
         unsigned callbacks = 0;
@@ -280,7 +280,7 @@ GC_TEST(ZWorkers, RestartableTaskWithoutRequestRunsOnce)
 // is cleared when the next cycle activates the workers.
 GC_TEST(ZWorkers, PendingRequestSurvivesOrdinaryRunUntilNextCycle)
 {
-    Fixture fx(GCCycleGeneration::OLD, 3);
+    Fixture fx(ZGenerationId::old, 3);
     fx.workers.set_active_workers(1);
     fx.workers.set_active();
     fx.workers.request_resize_workers(2);
@@ -327,7 +327,7 @@ GC_TEST(ZWorkers, WorkerTaskCapturesGcIdAtConstruction)
 // with ZStatWorkers::at_start(active_workers)/at_end (zWorkers.cpp:92-106).
 GC_TEST(ZWorkers, RunAccumulatesParallelTimeInStatWorkers)
 {
-    Fixture fx(GCCycleGeneration::OLD, 3);
+    Fixture fx(ZGenerationId::old, 3);
     GC_EXPECT_EQ(fx.stats.stats()._accumulated_duration, 0.0);
     Latch entered, release;
     Task task([&] {
@@ -373,8 +373,8 @@ GC_TEST(ZWorkers, ZGenerationOwnsWorkersAndStatWorkers)
         using ZGeneration::ZGeneration;
         bool should_record_stats() override { return false; }
     };
-    Probe young(GCCycleGeneration::YOUNG);
-    Probe old(GCCycleGeneration::OLD);
+    Probe young(ZGenerationId::young);
+    Probe old(ZGenerationId::old);
     young.InitializeWorkers(2);
     old.InitializeWorkers(1);
     GC_EXPECT_TRUE(young.StatWorkers() != old.StatWorkers());

@@ -16,7 +16,7 @@ namespace MapleRuntime {
 inline void RegionManager::PrepareFromRegionList()
     {
         Heap::GetHeap().GetCollector().GetZGeneration(
-            G == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)
+            G == Generation::Young ? ZGenerationId::young : ZGenerationId::old)
             .relocation_set().install_from_regions(fromRegionList);
     }
 

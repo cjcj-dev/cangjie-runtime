@@ -51,39 +51,39 @@ public:
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
     void RequestGC(GCReason reason, bool async);
 
-    virtual ZGeneration& GetZGeneration(GCCycleGeneration generation)
+    virtual ZGeneration& GetZGeneration(ZGenerationId generation)
     {
-        if (generation == GCCycleGeneration::YOUNG) {
+        if (generation == ZGenerationId::young) {
             return youngCycle;
         }
         return oldCycle;
     }
 
-    virtual const ZGeneration& GetZGeneration(GCCycleGeneration generation) const
+    virtual const ZGeneration& GetZGeneration(ZGenerationId generation) const
     {
-        if (generation == GCCycleGeneration::YOUNG) {
+        if (generation == ZGenerationId::young) {
             return youngCycle;
         }
         return oldCycle;
     }
     ZGeneration& GetZGeneration(Generation generation)
     {
-        return GetZGeneration(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
     }
     const ZGeneration& GetZGeneration(Generation generation) const
     {
-        return GetZGeneration(generation == Generation::Young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
     }
 
-    virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
+    virtual GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
     {
         return GetZGeneration(generation).Snapshot();
     }
-    virtual void PublishGenerationPhase(GCCycleGeneration generation, ZGenerationPhase value);
+    virtual void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
     bool OldActiveRemsetIsCurrent() const
     {
-        return GetZGeneration(GCCycleGeneration::OLD).ActiveRemsetIsCurrent(
-            GetZGeneration(GCCycleGeneration::YOUNG).Sequence());
+        return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
+            GetZGeneration(ZGenerationId::young).Sequence());
     }
     Generation ObjectGeneration(BaseObject* object) const;
 
@@ -124,7 +124,7 @@ public:
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
                                             const ForwardingProvenance& provenance);
 
-    virtual GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD)
+    virtual GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
     {
         return GetZGeneration(generation).Stats();
     }

@@ -33,19 +33,19 @@ public:
     void Init() override;
     void Fini() override;
 
-    ZGeneration& GetZGeneration(GCCycleGeneration generation) override
+    ZGeneration& GetZGeneration(ZGenerationId generation) override
     {
         return currentCollector != nullptr ? currentCollector->GetZGeneration(generation)
                                            : wCollector.GetZGeneration(generation);
     }
 
-    const ZGeneration& GetZGeneration(GCCycleGeneration generation) const override
+    const ZGeneration& GetZGeneration(ZGenerationId generation) const override
     {
         return currentCollector != nullptr ? currentCollector->GetZGeneration(generation)
                                            : wCollector.GetZGeneration(generation);
     }
 
-    GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
+    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const override
     {
         return currentCollector != nullptr ? currentCollector->GetCycleSnapshot(generation)
                                            : wCollector.GetCycleSnapshot(generation);
@@ -65,7 +65,7 @@ public:
         currentCollector->MarkOldObjectIfActive(object, gcThread);
     }
 
-    void PublishGenerationPhase(GCCycleGeneration generation, ZGenerationPhase phase) override
+    void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase phase) override
     {
         (currentCollector != nullptr ? *currentCollector : wCollector).PublishGenerationPhase(generation, phase);
     }

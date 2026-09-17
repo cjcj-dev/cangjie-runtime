@@ -355,8 +355,8 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
         using ZGeneration::ZGeneration;
         bool should_record_stats() override { return false; }
     };
-    Probe young(GCCycleGeneration::YOUNG);
-    Probe old(GCCycleGeneration::OLD);
+    Probe young(ZGenerationId::young);
+    Probe old(ZGenerationId::old);
     young.InitializeWorkers(2);
     old.InitializeWorkers(2);
     young.SelectReason(GC_REASON_YOUNG);
@@ -392,7 +392,7 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
         using ZGeneration::ZGeneration;
         bool should_record_stats() override { return false; }
     };
-    Probe young(GCCycleGeneration::YOUNG);
+    Probe young(ZGenerationId::young);
     TenuringInputs inputs;
     inputs.softMaxCapacity = 64 * 1024 * 1024;
     inputs.youngAllocated = 4096;

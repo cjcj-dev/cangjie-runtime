@@ -113,7 +113,7 @@ void FlipToPreforwardAfterFirstHandler(BaseObject*, BaseObject*)
     if (call == 1) {
         // Publish the product phase value that can change while the carrier
         // lock is released around a managed callback.
-        context->collector->GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
+        context->collector->GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     }
 }
 
@@ -339,14 +339,14 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     context.collector = &collector;
     phaseFlipContext = &context;
     collector.SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
-    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
+    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     ThreadLocal::SetMutator(&resolverMutator);
 
     collector.ResolveCycleRef();
     const size_t callsBeforeResume = context.calls.load(std::memory_order_acquire);
-    const auto phaseBeforeResume = collector.GetZGeneration(GCCycleGeneration::OLD).GcPhase();
+    const auto phaseBeforeResume = collector.GetZGeneration(ZGenerationId::old).GcPhase();
 
-    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Relocate);
+    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     collector.ResolveCycleRef();
     const size_t callsAfterResume = context.calls.load(std::memory_order_acquire);
     collector.ResolveCycleRef();

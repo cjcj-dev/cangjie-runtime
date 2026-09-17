@@ -27,11 +27,10 @@ struct TenuringInputs;
 // Per-generation execution state. The snapshot lock publishes cycle identity
 // and phase together; the phase atomic serves existing barrier readers.
 // ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
-enum class GCCycleGeneration : uint8_t { YOUNG, OLD };
 enum class MarkStartPoint : uint8_t { Begin, BeforeRetire, BeforeSequence, BeforeDomain, BeforeRemembered, Complete };
 enum class ZGenerationPhase : uint8_t { Mark, MarkComplete, Relocate };
 struct GCCycleSnapshot {
-    GCCycleGeneration generation;
+    ZGenerationId generation;
     uint64_t sequence;
     uint64_t requestIndex;
     GCReason reason;
@@ -50,7 +49,7 @@ protected:
     static ZGenerationOld* _old;
 
 public:
-    explicit ZGeneration(GCCycleGeneration generation);
+    explicit ZGeneration(ZGenerationId generation);
     ~ZGeneration();
     ZGeneration(const ZGeneration&) = delete;
     ZGeneration& operator=(const ZGeneration&) = delete;
@@ -145,7 +144,7 @@ public:
 #endif
     std::unique_ptr<ZMark> mark;
     const ZGenerationId _id;
-    const GCCycleGeneration _cycle;
+    const ZGenerationId _cycle;
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
     GCStats stats;

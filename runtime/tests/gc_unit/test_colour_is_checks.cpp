@@ -100,8 +100,8 @@ GC_TEST(ZAddress, GenerationFragmentationPolicy)
         using ZGeneration::ZGeneration;
         bool should_record_stats() override { return false; }
     };
-    Probe young(GCCycleGeneration::YOUNG);
-    Probe old(GCCycleGeneration::OLD);
+    Probe young(ZGenerationId::young);
+    Probe old(ZGenerationId::old);
     GC_EXPECT_EQ(young.FragmentationLimit(), 25.0);
     GC_EXPECT_EQ(old.FragmentationLimit(), 5.0);
 }

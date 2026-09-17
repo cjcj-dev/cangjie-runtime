@@ -49,7 +49,7 @@ struct PartialArrayTestAccess {
         auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
         GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
         auto arm = [](CopyCollector& c) {
-            auto& old = c.GetZGeneration(GCCycleGeneration::OLD);
+            auto& old = c.GetZGeneration(ZGenerationId::old);
             old.InitializeWorkers(1);
             if (!old.Snapshot().active) {
                 old.Begin(0);

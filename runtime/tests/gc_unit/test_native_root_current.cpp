@@ -40,7 +40,7 @@ struct RelocationReceiptTestAccess {
         }
         resources.collectorProxy.currentCollector = &collector;
         resources.concurrentGcThreadCount = workers;
-        for (auto gen : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+        for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
             collector.GetZGeneration(gen).InitializeWorkers(workers);
             collector.GetZGeneration(gen).Begin(workers);
         }
@@ -49,8 +49,8 @@ struct RelocationReceiptTestAccess {
     static void FlipNativeRootYoung(WCollector& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
     static void NativeRootMajorPrelude(WCollector& collector)
     {
-        collector.GetZGeneration(GCCycleGeneration::OLD).End();
-        auto& young = collector.GetZGeneration(GCCycleGeneration::YOUNG);
+        collector.GetZGeneration(ZGenerationId::old).End();
+        auto& young = collector.GetZGeneration(ZGenerationId::young);
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
         collector.RunGarbageCollection(1, GC_REASON_YOUNG);
     }
@@ -65,7 +65,7 @@ struct RelocationReceiptTestAccess {
     }
     static void RunOldRoots(WCollector& collector)
     {
-        collector.EnumAllCommonRoots(collector.GetWorkers(GCCycleGeneration::OLD));
+        collector.EnumAllCommonRoots(collector.GetWorkers(ZGenerationId::old));
     }
     static size_t PendingYoungRootWork(WCollector& collector)
     {
@@ -114,7 +114,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     ZPage* region = fx.region0;
     region->reset(PageAge::eden);
     region->reset(PageAge::eden);
-    resources.GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold = 1;
+    resources.GetGCStats(ZGenerationId::young).tenuringThreshold = 1;
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
     // Keep a second live object after the root object. In-place compaction
@@ -163,7 +163,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     selected.PrependRegion(region);
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
-    collector.GetZGeneration(GCCycleGeneration::YOUNG).set_phase(ZGenerationPhase::Relocate);
+    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     manager.CompactRegion(region);
@@ -205,7 +205,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         return;
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
-    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::MarkComplete);
+    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
     Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
     // Observe the product's published old mark stacks after the root task
     // returned and before follow starts (testOldMarkStarted fires at the top
@@ -214,8 +214,8 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     bool enumerated = false;
     bool visited = false;
     bool observed = false;
-    collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* visitedSlot) {
-        visited |= generation == GCCycleGeneration::OLD && visitedSlot == &slot;
+    collector.testColoredRootResult = [&](ZGenerationId generation, NativeSlot* visitedSlot) {
+        visited |= generation == ZGenerationId::old && visitedSlot == &slot;
     };
     collector.testOldMarkStarted = [&]() {
         observed = true;
@@ -269,7 +269,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
             workerSawParked = true;
         }
     };
-    collector.GetZGeneration(GCCycleGeneration::OLD).set_phase(ZGenerationPhase::Mark);
+    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     collector.StartOldMarkWork();
     RelocationReceiptTestAccess::RunOldRoots(collector);
     collector.testOldMarkThreadResult = nullptr;
@@ -312,7 +312,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     fx.region0->reset(PageAge::eden);
-    collector.GetZGeneration(GCCycleGeneration::YOUNG).set_phase(ZGenerationPhase::Mark);
+    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
     collector.StartYoungMarkWork();
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
@@ -408,8 +408,8 @@ void CheckRootStorageSegments(unsigned family)
     struct ResetObserver {
         ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
     } reset;
-    collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* slot) {
-        if ((generation == GCCycleGeneration::OLD) != (family == 0)) { return; }
+    collector.testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
+        if ((generation == ZGenerationId::old) != (family == 0)) { return; }
         std::unique_lock<std::mutex> lock(mutex);
         if (slot == nullptr) {
             if (!started || std::this_thread::get_id() != paused) {
@@ -477,8 +477,8 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     struct ResetObserver {
         ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
     } reset;
-    collector.testColoredRootResult = [&](GCCycleGeneration generation, NativeSlot* slot) {
-        if (generation != GCCycleGeneration::YOUNG || slot == nullptr) { return; }
+    collector.testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
+        if (generation != ZGenerationId::young || slot == nullptr) { return; }
         if (slot == addedSlot) { newSlotVisited = true; }
         if (observed) { return; }
         observed = true;

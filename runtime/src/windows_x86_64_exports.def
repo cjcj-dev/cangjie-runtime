@@ -1082,7 +1082,7 @@ EXPORTS
     _ZN12MapleRuntime10WCollector18GetCrossRefHandlerEPNS_10BaseObjectE @1121
     _ZN12MapleRuntime10WCollector19AddRawPointerObjectEPNS_10BaseObjectE @1122
     _ZN12MapleRuntime10WCollector19CollectLargeGarbageEv @1123
-    _ZN12MapleRuntime10WCollector19DoGarbageCollectionENS_17GCCycleGenerationE @1124
+    _ZN12MapleRuntime10WCollector19DoGarbageCollectionENS_17ZGenerationIdE @1124
     _ZN12MapleRuntime10WCollector19FixMinorObjectSlotsEPNS_10BaseObjectE @1125
 
     _ZN12MapleRuntime10WCollector19ShouldIgnoreRequestERNS_9GCRequestE @1129
@@ -1270,9 +1270,9 @@ EXPORTS
     _ZN12MapleRuntime13CartesianTree4Node21RefreshFreeZPageEv @1368
     _ZN12MapleRuntime13CartesianTree9ClearTreeEv @1369
     _ZN12MapleRuntime13CopyCollector15RefineFromSpaceEv @1370
-    _ZN12MapleRuntime13CopyCollector16ForwardFromSpaceENS_17GCCycleGenerationE @1371
+    _ZN12MapleRuntime13CopyCollector16ForwardFromSpaceENS_17ZGenerationIdE @1371
     _ZN12MapleRuntime13CopyCollector20RunGarbageCollectionEyNS_8GCReasonE @1372
-    _ZN12MapleRuntime13CopyCollector21PostGarbageCollectionENS_17GCCycleGenerationEy @1373
+    _ZN12MapleRuntime13CopyCollector21PostGarbageCollectionENS_17ZGenerationIdEy @1373
     _ZN12MapleRuntime13CopyCollectorD0Ev @1374
     _ZN12MapleRuntime13EnumDebugInfo12SetEnumCtorsEPv @1375
     _ZN12MapleRuntime13LoaderManager10UnloadFileEy @1376
@@ -1585,7 +1585,7 @@ EXPORTS
     _ZN12MapleRuntime16StackFrameCursor8ResumeAtEyRNS_7MutatorE @1740
     _ZN12MapleRuntime16StackFrameCursorC1ERKNS_13UnwindContextE @1741
     _ZN12MapleRuntime16StackFrameCursorC2ERKNS_13UnwindContextE @1742
-    _ZN12MapleRuntime16TracingCollector10GetGCStatsENS_17GCCycleGenerationE @1751
+    _ZN12MapleRuntime16TracingCollector10GetGCStatsENS_17ZGenerationIdE @1751
     _ZN12MapleRuntime16TracingCollector11TracingImplERNS_9MarkStackIPNS_10BaseObjectEEES5_b @1752
 
     _ZN12MapleRuntime16TracingCollector13UpdateGCStatsEv @1754
@@ -1599,9 +1599,9 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector17RequestGCInternalENS_8GCReasonEb @1764
 
     _ZN12MapleRuntime16TracingCollector19ShouldIgnoreRequestERNS_9GCRequestE @1767
-    _ZN12MapleRuntime16TracingCollector20PreGarbageCollectionENS_17GCCycleGenerationEby @1769
+    _ZN12MapleRuntime16TracingCollector20PreGarbageCollectionENS_17ZGenerationIdEby @1769
     _ZN12MapleRuntime16TracingCollector20TraceObjectRefFieldsEPNS_10BaseObjectERNS_9MarkStackIS2_EE @1770
-    _ZN12MapleRuntime16TracingCollector21PostGarbageCollectionENS_17GCCycleGenerationEy @1773
+    _ZN12MapleRuntime16TracingCollector21PostGarbageCollectionENS_17ZGenerationIdEy @1773
     _ZN12MapleRuntime16TracingCollector21RecordStubAllRegisterERNS_11RegSlotsMapEy @1774
     _ZN12MapleRuntime16TracingCollector21RecordStubCalleeSavedERNS_11RegSlotsMapEy @1775
     _ZN12MapleRuntime16TracingCollector24FindUselessExternObjectsEv @1777
@@ -1993,7 +1993,7 @@ EXPORTS
     _ZN12MapleRuntime9AllocatorC2Ev @2259
     _ZN12MapleRuntime9AllocatorD0Ev @2260
     _ZN12MapleRuntime9AllocatorD2Ev @2261
-    _ZN12MapleRuntime9Collector10GetGCStatsENS_17GCCycleGenerationE @2262
+    _ZN12MapleRuntime9Collector10GetGCStatsENS_17ZGenerationIdE @2262
     _ZN12MapleRuntime9Collector13ForwardObjectEPNS_10BaseObjectE @2264
     _ZN12MapleRuntime9Collector13MarkNewObjectEPNS_10BaseObjectE @2265
     _ZN12MapleRuntime9Collector15ResolveCycleRefEv @2267

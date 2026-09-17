@@ -233,7 +233,7 @@ BaseObject* ZBarrier::ReadStaticRef(NativeSlot& field)
 // ZZBarrier::mark_from_young_slow_path, zBarrier.cpp:158-183.
 zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 {
-    auto& young = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG);
+    auto& young = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     ASSERT(young.IsPhaseMark());
     if (is_null(address)) return address;
     if (Heap::page(raw(address))->IsYoungRegion()) {
@@ -241,7 +241,7 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
         return address;
     }
     if (young.IsMajorRoots()) {
-        Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD).MarkObject<false, true, true, false>(address);
+        Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).MarkObject<false, true, true, false>(address);
         return address;
     }
     return address;
@@ -250,7 +250,7 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 // ZZBarrier::mark_from_old_slow_path, zBarrier.cpp:185-203.
 zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
+    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, false>(address);
@@ -262,8 +262,8 @@ zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
 // ZZBarrier::mark_finalizable_slow_path, zBarrier.cpp:218-232.
 zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
-    auto& young = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG);
+    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    auto& young = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     ASSERT(old.IsPhaseMark() || young.IsPhaseMark());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
@@ -277,8 +277,8 @@ zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
 // ZZBarrier::mark_finalizable_from_old_slow_path, zBarrier.cpp:234-250.
 zaddress ZBarrier::MarkFinalizableFromOldSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::OLD);
-    CHECK(old.IsPhaseMark() || Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG).IsPhaseMark());
+    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    CHECK(old.IsPhaseMark() || Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).IsPhaseMark());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, true>(address);

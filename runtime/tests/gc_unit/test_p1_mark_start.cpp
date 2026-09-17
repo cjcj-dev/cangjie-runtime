@@ -60,9 +60,9 @@ extern "C" int p1MarkStartExercise()
 
     std::array<StartState, 2> state {};
     bool youngComplete = false;
-    CopyCollector::testMarkStartState = [&](GCCycleGeneration generation, MarkStartPoint point,
+    CopyCollector::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point,
                                                const ZMark* domain) {
-        const size_t index = generation == GCCycleGeneration::YOUNG ? 0 : 1;
+        const size_t index = generation == ZGenerationId::young ? 0 : 1;
         auto& before = state[index];
         const auto snapshot = collector.GetCycleSnapshot(generation);
         const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
@@ -121,13 +121,13 @@ extern "C" int p1MarkStartExercise()
             std::fflush(stdout);
         }
     };
-    const auto youngBefore = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
-    const auto oldBefore = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    const auto youngBefore = collector.GetCycleSnapshot(ZGenerationId::young);
+    const auto oldBefore = collector.GetCycleSnapshot(ZGenerationId::old);
     collector.RequestGC(GC_REASON_USER, false);
-    const auto oldAfterMajor = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    const auto oldAfterMajor = collector.GetCycleSnapshot(ZGenerationId::old);
     collector.RequestGC(GC_REASON_YOUNG, false);
-    const auto youngAfter = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
-    const auto oldAfter = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    const auto youngAfter = collector.GetCycleSnapshot(ZGenerationId::young);
+    const auto oldAfter = collector.GetCycleSnapshot(ZGenerationId::old);
     CopyCollector::testMarkStartState = nullptr;
     Expect(oldAfterMajor.sequence > oldBefore.sequence, "major_request_started_old");
     Expect(oldAfter.sequence == oldAfterMajor.sequence, "minor_preserves_old_identity");

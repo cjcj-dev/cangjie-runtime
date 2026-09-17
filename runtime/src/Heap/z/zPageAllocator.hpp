@@ -584,7 +584,7 @@ public:
     // Kept (IsForwardingDone via Exempt) is in-cycle only.
     // zRelocate.cpp:1041-1047: relocate() returns only after every page in the
     // relocation set is done. Finish every ROUTED page or publish it kept.
-    void FinishIncompleteFromRegions(GCCycleGeneration generation);
+    void FinishIncompleteFromRegions(ZGenerationId generation);
     // zRelocate.cpp:1346-1352 flip_survived: keep the page, reset age, leave young.
     // Must not remain LONE_FROM / FROM after TakeHead — barriers treat those as from-space.
     void EnlistStayYoungSurvivor(ZPage* region, bool advanceAge = true);

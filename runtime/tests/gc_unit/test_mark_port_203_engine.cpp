@@ -277,7 +277,7 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     GC_EXPECT_TRUE(domain.PollStop());
 
     ZStatWorkers statWorkers;
-    ZWorkers workers(GCCycleGeneration::YOUNG, 2, &statWorkers);
+    ZWorkers workers(ZGenerationId::young, 2, &statWorkers);
     workers.set_active();
     workers.set_active_workers(1);
     domain.BindWorkers(&workers);

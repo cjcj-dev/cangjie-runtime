@@ -72,7 +72,7 @@ public:
     void UnlockDriver() { driverLock.unlock(); }
     void RequestGC(GCReason reason, bool async);
 
-    ZWorkers& GetWorkers(GCCycleGeneration generation) const;
+    ZWorkers& GetWorkers(ZGenerationId generation) const;
 
     // ZYoungType::major_full_roots selects the combined mark-start pause.
 
@@ -97,7 +97,7 @@ public:
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
 
-    GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD);
+    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
 
     // ZGC-style per-generation request ports.  Requests on one port never
     // consume or coalesce requests from the other generation.

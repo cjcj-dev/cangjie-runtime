@@ -79,7 +79,7 @@ public:
         ZStat::Initialize();
         // zGeneration.cpp:129: every generation owns a ZWorkers; the driver
         // hands each request's worker count to it (zDriver.cpp:166-176).
-        for (auto generation : {GCCycleGeneration::YOUNG, GCCycleGeneration::OLD}) {
+        for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
             if (collector.GetZGeneration(generation).Workers() == nullptr) {
                 collector.GetZGeneration(generation).InitializeWorkers(1);
             }
@@ -1015,7 +1015,7 @@ GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
 {
     RequestHarness harness;
     harness.collector.SetAdvanceEpoch(true);
-    const size_t epochBefore = harness.collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence;
+    const size_t epochBefore = harness.collector.GetCycleSnapshot(ZGenerationId::young).sequence;
     std::promise<void> returnedPromise;
     std::future<void> returned = returnedPromise.get_future();
     std::atomic<size_t> epochAfter{ epochBefore };
@@ -1023,7 +1023,7 @@ GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
     std::thread requester([&] {
         ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
         harness.resources.RequestGC(GC_REASON_YOUNG, false);
-        epochAfter.store(harness.collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence,
+        epochAfter.store(harness.collector.GetCycleSnapshot(ZGenerationId::young).sequence,
                          std::memory_order_release);
         startedAfter.store(harness.resources.IsGcStarted(), std::memory_order_release);
         returnedPromise.set_value();
@@ -1232,7 +1232,7 @@ GC_TEST(GcRequestSync, MajorFullPrecleanThenCombinedRoots)
     GC_EXPECT_TRUE(collector.TypeAt(0) == ZYoungType::major_full_preclean);
     GC_EXPECT_TRUE(collector.TypeAt(1) == ZYoungType::major_full_roots);
     GC_EXPECT_TRUE(collector.TypeAt(2) == ZYoungType::none);
-    GC_EXPECT_TRUE(collector.GetZGeneration(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::none);
+    GC_EXPECT_TRUE(collector.GetZGeneration(ZGenerationId::young).YoungType() == ZYoungType::none);
     CollectorResourcesTestPeer::Destroy(resources);
 }
 

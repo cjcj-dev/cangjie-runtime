@@ -300,12 +300,12 @@ void WCollector::PreforwardAllResurrectExportFromObjects(Generation generation)
     CurrentizeValueRootSet(resurrectedExportObjectes, generation);
     CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
 }
-void WCollector::StartRelocationTasks(GCCycleGeneration generation)
+void WCollector::StartRelocationTasks(ZGenerationId generation)
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
     ZWorkers& workers = GetWorkers(generation);
-    if (generation == GCCycleGeneration::YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers);
+    if (generation == ZGenerationId::young) manager.StartForwardFromRegions<Generation::Young>(workers);
     else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
 
@@ -335,13 +335,13 @@ bool WCollector::Preforward()
         });
         ZGlobalsPointers::flip_old_relocate_start();
         ZVerify::OnColorFlip();
-        StartRelocationTasks(GCCycleGeneration::OLD);
+        StartRelocationTasks(ZGenerationId::old);
         ZJNICritical::unblock();
     }
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     manager.DrainForwardFromRegions<Generation::Old>();
-    ZWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
+    ZWorkers& workers = GetWorkers(ZGenerationId::old);
     const std::function<void()> families[] = {
         [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
         [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
@@ -830,8 +830,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     auto liveStw = [stw]() -> const ScopedStopTheWorld* {
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
     };
-    const bool doYoungFlip = !Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG).is_phase_relocate();
-    ZWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
+    const bool doYoungFlip = !Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).is_phase_relocate();
+    ZWorkers& workers = GetWorkers(ZGenerationId::young);
 
     std::vector<MAddress> remsetVec;
     remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
@@ -914,7 +914,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Publish the relocate phase and submit page work while the
             // existing young pause still excludes mutator execution. Root
             // transition may now wait for a real page task on allocation failure.
-            StartRelocationTasks(GCCycleGeneration::YOUNG);
+            StartRelocationTasks(ZGenerationId::young);
             ZJNICritical::unblock();
         }
 
@@ -941,8 +941,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             MRT_PHASE_TIMER(ZStatPhases::PYoungConcurrentRelocate);
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
-            ForwardFromSpace(GCCycleGeneration::YOUNG);
-            manager.FinishIncompleteFromRegions(GCCycleGeneration::YOUNG);
+            ForwardFromSpace(ZGenerationId::young);
+            manager.FinishIncompleteFromRegions(ZGenerationId::young);
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         {
@@ -994,7 +994,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     continue;
                 }
                 if (kPageAgeAdaptiveTenuring &&
-                    !ShouldPromoteAge(region->GetYoungAge(), GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold)) {
+                    !ShouldPromoteAge(region->GetYoungAge(), GetGCStats(ZGenerationId::young).tenuringThreshold)) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
                         manager.EnlistStayYoungSurvivor(region);
                     } else if (!(region->OnNamedList("recent full regions"))) {
@@ -1022,7 +1022,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER(ZStatPhases::PYoungEvacRetire);
         // zGeneration.cpp:563: keep this set until the next young mark-end reset.
         // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
-        manager.FinishIncompleteFromRegions(GCCycleGeneration::YOUNG);
+        manager.FinishIncompleteFromRegions(ZGenerationId::young);
         manager.ReassembleFromSpace();
     }
 }
@@ -1555,7 +1555,7 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, ZPage* copyPage)
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, GetGCStats(ZGenerationId::young).tenuringThreshold);
     auto& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     BaseObject* toObj = reinterpret_cast<BaseObject*>(manager.AllocSharedObject(size, toAge, true));
     if (toObj == nullptr) return nullptr;
@@ -1749,7 +1749,7 @@ bool IncompleteRouteUnpublished(ZPage* region)
 }
 } // namespace
 
-void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
+void RegionManager::FinishIncompleteFromRegions(ZGenerationId generation)
 {
     // zRelocate.cpp:1041-1047: relocate() does not return with a half-copied page.
     std::vector<ZPage*> snap;
@@ -1766,7 +1766,7 @@ void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
     std::sort(snap.begin(), snap.end());
     snap.erase(std::unique(snap.begin(), snap.end()), snap.end());
 
-    const bool young = generation == GCCycleGeneration::YOUNG;
+    const bool young = generation == ZGenerationId::young;
     static std::atomic<size_t> g_zombieFinished{ 0 };
     static std::atomic<size_t> g_zombieKept{ 0 };
     size_t finished = 0;
@@ -1918,7 +1918,7 @@ void RegionManager::CompactRegion(ZPage* region)
 
     const bool fromYoung = region->IsYoungRegion();
     const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats(ZGenerationId::young).tenuringThreshold);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), 0u);
@@ -2074,7 +2074,7 @@ bool StayYoungThisCycle(ZPage* region)
     if (!kPageAgeAdaptiveTenuring) {
         return false;
     }
-    const uint32_t thr = Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold;
+    const uint32_t thr = Heap::GetHeap().GetCollector().GetGCStats(ZGenerationId::young).tenuringThreshold;
     return !ShouldPromoteAge(region->GetYoungAge(), thr);
 }
 
@@ -2633,7 +2633,7 @@ size_t ZRelocateQueue::SynchronizedWorkerCount() const
 
 PageAge ZRelocate::compute_to_age(PageAge fromAge)
 {
-    const uint32_t threshold = Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold;
+    const uint32_t threshold = Heap::GetHeap().GetCollector().GetGCStats(ZGenerationId::young).tenuringThreshold;
     return ComputeToAge(fromAge, threshold);
 }
 
@@ -2663,7 +2663,7 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                     promoted.append(prev);
                 }
             }
-            Heap::GetHeap().GetCollector().GetZGeneration(GCCycleGeneration::YOUNG)
+            Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young)
                 .relocation_set().register_flip_promoted(promoted);
         }
     private:

@@ -553,7 +553,7 @@ public:
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
             if (CopyCollector::testColoredRootResult) {
-                CopyCollector::testColoredRootResult(GCCycleGeneration::OLD, &slot);
+                CopyCollector::testColoredRootResult(ZGenerationId::old, &slot);
             }
 #endif
         });
@@ -565,7 +565,7 @@ public:
         ThreadLocal::FlushCurrentThreadMarkStacks();
 #if defined(MRT_TESTABLE_INTERNALS)
         if (CopyCollector::testColoredRootResult) {
-            CopyCollector::testColoredRootResult(GCCycleGeneration::OLD, nullptr);
+            CopyCollector::testColoredRootResult(ZGenerationId::old, nullptr);
         }
 #endif
     }
@@ -617,7 +617,7 @@ public:
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
             if (CopyCollector::testColoredRootResult) {
-                CopyCollector::testColoredRootResult(GCCycleGeneration::YOUNG, &slot);
+                CopyCollector::testColoredRootResult(ZGenerationId::young, &slot);
             }
 #endif
         });
@@ -626,7 +626,7 @@ public:
         ThreadLocal::FlushCurrentThreadMarkStacks();
 #if defined(MRT_TESTABLE_INTERNALS)
         if (CopyCollector::testColoredRootResult) {
-            CopyCollector::testColoredRootResult(GCCycleGeneration::YOUNG, nullptr);
+            CopyCollector::testColoredRootResult(ZGenerationId::young, nullptr);
         }
 #endif
     }
@@ -653,9 +653,9 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     MarkYoungRootsTask task(*this, [&] {
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
         VisitMinorValueRoots(visitor);
-    }, GetWorkers(GCCycleGeneration::YOUNG).active_workers());
+    }, GetWorkers(ZGenerationId::young).active_workers());
     SuspendibleThreadSetJoiner joiner;
-    GetWorkers(GCCycleGeneration::YOUNG).run(&task);
+    GetWorkers(ZGenerationId::young).run(&task);
 
 }
 
@@ -707,17 +707,17 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
-        if (GetZGeneration(GCCycleGeneration::YOUNG).IsMajorRoots()) {
+        if (GetZGeneration(ZGenerationId::young).IsMajorRoots()) {
             MarkOldObjectIfActive(object, true);
         }
         return;
     }
     (void)workStack;
     if (finalizable) {
-        const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::YOUNG))
+        const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
             .MarkObjectIfActive<false, true, true, true>(from_object(object));
     } else {
-        const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::YOUNG))
+        const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
             .MarkObjectIfActive<false, true, true, false>(from_object(object));
     }
 }
@@ -821,7 +821,7 @@ private:
 
 void WCollector::StartYoungMarkWork()
 {
-    ZWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
+    ZWorkers& workers = GetWorkers(ZGenerationId::young);
     youngCycle.Mark().BindWorkers(&workers);
     youngCycle.Mark().Start();
     MarkingStacks::VerifyEmpty(youngCycle.Mark().Stripes().Population());
@@ -832,7 +832,7 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::YOUNG))
+    const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
         .MarkObjectIfActive<false, false, true, false>(from_object(object));
 }
 
@@ -849,7 +849,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     (void)workStack;
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = ZPage::GetTdWindowCount();
-    ZWorkers& workersSet = GetWorkers(GCCycleGeneration::YOUNG);
+    ZWorkers& workersSet = GetWorkers(ZGenerationId::young);
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
     ZMark& domain = youngCycle.Mark();
     (void)PublishHandshakeMarkWork(workStack, &domain);
@@ -1095,7 +1095,7 @@ void CopyCollector::StartOldMarkWork()
 {
     // ZGenerationOld::mark_start -> ZMark::start. Initialize the existing M3
     // domain before publishing old's mark phase to mutators and young workers.
-    ZWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
+    ZWorkers& workers = GetWorkers(ZGenerationId::old);
     oldCycle.Mark().BindWorkers(&workers);
     oldCycle.Mark().Start();
 }
@@ -1105,7 +1105,7 @@ void CopyCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) con
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::OLD));
+    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::old));
     if (gcThread) {
         cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
     } else {
@@ -1116,7 +1116,7 @@ void CopyCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) con
 size_t CopyCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
 {
     (void)workStack;
-    ZWorkers& workersSet = GetWorkers(GCCycleGeneration::OLD);
+    ZWorkers& workersSet = GetWorkers(ZGenerationId::old);
     ZMark& domain = oldCycle.Mark();
     domain.BindWorkers(&workersSet);
     (void)domain.Stacks().Flush(domain.Stripes(), true);

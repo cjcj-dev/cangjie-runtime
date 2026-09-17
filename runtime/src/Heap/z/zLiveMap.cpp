@@ -31,8 +31,8 @@ static const ZStatCounter ZCounterMarkSegmentResetContention("Contention", "Mark
 // ZGeneration::generation(id)->seqnum(): the per-generation cycle sequence.
 uint64_t ZLiveMap::generation_seqnum(ZGenerationId id)
 {
-    const GCCycleGeneration generation = id == ZGenerationId::young ? GCCycleGeneration::YOUNG
-                                                                    : GCCycleGeneration::OLD;
+    const ZGenerationId generation = id == ZGenerationId::young ? ZGenerationId::young
+                                                                    : ZGenerationId::old;
     return Heap::GetHeap().GetCollector().GetCycleSnapshot(generation).sequence;
 }
 

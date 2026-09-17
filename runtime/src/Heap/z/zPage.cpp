@@ -261,8 +261,8 @@ namespace MapleRuntime {
 // ZPage::reset_seqnum (zPage.cpp:90-93), after owner selection and before publication.
 void ZPage::ResetPageSequence()
 {
-    const auto owner = IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
-    const auto other = IsYoungRegion() ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG;
+    const auto owner = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
+    const auto other = IsYoungRegion() ? ZGenerationId::old : ZGenerationId::young;
     auto& collector = Heap::GetHeap().GetCollector();
     _seqnum = static_cast<uint32_t>(collector.GetCycleSnapshot(owner).sequence);
     _seqnum_other = static_cast<uint32_t>(collector.GetCycleSnapshot(other).sequence);
@@ -270,8 +270,8 @@ void ZPage::ResetPageSequence()
 
 uint64_t ZPage::GetSnapshotEpoch() const
 {
-    const GCCycleGeneration generation = GetOwnerGeneration() == Generation::Young
-        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    const ZGenerationId generation = GetOwnerGeneration() == Generation::Young
+        ? ZGenerationId::young : ZGenerationId::old;
     return Heap::GetHeap().GetCollector().GetCycleSnapshot(generation).sequence;
 }
 } // namespace MapleRuntime

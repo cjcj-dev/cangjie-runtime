@@ -251,8 +251,8 @@ public:
     ~CopyCollector() override = default;
     ZMark* MajorMark() { return oldCycle.MarkPtr(); }
     const ZMark* MajorMark() const { return oldCycle.MarkPtr(); }
-    virtual void PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex);
-    virtual void PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex);
+    virtual void PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex);
+    virtual void PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex);
 
     static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                 Mutator& mutator);
@@ -278,11 +278,11 @@ public:
     // Observers see the product result after dispatch; none supplies work.
     // Static storage keeps the instance layout identical in both build shapes.
     // Observes the post-closure slot; nullptr denotes that worker completing.
-    static std::function<void(GCCycleGeneration, NativeSlot*)> testColoredRootResult;
+    static std::function<void(ZGenerationId, NativeSlot*)> testColoredRootResult;
     static std::function<void()> testCyclePrepared;
     static std::function<void()> testYoungMarkStarted;
     static std::function<void()> testOldMarkStarted;
-    static std::function<void(GCCycleGeneration, MarkStartPoint, const ZMark*)> testMarkStartState;
+    static std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> testMarkStartState;
     static std::function<void()> testYoungMarkCompleted;
     static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
     static std::function<void(Mutator&)> testOldMarkThreadResult;
@@ -407,7 +407,7 @@ public:
     MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
     virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
 
-    GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD) override
+    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old) override
     {
         return GetZGeneration(generation).Stats();
     }
@@ -416,9 +416,9 @@ public:
 
 
 protected:
-    virtual void ForwardFromSpace(GCCycleGeneration generation);
+    virtual void ForwardFromSpace(ZGenerationId generation);
     virtual void RefineFromSpace();
-    virtual void DoGarbageCollection(GCCycleGeneration generation) = 0;
+    virtual void DoGarbageCollection(ZGenerationId generation) = 0;
     void RequestGCInternal(GCReason reason, bool async) override { collectorResources.RequestGC(reason, async); }
 
     Allocator& theAllocator;
@@ -502,7 +502,7 @@ protected:
 
     // enum all common roots.
     void EnumAllCommonRoots(ZWorkers& workers);
-    ZWorkers& GetWorkers(GCCycleGeneration generation) const
+    ZWorkers& GetWorkers(ZGenerationId generation) const
     {
         return *GetZGeneration(generation).Workers();
     }

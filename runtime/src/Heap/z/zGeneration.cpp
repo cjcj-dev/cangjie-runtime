@@ -61,13 +61,10 @@ namespace MapleRuntime {
 ZGenerationYoung* ZGeneration::_young = nullptr;
 ZGenerationOld* ZGeneration::_old = nullptr;
 
-ZGenerationYoung::ZGenerationYoung() : ZGeneration(GCCycleGeneration::YOUNG) { _young = this; }
-ZGenerationOld::ZGenerationOld() : ZGeneration(GCCycleGeneration::OLD) { _old = this; }
+ZGenerationYoung::ZGenerationYoung() : ZGeneration(ZGenerationId::young) { _young = this; }
+ZGenerationOld::ZGenerationOld() : ZGeneration(ZGenerationId::old) { _old = this; }
 
-ZGenerationId ZGeneration::id() const
-{
-    return _cycle == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
-}
+ZGenerationId ZGeneration::id() const { return _id; }
 
 ZGenerationIdOptional ZGeneration::id_optional() const
 {
@@ -84,11 +81,11 @@ ZGeneration* ZGeneration::generation(ZGenerationId id)
     return id == ZGenerationId::young ? static_cast<ZGeneration*>(_young) : static_cast<ZGeneration*>(_old);
 }
 
-ZGeneration::ZGeneration(GCCycleGeneration generation)
+ZGeneration::ZGeneration(ZGenerationId generation)
     : mark(std::make_unique<ZMark>(ZMarkStripesMax,
-          generation == GCCycleGeneration::YOUNG ? MarkingStacks::MarkingGeneration::YOUNG
+          generation == ZGenerationId::young ? MarkingStacks::MarkingGeneration::YOUNG
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
-      _id(generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old),
+      _id(generation == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old),
       _cycle(generation),
       _relocation_set(this),
       _relocate(std::make_unique<ZRelocate>(this))
@@ -99,9 +96,9 @@ ZGeneration::ZGeneration(GCCycleGeneration generation)
 ZGeneration::~ZGeneration() = default;
 
 // ZGC zGeneration.cpp:197-207: select policy at the generation boundary.
-static double fragmentation_limit(GCCycleGeneration generation)
+static double fragmentation_limit(ZGenerationId generation)
 {
-    if (generation == GCCycleGeneration::OLD) {
+    if (generation == ZGenerationId::old) {
         return ZFragmentationLimit;
     } else {
         return ZYoungCompactionLimit;
@@ -118,7 +115,7 @@ void ReportSkippedStackMapCounts();
 // supplies the existing allocator/mark domain; this cycle owns phase and seq.
 YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
 {
-    CHECK(_cycle == GCCycleGeneration::YOUNG);
+    CHECK(_cycle == ZGenerationId::young);
     CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
@@ -189,7 +186,7 @@ YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
 // ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
 void ZGeneration::StartOldMark(WCollector& collector)
 {
-    CHECK(_cycle == GCCycleGeneration::OLD);
+    CHECK(_cycle == ZGenerationId::old);
     CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (CopyCollector::testMarkStartState) {
@@ -239,22 +236,22 @@ void ZGeneration::StartOldMark(WCollector& collector)
 // young sequence once for the whole old relocation, not once per forwarding.
 void ZGeneration::RecordYoungSequenceAtRelocateStart(uint64_t youngSequence)
 {
-    CHECK(_cycle == GCCycleGeneration::OLD);
+    CHECK(_cycle == ZGenerationId::old);
     youngSequenceAtRelocateStart.store(youngSequence, std::memory_order_release);
 }
 
 bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 {
-    CHECK(_cycle == GCCycleGeneration::OLD);
+    CHECK(_cycle == ZGenerationId::old);
     // zGeneration.inline.hpp:174-182: each young mark start flips the faces.
     return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
 }
 
-void Collector::PublishGenerationPhase(GCCycleGeneration generation, ZGenerationPhase value)
+void Collector::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
 {
     ZGeneration& cycle = GetZGeneration(generation);
     const ZGenerationPhase before = cycle.GcPhase();
-    if (generation == GCCycleGeneration::OLD &&
+    if (generation == ZGenerationId::old &&
         value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
         oldCycle.RecordYoungSequenceAtRelocateStart(youngCycle.Sequence());
     }
@@ -267,7 +264,7 @@ void WCollector::MarkYoungRootObject(BaseObject* object) const
 {
     // #596's barrier already established current and selected young. Keep the
     // generation mark-phase assertion at ZGeneration::mark_object's entry.
-    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(GCCycleGeneration::YOUNG));
+    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young));
     cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
 }
 
@@ -740,7 +737,7 @@ void WCollector::FinishYoungMarkHandoff()
         tenuringIn.liveByAge[age] += live;
     }
     tenuringIn.youngGarbage = youngStats.candidateBytes > liveBytes ? (youngStats.candidateBytes - liveBytes) : 0;
-    GCStats& gcStats = GetGCStats(GCCycleGeneration::YOUNG);
+    GCStats& gcStats = GetGCStats(ZGenerationId::young);
     gcStats.youngCandidateBytes = youngStats.candidateBytes;
     gcStats.youngPromotedBytes = liveBytes;
     for (uint32_t i = 0; i < kPageAgeCount; ++i) {
@@ -827,7 +824,7 @@ void ZGenerationYoung::concurrent_relocate(WCollector& collector)
     size_t allocatedAfter = space.AllocatedBytes();
     collector.youngStats.reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    collector.GetGCStats(GCCycleGeneration::YOUNG).collectedBytes = collector.youngStats.reclaimedBytes;
+    collector.GetGCStats(ZGenerationId::young).collectedBytes = collector.youngStats.reclaimedBytes;
 
     if (collector.youngStw != nullptr) {
         collector.youngStw.reset();
@@ -1235,7 +1232,7 @@ void ZGeneration::InitializeWorkers(uint32_t capacity)
 {
     CHECK(workers == nullptr);
     workers = std::make_unique<ZWorkers>(_cycle, capacity, &statWorkers);
-    if (_cycle == GCCycleGeneration::OLD) {
+    if (_cycle == ZGenerationId::old) {
         weakRootsProcessor = std::make_unique<ZWeakRootsProcessor>(workers.get());
     }
 }
@@ -1248,9 +1245,9 @@ void ZGeneration::StopWorkers()
 }
 
 namespace MapleRuntime {
-void WCollector::DoGarbageCollection(GCCycleGeneration generation)
+void WCollector::DoGarbageCollection(ZGenerationId generation)
 {
-    if (generation == GCCycleGeneration::YOUNG) {
+    if (generation == ZGenerationId::young) {
         DoYoungGarbageCollection();
         return;
     }
@@ -1325,9 +1322,9 @@ void ZGenerationOld::pause_relocate_start(WCollector& collector)
 
 void ZGenerationOld::concurrent_relocate(WCollector& collector)
 {
-    collector.ForwardFromSpace(GCCycleGeneration::OLD);
+    collector.ForwardFromSpace(ZGenerationId::old);
     reinterpret_cast<RegionSpace&>(collector.GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
-        GCCycleGeneration::OLD);
+        ZGenerationId::old);
     collector.MergeResurrectExportObjects(Generation::Old);
     collector.PostResolveCycleTask();
     collector.CollectSmallSpace();
@@ -1340,7 +1337,7 @@ void WCollector::RunOldCollection()
 }
 
 namespace MapleRuntime {
-void CopyCollector::PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex)
+void CopyCollector::PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex)
 {
     const bool continuingPrelude = GetZGeneration(generation).Snapshot().active;
     if (!continuingPrelude) {
@@ -1375,7 +1372,7 @@ void CopyCollector::PreGarbageCollection(GCCycleGeneration generation, bool isCo
 namespace MapleRuntime {
 void ZGeneration::SetYoungType(ZYoungType type)
 {
-    CHECK(_cycle == GCCycleGeneration::YOUNG);
+    CHECK(_cycle == ZGenerationId::young);
     youngType.store(type, std::memory_order_release);
 }
 
@@ -1396,7 +1393,7 @@ YoungTypeSetter::~YoungTypeSetter()
 namespace MapleRuntime {
 void ZGeneration::SelectTenuringThreshold(const TenuringInputs& inputs)
 {
-    CHECK(_cycle == GCCycleGeneration::YOUNG);
+    CHECK(_cycle == ZGenerationId::young);
     // zGeneration.cpp:704-715: preclean promotes all, other types compute.
     stats.tenuringThreshold = YoungType() == ZYoungType::major_full_preclean
         ? 0 : ComputeTenuringThreshold(inputs);
@@ -1425,7 +1422,7 @@ void ZGeneration::flip_age_pages(const ZRelocationSetSelector* selector)
 void ZGeneration::select_relocation_set(bool promote_all)
 {
     ZRelocationSetSelector selector(FragmentationLimit());
-    const ZGenerationId id = _cycle == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+    const ZGenerationId id = _cycle == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old;
     {
         ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, nullptr);
         for (ZPage* page; pt_iter.next(&page);) {
@@ -1442,7 +1439,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
         free_empty_pages(&selector, 0);
     }
     selector.select();
-    if (_cycle == GCCycleGeneration::YOUNG) {
+    if (_cycle == ZGenerationId::young) {
         TenuringInputs inputs;
         inputs.promoteAll = promote_all;
         const ZRelocationSetSelectorStats st = selector.stats();
@@ -1453,7 +1450,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
         SelectTenuringThreshold(inputs);
     }
     _relocation_set.install(&selector);
-    if (_cycle == GCCycleGeneration::YOUNG) {
+    if (_cycle == ZGenerationId::young) {
         ZWorkers* w = Workers();
         if (w != nullptr) {
             ZRelocate::flip_age_pages(*w, selector.not_selected_small());
