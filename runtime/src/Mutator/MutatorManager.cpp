@@ -127,14 +127,14 @@ Mutator* MutatorManager::CreateMutator()
         mutator->Init();
         mutator->InitTid();
         BindMutator(*mutator);
-        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
+        mutator->SetMutatorPhase(GCPhase::GC_PHASE_IDLE);
         ConcurrencyModel::SetMutator(mutator);
     } else {
         MutatorManagementRLock();
         mutator->Init();
         mutator->InitTid();
         BindMutator(*mutator);
-        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
+        mutator->SetMutatorPhase(GCPhase::GC_PHASE_IDLE);
     }
     MutatorManagementRUnlock();
     return mutator;
@@ -199,7 +199,7 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     mutator->InitProtectStackAddr();
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
-    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
+    mutator->SetMutatorPhase(GCPhase::GC_PHASE_IDLE);
     {
         std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
         runtimeMutators.insert(mutator);

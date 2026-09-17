@@ -99,7 +99,7 @@ public:
         Mutator* mutator = new (std::nothrow) Mutator();
         CHECK_DETAIL(mutator != nullptr, "new Mutator failed");
         mutator->Init();
-        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
+        mutator->SetMutatorPhase(GCPhase::GC_PHASE_IDLE);
         return mutator;
     }
 
