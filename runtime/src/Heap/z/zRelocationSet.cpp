@@ -36,6 +36,7 @@
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zRelocationSetSelector.inline.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zForwardingEntry.hpp"
