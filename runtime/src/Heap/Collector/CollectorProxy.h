@@ -75,7 +75,10 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override { return currentCollector->ShouldIgnoreRequest(request); }
 
-    CopyCollector& GetCurrentCollector() const { return *currentCollector; }
+    CopyCollector& GetCurrentCollector() const
+    {
+        return currentCollector != nullptr ? *currentCollector : const_cast<WCollector&>(wCollector);
+    }
 
     FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {
