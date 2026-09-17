@@ -1,6 +1,6 @@
 #include "Heap/Collector/FinalizerProcessor.h"
-#include "Heap/z/workerThread.hpp"
 #include "gc_heap_fixture.hpp"
+#include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Mutator/Mutator.h"
 
@@ -70,7 +70,7 @@ GC_TEST(FnlzRoots, VisitFinalizersCountMatchesRegister)
 
 GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
 {
-    WorkerThread::set_worker_id(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     // ZReferenceProcessor::is_strongly_live (zReferenceProcessor.cpp:157):
     // reference processing operates on objects belonging to the installed heap.
@@ -95,7 +95,7 @@ GC_OTHER_VM_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
 
 GC_OTHER_VM_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
 {
-    WorkerThread::set_worker_id(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     // ZReferenceProcessor::is_strongly_live (zReferenceProcessor.cpp:157):
     // reference processing operates on objects belonging to the installed heap.

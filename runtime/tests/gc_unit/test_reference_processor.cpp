@@ -7,27 +7,17 @@
 #include <vector>
 
 #include "Heap/z/zReferenceProcessor.hpp"
-#include "Heap/z/workerThread.hpp"
 #include "gc_heap_fixture.hpp"
+#include "gc_worker_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace {
-struct WorkerIdGuard {
-    explicit WorkerIdGuard(uint32_t id)
-    {
-        WorkerThread::set_worker_id(id);
-    }
-    ~WorkerIdGuard() { WorkerThread::set_worker_id(UINT32_MAX); }
-};
-}
-
 GC_TEST(ReferenceProcessor, UnsupportedKindsFailClosed)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     ReferenceProcessor processor;
     alignas(8) unsigned char storage[16] = {};
     auto* object = reinterpret_cast<BaseObject*>(storage);
@@ -41,7 +31,7 @@ GC_TEST(ReferenceProcessor, UnsupportedKindsFailClosed)
 
 GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
@@ -63,7 +53,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
 // the same referent must retain one original discovery lifecycle.
 GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
@@ -80,7 +70,7 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryIsClaimedOnce)
 
 GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     GC_EXPECT_TRUE(GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0));
     GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(fx.region0, fx.obj0));
@@ -101,7 +91,7 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
 
 GC_TEST(ReferenceProcessor, StrongWeakReferentIsNotCleared)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -118,7 +108,7 @@ GC_TEST(ReferenceProcessor, StrongWeakReferentIsNotCleared)
 
 GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -138,7 +128,7 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(ReferenceProcessor, ProcessConsumerReloadsWinningWeakCasValue)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     BaseObject* replacement = fx.PlaceObject(fx.heapStart + 128);
     HeapSlot<>& referent =
@@ -164,7 +154,7 @@ GC_TEST(ReferenceProcessor, ProcessConsumerReloadsWinningWeakCasValue)
 
 GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -183,7 +173,7 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
 
 GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
 {
-    WorkerIdGuard worker(0);
+    WorkerFixture worker(0);
     GcHeapFixture fx;
     ReferenceProcessor processor;
     constexpr size_t kWorkers = 8;
@@ -202,11 +192,10 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
     workers.reserve(kWorkers);
     for (size_t worker = 0; worker < kWorkers; ++worker) {
         workers.emplace_back([&, worker] {
-            WorkerThread::set_worker_id(static_cast<uint32_t>(worker));
+            WorkerFixture id(static_cast<uint32_t>(worker));
             for (size_t i = 0; i < kPerWorker; ++i) {
                 (void)processor.DiscoverReference(objects[worker * kPerWorker + i], ReferenceType::FINAL);
             }
-            WorkerThread::set_worker_id(UINT32_MAX);
         });
     }
     for (std::thread& worker : workers) {

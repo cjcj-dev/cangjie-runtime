@@ -582,7 +582,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
         RelocationReceiptTestAccess::RunMajorMark(collector);
     }
     const size_t discovered =
-        collector.GetFinalizerProcessor().GetReferenceProcessor().Discovered(ReferenceType::WEAK);
+        resources.GetFinalizerProcessor().GetReferenceProcessor().Discovered(ReferenceType::WEAK);
     const bool referentCleared = is_null(WeakGraph::Field(graph.weak).GetFieldValue());
     const bool strongMarked = graph.IsMarked(graph.strongRoot);
     const bool weakMarked = graph.IsMarked(graph.weak);
