@@ -239,8 +239,8 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
 {
     GcHeapFixture heap;
     auto& collector = Heap::GetHeap().GetCollector();
-    const auto young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
-    const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    const GCPhase youngPhase = collector.GetGCPhase(GCCycleGeneration::YOUNG);
+    const GCPhase oldPhase = collector.GetGCPhase(GCCycleGeneration::OLD);
     for (bool marking : { false, true }) {
         collector.PublishGenerationPhase(GCCycleGeneration::YOUNG,
             marking ? GCPhase::GC_PHASE_ENUM : GCPhase::GC_PHASE_IDLE);
@@ -254,8 +254,8 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
         size_t count = 0;
         fwd->relocated_remembered_fields_apply_to_published([&](MAddress) { ++count; });
         fwd->Destroy();
-        collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, young.phase);
-        collector.PublishGenerationPhase(GCCycleGeneration::OLD, old.phase);
+        collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, youngPhase);
+        collector.PublishGenerationPhase(GCCycleGeneration::OLD, oldPhase);
         GC_EXPECT_EQ(count, marking ? 1u : 0u);
     }
 }
