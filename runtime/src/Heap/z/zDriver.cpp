@@ -459,20 +459,20 @@ CollectorResources::CollectorResources(Collector& c) : collector(c) {}
 namespace MapleRuntime {
 ZWorkers& CollectorResources::GetWorkers(ZGenerationId generation) const
 {
-    return *collector.GetZGeneration(generation).Workers();
+    return *ActiveCollector().GetZGeneration(generation).Workers();
 }
 
 GCStats& CollectorResources::GetGCStats(ZGenerationId generation)
 {
-    return collector.GetZGeneration(generation).Stats();
+    return ActiveCollector().GetZGeneration(generation).Stats();
 }
 }
 
 namespace MapleRuntime {
 bool CollectorResources::IsGcStarted() const
 {
-    return collector.GetCycleSnapshot(ZGenerationId::young).active ||
-           collector.GetCycleSnapshot(ZGenerationId::old).active;
+    return ActiveCollector().GetCycleSnapshot(ZGenerationId::young).active ||
+           ActiveCollector().GetCycleSnapshot(ZGenerationId::old).active;
 }
 }
 

@@ -107,7 +107,7 @@ public:
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
     Collector& bound_collector() { return collector; }
-    Collector& ActiveCollector()
+    Collector& ActiveCollector() const
     {
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
         if (testCollector != nullptr) {
