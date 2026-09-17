@@ -19,6 +19,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Inspector/CjHeapData.h"
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zResurrection.inline.hpp"
 
@@ -32,20 +33,6 @@ class CollectorResources;
 #if defined(MRT_TESTABLE_INTERNALS)
 class CollectorResourcesTestPeer;
 #endif
-
-// zDirector.hpp:30-42: the director is a ZThread; run_thread is its sampling
-// loop and terminate wakes it out of the monitor wait.
-class ZDirector final : public ZThread {
-public:
-    explicit ZDirector(CollectorResources& resources);
-    void run_thread() override;
-    void terminate() override;
-    static void evaluate_rules();
-    bool wait_for_tick();
-private:
-    static ZDirector* _director;
-    CollectorResources& resources;
-};
 
 // zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
 // receives requests from their port and whose terminate closes that port.

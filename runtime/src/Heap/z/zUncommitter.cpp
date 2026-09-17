@@ -11,7 +11,7 @@
 #include <chrono>
 
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/z/zDirector.hpp"
+#include "Base/Globals.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"
 
@@ -190,7 +190,7 @@ bool Uncommitter::Activate()
     nextUncommitNs = 0;
     uncommitted = 0;
     const size_t committed = regions.GetCommittedCapacity();
-    const size_t retain = MinCapacity(regions.pageAllocatorUsed, kGcTriggerYoungFixedBytes);
+    const size_t retain = MinCapacity(regions.pageAllocatorUsed, 32 * MB);
     toUncommit = committed > retain ? committed - retain : 0;
     return true;
 }
@@ -209,7 +209,7 @@ size_t Uncommitter::Uncommit()
             return 0;
         }
         const size_t committed = regions.GetCommittedCapacity();
-        const size_t retain = MinCapacity(regions.pageAllocatorUsed, kGcTriggerYoungFixedBytes);
+        const size_t retain = MinCapacity(regions.pageAllocatorUsed, 32 * MB);
         const size_t release = committed > retain ? committed - retain : 0;
         const size_t flush = std::min({release, toUncommit, ChunkLimit(partition.GetMaxCapacity())});
         // zUncommitter.cpp:395: flush memory from the mapped cache for uncommit.

@@ -34,20 +34,6 @@
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
-std::atomic<uint64_t> g_gcTriggerArmed{ 0 };
-std::atomic<uint64_t> g_gcTriggerTurned{ 0 };
-std::atomic<uint64_t> g_gcTriggerRuleTimer{ 0 };
-std::atomic<uint64_t> g_gcTriggerRuleWarmup{ 0 };
-std::atomic<uint64_t> g_gcTriggerRuleAllocRate{ 0 };
-std::atomic<uint64_t> g_gcTriggerRuleHighUsage{ 0 };
-std::atomic<uint64_t> g_gcTriggerRuleMajorAllocRateArmed{ 0 };
-std::atomic<uint64_t> g_gcTriggerRuleMajorAllocRate{ 0 };
-std::atomic<uint64_t> g_gcTriggerRuleProactiveArmed{ 0 };
-std::atomic<uint64_t> g_gcTriggerRuleProactive{ 0 };
-std::atomic<uint32_t> g_gcTriggerYoungWorkers{ 1 };
-std::atomic<uint32_t> g_gcTriggerOldWorkers{ 1 };
-
-
 extern "C" uintptr_t MRT_StopGCWork()
 {
     Heap::GetHeap().StopGCWork();

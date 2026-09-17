@@ -314,13 +314,9 @@ private:
     bool initialized = false;
 };
 
-struct GcTriggerInputs;
 class ZWorkers;
 class RegionManager;
 
-// zStat.hpp:385-401, zStat.cpp:1022-1095: the stat thread is a ZThread that
-// samples on a metronome tick and prints on the statistics interval. The
-// constructor starts the thread; ConcurrentGCThread::stop ends it.
 class ZStat final : public ZThread {
 public:
     ZStat();
@@ -331,12 +327,6 @@ public:
     static ZStatCollection& Collections();
     static ZStatHeap& YoungHeap();
     static ZStatHeap& OldHeap();
-    // zDirector.cpp:651-678 sample_worker_resize_stats: worker activity is read
-    // under ZWorkers::resizing_lock; the worker budget is the ZYoungGCThreads
-    // flag in ZGC and the caller's concurrent budget here.
-    static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                              RegionManager& regions, ZWorkers& youngWorkers, ZWorkers& oldWorkers,
-                                              uint32_t workerCapacity);
     // Existing GCLOG kind observer. It does not select sampler identity or group.
     static void EnterStwScope();
     static void ExitStwScope();
