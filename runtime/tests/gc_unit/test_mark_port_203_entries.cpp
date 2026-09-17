@@ -125,7 +125,8 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 #if defined(MRT_TESTABLE_INTERNALS)
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -137,10 +138,10 @@ namespace MapleRuntime {
 struct MarkPort203TestAccess {
     static void Bind(CollectorResources& resources, CopyCollector* collector, int32_t count = 1)
     {
-        if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);
+        if (collector != nullptr && resources.testCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
         }
-        resources.collectorProxy.currentCollector = collector;
+        resources.testCollector = collector;
         resources.concurrentGcThreadCount = count;
     }
     static void Collect(WCollector& collector, bool major)

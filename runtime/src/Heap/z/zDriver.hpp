@@ -28,7 +28,6 @@ namespace MapleRuntime {
 enum class GCDriverKind : uint8_t { MINOR, MAJOR };
 
 class Collector;
-class CollectorProxy;
 class CollectorResources;
 #if defined(MRT_TESTABLE_INTERNALS)
 class CollectorResourcesTestPeer;
@@ -67,9 +66,11 @@ class CollectorResources {
 #endif
     friend class ZDirector;
     friend class ZDriver;
+    friend struct RelocationReceiptTestAccess;
+    friend struct MarkPort203TestAccess;
 public:
     // a collectorResources without a collector entity is functionless
-    explicit CollectorResources(CollectorProxy& proxy);
+    explicit CollectorResources(Collector& collector);
     ATTR_NO_INLINE virtual ~CollectorResources() = default;
 
     void Init();
@@ -103,6 +104,7 @@ public:
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
+    Collector& bound_collector() { return collector; }
 
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
 
@@ -150,9 +152,9 @@ private:
     // zDriver.cpp:59-72: held by young; old releases it for its body.
     std::mutex driverLock;
 #if defined(MRT_GC_UNIT_TESTS)
-    // Deterministic unit builds can replace only the task executor.  The
-    // default product retains CollectorProxy as its sole owner and ABI shape.
+public:
     Collector* testCollector = nullptr;
+private:
     std::function<void()> testAfterYoungPrelude;
     std::atomic<size_t> testCompletionCount { 0 };
 #endif
@@ -171,7 +173,7 @@ private:
     ZStat* statistics = nullptr;
     int32_t concurrentGcThreadCount = 1;
     std::atomic<bool> gcThreadRunning = { false };
-    CollectorProxy& collectorProxy;
+    Collector& collector;
     FinalizerProcessor finalizerProcessor;
 };
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.

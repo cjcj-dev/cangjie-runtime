@@ -33,7 +33,8 @@
 #include "Heap/WCollector/WCollector.h"
 #undef protected
 #undef private
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -42,7 +43,7 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
-        resources.collectorProxy.currentCollector = collector;
+        resources.testCollector = collector;
     }
 };
 } // namespace MapleRuntime

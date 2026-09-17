@@ -17,7 +17,8 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zRelocate.hpp"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
@@ -39,7 +40,7 @@ struct RelocationReceiptTestAccess {
 #if defined(MRT_TESTABLE_INTERNALS)
     static void BindCollector(CollectorResources& resources, CopyCollector& collector)
     {
-        resources.collectorProxy.currentCollector = &collector;
+        resources.testCollector = &collector;
     }
 #endif
 };

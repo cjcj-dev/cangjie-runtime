@@ -21,7 +21,7 @@
 
 #include "Base/SysCall.h"
 #include "CangjieRuntime.h"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "Heap/z/zStat.hpp"
@@ -114,8 +114,8 @@ void CollectorResources::Init()
     GetGCStats(ZGenerationId::old).Init();
     ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();
-    collectorProxy.GetZGeneration(ZGenerationId::young).CycleStats().Initialize(now);
-    collectorProxy.GetZGeneration(ZGenerationId::old).CycleStats().Initialize(now);
+    collector.GetZGeneration(ZGenerationId::young).CycleStats().Initialize(now);
+    collector.GetZGeneration(ZGenerationId::old).CycleStats().Initialize(now);
     // zHeap.cpp: ZHeap owns _stat; its constructor starts the thread.
     statistics = new ZStat();
     StartGCThreads();
@@ -175,8 +175,8 @@ void CollectorResources::StopGCThreads()
     minorDriver = nullptr;
     majorDriver = nullptr;
     // Drivers have terminated; no worker task can be submitted any more.
-    collectorProxy.GetZGeneration(ZGenerationId::young).StopWorkers();
-    collectorProxy.GetZGeneration(ZGenerationId::old).StopWorkers();
+    collector.GetZGeneration(ZGenerationId::young).StopWorkers();
+    collector.GetZGeneration(ZGenerationId::old).StopWorkers();
     gcThreadRunning.store(false, std::memory_order_release);
 }
 
@@ -230,9 +230,9 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
 #if defined(MRT_GC_UNIT_TESTS)
-    Collector* collector = testCollector != nullptr ? testCollector : static_cast<Collector*>(&collectorProxy);
+    Collector* activeCollector = testCollector != nullptr ? testCollector : &collector;
 #else
-    Collector* collector = static_cast<Collector*>(&collectorProxy);
+    Collector* activeCollector = &collector;
 #endif
     ZDriverPort& port = request.cause() == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
     if (ZAbort::should_abort()) {
@@ -248,7 +248,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     // ZServiceabilityCycleTracer spans the request, including all young
     // prelude phases of a major. Capture existing generation stats before reuse.
     const auto accumulate = [&](ZGenerationId generation) {
-        GCStats& stats = collector->GetGCStats(generation);
+        GCStats& stats = activeCollector->GetGCStats(generation);
         if (firstGeneration) liveBefore = stats.liveBytesBeforeGC;
         firstGeneration = false;
         liveAfter = stats.liveBytesAfterGC;
@@ -263,27 +263,27 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     const bool warmup = request.cause() == GC_REASON_WARMUP;
     // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
     // selected worker counts into each generation's ZWorkers.
-    collector->GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);
+    activeCollector->GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);
     if (request.cause() != GC_REASON_YOUNG) {
-        collector->GetZGeneration(ZGenerationId::old).Workers()->set_active_workers(oldCount);
+        activeCollector->GetZGeneration(ZGenerationId::old).Workers()->set_active_workers(oldCount);
     }
 
     // zDriver.cpp:416-436: full causes preclean with promote-all, then
     // establish the combined young/old roots cycle. Other causes use partial roots.
     if (request.cause() != GC_REASON_YOUNG) {
         ZGCIdMajor majorId(GCIdMark::Current(), 'Y');
-        collector->GetZGeneration(ZGenerationId::old).SelectReason(
+        activeCollector->GetZGeneration(ZGenerationId::old).SelectReason(
             request.cause(), GCTask::ASYNC_TASK_INDEX);
         const bool preclean = ShouldPrecleanYoung(request.cause());
         if (preclean) {
-            RunYoungCollection(*collector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
+            RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
             accumulate(ZGenerationId::young);
             if (ZAbort::should_abort()) {
                 CancelDriverRequestLifecycle(&port == &minorDriverPort ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
                 return false;
             }
         }
-        RunYoungCollection(*collector, GCTask::ASYNC_TASK_INDEX,
+        RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX,
                            preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
         accumulate(ZGenerationId::young);
 #if defined(MRT_GC_UNIT_TESTS)
@@ -302,11 +302,11 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     const uint64_t index = GCTask::ASYNC_TASK_INDEX;
     if (request.cause() == GC_REASON_YOUNG) {
         ZGCIdMinor minorId(GCIdMark::Current());
-        RunYoungCollection(*collector, index, ZYoungType::minor, warmup);
+        RunYoungCollection(*activeCollector, index, ZYoungType::minor, warmup);
         accumulate(ZGenerationId::young);
     } else {
         ZGCIdMajor majorId(GCIdMark::Current(), 'O');
-        RunCollection(*collector, index, request.cause(), warmup);
+        RunCollection(*activeCollector, index, request.cause(), warmup);
         accumulate(ZGenerationId::old);
     }
     (request.cause() == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
@@ -349,7 +349,7 @@ bool CollectorResources::ProcessDriverRequest(ZDriverPort& port, const ZDriverRe
 
 void CollectorResources::CancelDriverRequestLifecycle(GCDriverKind kind)
 {
-    collectorProxy.GetZGeneration(kind == GCDriverKind::MINOR
+    collector.GetZGeneration(kind == GCDriverKind::MINOR
         ? ZGenerationId::young : ZGenerationId::old).End();
 }
 
@@ -400,7 +400,7 @@ void CollectorResources::StartGCThreads()
         return;
     }
     // Initialize both generation worker sets.
-    if (collectorProxy.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
+    if (collector.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
         unsigned int activeProcessorCount = std::thread::hardware_concurrency();
         bool affinityDetected = false;
 #if defined(__linux__) || defined(hongmeng)
@@ -438,10 +438,10 @@ void CollectorResources::StartGCThreads()
         // zArguments.cpp:67-99, zWorkers.cpp:45-64: each generation uses
         // the concurrent budget as its maximum and initial active count.
         // ZWorkers counts participants, excluding the coordinating driver.
-        collectorProxy.GetZGeneration(ZGenerationId::young).InitializeWorkers(concurrentGcThreadCount);
-        collectorProxy.GetZGeneration(ZGenerationId::old).InitializeWorkers(concurrentGcThreadCount);
+        collector.GetZGeneration(ZGenerationId::young).InitializeWorkers(concurrentGcThreadCount);
+        collector.GetZGeneration(ZGenerationId::old).InitializeWorkers(concurrentGcThreadCount);
         finalizerProcessor.GetReferenceProcessor().set_workers(
-            collectorProxy.GetZGeneration(ZGenerationId::old).Workers());
+            collector.GetZGeneration(ZGenerationId::old).Workers());
     }
 
     // zHeap.cpp / zCollectedHeap.cpp:65-71: the two drivers and the director
@@ -455,26 +455,26 @@ void CollectorResources::StartGCThreads()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-CollectorResources::CollectorResources(CollectorProxy& proxy) : collectorProxy(proxy) {}
+CollectorResources::CollectorResources(Collector& c) : collector(c) {}
 }
 
 namespace MapleRuntime {
 ZWorkers& CollectorResources::GetWorkers(ZGenerationId generation) const
 {
-    return *collectorProxy.GetZGeneration(generation).Workers();
+    return *collector.GetZGeneration(generation).Workers();
 }
 
 GCStats& CollectorResources::GetGCStats(ZGenerationId generation)
 {
-    return collectorProxy.GetZGeneration(generation).Stats();
+    return collector.GetZGeneration(generation).Stats();
 }
 }
 
 namespace MapleRuntime {
 bool CollectorResources::IsGcStarted() const
 {
-    return collectorProxy.GetCycleSnapshot(ZGenerationId::young).active ||
-           collectorProxy.GetCycleSnapshot(ZGenerationId::old).active;
+    return collector.GetCycleSnapshot(ZGenerationId::young).active ||
+           collector.GetCycleSnapshot(ZGenerationId::old).active;
 }
 }
 
@@ -597,7 +597,7 @@ bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
 
 ZDriverPort& CollectorResources::GetYoungDriverPort()
 {
-    return collectorProxy.GetZGeneration(ZGenerationId::young).YoungType() == ZYoungType::minor
+    return collector.GetZGeneration(ZGenerationId::young).YoungType() == ZYoungType::minor
         ? minorDriverPort : majorDriverPort;
 }
 }

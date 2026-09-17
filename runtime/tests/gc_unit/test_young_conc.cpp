@@ -44,7 +44,8 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
@@ -92,16 +93,16 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
-        if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
+        if (collector == nullptr && resources.testCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-                resources.collectorProxy.currentCollector->GetZGeneration(generation).StopWorkers();
+                resources.testCollector->GetZGeneration(generation).StopWorkers();
             }
         }
-        if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);
+        if (collector != nullptr && resources.testCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
         }
-        resources.collectorProxy.currentCollector = collector;
+        resources.testCollector = collector;
         if (collector != nullptr) {
             // Product driver startup owns one worker set per generation
             // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).

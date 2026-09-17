@@ -3,7 +3,8 @@
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
 #include "b09_runtime_fixture.hpp"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
@@ -35,10 +36,10 @@ struct RelocationReceiptTestAccess {
     }
     static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, uint32_t workers = 1)
     {
-        if (resources.collectorProxy.currentCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.collectorProxy.currentCollector);
+        if (resources.testCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.testCollector);
         }
-        resources.collectorProxy.currentCollector = &collector;
+        resources.testCollector = &collector;
         resources.concurrentGcThreadCount = workers;
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
             collector.GetZGeneration(gen).InitializeWorkers(workers);

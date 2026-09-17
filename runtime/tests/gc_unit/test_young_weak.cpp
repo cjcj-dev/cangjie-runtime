@@ -24,7 +24,8 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -51,13 +52,13 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
-        if (collector == nullptr && resources.collectorProxy.currentCollector != nullptr) {
+        if (collector == nullptr && resources.testCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-                resources.collectorProxy.currentCollector->GetZGeneration(generation).StopWorkers();
+                resources.testCollector->GetZGeneration(generation).StopWorkers();
             }
         }
-        resources.collectorProxy.currentCollector = collector;
+        resources.testCollector = collector;
         if (collector != nullptr) {
             // Product driver startup owns one worker set per generation
             // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).
@@ -72,12 +73,12 @@ struct RelocationReceiptTestAccess {
     // Do not put this file's teardown into a coalesced inline peer definition.
     static void StopWeakFixtureWorkersAndUnbind(CollectorResources& resources)
     {
-        auto* previous = resources.collectorProxy.currentCollector;
+        auto* previous = resources.testCollector;
         if (previous != nullptr) {
             previous->GetZGeneration(ZGenerationId::young).StopWorkers();
             previous->GetZGeneration(ZGenerationId::old).StopWorkers();
         }
-        resources.collectorProxy.currentCollector = nullptr;
+        resources.testCollector = nullptr;
     }
 
     // zArguments: the concurrent worker budget the driver hands each request.

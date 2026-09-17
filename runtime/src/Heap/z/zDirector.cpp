@@ -10,7 +10,7 @@
 #include "CangjieRuntime.h"
 #include "Common/Runtime.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeap.hpp"

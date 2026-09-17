@@ -7,6 +7,7 @@
 set(SRC_LIST
     "z/zHeap.cpp"
     "z/zInitialize.cpp"
+    "z/zArguments.cpp"
     "z/zGlobals.cpp"
     "z/zThreadLocalData.cpp"
     "z/workerThread.cpp"

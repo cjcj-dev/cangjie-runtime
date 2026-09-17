@@ -7,7 +7,7 @@
 
 #include "TaskQueue.h"
 
-#include "CollectorProxy.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
 #endif
@@ -16,11 +16,7 @@ namespace MapleRuntime {
 bool GCExecutor::Execute(void* owner)
 {
     MRT_ASSERT(owner != nullptr, "task queue owner ptr should not be null!");
-#if defined(MRT_TESTABLE_INTERNALS)
     Collector* collector = reinterpret_cast<Collector*>(owner);
-#else
-    CollectorProxy* collector = reinterpret_cast<CollectorProxy*>(owner);
-#endif
 
     switch (taskType) {
         case GCTask::TaskType::TASK_TYPE_TERMINATE_GC: {
