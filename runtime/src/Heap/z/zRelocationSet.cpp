@@ -147,8 +147,8 @@ private:
     const size_t _nforwardings;
     const ZArray<ZPage*>* _small;
     const ZArray<ZPage*>* _medium;
-    ZArrayIterator<ZPage*> _small_iter;
-    ZArrayIterator<ZPage*> _medium_iter;
+    ZArrayParallelIterator<ZPage*> _small_iter;
+    ZArrayParallelIterator<ZPage*> _medium_iter;
 
     void install(ZForwarding* forwarding, size_t index)
     {
@@ -180,8 +180,10 @@ public:
         const size_t forwardings_size = _nforwardings * sizeof(ZForwarding);
         const size_t forwarding_entries_size = selector->forwarding_entries() * sizeof(ZForwardingEntry);
         _allocator->reset(relocation_set_size + forwardings_size + forwarding_entries_size);
-        _forwardings = static_cast<ZForwarding**>(_allocator->alloc(relocation_set_size));
+        _forwardings = new (_allocator->alloc(relocation_set_size)) ZForwarding*[_nforwardings];
     }
+
+    ~ZRelocationSetInstallTask() { CHECK(_allocator->is_full()); }
 
     virtual void work()
     {

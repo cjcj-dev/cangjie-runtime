@@ -28,17 +28,9 @@ uint32_t ZForwarding::nentries(const ZPage* page)
 
 ZForwarding* ZForwarding::alloc(ZForwardingAllocator* allocator, ZPage* page, PageAge to_age)
 {
-    const size_t n = nentries(page);
-    size_t size = 0;
-    if (!AttachedArray::allocation_size(n, &size)) {
-        return nullptr;
-    }
-    void* const addr = allocator->allocate(size);
-    if (addr == nullptr) {
-        return nullptr;
-    }
-    AttachedArray::initialize(addr, n);
-    return ::new (addr) ZForwarding(page, page->GetRegionStart(), ZAddressHeapBase, page->GetRegionSize(), n,
+    const size_t nentries = ZForwarding::nentries(page);
+    void* const addr = AttachedArray::alloc(allocator, nentries);
+    return ::new (addr) ZForwarding(page, page->GetRegionStart(), ZAddressHeapBase, page->GetRegionSize(), nentries,
                                     page->GetRegionLifeId(), page->age(), to_age,
                                     static_cast<size_t>(page->object_alignment_shift()));
 }
