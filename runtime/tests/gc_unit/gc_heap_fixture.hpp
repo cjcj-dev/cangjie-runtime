@@ -52,6 +52,10 @@ inline bool SlotPageRemembered(MapleRuntime::MAddress slot)
 }
 
 struct RememberedSet {
+    static constexpr size_t kBufferCount = 2;
+    struct FlipTouchCounts { size_t bitmap = 0; size_t pageMap = 0; };
+    std::unique_ptr<std::atomic<uint64_t>> bitmaps[2];
+    std::unique_ptr<std::atomic<uint64_t>> rememberedPages[2];
     std::atomic<int> activeBuffer { 0 };
     bool initialized = true;
     bool IsInitialized() const { return true; }
