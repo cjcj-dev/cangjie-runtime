@@ -12,14 +12,19 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zTask.hpp"
 #include "Heap/z/zVerify.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "Heap/WCollector/WCollectorInternal.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/BaseObject.h"
+#include "Common/SuspendibleThreadSet.h"
+#include "Mutator/ThreadLocal.h"
 
 #include <atomic>
 
@@ -307,26 +312,92 @@ void ZRemembered::flip()
     flip_found_old_sets();
 }
 
+class ZRememberedScanMarkFollowTask : public ZRestartableTask {
+private:
+    ZRemembered* const _remembered;
+    ZMark* const _mark;
+    ZRemsetTableIterator _remset_table_iterator;
+
+public:
+    ZRememberedScanMarkFollowTask(ZRemembered* remembered, ZMark* mark)
+        : ZRestartableTask("ZRememberedScanMarkFollowTask"),
+          _remembered(remembered),
+          _mark(mark),
+          _remset_table_iterator(remembered, true)
+    {
+        _mark->PrepareWork();
+        ZPage::EnableSafeDestroy();
+    }
+
+    ~ZRememberedScanMarkFollowTask()
+    {
+        ZPage::DisableSafeDestroy();
+        _mark->FinishWork();
+        _remembered->clear_found_old_previous_set();
+    }
+
+    void work_inner()
+    {
+        ZRememberedScanForwardingContext context;
+        if (!_mark->FollowWorkPartial()) {
+            return;
+        }
+        for (ZRemsetTableEntry entry; _remset_table_iterator.next(&entry);) {
+            bool left_marking = false;
+            ZForwarding* forwarding = entry._forwarding;
+            ZPage* page = entry._page;
+            if (forwarding != nullptr) {
+                bool found_roots = _remembered->scan_forwarding(forwarding, &context);
+                ZVerify::AfterScan(forwarding);
+                if (found_roots) {
+                    left_marking = !_mark->FollowWorkPartial();
+                }
+            }
+            if (page != nullptr) {
+                if (_remembered->should_scan_page(page)) {
+                    bool found_roots = _remembered->scan_page_and_clear_remset(page);
+                    if (found_roots && !left_marking) {
+                        left_marking = !_mark->FollowWorkPartial();
+                    }
+                }
+                _remembered->register_found_old(page);
+            }
+            SuspendibleThreadSet::yield();
+            if (left_marking) {
+                return;
+            }
+        }
+        _mark->FollowWorkComplete(false);
+    }
+
+    void work() override
+    {
+        SuspendibleThreadSetJoiner sts_joiner;
+        work_inner();
+        (void)_mark->Flush(ThreadLocal::GetThreadLocalData());
+    }
+
+    void resize_workers(uint32_t nworkers) override
+    {
+        _mark->ResizeWorkers(nworkers);
+    }
+};
+
 void ZRemembered::scan_and_follow(ZMark* mark)
 {
-    (void)mark;
-    ZPage::EnableSafeDestroy();
-    ZRememberedScanForwardingContext context;
-    ZRemsetTableIterator iter(this, true);
-    for (ZRemsetTableEntry entry; iter.next(&entry);) {
-        if (entry._forwarding != nullptr) {
-            (void)scan_forwarding(entry._forwarding, &context);
-            ZVerify::AfterScan(entry._forwarding);
+    {
+        ZRememberedScanMarkFollowTask task(this, mark);
+        ZWorkers* workers = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG).Workers();
+        if (workers != nullptr) {
+            workers->run(&task);
+        } else {
+            task.work();
         }
-        if (entry._page != nullptr) {
-            if (should_scan_page(entry._page)) {
-                (void)scan_page_and_clear_remset(entry._page);
-            }
-            register_found_old(entry._page);
+        if (mark->PollStop() || !mark->TryTerminateFlush()) {
+            return;
         }
     }
-    clear_found_old_previous_set();
-    ZPage::DisableSafeDestroy();
+    mark->MarkFollow();
 }
 
 } // namespace MapleRuntime

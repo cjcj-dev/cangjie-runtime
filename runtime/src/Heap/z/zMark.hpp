@@ -75,6 +75,7 @@ public:
     void FinishWork();
     void MarkFollow(bool partial = false);
     void FollowWorkComplete(bool partial);
+    bool FollowWorkPartial();
     void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);
     void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
     void BindAbort(ZAbort* token) { abortToken = token; }

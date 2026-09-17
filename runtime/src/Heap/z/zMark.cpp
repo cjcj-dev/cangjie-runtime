@@ -1453,6 +1453,18 @@ void ZMark::FollowWorkComplete(bool partial)
     ThreadLocal::FlushCurrentThreadMarkStacks();
 }
 
+bool ZMark::FollowWorkPartial()
+{
+    const uint32_t workerId = WorkerThread::worker_id();
+    MarkContext local(nworkers, workerId, stripes, Stacks());
+    const Result result = FollowWork(local, smr, stripes, terminate, workerId, true,
+                     [this, &local](const MarkStackEntry& entry) { MarkAndFollow(local, entry); },
+                     nullptr, nullptr, this);
+    (void)local.Stacks().Flush(stripes, true);
+    local.Cache().Flush();
+    return result != Result::Aborted;
+}
+
 void ZMark::MarkFollow(bool partial)
 {
     for (;;) {
