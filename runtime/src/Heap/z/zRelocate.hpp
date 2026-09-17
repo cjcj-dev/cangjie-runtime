@@ -127,7 +127,7 @@ private:
 
 class ZWorkers;
 class ZPage;
-class ZGeneration;
+class GenerationCycle;
 template<typename T> class ZArray;
 
 class ZRelocationTargets {
@@ -149,7 +149,7 @@ private:
 
 class ZRelocate {
 public:
-    explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
+    explicit ZRelocate(GenerationCycle* generation) : generation(generation) {}
     ZRelocateQueue* queue() { return &relocateQueue; }
     bool is_queue_active() const { return relocateQueue.IsActive(); }
     static PageAge compute_to_age(PageAge fromAge);
@@ -157,7 +157,7 @@ public:
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
 private:
-    ZGeneration* const generation;
+    GenerationCycle* const generation;
     ZRelocateQueue relocateQueue;
 };
 

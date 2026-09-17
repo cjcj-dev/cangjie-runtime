@@ -897,8 +897,11 @@ static ArrayRef PinArray(const ArrayRef array)
     // same region the pin Inc'd.
     auto& collector = Heap::GetHeap().GetCollector();
     BaseObject* current = array;
-    RefField<> colored(from_object(current), ZPointerLoadGoodMask);
-    const ZGenerationId id = collector.remap_generation(colored);
+    const MAddress addr = reinterpret_cast<MAddress>(current);
+    const ZGenerationId id =
+        collector.GetGenerationCycle(Generation::Young).forwarding_table().get(addr) != nullptr
+            ? ZGenerationId::young
+            : ZGenerationId::old;
     current = collector.relocate_or_remap_object(current, id);
     ZJNICritical::enter();
     return static_cast<ArrayRef>(current);
