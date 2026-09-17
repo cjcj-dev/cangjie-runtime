@@ -406,7 +406,7 @@ bool AllSlotsAreRawNull(MArray* array)
 {
     bool allNull = true;
     array->ForEachRefField([&](RefField<>& slot) {
-        if (!is_null(slot.GetFieldValue())) {
+        if (!is_null_any(slot.GetFieldValue())) {
             allNull = false;
         }
     });
