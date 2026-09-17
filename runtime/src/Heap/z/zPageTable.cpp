@@ -111,6 +111,13 @@ bool ZGenerationPagesIterator::next(ZPage** page)
     return false;
 }
 
+void ZGenerationPagesIterator::yield(const std::function<void()>& function)
+{
+    ZPage::DisableSafeDestroy();
+    function();
+    ZPage::EnableSafeDestroy();
+}
+
 ZGenerationPagesParallelIterator::ZGenerationPagesParallelIterator(const ZPageTable* page_table, ZGenerationId id,
                                                                    ZPageAllocator* page_allocator)
     : _iterator(page_table->map()), _generation_id(id), _page_allocator(page_allocator)

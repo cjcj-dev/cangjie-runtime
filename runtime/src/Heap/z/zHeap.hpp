@@ -19,6 +19,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
 #include "Heap/Allocator/RegionListTypes.hpp"
@@ -35,6 +36,7 @@ extern uintptr_t g_cjHeapRangeStart[];
 extern uintptr_t g_cjHeapRangeEnd[];
 }
 namespace MapleRuntime {
+template<typename T> class ZArray;
 class ZPageTable;
 class OopStorage;
 class ObjectClosure;
@@ -113,6 +115,7 @@ public:
                                   bool allowSaferegion = true, bool clearPayload = true,
                                   PageAge age = PageAge::eden);
     static void free_page(ZPage* page);
+    static size_t free_empty_pages(ZGenerationId id, const ZArray<ZPage*>* pages);
 
 
     void DumpHeap(HeapDumpKind kind);

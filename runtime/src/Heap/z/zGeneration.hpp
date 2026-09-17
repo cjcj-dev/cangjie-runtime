@@ -20,6 +20,7 @@
 namespace MapleRuntime {
 class RememberedSet;
 class ZMark;
+class ZRelocationSetSelector;
 enum class zaddress : Uptr;
 struct TenuringInputs;
 // Per-generation execution state. The snapshot lock publishes cycle identity
@@ -92,7 +93,10 @@ public:
     ZRelocationSet& relocation_set() { return _relocation_set; }
     ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
     void reset_relocation_set();
-private:
+    void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
+    void flip_age_pages(const ZRelocationSetSelector* selector);
+    void select_relocation_set(bool promote_all);
+    private:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
 #endif

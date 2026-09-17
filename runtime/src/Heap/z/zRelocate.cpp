@@ -2659,18 +2659,14 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                 const PageAge fromAge = prev->age();
                 const PageAge toAge = ZRelocate::compute_to_age(fromAge);
                 const bool promotion = toAge == PageAge::old;
+                ZPage* const newPage = promotion ? prev->clone_for_promotion() : prev->reset(toAge);
+                newPage->reset_livemap();
                 if (promotion) {
-                    (void)prev->CloneForPromotion();
                     promoted.append(prev);
-                } else {
-                    prev->reset(toAge);
-                    prev->reset_livemap();
                 }
             }
-            auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-            for (int i = 0; i < promoted.length(); ++i) {
-                manager.AddFlipPromotedPage(promoted.at(i));
-            }
+            Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG)
+                .relocation_set().register_flip_promoted(promoted);
         }
     private:
         ZArrayParallelIterator<ZPage*> iter;

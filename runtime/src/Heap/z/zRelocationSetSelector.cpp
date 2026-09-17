@@ -26,6 +26,7 @@
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/CopyCollector.h"
@@ -128,7 +129,7 @@ void ZRelocationSetSelectorGroup::select_inner()
         ZPage* const page = _live_pages.at(from - 1);
         const size_t page_live_bytes = page->live_bytes();
         from_live_bytes += page_live_bytes;
-        from_forwarding_entries += ZForwarding::nentries(page->live_objects());
+        from_forwarding_entries += ZForwarding::nentries(page);
         live_bytes_per_age[untype(page->age())] += page_live_bytes;
         npages_per_age[untype(page->age())] += 1;
         const int to = denom <= 0.0 ? from : static_cast<int>(std::ceil(static_cast<double>(from_live_bytes) / denom));
@@ -176,6 +177,10 @@ void ZRelocationSetSelectorGroup::select()
         }
     }
 }
+
+ZRelocationSetSelector::ZRelocationSetSelector()
+    : ZRelocationSetSelector(0.0)
+{}
 
 ZRelocationSetSelector::ZRelocationSetSelector(double fragmentation_limit)
     : _small("Small", ZPageType::small, ZPageSizeSmall, ZObjectSizeLimitSmall, fragmentation_limit),
@@ -452,161 +457,8 @@ bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
 // Semi-sort by per-page live fraction, then select the last profitable prefix.
 size_t RegionManager::ExemptFromRegions()
 {
-    size_t forwardBytes = 0;
-    size_t floatingGarbage = 0;
-    size_t oldFromBytes = fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
-    std::vector<ZPage*> snapshot;
-    fromRegionList.VisitAllRegions([&snapshot](ZPage* r) { snapshot.push_back(r); });
-    ZRelocationSetSelector selector(
-        Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).FragmentationLimit());
-    for (ZPage* fromRegion : snapshot) {
-        // ZGeneration::select_relocation_set (zGeneration.cpp:211-213).
-        if (!fromRegion->IsRelocatable()) {
-            if (ClaimFromRegion(fromRegionList, fromRegion, "allocating")) {
-                ExemptFromRegion(fromRegion);
-            }
-            continue;
-        }
-        // ZGeneration::select_relocation_set (zGeneration.cpp:216-221): a page
-        // not marked this cycle registers as empty.
-        size_t liveBytes = fromRegion->is_marked() ? fromRegion->live_bytes() : 0;
-        long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        static constexpr bool kFreeEmptyAtCSetSelect = true;
-        if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
-            !fromRegion->IsAllocating() && !fromRegion->IsYoungRegion()) {
-            ZPage* del = fromRegion;
-            const unsigned rs = static_cast<unsigned>(del->RelocateObserve());
-            const unsigned ke = del->IsKnownEmpty() ? 1u : 0u;
-            size_t residual = 0;
-            size_t residualFwd = 0;
-            size_t marked = 0;
-            const uintptr_t start = del->GetRegionStart();
-            const uintptr_t alloc = del->GetRegionAllocPtr();
-            if (alloc > start && !del->IsLargeRegion()) {
-                uintptr_t pos = start;
-                while (pos < alloc) {
-                    BaseObject* o = from_region_addr(pos);
-                    if (!o->IsValidObject()) {
-                        break;
-                    }
-                    const size_t sz = o->GetSize();
-                    if (sz == 0) {
-                        break;
-                    }
-                    ++residual;
-                    if (o->IsForwarded()) {
-                        ++residualFwd;
-                    }
-                    if (del->is_object_strongly_live(from_object(o))) {
-                        ++marked;
-                    }
-                    pos += sz;
-                }
-            }
-            const bool deadFromCopy = residual == residualFwd;
-            // zGeneration.cpp:216-221 register_empty_page iff !is_marked.
-            // Held until in-place claim waits readers even at fwdRefCount==0
-            // (LEAD-NOTE 0820 21:1x / PORT_ZFORWARDING step 3). oldroots2
-            // 152ccd59 SEGV+drift was ClearUnits racing a naked mutator ref.
-            const bool unmarkedResidual = residual != 0 && marked == 0;
-            const bool freeEmpty = (ke != 0) || deadFromCopy || unmarkedResidual;
-            {
-                static std::atomic<size_t> gCsetEmpty{ 0 };
-                static std::atomic<size_t> gCsetEmptyResidual{ 0 };
-                static std::atomic<size_t> gCsetEmptyMarked{ 0 };
-                static std::atomic<size_t> gCsetEmptyKeep{ 0 };
-                static std::atomic<bool> gCsetEmptyAtexit{ false };
-                const size_t n = gCsetEmpty.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (residual != 0) {
-                    gCsetEmptyResidual.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (marked != 0) {
-                    gCsetEmptyMarked.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!freeEmpty) {
-                    gCsetEmptyKeep.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!gCsetEmptyAtexit.exchange(true, std::memory_order_relaxed)) {
-                    std::atexit([]() {
-                        std::fprintf(stderr,
-                                     "[WHODEAD][cset-empty] atexit n=%zu residualPages=%zu markedPages=%zu keep=%zu\n",
-                                     gCsetEmpty.load(std::memory_order_relaxed),
-                                     gCsetEmptyResidual.load(std::memory_order_relaxed),
-                                     gCsetEmptyMarked.load(std::memory_order_relaxed),
-                                     gCsetEmptyKeep.load(std::memory_order_relaxed));
-                        std::fflush(stderr);
-                    });
-                }
-                if (n <= 8 || (n & (n - 1)) == 0) {
-                    LOG(RTLOG_ERROR,
-                        "[WHODEAD][cset-empty] n=%zu region=%p start=%#zx live=%zu residual=%zu fwd=%zu marked=%zu "
-                        "route=%u ke=%u ghost=%u alloc=%u reason=%u free=%u",
-                        n, del, start, liveBytes, residual, residualFwd, marked, rs, ke,
-                        static_cast<unsigned>(del->IsGhostFromRegion()),
-                        static_cast<unsigned>(del->IsAllocating()),
-                        static_cast<unsigned>(Heap::GetHeap().GetCollector().GetGCStats().reason),
-                        static_cast<unsigned>(freeEmpty));
-                }
-            }
-            if (!freeEmpty) {
-                continue;
-            }
-            if (!ClaimFromRegion(fromRegionList, del, "cset-empty")) {
-                continue;
-            }
-            if (del->GetRawPointerObjectCount() > 0) {
-                rawPointerPinnedRegionList.PrependRegion(del);
-                continue;
-            }
-
-            ScrubRememberedSetForRegion(del);
-            garbageRegionList.PrependRegion(del);
-            continue;
-        }
-        if (rawPtrCnt > 0) {
-            ZPage* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
-                del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
-                del->GetUnitCount(), liveBytes, rawPtrCnt);
-            if (!ClaimFromRegion(fromRegionList, del, "cset-rawpin")) {
-                continue;
-            }
-            rawPointerPinnedRegionList.PrependRegion(del);
-            floatingGarbage += (del->GetRegionSize() - liveBytes);
-            continue;
-        }
-        if (fromRegion->is_marked()) {
-            selector.register_live_page(fromRegion);
-        } else {
-            selector.register_empty_page(fromRegion);
-        }
-    }
-    selector.select();
-    auto exemptNotSelected = [&](const ZArray<ZPage*>* pages) {
-        if (pages == nullptr) {
-            return;
-        }
-        for (int i = 0; i < pages->length(); ++i) {
-            ZPage* del = pages->at(i);
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) not selected", del, del->GetRegionStart(),
-                 del->GetRegionAllocatedSize(), del->GetRegionEnd(), del->GetUnitCount());
-            if (!ClaimFromRegion(fromRegionList, del, "cset-relocsel")) {
-                continue;
-            }
-            ExemptFromRegion(del);
-            floatingGarbage += (del->GetRegionSize() - del->live_bytes());
-        }
-    };
-    exemptNotSelected(selector.not_selected_small());
-    exemptNotSelected(selector.not_selected_medium());
-    exemptNotSelected(selector.not_selected_large());
-
-    size_t newFromBytes = fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
-    size_t exemptedFromBytes = unmovableFromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
-    VLOG(REPORT, "exempt from-space: %zu B - %zu B -> %zu B, %zu B floating garbage, %zu B to forward",
-         oldFromBytes, exemptedFromBytes, newFromBytes, floatingGarbage, forwardBytes);
-    return newFromBytes - forwardBytes;
+    Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD).select_relocation_set(false);
+    return fromRegionList.GetUnitCount() * ZPage::UNIT_SIZE;
 }
-
 
 } // namespace MapleRuntime

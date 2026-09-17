@@ -33,6 +33,10 @@
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zRelocationSetSelector.inline.hpp"
+#include "Heap/z/zRelocate.hpp"
+#include "Heap/z/zPageTable.hpp"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Common/SuspendibleThreadSet.h"
@@ -643,6 +647,8 @@ void WCollector::DoYoungGarbageCollection()
         });
         GetGenerationCycle(GCCycleGeneration::YOUNG).reset_relocation_set();
         space.GetRegionManager().ResetFlipPromotedPages();
+        GetGenerationCycle(GCCycleGeneration::YOUNG).select_relocation_set(
+            GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::major_full_preclean);
     }
 
     if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
@@ -1162,6 +1168,72 @@ void GenerationCycle::SelectTenuringThreshold(const TenuringInputs& inputs)
     // zGeneration.cpp:704-715: preclean promotes all, other types compute.
     stats.tenuringThreshold = YoungType() == ZYoungType::major_full_preclean
         ? 0 : ComputeTenuringThreshold(inputs);
+}
+
+void GenerationCycle::free_empty_pages(ZRelocationSetSelector* selector, int bulk)
+{
+    if (selector->should_free_empty_pages(bulk)) {
+        const ZGenerationId id = generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+        Heap::free_empty_pages(id, selector->empty_pages());
+        selector->clear_empty_pages();
+    }
+}
+
+void GenerationCycle::flip_age_pages(const ZRelocationSetSelector* selector)
+{
+    ZWorkers* w = Workers();
+    if (w == nullptr) {
+        return;
+    }
+    ZRelocate::flip_age_pages(*w, selector->not_selected_small());
+    ZRelocate::flip_age_pages(*w, selector->not_selected_medium());
+    ZRelocate::flip_age_pages(*w, selector->not_selected_large());
+    ZRendezvousHandshakeClosure cl;
+    Handshake::execute(&cl);
+    ZRelocate::barrier_promoted_pages(*w, _relocation_set.flip_promoted_pages(),
+                                     _relocation_set.relocate_promoted_pages());
+}
+
+void GenerationCycle::select_relocation_set(bool promote_all)
+{
+    ZRelocationSetSelector selector(FragmentationLimit());
+    ZPageAllocator* pageAllocator =
+        &static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    const ZGenerationId id = generation == GCCycleGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+    {
+        ZGenerationPagesIterator pt_iter(&Heap::page_table(), id, pageAllocator);
+        for (ZPage* page; pt_iter.next(&page);) {
+            if (!page->is_relocatable()) {
+                continue;
+            }
+            if (page->is_marked()) {
+                selector.register_live_page(page);
+            } else {
+                selector.register_empty_page(page);
+                pt_iter.yield([&]() { free_empty_pages(&selector, 64); });
+            }
+        }
+        free_empty_pages(&selector, 0);
+    }
+    selector.select();
+    if (generation == GCCycleGeneration::YOUNG) {
+        TenuringInputs inputs;
+        inputs.promoteAll = promote_all;
+        const ZRelocationSetSelectorStats st = selector.stats();
+        for (PageAge age : kPageAgeRangeAll) {
+            inputs.liveByAge[untype(age)] =
+                st.small(age).live() + st.medium(age).live() + st.large(age).live();
+        }
+        SelectTenuringThreshold(inputs);
+    }
+    _relocation_set.install(&selector);
+    if (generation == GCCycleGeneration::YOUNG) {
+        flip_age_pages(&selector);
+    }
+    ZRelocationSetIterator rs_iter(&_relocation_set);
+    for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {
+        _forwarding_table.insert(forwarding);
+    }
 }
 }
 

@@ -177,6 +177,7 @@ public:
                                 size_t object_size_limit, double fragmentation_limit);
     void register_live_page(ZPage* page);
     void register_empty_page(ZPage* page);
+    void append_selected(ZPage* page, size_t nentries);
     void select();
     const ZArray<ZPage*>* selected_pages() const;
     const ZArray<ZPage*>* not_selected_pages() const;
@@ -194,9 +195,11 @@ private:
     size_t empty() const;
     size_t relocate() const;
 public:
+    ZRelocationSetSelector();
     explicit ZRelocationSetSelector(double fragmentation_limit);
     void register_live_page(ZPage* page);
     void register_empty_page(ZPage* page);
+    void add_selected_small(ZPage* page, size_t nentries);
     bool should_free_empty_pages(int bulk) const;
     const ZArray<ZPage*>* empty_pages() const;
     void clear_empty_pages();
@@ -208,127 +211,6 @@ public:
     const ZArray<ZPage*>* not_selected_large() const;
     size_t forwarding_entries() const;
     ZRelocationSetSelectorStats stats() const;
-};
-
-inline constexpr size_t kRelocationMaxSmallRegionBytes = 128 * 1024;
-inline constexpr size_t kRelocationObjectSizeLimit = 16 * 1024;
-
-enum class RelocRegionKind : uint8_t { Small = 0, Large = 1 };
-
-struct RelocRegionDesc {
-    size_t liveBytes = 0;
-    size_t capacity = 0;
-    RelocRegionKind kind = RelocRegionKind::Small;
-    uint32_t id = 0;
-    bool allocating = false;
-};
-
-struct RelocSelectResult {
-    std::vector<uint32_t> selectedIds;
-};
-
-inline bool PreFilterRelocRegion(const RelocRegionDesc& page, double fragmentationLimit)
-{
-    if (page.allocating) {
-        return false;
-    }
-    if (page.kind == RelocRegionKind::Large) {
-        return false;
-    }
-    if (page.capacity == 0) {
-        return false;
-    }
-    const size_t garbage = page.capacity > page.liveBytes ? page.capacity - page.liveBytes : 0;
-    const size_t pageFragLimit =
-        static_cast<size_t>(static_cast<double>(page.capacity) * (fragmentationLimit / 100.0));
-    return garbage > pageFragLimit;
-}
-
-inline constexpr size_t kRelocationNumPartitionsShift = 11;
-inline constexpr size_t kRelocationNumPartitions = size_t{1} << kRelocationNumPartitionsShift;
-
-inline size_t RelocationPartitionIndex(const RelocRegionDesc& page)
-{
-    const size_t partitionSize = page.capacity >> kRelocationNumPartitionsShift;
-    assert(partitionSize != 0);
-    const size_t index = page.liveBytes / partitionSize;
-    assert(index < kRelocationNumPartitions);
-    return index;
-}
-
-inline void SemiSortRelocationPages(std::vector<RelocRegionDesc>& pages)
-{
-    size_t partitions[kRelocationNumPartitions]{};
-    for (const RelocRegionDesc& page : pages) {
-        ++partitions[RelocationPartitionIndex(page)];
-    }
-    size_t finger = 0;
-    for (size_t& partition : partitions) {
-        const size_t slots = partition;
-        partition = finger;
-        finger += slots;
-    }
-    std::vector<RelocRegionDesc> sorted(pages.size());
-    for (const RelocRegionDesc& page : pages) {
-        sorted[partitions[RelocationPartitionIndex(page)]++] = page;
-    }
-    pages.swap(sorted);
-}
-
-inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>& pages, double fragmentationLimit)
-{
-    RelocSelectResult out;
-    std::vector<RelocRegionDesc> live;
-    live.reserve(pages.size());
-    for (const RelocRegionDesc& p : pages) {
-        if (PreFilterRelocRegion(p, fragmentationLimit)) {
-            live.push_back(p);
-        }
-    }
-    SemiSortRelocationPages(live);
-    const int npages = static_cast<int>(live.size());
-    int selectedFrom = 0;
-    int selectedTo = 0;
-    size_t fromLiveBytes = 0;
-    const double denom = static_cast<double>(kRelocationMaxSmallRegionBytes - kRelocationObjectSizeLimit);
-    for (int from = 1; from <= npages; ++from) {
-        fromLiveBytes += live[static_cast<size_t>(from - 1)].liveBytes;
-        const int to = static_cast<int>(std::ceil(static_cast<double>(fromLiveBytes) / denom));
-        const int diffFrom = from - selectedFrom;
-        const int diffTo = to - selectedTo;
-        const double percentToOfFrom =
-            (diffFrom != 0) ? (static_cast<double>(diffTo) / static_cast<double>(diffFrom) * 100.0) : 0.0;
-        const double diffReclaimable = 100.0 - percentToOfFrom;
-        if (diffReclaimable > fragmentationLimit) {
-            selectedFrom = from;
-            selectedTo = to;
-        }
-    }
-    out.selectedIds.reserve(static_cast<size_t>(selectedFrom));
-    for (int i = 0; i < selectedFrom; ++i) {
-        out.selectedIds.push_back(live[static_cast<size_t>(i)].id);
-    }
-    return out;
-}
-
-class ZRelocationSetSelector {
-private:
-    ZArray<ZPage*> _small;
-    ZArray<ZPage*> _medium;
-    size_t _forwarding_entries;
-
-public:
-    ZRelocationSetSelector() : _forwarding_entries(0) {}
-
-    void add_selected_small(ZPage* page, size_t nentries)
-    {
-        _small.push(page);
-        _forwarding_entries += nentries;
-    }
-
-    const ZArray<ZPage*>* selected_small() const { return &_small; }
-    const ZArray<ZPage*>* selected_medium() const { return &_medium; }
-    size_t forwarding_entries() const { return _forwarding_entries; }
 };
 
 } // namespace MapleRuntime
