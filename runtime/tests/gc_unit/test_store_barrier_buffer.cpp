@@ -179,9 +179,6 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
     ZBarrier::WriteReference(fx.obj0, field, fx.obj1);
-    heap.GetCollector().GetZGeneration(GCCycleGeneration::OLD).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
-    if (!ownerWasActive) activityCycle.End();
 
     StoreBarrierBuffer& buf = *ThreadLocal::GetGCData().storeBarrierBuffer;
     const size_t pending = buf.Pending();
@@ -206,9 +203,9 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     }
     buf.Flush();
     DrainPublishedMarkObjects(retired);
-    // The product TraceBarrier path contributes exactly one SATB retirement;
-    // its former direct enqueue was removed, leaving the paired flush as the
-    // sole producer for this runtime-domain write.
+    heap.GetCollector().GetZGeneration(GCCycleGeneration::OLD).set_phase(phaseBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    if (!ownerWasActive) activityCycle.End();
     GC_EXPECT_EQ(retired.size(), 1u);
 }
 
@@ -253,11 +250,10 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer->Pending(), 1u);
     mutator.FlushStoreBarrierBuffer();
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
+    DrainPublishedMarkObjects(retired);
     heap.GetCollector().GetZGeneration(GCCycleGeneration::OLD).set_phase(phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
-
-    DrainPublishedMarkObjects(retired);
     size_t oldCount = 0;
     size_t newCount = 0;
     for (BaseObject* object : retired) {
@@ -386,12 +382,10 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     field.StoreColoured(newWord);
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     mutator.FlushStoreBarrierBuffer();
-
+    DrainPublishedMarkObjects(retired);
     heap.GetCollector().GetZGeneration(GCCycleGeneration::OLD).set_phase(phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
-
-    DrainPublishedMarkObjects(retired);
     size_t oldReceipts = 0;
     size_t newReceipts = 0;
     for (BaseObject* object : retired) {
