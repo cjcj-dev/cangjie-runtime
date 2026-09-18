@@ -174,8 +174,8 @@ void Heap::Fini()
     collectorImpl->Fini();
 }
 
-HeapGcState& Heap::GetCollector() { return collectorResources->ActiveCollector(); }
-const HeapGcState& Heap::GetCollector() const { return collectorResources->ActiveCollector(); }
+HeapGcState& Heap::GetCollector() { return *collectorImpl; }
+const HeapGcState& Heap::GetCollector() const { return *collectorImpl; }
 
 void Heap::RequestGC(GCReason reason, bool async) { GetCollector().RequestGC(reason, async); }
 

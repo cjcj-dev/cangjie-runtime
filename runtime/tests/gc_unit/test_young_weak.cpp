@@ -54,9 +54,9 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, HeapGcState* collector)
     {
-        resources.testCollector = collector;
-        resources.BindCollector(collector);
+        (void)resources;
         if (collector != nullptr) {
+            CHECK(collector == &Heap::GetHeap().GetCollector());
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
                 auto& cycle = collector->GetZGeneration(generation);
                 if (cycle.Snapshot().active) cycle.End();
@@ -76,8 +76,7 @@ struct RelocationReceiptTestAccess {
     // Do not put this file's teardown into a coalesced inline peer definition.
     static void StopWeakFixtureWorkersAndUnbind(CollectorResources& resources)
     {
-        resources.testCollector = nullptr;
-        resources.BindCollector(nullptr);
+        (void)resources;
     }
 
     // zArguments: the concurrent worker budget the driver hands each request.

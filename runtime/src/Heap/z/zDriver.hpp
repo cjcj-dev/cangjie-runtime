@@ -367,7 +367,6 @@ public:
 // such as GC drivers and workers.
 class CollectorResources {
 public:
-    HeapGcState* boundCollector = nullptr;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MarkPublicationFixture;
 #endif
@@ -412,18 +411,6 @@ public:
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
-    HeapGcState& bound_collector() { return collector; }
-    HeapGcState& ActiveCollector() const
-    {
-#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-        if (testCollector != nullptr) {
-            return *testCollector;
-        }
-#endif
-        return boundCollector != nullptr ? *boundCollector : collector;
-    }
-    void BindCollector(HeapGcState* c) { boundCollector = c; }
-
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
 
     // ZGC-style per-generation request ports.  Requests on one port never
@@ -470,8 +457,6 @@ private:
     // zDriver.cpp:59-72: held by young; old releases it for its body.
     std::mutex driverLock;
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-public:
-    HeapGcState* testCollector = nullptr;
 private:
     std::function<void()> testAfterYoungPrelude;
     std::atomic<size_t> testCompletionCount { 0 };

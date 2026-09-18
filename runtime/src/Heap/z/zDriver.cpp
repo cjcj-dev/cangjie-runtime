@@ -228,11 +228,7 @@ void CollectorResources::RunCollection(HeapGcState& collector, uint64_t index, G
 bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
-#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-    HeapGcState* activeCollector = testCollector != nullptr ? testCollector : &collector;
-#else
     HeapGcState* activeCollector = &collector;
-#endif
     ZDriverPort& port = request.cause() == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
     if (ZAbort::should_abort()) {
         return false;
