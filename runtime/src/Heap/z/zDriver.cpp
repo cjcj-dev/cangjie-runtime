@@ -275,7 +275,8 @@ bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRe
             RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
             accumulate(ZGenerationId::young);
             if (ZAbort::should_abort()) {
-                CancelDriverRequestLifecycle(kind);
+                Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
+                    ? ZGenerationId::young : ZGenerationId::old).End();
                 return false;
             }
         }
@@ -288,7 +289,8 @@ bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRe
         }
 #endif
         if (ZAbort::should_abort()) {
-            CancelDriverRequestLifecycle(kind);
+            Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
+                ? ZGenerationId::young : ZGenerationId::old).End();
             return false;
         }
     }
@@ -310,19 +312,14 @@ bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRe
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.
     if (ZAbort::should_abort()) {
-        CancelDriverRequestLifecycle(kind);
+        Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
+            ? ZGenerationId::young : ZGenerationId::old).End();
         return false;
     }
     GcLog::Cycle(GCIdMark::Current(), request.cause() == GC_REASON_YOUNG ? "minor" : "major",
                  g_gcRequests[request.cause()].name, collectionStart, TimeUtil::NanoSeconds() - collectionStart,
                  liveBefore, liveAfter, collected, Heap::GetHeap().GetUsedPageSize(), threshold);
     return true;
-}
-
-void CollectorResources::CancelDriverRequestLifecycle(GCDriverKind kind)
-{
-    Heap::GetHeap().GetCollector().GetZGeneration(kind == GCDriverKind::MINOR
-        ? ZGenerationId::young : ZGenerationId::old).End();
 }
 
 void CollectorResources::StartGCThreads()

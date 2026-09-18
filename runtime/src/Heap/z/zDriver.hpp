@@ -453,7 +453,6 @@ private:
     // Called by mutator.
     // reason: The reason for this GC.
     bool ExecuteDriverRequest(GCDriverKind kind, const ZDriverRequest& request);
-    void CancelDriverRequestLifecycle(GCDriverKind kind);
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 private:
     std::function<void()> testAfterYoungPrelude;
