@@ -41,10 +41,9 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, HeapGcState* collector)
+    static void BindCollector(HeapGcState* collector)
     {
-        (void)resources;
-        if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
+                if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
     }
     static void AddCycleRoot(HeapGcState& collector, BaseObject* owner, BaseObject* target)
     {
@@ -244,7 +243,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
 
@@ -320,7 +319,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     RelocationReceiptTestAccess::ClearCycleRoots(collector);
     handlerSafepointContext = nullptr;
     Heap::GetHeap().RemoveExportObject(exportHandle);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 
     // Keep the target ordering assertion first: the deliberate lock-across-
     // handler cut must fail here, not at an earlier setup assertion.
@@ -341,7 +340,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
 
@@ -380,7 +379,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     phaseFlipContext = nullptr;
     RelocationReceiptTestAccess::ClearCycleRoots(collector);
     Heap::GetHeap().RemoveExportObject(exportHandle);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 
     GC_EXPECT_EQ(callsBeforeResume, 1u);
     GC_EXPECT_EQ(static_cast<unsigned>(phaseBeforeResume),

@@ -75,10 +75,9 @@ struct RelocationReceiptTestAccess {
         GC_EXPECT_TRUE(region == nullptr || region->GetRegionListOwner() == nullptr);
     }
 
-    static void BindCollector(CollectorResources& resources, HeapGcState* collector)
+    static void BindCollector(HeapGcState* collector)
     {
-        (void)resources;
-        if (collector == nullptr) return;
+                if (collector == nullptr) return;
         CHECK(collector == &Heap::GetHeap().GetCollector());
         for (ZGenerationId generation : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = Heap::GetHeap().GetZGeneration(generation);
@@ -297,8 +296,7 @@ struct LoadHealDeliveryTestAccess {
         // This synthetic relocation fixture must bind the same collector
         // used by the global product barrier and provide its mark domain.
         // Full GC/phase production is separately covered by the managed P2 test.
-        auto& resources = Heap::GetHeap().GetCollectorResources();
-        RelocationReceiptTestAccess::BindCollector(resources, &collector);
+        RelocationReceiptTestAccess::BindCollector(&collector);
         auto& young = Heap::GetHeap().young();
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
         collector.StartYoungMarkWork();
@@ -320,7 +318,7 @@ struct LoadHealDeliveryTestAccess {
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
             if (auto* stack = stacks.StealLocal(stripe)) MarkStripeStack::Destroy(stack);
         }
-        RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+        RelocationReceiptTestAccess::BindCollector(nullptr);
         return RemsetConsumeResult { work, consumed.size() };
     }
 };
@@ -384,7 +382,7 @@ GcHeapFixture& ProductFixture()
 {
     EnsureDeliveryRuntime();
     static GcHeapFixture fixture;
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     static const bool initialized = InitFwdTables(
         fixture.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE, ZPage::UNIT_SIZE);
     // CompactRegion now carries remembered bits with an in-place copy.  This
@@ -584,7 +582,7 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, HeapGcState& collector,
     BaseObject* to = fx.PlaceObject(destination->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     ZLiveMap* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
     if (publishMapping) {
@@ -634,7 +632,7 @@ PartialCompactState PreparePartialCompact(GcHeapFixture& fx, HeapGcState& collec
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + objectSize);
     destination->SetRegionAllocPtr(
         exhaustDestination ? destination->GetRegionEnd() : destination->GetRegionStart());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     ZLiveMap* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
     return PartialCompactState{ region, destination, liveObject, live, objectSize };
 }
@@ -738,7 +736,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorConsumerRewritesEveryCarrierBefor
                  "after_reclaim=%d lookup=%u\n",
                  static_cast<int>(consumerCurrent), static_cast<int>(carrierCurrent),
                  static_cast<int>(independentAfterReclaim), static_cast<unsigned>(afterCoverage.answer));
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 
     GC_EXPECT_TRUE(consumerCurrent);
     GC_EXPECT_TRUE(carrierCurrent);
@@ -771,7 +769,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorConsumerRewritesEveryCarrierBefor
                  "after_reclaim=%d lookup=%u\n",
                  static_cast<int>(consumerCurrent), static_cast<int>(carrierCurrent),
                  static_cast<int>(independentAfterReclaim), static_cast<unsigned>(afterCoverage.answer));
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 
     GC_EXPECT_TRUE(consumerCurrent);
     GC_EXPECT_TRUE(carrierCurrent);
@@ -803,7 +801,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
                  static_cast<int>(insertCurrent), static_cast<int>(lateCurrent));
 
     CleanupLateBackfill(fx, state);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     GC_EXPECT_TRUE(insertCurrent);
     GC_EXPECT_TRUE(lateCurrent);
 }
@@ -822,7 +820,7 @@ GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollect
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(resolved), reinterpret_cast<uintptr_t>(state.to));
 
     CleanupLateBackfill(fx, state);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 // ZGC zRelocate.cpp:382-409: the mutator runtime entry itself must retain the
@@ -843,7 +841,7 @@ void ExerciseMutatorCopy(bool runtimeEntry)
     destination->SetRegionAllocPtr(expected);
     HeapGcState& collector = Heap::GetHeap().GetCollector();
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     DeliverySharedPageScope allocation(destination);
     BaseObject* result = runtimeEntry
@@ -857,7 +855,7 @@ void ExerciseMutatorCopy(bool runtimeEntry)
     GC_EXPECT_TRUE(result->GetTypeInfo() == fx.typeInfo);
     GC_EXPECT_TRUE(from->IsForwarded());
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     Heap::GetHeap().GetCollector().GetZGeneration(Generation::Old).reset_relocation_set();
     }
 }
@@ -889,7 +887,7 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
     region->SetRegionListOwner(nullptr);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
     GC_EXPECT_EQ(0ull, static_cast<uint64_t>(0));
@@ -899,7 +897,7 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
     GC_EXPECT_EQ(0ull, static_cast<uint64_t>(1));
     GC_EXPECT_EQ(0ull, static_cast<uint64_t>(0));
 
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
 }
 
@@ -944,7 +942,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
@@ -955,7 +953,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     GC_EXPECT_TRUE(resolved == liveObject);
 
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsNotTlab)
@@ -969,7 +967,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
     BaseObject* deadObject = fx.PlaceObject(region->GetRegionStart() + liveObject->GetSize());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(deadObject) + deadObject->GetSize());
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, region);
@@ -997,7 +995,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 #if defined(__linux__)
@@ -1149,7 +1147,7 @@ void CheckLookupWitness(bool publishReceipt)
     GC_EXPECT_EQ(lookup.fromPageLifeId, expected.lifeId);
     GC_EXPECT_TRUE(lookup.forwardingSnapshotValid);
     CleanupLateBackfill(fx, state);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 GC_OTHER_VM_TEST(ForwardingLookupWitness, ActiveHitIdentifiesPublisher)
@@ -1281,7 +1279,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
 
     GcHeapFixture& fx = ProductFixture();
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     LateBackfillState state {};
     if (unresolvedGhost) {
         state = PrepareLateBackfill(fx, collector);
@@ -1332,7 +1330,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
         std::fprintf(stderr, "DERIVED_BASE_FAILCLOSED status=%d\n%s", aborted.status, aborted.output.c_str());
         if (usesState) { CleanupLateBackfill(fx, state); }
         collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+        RelocationReceiptTestAccess::BindCollector(nullptr);
         std::fprintf(stderr, "DERIVED_BASE_TARGET target_assertion executed=1 matched=%d\n",
                      aborted.output.find("should be forwarded from=") !=
                          std::string::npos);
@@ -1347,7 +1345,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
     const bool derivedCorrect = frame[1] == expected + 8;
     if (usesState) { CleanupLateBackfill(fx, state); }
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     GC_EXPECT_TRUE(derivedCorrect);
     GC_EXPECT_TRUE(baseCorrect);
 }
@@ -1411,7 +1409,7 @@ GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWi
     GC_EXPECT_EQ(0ull, unavailableBefore + 1);
 
     CleanupLateBackfill(fx, state);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 // A non-LookupUnavailable route may carry lookup-shaped fields from a caller,
@@ -1453,7 +1451,7 @@ static void CheckForwardingWinner(bool identity)
     BaseObject* loser = identity ? fx.obj1 : from;
     HeapGcState& collector = Heap::GetHeap().GetCollector();
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, fromAddr);
     GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), 0);
     GC_EXPECT_FALSE(region->IsForwardingDone());
@@ -1479,7 +1477,7 @@ static void CheckForwardingWinner(bool identity)
     GC_EXPECT_FALSE(region->RetainForwarding());
     GC_EXPECT_EQ(forwarding_find(Generation::Old, fromAddr), reinterpret_cast<MAddress>(winner));
 
-        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+        RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, ForwardingIdentityWinnerSurvivesDoneAndRelease)
@@ -1508,7 +1506,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedForwardingMissRejectsOriginalAddr
         region->SetRegionAllocPtr(fromAddr + from->GetSize());
         HeapGcState& collector = Heap::GetHeap().GetCollector();
         collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+        RelocationReceiptTestAccess::BindCollector(&collector);
         (void)PrepareForwardable(fx, region, fromAddr);
         region->MarkForwardingDone();
         region->ReleaseForwarding();
@@ -1538,7 +1536,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     HeapGcState& collector = Heap::GetHeap().GetCollector();
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     GC_EXPECT_FALSE(region->IsForwardingDone());
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -1571,7 +1569,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
 
     if (region->IsYoungRegion() && false) {
             }
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 #endif
 }
 #endif
@@ -1587,7 +1585,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     BaseObject* to = fx.PlaceObject(region->GetRegionStart() + 256);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     ZForwarding* publication =
         forwarding_for_page(region, reinterpret_cast<MAddress>(from));
@@ -1607,7 +1605,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolved)
@@ -1621,7 +1619,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     ExpectRootAbortAt("ForwardUpdateRawRef.unresolved", [&]() {
@@ -1633,7 +1631,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 #endif
 }
 
@@ -1658,7 +1656,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
     finalRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(final) + final->GetSize());
 
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     RegionList selected("forwarding-chain-fixture");
     selected.PrependRegion(firstRegion);
     selected.PrependRegion(secondRegion);
@@ -1691,7 +1689,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
             }
     if (secondRegion->IsYoungRegion() && false) {
             }
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt)
@@ -1723,7 +1721,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt
     GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(expected)->IsValidObject());
     GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
 
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     CleanupPartialCompact(fx, state);
 }
 
@@ -1764,7 +1762,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
     GC_EXPECT_EQ(raw(derivedField.GetTargetObject()), expected + 8u);
     GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
 
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     CleanupPartialCompact(fx, state);
 }
 
@@ -1791,7 +1789,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     RegionManager& manager = productSpace.GetRegionManager();
     HeapGcState& collector = Heap::GetHeap().GetCollector();
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
@@ -1833,7 +1831,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     GC_EXPECT_TRUE(workerClosed);
 
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
@@ -1868,7 +1866,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     RegionManager& manager = productSpace.GetRegionManager();
     HeapGcState& collector = Heap::GetHeap().GetCollector();
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
@@ -1908,7 +1906,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     const bool generationClosed = workerClosed;
 
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
@@ -1944,7 +1942,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
 
     RegionManager manager;
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
 
@@ -1964,7 +1962,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     GC_EXPECT_EQ(forwarding_find(Generation::Old, from), resolved);
     GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(resolved)->IsValidObject());
 
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
 }
@@ -1996,7 +1994,7 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     const MAddress to = reinterpret_cast<MAddress>(toObject);
 
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, from);
 
     DeliverySharedPageScope allocation(destination);
@@ -2010,7 +2008,7 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     GC_EXPECT_EQ(forwarding_find(Generation::Old, from), to);
     GC_EXPECT_TRUE(fromObject->IsForwarded());
 
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     if (region->IsYoungRegion() && false) {
             }
@@ -2023,7 +2021,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierProducerCapturesOldTopAndLivemap)
     GcHeapFixture& fx = ProductFixture();
     ZPage* region = ResetDeliveryUnit(fx, 0);
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + 64);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
     const MAddress oldTop = region->GetRegionAllocPtr();
@@ -2040,7 +2038,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierProducerCapturesOldTopAndLivemap)
     GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
     GC_EXPECT_FALSE(region->IsOwnerSurvivedObject(0));
 
-        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+        RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 // zForwarding.cpp:55-84 / zRelocate.cpp:871-877: resetting the to-page
@@ -2051,7 +2049,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierConsumerSurvivesCurrentPageResetUnti
     GcHeapFixture& fx = ProductFixture();
     ZPage* region = ResetDeliveryUnit(fx, 0);
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + 64);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
     const MAddress oldTop = region->GetRegionAllocPtr();
@@ -2072,7 +2070,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierConsumerSurvivesCurrentPageResetUnti
     Heap::GetHeap().GetCollector().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
     GC_EXPECT_TRUE(UNUSED_GetFromPageView(region) == nullptr);
     GC_EXPECT_FALSE(region->IsOwnerSurvivedObject(offset));
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     delete live;
 }
 
@@ -2107,7 +2105,7 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     ZStatWorkers statWorkers;
     ZWorkers workers(ZGenerationId::young, 2, &statWorkers);
     workers.set_active();
@@ -2120,7 +2118,7 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     remembered.ScanPreviousForMinor(previous);
     GC_EXPECT_EQ(previous.count(reinterpret_cast<MAddress>(liveField)), 1u);
     GC_EXPECT_EQ(previous.count(reinterpret_cast<MAddress>(deadField)), 0u);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     EmptyBothRememberedFaces(remembered);
     // manager owns the original map through its promotion page.
     targetRegion->reset(PageAge::old);
@@ -2147,7 +2145,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedObjectRemembersYoungTargetOnly)
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     field.StoreColoured(GcUnit::StoreGoodPointer(target));
     RegionManager::RememberPromotedObject(holder);
     GC_EXPECT_TRUE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
@@ -2155,7 +2153,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedObjectRemembersYoungTargetOnly)
     targetRegion->reset(PageAge::old);
     RegionManager::RememberPromotedObject(holder);
     GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&field)));
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 // zRelocate.cpp:780-784,1241: resolve a young from-address to an old
@@ -2179,7 +2177,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         RememberedSet& remembered = DeliveryRememberedSet(fx);
         EmptyBothRememberedFaces(remembered);
         HeapGcState& collector = Heap::GetHeap().GetCollector();
-        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+        RelocationReceiptTestAccess::BindCollector(&collector);
         LoadHealDeliveryTestAccess::PublishColours(collector);
         (void)PrepareForwardable(fx, fromRegion, reinterpret_cast<MAddress>(from));
         field.StoreColoured(GcUnit::StoreGoodPointer(from));
@@ -2220,7 +2218,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         Heap::GetHeap().GetCollector().GetZGeneration(fromRegion->GetOwnerGeneration()).reset_relocation_set();
         fromRegion->reset(PageAge::old);
         LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
-        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+        RelocationReceiptTestAccess::BindCollector(nullptr);
     }
 }
 
@@ -2324,7 +2322,7 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
     CleanupLateBackfill(fx, forwarding);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     youngCarrier->reset(PageAge::old);
     youngRegion->reset(PageAge::old);
 }
@@ -2362,9 +2360,8 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
 
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     LoadHealDeliveryTestAccess::PublishColours(collector);
     {
         DeliveryNoAllocBufferScope directRemember;
@@ -2423,9 +2420,8 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
 {
     ZStat::Initialize();
     GcHeapFixture& fx = ProductFixture();
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     LoadHealDeliveryTestAccess::PublishColours(collector);
     LateBackfillState forwarding {};
     BaseObject* secondOld = nullptr;
@@ -2609,7 +2605,7 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     auto* second = fx.PlaceObject(start + 2 * size);
     region->SetRegionAllocPtr(start + 3 * size);
     fx.region1->SetRegionAllocPtr(fx.region1->GetRegionEnd());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::BindCollector(&collector);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(first));
@@ -2714,7 +2710,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartRejectsNonU
     });
 
     compactedStart->SetStateCode(ObjectState::NORMAL);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     CleanupPartialCompact(fx, state);
 #endif
 }
@@ -2739,7 +2735,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartWithUsableT
     GC_EXPECT_TRUE(resolved != nullptr);
     GC_EXPECT_TRUE(HeapGcState::JudgeHandOutTarget(resolved) == HandVerdict::Usable);
 
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     CleanupPartialCompact(fx, state);
 #endif
 }
@@ -2768,7 +2764,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorStoredCurrentRootRemapsAfterOldCo
 // changes independently of the source forwarding retained for remapping.
 GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
 {
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     GcHeapFixture fixture;
     auto* region = fixture.region0;
     // PrepareForwardableRegion walks a dense allocation range from page start.
@@ -2809,7 +2805,7 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
 
 GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
 {
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
     GcHeapFixture fixture;
     auto* region = fixture.region0;
     auto& collector = Heap::GetHeap().GetCollector();
