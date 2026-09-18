@@ -26,6 +26,8 @@
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriver.hpp"
+#include "Heap/z/zStringDedup.hpp"
+#include "Heap/z/zThread.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Mutator/Mutator.h"
@@ -85,7 +87,33 @@ void ZCollectedHeap::collect(GCReason reason, bool async)
 void ZCollectedHeap::stop()
 {
     ZAbort::abort();
-    Heap::GetHeap().GetCollectorResources().StopGCWork();
+    ZCollectedHeap* collected = heap();
+    CollectorResources& resources = collected->resources();
+    if (resources.finalizerProcessor.IsRunning()) {
+        resources.finalizerProcessor.Stop();
+    }
+    if (resources.gcThreadRunning.load(std::memory_order_acquire)) {
+        for (ZThread* thread : { static_cast<ZThread*>(collected->_director),
+                                 static_cast<ZThread*>(collected->_driver_major),
+                                 static_cast<ZThread*>(collected->_driver_minor) }) {
+            thread->stop();
+        }
+        delete collected->_director;
+        delete collected->_driver_minor;
+        delete collected->_driver_major;
+        collected->_director = nullptr;
+        collected->_driver_minor = nullptr;
+        collected->_driver_major = nullptr;
+        Heap::GetHeap().young().StopWorkers();
+        Heap::GetHeap().old().StopWorkers();
+        resources.gcThreadRunning.store(false, std::memory_order_release);
+    }
+    if (collected->_stat != nullptr) {
+        collected->_stat->stop();
+        delete collected->_stat;
+        collected->_stat = nullptr;
+    }
+    StringDedup::Instance().Stop();
 }
 
 } // namespace MapleRuntime

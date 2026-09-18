@@ -398,7 +398,6 @@ public:
 
     void Init();
     void Fini();
-    void StopGCWork();
 
     ZWorkers& GetWorkers(ZGenerationId generation) const;
 
@@ -442,7 +441,6 @@ private:
 #endif
 
     void StartGCThreads();
-    void StopGCThreads();
 
     // Notify the GC thread to start GC, and doesn't wait.
     // Called by mutator.

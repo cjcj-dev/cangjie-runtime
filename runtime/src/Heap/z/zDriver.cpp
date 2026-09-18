@@ -166,51 +166,6 @@ void CollectorResources::Fini()
     MRT_ASSERT(!gcThreadRunning.load(std::memory_order_relaxed), "Invalid GC thread status");
 }
 
-// zCollectedHeap.cpp:96-110 ZCollectedHeap::stop. Each ZThread::terminate
-// closes its own wait (director monitor, driver port); a driver's port stop
-// is also the shutdown acknowledgement for synchronous callers.
-void CollectorResources::StopGCWork()
-{
-    if (finalizerProcessor.IsRunning()) {
-        finalizerProcessor.Stop();
-    }
-    // zCollectedHeap.cpp:314-319 gc_threads_do order: director, major driver,
-    // minor driver, stat. StringDedup is not a ZGC thread and stops last.
-    StopGCThreads();
-    ZCollectedHeap* collected = ZCollectedHeap::heap();
-    if (collected->_stat != nullptr) {
-        collected->_stat->stop();
-        delete collected->_stat;
-        collected->_stat = nullptr;
-    }
-    StringDedup::Instance().Stop();
-}
-
-// zCollectedHeap.cpp:96-110 ZCollectedHeap::stop: every ConcurrentGCThread
-// is stopped through ConcurrentGCThread::stop (should_terminate ->
-// stop_service -> ZThread::terminate -> wait for termination).
-void CollectorResources::StopGCThreads()
-{
-    if (gcThreadRunning.load(std::memory_order_acquire) == false) {
-        return;
-    }
-    ZCollectedHeap* collected = ZCollectedHeap::heap();
-    for (ZThread* thread : { static_cast<ZThread*>(collected->_director), static_cast<ZThread*>(collected->_driver_major),
-                             static_cast<ZThread*>(collected->_driver_minor) }) {
-        thread->stop();
-    }
-    delete collected->_director;
-    delete collected->_driver_minor;
-    delete collected->_driver_major;
-    collected->_director = nullptr;
-    collected->_driver_minor = nullptr;
-    collected->_driver_major = nullptr;
-    // Drivers have terminated; no worker task can be submitted any more.
-    Heap::GetHeap().young().StopWorkers();
-    Heap::GetHeap().old().StopWorkers();
-    gcThreadRunning.store(false, std::memory_order_release);
-}
-
 void ZDriver::RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup)
 {
     const bool isYoung = reason == GC_REASON_YOUNG;
