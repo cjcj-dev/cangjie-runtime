@@ -259,18 +259,6 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
     clearList(largeTraceRegions);
 }
 
-// routedest: drop the destination holds of one route generation. Called from
-// PrepareFromRegionList, immediately after the ghost dispel walk and before the next
-// generation's destinations are enrolled — placing it there rather than at the three
-// PrepareForwardTable call sites is what makes it immune to a missed site, and there are
-// three, two of them inside a single minor (CopyCollector.cpp:5117 and :5570) plus the major
-// PostTrace one (:2124).
-//
-// Walks the same eleven lists as ClearNotRelocatableThisCycleFlags, and reports the gauge
-// before clearing: holds that leak never get dropped and show up as monotonic growth in
-// held_regions, which is the only way to tell that failure apart from the opposite one.
-
-
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
     (void)collectAll;

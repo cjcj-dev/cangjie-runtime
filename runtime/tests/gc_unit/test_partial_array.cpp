@@ -46,7 +46,7 @@ struct PartialArrayTestAccess {
 
     static void StartFieldMark(HeapGcState& collector)
     {
-        auto& old = collector.GetZGeneration(ZGenerationId::old);
+        auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         if (old.Workers() == nullptr) old.InitializeWorkers(1);
         if (!old.Snapshot().active) old.Begin(0);
         collector.StartOldMarkWork();

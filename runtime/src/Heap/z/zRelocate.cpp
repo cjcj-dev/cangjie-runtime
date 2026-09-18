@@ -299,7 +299,7 @@ void HeapGcState::PreforwardAllResurrectExportFromObjects(Generation generation)
 }
 void HeapGcState::StartRelocationTasks(ZGenerationId generation)
 {
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = space.GetRegionManager();
     ZWorkers& workers = GetWorkers(generation);
     if (generation == ZGenerationId::young) manager.StartForwardFromRegions<Generation::Young>(workers);
@@ -335,7 +335,7 @@ bool HeapGcState::Preforward()
         ZJNICritical::unblock();
     }
 
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     manager.DrainForwardFromRegions<Generation::Old>();
     ZWorkers& workers = GetWorkers(ZGenerationId::old);
     const std::function<void()> families[] = {
@@ -816,7 +816,7 @@ void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachable
                                        const MinorInteriorBaseMap& interiorBases,
                                        std::unique_ptr<ScopedStopTheWorld>* stw)
 {
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     (void)reachableVec;
     (void)refFixSlotsCoveredByReachable;
     // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
@@ -890,7 +890,7 @@ void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachable
             // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
-            static_cast<RegionSpace&>(GetAllocator()).PrepareFromSpace<Generation::Young>();
+            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareFromSpace<Generation::Young>();
             // ZGenerationYoung::collect: last abortpoint after selection,
             // before relocate-start. Once flipped, finish every remaining page.
             if (ZAbort::should_abort()) {
@@ -990,7 +990,7 @@ void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachable
                     continue;
                 }
                 if (kPageAgeAdaptiveTenuring &&
-                    !ShouldPromoteAge(region->GetYoungAge(), GetGCStats(ZGenerationId::young).tenuringThreshold)) {
+                    !ShouldPromoteAge(region->GetYoungAge(), Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold)) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
                         manager.EnlistStayYoungSurvivor(region);
                     } else if (!(region->OnNamedList("recent full regions"))) {

@@ -76,7 +76,6 @@ struct RemsetRearmTestAccess {
         // acceptance test. Bind its actual collector/domain/phase before the
         // linked product barrier can call ZGeneration::mark_object (:118-122).
         if (Heap::GetHeap().young().Workers() == nullptr) {
-            GcHeapFixture::AdoptGenerationIdentity(collector, Heap::GetHeap().GetCollector());
             Heap::GetHeap().young().InitializeWorkers(1);
             collector.StartYoungMarkWork();
             Heap::GetHeap().young().Begin(0);
@@ -1078,7 +1077,7 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
             for (size_t flip = 0; flip != flips; ++flip) markStart();
             // FORWARD is the same relocation: it must not replace the snapshot.
             Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
-            GC_EXPECT_EQ(collector.OldActiveRemsetIsCurrent(), flips % 2 == 0);
+            GC_EXPECT_EQ(Heap::GetHeap().OldActiveRemsetIsCurrent(), flips % 2 == 0);
             GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
             GC_EXPECT_TRUE(SlotPageRemembered(to + sizeof(void*)));
             ++checked;

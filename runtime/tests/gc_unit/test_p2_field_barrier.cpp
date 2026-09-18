@@ -119,8 +119,8 @@ extern "C" int p2FieldBarrierExercise()
                                       zpointer observed, zaddress result) {
         std::lock_guard<std::mutex> lock(resultMutex);
         if (kind == ZBarrier::FieldMarkKind::Finalizable && finalHolder != nullptr) {
-            Expect((collector.GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark ||
-                    collector.GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::MarkComplete), "finalizable_follow_during_mark");
+            Expect((Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark ||
+                    Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::MarkComplete), "finalizable_follow_during_mark");
             if (&field == &Slot(finalHolder)) {
                 const bool fast = ZPointer::is_load_good(observed) && ZPointer::is_marked_any_old(observed);
                 if (fast) {
@@ -179,7 +179,7 @@ extern "C" int p2FieldBarrierExercise()
             }
         }
         if (currentChild != nullptr && &field == &Slot(currentChild, 1) && kind == ZBarrier::FieldMarkKind::Young) {
-            const bool major = collector.GetZGeneration(ZGenerationId::young).IsMajorRoots();
+            const bool major = Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsMajorRoots();
             if (major) ++youngOldMajor; else ++youngOldMinor;
             Expect(to_object(result) == oldViaYoung, "young_old_returns_current");
             auto* page = Heap::page(reinterpret_cast<MAddress>(oldViaYoung));
@@ -612,7 +612,7 @@ extern "C" int p2SlowFieldInputExercise()
     };
     unsigned started = 0;
     HeapGcState::testYoungMarkStarted = [&] {
-        if (!collector.GetZGeneration(ZGenerationId::young).IsMajorRoots()) return;
+        if (!Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsMajorRoots()) return;
         ++started;
         Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
         auto* page = Heap::page(reinterpret_cast<MAddress>(young));
@@ -636,7 +636,7 @@ extern "C" int p2SlowFieldInputExercise()
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
             Expect(collector.MajorMark()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
         });
-        collector.GetZGeneration(ZGenerationId::old).Workers()->run(&task);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()->run(&task);
         Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");
         Expect(strongSlow == 1 && finalSlow == 1, "slow_input_both_field_entries_reached");
         Expect(strongFast == 1 && finalFast == 1, "slow_input_legal_fast_controls_reached");

@@ -160,8 +160,8 @@ public:
 
 private:
     // heapdesired: plain BaseObject* carrier is not a public heap-CAS desired.
-    // Only CopyCollector (GetAndTryTagRefField / RootSlotWriteback plain-root arm /
-    // null install) may mint it. Outside code that needs a plain value must say
+    // Only the friend owning the heap's GC state may mint it. Outside code
+    // that needs a plain value must say
     // so via zpointer/MAddress or the colour-carrying constructors above —
     // RefField<>(obj) as CompareExchange desired is a compile error.
     explicit HeapSlot(const BaseObject* obj)

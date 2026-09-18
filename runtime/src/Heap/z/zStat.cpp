@@ -658,8 +658,8 @@ ZStatHeapStats ZStatHeap::Stats() const
 namespace MapleRuntime {
 void HeapGcState::UpdateGCStats()
 {
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
-    GCStats& gcStats = GetGCStats();
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    GCStats& gcStats = Heap::GetHeap().GetGCStats();
     gcStats.Dump();
 
     size_t oldThreshold = gcStats.GetThreshold();

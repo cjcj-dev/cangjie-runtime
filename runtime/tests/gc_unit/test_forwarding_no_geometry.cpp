@@ -44,7 +44,7 @@ struct MutatorPublishTestAccess {
     }
     static BaseObject* ForwardImpl(HeapGcState& collector, BaseObject* from, ZPage* page)
     {
-        collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         ZPage::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
         return ZGeneration::generation(page->generation_id())->relocate().relocate_object_inner(from, page);

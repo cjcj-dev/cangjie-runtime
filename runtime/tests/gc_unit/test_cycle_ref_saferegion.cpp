@@ -129,7 +129,7 @@ void FlipToPreforwardAfterFirstHandler(BaseObject*, BaseObject*)
     if (call == 1) {
         // Publish the product phase value that can change while the carrier
         // lock is released around a managed callback.
-        context->collector->GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     }
 }
 
@@ -257,7 +257,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     HandlerSafepointContext context;
     handlerSafepointContext = &context;
     collector.SetCycleRefHandlerForTest(&SafepointingCycleRefHandler);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     manager.SetSuspensionMutatorCount(1);
 
     std::atomic<bool> resolverReturned{ false };
@@ -356,14 +356,14 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     context.collector = &collector;
     phaseFlipContext = &context;
     collector.SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     ThreadLocal::SetMutator(&resolverMutator);
 
     collector.ResolveCycleRef();
     const size_t callsBeforeResume = context.calls.load(std::memory_order_acquire);
-    const auto phaseBeforeResume = collector.GetZGeneration(ZGenerationId::old).GcPhase();
+    const auto phaseBeforeResume = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
 
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     collector.ResolveCycleRef();
     const size_t callsAfterResume = context.calls.load(std::memory_order_acquire);
     collector.ResolveCycleRef();

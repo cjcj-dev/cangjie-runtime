@@ -148,7 +148,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     remset.Initialize(fixture.heapStart, 2 * ZPage::UNIT_SIZE);
     ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner); });
     remset.Record(slot);
-    if (!Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
+    if (!Heap::GetHeap().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
     ZVerify::BeforeRelocation(owner);
 }
 

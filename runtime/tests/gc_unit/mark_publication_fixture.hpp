@@ -16,14 +16,14 @@ struct MarkPublicationFixture {
     MarkPublicationFixture()
     {
         current = this;
-        if (collector.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
-            collector.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
+        if (Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
+            Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
         }
-        if (collector.GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
-            collector.GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
+        if (Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
+            Heap::GetHeap().GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
         }
-        auto& young = collector.GetZGeneration(ZGenerationId::young);
-        auto& old = collector.GetZGeneration(ZGenerationId::old);
+        auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+        auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         if (young.Snapshot().active) young.End();
         if (old.Snapshot().active) old.End();
         young.SelectReason(GC_REASON_YOUNG);
@@ -68,7 +68,7 @@ struct MarkPublicationFixture {
     }
     void CompleteOldMarkForAdmissionTest()
     {
-        collector.GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::MarkComplete);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::MarkComplete);
     }
     template<class Visitor> void Drain(Visitor&& visitor)
     {

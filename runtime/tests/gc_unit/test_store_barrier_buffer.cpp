@@ -130,12 +130,12 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     Heap& heap = Heap::GetHeap();
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = heap.GetGCStats().reason;
-    const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     heap.GetGCStats().reason = GC_REASON_USER;
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
@@ -164,7 +164,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     }
     buf.Flush();
     DrainPublishedMarkObjects(retired);
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
     heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     GC_EXPECT_EQ(retired.size(), 1u);
@@ -188,12 +188,12 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     Heap& heap = Heap::GetHeap();
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = heap.GetGCStats().reason;
-    const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     heap.GetGCStats().reason = GC_REASON_USER;
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -209,7 +209,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     mutator.FlushStoreBarrierBuffer();
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
     DrainPublishedMarkObjects(retired);
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
     heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     size_t oldCount = 0;
@@ -313,12 +313,12 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     Heap& heap = Heap::GetHeap();
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = heap.GetGCStats().reason;
-    const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     heap.GetGCStats().reason = GC_REASON_USER;
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -336,7 +336,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     mutator.FlushStoreBarrierBuffer();
     DrainPublishedMarkObjects(retired);
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
     heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     size_t oldReceipts = 0;
@@ -379,12 +379,12 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     Heap& heap = Heap::GetHeap();
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = heap.GetGCStats().reason;
-    const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     heap.GetGCStats().reason = GC_REASON_USER;
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     ThreadLocal::SetAllocBuffer(&alloc);
@@ -403,7 +403,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     mutator.FlushStoreBarrierBuffer(true);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
 
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
     heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
 }

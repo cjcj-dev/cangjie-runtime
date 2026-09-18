@@ -170,11 +170,10 @@ void ZRemembered::oops_do_forwarded_via_containing(const std::vector<ZRemembered
 
 bool ZRemembered::should_scan_page(ZPage* page) const
 {
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
     if (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_relocate()) {
         return true;
     }
-    ZForwarding* forwarding = collector.GetZGeneration(ZGenerationId::old).forwarding(
+    ZForwarding* forwarding = Heap::GetHeap().GetZGeneration(ZGenerationId::old).forwarding(
         untype(ZOffset::address_unsafe(page->start())));
     if (forwarding == nullptr) {
         return true;
@@ -187,7 +186,6 @@ bool ZRemembered::should_scan_page(ZPage* page) const
 
 bool ZRemembered::scan_page_and_clear_remset(ZPage* page) const
 {
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
     const bool can_trust_live_bits =
         page->is_relocatable() && (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_mark());
     bool result = false;

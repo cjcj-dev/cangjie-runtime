@@ -606,7 +606,6 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     int32_t concurrentGcThreadCount)
 {
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    auto& collector = Heap::GetHeap().GetCollector();
     ZDirectorStats stats;
     stats.mutator_alloc_rate = ZStatMutatorAllocRate::stats();
     stats.max_capacity = Heap::GetHeap().GetMaxCapacity();
@@ -617,10 +616,10 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     stats.heap.used = Heap::GetHeap().GetAllocator().AllocatedBytes();
     const auto collectionStats = ZStat::Collections().Stats();
     stats.heap.total_collections = collectionStats.totalCollections;
-    stats.young_stats.cycle = collector.GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
-    stats.old_stats.cycle = collector.GetZGeneration(ZGenerationId::old).CycleStats().Stats(now);
-    stats.young_stats.workers = collector.GetZGeneration(ZGenerationId::young).StatWorkers()->stats();
-    stats.old_stats.workers = collector.GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
+    stats.young_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
+    stats.old_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old).CycleStats().Stats(now);
+    stats.young_stats.workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).StatWorkers()->stats();
+    stats.old_stats.workers = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
     stats.young_stats.resize = sample_worker_resize_stats(stats.young_stats.cycle, stats.young_stats.workers,
         Heap::GetHeap().young().Workers());
     stats.old_stats.resize = sample_worker_resize_stats(stats.old_stats.cycle, stats.old_stats.workers,

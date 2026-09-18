@@ -56,7 +56,7 @@ namespace MapleRuntime {
 void HeapGcState::PostTrace()
 {
     MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
     // Complete their owner handoff while that authority is queryable.
@@ -84,8 +84,8 @@ void HeapGcState::PostTrace()
 }
 void HeapGcState::CollectSmallSpace()
 {
-    GCStats& stats = GetGCStats();
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
+    GCStats& stats = Heap::GetHeap().GetGCStats();
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     {
         MRT_PHASE_TIMER(ZStatPhases::PCollectFromSpaceGarbage);
         stats.collectedBytes += stats.smallGarbageSize;

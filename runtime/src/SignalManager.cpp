@@ -22,9 +22,6 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "LoaderManager.h"
-// paramzero: avoid #include CopyCollector.h (its Heap include graph needs CopyCollector TU paths).
-namespace MapleRuntime {
-}
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Signal/SignalUtils.h"

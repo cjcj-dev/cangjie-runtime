@@ -263,9 +263,8 @@ void ZPage::ResetPageSequence()
 {
     const auto owner = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
     const auto other = IsYoungRegion() ? ZGenerationId::old : ZGenerationId::young;
-    auto& collector = Heap::GetHeap().GetCollector();
-    _seqnum = static_cast<uint32_t>(collector.GetCycleSnapshot(owner).sequence);
-    _seqnum_other = static_cast<uint32_t>(collector.GetCycleSnapshot(other).sequence);
+    _seqnum = static_cast<uint32_t>(Heap::GetHeap().GetCycleSnapshot(owner).sequence);
+    _seqnum_other = static_cast<uint32_t>(Heap::GetHeap().GetCycleSnapshot(other).sequence);
 }
 
 uint64_t ZPage::GetSnapshotEpoch() const

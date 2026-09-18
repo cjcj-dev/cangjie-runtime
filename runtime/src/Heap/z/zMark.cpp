@@ -655,17 +655,17 @@ void HeapGcState::PushYoungObject(BaseObject* object, WorkStack& workStack, cons
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
-        if (GetZGeneration(ZGenerationId::young).IsMajorRoots()) {
+        if (Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsMajorRoots()) {
             MarkOldObjectIfActive(object, true);
         }
         return;
     }
     (void)workStack;
     if (finalizable) {
-        const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
+        const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::young))
             .MarkObjectIfActive<false, true, true, true>(from_object(object));
     } else {
-        const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
+        const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::young))
             .MarkObjectIfActive<false, true, true, false>(from_object(object));
     }
 }
@@ -1036,7 +1036,7 @@ void HeapGcState::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::old));
+    auto& cycle = const_cast<ZGeneration&>(Heap::GetHeap().GetZGeneration(ZGenerationId::old));
     if (gcThread) {
         cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
     } else {

@@ -63,7 +63,7 @@ extern "C" int p1MarkStartExercise()
                                                const ZMark* domain) {
         const size_t index = generation == ZGenerationId::young ? 0 : 1;
         auto& before = state[index];
-        const auto snapshot = collector.GetCycleSnapshot(generation);
+        const auto snapshot = Heap::GetHeap().GetCycleSnapshot(generation);
         const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
         const uintptr_t color = ::g_cjMarkBadMask & mask;
         const unsigned face = ZGenerationRootTestAccess::RemsetFace();
@@ -120,13 +120,13 @@ extern "C" int p1MarkStartExercise()
             std::fflush(stdout);
         }
     };
-    const auto youngBefore = collector.GetCycleSnapshot(ZGenerationId::young);
-    const auto oldBefore = collector.GetCycleSnapshot(ZGenerationId::old);
+    const auto youngBefore = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
+    const auto oldBefore = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
     Heap::GetHeap().RequestGC(GC_REASON_USER, false);
-    const auto oldAfterMajor = collector.GetCycleSnapshot(ZGenerationId::old);
+    const auto oldAfterMajor = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    const auto youngAfter = collector.GetCycleSnapshot(ZGenerationId::young);
-    const auto oldAfter = collector.GetCycleSnapshot(ZGenerationId::old);
+    const auto youngAfter = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
+    const auto oldAfter = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
     HeapGcState::testMarkStartState = nullptr;
     Expect(oldAfterMajor.sequence > oldBefore.sequence, "major_request_started_old");
     Expect(oldAfter.sequence == oldAfterMajor.sequence, "minor_preserves_old_identity");

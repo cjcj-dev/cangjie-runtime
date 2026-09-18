@@ -335,25 +335,6 @@ class HeapGcState {
     friend class ZMarkTask;
 
 public:
-    ZGeneration& GetZGeneration(ZGenerationId generation);
-    const ZGeneration& GetZGeneration(ZGenerationId generation) const;
-    ZGeneration& GetZGeneration(Generation generation)
-    {
-        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
-    }
-    const ZGeneration& GetZGeneration(Generation generation) const
-    {
-        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
-    }
-    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
-    {
-        return GetZGeneration(generation).Snapshot();
-    }
-    bool OldActiveRemsetIsCurrent() const
-    {
-        return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
-            GetZGeneration(ZGenerationId::young).Sequence());
-    }
     [[noreturn]] static void AbortUnimplemented(const char* method);
     static HandVerdict JudgeHandOutTarget(BaseObject* target);
     static uint64_t EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
@@ -503,14 +484,10 @@ public:
 
 
 
-    Allocator& GetAllocator() const { return Heap::GetHeap().GetAllocator(); }
 
 
 
-    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
-    {
-        return GetZGeneration(generation).Stats();
-    }
+
 
     void UpdateGCStats();
 
@@ -566,7 +543,7 @@ protected:
     void EnumAllCommonRoots(ZWorkers& workers);
     ZWorkers& GetWorkers(ZGenerationId generation) const
     {
-        return *GetZGeneration(generation).Workers();
+        return *Heap::GetHeap().GetZGeneration(generation).Workers();
     }
     // enum roots referenced by foreign languages.
     void EnumAllExportRoots(RootSet& foreignRootsSet);
@@ -741,22 +718,22 @@ public:
         // was about to relocate.
         if (obj != nullptr && Heap::IsHeapAddress(obj)) {
             const MAddress addr = reinterpret_cast<MAddress>(obj);
-            if (GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
-                GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr) {
+            if (Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr) {
                 const ForwardingProvenance provenance{
                     ForwardingHolderKind::HeapRef, this, &obj
                 };
                 obj = ValidateCurrentValue(obj, provenance);
             }
         }
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
         space.AddRawPointerObject(obj);
         return obj;
     }
 
     void RemoveRawPointerObject(BaseObject* obj)
     {
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
         space.RemoveRawPointerObject(obj);
     }
 
@@ -804,8 +781,8 @@ public:
                 return false;
             }
             const MAddress addr = reinterpret_cast<MAddress>(obj);
-            return GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
-                   GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
+            return Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+                   Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
         }
         // filter const string object.
         if (Heap::IsHeapAddress(obj)) {
@@ -1068,8 +1045,8 @@ protected:
     void CollectLargeGarbage()
     {
         MRT_PHASE_TIMER(ZStatPhases::PCollectLargeGarbage);
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
-        GCStats& stats = GetGCStats();
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        GCStats& stats = Heap::GetHeap().GetGCStats();
         stats.largeSpaceSize = space.LargeObjectBytes();
         stats.largeGarbageSize = space.CollectLargeGarbage();
         stats.collectedBytes += stats.largeGarbageSize;
@@ -1077,8 +1054,8 @@ protected:
 
     void CollectPinnedGarbage()
     {
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
-        GCStats& stats = GetGCStats();
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        GCStats& stats = Heap::GetHeap().GetGCStats();
         stats.pinnedSpaceSize = space.PinnedSpaceSize();
         stats.pinnedGarbageSize = space.CollectPinnedGarbage();
         stats.collectedBytes += stats.pinnedGarbageSize;
