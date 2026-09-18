@@ -297,7 +297,10 @@ MAddress Heap::GetStartAddress() const { return _page_allocator->GetSpaceStartAd
 
 MAddress Heap::GetSpaceEndAddress() const { return _page_allocator->GetSpaceEndAddress(); }
 
-Heap& Heap::GetHeap() { return *_heap; }
+Heap& Heap::GetHeap()
+{
+    return ZCollectedHeap::heap()->collected_heap();
+}
 
 void Heap::install_page_table(MAddress base, size_t heapSize, size_t granule)
 {

@@ -42,9 +42,15 @@
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
-static ImmortalWrapper<ZCollectedHeap> g_collectedHeap;
-
-ZCollectedHeap* ZCollectedHeap::heap() { return &*g_collectedHeap; }
+ZCollectedHeap* ZCollectedHeap::heap()
+{
+    // Universe::initialize_heap creates the collector after VM/platform
+    // initialization (universe.cpp:962-963, zArguments.cpp:243-245).
+    // A DSO constructor here would observe dynamic page-size globals before
+    // their initialization, depending on static archive link order.
+    static ImmortalWrapper<ZCollectedHeap> collected;
+    return &*collected;
+}
 
 ZCollectedHeap::ZCollectedHeap()
     : _heap(),
