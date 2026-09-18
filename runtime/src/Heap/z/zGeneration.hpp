@@ -24,6 +24,7 @@
 namespace MapleRuntime {
 class ZMark;
 class ZRelocate;
+struct ForwardingProvenance;
 class ZRelocationSetSelector;
 enum class zaddress : Uptr;
 struct TenuringInputs;
@@ -135,6 +136,8 @@ public:
     ZRelocationSet& relocation_set() { return _relocation_set; }
     ZRelocate& relocate() { return *_relocate; }
     ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
+    BaseObject* relocate_or_remap_object(BaseObject* object);
+    BaseObject* relocate_or_remap_object(BaseObject* object, const ForwardingProvenance& provenance);
     void reset_relocation_set();
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
     void flip_age_pages(const ZRelocationSetSelector* selector);

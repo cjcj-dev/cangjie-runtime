@@ -333,6 +333,7 @@ using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>
 
 class HeapGcState {
     friend class ZMarkTask;
+    friend class ZRelocate;
 
 public:
     ZGeneration& GetZGeneration(ZGenerationId generation);
@@ -396,7 +397,7 @@ public:
         if (target == nullptr || ZPointer::is_load_good(ref.GetFieldValue())) {
             return target;
         }
-        return relocate_or_remap_object(target, remap_generation(ref), provenance);
+        return ZGeneration::generation(remap_generation(ref))->relocate_or_remap_object(target, provenance);
     }
     BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const;
 
@@ -754,51 +755,6 @@ public:
             return ZGenerationId::young;
         }
         return ZGenerationId::old;
-    }
-
-    // OpenJDK ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131-140): an address
-    // outside the selected generation's forwarding table is already safe; a matching entry routes
-    // to the current object. The generation check prevents an address-reuse alias from selecting a
-    // route installed by the other generation.
-    //
-    // ZRelocate::relocate_object (zRelocate.cpp:382-410) has three exits only:
-    //   ① find() hit → to    ② retain+copy → to    ③ wait, then forward_object
-    // forward_object (zRelocate.cpp:412-416) asserts find()!=null. There is no
-    // "return from". non-heap / no-ghost are "not in this forwarding table"
-    // (zGeneration.inline.hpp:131-140), not a fourth relocate exit.
-    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const
-    {
-        return relocate_or_remap_object(
-            obj, generation,
-            ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &obj });
-    }
-
-    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
-                                         const ForwardingProvenance& provenance) const
-    {
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) return obj;
-        const MAddress from = reinterpret_cast<MAddress>(obj);
-        const Generation ownerGeneration = generation == ZGenerationId::young
-            ? Generation::Young : Generation::Old;
-        ZForwarding* forwarding = Heap::GetHeap().GetZGeneration(ownerGeneration).forwarding_table().get(from);
-        if (forwarding == nullptr) return obj;
-
-        // zRelocate.cpp:383-415: lookup, retain/copy/release, then wait/find.
-        // Every leg carries the same set-owned forwarding, including after
-        // the source page has been released and its descriptor reused.
-        if (const MAddress to = forwarding->find(from)) {
-            return reinterpret_cast<BaseObject*>(to);
-        }
-        ZPage::RetainScope lease{forwarding};
-        if (lease.ok()) {
-            if (BaseObject* to = TryMutatorRelocate(obj, lease)) return to;
-        }
-        lease.Release();
-        BaseObject* to = WaitForPageForwarding(obj, lease.HoldForwarding());
-        if (to == nullptr) {
-            FailClosedLoad("ZRelocate::forward_object requires a forwarding entry", obj, 0, provenance);
-        }
-        return to;
     }
 
     void AddRawPointerObject(BaseObject* obj)

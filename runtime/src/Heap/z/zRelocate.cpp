@@ -154,8 +154,7 @@ bool HeapGcState::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, Base
     if (IsLoadBad(oldRef)) {
         fromObj = to_object(oldRef.GetTargetObject());
         if (forward) {
-            toObj = const_cast<HeapGcState*>(this)->relocate_or_remap_object(
-                fromObj, static_cast<ZGenerationId>(remap_generation(oldRef)));
+            toObj = ZGeneration::generation(remap_generation(oldRef))->relocate_or_remap_object(fromObj);
         } else {
             toObj = FindToVersion(fromObj, static_cast<Generation>(remap_generation(oldRef))).GetOrFailClosed(
                 "HeapGcState::TryUpdateRefFieldImpl", provenance);
@@ -260,7 +259,7 @@ void HeapGcState::RemapYoungRoots()
         if (observedAddr != 0 &&
             generation_forwarding_table(Generation::Young).get(observedAddr) != nullptr) {
             const ZGenerationId id = ZGenerationId::young;
-            (void)relocate_or_remap_object(to_object(safe(observed)), id);
+            (void)ZGeneration::generation(id)->relocate_or_remap_object(to_object(safe(observed)));
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -347,7 +346,7 @@ bool HeapGcState::Preforward()
             const zaddress_unsafe observed = root.LoadPlain();
             BaseObject* oldObj = to_object(safe(observed));
             if (oldObj != nullptr && Heap::IsHeapAddress(oldObj)) {
-                (void)relocate_or_remap_object(oldObj, ZGenerationId::old);
+                (void)ZGeneration::old()->relocate_or_remap_object(oldObj);
             }
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }, {}); },
@@ -1446,7 +1445,7 @@ BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProv
             HeapGcState::JudgeHandOutTarget(current) == HandVerdict::Usable) {
             return current;
         }
-        BaseObject* resolved = relocate_or_remap_object(current, static_cast<ZGenerationId>(generation), provenance);
+        BaseObject* resolved = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(current, provenance);
         if (resolved == nullptr) {
             FailClosedLoad("HeapGcState::ResolveStoreValue.unresolved", current, 0, provenance);
         }
@@ -1475,7 +1474,7 @@ BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProv
 
 BaseObject* HeapGcState::ForwardObject(BaseObject* obj, Generation generation)
 {
-    BaseObject* to = relocate_or_remap_object(obj, static_cast<ZGenerationId>(generation));
+    BaseObject* to = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(obj);
     if (to != nullptr && to != obj) {
         return to;
     }
@@ -2704,3 +2703,26 @@ void ZRelocate::barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* 
 }
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+// zRelocate.cpp:382-410: lookup, retain/copy/release, then wait/forward.
+BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* object,
+                                      const ForwardingProvenance& provenance)
+{
+    const MAddress from = reinterpret_cast<MAddress>(object);
+    if (const MAddress to = forwarding->find(from)) {
+        return reinterpret_cast<BaseObject*>(to);
+    }
+    auto& collector = Heap::GetHeap().GetCollector();
+    ZPage::RetainScope lease{forwarding};
+    if (lease.ok()) {
+        if (BaseObject* to = collector.TryMutatorRelocate(object, lease)) return to;
+    }
+    lease.Release();
+    BaseObject* to = collector.WaitForPageForwarding(object, lease.HoldForwarding());
+    if (to == nullptr) {
+        HeapGcState::FailClosedLoad("ZRelocate::forward_object requires a forwarding entry", object, 0, provenance);
+    }
+    return to;
+}
+}

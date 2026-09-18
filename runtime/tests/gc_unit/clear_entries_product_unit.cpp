@@ -123,7 +123,7 @@ struct RelocationReceiptTestAccess {
         if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
             return oldObj;
         }
-        BaseObject* mapped = collector.relocate_or_remap_object(oldObj, ZGenerationId::old);
+        BaseObject* mapped = Heap::GetHeap().old().relocate_or_remap_object(oldObj);
         ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         return mapped;
     }
@@ -140,7 +140,7 @@ struct RelocationReceiptTestAccess {
 
     static BaseObject* TryForward(HeapGcState& collector, BaseObject* object)
     {
-        return collector.relocate_or_remap_object(object, ZGenerationId::old);
+        return Heap::GetHeap().old().relocate_or_remap_object(object);
     }
 
     static BaseObject* WaitRoutedTipReady(

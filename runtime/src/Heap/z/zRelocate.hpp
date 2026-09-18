@@ -113,6 +113,7 @@ private:
 class ZWorkers;
 class ZPage;
 class ZGeneration;
+struct ForwardingProvenance;
 template<typename T> class ZArray;
 
 class ZRelocationTargets {
@@ -135,6 +136,8 @@ private:
 class ZRelocate {
 public:
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
+    BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object,
+                                const ForwardingProvenance& provenance);
     ZRelocateQueue* queue() { return &relocateQueue; }
     bool is_queue_active() const { return relocateQueue.IsActive(); }
     static PageAge compute_to_age(PageAge fromAge);

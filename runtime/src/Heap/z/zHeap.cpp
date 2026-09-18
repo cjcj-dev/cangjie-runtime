@@ -219,7 +219,7 @@ BaseObject* Heap::ForwardObject(BaseObject* fromVersion, Generation generation)
 
 BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
 {
-    return GetCollector().relocate_or_remap_object(object, generation);
+    return GetZGeneration(generation).relocate_or_remap_object(object);
 }
 
 bool Heap::IsSurvivedObject(const BaseObject* obj) const
