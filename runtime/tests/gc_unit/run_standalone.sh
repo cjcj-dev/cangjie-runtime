@@ -467,25 +467,27 @@ sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \
 # The standalone script is the frozen gate's real build entry point.  Keep the
 # same structural invariant as the CMake target at that point, before any test
 # process can run: none of the product consumers exercised through dlsym may
-# be dynamically defined by this executable itself.  A removed visibility or
+# be defined by this executable itself.  A removed visibility or
 # archive-exclusion flag therefore fails closed instead of silently restoring
 # the old self-satisfying weak copies.
 STANDALONE_SYMBOLS=(
   _ZN12MapleRuntime8ZLiveMap5resetENS_13ZGenerationIdE
   _ZN12MapleRuntime8ZLiveMap13reset_segmentEm
-  _ZN12MapleRuntime10RegionInfo17CloneForPromotionEv
-  _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE
-  _ZNK12MapleRuntime9Collector18MarkObjectIfActiveEPNS_10BaseObjectE
 )
 STANDALONE_FULL_SYMBOLS=(
+  _ZN12MapleRuntime5ZPage17CloneForPromotionEv
+  _ZN12MapleRuntime5ZMark15MarkEntryObjectEPNS_10BaseObjectERKNS_14MarkStackEntryEPNS_13MarkLiveCacheE
+  _ZN12MapleRuntime5ZMark21MarkOldObjectIfActiveEPNS_10BaseObjectEb
 )
-# ZLiveMap::reset/reset_segment and RegionInfo::CloneForPromotion are out-of-line
-# product functions (zLiveMap.cpp / zPage.cpp); the livemap tests must bind them
-# from the SO, never from a local copy in this ELF.
+# ZPage::CloneForPromotion and ZMark entry/active marking are out-of-line
+# product functions. Full symbols exclude local copies as well as exports;
+# matching product definitions keep retired names from making the guard inert.
 STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"
 STANDALONE_SYMBOL_FULL="$OUT/cj_gc_unit.full-defined.txt"
+STANDALONE_PRODUCT_FULL="$OUT/standalone-product.full-defined.txt"
 nm -D --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_DYN"
 nm --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_FULL"
+nm --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$STANDALONE_PRODUCT_FULL"
 if ! /usr/bin/grep -Eq '[[:space:]]main$' "$STANDALONE_SYMBOL_FULL"; then
   echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_BROKEN positive_control=main" >&2
   exit 7
@@ -497,8 +499,11 @@ for symbol in "${STANDALONE_SYMBOLS[@]}"; do
   fi
 done
 for symbol in "${STANDALONE_FULL_SYMBOLS[@]}"; do
-  if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_DYN" ||
-      /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_FULL"; then
+  if ! /usr/bin/grep -F -q "$symbol" "$STANDALONE_PRODUCT_FULL"; then
+    echo "GC_UNIT_STANDALONE_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
+    exit 7
+  fi
+  if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_FULL"; then
     echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_FAIL symbol=$symbol" >&2
     exit 7
   fi
