@@ -1064,6 +1064,10 @@ void ZMark::Start()
     stripes.SetNStripes(targetNStripes);
     EnsureWorkers(nworkers);
     terminate.Reset(nworkers);
+    // zMark.cpp:118-123: stripe count goes to the generation's mark account.
+    const ZGenerationId statId =
+        generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+    Heap::GetHeap().GetZGeneration(statId).StatMark()->AtMarkStart(targetNStripes);
 }
 
 void ZMark::PrepareWork()
@@ -1412,6 +1416,11 @@ bool ZMark::TryEnd()
     if (!stripes.IsEmpty()) {
         return false;
     }
+    // zMark.cpp:983-987: completed mark publishes its flush/continue counters.
+    const ZGenerationId statId =
+        generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+    Heap::GetHeap().GetZGeneration(statId).StatMark()->AtMarkEnd(nproactiveflush, nterminateflush,
+                                                                 ntrycomplete, ncontinue);
     return true;
 }
 

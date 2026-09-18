@@ -1069,11 +1069,12 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
         return;
     }
     ZStatDurationSample(sampler, endNs - startNs);
-    // zStat.cpp:724-735 — the one-shot per-collection report. The stalls,
-    // mark, relocation and heap units join as their per-generation stat
-    // objects land on this branch.
+    // zStat.cpp:724-735 — the one-shot per-collection report; the heap table
+    // and relocation units join with their feeders (this branch).
+    ZGeneration& generation = Heap::GetHeap().GetZGeneration(id);
     ZStatLoad::Print();
     ZStatMMU::Print();
+    generation.StatMark()->Print();
     if (id == ZGenerationId::old) {
         ZStatReferences::Print();
     }

@@ -121,6 +121,8 @@ public:
     ZStatWorkers* StatWorkers() { return &statWorkers; }
     // zGeneration.hpp: stat_heap() — per-generation heap account.
     ZStatHeap* StatHeap() { return &statHeap; }
+    // zGeneration.hpp:137 stat_mark() — per-generation mark account.
+    ZStatMark* StatMark() { return &statMark; }
     ZGenerationPhase GcPhase() const { return _phase; }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
@@ -163,6 +165,8 @@ protected:
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
     ZStatHeap statHeap;
+    // zGeneration.hpp:84 — mark statistics for this generation's mark domain.
+    ZStatMark statMark;
     ZStatCycle cycleStats;
     // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
     ZStatWorkers statWorkers;
