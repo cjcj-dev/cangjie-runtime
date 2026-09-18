@@ -29,7 +29,7 @@ namespace MapleRuntime {
 #define ARM32_MARKED_FLAG_BITS  2
 #endif
 class BaseObject;
-class Collector;
+class HeapGcState;
 
 void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr);
 
@@ -50,7 +50,7 @@ public:
     static constexpr size_t GetSize() { return sizeof(fieldVal); }
 
     // 剥色地址位。返回 zaddress：调用方把「槽值地址位」当可解引用对象基址使用。
-    // ⚠ 本函数不做读屏障；需要 load-good 的路径必须走 Collector::make_load_good。
+    // ⚠ 本函数不做读屏障；需要 load-good 的路径必须走 HeapGcState::make_load_good。
     // 类型纪律见 ops/design/COLOUR_TYPE_DISCIPLINE.md。
     zaddress GetTargetObject(std::memory_order order = std::memory_order_relaxed) const
     {
@@ -166,7 +166,7 @@ private:
     // RefField<>(obj) as CompareExchange desired is a compile error.
     explicit HeapSlot(const BaseObject* obj)
         : fieldVal(raw(ZAddress::store_good(from_object(obj)))) {}
-    friend class Collector;
+    friend class HeapGcState;
     using RefFieldValue = MAddress;
     RefFieldValue fieldVal;
 };
@@ -220,7 +220,7 @@ private:
     zaddress_unsafe rootValue;
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);
-    friend class Collector;
+    friend class HeapGcState;
 };
 
 // Read-only root capability. This is intentionally const-qualified rather than a

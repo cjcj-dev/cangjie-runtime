@@ -24,14 +24,14 @@
 namespace MapleRuntime {
 
 #if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(ZGenerationId, NativeSlot*)> Collector::testColoredRootResult;
-std::function<void()> Collector::testCyclePrepared;
-std::function<void()> Collector::testYoungMarkStarted;
-std::function<void()> Collector::testOldMarkStarted;
-std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> Collector::testMarkStartState;
-std::function<void()> Collector::testYoungMarkCompleted;
-std::function<void(const ExportOwnershipTestObservation&)> Collector::testExportOwnershipResult;
-std::function<void(Mutator&)> Collector::testOldMarkThreadResult;
+std::function<void(ZGenerationId, NativeSlot*)> HeapGcState::testColoredRootResult;
+std::function<void()> HeapGcState::testCyclePrepared;
+std::function<void()> HeapGcState::testYoungMarkStarted;
+std::function<void()> HeapGcState::testOldMarkStarted;
+std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> HeapGcState::testMarkStartState;
+std::function<void()> HeapGcState::testYoungMarkCompleted;
+std::function<void(const ExportOwnershipTestObservation&)> HeapGcState::testExportOwnershipResult;
+std::function<void(Mutator&)> HeapGcState::testOldMarkThreadResult;
 #endif
 
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
@@ -112,7 +112,7 @@ void NoteTraceYoungClosureDuringPause()
 #endif
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void Collector::DumpHeap(const CString& tag)
+void HeapGcState::DumpHeap(const CString& tag)
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "Not In STW");
     DLOG(FRAGMENT, "DumpHeap %s", tag.Str());
@@ -142,7 +142,7 @@ void Collector::DumpHeap(const CString& tag)
 }
 
 ATTR_NO_SANITIZE_ADDRESS
-void Collector::DumpRoots(LogType logType)
+void HeapGcState::DumpRoots(LogType logType)
 {
     RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
         zaddress_unsafe value = ref.LoadPlain();
@@ -265,7 +265,7 @@ void ReportSkippedStackMapCounts()
             zeroEntries, pcMiss, zeroRootIndices);
     }
 }
-size_t Collector::CurrentThreadRootMapMissCount()
+size_t HeapGcState::CurrentThreadRootMapMissCount()
 {
     return g_currentThreadRootMapMissCount;
 }
@@ -276,7 +276,7 @@ size_t Collector::CurrentThreadRootMapMissCount()
 
 namespace MapleRuntime {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void Collector::DumpBeforeGC()
+void HeapGcState::DumpBeforeGC()
     {
         if (ENABLE_LOG(FRAGMENT)) {
             if (MutatorManager::Instance().WorldStopped()) {
@@ -288,7 +288,7 @@ void Collector::DumpBeforeGC()
         }
     }
 
-void Collector::DumpAfterGC()
+void HeapGcState::DumpAfterGC()
     {
         if (ENABLE_LOG(FRAGMENT)) {
             if (MutatorManager::Instance().WorldStopped()) {

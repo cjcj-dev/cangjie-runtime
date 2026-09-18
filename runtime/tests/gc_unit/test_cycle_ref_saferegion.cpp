@@ -41,7 +41,7 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, Collector* collector)
+    static void BindCollector(CollectorResources& resources, HeapGcState* collector)
     {
         resources.testCollector = collector;
     }
@@ -103,7 +103,7 @@ void SafepointingCycleRefHandler(BaseObject* exportObj, BaseObject* externObj)
 }
 
 struct PhaseFlipContext {
-    Collector* collector = nullptr;
+    HeapGcState* collector = nullptr;
     std::atomic<size_t> calls{ 0 };
 };
 

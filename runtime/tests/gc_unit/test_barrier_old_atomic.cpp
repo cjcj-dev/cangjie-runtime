@@ -63,7 +63,7 @@ struct RelocationReceiptTestAccess {
 
 namespace {
 
-class BarrierCollector final : public Collector {
+class BarrierCollector final : public HeapGcState {
 public:
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
     { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }

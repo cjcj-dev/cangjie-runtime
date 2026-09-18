@@ -20,7 +20,7 @@
 #include "Heap/z/zGenerationId.hpp"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
-class Collector;
+class HeapGcState;
 class Mutator;
 
 class HandleMark {
@@ -56,9 +56,9 @@ public:
 
 class OopStorageSetIteratorStrong {
 public:
-    OopStorageSetIteratorStrong(const Collector& collector, unsigned workers,
+    OopStorageSetIteratorStrong(const HeapGcState& collector, unsigned workers,
                                 ZGenerationIdOptional generation);
-    explicit OopStorageSetIteratorStrong(const Collector& collector, unsigned workers = 1)
+    explicit OopStorageSetIteratorStrong(const HeapGcState& collector, unsigned workers = 1)
         : OopStorageSetIteratorStrong(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
@@ -67,9 +67,9 @@ private:
 };
 class OopStorageSetIteratorWeak {
 public:
-    OopStorageSetIteratorWeak(const Collector& collector, unsigned workers,
+    OopStorageSetIteratorWeak(const HeapGcState& collector, unsigned workers,
                               ZGenerationIdOptional generation);
-    explicit OopStorageSetIteratorWeak(const Collector& collector, unsigned workers = 1)
+    explicit OopStorageSetIteratorWeak(const HeapGcState& collector, unsigned workers = 1)
         : OopStorageSetIteratorWeak(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
     void report_num_dead();
@@ -81,13 +81,13 @@ private:
 };
 class StaticRootsAdapterIterator {
 public:
-    StaticRootsAdapterIterator(const Collector& collector, ZGenerationIdOptional)
+    StaticRootsAdapterIterator(const HeapGcState& collector, ZGenerationIdOptional)
         : collector(collector) {}
-    explicit StaticRootsAdapterIterator(const Collector& collector)
+    explicit StaticRootsAdapterIterator(const HeapGcState& collector)
         : StaticRootsAdapterIterator(collector, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    const Collector& collector;
+    const HeapGcState& collector;
     std::atomic<bool> claimed{false};
 };
 class JavaThreadsIterator {
@@ -102,10 +102,10 @@ private:
 };
 class RootsIteratorStrongColored {
 public:
-    RootsIteratorStrongColored(const Collector& collector, unsigned workers,
+    RootsIteratorStrongColored(const HeapGcState& collector, unsigned workers,
                                ZGenerationIdOptional generation)
         : strong(collector, workers, generation), statics(collector, generation) {}
-    explicit RootsIteratorStrongColored(const Collector& collector, unsigned workers = 1)
+    explicit RootsIteratorStrongColored(const HeapGcState& collector, unsigned workers = 1)
         : RootsIteratorStrongColored(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
@@ -114,10 +114,10 @@ private:
 };
 class RootsIteratorWeakColored {
 public:
-    RootsIteratorWeakColored(const Collector& collector, unsigned workers,
+    RootsIteratorWeakColored(const HeapGcState& collector, unsigned workers,
                              ZGenerationIdOptional generation)
         : weak(collector, workers, generation) {}
-    explicit RootsIteratorWeakColored(const Collector& collector, unsigned workers = 1)
+    explicit RootsIteratorWeakColored(const HeapGcState& collector, unsigned workers = 1)
         : RootsIteratorWeakColored(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor)
     {
@@ -130,11 +130,11 @@ private:
 };
 class RootsIteratorAllColored {
 public:
-    RootsIteratorAllColored(const Collector& collector, unsigned workers,
+    RootsIteratorAllColored(const HeapGcState& collector, unsigned workers,
                             ZGenerationIdOptional generation)
         : strong(collector, workers, generation), weak(collector, workers, generation),
           statics(collector, generation) {}
-    explicit RootsIteratorAllColored(const Collector& collector, unsigned workers = 1)
+    explicit RootsIteratorAllColored(const HeapGcState& collector, unsigned workers = 1)
         : RootsIteratorAllColored(collector, workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:

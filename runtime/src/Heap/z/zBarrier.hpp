@@ -19,7 +19,7 @@
 #include "ObjectModel/MClass.h"
 
 namespace MapleRuntime {
-class Collector;
+class HeapGcState;
 enum class ReferenceStrength : uint8_t { Strong, Weak, Phantom };
 struct ForwardingProvenance;
 

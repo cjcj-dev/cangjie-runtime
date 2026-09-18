@@ -42,20 +42,20 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
                 (void)young;
-                Collector::Process(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
+                HeapGcState::Process(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
                 break;
             }
             case FrameType::C2R_STUB:
 
-                Collector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                HeapGcState::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::C2N_STUB:
 
-                Collector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                HeapGcState::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::EXSLUSIVE:
 
-                Collector::RecordExclusiveStubCalleeSaved(regSlotsMap,
+                HeapGcState::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                                  reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::STACKGROW:
@@ -63,7 +63,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                 break;
             case FrameType::SAFEPOINT:
 
-                Collector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                HeapGcState::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
 
@@ -81,23 +81,23 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
         switch (frame->GetFrameType()) {
             case FrameType::MANAGED: {
                 currentFramePtr = frame;
-                Collector::Process(func, nullptr, regSlotsMap, ref, mutator);
+                HeapGcState::Process(func, nullptr, regSlotsMap, ref, mutator);
                 break;
             }
             case FrameType::STACKGROW:
                 LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
                 break;
             case FrameType::SAFEPOINT:
-                Collector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                HeapGcState::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             case FrameType::C2R_STUB:
-                Collector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                HeapGcState::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             case FrameType::C2N_STUB:
-                Collector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                HeapGcState::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             case FrameType::EXSLUSIVE:
-                Collector::RecordExclusiveStubCalleeSaved(regSlotsMap,
+                HeapGcState::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                                  reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             default: {
@@ -160,7 +160,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
                 (void)young;
-                Collector::Process(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
+                HeapGcState::Process(regRootVisitor, &derivedPtrVisitor, regSlotsMap, frame, mutator);
                 break;
             }
             case FrameType::C2R_STUB:
@@ -170,12 +170,12 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
             case FrameType::INTERPRETER_C2I:
 #endif
 
-                Collector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                HeapGcState::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
 
-                Collector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+                HeapGcState::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
 
@@ -216,17 +216,17 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
         switch (frame->GetFrameType()) {
             case FrameType::MANAGED: {
                 currentFramePtr = frame;
-                Collector::Process(func, nullptr, regSlotsMap, ref, mutator);
+                HeapGcState::Process(func, nullptr, regSlotsMap, ref, mutator);
                 break;
             }
             case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
-                Collector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                HeapGcState::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             case FrameType::C2R_STUB:
             case FrameType::C2N_STUB:
             case FrameType::EXSLUSIVE:
-                Collector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
+                HeapGcState::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame->mFrame.GetFA()));
                 break;
             default: {
                 break;

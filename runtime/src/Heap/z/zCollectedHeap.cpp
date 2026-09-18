@@ -32,8 +32,8 @@
 
 namespace MapleRuntime {
 namespace {
-const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
-                                       "Smooth Collector" };
+const char* const COLLECTOR_NAME[] = { "No HeapGcState", "Proxy HeapGcState", "Regional-Copying HeapGcState",
+                                       "Smooth HeapGcState" };
 }
 
 static ImmortalWrapper<ZCollectedHeap> g_collectedHeap;
@@ -50,7 +50,7 @@ ZCollectedHeap::ZCollectedHeap()
 {
 }
 
-void Collector::MarkObjectIfActive(BaseObject* object) const
+void HeapGcState::MarkObjectIfActive(BaseObject* object) const
 {
     if (!Heap::IsHeapAddress(object)) {
         return;
@@ -63,9 +63,9 @@ void Collector::MarkObjectIfActive(BaseObject* object) const
     }
 }
 
-const char* Collector::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
+const char* HeapGcState::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
 
-void Collector::RequestGC(GCReason reason, bool async)
+void HeapGcState::RequestGC(GCReason reason, bool async)
 {
     RequestGCInternal(reason, async);
 }
@@ -107,12 +107,12 @@ void ZCollectedHeap::stop()
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
-ZGeneration& Collector::GetZGeneration(ZGenerationId generation)
+ZGeneration& HeapGcState::GetZGeneration(ZGenerationId generation)
 {
     return Heap::GetHeap().GetZGeneration(generation);
 }
 
-const ZGeneration& Collector::GetZGeneration(ZGenerationId generation) const
+const ZGeneration& HeapGcState::GetZGeneration(ZGenerationId generation) const
 {
     return Heap::GetHeap().GetZGeneration(generation);
 }
@@ -198,7 +198,7 @@ private:
 // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
 // Synchronous root operations consume the generation of their phase context.
 // Unlike ZStackWatermark, these closures do not retain frames across relocations.
-BaseObject* Collector::ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const
+BaseObject* HeapGcState::ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const
 {
     if (ref == nullptr || !Heap::IsHeapAddress(ref) || JudgeHandOutTarget(ref) == HandVerdict::Usable) {
         return ref;
@@ -206,20 +206,20 @@ BaseObject* Collector::ValidateCurrentValue(BaseObject* ref, const ForwardingPro
     FailClosedLoad("current raw value required", ref, 0, provenance);
 }
 
-Generation Collector::ObjectGeneration(BaseObject* object) const
+Generation HeapGcState::ObjectGeneration(BaseObject* object) const
 {
     const MAddress address = reinterpret_cast<MAddress>(object);
     // ZHeap::is_young uses the current page, including after promotion.
     return Heap::page(address)->GetOwnerGeneration();
 }
 
-BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const
+BaseObject* HeapGcState::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const
 {
     if (obj == nullptr) {
         return nullptr;
     }
 
-    BaseObject* to = FindToVersion(obj, generation).GetOrFailClosed("Collector::FindLatestVersion", provenance);
+    BaseObject* to = FindToVersion(obj, generation).GetOrFailClosed("HeapGcState::FindLatestVersion", provenance);
     if (to != nullptr) {
         if (to != obj && Heap::IsHeapAddress(to) && !to->IsValidObject()) {
             CHECK_DETAIL(obj->IsValidObject(),
@@ -239,7 +239,7 @@ BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProven
 // loadfc: best-effort detection verdict. Same header-word shape as Barrier.cpp's former staleguard
 // judge (StateWord.h:215-228: bits 0-47 TypeInfo, bits 48-49 stateCode; FORWARDED=3). This one
 // relaxed read classifies the observed word; it does not establish object lifetime or happens-before.
-HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
+HandVerdict HeapGcState::JudgeHandOutTarget(BaseObject* target)
 {
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return HandVerdict::Usable;
@@ -248,7 +248,7 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
     return ClassifyRawHeader(hdr);
 }
 
-uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
+uint64_t HeapGcState::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
                                                  MAddress witnessStart, uint64_t witnessEpoch,
                                                  uint64_t witnessLife, bool witnessValid)
 {
@@ -316,7 +316,7 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
 // loadfc (zBarrier.inline.hpp:327-343): the slow path must produce a verified current version or
 // stop the mutator in a controlled, attributable place -- never hand back a structurally dead
 // from-address. The [LOADFC] tag is the population-accounting signature.
-[[noreturn]] void Collector::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
+[[noreturn]] void HeapGcState::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
                                             const ForwardingProvenance& provenance)
 {
     const HandVerdict verdict = JudgeHandOutTarget(target);
@@ -367,11 +367,11 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
 }
 
 // Virtual default: this collector type does not implement the method. Always abort;
-// body is out-of-line so Collector.h stays free of FormatLog / string payloads.
-[[noreturn]] void Collector::AbortUnimplemented(const char* method)
+// body is out-of-line so HeapGcState.h stays free of FormatLog / string payloads.
+[[noreturn]] void HeapGcState::AbortUnimplemented(const char* method)
 {
     Logger::GetLogger().FormatLog(RTLOG_FATAL, true,
-                                  "unimplemented virtual %s on this Collector "
+                                  "unimplemented virtual %s on this HeapGcState "
                                   "(base default must not be reached)",
                                   method != nullptr ? method : "?");
     std::abort();

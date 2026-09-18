@@ -105,15 +105,15 @@ Heap::Heap()
     theSpace = Allocator::NewAllocator();
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
-    collectorImpl = static_cast<Collector*>(::operator new(sizeof(Collector)));
+    collectorImpl = static_cast<HeapGcState*>(::operator new(sizeof(HeapGcState)));
     collectorResources = new CollectorResources(*collectorImpl);
-    new (collectorImpl) Collector(*theSpace, *collectorResources);
+    new (collectorImpl) HeapGcState(*theSpace, *collectorResources);
 }
 
 Heap::~Heap()
 {
     if (collectorImpl != nullptr) {
-        collectorImpl->~Collector();
+        collectorImpl->~HeapGcState();
         ::operator delete(collectorImpl);
         collectorImpl = nullptr;
     }
@@ -178,8 +178,8 @@ void Heap::Fini()
     }
 }
 
-Collector& Heap::GetCollector() { return collectorResources->ActiveCollector(); }
-const Collector& Heap::GetCollector() const { return collectorResources->ActiveCollector(); }
+HeapGcState& Heap::GetCollector() { return collectorResources->ActiveCollector(); }
+const HeapGcState& Heap::GetCollector() const { return collectorResources->ActiveCollector(); }
 
 void Heap::RequestGC(GCReason reason, bool async) { GetCollector().RequestGC(reason, async); }
 
@@ -424,7 +424,7 @@ void Heap::CrossAccessBarrier(I64 id)
     // Preserve that current identity, including an in-place destination whose
     // address is also another object's from-key (ZUncoloredRoot::make_load_good,
     // zUncoloredRoot.inline.hpp:62-69). Page ownership cannot reclassify it.
-    reinterpret_cast<Collector&>(GetCollector()).ResurrectExportObject(recordObj);
+    reinterpret_cast<HeapGcState&>(GetCollector()).ResurrectExportObject(recordObj);
     SetExportObjActiveState(id, true);
 }
 

@@ -62,7 +62,7 @@ void CheckNativeFrameScan(bool derived)
         size_t visits = 0;
         const RootVisitor roots = [&](RootSlot&) { ++visits; };
         const DerivedPtrVisitor derivedRoots = [&](BasePtrType, DerivedSlot&) { ++visits; };
-        Collector::Process(roots, derived ? &derivedRoots : nullptr, registers, frame, mutator);
+        HeapGcState::Process(roots, derived ? &derivedRoots : nullptr, registers, frame, mutator);
         _exit(visits == 0 ? 0 : 1);
     }
     int status = 0;

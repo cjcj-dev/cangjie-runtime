@@ -66,7 +66,7 @@ zpointer StoreBadPointer(BaseObject* object)
     return to_zpointer(raw(StoreGoodPointer(object)) ^ ZPointerMarkedOldMask);
 }
 
-class StoreBufferCollector final : public Collector {
+class StoreBufferCollector final : public HeapGcState {
 public:
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
     { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }

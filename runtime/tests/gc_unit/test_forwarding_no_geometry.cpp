@@ -38,11 +38,11 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct MutatorPublishTestAccess {
-    static BaseObject* RelocateInner(Collector& collector, BaseObject* from, ZPage* page)
+    static BaseObject* RelocateInner(HeapGcState& collector, BaseObject* from, ZPage* page)
     {
         return collector.RelocateObjectInner(from, page);
     }
-    static BaseObject* ForwardImpl(Collector& collector, BaseObject* from, ZPage* page)
+    static BaseObject* ForwardImpl(HeapGcState& collector, BaseObject* from, ZPage* page)
     {
         collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         ZPage::RetainScope lease(page);

@@ -77,7 +77,7 @@ bool ModelShouldSelfHealCas(bool loadGoodIsHeap)
     return loadGoodIsHeap;
 }
 
-class ExportHandleTestCollector final : public Collector {
+class ExportHandleTestCollector final : public HeapGcState {
 public:
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}

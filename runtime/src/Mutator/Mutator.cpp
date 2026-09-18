@@ -869,7 +869,7 @@ bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size
     return scanned;
 }
 
-inline void Mutator::ForwardLocalFinalizers(Collector&)
+inline void Mutator::ForwardLocalFinalizers(HeapGcState&)
 {
     for (NativeSlot& root : localFinalizers) {
         (void)ZBarrier::ReadStaticRef(root);

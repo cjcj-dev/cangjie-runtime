@@ -42,7 +42,7 @@ extern "C" void CJ_MCC_ArrayCopyRef(MapleRuntime::ObjectPtr dstObj, MapleRuntime
 
 namespace {
 
-class NoAnswerCollector final : public Collector {
+class NoAnswerCollector final : public HeapGcState {
 public:
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}

@@ -21,7 +21,7 @@ enum CollectorType {
     COLLECTOR_TYPE_COUNT,
 };
 
-class Collector;
+class HeapGcState;
 class ZDirector;
 class ZDriverMajor;
 class ZDriverMinor;

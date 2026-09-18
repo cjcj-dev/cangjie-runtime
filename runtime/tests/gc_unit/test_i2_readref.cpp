@@ -21,7 +21,7 @@ using namespace MapleRuntime::GcUnit;
 
 namespace {
 
-class ToCollector final : public Collector {
+class ToCollector final : public HeapGcState {
 public:
     BaseObject* from = nullptr;
     BaseObject* to = nullptr;

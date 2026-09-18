@@ -86,7 +86,7 @@ private:
     CJInteropContext* interopContext = nullptr;
 };
 
-CrossRefHandler Collector::GetCrossRefHandler(BaseObject *foreignProxy)
+CrossRefHandler HeapGcState::GetCrossRefHandler(BaseObject *foreignProxy)
 {
 #if defined(MRT_GC_UNIT_TESTS)
     if (cycleRefHandlerForTest != nullptr) {
@@ -96,7 +96,7 @@ CrossRefHandler Collector::GetCrossRefHandler(BaseObject *foreignProxy)
     return static_cast<CJForeignProxy*>(foreignProxy)->GetCJInteropContext()->GetCJFunc()->GetHandler();
 }
 
-void Collector::ResolveCycleRef()
+void HeapGcState::ResolveCycleRef()
 {
 #if defined (__OHOS__) || defined(MRT_GC_UNIT_TESTS)
     // Leave saferegion before acquiring either owner. The resolver owner is not
@@ -214,7 +214,7 @@ void Collector::ResolveCycleRef()
     resurrectedExportObjectesForwardPhase.clear();
 #endif
 }
-void Collector::PostResolveCycleTask()
+void HeapGcState::PostResolveCycleTask()
 {
 #if defined (__OHOS__)
     if (cycleRefWorkStack.empty()) {
@@ -224,5 +224,5 @@ void Collector::PostResolveCycleTask()
 #endif
 }
 
-bool Collector::ShouldIgnoreRequest(GCRequest& request) { return request.ShouldBeIgnored(); }
+bool HeapGcState::ShouldIgnoreRequest(GCRequest& request) { return request.ShouldBeIgnored(); }
 } // namespace MapleRuntime

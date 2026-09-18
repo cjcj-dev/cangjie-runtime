@@ -49,7 +49,7 @@ class Allocator;
 class AllocBuffer;
 class FinalizerProcessor;
 class CollectorResources;
-class Collector;
+class HeapGcState;
 struct ForwardingProvenance;
 struct ThreadLocalData;
 struct ThreadGCData;
@@ -78,8 +78,8 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType);
 
-    Collector& GetCollector();
-    const Collector& GetCollector() const;
+    HeapGcState& GetCollector();
+    const HeapGcState& GetCollector() const;
     void RequestGC(GCReason reason, bool async);
     void ResolveCycleRef();
     Allocator& GetAllocator();
@@ -274,7 +274,7 @@ private:
     ZGenerationYoung _young;
     Allocator* theSpace { nullptr };
     CollectorResources* collectorResources { nullptr };
-    Collector* collectorImpl { nullptr };
+    HeapGcState* collectorImpl { nullptr };
     ExportRootTable* exportRootsTable { nullptr };
     StaticRootTable* staticRootTable { nullptr };
     std::atomic<bool> isGCEnabled { true };

@@ -29,13 +29,13 @@
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void PreparePlainRoots(Collector& collector)
+    static void PreparePlainRoots(HeapGcState& collector)
     {
         // Match the eager product ordering before the direct TraceHeap fixture.
         // Full driver-entry coverage lives in RawRemapYoungProduct.
         collector.RemapYoungRoots();
     }
-    static void BindNativeRootFixture(CollectorResources& resources, Collector& collector, uint32_t workers = 1)
+    static void BindNativeRootFixture(CollectorResources& resources, HeapGcState& collector, uint32_t workers = 1)
     {
         if (resources.testCollector != nullptr) {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.testCollector);
@@ -57,15 +57,15 @@ struct RelocationReceiptTestAccess {
         }
         ZGlobalsPointers::initialize();
     }
-    static void FlipNativeRootYoung(Collector& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
-    static void NativeRootMajorPrelude(Collector& collector)
+    static void FlipNativeRootYoung(HeapGcState& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
+    static void NativeRootMajorPrelude(HeapGcState& collector)
     {
         collector.GetZGeneration(ZGenerationId::old).End();
         auto& young = collector.GetZGeneration(ZGenerationId::young);
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
         collector.RunGarbageCollection(1, GC_REASON_YOUNG);
     }
-    static void NativeRootTrace(Collector& collector)
+    static void NativeRootTrace(HeapGcState& collector)
     {
         // This fixture enters tracing directly after in-place promotion. Match
         // the old mark-start sequence advance before consuming the new page
@@ -74,21 +74,21 @@ struct RelocationReceiptTestAccess {
         collector.StartOldMarkWork();
         collector.TraceHeap();
     }
-    static void RunOldRoots(Collector& collector)
+    static void RunOldRoots(HeapGcState& collector)
     {
         collector.EnumAllCommonRoots(collector.GetWorkers(ZGenerationId::old));
     }
-    static size_t PendingYoungRootWork(Collector& collector)
+    static size_t PendingYoungRootWork(HeapGcState& collector)
     {
         return ThreadLocal::GetMarkStacks(*collector.YoungMark()).Population();
     }
-    static void DrainYoungRootWork(Collector& collector)
+    static void DrainYoungRootWork(HeapGcState& collector)
     {
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.YoungMark());
         WorkStack work;
         std::vector<BaseObject*> reachable;
-        Collector::MinorSlotSet slots;
-        Collector::MinorSlotSet weak;
+        HeapGcState::MinorSlotSet slots;
+        HeapGcState::MinorSlotSet weak;
         collector.TraceYoungClosure(work, false, reachable, slots, weak);
     }
 };
@@ -418,7 +418,7 @@ void CheckRootStorageSegments(unsigned family)
     size_t otherConsumed = 0;
     bool valuesValid = true;
     struct ResetObserver {
-        ~ResetObserver() { Collector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { HeapGcState::testColoredRootResult = nullptr; }
     } reset;
     collector.testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
         if ((generation == ZGenerationId::old) != (family == 0)) { return; }
@@ -487,7 +487,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     NativeSlot* addedSlot = nullptr;
     bool newSlotVisited = false;
     struct ResetObserver {
-        ~ResetObserver() { Collector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { HeapGcState::testColoredRootResult = nullptr; }
     } reset;
     collector.testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
         if (generation != ZGenerationId::young || slot == nullptr) { return; }

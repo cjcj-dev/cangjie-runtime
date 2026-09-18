@@ -157,7 +157,7 @@ void StoreBarrierBuffer::on_new_phase()
 
 void StoreBarrierBuffer::Flush()
 {
-    Collector& collector = Heap::GetHeap().GetCollector();
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress addr = ZBarrier::make_load_good(entry.prev);

@@ -53,7 +53,7 @@
 namespace MapleRuntime {
 #include "Heap/z/zExportOwnershipTestObservations.hpp"
 
-void Collector::PostTrace()
+void HeapGcState::PostTrace()
 {
     MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -82,7 +82,7 @@ void Collector::PostTrace()
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.
     space.GetRegionManager().ReleaseMarkQuarantine();
 }
-void Collector::CollectSmallSpace()
+void HeapGcState::CollectSmallSpace()
 {
     GCStats& stats = GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);

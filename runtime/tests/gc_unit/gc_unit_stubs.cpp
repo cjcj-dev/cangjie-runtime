@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// Link stub for Collector::AbortUnimplemented when the linked libcangjie-runtime
+// Link stub for HeapGcState::AbortUnimplemented when the linked libcangjie-runtime
 // predates named-abort export. Prefer product definition when the .so provides it
 // (weak so a newer runtime wins).
 
@@ -15,9 +15,9 @@
 
 namespace MapleRuntime {
 
-[[noreturn]] void Collector::AbortUnimplemented(const char* method)
+[[noreturn]] void HeapGcState::AbortUnimplemented(const char* method)
 {
-    std::fprintf(stderr, "Collector::AbortUnimplemented: %s\n", method);
+    std::fprintf(stderr, "HeapGcState::AbortUnimplemented: %s\n", method);
     std::fflush(stderr);
     std::abort();
 }

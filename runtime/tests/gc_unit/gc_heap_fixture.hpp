@@ -244,8 +244,8 @@ inline zpointer CaptureStoreGoodThenFlipMark(BaseObject* object, RestoreMarkFlip
 }
 
 // Access the product generation state for the same setup used by ZLiveMapTest.
-struct LiveMapCycleAccess : Collector {
-    static ZGeneration& Cycle(Collector& collector, Generation generation)
+struct LiveMapCycleAccess : HeapGcState {
+    static ZGeneration& Cycle(HeapGcState& collector, Generation generation)
     {
         // ZLiveMapTest initializes the generation that page/livemap readers use
         // (test_zLiveMap.cpp:45-52). Preserve CollectorProxy's virtual routing.
@@ -274,7 +274,7 @@ struct GcHeapFixture {
 
     // When a fixture replaces the collector, page birth/livemap sequence values
     // must keep the same meaning. Advance the replacement through product starts.
-    static void AdoptGenerationIdentity(Collector& next, Collector& previous)
+    static void AdoptGenerationIdentity(HeapGcState& next, HeapGcState& previous)
     {
         if (&next == &previous) return;
         for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {

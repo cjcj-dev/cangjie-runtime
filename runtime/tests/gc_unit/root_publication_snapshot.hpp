@@ -20,7 +20,7 @@ namespace MapleRuntime {
 // immutable while linked on a stripe).
 //
 // Only valid while no worker pops: after the root task has returned and
-// before TracingImpl starts, i.e. inside Collector::testOldMarkStarted
+// before TracingImpl starts, i.e. inside HeapGcState::testOldMarkStarted
 // (zGeneration.cpp, DoTracing). Producers may still prepend a node, which is
 // why the walk starts from an acquire load of the list head.
 struct RootPublicationSnapshot {

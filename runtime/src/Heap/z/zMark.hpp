@@ -326,7 +326,7 @@ class VM_ZVerifyOld;
 
 
 class MarkingWork;
-class Collector {
+class HeapGcState {
     friend class ZMarkTask;
 
 public:
@@ -411,9 +411,9 @@ public:
         WEAK_REFERENT,
     };
 
-    explicit Collector(Allocator& allocator, CollectorResources& resources);
+    explicit HeapGcState(Allocator& allocator, CollectorResources& resources);
 
-    ~Collector() = default;
+    ~HeapGcState() = default;
     ZMark* MajorMark() { return Heap::GetHeap().old().MarkPtr(); }
     const ZMark* MajorMark() const { return Heap::GetHeap().old().MarkPtr(); }
     void PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex);
@@ -757,8 +757,8 @@ public:
     // over them lets it through unexamined. That is correct while good == 0 and wrong the moment
     // a good colour is non-zero, which is what phase C does.
     //
-    // IsLoadBad is declared on Collector (Collector.h) so the six phase barriers, which hold a
-    // Collector&, can spell it. Phase C changes that one body -- as in ZGC's
+    // IsLoadBad is declared on HeapGcState (HeapGcState.h) so the six phase barriers, which hold a
+    // HeapGcState&, can spell it. Phase C changes that one body -- as in ZGC's
     // ZPointer::is_load_bad, zAddress.inline.hpp:626-628 -- instead of ~90 call sites.
 
     // note this api is not atomic, caller should take care of this.
@@ -1178,7 +1178,7 @@ protected:
     bool IsAlreadyToStoreValue(BaseObject* target, Generation generation) const
     {
         return target != nullptr && Heap::IsHeapAddress(target) &&
-            Collector::JudgeHandOutTarget(target) == HandVerdict::Usable &&
+            HeapGcState::JudgeHandOutTarget(target) == HandVerdict::Usable &&
             generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(target)) == nullptr;
     }
 

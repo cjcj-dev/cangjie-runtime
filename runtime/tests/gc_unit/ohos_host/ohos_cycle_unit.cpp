@@ -22,14 +22,14 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct ZGenerationRootTestAccess {
-    static void Seed(Collector& collector, BaseObject* object)
+    static void Seed(HeapGcState& collector, BaseObject* object)
     {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.emplace(Collector::ValueRoot(object),
-                                            Collector::ValueRootList{});
+        collector.cycleRefWorkStack.emplace(HeapGcState::ValueRoot(object),
+                                            HeapGcState::ValueRootList{});
     }
 
-    static void Clear(Collector& collector)
+    static void Clear(HeapGcState& collector)
     {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
         collector.cycleRefWorkStack.clear();
@@ -56,10 +56,10 @@ bool NoHigherPriorityTask()
 
 class PostResolveProbeCollector final : public CopyCollector {
 public:
-    using Collector::DoGarbageCollection;
+    using HeapGcState::DoGarbageCollection;
 
     PostResolveProbeCollector(Allocator& allocator, CollectorResources& resources)
-        : Collector(allocator, resources)
+        : HeapGcState(allocator, resources)
     {
     }
 
@@ -85,7 +85,7 @@ void* RunMajorCycle(void*)
     // ZHeap owns both generations (zHeap.cpp:60-70); a major request runs
     // its young prelude before the old body (zDriver.cpp:443-451). Use the
     // initialized heap collector and driver instead of a second collector.
-    auto& collector = static_cast<Collector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
     auto* type = reinterpret_cast<TypeInfo*>(typeStorage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);

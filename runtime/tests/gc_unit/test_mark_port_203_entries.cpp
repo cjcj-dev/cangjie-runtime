@@ -17,7 +17,7 @@ namespace {
 // Bind the existing product implementation, never instantiate a second copy
 // of the mark claim in the test ELF. The runtime entry arms are separate from
 // these focused accounting checks.
-using ProductMark = bool (*)(const Collector*, BaseObject*, bool, MarkLiveCache*);
+using ProductMark = bool (*)(const HeapGcState*, BaseObject*, bool, MarkLiveCache*);
 ProductMark CachedMark()
 {
     auto fn = reinterpret_cast<ProductMark>(dlsym(RTLD_DEFAULT,
@@ -136,7 +136,7 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct MarkPort203TestAccess {
-    static void Bind(CollectorResources& resources, Collector* collector, int32_t count = 1)
+    static void Bind(CollectorResources& resources, HeapGcState* collector, int32_t count = 1)
     {
         if (collector != nullptr && resources.testCollector != nullptr) {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
@@ -144,7 +144,7 @@ struct MarkPort203TestAccess {
         resources.testCollector = collector;
         resources.concurrentGcThreadCount = count;
     }
-    static void Collect(Collector& collector, bool major)
+    static void Collect(HeapGcState& collector, bool major)
     {
         // The major driver normally initializes old marking in its young prelude.
         // This focused old-body fixture supplies the same product initialization.

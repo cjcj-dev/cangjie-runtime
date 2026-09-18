@@ -332,7 +332,7 @@ private:
 
 enum class GCDriverKind : uint8_t { MINOR, MAJOR };
 
-class Collector;
+class HeapGcState;
 class CollectorResources;
 #if defined(MRT_TESTABLE_INTERNALS)
 class CollectorResourcesTestPeer;
@@ -367,7 +367,7 @@ public:
 // such as GC drivers and workers.
 class CollectorResources {
 public:
-    Collector* boundCollector = nullptr;
+    HeapGcState* boundCollector = nullptr;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MarkPublicationFixture;
 #endif
@@ -378,7 +378,7 @@ public:
     friend struct MarkPort203TestAccess;
 public:
     // a collectorResources without a collector entity is functionless
-    explicit CollectorResources(Collector& collector);
+    explicit CollectorResources(HeapGcState& collector);
     ATTR_NO_INLINE virtual ~CollectorResources() = default;
 
     void Init();
@@ -412,8 +412,8 @@ public:
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
-    Collector& bound_collector() { return collector; }
-    Collector& ActiveCollector() const
+    HeapGcState& bound_collector() { return collector; }
+    HeapGcState& ActiveCollector() const
     {
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
         if (testCollector != nullptr) {
@@ -422,7 +422,7 @@ public:
 #endif
         return boundCollector != nullptr ? *boundCollector : collector;
     }
-    void BindCollector(Collector* c) { boundCollector = c; }
+    void BindCollector(HeapGcState* c) { boundCollector = c; }
 
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
 
@@ -453,8 +453,8 @@ private:
     void EvaluateDirector(uint64_t now);
     bool start_gc(uint64_t now);
     void CompleteDriverRequest(ZDriverPort& port);
-    void RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup);
-    void RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup);
+    void RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup);
+    void RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup);
     bool ShouldPrecleanYoung(GCReason reason) const;
 
     // Notify the GC thread to start GC, and doesn't wait.
@@ -471,7 +471,7 @@ private:
     std::mutex driverLock;
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 public:
-    Collector* testCollector = nullptr;
+    HeapGcState* testCollector = nullptr;
 private:
     std::function<void()> testAfterYoungPrelude;
     std::atomic<size_t> testCompletionCount { 0 };
@@ -491,7 +491,7 @@ private:
     ZStat* statistics = nullptr;
     int32_t concurrentGcThreadCount = 1;
     std::atomic<bool> gcThreadRunning = { false };
-    Collector& collector;
+    HeapGcState& collector;
     FinalizerProcessor finalizerProcessor;
 };
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.

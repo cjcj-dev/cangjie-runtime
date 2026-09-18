@@ -14,7 +14,7 @@ struct MarkPublicationFixture {
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     CopyCollector collector { Heap::GetHeap().GetAllocator(), resources };
-    Collector* previousCollector;
+    HeapGcState* previousCollector;
     MarkPublicationFixture()
         : previousCollector(resources.testCollector)
     {
@@ -64,8 +64,8 @@ struct MarkPublicationFixture {
     }
     bool FollowYoung(WorkStack& work, std::vector<BaseObject*>& reached)
     {
-        Collector::MinorSlotSet slots;
-        Collector::MinorSlotSet weakSlots;
+        HeapGcState::MinorSlotSet slots;
+        HeapGcState::MinorSlotSet weakSlots;
         return collector.FollowYoungMark(work, false, reached, slots, weakSlots);
     }
     void CompleteOldMarkForAdmissionTest()
@@ -82,11 +82,11 @@ struct MarkPublicationFixture {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
     size_t YoungPending() const {
-        auto* mark = const_cast<Collector&>(collector).YoungMark();
+        auto* mark = const_cast<HeapGcState&>(collector).YoungMark();
         return mark->Stripes().Population() + mark->Stacks().Population();
     }
     size_t OldPending() const {
-        auto* mark = const_cast<Collector&>(collector).MajorMark();
+        auto* mark = const_cast<HeapGcState&>(collector).MajorMark();
         return mark->Stripes().Population() + mark->Stacks().Population();
     }
 };

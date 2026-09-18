@@ -44,7 +44,7 @@ namespace MapleRuntime {
 // whose predicate it did not set.
 struct ZGenerationRootTestAccess {
     inline static std::array<NativeSlot*, 2> strongSlots {};
-    static void Install(Collector& collector, const std::array<BaseObject*, 6>& objects)
+    static void Install(HeapGcState& collector, const std::array<BaseObject*, 6>& objects)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (size_t i = 0; i < strongSlots.size(); ++i) {
@@ -63,7 +63,7 @@ struct ZGenerationRootTestAccess {
             collector.cycleRefWorkStack[objects[4]].push_back(objects[5]);
         }
     }
-    static void Remove(Collector& collector, const std::array<BaseObject*, 6>& objects)
+    static void Remove(HeapGcState& collector, const std::array<BaseObject*, 6>& objects)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (NativeSlot*& slot : strongSlots) {
@@ -102,7 +102,7 @@ bool Same(const GCCycleSnapshot& a, const GCCycleSnapshot& b)
 }
 void* Exercise(void*)
 {
-    Collector& collector = Heap::GetHeap().GetCollector();
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     auto& resources = Heap::GetHeap().GetCollectorResources();
     cpu_set_t cpus;
     CPU_ZERO(&cpus);
@@ -124,7 +124,7 @@ void* Exercise(void*)
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent);
 #if defined(MRT_TESTABLE_INTERNALS)
-    auto& tracing = static_cast<Collector&>(collector);
+    auto& tracing = static_cast<HeapGcState&>(collector);
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;

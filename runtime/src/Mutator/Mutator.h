@@ -308,7 +308,7 @@ public:
     AllocBuffer* GetAllocBuffer() const { return foreignThreadInfo.allocBuffer; }
     void SetAllocBuffer(AllocBuffer* buffer) { foreignThreadInfo.allocBuffer = buffer; }
     inline void GCPhasePreForward();
-    inline void ForwardLocalFinalizers(Collector& collector);
+    inline void ForwardLocalFinalizers(HeapGcState& collector);
     static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();

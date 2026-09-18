@@ -207,7 +207,7 @@ void CollectorResources::CompleteDriverRequest(ZDriverPort& port)
     directorCondition.notify_one();
 }
 
-void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup)
+void CollectorResources::RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup)
 {
     const bool isYoung = reason == GC_REASON_YOUNG;
     ZGeneration& generation = collector.GetZGeneration(isYoung
@@ -229,9 +229,9 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-    Collector* activeCollector = testCollector != nullptr ? testCollector : &collector;
+    HeapGcState* activeCollector = testCollector != nullptr ? testCollector : &collector;
 #else
-    Collector* activeCollector = &collector;
+    HeapGcState* activeCollector = &collector;
 #endif
     ZDriverPort& port = request.cause() == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
     if (ZAbort::should_abort()) {
@@ -459,7 +459,7 @@ void CollectorResources::StartGCThreads()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-CollectorResources::CollectorResources(Collector& c) : collector(c) {}
+CollectorResources::CollectorResources(HeapGcState& c) : collector(c) {}
 }
 
 namespace MapleRuntime {
@@ -483,7 +483,7 @@ bool CollectorResources::IsGcStarted() const
 }
 
 namespace MapleRuntime {
-void Collector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
+void HeapGcState::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
     ScopedEntryTrace trace("CJRT_GC_START");
 
@@ -568,7 +568,7 @@ void Collector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 }
 
 namespace MapleRuntime {
-void CollectorResources::RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup)
+void CollectorResources::RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup)
 {
     YoungTypeSetter typeSetter(collector.GetZGeneration(ZGenerationId::young), type);
     RunCollection(collector, index, GC_REASON_YOUNG, warmup);
@@ -612,7 +612,7 @@ extern "C" void __gcov_dump(void);
 bool GCExecutor::Execute(void* owner)
 {
     MRT_ASSERT(owner != nullptr, "task queue owner ptr should not be null!");
-    Collector* collector = reinterpret_cast<Collector*>(owner);
+    HeapGcState* collector = reinterpret_cast<HeapGcState*>(owner);
 
     switch (taskType) {
         case GCTask::TaskType::TASK_TYPE_TERMINATE_GC: {

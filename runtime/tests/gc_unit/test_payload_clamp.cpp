@@ -29,7 +29,7 @@ extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, MapleRuntime::ObjectP
 
 namespace {
 
-class NoAnswerCollector final : public Collector {
+class NoAnswerCollector final : public HeapGcState {
 public:
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
