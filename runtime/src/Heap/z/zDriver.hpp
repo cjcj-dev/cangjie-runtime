@@ -348,6 +348,8 @@ public:
     void run_thread() override;
     void terminate() override;
     bool is_busy() const;
+    void RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup);
+    void RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup);
 protected:
     CollectorResources& resources;
     const GCDriverKind kind;
@@ -445,8 +447,6 @@ private:
 
     void StartGCThreads();
     void StopGCThreads();
-    void RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup);
-    void RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup);
     bool ShouldPrecleanYoung(GCReason reason) const;
 
     // Notify the GC thread to start GC, and doesn't wait.

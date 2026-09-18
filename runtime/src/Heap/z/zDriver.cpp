@@ -209,7 +209,7 @@ void CollectorResources::StopGCThreads()
     gcThreadRunning.store(false, std::memory_order_release);
 }
 
-void CollectorResources::RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup)
+void ZDriver::RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup)
 {
     const bool isYoung = reason == GC_REASON_YOUNG;
     ZGeneration& generation = collector.GetZGeneration(isYoung
@@ -272,7 +272,8 @@ bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRe
             request.cause(), GCTask::ASYNC_TASK_INDEX);
         const bool preclean = ShouldPrecleanYoung(request.cause());
         if (preclean) {
-            RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
+            ZCollectedHeap::heap()->driver_major()->RunYoungCollection(
+                *activeCollector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
             accumulate(ZGenerationId::young);
             if (ZAbort::should_abort()) {
                 Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
@@ -280,8 +281,8 @@ bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRe
                 return false;
             }
         }
-        RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX,
-                           preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
+        ZCollectedHeap::heap()->driver_major()->RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX,
+            preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
         accumulate(ZGenerationId::young);
 #if defined(MRT_GC_UNIT_TESTS)
         if (testAfterYoungPrelude) {
@@ -300,11 +301,11 @@ bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRe
     const uint64_t index = GCTask::ASYNC_TASK_INDEX;
     if (request.cause() == GC_REASON_YOUNG) {
         ZGCIdMinor minorId(GCIdMark::Current());
-        RunYoungCollection(*activeCollector, index, ZYoungType::minor, warmup);
+        ZCollectedHeap::heap()->driver_minor()->RunYoungCollection(*activeCollector, index, ZYoungType::minor, warmup);
         accumulate(ZGenerationId::young);
     } else {
         ZGCIdMajor majorId(GCIdMark::Current(), 'O');
-        RunCollection(*activeCollector, index, request.cause(), warmup);
+        ZCollectedHeap::heap()->driver_major()->RunCollection(*activeCollector, index, request.cause(), warmup);
         accumulate(ZGenerationId::old);
     }
     (request.cause() == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
@@ -503,7 +504,7 @@ void HeapGcState::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 }
 
 namespace MapleRuntime {
-void CollectorResources::RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup)
+void ZDriver::RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup)
 {
     YoungTypeSetter typeSetter(collector.GetZGeneration(ZGenerationId::young), type);
     RunCollection(collector, index, GC_REASON_YOUNG, warmup);
