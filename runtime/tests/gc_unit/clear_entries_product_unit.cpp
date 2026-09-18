@@ -163,7 +163,7 @@ struct RelocationReceiptTestAccess {
         void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
         GC_EXPECT_TRUE(handle != nullptr);
         void* symbol = handle == nullptr ? nullptr : dlsym(
-            handle, "_ZNK12MapleRuntime10CopyCollector13FindToVersionEPNS_10BaseObjectENS_10GenerationE");
+            handle, "_ZNK12MapleRuntime11HeapGcState13FindToVersionEPNS_10BaseObjectENS_10GenerationE");
         GC_EXPECT_TRUE(symbol != nullptr);
         Dl_info info {};
         GC_EXPECT_TRUE(symbol != nullptr && dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&
@@ -188,7 +188,7 @@ struct RelocationReceiptTestAccess {
         GC_EXPECT_TRUE(handle != nullptr);
         void* symbol = handle == nullptr ? nullptr : dlsym(
             handle,
-            "_ZNK12MapleRuntime10CopyCollector24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE");
+            "_ZNK12MapleRuntime11HeapGcState24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE");
         GC_EXPECT_TRUE(symbol != nullptr);
         Dl_info info {};
         GC_EXPECT_TRUE(symbol != nullptr && dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&

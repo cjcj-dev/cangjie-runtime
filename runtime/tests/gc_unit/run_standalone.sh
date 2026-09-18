@@ -573,7 +573,7 @@ REFERENCE_PROCESSOR_CONSUMERS=(
 )
 # The direct weak-discovery test in test_young_conc.cpp is testable-only.
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::CopyCollector::DiscoverWeakReference(')
+  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::HeapGcState::DiscoverWeakReference(')
 fi
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
@@ -597,8 +597,8 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
-    'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::ZGenerationId)'
-    'MapleRuntime::WCollector::TraceHeap()'
+    'MapleRuntime::HeapGcState::DoGarbageCollection(MapleRuntime::ZGenerationId)'
+    'MapleRuntime::HeapGcState::TraceHeap()'
   )
   for consumer in "${YOUNG_WEAK_PRODUCT_CONSUMERS[@]}"; do
     if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
@@ -619,11 +619,11 @@ fi
 LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RegionManager::RememberFlipPromotedPages('
   'MapleRuntime::RegionManager::RememberPromotedObject('
-  'MapleRuntime::WCollector::RemapYoungRoots('
+  'MapleRuntime::HeapGcState::RemapYoungRoots('
 )
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   LOADHEAL_PRODUCT_CONSUMERS+=(
-    'MapleRuntime::CopyCollector::RunGarbageCollection('
+    'MapleRuntime::HeapGcState::RunGarbageCollection('
     'MapleRuntime::ResetRemapYoungRootsTestReceipt('
     'MapleRuntime::ReadRemapYoungRootsTestReceipt()'
   )
@@ -728,7 +728,7 @@ for consumer in "${LOADHEAL_PRODUCT_CONSUMERS[@]}"; do
 done
 MUTUALWAIT_SO_EXPORTS="$OUT/cj_gc_forwarding_publication_unit.so-exports.txt"
 nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$MUTUALWAIT_SO_EXPORTS"
-for consumer in 'MapleRuntime::WCollector::FindToVersion('; do
+for consumer in 'MapleRuntime::HeapGcState::FindToVersion('; do
   if /usr/bin/grep -F -q "$consumer" "$LOADHEAL_FULL"; then
     echo "GC_UNIT_MUTUALWAIT_LOCAL_DEFINITION symbol=$consumer" >&2
     exit 9
