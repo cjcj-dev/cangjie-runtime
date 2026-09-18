@@ -31,7 +31,7 @@
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/z/zStringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zThread.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zUncommitter.hpp"

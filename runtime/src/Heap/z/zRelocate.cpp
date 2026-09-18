@@ -9,7 +9,7 @@
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zIterator.inline.hpp"
-#include "Heap/z/zStringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>
@@ -2458,7 +2458,7 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/zStringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>
@@ -2638,7 +2638,7 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/zStringDedup.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>

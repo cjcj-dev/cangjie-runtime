@@ -49,7 +49,7 @@ list(APPEND SRC_LIST
     "z/zMarkingSMR.cpp"
     "z/zMarkCache.cpp"
     "z/zReferenceProcessor.cpp"
-    "z/zStringDedup.cpp"
+    "shared/stringdedup/stringDedup.cpp"
     "z/zUncommitter.cpp"
     "z/zForwarding.cpp"
 )
