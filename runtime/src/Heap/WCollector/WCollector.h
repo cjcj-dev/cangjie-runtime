@@ -165,8 +165,8 @@ public:
     bool FlushThreadMarkProducers(ThreadLocalData* tls);
     bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);
     bool FlushGCDataMarkProducers(ThreadGCData& data);
-    ZMark* YoungMark() { return youngCycle.MarkPtr(); }
-    const ZMark* YoungMark() const { return youngCycle.MarkPtr(); }
+    ZMark* YoungMark() { return Heap::GetHeap().young().MarkPtr(); }
+    const ZMark* YoungMark() const { return Heap::GetHeap().young().MarkPtr(); }
     void MarkYoungObjectIfActive(BaseObject* object) const override;
     void MarkYoungRootObject(BaseObject* object) const override;
 

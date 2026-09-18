@@ -276,7 +276,7 @@ void Collector::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhas
     const ZGenerationPhase before = cycle.GcPhase();
     if (generation == ZGenerationId::old &&
         value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
-        oldCycle.RecordYoungSequenceAtRelocateStart(youngCycle.Sequence());
+        Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(Heap::GetHeap().young().Sequence());
     }
     cycle.PublishPhase(value);
 }
@@ -400,7 +400,7 @@ public:
 
 void WCollector::DoYoungGarbageCollection()
 {
-    youngCycle.collect();
+    Heap::GetHeap().young().collect();
 }
 
 void ZGeneration::at_collection_start(void* timer)
@@ -497,13 +497,13 @@ void WCollector::RunYoungCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
-    collectorResources.NoteYoungMarkStart(youngCycle.YoungType());
+    collectorResources.NoteYoungMarkStart(Heap::GetHeap().young().YoungType());
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
-    YoungCollectionStats stats = youngCycle.StartYoungMark(*this);
-    if (youngCycle.IsMajorRoots()) {
-        oldCycle.Begin(oldCycle.Snapshot().requestIndex);
-        oldCycle.StartOldMark(*this);
+    YoungCollectionStats stats = Heap::GetHeap().young().StartYoungMark(*this);
+    if (Heap::GetHeap().young().IsMajorRoots()) {
+        Heap::GetHeap().old().Begin(Heap::GetHeap().old().Snapshot().requestIndex);
+        Heap::GetHeap().old().StartOldMark(*this);
     }
     RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
@@ -600,7 +600,7 @@ void WCollector::ConcurrentYoungMark()
     auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER(ZStatPhases::PYoungRootEnum);
-        (void)youngCycle.Mark().Flush();
+        (void)Heap::GetHeap().young().Mark().Flush();
         VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
@@ -620,9 +620,9 @@ void WCollector::ConcurrentYoungMark()
             PushYoungObject(object, workStack, "minor_root");
         }, stackScanEpoch);
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), youngCycle.Mark());
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yAfterRootTestReceipt(youngCycle.Mark().Stacks().Population());
+        NoteY2yAfterRootTestReceipt(Heap::GetHeap().young().Mark().Stacks().Population());
 #endif
     };
     // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent
@@ -668,7 +668,7 @@ void WCollector::ConcurrentYoungMark()
     }
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetRescan);
-        Heap::GetHeap().remembered().scan_and_follow(youngCycle.MarkPtr());
+        Heap::GetHeap().remembered().scan_and_follow(Heap::GetHeap().young().MarkPtr());
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     // Deterministic T1->T2 export-root window: root enumeration has returned,
@@ -728,7 +728,7 @@ bool WCollector::YoungMarkEndPause()
         }
 #endif
         ReportMarkTerminateContinue();
-        youngCycle.set_phase(ZGeneration::Phase::MarkComplete);
+        Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         return true;
     }
     NoteMarkTerminateContinue(workStack.size());
@@ -785,7 +785,7 @@ void WCollector::FinishYoungMarkHandoff()
     for (uint32_t i = 0; i < kPageAgeCount; ++i) {
         gcStats.liveByAge[i] = tenuringIn.liveByAge[i];
     }
-    youngCycle.SelectTenuringThreshold(tenuringIn);
+    Heap::GetHeap().young().SelectTenuringThreshold(tenuringIn);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
@@ -925,7 +925,7 @@ public:
 void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
 {
     ZBreakpoint::AtAfterReferenceProcessingStarted();
-    CHECK_DETAIL(oldCycle.is_phase_mark_complete(),
+    CHECK_DETAIL(Heap::GetHeap().old().is_phase_mark_complete(),
                  "non-strong references require completed old marking");
     {
         MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
@@ -934,8 +934,8 @@ void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     // Finalizable graphs were followed during mark discovery. This phase
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
     ProcessFinalizers();
-    if (oldCycle.WeakRootsProcessor() != nullptr) {
-        oldCycle.WeakRootsProcessor()->process_weak_roots();
+    if (Heap::GetHeap().old().WeakRootsProcessor() != nullptr) {
+        Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
     }
     SyncRetireDead();
     StringDedup::Instance().Clean([this](BaseObject* object) {
@@ -954,11 +954,11 @@ void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
 bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
-    MarkStripeSet& stripes = oldCycle.Mark().Stripes();
+    MarkStripeSet& stripes = Heap::GetHeap().old().Mark().Stripes();
     NoteMarkTerminatePause();
     const size_t before = stripes.Population();
     (void)workStack;
-    const bool ended = oldCycle.Mark().TryEnd();
+    const bool ended = Heap::GetHeap().old().Mark().TryEnd();
     const size_t after = stripes.Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
     if (!ended) {
@@ -973,8 +973,8 @@ bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsS
     if (ZAbort::should_abort()) {
         return false;
     }
-    MarkingStacks::VerifyAllEmpty(oldCycle.Mark());
-    oldCycle.set_phase(ZGeneration::Phase::MarkComplete);
+    MarkingStacks::VerifyAllEmpty(Heap::GetHeap().old().Mark());
+    Heap::GetHeap().old().set_phase(ZGeneration::Phase::MarkComplete);
     ZVerify::AfterMark();
     collectorResources.BlockResurrection();
     ReportMarkTerminateContinue();
@@ -1286,7 +1286,7 @@ void WCollector::DoGarbageCollection(ZGenerationId generation)
         DoYoungGarbageCollection();
         return;
     }
-    oldCycle.collect();
+    Heap::GetHeap().old().collect();
 }
 
 void ZGenerationOld::collect()
@@ -1376,7 +1376,7 @@ void ZGenerationOld::concurrent_relocate()
 
 void WCollector::RunOldCollection()
 {
-    oldCycle.collect();
+    Heap::GetHeap().old().collect();
 }
 }
 

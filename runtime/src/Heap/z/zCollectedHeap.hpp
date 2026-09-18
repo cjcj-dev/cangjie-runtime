@@ -51,21 +51,8 @@ public:
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
     void RequestGC(GCReason reason, bool async);
 
-    virtual ZGeneration& GetZGeneration(ZGenerationId generation)
-    {
-        if (generation == ZGenerationId::young) {
-            return youngCycle;
-        }
-        return oldCycle;
-    }
-
-    virtual const ZGeneration& GetZGeneration(ZGenerationId generation) const
-    {
-        if (generation == ZGenerationId::young) {
-            return youngCycle;
-        }
-        return oldCycle;
-    }
+    ZGeneration& GetZGeneration(ZGenerationId generation);
+    const ZGeneration& GetZGeneration(ZGenerationId generation) const;
     ZGeneration& GetZGeneration(Generation generation)
     {
         return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
@@ -323,8 +310,6 @@ protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
 
     CollectorType collectorType = CollectorType::NO_COLLECTOR;
-    ZGenerationYoung youngCycle;
-    ZGenerationOld oldCycle;
 };
 
 class ZCollectedHeap {

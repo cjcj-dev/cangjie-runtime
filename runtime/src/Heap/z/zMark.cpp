@@ -481,7 +481,7 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
 // Java FinalReference object. The load barrier heals remapping before discovery.
 void CopyCollector::DiscoverFinalizableRoot(NativeSlot& slot) const
 {
-    CHECK(oldCycle.IsPhaseMark());
+    CHECK(Heap::GetHeap().old().IsPhaseMark());
     BaseObject* object = ZBarrier::ReadStaticRef(slot);
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
     object = ValidateCurrentValue(object, provenance);
@@ -585,8 +585,8 @@ private:
 
 void CopyCollector::EnumAllCommonRoots(ZWorkers& workers)
 {
-    CHECK_DETAIL(oldCycle.MarkPtr() != nullptr, "old mark domain must start before roots");
-    MarkOldRootsTask task(*this, oldCycle.Mark(),
+    CHECK_DETAIL(Heap::GetHeap().old().MarkPtr() != nullptr, "old mark domain must start before roots");
+    MarkOldRootsTask task(*this, Heap::GetHeap().old().Mark(),
                          [this](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
             MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
@@ -827,9 +827,9 @@ private:
 void WCollector::StartYoungMarkWork()
 {
     ZWorkers& workers = GetWorkers(ZGenerationId::young);
-    youngCycle.Mark().BindWorkers(&workers);
-    youngCycle.Mark().Start();
-    MarkingStacks::VerifyEmpty(youngCycle.Mark().Stripes().Population());
+    Heap::GetHeap().young().Mark().BindWorkers(&workers);
+    Heap::GetHeap().young().Mark().Start();
+    MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
 }
 
 void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
@@ -856,7 +856,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     const size_t dispelAtEntry = ZPage::GetTdWindowCount();
     ZWorkers& workersSet = GetWorkers(ZGenerationId::young);
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
-    ZMark& domain = youngCycle.Mark();
+    ZMark& domain = Heap::GetHeap().young().Mark();
     (void)PublishHandshakeMarkWork(workStack, &domain);
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, false);
@@ -889,9 +889,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
         NoteTraceYoungClosureDuringPause();
     }
 #endif
-    (void)youngCycle.Mark().Flush(ThreadLocal::GetThreadLocalData());
-    if (workStack.empty() && youngCycle.Mark().Stripes().IsEmpty() &&
-        youngCycle.Mark().Stacks().IsEmpty()) {
+    (void)Heap::GetHeap().young().Mark().Flush(ThreadLocal::GetThreadLocalData());
+    if (workStack.empty() && Heap::GetHeap().young().Mark().Stripes().IsEmpty() &&
+        Heap::GetHeap().young().Mark().Stacks().IsEmpty()) {
         return;
     }
 
@@ -911,12 +911,12 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();
 #endif
-    (void)youngCycle.Mark().Flush();
-    (void)youngCycle.Mark().Flush(ThreadLocal::GetThreadLocalData());
-    (void)PublishHandshakeMarkWork(workStack, &youngCycle.Mark());
+    (void)Heap::GetHeap().young().Mark().Flush();
+    (void)Heap::GetHeap().young().Mark().Flush(ThreadLocal::GetThreadLocalData());
+    (void)PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
     do {
-        if (!workStack.empty() || !youngCycle.Mark().Stripes().IsEmpty() ||
-            !youngCycle.Mark().Stacks().IsEmpty()) {
+        if (!workStack.empty() || !Heap::GetHeap().young().Mark().Stripes().IsEmpty() ||
+            !Heap::GetHeap().young().Mark().Stacks().IsEmpty()) {
             if (windowStats != nullptr) {
                 ++windowStats->closureCalls;
             }
@@ -925,7 +925,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
         if (ZAbort::should_abort()) {
             return false;
         }
-    } while (youngCycle.Mark().TryTerminateFlush());
+    } while (Heap::GetHeap().young().Mark().TryTerminateFlush());
     return true;
 }
 
@@ -933,15 +933,15 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
 {
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
-    const size_t before = youngCycle.Mark().Stripes().Population();
-    (void)PublishHandshakeMarkWork(workStack, &youngCycle.Mark());
-    const bool ended = youngCycle.Mark().TryEnd();
-    const size_t after = youngCycle.Mark().Stripes().Population();
+    const size_t before = Heap::GetHeap().young().Mark().Stripes().Population();
+    (void)PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
+    const bool ended = Heap::GetHeap().young().Mark().TryEnd();
+    const size_t after = Heap::GetHeap().young().Mark().Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
     if (!ended) {
         return false;
     }
-    MarkingStacks::VerifyAllEmpty(youngCycle.Mark());
+    MarkingStacks::VerifyAllEmpty(Heap::GetHeap().young().Mark());
     return true;
 }
 void WCollector::MarkNewObject(BaseObject* obj)
@@ -1008,7 +1008,7 @@ void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& w
 
 void WCollector::PublishThreadRoot(BaseObject* object, bool young, bool follow)
 {
-    ZMark* domain = young ? youngCycle.MarkPtr() : oldCycle.MarkPtr();
+    ZMark* domain = young ? Heap::GetHeap().young().MarkPtr() : Heap::GetHeap().old().MarkPtr();
     CHECK_DETAIL(domain != nullptr, "root publication requires an active mark domain");
     MarkStripeSet& stripes = domain->Stripes();
     ThreadLocal::GetMarkStacks(*domain).Push(stripes,
@@ -1023,14 +1023,14 @@ bool WCollector::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
 
 bool WCollector::FlushGCDataMarkProducers(ThreadGCData& data)
 {
-    const bool young = FlushGCDataMarkProducers(data, youngCycle.MarkPtr());
-    return FlushGCDataMarkProducers(data, oldCycle.MarkPtr()) || young;
+    const bool young = FlushGCDataMarkProducers(data, Heap::GetHeap().young().MarkPtr());
+    return FlushGCDataMarkProducers(data, Heap::GetHeap().old().MarkPtr()) || young;
 }
 
 bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls)
 {
-    bool published = FlushThreadMarkProducers(tls, youngCycle.MarkPtr());
-    return FlushThreadMarkProducers(tls, oldCycle.MarkPtr()) || published;
+    bool published = FlushThreadMarkProducers(tls, Heap::GetHeap().young().MarkPtr());
+    return FlushThreadMarkProducers(tls, Heap::GetHeap().old().MarkPtr()) || published;
 }
 
 bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain)
@@ -1101,8 +1101,8 @@ void CopyCollector::StartOldMarkWork()
     // ZGenerationOld::mark_start -> ZMark::start. Initialize the existing M3
     // domain before publishing old's mark phase to mutators and young workers.
     ZWorkers& workers = GetWorkers(ZGenerationId::old);
-    oldCycle.Mark().BindWorkers(&workers);
-    oldCycle.Mark().Start();
+    Heap::GetHeap().old().Mark().BindWorkers(&workers);
+    Heap::GetHeap().old().Mark().Start();
 }
 
 void CopyCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
@@ -1122,7 +1122,7 @@ size_t CopyCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
 {
     (void)workStack;
     ZWorkers& workersSet = GetWorkers(ZGenerationId::old);
-    ZMark& domain = oldCycle.Mark();
+    ZMark& domain = Heap::GetHeap().old().Mark();
     domain.BindWorkers(&workersSet);
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, partial);
@@ -1139,7 +1139,7 @@ void CopyCollector::TracingImpl(WorkStack& workStack)
     // ZMark::mark_follow (zMark.cpp:944-952): join workers, check abort,
     // then flush producers. Stopped stripes never start another follow pass.
     (void)workStack;
-    oldCycle.Mark().MarkFollow(false);
+    Heap::GetHeap().old().Mark().MarkFollow(false);
 }
 
 void CopyCollector::ProcessExportRoots(WorkStack& foreignRootsSet)

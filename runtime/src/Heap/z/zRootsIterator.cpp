@@ -380,7 +380,7 @@ void CopyCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor
 void CopyCollector::MergeMutatorRoots(WorkStack& workStack)
 {
     (void)workStack;
-    (void)oldCycle.Mark().Flush();
+    (void)Heap::GetHeap().old().Mark().Flush();
 }
 
 void CopyCollector::EnumAllExportRoots(RootSet &foreignRootsSet)

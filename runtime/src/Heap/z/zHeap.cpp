@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zHeap.hpp"
+#include "Common/RunType.h"
+#include "Common/OopStorage.h"
 #include "Heap/z/zHeuristics.hpp"
 #include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zAddress.inline.hpp"
@@ -30,6 +32,7 @@
 #include "Heap/z/zIterator.hpp"
 #include "Heap/Allocator/RegionList.h"
 
+#include <new>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -61,6 +64,7 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zInitialize.hpp"
 #include "Heap/z/zRememberedSet.hpp"
+#include "Heap/z/zRootsIterator.hpp"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
@@ -77,172 +81,137 @@ namespace MapleRuntime {
 MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
 std::vector<HeapSlotAddressRange> Heap::heapReservations;
+Heap* Heap::_heap = nullptr;
 
-class HeapImpl : public Heap {
+class ScopedFileHandler {
 public:
-    HeapImpl()
-        : theSpace(Allocator::NewAllocator()), collectorResources(collectorImpl),
-          collectorImpl(*theSpace, collectorResources)
+    ScopedFileHandler(const char* fileName, const char* mode) { file = fopen(fileName, mode); }
+    ~ScopedFileHandler()
     {
-        RunType::InitRunTypeMap();
-    }
-
-    ~HeapImpl() override = default;
-    void Init(const HeapParam& vmHeapParam) override;
-    void Fini() override;
-
-    bool IsSurvivedObject(const BaseObject* obj) const override
-    {
-        // ZPage::is_object_live (zPage.inline.hpp:254-256).
-        return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
-    }
-
-    bool IsGcStarted() const override { return collectorResources.IsGcStarted(); }
-
-
-    bool IsGCEnabled() const override { return isGCEnabled.load(); }
-
-    void EnableGC(bool val) override { return isGCEnabled.store(val); }
-
-    MAddress Allocate(size_t size, AllocType allocType) override;
-
-    Collector& GetCollector() override;
-    Allocator& GetAllocator() override;
-
-    size_t GetMaxCapacity() const override;
-    ZMemoryUsageInfo GetMemoryUsage() const override;
-    size_t GetCurrentCapacity() const override;
-    size_t GetUsedPageSize() const override;
-    size_t GetAllocatedSize() const override;
-    MAddress GetStartAddress() const override;
-    MAddress GetSpaceEndAddress() const override;
-    void RegisterStaticRoots(Uptr addr, U32) override;
-    void UnregisterStaticRoots(Uptr addr, U32) override;
-    void VisitStaticRoots(const NativeSlotVisitor& visitor) override;
-
-    bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
-    ssize_t GetHeapPhysicalMemorySize() const override;
-
-    FinalizerProcessor& GetFinalizerProcessor() override;
-    CollectorResources& GetCollectorResources() override;
-    void RegisterAllocBuffer(AllocBuffer& buffer) override;
-    void RemoveAllocBuffer(AllocBuffer& buffer) override;
-    U64 RegisterExportRoot(BaseObject* obj) override;
-    OopStorage& GetExportRootStorage() override { return exportRootsTable.RootStorage(); }
-    void VisitAllExportRoots(const NativeSlotVisitor& visitor) override;
-    BaseObject* GetExportObject(U64 id) override;
-    void RemoveExportObject(U64 id) override;
-    void StopGCWork() override;
-    void CrossAccessBarrier(I64 handle) override;
-    void SetExportObjActiveState(U64 id, bool state) override;
-    bool CheckExportObjState(U64 id, BaseObject* exportObj) override;
-
-    class ScopedFileHandler {
-    public:
-        ScopedFileHandler(const char* fileName, const char* mode) { file = fopen(fileName, mode); }
-        ~ScopedFileHandler()
-        {
-            if (file != nullptr) {
-                fclose(file);
-            }
+        if (file != nullptr) {
+            fclose(file);
         }
-        FILE* GetFile() const { return file; }
-
-    private:
-        FILE* file = nullptr;
-    };
+    }
+    FILE* GetFile() const { return file; }
 
 private:
-    // allocator is actually a subspace in heap
-    Allocator* theSpace;
+    FILE* file = nullptr;
+};
 
-    CollectorResources collectorResources;
+Heap::Heap()
+{
+    _heap = this;
+    RunType::InitRunTypeMap();
+    theSpace = Allocator::NewAllocator();
+    exportRootsTable = new ExportRootTable();
+    staticRootTable = new StaticRootTable();
+    collectorImpl = static_cast<WCollector*>(::operator new(sizeof(WCollector)));
+    collectorResources = new CollectorResources(*collectorImpl);
+    new (collectorImpl) WCollector(*theSpace, *collectorResources);
+}
 
-    // collector is closely related to barrier. but we do not put barrier inside collector because even without
-    // collector (i.e. no-gc), allocator and barrier (interface to access heap) is still needed.
-    WCollector collectorImpl;
+Heap::~Heap()
+{
+    if (collectorImpl != nullptr) {
+        collectorImpl->~WCollector();
+        ::operator delete(collectorImpl);
+        collectorImpl = nullptr;
+    }
+    delete collectorResources;
+    collectorResources = nullptr;
+    delete exportRootsTable;
+    exportRootsTable = nullptr;
+    delete staticRootTable;
+    staticRootTable = nullptr;
+}
 
-    ExportRootTable exportRootsTable;
-
-    // manage gc roots entry
-    StaticRootTable staticRootTable;
-
-    std::atomic<bool> isGCEnabled = { true };
-}; // end class HeapImpl
-
-static ImmortalWrapper<HeapImpl> g_heapInstance;
+static ImmortalWrapper<Heap> g_heapInstance;
 
 
 
-MAddress HeapImpl::Allocate(size_t size, AllocType allocType) { return theSpace->Allocate(size, allocType); }
+MAddress Heap::Allocate(size_t size, AllocType allocType) { return theSpace->Allocate(size, allocType); }
 
-bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
+bool Heap::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
 {
     return theSpace->ForEachObj(visitor, safe);
 }
 
-void HeapImpl::Init(const HeapParam& param)
+void Heap::Init(const HeapParam& param)
 {
     ZArguments::initialize();
     ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
     theSpace->Init(param);
     Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
-    collectorImpl.Init();
+    collectorImpl->Init();
     {
         const auto& heapMap = ZPageTable::heap_table().map();
         const size_t heapSpan = heapMap.size() * heapMap.granule();
-        collectorImpl.GetZGeneration(ZGenerationId::young).forwarding_table().initialize(
+        young().forwarding_table().initialize(
             heapSpan, heapMap.base(), heapMap.granule());
-        collectorImpl.GetZGeneration(ZGenerationId::old).forwarding_table().initialize(
+        old().forwarding_table().initialize(
             heapSpan, heapMap.base(), heapMap.granule());
     }
-    collectorImpl.GetZGeneration(ZGenerationId::young).remembered()->bind(
+    young().remembered()->bind(
         &ZPageTable::heap_table(),
-        &collectorImpl.GetZGeneration(ZGenerationId::old).forwarding_table(),
+        &old().forwarding_table(),
         &static_cast<RegionSpace*>(theSpace)->GetRegionManager());
-    if (collectorImpl.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
-        collectorImpl.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
+    if (young().Workers() == nullptr) {
+        young().InitializeWorkers(1);
     }
-    if (collectorImpl.GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
-        collectorImpl.GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
+    if (old().Workers() == nullptr) {
+        old().InitializeWorkers(1);
     }
-    collectorResources.Init();
+    collectorResources->Init();
+    _initialized = true;
 }
 
-void HeapImpl::Fini()
+void Heap::Fini()
 {
-    collectorResources.Fini();
-    collectorImpl.GetZGeneration(ZGenerationId::young).StopWorkers();
-    collectorImpl.GetZGeneration(ZGenerationId::old).StopWorkers();
-    collectorImpl.Fini();
+    collectorResources->Fini();
+    young().StopWorkers();
+    old().StopWorkers();
+    collectorImpl->Fini();
     if (theSpace != nullptr) {
         delete theSpace;
         theSpace = nullptr;
     }
 }
 
-Collector& HeapImpl::GetCollector() { return collectorResources.ActiveCollector(); }
+Collector& Heap::GetCollector() { return collectorResources->ActiveCollector(); }
 
-Allocator& HeapImpl::GetAllocator() { return *theSpace; }
+bool Heap::IsSurvivedObject(const BaseObject* obj) const
+{
+    return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
+}
 
-size_t HeapImpl::GetMaxCapacity() const { return theSpace->GetMaxCapacity(); }
+bool Heap::IsGcStarted() const { return collectorResources->IsGcStarted(); }
 
-ZMemoryUsageInfo HeapImpl::GetMemoryUsage() const
+bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }
+
+void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
+
+OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(); }
+
+Allocator& Heap::GetAllocator() { return *theSpace; }
+
+size_t Heap::GetMaxCapacity() const { return theSpace->GetMaxCapacity(); }
+
+ZMemoryUsageInfo Heap::GetMemoryUsage() const
 {
     return static_cast<RegionSpace*>(theSpace)->GetMemoryUsage();
 }
 
 
-size_t HeapImpl::GetCurrentCapacity() const { return theSpace->GetCurrentCapacity(); }
+size_t Heap::GetCurrentCapacity() const { return theSpace->GetCurrentCapacity(); }
 
-size_t HeapImpl::GetUsedPageSize() const { return theSpace->GetUsedPageSize(); }
+size_t Heap::GetUsedPageSize() const { return theSpace->GetUsedPageSize(); }
 
-size_t HeapImpl::GetAllocatedSize() const { return theSpace->AllocatedBytes(); }
+size_t Heap::GetAllocatedSize() const { return theSpace->AllocatedBytes(); }
 
-MAddress HeapImpl::GetStartAddress() const { return theSpace->GetSpaceStartAddress(); }
+MAddress Heap::GetStartAddress() const { return theSpace->GetSpaceStartAddress(); }
 
-MAddress HeapImpl::GetSpaceEndAddress() const { return theSpace->GetSpaceEndAddress(); }
+MAddress Heap::GetSpaceEndAddress() const { return theSpace->GetSpaceEndAddress(); }
 
 Heap& Heap::GetHeap() { return *g_heapInstance; }
 
@@ -251,26 +220,26 @@ ZRemembered& Heap::remembered()
     return *GetCollector().GetZGeneration(ZGenerationId::young).remembered();
 }
 
-void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
+void Heap::RegisterStaticRoots(Uptr addr, U32 size)
 {
-    staticRootTable.RegisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
+    staticRootTable->RegisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
 }
 
-void HeapImpl::UnregisterStaticRoots(Uptr addr, U32 size)
+void Heap::UnregisterStaticRoots(Uptr addr, U32 size)
 {
-    staticRootTable.UnregisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
+    staticRootTable->UnregisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
 }
 
-void HeapImpl::VisitStaticRoots(const NativeSlotVisitor& visitor)
+void Heap::VisitStaticRoots(const NativeSlotVisitor& visitor)
 {
-    staticRootTable.VisitRoots(visitor);
+    staticRootTable->VisitRoots(visitor);
 #ifdef INTERPRETER_ENABLED
     VisitInterpreterGlobalRoots(&visitor);
 #endif
 }
 
 #if defined(_WIN64)
-ssize_t HeapImpl::GetHeapPhysicalMemorySize() const
+ssize_t Heap::GetHeapPhysicalMemorySize() const
 {
     PROCESS_MEMORY_COUNTERS memCounter;
     HANDLE hProcess = GetCurrentProcess();
@@ -292,7 +261,7 @@ ssize_t HeapImpl::GetHeapPhysicalMemorySize() const
 }
 
 #elif defined(__APPLE__)
-ssize_t HeapImpl::GetHeapPhysicalMemorySize() const
+ssize_t Heap::GetHeapPhysicalMemorySize() const
 {
     struct task_basic_info t_info;
     mach_msg_type_number_t t_info_count = TASK_BASIC_INFO_COUNT;
@@ -302,7 +271,7 @@ ssize_t HeapImpl::GetHeapPhysicalMemorySize() const
 }
 
 #else
-ssize_t HeapImpl::GetHeapPhysicalMemorySize() const
+ssize_t Heap::GetHeapPhysicalMemorySize() const
 {
     CString smapsFile = CString("/proc/") + CString(MapleRuntime::GetPid()) + "/smaps";
     ScopedFileHandler fileHandler(smapsFile.Str(), "r");
@@ -350,40 +319,40 @@ ssize_t HeapImpl::GetHeapPhysicalMemorySize() const
 }
 #endif
 
-FinalizerProcessor& HeapImpl::GetFinalizerProcessor() { return collectorResources.GetFinalizerProcessor(); }
+FinalizerProcessor& Heap::GetFinalizerProcessor() { return collectorResources->GetFinalizerProcessor(); }
 
-CollectorResources& HeapImpl::GetCollectorResources() { return collectorResources; }
+CollectorResources& Heap::GetCollectorResources() { return *collectorResources; }
 
-void HeapImpl::StopGCWork() { ZCollectedHeap::stop(); }
+void Heap::StopGCWork() { ZCollectedHeap::stop(); }
 
-void HeapImpl::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().RegisterAllocBuffer(buffer); }
+void Heap::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().RegisterAllocBuffer(buffer); }
 
-void HeapImpl::RemoveAllocBuffer(AllocBuffer &buffer) { GetAllocator().RemoveAllocBuffer(buffer); }
+void Heap::RemoveAllocBuffer(AllocBuffer &buffer) { GetAllocator().RemoveAllocBuffer(buffer); }
 
-void HeapImpl::VisitAllExportRoots(const NativeSlotVisitor &visitor)
+void Heap::VisitAllExportRoots(const NativeSlotVisitor &visitor)
 {
-    exportRootsTable.VisitGCRoots(visitor);
+    exportRootsTable->VisitGCRoots(visitor);
 }
 
-BaseObject* HeapImpl::GetExportObject(U64 id)
+BaseObject* Heap::GetExportObject(U64 id)
 {
-    return exportRootsTable.GetExportRoot(id);
+    return exportRootsTable->GetExportRoot(id);
 }
 
-U64 HeapImpl::RegisterExportRoot(BaseObject *obj)
+U64 Heap::RegisterExportRoot(BaseObject *obj)
 {
     if (!IsHeapAddress(obj)) {
         return std::numeric_limits<U64>::max();
     }
-    return exportRootsTable.RegisterExportRoot(obj);
+    return exportRootsTable->RegisterExportRoot(obj);
 }
 
-void HeapImpl::RemoveExportObject(U64 id)
+void Heap::RemoveExportObject(U64 id)
 {
-    exportRootsTable.RemoveExportRoot(id);
+    exportRootsTable->RemoveExportRoot(id);
 }
 
-void HeapImpl::CrossAccessBarrier(I64 id)
+void Heap::CrossAccessBarrier(I64 id)
 {
     BaseObject* recordObj = GetExportObject(id);
     if (recordObj == nullptr) {
@@ -397,14 +366,14 @@ void HeapImpl::CrossAccessBarrier(I64 id)
     SetExportObjActiveState(id, true);
 }
 
-void HeapImpl::SetExportObjActiveState(U64 id, bool state)
+void Heap::SetExportObjActiveState(U64 id, bool state)
 {
-    exportRootsTable.SetActiveState(id, state);
+    exportRootsTable->SetActiveState(id, state);
 }
 
-bool HeapImpl::CheckExportObjState(U64 id, BaseObject *exportObj)
+bool Heap::CheckExportObjState(U64 id, BaseObject *exportObj)
 {
-    return exportRootsTable.CheckActiveState(id, exportObj);
+    return exportRootsTable->CheckActiveState(id, exportObj);
 }
 } // namespace MapleRuntime
 

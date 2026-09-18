@@ -27,6 +27,16 @@
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
+ZGeneration& Collector::GetZGeneration(ZGenerationId generation)
+{
+    return Heap::GetHeap().GetZGeneration(generation);
+}
+
+const ZGeneration& Collector::GetZGeneration(ZGenerationId generation) const
+{
+    return Heap::GetHeap().GetZGeneration(generation);
+}
+
 namespace {
 
 

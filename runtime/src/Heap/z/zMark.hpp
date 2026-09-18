@@ -40,6 +40,8 @@ void VerifyAllEmpty(ZMark& domain);
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zMarkingSMR.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 
@@ -249,8 +251,8 @@ public:
     explicit CopyCollector(Allocator& allocator, CollectorResources& resources);
 
     ~CopyCollector() override = default;
-    ZMark* MajorMark() { return oldCycle.MarkPtr(); }
-    const ZMark* MajorMark() const { return oldCycle.MarkPtr(); }
+    ZMark* MajorMark() { return Heap::GetHeap().old().MarkPtr(); }
+    const ZMark* MajorMark() const { return Heap::GetHeap().old().MarkPtr(); }
     virtual void PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex);
     virtual void PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex);
 
