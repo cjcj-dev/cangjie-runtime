@@ -22,6 +22,7 @@
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zMetronome.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
@@ -553,9 +554,40 @@ private:
     size_t _markStackUsage;
 };
 
-// zStat.hpp:568-585, zStat.cpp:1642-1697
-class ZStatReferences {
+// zStat.hpp:514-553, zStat.cpp:1460-1620 — per-generation relocation account:
+// selector snapshot + forwarding usage + in-place counts, printed as a page
+// summary and (young only) an age table from ZStatPhaseGeneration::RegisterEnd.
+struct ZStatRelocationSummary {
+    size_t npagesCandidates = 0;
+    size_t total = 0;
+    size_t live = 0;
+    size_t empty = 0;
+    size_t npagesSelected = 0;
+    size_t relocate = 0;
+};
+
+class ZStatRelocation {
 public:
+    ZStatRelocation();
+
+    void AtSelectRelocationSet(const ZRelocationSetSelectorStats& selectorStats);
+    void AtInstallRelocationSet(size_t forwardingUsage);
+    void AtRelocateEnd(size_t smallInPlaceCount, size_t mediumInPlaceCount);
+
+    void PrintPageSummary();
+    void PrintAgeTable();
+
+private:
+    ZRelocationSetSelectorStats _selectorStats;
+    size_t _forwardingUsage = 0;
+    size_t _smallSelected = 0;
+    size_t _smallInPlaceCount = 0;
+    size_t _mediumSelected = 0;
+    size_t _mediumInPlaceCount = 0;
+};
+
+// zStat.hpp:568-585, zStat.cpp:1642-1697
+class ZStatReferences {public:
     static void set_soft(size_t encountered, size_t discovered, size_t enqueued);
     static void set_weak(size_t encountered, size_t discovered, size_t enqueued);
     static void set_final(size_t encountered, size_t discovered, size_t enqueued);

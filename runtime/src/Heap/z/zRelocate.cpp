@@ -118,7 +118,9 @@ void ZRelocate::ForwardFromSpace(ZGenerationId generation)
     } else {
         space.ForwardFromSpace<Generation::Old>(*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers());
     }
-
+    // zRelocate.cpp:1121: in-place counts close the relocation account.
+    const auto inPlace = space.GetRegionManager().InPlaceRelocatedCounts();
+    Heap::GetHeap().GetZGeneration(generation).StatRelocation()->AtRelocateEnd(inPlace.first, inPlace.second);
 }
 
 void ZRelocate::RefineFromSpace()
@@ -1298,6 +1300,7 @@ void RegionManager::StartForwardFromRegions(ZWorkers& workers)
     relocationStarted = true;
     relocationDrained = false;
     relocationWorkers = &workers;
+    ResetInPlaceRelocatedCounts();
     relocateQueue.BeginWorkers(workers.active_workers());
 }
 
@@ -1336,6 +1339,7 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
     if (inPlace) {
         (void)fromRegionList.TryDeleteRegion(region);
         owner->set_in_place();
+        NoteInPlaceRelocated(region);
         CompactRegion(region);
     } else {
         ForwardRegion<G>(region);
@@ -1549,6 +1553,7 @@ void RegionManager::CollectFromSpaceGarbage()
 template<Generation G>
 void RegionManager::ForwardFromRegions()
 {
+    ResetInPlaceRelocatedCounts();
     detail::ExecuteForwardTask<G>(*this, fromRegionList);
 
     VLOG(REPORT, "forward %zu from-region units", fromRegionList.GetUnitCount());
@@ -1580,6 +1585,7 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
     });
     if (allocFailed) {
         forwarding_for_page(region)->set_in_place();
+        NoteInPlaceRelocated(region);
         CompactRegion(region);
         return false;
     }

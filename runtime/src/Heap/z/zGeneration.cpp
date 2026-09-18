@@ -1391,6 +1391,9 @@ void ZGeneration::select_relocation_set(bool promote_all)
         }
         ZGeneration::young()->SelectTenuringThreshold(inputs);
     }
+    // zGeneration.cpp:268-269: the selector snapshot feeds both the
+    // relocation and the heap accounts before the set is installed.
+    statRelocation.AtSelectRelocationSet(selector.stats());
     _relocation_set.install(&selector);
     if (_cycle == ZGenerationId::young) {
         ZWorkers* w = Workers();

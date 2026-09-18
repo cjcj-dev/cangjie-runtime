@@ -521,6 +521,26 @@ public:
     MRT_EXPORT size_t DequeuedStalledAllocations() const;
     MRT_EXPORT size_t SatisfiedStalledAllocations() const;
     MRT_EXPORT size_t FailedStalledAllocations() const;
+
+    // In-place relocation account (feeds ZStatRelocation::AtRelocateEnd).
+    void ResetInPlaceRelocatedCounts()
+    {
+        inPlaceSmallCount.store(0, std::memory_order_relaxed);
+        inPlaceMediumCount.store(0, std::memory_order_relaxed);
+    }
+    void NoteInPlaceRelocated(const ZPage* region)
+    {
+        if (region->is_medium()) {
+            inPlaceMediumCount.fetch_add(1, std::memory_order_relaxed);
+        } else if (region->is_small()) {
+            inPlaceSmallCount.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    std::pair<size_t, size_t> InPlaceRelocatedCounts() const
+    {
+        return { inPlaceSmallCount.load(std::memory_order_relaxed),
+                 inPlaceMediumCount.load(std::memory_order_relaxed) };
+    }
 #endif
     template<Generation G>
     void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
@@ -803,6 +823,13 @@ private:
     ZWorkers* relocationWorkers{ nullptr };
     bool relocationStarted{ false };
     bool relocationDrained{ false };
+    // zRelocate.cpp:1121 shape: in-place relocated page counts by size class,
+    // accumulated while a from-space pass runs and read at its end. Host
+    // difference: ZGC counts these on ZRelocateSmall/MediumAllocator; here the
+    // in-place decision is made inside RegionManager::ForwardClaimedPage /
+    // RelocateClaimedPage, so the counters live with that driver.
+    std::atomic<size_t> inPlaceSmallCount{ 0 };
+    std::atomic<size_t> inPlaceMediumCount{ 0 };
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
     std::mutex flipPromotedMutex;

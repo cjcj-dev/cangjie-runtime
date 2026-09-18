@@ -211,6 +211,10 @@ void ZRelocationSet::install(const ZRelocationSetSelector* selector)
     }
     _forwardings = task.forwardings();
     _nforwardings = task.nforwardings();
+    // zRelocationSet.cpp:179: forwarding-allocator usage after install.
+    if (_generation != nullptr) {
+        _generation->StatRelocation()->AtInstallRelocationSet(_allocator.size());
+    }
 }
 
 void ZRelocationSet::install_from_regions(RegionList& regions)

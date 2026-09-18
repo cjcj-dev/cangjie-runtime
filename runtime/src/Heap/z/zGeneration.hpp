@@ -123,6 +123,8 @@ public:
     ZStatHeap* StatHeap() { return &statHeap; }
     // zGeneration.hpp:137 stat_mark() — per-generation mark account.
     ZStatMark* StatMark() { return &statMark; }
+    // zGeneration.hpp:138 stat_relocation() — per-generation relocation account.
+    ZStatRelocation* StatRelocation() { return &statRelocation; }
     ZGenerationPhase GcPhase() const { return _phase; }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
@@ -167,6 +169,8 @@ protected:
     ZStatHeap statHeap;
     // zGeneration.hpp:84 — mark statistics for this generation's mark domain.
     ZStatMark statMark;
+    // zGeneration.hpp:85 — relocation statistics (selector snapshot + in-place).
+    ZStatRelocation statRelocation;
     ZStatCycle cycleStats;
     // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
     ZStatWorkers statWorkers;

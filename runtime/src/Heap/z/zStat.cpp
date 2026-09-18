@@ -977,6 +977,98 @@ void ZStatMark::Print()
         _nstripes, _nproactiveflush, _nterminateflush, _ntrycomplete, _ncontinue);
 }
 
+// zStat.cpp:1460-1620 — relocation account. ZStatTablePrinter is a log
+// formatter (host infra difference, PLAN §5): rows go to LOG lines here.
+ZStatRelocation::ZStatRelocation() = default;
+
+void ZStatRelocation::AtSelectRelocationSet(const ZRelocationSetSelectorStats& selectorStats)
+{
+    _selectorStats = selectorStats;
+}
+
+void ZStatRelocation::AtInstallRelocationSet(size_t forwardingUsage)
+{
+    _forwardingUsage = forwardingUsage;
+}
+
+void ZStatRelocation::AtRelocateEnd(size_t smallInPlaceCount, size_t mediumInPlaceCount)
+{
+    _smallInPlaceCount = smallInPlaceCount;
+    _mediumInPlaceCount = mediumInPlaceCount;
+}
+
+void ZStatRelocation::PrintPageSummary()
+{
+    if (!_selectorStats.has_relocatable_pages()) {
+        return;
+    }
+    ZStatRelocationSummary smallSummary;
+    ZStatRelocationSummary mediumSummary;
+    ZStatRelocationSummary largeSummary;
+    auto accountPageSize = [](ZStatRelocationSummary& summary, const ZRelocationSetSelectorGroupStats& stats) {
+        summary.npagesCandidates += stats.npages_candidates();
+        summary.total += stats.total();
+        summary.empty += stats.empty();
+        summary.npagesSelected += stats.npages_selected();
+        summary.relocate += stats.relocate();
+    };
+    for (PageAge age : kPageAgeRangeAll) {
+        accountPageSize(smallSummary, _selectorStats.small(age));
+        accountPageSize(mediumSummary, _selectorStats.medium(age));
+        accountPageSize(largeSummary, _selectorStats.large(age));
+    }
+    LOG(RTLOG_INFO, "%-14s %12s %12s %12s %12s %12s %12s", "Pages:", "Candidates", "Selected", "In-Place",
+        "Size", "Empty", "Relocated");
+    auto printSummary = [](const char* name, const ZStatRelocationSummary& summary, size_t inPlaceCount) {
+        LOG(RTLOG_INFO, "%-14s %12zu %12zu %12zu %11zuM %11zuM %11zuM", name, summary.npagesCandidates,
+            summary.npagesSelected, inPlaceCount, summary.total / MB, summary.empty / MB, summary.relocate / MB);
+    };
+    printSummary("Small", smallSummary, _smallInPlaceCount);
+    printSummary("Medium", mediumSummary, _mediumInPlaceCount);
+    printSummary("Large", largeSummary, 0);
+    LOG(RTLOG_INFO, "Forwarding Usage: %zuM", _forwardingUsage / MB);
+}
+
+void ZStatRelocation::PrintAgeTable()
+{
+    if (!_selectorStats.has_relocatable_pages()) {
+        return;
+    }
+    size_t live[kPageAgeCount] = {};
+    size_t total[kPageAgeCount] = {};
+    uint32_t oldestNonEmptyAge = 0;
+    for (PageAge age : kPageAgeRangeAll) {
+        const uint32_t i = untype(age);
+        auto summarizePages = [&](const ZRelocationSetSelectorGroupStats& stats) {
+            live[i] += stats.live();
+            total[i] += stats.total();
+        };
+        summarizePages(_selectorStats.small(age));
+        summarizePages(_selectorStats.medium(age));
+        summarizePages(_selectorStats.large(age));
+        if (total[i] != 0) {
+            oldestNonEmptyAge = i;
+        }
+    }
+    LOG(RTLOG_INFO, "Age Table: %10s %10s %16s %16s %16s", "Live", "Garbage", "Small", "Medium", "Large");
+    for (uint32_t i = 0; i <= oldestNonEmptyAge; ++i) {
+        const PageAge age = to_pageage(i);
+        char ageStr[16];
+        if (age == PageAge::eden) {
+            snprintf(ageStr, sizeof(ageStr), "%s", "Eden");
+        } else if (age != PageAge::old) {
+            snprintf(ageStr, sizeof(ageStr), "Survivor %u", i);
+        } else {
+            ageStr[0] = '\0';
+        }
+        LOG(RTLOG_INFO, "%-10s %10zu %10zu %7zu / %-6zu %7zu / %-6zu %7zu / %-6zu", ageStr, live[i],
+            total[i] - live[i], _selectorStats.small(age).npages_candidates(),
+            _selectorStats.small(age).npages_selected(), _selectorStats.medium(age).npages_candidates(),
+            _selectorStats.medium(age).npages_selected(), _selectorStats.large(age).npages_candidates(),
+            _selectorStats.large(age).npages_selected());
+    }
+}
+
 // zStat.cpp:1642-1697
 ZStatReferences::ZCount ZStatReferences::soft;
 ZStatReferences::ZCount ZStatReferences::weak;
@@ -1069,14 +1161,19 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
         return;
     }
     ZStatDurationSample(sampler, endNs - startNs);
-    // zStat.cpp:724-735 — the one-shot per-collection report; the heap table
-    // and relocation units join with their feeders (this branch).
+    // zStat.cpp:724-735 — the one-shot per-collection report; stalls and the
+    // heap table join with the ZStatHeap feeders (this branch).
     ZGeneration& generation = Heap::GetHeap().GetZGeneration(id);
     ZStatLoad::Print();
     ZStatMMU::Print();
     generation.StatMark()->Print();
     if (id == ZGenerationId::old) {
         ZStatReferences::Print();
+    }
+    // zStat.cpp:731-734 — relocation page summary always; age table young only.
+    generation.StatRelocation()->PrintPageSummary();
+    if (id == ZGenerationId::young) {
+        generation.StatRelocation()->PrintAgeTable();
     }
 }
 
