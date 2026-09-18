@@ -77,14 +77,11 @@ struct RelocationReceiptTestAccess {
 
     static void BindCollector(CollectorResources& resources, HeapGcState* collector)
     {
-        if (collector != nullptr && resources.testCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
-        }
-        resources.testCollector = collector != nullptr ? collector : &resources.bound_collector();
-        HeapGcState& active = collector != nullptr ? static_cast<HeapGcState&>(*collector)
-                                                 : resources.bound_collector();
+        (void)resources;
+        if (collector == nullptr) return;
+        CHECK(collector == &Heap::GetHeap().GetCollector());
         for (ZGenerationId generation : {ZGenerationId::young, ZGenerationId::old}) {
-            auto& cycle = active.GetZGeneration(generation);
+            auto& cycle = Heap::GetHeap().GetZGeneration(generation);
             if (cycle.Sequence() != 0) continue;
             if (!cycle.Snapshot().active) cycle.Begin(0);
             if (generation == ZGenerationId::young) {
@@ -320,9 +317,10 @@ struct LoadHealDeliveryTestAccess {
         // Full GC/phase production is separately covered by the managed P2 test.
         auto& resources = Heap::GetHeap().GetCollectorResources();
         RelocationReceiptTestAccess::BindCollector(resources, &collector);
-        collector.youngCycle.InitializeWorkers(1);
+        auto& young = Heap::GetHeap().young();
+        if (young.Workers() == nullptr) young.InitializeWorkers(1);
         collector.StartYoungMarkWork();
-        collector.youngCycle.PublishPhase(ZGenerationPhase::Mark);
+        young.PublishPhase(ZGenerationPhase::Mark);
         ZGlobalsPointers::flip_young_mark_start();
         WorkStack workStack = collector.NewWorkStack();
         HeapGcState::MinorSlotSet reachableSlots;
