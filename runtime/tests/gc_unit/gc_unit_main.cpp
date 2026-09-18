@@ -20,7 +20,8 @@
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1
 #endif
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zCPU.hpp"
 
@@ -28,10 +29,7 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void PrepareIsolatedGcUnit()
     {
-        CollectorProxy& proxy = Heap::GetHeap().GetCollectorResources().collectorProxy;
-        if (proxy.currentCollector == nullptr) {
-            proxy.currentCollector = &proxy.wCollector;
-        }
+        (void)Heap::GetHeap().GetCollectorResources();
     }
 };
 } // namespace MapleRuntime

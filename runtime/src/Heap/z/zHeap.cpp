@@ -12,7 +12,8 @@
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zArray.hpp"
 
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zArguments.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Interpreter/Options.h"
 #include "Interpreter/InterpreterSpecific.h"
@@ -77,33 +78,11 @@ MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
 std::vector<HeapSlotAddressRange> Heap::heapReservations;
 
-static bool InitEnabledGCParam()
-{
-    auto enableGC = std::getenv("cjEnableGC");
-    if (enableGC == nullptr) {
-        return true;
-    }
-    if (strlen(enableGC) != 1) {
-        LOG(RTLOG_ERROR, "Unsupported cjEnableGC, cjEnableGC should be 0 or 1.\n");
-        return true;
-    }
-
-    switch (enableGC[0]) {
-        case '0':
-            return false;
-        case '1':
-            return true;
-        default:
-            LOG(RTLOG_ERROR, "Unsupported cjEnableGC, cjEnableGC should be 0 or 1.\n");
-    }
-    return true;
-}
-
 class HeapImpl : public Heap {
 public:
     HeapImpl()
-        : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
-          collectorProxy(*theSpace, collectorResources)
+        : theSpace(Allocator::NewAllocator()), collectorResources(collectorImpl),
+          collectorImpl(*theSpace, collectorResources)
     {
         RunType::InitRunTypeMap();
     }
@@ -181,7 +160,7 @@ private:
 
     // collector is closely related to barrier. but we do not put barrier inside collector because even without
     // collector (i.e. no-gc), allocator and barrier (interface to access heap) is still needed.
-    CollectorProxy collectorProxy;
+    WCollector collectorImpl;
 
     ExportRootTable exportRootsTable;
 
@@ -204,37 +183,46 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 
 void HeapImpl::Init(const HeapParam& param)
 {
+    ZArguments::initialize();
     ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
     theSpace->Init(param);
-    Heap::GetHeap().EnableGC(InitEnabledGCParam());
-    collectorProxy.Init();
+    Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
+    collectorImpl.Init();
     {
         const auto& heapMap = ZPageTable::heap_table().map();
         const size_t heapSpan = heapMap.size() * heapMap.granule();
-        collectorProxy.GetCurrentCollector().GetZGeneration(ZGenerationId::young).forwarding_table().initialize(
+        collectorImpl.GetZGeneration(ZGenerationId::young).forwarding_table().initialize(
             heapSpan, heapMap.base(), heapMap.granule());
-        collectorProxy.GetCurrentCollector().GetZGeneration(ZGenerationId::old).forwarding_table().initialize(
+        collectorImpl.GetZGeneration(ZGenerationId::old).forwarding_table().initialize(
             heapSpan, heapMap.base(), heapMap.granule());
     }
-    collectorProxy.GetCurrentCollector().GetZGeneration(ZGenerationId::young).remembered()->bind(
+    collectorImpl.GetZGeneration(ZGenerationId::young).remembered()->bind(
         &ZPageTable::heap_table(),
-        &collectorProxy.GetCurrentCollector().GetZGeneration(ZGenerationId::old).forwarding_table(),
+        &collectorImpl.GetZGeneration(ZGenerationId::old).forwarding_table(),
         &static_cast<RegionSpace*>(theSpace)->GetRegionManager());
+    if (collectorImpl.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
+        collectorImpl.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
+    }
+    if (collectorImpl.GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
+        collectorImpl.GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
+    }
     collectorResources.Init();
 }
 
 void HeapImpl::Fini()
 {
     collectorResources.Fini();
-    collectorProxy.Fini();
+    collectorImpl.GetZGeneration(ZGenerationId::young).StopWorkers();
+    collectorImpl.GetZGeneration(ZGenerationId::old).StopWorkers();
+    collectorImpl.Fini();
     if (theSpace != nullptr) {
         delete theSpace;
         theSpace = nullptr;
     }
 }
 
-Collector& HeapImpl::GetCollector() { return collectorProxy.GetCurrentCollector(); }
+Collector& HeapImpl::GetCollector() { return collectorResources.ActiveCollector(); }
 
 Allocator& HeapImpl::GetAllocator() { return *theSpace; }
 
@@ -366,7 +354,7 @@ FinalizerProcessor& HeapImpl::GetFinalizerProcessor() { return collectorResource
 
 CollectorResources& HeapImpl::GetCollectorResources() { return collectorResources; }
 
-void HeapImpl::StopGCWork() { collectorResources.StopGCWork(); }
+void HeapImpl::StopGCWork() { ZCollectedHeap::stop(); }
 
 void HeapImpl::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().RegisterAllocBuffer(buffer); }
 

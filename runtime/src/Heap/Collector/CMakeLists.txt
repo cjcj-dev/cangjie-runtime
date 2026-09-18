@@ -16,7 +16,7 @@ set(SRC_LIST
     "GcStats.cpp"
     "../z/zCollectedHeap.cpp"
     "Collector.cpp"
-    "CollectorProxy.cpp"
+
     "../z/zDriver.cpp"
     "../z/zDirector.cpp"
     "../z/zDriverPort.cpp"

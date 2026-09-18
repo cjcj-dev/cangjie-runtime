@@ -33,7 +33,8 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zBarrier.hpp"
@@ -54,10 +55,7 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void EnsureCollectorProxyBound(CollectorResources& resources)
     {
-        CollectorProxy& proxy = resources.collectorProxy;
-        if (proxy.currentCollector == nullptr) {
-            proxy.currentCollector = &proxy.wCollector;
-        }
+        (void)resources;
     }
 };
 

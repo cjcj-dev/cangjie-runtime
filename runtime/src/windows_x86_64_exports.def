@@ -1424,15 +1424,6 @@ EXPORTS
     _ZN12MapleRuntime14CangjieRuntimeC2ERK12RuntimeParam @1552
     _ZN12MapleRuntime14CangjieRuntimeD0Ev @1553
     _ZN12MapleRuntime14CangjieRuntimeD2Ev @1554
-    _ZN12MapleRuntime14CollectorProxy13ForwardObjectEPNS_10BaseObjectE @1556
-    _ZN12MapleRuntime14CollectorProxy19AddRawPointerObjectEPNS_10BaseObjectE @1557
-    _ZN12MapleRuntime14CollectorProxy19ShouldIgnoreRequestERNS_9GCRequestE @1558
-    _ZN12MapleRuntime14CollectorProxy20RunGarbageCollectionEyNS_8GCReasonE @1559
-    _ZN12MapleRuntime14CollectorProxy22RemoveRawPointerObjectEPNS_10BaseObjectE @1560
-    _ZN12MapleRuntime14CollectorProxy4FiniEv @1561
-    _ZN12MapleRuntime14CollectorProxy4InitEv @1562
-    _ZN12MapleRuntime14CollectorProxyD0Ev @1563
-    _ZN12MapleRuntime14CollectorProxyD2Ev @1564
     _ZN12MapleRuntime14FastULEBDecodeERNS_7CStringEy @1565
     _ZN12MapleRuntime14GetStackOffsetERNS_10UnwindInfoE @1567
     _ZN12MapleRuntime14LOG_TYPE_NAMESE @1568 DATA
@@ -2244,20 +2235,6 @@ EXPORTS
     _ZNK12MapleRuntime13UnwindContext21UnwindToCallerContextERS0_RNS_19UnwindContextStatusE @2569
     _ZNK12MapleRuntime13WinModuleHashclEPKNS_9WinModuleE @2570
     _ZNK12MapleRuntime14CangjieRuntime15GetRuntimeParamEv @2571
-    _ZNK12MapleRuntime14CollectorProxy12IsFromObjectEPNS_10BaseObjectE @2573
-    _ZNK12MapleRuntime14CollectorProxy12IsOldPointerERNS_8HeapSlotILb0EEE @2574
-    _ZNK12MapleRuntime14CollectorProxy13FindToVersionEPNS_10BaseObjectE @2575
-    _ZNK12MapleRuntime14CollectorProxy16IsCurrentPointerERNS_8HeapSlotILb0EEE @2576
-    _ZNK12MapleRuntime14CollectorProxy16TryUntagRefFieldEPNS_10BaseObjectERNS_8HeapSlotILb0EEERS2_ @2577
-    _ZNK12MapleRuntime14CollectorProxy16is_old_load_goodERNS_8HeapSlotILb0EEE @2578
-    _ZNK12MapleRuntime14CollectorProxy16remap_generationERNS_8HeapSlotILb0EEE @2579
-    _ZNK12MapleRuntime14CollectorProxy17IsGhostFromObjectEPNS_10BaseObjectE @2580
-    _ZNK12MapleRuntime14CollectorProxy17TryUpdateRefFieldEPNS_10BaseObjectERNS_8HeapSlotILb0EEERS2_ @2581
-    _ZNK12MapleRuntime14CollectorProxy18TryForwardRefFieldEPNS_10BaseObjectERNS_8HeapSlotILb0EEERS2_ @2582
-    _ZNK12MapleRuntime14CollectorProxy18is_young_load_goodERNS_8HeapSlotILb0EEE @2583
-    _ZNK12MapleRuntime14CollectorProxy20GetAndTryTagRefFieldEPNS_10BaseObjectE @2584
-    _ZNK12MapleRuntime14CollectorProxy21IsUnmovableFromObjectEPNS_10BaseObjectE @2585
-    _ZNK12MapleRuntime14CollectorProxy24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE @2586
     _ZNK12MapleRuntime14MutatorManager11BindMutatorERNS_7MutatorE @2597
     _ZNK12MapleRuntime14MutatorManager13UnbindMutatorERNS_7MutatorE @2598
     _ZNK12MapleRuntime14PrintStackInfo15PrintStackTraceEv @2599
@@ -2736,7 +2713,6 @@ EXPORTS
     _ZTVN12MapleRuntime13StackMapTableE @3165 DATA
     _ZTVN12MapleRuntime13UnwindContextE @3166 DATA
     _ZTVN12MapleRuntime14CangjieRuntimeE @3167 DATA
-    _ZTVN12MapleRuntime14CollectorProxyE @3168 DATA
     _ZTVN12MapleRuntime14PrintStackInfoE @3170 DATA
     _ZTVN12MapleRuntime15DerivedPtrTableE @3171 DATA
     _ZTVN12MapleRuntime15RecordStackInfoE @3172 DATA

@@ -31,7 +31,8 @@
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
@@ -76,12 +77,12 @@ struct RelocationReceiptTestAccess {
 
     static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
-        if (collector != nullptr && resources.collectorProxy.currentCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.collectorProxy.currentCollector);
+        if (collector != nullptr && resources.testCollector != nullptr) {
+            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
         }
-        resources.collectorProxy.currentCollector = collector != nullptr ? collector : &resources.collectorProxy.wCollector;
+        resources.testCollector = collector != nullptr ? collector : &resources.bound_collector();
         Collector& active = collector != nullptr ? static_cast<Collector&>(*collector)
-                                                 : static_cast<Collector&>(resources.collectorProxy.wCollector);
+                                                 : resources.bound_collector();
         for (ZGenerationId generation : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = active.GetZGeneration(generation);
             if (cycle.Sequence() != 0) continue;

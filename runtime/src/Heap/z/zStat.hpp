@@ -123,6 +123,7 @@ enum class ZStatUnit { TIME, BYTES, THREADS, BYTES_PER_SECOND, OPS_PER_SECOND };
 // Identity and list membership are fixed by static construction, before startup.
 class ZStatValue {
 public:
+    static void initialize() { InitializeStorage(); }
     const char* Group() const;
     const char* Name() const;
     uint32_t Id() const;
