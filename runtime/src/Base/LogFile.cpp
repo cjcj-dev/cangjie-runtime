@@ -339,13 +339,4 @@ RTLogLevel InitLogLevel()
     return RTLOG_ERROR;
 }
 
-void EmitTimerRecords(uint64_t seq, const char* name, uint64_t startNs, uint64_t ns, bool isLeaf, int kind, uint64_t depth,
-                      bool pathOk, const char* path)
-{
-    const char* phaseKind = kind < 0 ? "unknown" : (kind == 0 ? "conc" : "pause");
-    GcLog::Phase(seq, name, phaseKind, startNs, ns);
-    if (isLeaf) {
-        GcLog::PhaseLeaf(seq, name, ns, phaseKind, depth, pathOk, path);
-    }
-}
 } // namespace MapleRuntime

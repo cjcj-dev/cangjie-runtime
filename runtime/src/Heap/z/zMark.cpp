@@ -663,7 +663,7 @@ bool ZMark::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
                                      std::unordered_set<MAddress>& weakSlots,
                                      YoungConcWindowStats* windowStats)
 {
-    MRT_PHASE_TIMER(ZStatPhases::PYoungMarkFollow);
+    ZStatTimerWorker zstatTimer(ZStatPhases::PYoungMarkFollow);
     // Follow explicit roots and allocation work; young has no SATB queue.
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();

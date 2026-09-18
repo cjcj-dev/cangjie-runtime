@@ -54,7 +54,7 @@ namespace MapleRuntime {
 
 void ZGenerationOld::PostTrace()
 {
-    MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
+    ZStatTimerOld zstatTimer(ZStatPhases::PPostTrace);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
@@ -86,7 +86,7 @@ void ZGenerationOld::CollectSmallSpace()
     GCStats& stats = Heap::GetHeap().GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     {
-        MRT_PHASE_TIMER(ZStatPhases::PCollectFromSpaceGarbage);
+        ZStatTimerOld zstatTimer(ZStatPhases::PCollectFromSpaceGarbage);
         stats.collectedBytes += stats.smallGarbageSize;
         space.CollectFromSpaceGarbage();
     }

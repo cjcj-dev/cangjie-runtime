@@ -180,7 +180,7 @@ bool ZRelocate::IsUnmovableFromObject(BaseObject* obj)
 void ZRelocate::RemapYoungRoots()
 {
     SuspendibleThreadSetJoiner joiner;
-    MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
+    ZStatTimerYoung zstatTimer(ZStatPhases::PRemapYoungRoots);
     // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
     ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
     Heap::GetHeap().remembered().remap_current(&remsetIter);
@@ -238,7 +238,7 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 bool ZRelocate::Preforward()
 {
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
-    MRT_PHASE_TIMER(ZStatPhases::PPreforward);
+    ZStatTimerOld zstatTimer(ZStatPhases::PPreforward);
     {
         // Caller holds DriverLocker (ZGenerationOld::collect zGeneration.cpp:1054-1063).
         RemapYoungRoots();
@@ -254,7 +254,7 @@ bool ZRelocate::Preforward()
         // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
-        MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
+        ZStatTimerOld zstatTimer(ZStatPhases::POldRelocateStart);
         ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
             data.storeBarrierBuffer->install_base_pointers();
         });

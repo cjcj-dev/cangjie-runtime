@@ -27,7 +27,7 @@ namespace MapleRuntime {
 //   [GCLOG] v=4 rec=cycle seq= gc_tag= kind= reason= start_ns= dur_ns= live_before= live_after=
 //           collected= heap_used= threshold= rss_kb=
 //   [GCLOG] v=4 rec=phase seq= gc_tag= name= kind= start_ns= ns=
-//   [GCLOG] v=4 rec=phase_leaf seq= gc_tag= name= ns= kind= depth= path_ok= path=
+//   [GCLOG] v=4 rec=phase_leaf seq= gc_tag= name= ns= kind= depth= path_ok= path=  (removed: no ZGC counterpart)
 //   [GCLOG] v=4 rec=stw   seq= gc_tag= reason= start_ns= wait_ns= held_ns=
 //   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
@@ -45,7 +45,6 @@ public:
     // 128: longest phase name in the tree is well under this; longer ones are truncated.
     // v3: all machine durations are nanoseconds and all names are folded to one token.
     static constexpr size_t MAX_PHASE_NAME = 128;
-    static constexpr size_t MAX_PHASE_PATH = 512;
     // Fixed-capacity last-FATAL slot for crash assert= field. No TLS, no lock, no heap.
     static constexpr size_t FATAL_SLOT_CAP = 512;
 
@@ -92,24 +91,6 @@ public:
         EmitLine("[GCLOG] v=%u rec=phase seq=%llu gc_tag=%c name=%s kind=%s start_ns=%llu ns=%llu", SCHEMA_VERSION,
                  static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safe, kind,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(ns));
-    }
-
-    // `path` is assembled from already folded components by Timer and uses `>` only as the
-    // leaf-to-root separator.  On fixed-buffer overflow Timer still emits a syntactically exact
-    // record with path_ok=0, which strict readers reject instead of accepting silent truncation.
-    static void PhaseLeaf(uint64_t seq, const char* name, uint64_t ns, const char* kind, uint64_t depth,
-                          bool pathOk, const char* path)
-    {
-        if (!Enabled()) {
-            return;
-        }
-        char safe[MAX_PHASE_NAME + 1];
-        FoldToToken(name, safe);
-        EmitLine("[GCLOG] v=%u rec=phase_leaf seq=%llu gc_tag=%c name=%s ns=%llu kind=%s depth=%llu "
-                 "path_ok=%u path=%s",
-                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safe,
-                 static_cast<unsigned long long>(ns), kind, static_cast<unsigned long long>(depth),
-                 pathOk ? 1U : 0U, path);
     }
 
     // One record per stop-the-world, because neither of the two records above can answer "how long
