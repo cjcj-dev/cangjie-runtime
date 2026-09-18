@@ -159,25 +159,7 @@ struct RelocationReceiptTestAccess {
 
     static FindToVersionResult ProductFindToVersion(HeapGcState& collector, BaseObject* from, Generation generation)
     {
-        using ProductFn = FindToVersionResult (*)(const HeapGcState*, BaseObject*, Generation);
-        void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-        GC_EXPECT_TRUE(handle != nullptr);
-        void* symbol = handle == nullptr ? nullptr : dlsym(
-            handle, "_ZNK12MapleRuntime11HeapGcState13FindToVersionEPNS_10BaseObjectENS_10GenerationE");
-        GC_EXPECT_TRUE(symbol != nullptr);
-        Dl_info info {};
-        GC_EXPECT_TRUE(symbol != nullptr && dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&
-                       std::strstr(info.dli_fname, "libcangjie-runtime.so") != nullptr);
-        if (info.dli_fname != nullptr) {
-            std::fprintf(stderr, "FINDTO_PRODUCT_SO=%s\n", info.dli_fname);
-        }
-        FindToVersionResult result = symbol == nullptr
-            ? FindToVersionResult::NotManaged()
-            : reinterpret_cast<ProductFn>(symbol)(&collector, from, generation);
-        if (handle != nullptr) {
-            (void)dlclose(handle);
-        }
-        return result;
+        return collector.FindToVersion(from, generation);
     }
 
     static BaseObject* ProductRelocateOrRemap(

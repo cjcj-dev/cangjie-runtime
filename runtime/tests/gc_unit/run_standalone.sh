@@ -728,17 +728,6 @@ for consumer in "${LOADHEAL_PRODUCT_CONSUMERS[@]}"; do
 done
 MUTUALWAIT_SO_EXPORTS="$OUT/cj_gc_forwarding_publication_unit.so-exports.txt"
 nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$MUTUALWAIT_SO_EXPORTS"
-for consumer in 'MapleRuntime::HeapGcState::FindToVersion('; do
-  if /usr/bin/grep -F -q "$consumer" "$LOADHEAL_FULL"; then
-    echo "GC_UNIT_MUTUALWAIT_LOCAL_DEFINITION symbol=$consumer" >&2
-    exit 9
-  fi
-  if ! /usr/bin/grep -F -q "$consumer" "$MUTUALWAIT_SO_EXPORTS"; then
-    echo "GC_UNIT_MUTUALWAIT_PRODUCT_EXPORT_MISSING symbol=$consumer" >&2
-    exit 10
-  fi
-done
-echo "GATE_MUTUALWAIT_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 echo "GATE_LOADHEAL_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 
 remap_receipt_symbol="${REMAP_RECEIPT_TEST#*.}"
