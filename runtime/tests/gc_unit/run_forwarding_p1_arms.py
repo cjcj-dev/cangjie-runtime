@@ -25,7 +25,7 @@ TESTS = [
 SECONDARY = 'FindToPublicState.NotManagedIsObservable'
 PREFIX = 'runtime/src/'
 CUTS = {
-    'entry': (PREFIX+'Heap/z/WCollector.cpp',
+    'entry': (PREFIX+'Heap/WCollector/WCollector.cpp',
               '        DoYoungGarbageCollection();', '        (void)0;'),
     'arena_begin': (PREFIX+'Heap/z/zRelocationSet.inline.hpp',
         '        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(fromRegionList),\n'
