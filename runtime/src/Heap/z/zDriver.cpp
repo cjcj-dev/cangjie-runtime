@@ -192,10 +192,7 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind, ZDriverPort& port)
         if (request.cause() == GC_REASON_INVALID) {
             return;
         }
-        {
-            std::lock_guard<std::mutex> lock(directorMutex);
-            (kind == GCDriverKind::MINOR ? minorBusy : majorBusy) = true;
-        }
+        ZCollectedHeap::heap()->director()->set_busy(kind == GCDriverKind::MINOR, true);
         abortpoint();
         (void)ProcessDriverRequest(port, request);
         abortpoint();
@@ -206,9 +203,7 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind, ZDriverPort& port)
 
 void CollectorResources::CompleteDriverRequest(ZDriverPort& port)
 {
-    std::lock_guard<std::mutex> lock(directorMutex);
-    (&port == &GetMinorDriverPort() ? minorBusy : majorBusy) = false;
-    ZDirector::evaluate_rules();
+    ZCollectedHeap::heap()->director()->set_busy(&port == &GetMinorDriverPort(), false);
 }
 
 void CollectorResources::RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup)

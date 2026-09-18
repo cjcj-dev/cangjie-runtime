@@ -17,6 +17,8 @@ private:
     std::condition_variable condition;
     bool stopped = false;
     bool reevaluate = false;
+    bool minorBusy = false;
+    bool majorBusy = false;
 
     bool wait_for_tick();
 
@@ -29,6 +31,8 @@ public:
 
     static void evaluate_rules();
     void notify_reevaluate();
+    void set_busy(bool minor, bool busy);
+    bool busy(bool minor);
 };
 } // namespace MapleRuntime
 

@@ -1,4 +1,5 @@
 #include "Heap/z/zDirector.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 
 #include <algorithm>
@@ -84,6 +85,22 @@ void ZDirector::notify_reevaluate()
     std::lock_guard<std::mutex> lock(monitor);
     reevaluate = true;
     condition.notify_one();
+}
+
+void ZDirector::set_busy(bool minor, bool busy)
+{
+    std::lock_guard<std::mutex> lock(monitor);
+    (minor ? minorBusy : majorBusy) = busy;
+    if (!busy) {
+        reevaluate = true;
+        condition.notify_one();
+    }
+}
+
+bool ZDirector::busy(bool minor)
+{
+    std::lock_guard<std::mutex> lock(monitor);
+    return minor ? minorBusy : majorBusy;
 }
 
 bool ZDirector::wait_for_tick()
@@ -640,7 +657,9 @@ void ZDirector::terminate()
 bool CollectorResources::start_gc(uint64_t now)
 {
     EvaluateDirector(now);
-    return minorBusy || majorBusy || GetMinorDriverPort().is_busy() || GetMajorDriverPort().is_busy();
+    ZDirector* director = ZCollectedHeap::heap()->director();
+    return director->busy(true) || director->busy(false) ||
+        GetMinorDriverPort().is_busy() || GetMajorDriverPort().is_busy();
 }
 
 void CollectorResources::EvaluateDirector(uint64_t now)
@@ -648,7 +667,9 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     if (Runtime::CurrentRef() == nullptr || !IsGCActive()) {
         return;
     }
-    const ZDirectorStats stats = sample_stats(*this, now, minorBusy, majorBusy, concurrentGcThreadCount);
+    ZDirector* director = ZCollectedHeap::heap()->director();
+    const ZDirectorStats stats = sample_stats(*this, now, director->busy(true), director->busy(false),
+                                              concurrentGcThreadCount);
     if (!MapleRuntime::start_gc(*this, stats)) {
         adjust_gc(*this, stats);
     }
