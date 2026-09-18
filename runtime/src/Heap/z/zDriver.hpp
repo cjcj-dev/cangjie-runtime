@@ -16,7 +16,7 @@
 
 #include "Base/Macros.h"
 #include "Heap/z/zStat.hpp"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include <condition_variable>
 #include <cstdint>
 #include <list>

@@ -25,7 +25,6 @@ set(SRC_LIST
     "../z/zMarkStack.cpp"
     "../z/zMarkingSMR.cpp"
     "../z/zMarkCache.cpp"
-    "FinalizerProcessor.cpp"
     "../z/zReferenceProcessor.cpp"
     "StringDedup.cpp"
     "../z/zUncommitter.cpp"

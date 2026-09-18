@@ -23,7 +23,7 @@
 #endif
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/Concurrency.h"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "LoaderManager.h"
 #include "LogManager.h"

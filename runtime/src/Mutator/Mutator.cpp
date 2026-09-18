@@ -16,7 +16,7 @@
 #include "Collector/CopyCollector.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "ObjectModel/RefField.inline.h"

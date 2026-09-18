@@ -9,7 +9,7 @@
 #include "BaseObject.h"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"

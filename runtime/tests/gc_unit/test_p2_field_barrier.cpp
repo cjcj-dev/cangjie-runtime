@@ -8,7 +8,7 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/WCollector/WCollector.h"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "Heap/z/zMarkPartialArray.hpp"

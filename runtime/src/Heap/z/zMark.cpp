@@ -51,7 +51,7 @@
 #include "Mutator/MutatorManager.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/Handshake.h"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
