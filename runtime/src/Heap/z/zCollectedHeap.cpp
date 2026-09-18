@@ -41,9 +41,12 @@ ZCollectedHeap::ZCollectedHeap()
       _driver_major(nullptr),
       _director(nullptr),
       _stat(nullptr),
-      _runtime_workers()
+      _runtime_workers(),
+      _resources(new CollectorResources())
 {
 }
+
+ZCollectedHeap::~ZCollectedHeap() { delete _resources; }
 
 void HeapGcState::MarkObjectIfActive(BaseObject* object) const
 {

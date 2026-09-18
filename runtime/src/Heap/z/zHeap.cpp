@@ -105,7 +105,6 @@ Heap::Heap()
     _page_allocator.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
-    collectorResources = new CollectorResources();
     collectorImpl = new HeapGcState();
 }
 
@@ -115,8 +114,6 @@ Heap::~Heap()
         delete collectorImpl;
         collectorImpl = nullptr;
     }
-    delete collectorResources;
-    collectorResources = nullptr;
     delete exportRootsTable;
     exportRootsTable = nullptr;
     delete staticRootTable;
@@ -160,13 +157,13 @@ void Heap::Init(const HeapParam& param)
     if (old().Workers() == nullptr) {
         old().InitializeWorkers(1);
     }
-    collectorResources->Init();
+    GetCollectorResources().Init();
     _initialized = true;
 }
 
 void Heap::Fini()
 {
-    collectorResources->Fini();
+    GetCollectorResources().Fini();
     young().StopWorkers();
     old().StopWorkers();
     collectorImpl->Fini();
@@ -236,7 +233,7 @@ bool Heap::IsSurvivedObject(const BaseObject* obj) const
     return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
 }
 
-bool Heap::IsGcStarted() const { return collectorResources->IsGcStarted(); }
+bool Heap::IsGcStarted() const { return ZCollectedHeap::heap()->resources().IsGcStarted(); }
 
 bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }
 
@@ -375,9 +372,9 @@ ssize_t Heap::GetHeapPhysicalMemorySize() const
 }
 #endif
 
-FinalizerProcessor& Heap::GetFinalizerProcessor() { return collectorResources->GetFinalizerProcessor(); }
+FinalizerProcessor& Heap::GetFinalizerProcessor() { return GetCollectorResources().GetFinalizerProcessor(); }
 
-CollectorResources& Heap::GetCollectorResources() { return *collectorResources; }
+CollectorResources& Heap::GetCollectorResources() { return ZCollectedHeap::heap()->resources(); }
 
 void Heap::StopGCWork() { ZCollectedHeap::stop(); }
 

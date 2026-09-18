@@ -14,6 +14,7 @@
 namespace MapleRuntime {
 enum class Generation : uint8_t;
 class HeapGcState;
+class CollectorResources;
 class ZDirector;
 class ZDriverMajor;
 class ZDriverMinor;
@@ -28,7 +29,10 @@ class ZCollectedHeap {
 public:
     static ZCollectedHeap* heap();
     ZCollectedHeap();
+    ~ZCollectedHeap();
     static void stop();
+    CollectorResources& resources() { return *_resources; }
+    const CollectorResources& resources() const { return *_resources; }
 
     Heap& collected_heap() { return _heap; }
     const Heap& collected_heap() const { return _heap; }
@@ -46,6 +50,7 @@ private:
     ZDirector* _director;
     ZStat* _stat;
     ZRuntimeWorkers _runtime_workers;
+    CollectorResources* _resources;
 };
 } // namespace MapleRuntime
 

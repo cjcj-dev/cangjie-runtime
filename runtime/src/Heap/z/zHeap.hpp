@@ -274,7 +274,6 @@ private:
     ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;
-    CollectorResources* collectorResources { nullptr };
     HeapGcState* collectorImpl { nullptr };
     ExportRootTable* exportRootsTable { nullptr };
     StaticRootTable* staticRootTable { nullptr };
