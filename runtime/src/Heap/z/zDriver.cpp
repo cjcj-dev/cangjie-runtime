@@ -38,6 +38,8 @@
 namespace MapleRuntime {
 std::mutex ZDriver::driverLock;
 
+static bool ShouldPrecleanYoung(GCReason reason);
+
 void ZDriver::lock() { driverLock.lock(); }
 
 void ZDriver::unlock() { driverLock.unlock(); }
@@ -510,7 +512,7 @@ void ZDriver::RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungT
     RunCollection(collector, index, GC_REASON_YOUNG, warmup);
 }
 
-bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
+static bool ShouldPrecleanYoung(GCReason reason)
 {
     // ZGC zDriver.cpp:270-299: explicit full collections, including breakpoints.
     switch (reason) {

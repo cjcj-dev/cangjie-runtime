@@ -447,7 +447,6 @@ private:
 
     void StartGCThreads();
     void StopGCThreads();
-    bool ShouldPrecleanYoung(GCReason reason) const;
 
     // Notify the GC thread to start GC, and doesn't wait.
     // Called by mutator.
