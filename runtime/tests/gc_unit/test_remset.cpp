@@ -77,7 +77,9 @@ struct RemsetRearmTestAccess {
         // linked product barrier can call ZGeneration::mark_object (:118-122).
         if (Heap::GetHeap().young().Workers() == nullptr) {
             Heap::GetHeap().young().InitializeWorkers(1);
-            collector.StartYoungMarkWork();
+            Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+            Heap::GetHeap().young().Mark().Start();
+            MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
             Heap::GetHeap().young().Begin(0);
         }
         Heap::GetHeap().young().PublishPhase(ZGenerationPhase::Mark);

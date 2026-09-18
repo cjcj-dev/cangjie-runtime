@@ -30,7 +30,6 @@ std::function<void()> HeapGcState::testYoungMarkStarted;
 std::function<void()> HeapGcState::testOldMarkStarted;
 std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> HeapGcState::testMarkStartState;
 std::function<void()> HeapGcState::testYoungMarkCompleted;
-std::function<void(const ExportOwnershipTestObservation&)> HeapGcState::testExportOwnershipResult;
 std::function<void(Mutator&)> HeapGcState::testOldMarkThreadResult;
 #endif
 

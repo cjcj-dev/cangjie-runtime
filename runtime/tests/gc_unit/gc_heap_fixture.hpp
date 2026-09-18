@@ -364,8 +364,8 @@ for (Generation generation : {Generation::Young, Generation::Old}) {
         auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
         if (space.GetMaxCapacity() == 0) {
             constexpr size_t kFdmUnits = 64;
-            space.reservedStart = heapStart;
-            space.reservedEnd = heapStart + kFdmUnits * ZPage::UNIT_SIZE;
+            Heap::GetHeap().page_allocator().reservedStart = heapStart;
+            Heap::GetHeap().page_allocator().reservedEnd = heapStart + kFdmUnits * ZPage::UNIT_SIZE;
         }
         ready = true;
     }

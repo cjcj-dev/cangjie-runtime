@@ -31,12 +31,15 @@ struct MarkPublicationFixture {
         // ZGenerationYoung::mark_start advances the sequence with the remset
         // flip (zGeneration.cpp:855-881), before mark work can be published.
         GenerationSequenceFixture::AdvanceYoung(young);
-        collector.StartYoungMarkWork();
+        Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+        Heap::GetHeap().young().Mark().Start();
+        MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
         young.PublishPhase(ZGenerationPhase::Mark);
         old.SelectReason(GC_REASON_USER);
         old.Begin(2);
         GenerationSequenceFixture::Advance(old);
-        collector.StartOldMarkWork();
+        Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+        Heap::GetHeap().old().Mark().Start();
         old.PublishPhase(ZGenerationPhase::Mark);
     }
     ~MarkPublicationFixture()

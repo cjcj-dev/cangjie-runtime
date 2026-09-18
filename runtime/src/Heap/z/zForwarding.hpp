@@ -27,10 +27,10 @@
 #include <vector>
 
 #include "Heap/z/zForwardingEntry.hpp"
+#include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zForwardingAllocator.hpp"
 #include "Heap/z/zAttachedArray.hpp"
 
-#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 
 namespace MapleRuntime {
@@ -250,11 +250,7 @@ public:
         accept,
     };
 
-    static uint32_t young_seqnum()
-    {
-        return static_cast<uint32_t>(
-            Heap::GetHeap().young().Snapshot().sequence);
-    }
+    static uint32_t young_seqnum();
 
     static bool young_marking()
     {

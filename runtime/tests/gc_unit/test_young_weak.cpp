@@ -17,6 +17,7 @@
 #include "CjScheduler.h"
 
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zCrossVM.hpp"
 #include "gc_unittest.hpp"
 
 #include "Concurrency/Concurrency.h"
@@ -107,7 +108,8 @@ struct RelocationReceiptTestAccess {
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_USER);
         if (!cycle.Snapshot().active) cycle.Begin(1);
-        collector.StartOldMarkWork();
+        Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+        Heap::GetHeap().old().Mark().Start();
 
         auto& old = Heap::GetHeap().old();
         old.concurrent_mark();
@@ -131,65 +133,65 @@ struct RelocationReceiptTestAccess {
     static void SeedValueRoots(HeapGcState& collector, BaseObject* value)
     {
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            collector.resurrectedExportObjectes.clear();
-            collector.resurrectedExportObjectesForwardPhase.clear();
-            collector.resurrectedExportObjectes.insert(value);
-            collector.resurrectedExportObjectesForwardPhase.insert(value);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.clear();
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.clear();
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.insert(value);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.insert(value);
         }
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.clear();
-        collector.discoveredExternObjects.clear();
-        collector.cycleRefWorkStack[value].push_back(value);
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        Heap::GetHeap().cross_vm().cycleRefWorkStack.clear();
+        Heap::GetHeap().cross_vm().discoveredExternObjects.clear();
+        Heap::GetHeap().cross_vm().cycleRefWorkStack[value].push_back(value);
     }
 
     static bool AllValueRootsEqual(HeapGcState& collector, BaseObject* value)
     {
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            if (collector.resurrectedExportObjectes.size() != 1 ||
-                collector.resurrectedExportObjectes.count(value) != 1 ||
-                collector.resurrectedExportObjectesForwardPhase.size() != 1 ||
-                collector.resurrectedExportObjectesForwardPhase.count(value) != 1) {
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            if (Heap::GetHeap().cross_vm().resurrectedExportObjectes.size() != 1 ||
+                Heap::GetHeap().cross_vm().resurrectedExportObjectes.count(value) != 1 ||
+                Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.size() != 1 ||
+                Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.count(value) != 1) {
                 return false;
             }
         }
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        auto it = collector.cycleRefWorkStack.find(value);
-        return collector.cycleRefWorkStack.size() == 1 && it != collector.cycleRefWorkStack.end() &&
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        auto it = Heap::GetHeap().cross_vm().cycleRefWorkStack.find(value);
+        return Heap::GetHeap().cross_vm().cycleRefWorkStack.size() == 1 && it != Heap::GetHeap().cross_vm().cycleRefWorkStack.end() &&
             it->second.size() == 1 && it->second.front() == value;
     }
 
     static bool CycleHandoffEquals(HeapGcState& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
     {
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        auto it = collector.cycleRefWorkStack.find(key);
-        return collector.discoveredExternObjects.empty() && collector.cycleRefWorkStack.size() == owners &&
-            it != collector.cycleRefWorkStack.end() && it->second.size() == 1 && it->second.front() == value;
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        auto it = Heap::GetHeap().cross_vm().cycleRefWorkStack.find(key);
+        return Heap::GetHeap().cross_vm().discoveredExternObjects.empty() && Heap::GetHeap().cross_vm().cycleRefWorkStack.size() == owners &&
+            it != Heap::GetHeap().cross_vm().cycleRefWorkStack.end() && it->second.size() == 1 && it->second.front() == value;
     }
 
     static bool DiscoveredCarrierEquals(HeapGcState& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
     {
-        std::lock_guard<std::mutex> lock(collector.externMtx);
-        auto it = collector.discoveredExternObjects.find(key);
-        return collector.discoveredExternObjects.size() == owners &&
-            it != collector.discoveredExternObjects.end() && it->second.size() == 1 &&
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().externMtx);
+        auto it = Heap::GetHeap().cross_vm().discoveredExternObjects.find(key);
+        return Heap::GetHeap().cross_vm().discoveredExternObjects.size() == owners &&
+            it != Heap::GetHeap().cross_vm().discoveredExternObjects.end() && it->second.size() == 1 &&
             it->second.front() == value;
     }
 
     static bool MinorFinishedValueRootsEqual(HeapGcState& collector, BaseObject* value)
     {
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            if (collector.resurrectedExportObjectes.size() != 1 ||
-                collector.resurrectedExportObjectes.count(value) != 1 ||
-                !collector.resurrectedExportObjectesForwardPhase.empty()) {
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            if (Heap::GetHeap().cross_vm().resurrectedExportObjectes.size() != 1 ||
+                Heap::GetHeap().cross_vm().resurrectedExportObjectes.count(value) != 1 ||
+                !Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.empty()) {
                 return false;
             }
         }
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        auto it = collector.cycleRefWorkStack.find(value);
-        return collector.cycleRefWorkStack.size() == 1 && it != collector.cycleRefWorkStack.end() &&
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        auto it = Heap::GetHeap().cross_vm().cycleRefWorkStack.find(value);
+        return Heap::GetHeap().cross_vm().cycleRefWorkStack.size() == 1 && it != Heap::GetHeap().cross_vm().cycleRefWorkStack.end() &&
             it->second.size() == 1 && it->second.front() == value;
     }
 
@@ -846,7 +848,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
         // Pin the fixture objects while the real driver completes relocation.
         space.GetRegionManager().AddRawPointerObject(graph.root);
         if (secondRoot != nullptr) space.GetRegionManager().AddRawPointerObject(secondRoot);
-        HeapGcState::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
+        ZCrossVM::testExportOwnershipResult = [&](const ExportOwnershipTestObservation& observed) {
             const auto paired = [&](const std::vector<ExportOwnershipTestObservation::Edge>& edges) {
                 return edges.size() == owners &&
                     std::count(edges.begin(), edges.end(), std::make_pair(graph.root, graph.foreign)) == 1 &&
@@ -876,7 +878,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
             }
         };
         RelocationReceiptTestAccess::RunMajorCollection(collector);
-        HeapGcState::testExportOwnershipResult = nullptr;
+        ZCrossVM::testExportOwnershipResult = nullptr;
         driverCompleted = !Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).active;
     } else {
         RelocationReceiptTestAccess::RunExportMajorMark(collector);

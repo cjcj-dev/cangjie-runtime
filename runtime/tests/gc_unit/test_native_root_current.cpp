@@ -67,7 +67,8 @@ struct RelocationReceiptTestAccess {
         // the old mark-start sequence advance before consuming the new page
         // (ZGC zGeneration.cpp:1212-1237).
         GcUnit::GcHeapFixture::AdvanceGeneration(Generation::Old);
-        collector.StartOldMarkWork();
+        Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+        Heap::GetHeap().old().Mark().Start();
         auto& old = Heap::GetHeap().old();
         old.concurrent_mark();
         while (!old.pause_mark_end()) old.concurrent_mark_continue();
@@ -278,7 +279,8 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
         }
     };
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
-    collector.StartOldMarkWork();
+    Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+    Heap::GetHeap().old().Mark().Start();
     RelocationReceiptTestAccess::RunOldRoots(collector);
     collector.testOldMarkThreadResult = nullptr;
 
@@ -320,7 +322,9 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     fx.region0->reset(PageAge::eden);
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
-    collector.StartYoungMarkWork();
+    Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+    Heap::GetHeap().young().Mark().Start();
+    MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
     NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));

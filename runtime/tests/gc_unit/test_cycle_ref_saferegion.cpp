@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zCrossVM.hpp"
 
 #include "Base/SysCall.h"
 #include "Common/Runtime.h"
@@ -47,16 +48,16 @@ struct RelocationReceiptTestAccess {
     }
     static void AddCycleRoot(HeapGcState& collector, BaseObject* owner, BaseObject* target)
     {
-        collector.cycleRefWorkStack[owner].push_back(target);
+        Heap::GetHeap().cross_vm().cycleRefWorkStack[owner].push_back(target);
     }
-    static void ClearCycleRoots(HeapGcState& collector) { collector.cycleRefWorkStack.clear(); }
+    static void ClearCycleRoots(HeapGcState& collector) { Heap::GetHeap().cross_vm().cycleRefWorkStack.clear(); }
     static void VisitCycleRoots(HeapGcState& collector, const std::function<void(BaseObject*)>& visitor)
     {
-        collector.VisitSurrectedExportRoots(visitor);
+        Heap::GetHeap().cross_vm().VisitSurrectedExportRoots(visitor);
     }
     static void VisitMinorRoots(HeapGcState& collector, const std::function<void(BaseObject*)>& visitor)
     {
-        collector.VisitMinorValueRoots(visitor);
+        Heap::GetHeap().cross_vm().VisitMinorValueRoots(visitor);
     }
 };
 } // namespace MapleRuntime
@@ -147,7 +148,7 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
     std::atomic<bool> resolverReturned{ false };
     std::thread resolver([&] {
         ThreadLocal::SetMutator(&resolverMutator);
-        collector.ResolveCycleRef();
+        Heap::GetHeap().cross_vm().ResolveCycleRef();
         resolverReturned.store(true, std::memory_order_release);
         ThreadLocal::SetMutator(nullptr);
     });
@@ -256,14 +257,14 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
 
     HandlerSafepointContext context;
     handlerSafepointContext = &context;
-    collector.SetCycleRefHandlerForTest(&SafepointingCycleRefHandler);
+    Heap::GetHeap().cross_vm().SetCycleRefHandlerForTest(&SafepointingCycleRefHandler);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     manager.SetSuspensionMutatorCount(1);
 
     std::atomic<bool> resolverReturned{ false };
     std::thread resolver([&] {
         ThreadLocal::SetMutator(&resolverMutator);
-        collector.ResolveCycleRef();
+        Heap::GetHeap().cross_vm().ResolveCycleRef();
         resolverReturned.store(true, std::memory_order_release);
         ThreadLocal::SetMutator(nullptr);
     });
@@ -315,7 +316,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
                  context.returned.load(std::memory_order_acquire),
                  resolverReturned.load(std::memory_order_acquire), roots.empty());
 
-    collector.SetCycleRefHandlerForTest(nullptr);
+    Heap::GetHeap().cross_vm().SetCycleRefHandlerForTest(nullptr);
     RelocationReceiptTestAccess::ClearCycleRoots(collector);
     handlerSafepointContext = nullptr;
     Heap::GetHeap().RemoveExportObject(exportHandle);
@@ -355,18 +356,18 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     PhaseFlipContext context;
     context.collector = &collector;
     phaseFlipContext = &context;
-    collector.SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
+    Heap::GetHeap().cross_vm().SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     ThreadLocal::SetMutator(&resolverMutator);
 
-    collector.ResolveCycleRef();
+    Heap::GetHeap().cross_vm().ResolveCycleRef();
     const size_t callsBeforeResume = context.calls.load(std::memory_order_acquire);
     const auto phaseBeforeResume = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
 
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    collector.ResolveCycleRef();
+    Heap::GetHeap().cross_vm().ResolveCycleRef();
     const size_t callsAfterResume = context.calls.load(std::memory_order_acquire);
-    collector.ResolveCycleRef();
+    Heap::GetHeap().cross_vm().ResolveCycleRef();
     const size_t callsAfterDrain = context.calls.load(std::memory_order_acquire);
 
     std::fprintf(stderr,
@@ -375,7 +376,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
                  static_cast<unsigned>(phaseBeforeResume));
 
     ThreadLocal::SetMutator(nullptr);
-    collector.SetCycleRefHandlerForTest(nullptr);
+    Heap::GetHeap().cross_vm().SetCycleRefHandlerForTest(nullptr);
     phaseFlipContext = nullptr;
     RelocationReceiptTestAccess::ClearCycleRoots(collector);
     Heap::GetHeap().RemoveExportObject(exportHandle);

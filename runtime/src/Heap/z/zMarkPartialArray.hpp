@@ -28,7 +28,7 @@ class BaseObject;
 // and the constants at reference/jdk/src/hotspot/share/gc/z/zGlobals.hpp:82-84.
 //
 // Why: without this split, one large array is traced start-to-end by a
-// single worker after TraceObjectRefFields returns.
+// single worker instead of publishing continuations.
 // ZGC splits the array and pushes the remainder back onto the mark stack,
 // which makes the tail stealable by the other mark workers.
 //

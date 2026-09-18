@@ -167,7 +167,7 @@ void RegionManager::UndoSharedPage(ZPage* page)
 uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
 {
     CHECK(untype(age) < kPageAgeCount);
-    RegionManager& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    RegionManager& manager = Heap::GetHeap().page_allocator();
     PerAge& allocator = *this->allocator(age);
     if (size > ZObjectSizeLimitSmall) {
         if (ZPageSizeMediumEnabled && size <= ZObjectSizeLimitMedium) {
@@ -340,18 +340,18 @@ namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
     if (UNLIKELY(allocType == AllocType::PINNED_OBJECT)) {
-        return regionManager.AllocPinned(allocSize);
+        return GetRegionManager().AllocPinned(allocSize);
     }
     if (allocSize > ZObjectSizeLimitSmall) {
         return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden);
     }
-    if (UNLIKELY(allocSize >= regionManager.GetLargeObjectThreshold())) {
-        return regionManager.AllocLarge(
+    if (UNLIKELY(allocSize >= GetRegionManager().GetLargeObjectThreshold())) {
+        return GetRegionManager().AllocLarge(
             allocSize, allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
     }
     CHECK_DETAIL(allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR,
                  "segmented-clear allocation must be a large object: size=%zu threshold=%zu",
-                 allocSize, regionManager.GetLargeObjectThreshold());
+                 allocSize, GetRegionManager().GetLargeObjectThreshold());
     AllocBuffer* allocBuffer = AllocBuffer::GetOrCreateAllocBuffer();
     return allocBuffer->Allocate(allocSize, allocType);
 }
@@ -369,7 +369,7 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
         }
         // Page allocation owns the request through stall and consumption.
         // Reaching this point means that request failed, not a retry promise.
-        regionManager.DumpRegionStats("region statistics when gc ends");
+        GetRegionManager().DumpRegionStats("region statistics when gc ends");
         VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
         LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
         ExceptionManager::OutOfMemory();

@@ -13,7 +13,6 @@
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zVirtualMemory.inline.hpp"
-#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zRememberedSet.inline.hpp"
 
 namespace MapleRuntime {
@@ -40,15 +39,7 @@ inline const ZLiveMap& ZPage::livemap() const
     return _livemap;
 }
 
-inline ZForwarding* ZPage::GetFromPageCarrier() const
-    {
-        const MAddress start = GetRegionStart();
-        if (start == 0) {
-            return nullptr;
-        }
-        ZForwarding* carrier = Heap::GetHeap().GetZGeneration(GetOwnerGeneration()).forwarding_table().get(start);
-        return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
-    }
+
 
 inline bool ZPage::HasFromPageMetadata() const
     {
@@ -637,19 +628,7 @@ inline void ZPage::WaitCopiedBeforePayloadWipe(ZPage* region, const char* site)
         ZForwarding::WaitPageDone(forwarding_for_page(region));
     }
 
-inline void ZPage::ClearUnits(size_t idx, size_t cnt)
-    {
-        uintptr_t unitAddress = ZPage::GetUnitAddress(idx);
-        size_t size = cnt * ZPage::UNIT_SIZE;
-        CHECK(ContainsUnitRange(unitAddress, size));
-        ZPage* wipeRegion = Heap::page(unitAddress);
-        WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
 
-        DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
-             unitAddress + size);
-
-        MapleRuntime::MemorySet(unitAddress, size, 0, size);
-    }
 
 inline bool ZPage::IsEmpty() const
     {

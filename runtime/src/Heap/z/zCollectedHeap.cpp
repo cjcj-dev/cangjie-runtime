@@ -236,7 +236,6 @@ namespace {
 // zc7fix: is_mark_good fast path may admit plain non-heap slots (g_cjMarkBadMask all-zero on
 // uncoloured non-null). Count rejects before IsValidObject/IsMarkedObject.
 
-std::atomic<uint64_t> g_neverInstalledEvent{ 0 };
 
 HandVerdict ClassifyRawHeader(uint64_t header)
 {
@@ -263,44 +262,6 @@ const char* ToAnswerName(int)
 {
     return "table";
 }
-
-class BoundedDiagnosticBuffer {
-public:
-    BoundedDiagnosticBuffer(char* storage, size_t capacity) : data(storage), cap(capacity)
-    {
-        if (cap != 0) {
-            data[0] = '\0';
-        }
-    }
-
-    void Append(const char* format, ...)
-    {
-        if (truncated || used >= cap) {
-            truncated = true;
-            return;
-        }
-        va_list args;
-        va_start(args, format);
-        const int n = std::vsnprintf(data + used, cap - used, format, args);
-        va_end(args);
-        if (n < 0 || static_cast<size_t>(n) >= cap - used) {
-            used = cap == 0 ? 0 : cap - 1;
-            truncated = true;
-            return;
-        }
-        used += static_cast<size_t>(n);
-    }
-
-    bool Truncated() const { return truncated; }
-
-private:
-    char* data;
-    size_t cap;
-    size_t used{ 0 };
-    bool truncated{ false };
-};
-
-
 
 } // namespace
 
@@ -356,70 +317,6 @@ HandVerdict HeapGcState::JudgeHandOutTarget(BaseObject* target)
     return ClassifyRawHeader(hdr);
 }
 
-uint64_t HeapGcState::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
-                                                 MAddress witnessStart, uint64_t witnessEpoch,
-                                                 uint64_t witnessLife, bool witnessValid)
-{
-    const uint64_t event = g_neverInstalledEvent.fetch_add(1, std::memory_order_relaxed) + 1;
-    const MAddress address = target == nullptr ? 0 : reinterpret_cast<MAddress>(target);
-    const uint64_t rawHeader = (target != nullptr && Heap::IsHeapAddress(target))
-        ? __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED)
-        : 0;
-    const HandVerdict verdict = ClassifyRawHeader(rawHeader);
-    (void)address;
-
-    ZPage* region = (target != nullptr && Heap::IsHeapAddress(target))
-        ? Heap::page(address)
-        : nullptr;
-    const MAddress regionStart = region == nullptr ? 0 : region->GetRegionStart();
-    const unsigned regionType = region == nullptr ? 0xffu : static_cast<unsigned>(0u);
-    const unsigned generation = region == nullptr ? 0xffu : static_cast<unsigned>(region->generation_id());
-    const uint64_t currentEpoch = region == nullptr ? 0 : region->GetSnapshotEpoch();
-    const RegionLifeId currentLife = region == nullptr ? 0 : region->GetRegionLifeId();
-    const bool sameWitnessIncarnation = witnessValid && region != nullptr && witnessStart == regionStart &&
-        witnessLife != 0 && witnessLife == currentLife;
-    char witnessEpochDelta[48];
-    if (sameWitnessIncarnation) {
-        (void)std::snprintf(witnessEpochDelta, sizeof(witnessEpochDelta), "%lld",
-                            static_cast<long long>(static_cast<int64_t>(currentEpoch) -
-                                                   static_cast<int64_t>(witnessEpoch)));
-    } else {
-        (void)std::snprintf(witnessEpochDelta, sizeof(witnessEpochDelta), "%s",
-                            witnessValid && region != nullptr && witnessLife != 0
-                                ? "n/a(reused)" : "n/a(no-incarnation)");
-    }
-    char carriers[6144];
-    BoundedDiagnosticBuffer carrierText(carriers, sizeof(carriers));
-    carrierText.Append("[]");
-
-    char receipts[2048];
-    BoundedDiagnosticBuffer receiptText(receipts, sizeof(receipts));
-    receiptText.Append("[]");
-
-    std::fprintf(
-        stderr,
-        "[FINDTO][never-installed] never_installed_event=%llu target=%p raw_slot_bits=%#zx raw_target_header=%#llx "
-        "hand_verdict=%s current_region_start=%#zx current_region_type=%u current_generation=%u "
-        "current_page_epoch=%llu current_lifeId=%llu witness_start=%#zx witness_from_page_epoch=%llu "
-        "witness_lifeId=%llu witness_epoch_delta="
-        "%s covering_total=%zu covering_emitted=%zu "
-        "carrier_overflow=%u carriers=%s reverse_total=%zu reverse_emitted=%zu reverse_overflow=%u "
-        "reverse_receipts=%s scan_overflow=%u format_overflow=%u historical_writer=unknown "
-        "historical_slot_colour=unknown current_writer_role=consumer\n",
-        static_cast<unsigned long long>(event), static_cast<void*>(target),
-        static_cast<size_t>(rawSlotBits), static_cast<unsigned long long>(rawHeader),
-        HandVerdictName(verdict), static_cast<size_t>(regionStart), regionType, generation,
-        static_cast<unsigned long long>(currentEpoch), static_cast<unsigned long long>(currentLife),
-        static_cast<size_t>(witnessStart), static_cast<unsigned long long>(witnessEpoch),
-        static_cast<unsigned long long>(witnessLife),
-        witnessEpochDelta,
-        0zu, 0zu, 0u, carriers,
-        0zu, 0zu, 0u, receipts,
-        0u,
-        (carrierText.Truncated() || receiptText.Truncated()) ? 1u : 0u);
-    (void)std::fflush(stderr);
-    return event;
-}
 
 // loadfc (zBarrier.inline.hpp:327-343): the slow path must produce a verified current version or
 // stop the mutator in a controlled, attributable place -- never hand back a structurally dead
@@ -476,12 +373,4 @@ uint64_t HeapGcState::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t
 
 // Virtual default: this collector type does not implement the method. Always abort;
 // body is out-of-line so HeapGcState.h stays free of FormatLog / string payloads.
-[[noreturn]] void HeapGcState::AbortUnimplemented(const char* method)
-{
-    Logger::GetLogger().FormatLog(RTLOG_FATAL, true,
-                                  "unimplemented virtual %s on this HeapGcState "
-                                  "(base default must not be reached)",
-                                  method != nullptr ? method : "?");
-    std::abort();
-}
 }

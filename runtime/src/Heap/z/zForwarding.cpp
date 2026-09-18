@@ -20,6 +20,11 @@
 #include <vector>
 
 namespace MapleRuntime {
+uint32_t ZForwarding::young_seqnum()
+{
+    return static_cast<uint32_t>(Heap::GetHeap().young().Snapshot().sequence);
+}
+
 
 uint32_t ZForwarding::nentries(const ZPage* page)
 {

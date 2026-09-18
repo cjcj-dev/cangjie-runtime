@@ -59,51 +59,6 @@
 #include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
-bool HeapGcState::MarkObject(BaseObject* obj) const
-{
-    return MarkObjectImpl(obj, false);
-}
-
-bool HeapGcState::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache* liveCache) const
-{
-    (void)youngClaim;
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
-
-    size_t objectSize = obj->GetSize();
-    // ZPage::mark_object (zPage.inline.hpp:284-294) followed by the caller's
-    // inc_live (zMark.cpp:417-425): per worker through the ZMarkCache when one
-    // is supplied, otherwise straight onto the page.
-    bool firstLive = false;
-    bool marked = !region->mark_object(from_object(obj), false, firstLive);
-    if (firstLive) {
-        if (liveCache != nullptr) {
-            liveCache->IncLive(region, objectSize);
-        } else {
-            region->inc_live(1, objectSize);
-        }
-    }
-    if (!marked) {
-        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
-             region, 0u, region->GetRegionStart(), region->live_bytes());
-    }
-    return marked;
-}
-
-bool HeapGcState::ResurrectObject(BaseObject* obj, size_t offset, ZPage* region)
-{
-    (void)offset;
-    // ZPage::mark_object(addr, finalizable = true) + inc_live on the first claim.
-    bool firstLive = false;
-    bool resurrected = !region->mark_object(from_object(obj), true, firstLive);
-    if (firstLive) {
-        region->inc_live(1, obj->GetSize());
-    }
-    if (!resurrected) {
-        DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
-             obj, obj->GetTypeInfo(), obj->GetSize(), region->live_bytes());
-    }
-    return resurrected;
-}
 // RefFieldRoot is root in tagged pointer format.
 void HeapGcState::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 {
@@ -171,148 +126,6 @@ void HeapGcState::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(latest))), true, true, true, false));
 }
 
-void HeapGcState::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const
-{
-    zaddress_unsafe observed = ref.LoadPlain();
-    if (is_null(observed)) {
-        return;
-    }
-
-    // ZUncoloredRoot supplies an address, never a colored HeapSlot word.
-    BaseObject* root = to_object(safe(observed));
-    if (root == nullptr || !Heap::IsHeapAddress(root)) {
-        return;
-    }
-    if (IsGhostFromObject(root)) {
-        const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &ref };
-        BaseObject* to = FindToVersion(root, generation).GetOrFailClosed(
-            "HeapGcState::MarkStackRoots", provenance);
-        if (to != nullptr) {
-            root = to;
-        }
-    }
-    CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-    ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&ref), ZPointerLoadGoodMask);
-    rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(root))), true, true, true, false));
-}
-
-// ZMarkOopClosure::do_oop, zMark.cpp:198-205. The field barrier owns
-// remapping and generation routing; the original colored slot is authoritative.
-void HeapGcState::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack&, bool finalizable) const
-{
-    ZBarrier::MarkBarrierOnOldOopField(obj, field, finalizable);
-}
-
-// Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196): the heap
-// offset is bounded, so the descriptor always fits one entry word.
-void HeapGcState::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable) const
-{
-    workStack.push_back(MarkPartialArray::Encode(addr, length, finalizable));
-}
-
-// zMark.cpp:208-214 (follow_array_elements_small).
-void HeapGcState::FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, size_t length,
-                                          WorkStack& workStack, bool finalizable) const
-{
-    for (size_t i = 0; i < length; ++i) {
-        TraceRefField(holder, addr[i], workStack, finalizable);
-    }
-}
-
-// zMark.cpp:216-255 (follow_array_elements_large), transcribed.
-void HeapGcState::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, size_t length,
-                                          WorkStack& workStack, bool finalizable) const
-{
-    RefField<>* const start = addr;
-    RefField<>* const end = start + length;
-
-    // Calculate the aligned middle start/end/size, where the middle start
-    // should always be greater than the start (hence the +1 below) to make
-    // sure we always do some follow work, not just split the array into pieces.
-    RefField<>* const middleStart = AlignUp(start + 1, MarkPartialArray::MIN_SIZE);
-    const size_t middleLength =
-        AlignDown(static_cast<size_t>(end - middleStart), MarkPartialArray::MIN_LENGTH);
-    RefField<>* const middleEnd = middleStart + middleLength;
-
-    // Push unaligned trailing part
-    if (end > middleEnd) {
-        PushPartialArray(middleEnd, static_cast<size_t>(end - middleEnd), workStack, finalizable);
-    }
-
-    // Push aligned middle part(s)
-    RefField<>* partialAddr = middleEnd;
-    while (partialAddr > middleStart) {
-        const size_t parts = 2;
-        const size_t partialLength = AlignUp(static_cast<size_t>(partialAddr - middleStart) / parts,
-                                             MarkPartialArray::MIN_LENGTH);
-        partialAddr -= partialLength;
-        PushPartialArray(partialAddr, partialLength, workStack, finalizable);
-    }
-
-    // Follow leading part
-    CHECK_DETAIL(start < middleStart, "Miscalculated middle start");
-    FollowArrayElementsSmall(holder, start, static_cast<size_t>(middleStart - start), workStack, finalizable);
-}
-
-// zMark.cpp:257-263 (follow_array_elements).
-void HeapGcState::FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
-                                     WorkStack& workStack, bool finalizable) const
-{
-    MarkPartialArray::FollowElements(reinterpret_cast<MAddress>(addr), length, finalizable,
-        [this, holder, &workStack, finalizable](MAddress slot) {
-            TraceRefField(holder, HeapSlotAt<>(slot), workStack, finalizable);
-        }, [&workStack](const MarkStackEntry& entry) { workStack.push_back(entry); });
-}
-
-// zMark.cpp:265-270 (follow_partial_array).
-void HeapGcState::FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
-{
-    MAddress chunkStart = 0;
-    size_t length = 0;
-    MarkPartialArray::Decode(entry, chunkStart, length);
-    FollowArrayElements(nullptr, &HeapSlotAt<>(chunkStart), length, workStack, entry.finalizable());
-}
-
-void HeapGcState::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable)
-{
-
-    auto visitor = [this, obj, &workStack, finalizable](RefField<>& field) {
-        TraceRefField(obj, field, workStack, finalizable);
-    };
-    TypeInfo* typeInfo = obj->GetTypeInfo();
-    if (!typeInfo->HasRefField()) {
-        return;
-    }
-
-    if (UNLIKELY(typeInfo->IsRawArray())) {
-        MArray* array = reinterpret_cast<MArray*>(obj);
-        MIndex arrayLength = array->GetLength();
-        TypeInfo* componentTypeInfo = array->GetComponentTypeInfo();
-        if (componentTypeInfo->IsStructType()) {
-            GCTib gcTib = componentTypeInfo->GetGCTib();
-            MAddress contentAddr = reinterpret_cast<Uptr>(array) + MArray::GetContentOffset();
-            size_t elementSize = array->GetElementSize();
-            for (MIndex i = 0; i < arrayLength; ++i) {
-                gcTib.ForEachBitmapWord(contentAddr, visitor);
-                contentAddr += elementSize;
-            }
-        } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
-                   componentTypeInfo->IsInterface()) {
-            HeapSlot<>* arrayContent = &HeapSlotAt<>(array->ConvertToCArray());
-            // This is ZGC's objArrayOop case (zMark.cpp:346-369 follow_array_object):
-            // a flat run of reference slots, the only shape it chunks. The struct
-            // -component branch above has no ZGC counterpart and is left alone.
-            FollowArrayElements(obj, arrayContent, arrayLength, workStack, finalizable);
-        } else {
-            LOG(RTLOG_FATAL, "array object %p has wrong component type", array);
-        }
-        return;
-    }
-
-    // zMark.cpp:371-388: non-array following uses the unsafe oop iterator.
-    ZBasicOopIterateClosure<decltype(visitor)> closure(visitor);
-    ZIterator::oop_iterate(obj, &closure);
-}
 
 BaseObject* HeapGcState::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
 {
@@ -348,11 +161,8 @@ BaseObject* HeapGcState::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefF
     return latest;
 }
 
-namespace {
-// gcbadroot: tag which root family is currently being walked so PushYoungObject
-// can attribute invalid headers without threading origin through every visitor.
+// Shared by mark roots and Cangjie foreign-root traversal.
 thread_local const char* gMinorRootOrigin = "unknown";
-} // namespace
 
 void HeapGcState::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                                      uint64_t stackScanEpoch)
@@ -395,32 +205,7 @@ void HeapGcState::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& 
     gMinorRootOrigin = "unknown";
 }
 
-void HeapGcState::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor)
-{
-    {
-        std::lock_guard<std::mutex> lock(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Young);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Young);
-        gMinorRootOrigin = "value_export";
-        for (BaseObject* object : resurrectedExportObjectes) {
-            visitor(object);
-        }
-        gMinorRootOrigin = "value_export_fwd";
-        for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
-            visitor(object);
-        }
-    }
-    std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
-    CurrentizeValueRootMap(cycleRefWorkStack, Generation::Young);
-    gMinorRootOrigin = "value_cycle";
-    for (const auto& entry : cycleRefWorkStack) {
-        visitor(entry.first);
-        for (BaseObject* object : entry.second) {
-            visitor(object);
-        }
-    }
-    gMinorRootOrigin = "unknown";
-}
+
 
 // ZReferenceProcessor::should_discover/discover (zReferenceProcessor.cpp:174-201,
 // 239-250). Native registration owns the original referent slot, rather than a
@@ -534,7 +319,7 @@ void HeapGcState::EnumAllCommonRoots(ZWorkers& workers)
         VisitStrongPlainRoots([&](ObjectRef& root) {
             MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
         }, {});
-        VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
+        Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([&](BaseObject* object) { MarkOldObjectIfActive(object); });
     }, workers.active_workers());
     workers.run(&task);
 }
@@ -597,7 +382,7 @@ void HeapGcState::VisitMinorRoots(const std::function<void(BaseObject*)>& visito
     };
     MarkYoungRootsTask task([&] {
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
-        VisitMinorValueRoots(visitor);
+        Heap::GetHeap().cross_vm().VisitMinorValueRoots(visitor);
         gMinorRootOrigin = "export";
         Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) { visitor(ZBarrier::ReadStaticRef(slot)); });
         gMinorRootOrigin = "unknown";
@@ -762,16 +547,6 @@ private:
     ZMark* const mark;
     const bool partial;
 };
-
-void HeapGcState::StartYoungMarkWork()
-{
-    ZWorkers& workers = GetWorkers(ZGenerationId::young);
-    Heap::GetHeap().young().Mark().BindWorkers(&workers);
-    Heap::GetHeap().young().Mark().Start();
-    MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
-}
-
-
 
 void HeapGcState::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
@@ -1022,15 +797,6 @@ namespace MapleRuntime {
 
 
 namespace MapleRuntime {
-void HeapGcState::StartOldMarkWork()
-{
-    // ZGenerationOld::mark_start -> ZMark::start. Initialize the existing M3
-    // domain before publishing old's mark phase to mutators and young workers.
-    ZWorkers& workers = GetWorkers(ZGenerationId::old);
-    Heap::GetHeap().old().Mark().BindWorkers(&workers);
-    Heap::GetHeap().old().Mark().Start();
-}
-
 void HeapGcState::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
 {
     if (!Heap::IsHeapAddress(object)) {
@@ -1043,83 +809,6 @@ void HeapGcState::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
         cycle.MarkObjectIfActive<false, false, true, false>(from_object(object));
     }
 }
-
-size_t HeapGcState::RunMajorStripeMark(WorkStack& workStack, bool partial)
-{
-    (void)workStack;
-    ZWorkers& workersSet = GetWorkers(ZGenerationId::old);
-    ZMark& domain = Heap::GetHeap().old().Mark();
-    domain.BindWorkers(&workersSet);
-    (void)domain.Stacks().Flush(domain.Stripes(), true);
-    ZMarkTask task(&domain, partial);
-    workersSet.run(&task);
-    if (!partial && !ZAbort::should_abort()) {
-        CHECK_DETAIL(domain.Stripes().IsEmpty(),
-                     "major striped closure returned without coordinated worker termination");
-    }
-    return 0;
-}
-
-
-
-void HeapGcState::ProcessExportRoots(WorkStack& foreignRootsSet)
-{
-    while (!foreignRootsSet.empty()) {
-        if (ZAbort::should_abort()) {
-            return;
-        }
-        const MarkStackEntry entry = foreignRootsSet.back();
-        foreignRootsSet.pop_back();
-        BaseObject* exportObj = to_object(ZOffset::address(to_zoffset(entry.object_address())));
-        if (exportObj == nullptr) {
-            continue;
-        }
-        {
-            std::lock_guard<std::mutex> lock(externMtx);
-            // Multiple export handles may name the same owner.
-            if (!discoveredExternObjects.emplace(exportObj, ValueRootList{}).second) {
-                continue;
-            }
-        }
-        MarkOldObjectIfActive(exportObj, true);
-        WorkStack exportSeed;
-        markedObjectCount.fetch_add(RunMajorStripeMark(exportSeed), std::memory_order_relaxed);
-
-        // ZMark::mark_and_follow (zMark.cpp:412-415) deduplicates GC liveness,
-        // not ownership. Cangjie's foreign-cycle handoff has no JNI equivalent:
-        // every export owner needs its own strong reachable foreign set, even
-        // when the young-roots prelude or another owner already marked it.
-        std::unordered_set<BaseObject*> visited;
-        std::vector<BaseObject*> pending{exportObj};
-        while (!pending.empty()) {
-            BaseObject* object = pending.back();
-            pending.pop_back();
-            if (!visited.insert(object).second) {
-                continue;
-            }
-            if (object->GetTypeInfo()->IsForeignType()) {
-                std::lock_guard<std::mutex> lock(externMtx);
-                discoveredExternObjects[exportObj].push_back(object);
-            }
-            // Discovery is not keep-alive (zReferenceProcessor.cpp:175-203):
-            // do not turn a weak referent into an export ownership edge.
-            object->ForEachRefField([&](RefField<>& field) {
-                BaseObject* target = GetAndTryTagObj(RefSlotKind::STRONG, object, field);
-                if (target != nullptr) {
-                    pending.push_back(target);
-                }
-            });
-        }
-    }
-}
-
-void HeapGcState::FindUselessExternObjects()
-{
-    std::lock_guard<std::mutex> lock(externMtx);
-    CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
-}
-
-
 
 } // namespace MapleRuntime
 
@@ -1147,8 +836,8 @@ void HeapGcState::FindUselessExternObjects()
 
 
 namespace MapleRuntime {
-bool HeapGcState::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
-                                       MarkLiveCache* cache) const
+bool ZMark::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
+                            MarkLiveCache* cache)
 {
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
     CHECK_DETAIL(region->IsRelocatable(), "mark consumer requires a relocatable page");
@@ -1383,7 +1072,6 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
 {
     auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     if (generation == MarkingStacks::MarkingGeneration::YOUNG) {
-        auto& w = static_cast<HeapGcState&>(collector);
         auto visitSlot = [](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
             ZBarrier::MarkBarrierOnYoungOopField(field);
@@ -1415,7 +1103,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         if (!region->IsYoungRegion()) {
             return;
         }
-        const bool wasMarked = w.MarkEntryObject(object, entry, &ctx.Cache());
+        const bool wasMarked = MarkEntryObject(object, entry, &ctx.Cache());
         if (entry.mark() && wasMarked) {
             return;
         }
@@ -1454,7 +1142,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         return;
     }
     BaseObject* obj = to_object(ZOffset::address(to_zoffset(entry.object_address())));
-    const bool wasMarked = collector.MarkEntryObject(obj, entry, &ctx.Cache());
+    const bool wasMarked = MarkEntryObject(obj, entry, &ctx.Cache());
     if ((!entry.mark() || !wasMarked) && entry.follow()) {
         if (!obj->HasRefField()) {
             return;

@@ -389,7 +389,7 @@ union GCTib {
 
     // STACK_ROOTS_STAY_PLAIN: a non-heap destination (static/global storage) is a *root*,
     // not a heap field. StaticRootTable registers those words as RootSlot and
-    // HeapGcState::EnumAndTagRawRoot heals them with StorePlain, so a coloured write there is
+    // Plain root visitors heal them with StorePlain, so a coloured write there is
     // both pointless (the next root enumeration overwrites it plain) and hazardous (relroroot:
     // static slots can sit on RELRO read-only pages where lock cmpxchg faults).
     // Yielding RootSlot makes the coloured spelling not compile: RootSlot has no

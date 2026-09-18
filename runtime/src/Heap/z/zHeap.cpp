@@ -103,7 +103,7 @@ Heap::Heap()
 {
     _heap = this;
     RunType::InitRunTypeMap();
-    _page_allocator.reset(new RegionSpace());
+    _allocation_adapter.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
     collectorImpl.reset(new HeapGcState());
@@ -121,11 +121,11 @@ Heap::~Heap()
 
 
 
-MAddress Heap::Allocate(size_t size, AllocType allocType) { return _page_allocator->Allocate(size, allocType); }
+MAddress Heap::Allocate(size_t size, AllocType allocType) { return _allocation_adapter->Allocate(size, allocType); }
 
 bool Heap::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
 {
-    return _page_allocator->ForEachObj(visitor, safe);
+    return _allocation_adapter->ForEachObj(visitor, safe);
 }
 
 void Heap::Init(const HeapParam& param)
@@ -133,7 +133,7 @@ void Heap::Init(const HeapParam& param)
     ZArguments::initialize();
     ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
-    _page_allocator->Init(param);
+    _page_allocator.Init(param);
     Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
     {
         const auto& heapMap = page_table().map();
@@ -146,7 +146,7 @@ void Heap::Init(const HeapParam& param)
     young().remembered()->bind(
         &page_table(),
         &old().forwarding_table(),
-        &_page_allocator->GetRegionManager());
+        &_page_allocator);
     if (young().Workers() == nullptr) {
         young().InitializeWorkers(1);
     }
@@ -169,7 +169,7 @@ const HeapGcState& Heap::GetCollector() const { return *collectorImpl; }
 
 void Heap::RequestGC(GCReason reason, bool async) { ZCollectedHeap::heap()->collect(reason, async); }
 
-void Heap::ResolveCycleRef() { GetCollector().ResolveCycleRef(); }
+void Heap::ResolveCycleRef() { cross_vm().ResolveCycleRef(); }
 
 void Heap::MarkYoungRootObject(BaseObject* object)
 {
@@ -277,25 +277,28 @@ void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
 
 OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(); }
 
-Allocator& Heap::GetAllocator() { return *_page_allocator; }
+Allocator& Heap::GetAllocator() { return *_allocation_adapter; }
 
-size_t Heap::GetMaxCapacity() const { return _page_allocator->GetMaxCapacity(); }
+size_t Heap::GetMaxCapacity() const { return _page_allocator.GetHeapCapacity(); }
 
 ZMemoryUsageInfo Heap::GetMemoryUsage() const
 {
-    return _page_allocator->GetMemoryUsage();
+    const size_t young = _page_allocator.GetYoungAllocatedSize();
+    const size_t used = _page_allocator.GetUsedRegionSize();
+    const size_t old = used - std::min(used, young);
+    return ComputeMemoryUsageInfo(_page_allocator.GetCommittedCapacity(), GetMaxCapacity(), young, old);
 }
 
 
-size_t Heap::GetCurrentCapacity() const { return _page_allocator->GetCurrentCapacity(); }
+size_t Heap::GetCurrentCapacity() const { return _page_allocator.GetActiveUnitCount() * ZPage::UNIT_SIZE; }
 
-size_t Heap::GetUsedPageSize() const { return _page_allocator->GetUsedPageSize(); }
+size_t Heap::GetUsedPageSize() const { return _page_allocator.GetUsedRegionSize(); }
 
-size_t Heap::GetAllocatedSize() const { return _page_allocator->AllocatedBytes(); }
+size_t Heap::GetAllocatedSize() const { return _page_allocator.GetAllocatedSize(); }
 
-MAddress Heap::GetStartAddress() const { return _page_allocator->GetSpaceStartAddress(); }
+MAddress Heap::GetStartAddress() const { return _page_allocator.GetSpaceStartAddress(); }
 
-MAddress Heap::GetSpaceEndAddress() const { return _page_allocator->GetSpaceEndAddress(); }
+MAddress Heap::GetSpaceEndAddress() const { return _page_allocator.GetSpaceEndAddress(); }
 
 Heap& Heap::GetHeap()
 {
@@ -452,7 +455,7 @@ void Heap::CrossAccessBarrier(I64 id)
     // Preserve that current identity, including an in-place destination whose
     // address is also another object's from-key (ZUncoloredRoot::make_load_good,
     // zUncoloredRoot.inline.hpp:62-69). Page ownership cannot reclassify it.
-    reinterpret_cast<HeapGcState&>(GetCollector()).ResurrectExportObject(recordObj);
+    cross_vm().ResurrectExportObject(recordObj);
     SetExportObjActiveState(id, true);
 }
 
@@ -508,7 +511,7 @@ ZPageTable& Heap::page_table() { return GetHeap()._page_table; }
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age)
 {
-    RegionManager& manager = static_cast<RegionSpace&>(GetHeap().GetAllocator()).GetRegionManager();
+    RegionManager& manager = GetHeap().page_allocator();
     ZPage* page = manager.TakeRegion(num, role, expectPhysicalMem, allowSaferegion, clearPayload, age);
     if (page != nullptr && page_table().get(page->GetRegionStart()) != page) {
         page_table().insert(page);

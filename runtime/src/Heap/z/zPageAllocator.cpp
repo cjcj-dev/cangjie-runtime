@@ -1237,7 +1237,23 @@ void RegionManager::DumpRegionStats(const char* msg) const
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
-void RegionSpace::Init(const HeapParam& vmHeapParam)
+RegionManager::MetadataMapping::~MetadataMapping()
+{
+    if (base != nullptr) {
+        (void)munmap(base, size);
+    }
+}
+
+RegionManager::~RegionManager()
+{
+#if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
+    if (reservedEnd > reservedStart) {
+        Sanitizer::OnHeapDeallocated(reinterpret_cast<void*>(reservedStart), reservedEnd - reservedStart);
+    }
+#endif
+}
+
+void RegionManager::Init(const HeapParam& vmHeapParam)
 {
     size_t heapSize = 0;
     CHECK_DETAIL(CheckedMulSize(vmHeapParam.heapSize, size_t{1024}, heapSize),
@@ -1279,7 +1295,7 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
     MAddress metadataAddress = reinterpret_cast<MAddress>(metadata.base);
     CHECK(IsRepresentableLow48Range(metadataAddress, metadata.size));
-    regionManager.Initialize(unitNum, metadataAddress, *virtualMemory, *physicalMemory, vmHeapParam,
+    Initialize(unitNum, metadataAddress, *virtualMemory, *physicalMemory, vmHeapParam,
                              CangjieRuntime::GetGCParam().garbageThreshold);
 #if defined(MRT_DUMP_ADDRESS)
     VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadataAddress, reservedStart, reservedEnd - reservedStart,
@@ -1292,5 +1308,82 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     Heap::OnHeapCreated(reservedStart, heapReservations);
     Heap::OnHeapExtended(reservedEnd);
 }
+
+
+void RegionManager::AddRawPointerObject(BaseObject* obj)
+    {
+        // Pin needs a plain load-good address. High colour bits ⇒ missing barrier
+        // at the call site (would OOB in GetUnitIdxAt; fail closed here).
+        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
+        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
+        ZPage* region = Heap::page(rawAddr);
+        region->IncRawPointerObjectCount();
+
+        // CSet empty-free (ExemptFromRegions) TryDeletes FROM under the same
+        // list lock (zGeneration.cpp:211-221 register_empty_page). Inc first so
+        // a GC that already claimed GARBAGE still sees rawPtrCnt>0. Retry the
+        // unlisted window between TryDelete and Prepend.
+        for (;;) {
+            if (fromRegionList.TryDeleteRegion(region) ||
+                garbageRegionList.TryDeleteRegion(region)) {
+                ZGeneration* generation = region->IsYoungRegion() ? static_cast<ZGeneration*>(ZGeneration::young())
+                                                                  : static_cast<ZGeneration*>(ZGeneration::old());
+                CHECK(generation == nullptr || !generation->is_phase_relocate());
+                rawPointerPinnedRegionList.PrependRegion(region);
+                break;
+            }
+            if (!region->IsFromRegion() && !region->IsGarbageRegion()) {
+                CHECK(!region->IsLoneFromRegion());
+                break;
+            }
+            std::this_thread::yield();
+        }
+    }
+
+void RegionManager::RemoveRawPointerObject(BaseObject* obj)
+    {
+        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
+        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
+        ZPage* region = Heap::page(rawAddr);
+        region->DecRawPointerObjectCount();
+    }
+
+size_t RegionManager::GetAllocatedSize() const
+    {
+        size_t threadLocalSize = 0;
+        AllocBufferVisitor visitor = [&threadLocalSize](AllocBuffer& regionBuffer) {
+            ZPage* region = regionBuffer.GetRegion();
+            if (UNLIKELY(region == ZPage::NullRegion())) {
+                return;
+            }
+            threadLocalSize += region->GetRegionAllocatedSize();
+        };
+        Heap::GetHeap().GetAllocator().VisitAllocBuffers(visitor);
+        // exclude garbageRegionList for live object set.
+        return fromRegionList.GetAllocatedSize() + unmovableFromRegionList.GetAllocatedSize() +
+            recentFullRegionList.GetAllocatedSize() + oldLargeRegionList.GetAllocatedSize() +
+            recentLargeRegionList.GetAllocatedSize() + oldPinnedRegionList.GetAllocatedSize() +
+            recentPinnedRegionList.GetAllocatedSize() + rawPointerPinnedRegionList.GetAllocatedSize() +
+            largeTraceRegions.GetAllocatedSize() + fullTraceRegions.GetAllocatedSize() +
+            threadLocalSize;
+    }
+
+
+void FreeRegionManager::AddMarkQuarantineUnits(UnitIndex idx, UnitCount num)
+{
+        ScopedEnterSaferegion enterSaferegion(true);
+        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
+        if (UNLIKELY(!markQuarantineTree.MergeInsert(idx, num, true))) {
+            LOG(RTLOG_FATAL, "tid %d: failed to add mark-quarantine units [%u+%u, %u)", GetTid(), idx, num, idx + num);
+        }
+    }
+
+
+void RegionManager::LockRegionListInSaferegion(std::mutex& listMutex)
+    {
+        while (!listMutex.try_lock()) {
+            ScopedEnterSaferegion enterSaferegion(true);
+        }
+    }
 
 }

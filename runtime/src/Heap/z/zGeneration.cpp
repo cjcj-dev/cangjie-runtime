@@ -157,10 +157,6 @@ bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
 // ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
 
 
-void HeapGcState::FlushAllocationRegions()
-{
-    Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
-}
 
 class VM_ZOperation {
 public:
@@ -749,7 +745,7 @@ void ZGenerationYoung::concurrent_relocate()
     // filtering both live-build and Rescan. Unifying on consumed restores
     // fix-domain ⊆ mark/route-domain without widening AdmitForRoute.
     // In non-concurrent FYS, remset consume is scan_and_follow;
-    // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
+    // its holder coverage belongs to the mark scan.
     // Concurrent mark force-admits slots without that proof.
     const bool refFixSlotsCoveredByReachable = false;
     collector.EvacuateYoungRegions(youngReachableVec, youngConsumedSlots,
@@ -769,7 +765,7 @@ void ZGenerationYoung::concurrent_relocate()
 
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungPostEvacFinish);
-        collector.MergeResurrectExportObjects(Generation::Young);
+        Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Young);
     }
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - youngStartNs) / NS_PER_US;
@@ -824,7 +820,7 @@ void ZGenerationOld::process_non_strong_references()
                  "non-strong references require completed old marking");
     {
         MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
-        Heap::GetHeap().GetCollector().FindUselessExternObjects();
+        Heap::GetHeap().cross_vm().FindUselessExternObjects();
     }
     // Finalizable graphs were followed during mark discovery. This phase
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
@@ -848,17 +844,8 @@ void ZGenerationOld::process_non_strong_references()
 #if defined(MRT_TESTABLE_INTERNALS)
     ObserveMarkClosureForTest(nullptr);
 #endif
-    VLOG(REPORT, "mark %zu objects", Heap::GetHeap().GetCollector().markedObjectCount.load(std::memory_order_relaxed));
 }
 
-bool HeapGcState::FlushMarkProducers(ZMark* domain)
-{
-    bool flushed = domain != nullptr ? domain->TryTerminateFlush() : ZMark::FlushAllGenerations();
-    if (domain != nullptr) {
-        flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
-    }
-    return flushed;
-}
 
 } // namespace MapleRuntime
 
@@ -887,97 +874,17 @@ bool HeapGcState::FlushMarkProducers(ZMark* domain)
 
 namespace MapleRuntime {
 
-BaseObject* HeapGcState::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
-                                                      ForwardingStage stage) const
-{
-    if (value == nullptr || !Heap::IsHeapAddress(value)) {
-        return value;
-    }
-    const ForwardingProvenance provenance{
-        ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
-        ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
-    };
-    // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-69)
-    // preserves load-good identity. IncomingNew carries the caller's current
-    // identity; a page owner alone cannot distinguish overlapping from/to keys.
-    if (stage == ForwardingStage::IncomingNew) {
-        return ValidateCurrentValue(value, provenance);
-    }
-    // Stored roots still need remapping using their source page's generation,
-    // which can differ from the generation currently visiting the roots.
-    (void)generation;
-    const auto forwarding = forwarding_for_page(
-        Heap::page(reinterpret_cast<MAddress>(value)));
-    BaseObject* current = value;
-    if (forwarding) {
-        const MAddress target = forwarding->find(reinterpret_cast<MAddress>(value));
-        current = target != 0 ? reinterpret_cast<BaseObject*>(target)
-            : ResolveStoreValue(value, provenance, static_cast<Generation>(forwarding->table_generation()));
-    }
-    CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
-                 "value root resolve requires a heap to-address from=%p current=%p", value, current);
-    CHECK_DETAIL(HeapGcState::JudgeHandOutTarget(current) == HandVerdict::Usable,
-                 "value root resolve requires a usable target from=%p current=%p", value, current);
-    return current;
-}
 
-void HeapGcState::CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const
-{
-    ValueRootSet current;
-    current.reserve(roots.size());
-    for (const ValueRoot& value : roots) {
-        current.insert(ValueRoot(ResolveCurrentValueRoot(value, &roots, generation, value.Stage()),
-                                 ForwardingStage::IncomingNew));
-    }
-    roots.swap(current);
-}
 
-void HeapGcState::CurrentizeValueRootMap(
-    ValueRootMap& roots, Generation generation) const
-{
-    ValueRootMap current;
-    current.reserve(roots.size());
-    for (const auto& entry : roots) {
-        ValueRoot key(ResolveCurrentValueRoot(entry.first, &roots, generation, entry.first.Stage()),
-                      ForwardingStage::IncomingNew);
-        ValueRootList& values = current[key];
-        for (const ValueRoot& value : entry.second) {
-            values.emplace_back(ResolveCurrentValueRoot(value, &roots, generation, value.Stage()),
-                                ForwardingStage::IncomingNew);
-        }
-    }
-    roots.swap(current);
-}
+
+
+
 
 // Registered finalizers are discovered during old root marking and fixed by
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
 
 
-void HeapGcState::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor)
-{
-    {
-        std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Old);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Old);
-        for (BaseObject* obj : resurrectedExportObjectes) {
-            visitor(obj);
-        }
-        for (BaseObject* obj : resurrectedExportObjectesForwardPhase) {
-            visitor(obj);
-        }
-    }
-    std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-    CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
-    auto it = cycleRefWorkStack.begin();
-    while (it != cycleRefWorkStack.end()) {
-        BaseObject* exportObj = it->first;
-        visitor(exportObj);
-        for (auto &externObj : it->second) {
-            visitor(externObj.object);
-        }
-        it++;
-    }
-}
+
 
 } // namespace MapleRuntime
 
@@ -1219,7 +1126,7 @@ bool ZGenerationOld::mark_end()
     }
     // Preserve export ownership discovery after the ordinary root closure,
     // while the mark-end pause excludes new mutator publication.
-    TheCollector().ProcessExportRoots(oldMarkForeignRoots);
+    Heap::GetHeap().cross_vm().ProcessExportRoots(oldMarkForeignRoots);
     // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
     // to the phase owner before verification or publishing mark completion.
     if (ZAbort::should_abort()) {
@@ -1304,7 +1211,6 @@ void ZGenerationOld::concurrent_mark()
 
     {
         MRT_PHASE_TIMER(ZStatPhases::PTraceLiveObjectsUpdateOldPointersInRefFields);
-        TheCollector().markedObjectCount.store(0, std::memory_order_relaxed);
         reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
 #if defined(MRT_TESTABLE_INTERNALS)
         if (HeapGcState::testOldMarkStarted) HeapGcState::testOldMarkStarted();
@@ -1365,15 +1271,11 @@ void ZGenerationOld::concurrent_relocate()
     collector.ForwardFromSpace(ZGenerationId::old);
     reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
         ZGenerationId::old);
-    collector.MergeResurrectExportObjects(Generation::Old);
-    collector.PostResolveCycleTask();
+    Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
+    Heap::GetHeap().cross_vm().PostResolveCycleTask();
     collector.CollectSmallSpace();
 }
 
-void HeapGcState::RunOldCollection()
-{
-    Heap::GetHeap().old().collect();
-}
 }
 
 namespace MapleRuntime {

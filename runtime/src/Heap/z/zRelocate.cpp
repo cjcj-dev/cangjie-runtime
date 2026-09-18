@@ -195,48 +195,8 @@ bool HeapGcState::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObje
     return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
 }
 
-bool HeapGcState::TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
-                                                  const ForwardingProvenance& provenance) const
-{
-    BaseObject* oldRef = nullptr;
-    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
-}
 
-bool HeapGcState::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
-{
-    BaseObject* oldRef = nullptr;
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    return TryUpdateRefFieldImpl<true>(obj, field, oldRef, newRef, provenance);
-}
 // this api untags current pointer as well as old pointer, caller should take care of this.
-bool HeapGcState::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
-{
-    for (;;) {
-        RefField<> oldRef(field);
-        if (!IsLoadBad(oldRef)) {
-            return false;
-        }
-        target = to_object(oldRef.GetTargetObject());
-        const bool isValidTarget = target->IsValidObject();
-        // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
-        CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
-                     &field);
-        // TRUST_STATE_KILL_PLAN Phase 1: API retained, but HeapSlot write-back is current colour
-        // (not plain). Read path no longer calls this; residual callers must not re-install trust.
-        RefField<> newRef = GetAndTryTagRefField(target);
-        if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
-            if (obj != nullptr) {
-                DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-                     &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
-            } else {
-                DLOG(FIX, "untag ref@%p: %#zx -> %#zx", &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
-            }
-            return true;
-        }
-    }
-
-    return false;
-}
 
 void HeapGcState::RemapYoungRoots()
 {
@@ -284,19 +244,9 @@ void HeapGcState::RemapYoungRoots()
 
 
 
-void HeapGcState::PreforwardDiscoveredExternObjects(Generation generation)
-{
-    std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-    CHECK(discoveredExternObjects.empty());
-    CurrentizeValueRootMap(cycleRefWorkStack, generation);
-}
 
-void HeapGcState::PreforwardAllResurrectExportFromObjects(Generation generation)
-{
-    std::lock_guard<std::mutex> lg(resurrectExportMtx);
-    CurrentizeValueRootSet(resurrectedExportObjectes, generation);
-    CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
-}
+
+
 void HeapGcState::StartRelocationTasks(ZGenerationId generation)
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -348,8 +298,8 @@ bool HeapGcState::Preforward()
             }
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         }, {}); },
-        [&] { PreforwardDiscoveredExternObjects(Generation::Old); },
-        [&] { PreforwardAllResurrectExportFromObjects(Generation::Old); }
+        [&] { Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Old); },
+        [&] { Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Old); }
     };
     // zArray.hpp:104 ZArrayParallelIterator: workers claim root families.
     class RootsTask final : public ZTask {
@@ -452,7 +402,8 @@ void EnsureRouteDomainMembership(HeapGcState* collector, BaseObject* obj)
         }
     }
     // Mark the current livemap (post-snapshot: same map as the carrier's when non-null).
-    (void)collector->MarkObject(obj);
+    (void)ZMark::MarkEntryObject(obj,
+        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr);
     // If ghost face was null (snapshot of empty livemap), bind freshly allocated livemap
     // so GetRoute's from-livemap gate opens on the bits we just painted.
     if (isGhost) {
@@ -504,7 +455,8 @@ bool ForceRootRouteDomainWhileForwardable(HeapGcState* collector, BaseObject* ob
     if (region->IsForwardingDone() || region->IsRoutingState()) {
         return region->FromPageLiveMap() != nullptr && region->IsRouteSurvivedObject(offset);
     }
-    (void)collector->MarkObject(obj);
+    (void)ZMark::MarkEntryObject(obj,
+        MarkStackEntry(untype(ZAddress::offset(from_object(obj))), true, true, false, false), nullptr);
     region->BindFromPageLiveMapIfNull();
     ZLiveMap* g0 = region->FromPageLiveMap();
     if (g0 != nullptr && !region->IsRouteSurvivedObject(offset)) {
@@ -792,23 +744,6 @@ void HeapGcState::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 
 }
 
-void HeapGcState::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorld* stw)
-{
-    // secondclass ②: belt-and-braces — refuse null tip before HasRefField.
-    if (object == nullptr || !object->IsValidObject()) {
-        return;
-    }
-    if (!object->HasRefField()) {
-        return;
-    }
-    // eatarm brackets the host so an IOR can be attributed to the object being fixed;
-    // nullgate names the edge inside. Both are gated and neither subsumes the other.
-
-    ZIterator::basic_oop_iterate_safe(object, [this, object, stw](RefField<>& field) {
-        (void)FixMinorEvacuatedSlot(field, nullptr, stw);
-    });
-
-}
 
 void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
                                        const MinorSlotSet& rememberedSlots,
@@ -919,8 +854,8 @@ void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachable
         {
             MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixRootPass1);
             FixMinorRootSlots(liveStw());
-            PreforwardDiscoveredExternObjects(Generation::Young);
-            PreforwardAllResurrectExportFromObjects(Generation::Young);
+            Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
+            Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
         }
 
         // Reset CAS counters for this fix window (positive-control visibility).
@@ -946,8 +881,8 @@ void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachable
             g_minorRefCasFail.store(0, std::memory_order_relaxed);
             g_minorRefCasOk.store(0, std::memory_order_relaxed);
             FixMinorRootSlots(liveStw());
-            PreforwardDiscoveredExternObjects(Generation::Young);
-            PreforwardAllResurrectExportFromObjects(Generation::Young);
+            Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
+            Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
             remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
             {
                 // ZGC immediately scans buffered entries that crossed the young

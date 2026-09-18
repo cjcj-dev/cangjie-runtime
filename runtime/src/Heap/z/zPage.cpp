@@ -397,4 +397,29 @@ bool ZPage::undo_alloc_object_atomic(uintptr_t addr, size_t size)
     const size_t aligned = AlignUp<size_t>(size, object_alignment());
     return UndoAllocObjectAtomic(addr, aligned);
 }
+
+ZForwarding* ZPage::GetFromPageCarrier() const
+    {
+        const MAddress start = GetRegionStart();
+        if (start == 0) {
+            return nullptr;
+        }
+        ZForwarding* carrier = Heap::GetHeap().GetZGeneration(GetOwnerGeneration()).forwarding_table().get(start);
+        return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
+    }
+
+void ZPage::ClearUnits(size_t idx, size_t cnt)
+    {
+        uintptr_t unitAddress = ZPage::GetUnitAddress(idx);
+        size_t size = cnt * ZPage::UNIT_SIZE;
+        CHECK(ContainsUnitRange(unitAddress, size));
+        ZPage* wipeRegion = Heap::page(unitAddress);
+        WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
+
+        DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
+             unitAddress + size);
+
+        MapleRuntime::MemorySet(unitAddress, size, 0, size);
+    }
+
 }

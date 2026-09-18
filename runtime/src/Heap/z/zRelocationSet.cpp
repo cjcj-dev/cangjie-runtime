@@ -62,11 +62,11 @@ void HeapGcState::PostTrace()
     // Complete their owner handoff while that authority is queryable.
     // zGeneration.cpp:1261 mark_end does not reset forwarding.
 #if defined(MRT_TESTABLE_INTERNALS)
-    ObserveExportOwnershipForTest(false);
+    Heap::GetHeap().cross_vm().ObserveExportOwnershipForTest(false);
 #endif
-    PrepareCycleRef();
+    Heap::GetHeap().cross_vm().PrepareCycleRef();
 #if defined(MRT_TESTABLE_INTERNALS)
-    ObserveExportOwnershipForTest(true);
+    Heap::GetHeap().cross_vm().ObserveExportOwnershipForTest(true);
 #endif
     CollectLargeGarbage();
     CollectPinnedGarbage();

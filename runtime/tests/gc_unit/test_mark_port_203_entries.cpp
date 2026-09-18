@@ -3,7 +3,6 @@
 // with Runtime Library Exception.
 
 #include "gc_cycle_sequence_fixture.hpp"
-#include <dlfcn.h>
 #include <memory>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -14,18 +13,8 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
-// Bind the existing product implementation, never instantiate a second copy
-// of the mark claim in the test ELF. The runtime entry arms are separate from
-// these focused accounting checks.
-using ProductMark = bool (*)(const HeapGcState*, BaseObject*, bool, MarkLiveCache*);
-ProductMark CachedMark()
-{
-    auto fn = reinterpret_cast<ProductMark>(dlsym(RTLD_DEFAULT,
-        "_ZNK12MapleRuntime11HeapGcState14MarkObjectImplEPNS_10BaseObjectEbPNS_13MarkLiveCacheE"));
-    GC_EXPECT_TRUE(fn != nullptr);
-    return fn;
-}
-
+// Exercise the product mark-entry page claim and live accounting directly.
+// Runtime entry arms remain separate from these focused accounting checks.
 void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
 {
     GcHeapFixture fx;
@@ -35,15 +24,16 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
         fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
         fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + fx.obj0->GetSize());
     }
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
     const size_t size = fx.obj0->GetSize();
-    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     if (finalizable) {
-        GC_EXPECT_FALSE(collector.ResurrectObject(fx.obj0, offset, fx.region0));
+        GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
     }
     MarkLiveCache cache(1);
-    const bool already = CachedMark()(&collector, fx.obj0, false, &cache);
-    const bool secondAlready = repeat ? CachedMark()(&collector, fx.obj0, false, &cache) : true;
+    const bool already = ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
+    const bool secondAlready = repeat ? ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache) : true;
     cache.Flush();
     const uint64_t bytes = fx.region0->live_bytes();
     const uint32_t objects = fx.region0->live_objects();
@@ -92,7 +82,6 @@ GC_TEST(MarkPort203Entries, LargeFinalizableUpgradeDoesNotAccountTwice)
 GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 {
     GcHeapFixture fx;
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
     // Choose a legal power-of-two shift from actual fixture addresses rather
     // than assuming that mmap placed both pages below one bucket boundary.
     size_t stripes = 1;
@@ -105,8 +94,10 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
     uint64_t evictedBytes = 0;
     {
         MarkLiveCache cache(stripes);
-        (void)CachedMark()(&collector, fx.obj0, false, &cache);
-        (void)CachedMark()(&collector, fx.obj1, false, &cache);
+        (void)ZMark::MarkEntryObject(fx.obj0,
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
+        (void)ZMark::MarkEntryObject(fx.obj1,
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, false, false), &cache);
         evictedObjects = fx.region0->live_objects();
         evictedBytes = fx.region0->live_bytes();
     }
@@ -153,7 +144,8 @@ struct MarkPort203TestAccess {
             // ZGenerationOld::mark_start, zGeneration.cpp:1213-1226.
             ZGlobalsPointers::flip_old_mark_start();
             GenerationSequenceFixture::Advance(old);
-            collector.StartOldMarkWork();
+            Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+            Heap::GetHeap().old().Mark().Start();
         }
         collector.DoGarbageCollection(major ? ZGenerationId::old : ZGenerationId::young);
     }
@@ -333,7 +325,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     } else if (markOnly || duplicateRootOrder != 0) {
         ownsInvisibleBuffer = AllocBuffer::GetAllocBuffer() == nullptr;
         invisibleBuffer = AllocBuffer::GetOrCreateAllocBuffer();
-        collector.StartYoungMarkWork();
+        Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+        Heap::GetHeap().young().Mark().Start();
+        MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
         if (duplicateRootOrder != 0) {
             // Two snapshots of one root use the actual private producers.
             // The TLS stack and GC decide the consumer order.

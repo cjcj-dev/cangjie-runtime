@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zCrossVM.hpp"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
@@ -164,18 +165,18 @@ struct RelocationReceiptTestAccess {
     static BaseObject* ProductRelocateOrRemap(
         HeapGcState& collector, BaseObject* from, ZGenerationId generation)
     {
-        using ProductFn = BaseObject* (*)(const HeapGcState*, BaseObject*, ZGenerationId);
+        using ProductFn = BaseObject* (*)(Heap*, BaseObject*, ZGenerationId);
         void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
         GC_EXPECT_TRUE(handle != nullptr);
         void* symbol = handle == nullptr ? nullptr : dlsym(
             handle,
-            "_ZNK12MapleRuntime11HeapGcState24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE");
+            "_ZN12MapleRuntime4Heap24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE");
         GC_EXPECT_TRUE(symbol != nullptr);
         Dl_info info {};
         GC_EXPECT_TRUE(symbol != nullptr && dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&
                        std::strstr(info.dli_fname, "libcangjie-runtime.so") != nullptr);
         BaseObject* result = symbol == nullptr ? nullptr :
-            reinterpret_cast<ProductFn>(symbol)(&collector, from, generation);
+            reinterpret_cast<ProductFn>(symbol)(&Heap::GetHeap(), from, generation);
         if (handle != nullptr) {
             (void)dlclose(handle);
         }
@@ -199,47 +200,47 @@ struct RelocationReceiptTestAccess {
     static void SeedValueRoots(HeapGcState& collector, BaseObject* value)
     {
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            collector.resurrectedExportObjectes.clear();
-            collector.resurrectedExportObjectesForwardPhase.clear();
-            collector.resurrectedExportObjectes.insert(value);
-            collector.resurrectedExportObjectesForwardPhase.insert(value);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.clear();
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.clear();
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.insert(value);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.insert(value);
         }
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.clear();
-        collector.cycleRefWorkStack[value].push_back(value);
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        Heap::GetHeap().cross_vm().cycleRefWorkStack.clear();
+        Heap::GetHeap().cross_vm().cycleRefWorkStack[value].push_back(value);
     }
 
     static bool AllValueRootCarriersEqual(HeapGcState& collector, BaseObject* value)
     {
         bool resurrected = false;
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            resurrected = collector.resurrectedExportObjectes.size() == 1 &&
-                collector.resurrectedExportObjectes.count(value) == 1 &&
-                collector.resurrectedExportObjectesForwardPhase.size() == 1 &&
-                collector.resurrectedExportObjectesForwardPhase.count(value) == 1;
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            resurrected = Heap::GetHeap().cross_vm().resurrectedExportObjectes.size() == 1 &&
+                Heap::GetHeap().cross_vm().resurrectedExportObjectes.count(value) == 1 &&
+                Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.size() == 1 &&
+                Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.count(value) == 1;
         }
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        auto it = collector.cycleRefWorkStack.find(value);
-        return resurrected && collector.cycleRefWorkStack.size() == 1 &&
-            it != collector.cycleRefWorkStack.end() && it->second.size() == 1 &&
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        auto it = Heap::GetHeap().cross_vm().cycleRefWorkStack.find(value);
+        return resurrected && Heap::GetHeap().cross_vm().cycleRefWorkStack.size() == 1 &&
+            it != Heap::GetHeap().cross_vm().cycleRefWorkStack.end() && it->second.size() == 1 &&
             it->second.front() == value;
     }
 
     static bool BothResurrectionSetsEqual(HeapGcState& collector, BaseObject* value)
     {
-        std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-        return collector.resurrectedExportObjectes.size() == 1 &&
-            collector.resurrectedExportObjectes.count(value) == 1 &&
-            collector.resurrectedExportObjectesForwardPhase.size() == 1 &&
-            collector.resurrectedExportObjectesForwardPhase.count(value) == 1;
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+        return Heap::GetHeap().cross_vm().resurrectedExportObjectes.size() == 1 &&
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.count(value) == 1 &&
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.size() == 1 &&
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.count(value) == 1;
     }
 
     static std::vector<BaseObject*> VisitMinorValueRoots(HeapGcState& collector)
     {
         std::vector<BaseObject*> visited;
-        collector.VisitMinorValueRoots([&visited](BaseObject* value) { visited.push_back(value); });
+        Heap::GetHeap().cross_vm().VisitMinorValueRoots([&visited](BaseObject* value) { visited.push_back(value); });
         return visited;
     }
 
@@ -248,15 +249,15 @@ struct RelocationReceiptTestAccess {
     static std::vector<BaseObject*> EnumMajorValueRoots(HeapGcState& collector)
     {
         std::vector<BaseObject*> visited;
-        collector.VisitSurrectedExportRoots([&](BaseObject* object) { visited.push_back(object); });
+        Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([&](BaseObject* object) { visited.push_back(object); });
         std::reverse(visited.begin(), visited.end());
         return visited;
     }
 
     static void RunLateValueRootRekey(HeapGcState& collector)
     {
-        collector.PreforwardDiscoveredExternObjects(Generation::Old);
-        collector.PreforwardAllResurrectExportFromObjects(Generation::Old);
+        Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Old);
+        Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Old);
     }
 };
 
@@ -299,7 +300,9 @@ struct LoadHealDeliveryTestAccess {
         RelocationReceiptTestAccess::BindCollector(&collector);
         auto& young = Heap::GetHeap().young();
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
-        collector.StartYoungMarkWork();
+        Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+        Heap::GetHeap().young().Mark().Start();
+        MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
         young.PublishPhase(ZGenerationPhase::Mark);
         ZGlobalsPointers::flip_young_mark_start();
         WorkStack workStack = collector.NewWorkStack();
@@ -786,9 +789,9 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
     // Incoming registration receives a current value (ZGC load-good root).
     // The stored-root rekey below independently retains OLD-source coverage.
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    collector.ResurrectExportObject(state.to);
+    Heap::GetHeap().cross_vm().ResurrectExportObject(state.to);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    collector.ResurrectExportObject(state.to);
+    Heap::GetHeap().cross_vm().ResurrectExportObject(state.to);
     const bool insertCurrent =
         RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, state.to);
 
@@ -2384,7 +2387,8 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(2);
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).InitializeWorkers(2);
     // The real major driver prepares the mark engine before entering its body.
-    collector.StartOldMarkWork();
+    Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+    Heap::GetHeap().old().Mark().Start();
     {
         DriverLocker driver;
         ZDriver::RunGarbageCollection(1, GC_REASON_USER);
@@ -2500,7 +2504,8 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     if (!oldCycle.Snapshot().active) oldCycle.Begin(0);
     GenerationSequenceFixture::Advance(oldCycle);
-    collector.StartOldMarkWork();
+    Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+    Heap::GetHeap().old().Mark().Start();
     {
         DriverLocker driver;
         ZDriver::RunGarbageCollection(1, GC_REASON_USER);
@@ -2618,9 +2623,9 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
     GC_EXPECT_TRUE(request.accepted);
     if (rootBeforeCompact) {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-        collector.ResurrectExportObject(second);
+        Heap::GetHeap().cross_vm().ResurrectExportObject(second);
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-        collector.ResurrectExportObject(second);
+        Heap::GetHeap().cross_vm().ResurrectExportObject(second);
         LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     }
     manager.CompactRegion(region);
@@ -2643,9 +2648,9 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
             Heap::GetHeap().CrossAccessBarrier(handle);
             Heap::GetHeap().RemoveExportObject(handle);
         } else {
-            collector.ResurrectExportObject(current);
+            Heap::GetHeap().cross_vm().ResurrectExportObject(current);
             Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-            collector.ResurrectExportObject(current);
+            Heap::GetHeap().cross_vm().ResurrectExportObject(current);
         }
     }
     const bool identity = RelocationReceiptTestAccess::BothResurrectionSetsEqual(

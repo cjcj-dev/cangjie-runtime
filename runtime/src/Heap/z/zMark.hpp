@@ -42,6 +42,7 @@ void VerifyAllEmpty(ZMark& domain);
 #include "Heap/z/zForwardingTable.hpp"
 
 #include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zMarkingSMR.hpp"
@@ -85,6 +86,7 @@ public:
     void FollowWorkComplete(bool partial);
     bool FollowWorkPartial();
     void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);
+    static bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry, MarkLiveCache* cache);
     void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
     bool PollStop();
     MarkStripeSet& Stripes() { return stripes; }
@@ -212,14 +214,7 @@ constexpr int MARK_PREFETCH_DISTANCE = 16; // when it is changed, remember to ch
 // target slot is armed by a test, but the observed word is produced and sampled
 // inside the product remap loop before relocate-start changes the good masks.
 // Read-only copies of the product's ownership carriers at PostTrace's handoff.
-struct ExportOwnershipTestObservation {
-    using Edge = std::pair<BaseObject*, BaseObject*>;
-    bool afterHandoff = false;
-    size_t discoveredOwners = 0;
-    size_t handoffOwners = 0;
-    std::vector<Edge> discovered;
-    std::vector<Edge> handoff;
-};
+
 
 struct RemapYoungRootsTestReceipt {
     uintptr_t targetSlot = 0;
@@ -292,7 +287,7 @@ ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt();
 
 
 
-using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
+
 
 class VM_ZMarkStartYoung;
 class VM_ZMarkStartYoungAndOld;
@@ -305,41 +300,12 @@ class VM_ZVerifyOld;
 
 class MarkingWork;
 
-struct ValueRoot {
-    BaseObject* object;
-    ForwardingStage stage;
-    uintptr_t color;
-    Generation generation;
-    ValueRoot(BaseObject* value, ForwardingStage source = ForwardingStage::OverwritePrevious)
-        : object(value), stage(source), color(::g_cjLoadGoodMask),
-          generation(source == ForwardingStage::IncomingNew && Heap::IsHeapAddress(value)
-              ? Heap::page(reinterpret_cast<MAddress>(value))->GetOwnerGeneration()
-              : Generation::Old) {}
-    operator BaseObject*() const { return object; }
-    ForwardingStage Stage() const
-    {
-        const uintptr_t mask = generation == Generation::Young
-            ? ZPointerRemappedYoungMask
-            : ZPointerRemappedOldMask;
-        return (ZPointer::remap_bits(color) & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
-    }
-};
-struct ValueRootHash {
-    size_t operator()(const ValueRoot& root) const { return std::hash<BaseObject*>{}(root.object); }
-};
-using ValueRootSet = std::unordered_set<ValueRoot, ValueRootHash>;
-using ValueRootList = std::list<ValueRoot>;
-using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>;
 
 class HeapGcState {
     friend class ZMarkTask;
 
 public:
-    [[noreturn]] static void AbortUnimplemented(const char* method);
     static HandVerdict JudgeHandOutTarget(BaseObject* target);
-    static uint64_t EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
-                                                 MAddress witnessStart, uint64_t witnessEpoch,
-                                                 uint64_t witnessLife, bool witnessValid);
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
                                             const ForwardingProvenance& provenance);
     BaseObject* ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const;
@@ -388,7 +354,7 @@ public:
     static std::function<void()> testOldMarkStarted;
     static std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> testMarkStartState;
     static std::function<void()> testYoungMarkCompleted;
-    static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
+
     static std::function<void(Mutator&)> testOldMarkThreadResult;
 #endif
 
@@ -405,32 +371,8 @@ public:
     void DumpAfterGC();
 #endif
 
-    void ResurrectExportObject(BaseObject* obj)
-    {
-        ZGeneration* generation = Heap::GetHeap().ObjectGeneration(obj) == Generation::Young ?
-            static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old());
-        std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        if (generation == nullptr || !generation->is_phase_relocate()) {
-            resurrectedExportObjectes.erase(obj);
-            resurrectedExportObjectes.insert(ValueRoot(ResolveCurrentValueRoot(
-                obj, &resurrectedExportObjectes, Heap::GetHeap().ObjectGeneration(obj), ForwardingStage::IncomingNew),
-                ForwardingStage::IncomingNew));
-        } else {
-            resurrectedExportObjectesForwardPhase.erase(obj);
-            resurrectedExportObjectesForwardPhase.insert(ValueRoot(
-                ResolveCurrentValueRoot(
-                    obj, &resurrectedExportObjectesForwardPhase, Heap::GetHeap().ObjectGeneration(obj), ForwardingStage::IncomingNew),
-                ForwardingStage::IncomingNew));
-        }
-    }
 
-    void VisitAllResurrectExportObjects(const RootVisitor& visitor)
-    {
-        std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        for (auto& obj : resurrectedExportObjectes) {
-            visitor(reinterpret_cast<ObjectRef&>(*obj));
-        }
-    }
+
 
 
 
@@ -453,12 +395,10 @@ public:
         return RegionSpace::IsMarkedObject<G>(obj) ||
             (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
-    void StartOldMarkWork();
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const;
     // Consume one object entry. Partial arrays must be decoded before this
     // entry point; mark=false carries an already-owned accounting obligation.
-    bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
-                                 MarkLiveCache* cache) const;
+
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
 
@@ -475,34 +415,7 @@ protected:
     void ForwardFromSpace(ZGenerationId generation);
     void RefineFromSpace();
 
-    std::atomic<size_t> markedObjectCount = { 0 };
-    std::mutex externMtx;
-    ValueRootMap discoveredExternObjects;
-#if defined(MRT_TESTABLE_INTERNALS)
-    void ObserveExportOwnershipForTest(bool afterHandoff);
-#endif
-    // Resolver callbacks may enter managed code and therefore must not own the
-    // root-carrier mutex.  Keep resolver serialization separate from the mutex
-    // used by GC root and preforward consumers.
-    std::mutex cycleResolverMtx;
-    std::mutex cycleWorkStackMtx;
-    ValueRootMap cycleRefWorkStack;
-    // Number of callbacks already delivered for each stable export id. A
-    // resolver can be reposted when PREFORWARD is published while a managed
-    // callback is running, so progress must outlive one ResolveCycleRef call.
-    // Protected by cycleWorkStackMtx together with the root carrier.
-    std::unordered_map<U32, size_t> cycleRefProgress;
-    std::mutex resurrectExportMtx;
-    ValueRootSet resurrectedExportObjectes;
-    ValueRootSet resurrectedExportObjectesForwardPhase;
 
-    // Value-only root containers have no addressable RootSlot to heal. Keep
-    // their RootObligation on the existing ResolveStoreValue authority and
-    // rebuild key-bearing containers while their owner lock is held.
-    BaseObject* ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
-                                        ForwardingStage stage = ForwardingStage::OverwritePrevious) const;
-    void CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const;
-    void CurrentizeValueRootMap(ValueRootMap& roots, Generation generation) const;
 
     inline WorkStack NewWorkStack() const
     {
@@ -525,20 +438,14 @@ protected:
 
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool FlushMarkProducers(ZMark* domain);
-    void ProcessExportRoots(WorkStack& foreignRootsSet);
 
     // concurrent marking.
 
-    void FindUselessExternObjects();
 
     // Export-root producer consumed by the old roots task (zMark.cpp
     // mark_old_roots -> MarkOldObjectIfActive).
-    void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
 
 private:
-    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
-    void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
 
     void VisitStaticRoots(const NativeSlotVisitor& visitor) const;
     friend class ZGeneration;
@@ -567,14 +474,12 @@ public:
     
 
 #if defined(MRT_GC_UNIT_TESTS)
-    void SetCycleRefHandlerForTest(CrossRefHandler handler) { cycleRefHandlerForTest = handler; }
 
     // Controlled test wrapper for the copier route consumer. It keeps the
     // consumer's preconditions visible (heap address, relocation phase and
 
 #endif
 
-    void StartYoungMarkWork();
     void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
     bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
     void PublishThreadRoot(BaseObject* object, bool young, bool follow);
@@ -585,40 +490,15 @@ public:
     ZMark* YoungMark() { return Heap::GetHeap().young().MarkPtr(); }
     const ZMark* YoungMark() const { return Heap::GetHeap().young().MarkPtr(); }
 
-    bool ShouldIgnoreRequest(GCRequest& request);
-    bool MarkObject(BaseObject* obj) const;
-    bool ResurrectObject(BaseObject* obj, size_t offset, ZPage* regionInfo);
 
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const;
-    void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack, bool finalizable = false) const;
-    void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false);
-    void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack);
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field);
     BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
     BaseObject* ForwardObjectExclusive(BaseObject* obj);
     BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
                                   Generation generation) const;
-    void PostResolveCycleTask();
-    void PrepareCycleRef()
-    {
-        std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-        CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
-        CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
-        for (auto& entry : discoveredExternObjects) {
-            ValueRootList& destination = cycleRefWorkStack[entry.first];
-            destination.splice(destination.end(), entry.second);
-        }
-        discoveredExternObjects.clear();
-    }
-    void MergeResurrectExportObjects(Generation generation)
-    {
-        std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes, generation);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
-        resurrectedExportObjectes.insert(resurrectedExportObjectesForwardPhase.begin(),
-            resurrectedExportObjectesForwardPhase.end());
-        resurrectedExportObjectesForwardPhase.clear();
-    }
+
+
     // Phase A of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
     //
     // Today a reference carries no colour unless it is being evacuated, so "needs the barrier"
@@ -633,11 +513,9 @@ public:
 
     // note this api is not atomic, caller should take care of this.
     // Stale remap colour (ZGC: the value itself says it may be stale). No pointer tagID.
-    bool IsOldPointer(RefField<>& ref) const { return IsLoadBad(ref); }
 
     // note this api is not atomic, caller should take care of this.
     // Current colour: has the remap bit being handed out now. Plain (no colour) is neither.
-    bool IsCurrentPointer(RefField<>& ref) const { return ZPointer::is_load_good(ref.GetFieldValue()); }
 
     // OpenJDK ZPointer::is_young_load_good/is_old_load_good
     // (zAddress.inline.hpp:648-655): the conceptual generation epoch is represented by the two
@@ -709,7 +587,6 @@ public:
         space.RemoveRawPointerObject(obj);
     }
 
-    void ResolveCycleRef();
 
     // Relocation membership comes from the installed forwarding tables, as in
     // ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp).
@@ -734,7 +611,7 @@ public:
     // GetGhostFromRegionAt -> GetUnitIdxAt has no heap range
     //
     // Old-tagged fields are exactly where non-heap payloads appear -- a TypeInfo*, a binary
-    // constant, immortal metadata: after Flip their colour is IsOldPointer while the payload is
+    // constant, immortal metadata: after Flip their colour is load-bad while the payload is
     // still the live non-heap pointer. Every
     // caller's *load-good* arm gated on Heap::IsHeapAddress before looking the route up; none of
     // the *old-tag* arms did.  Guarding here rather than at each arm is a shared guard:
@@ -768,12 +645,8 @@ protected:
     // retain the from-region, relocate the object on this thread, release. Returns the
     // to-version, or nullptr when the owning copier must supply the receipt.
 
-    bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const;
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const;
-    bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
-                                         const ForwardingProvenance& provenance) const;
-    bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const;
 
     // ── store value side: typed, mirroring ZGC ────────────────────────────────────────────
     //
@@ -799,13 +672,6 @@ protected:
     // Produce the load-bad member of the full-colour family without changing
     // the address.  This is deliberately separate from GetAndTryTagRefField:
     // unclassified store values still have to pass ResolveStoreValue first.
-    RefField<> ColourStaleLoadBad(zaddress_unsafe stale) const
-    {
-        const Uptr notCurrent = ZPointerRemappedMask ^ ZPointerRemapped;
-        const Uptr staleOneHot = notCurrent & -notCurrent;
-        const Uptr storeColour = ZPointer::remap_bits(staleOneHot) | ZPointerMarkedYoung | ZPointerMarkedOld | ZPointerRemembered;
-        return RefField<>(from_region_addr(raw(stale)), storeColour);
-    }
 
     // The ONE adapter from a raw managed pointer to the typed pair.  This is where the proof that
     // ZPointer::uncolor asserts gets actually established, instead of being assumed by
@@ -837,22 +703,6 @@ protected:
     // The three checks are kept, and they now carry the invariant instead of a resolve: the
     // address handed to the colour producer is already resolved, and an unresolved one stops
     // here rather than being laundered into a store-good word.
-    RefField<> ColourResolvedRefField(BaseObject* target,
-                                      const ForwardingProvenance& provenance = {}) const
-    {
-        if (target == nullptr) {
-            return RefField<>(static_cast<BaseObject*>(nullptr));
-        }
-        if (!Heap::IsHeapAddress(target)) {
-            return RefField<>(target);
-        }
-        CheckStoreGoodTarget("ColourResolvedRefField", target, provenance);
-        if (kColourWhoProbe) {
-            NoteStoreGoodOnBadTarget(target);
-        }
-        return RefField<>(ZAddress::store_good(from_object(target)));
-    }
-
     RefField<> GetAndTryTagRefField(BaseObject* target) const
     {
         const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
@@ -895,13 +745,8 @@ protected:
     }
 
     // holdermark: probe-only view of the old-generation mark bit.
-    bool IsMarkedObjectForProbe(BaseObject* obj) const
-    {
-        return IsMarkedObject<Generation::Old>(obj);
-    }
 
     // flipwitness: the probe needs the colour currently handed out, without reaching into members.
-    Uptr CurrentRemapColourForProbe() const { return ZPointerRemapped; }
 
     // colourwho: compile-time gated -- this is the funnel every coloured write goes through.
     static constexpr bool kColourWhoProbe = true;
@@ -986,31 +831,12 @@ protected:
 
     void DoGarbageCollection(ZGenerationId generation);
     void ProcessFinalizers();
-    void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const;
 
 private:
     using MinorObjectSet = std::unordered_set<BaseObject*>;
     using MinorRegionSet = std::unordered_set<ZPage*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
-
-    bool MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache* liveCache = nullptr) const;
-    bool MarkYoungObject(BaseObject* obj, MarkLiveCache* liveCache = nullptr) const
-    {
-        return MarkObjectImpl(obj, true, liveCache);
-    }
-
-    // Large reference-array chunking, ported from ZGC's ZMark (zMark.cpp:185-263).
-    // `holder` is the owning array, carried only for diagnostics; it is nullptr
-    // when the elements arrive as a chunk popped off the work stack, because
-    // ZGC's partial-array entry does not carry the holder either.
-    void PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable = false) const;
-    void FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, size_t length,
-                                  WorkStack& workStack, bool finalizable) const;
-    void FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, size_t length,
-                                  WorkStack& workStack, bool finalizable) const;
-    void FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
-                             WorkStack& workStack, bool finalizable) const;
 
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
                                   bool allowNull = false) const;
@@ -1020,7 +846,6 @@ private:
                                      const ScopedStopTheWorld* stw = nullptr) const;
     void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                              uint64_t stackScanEpoch = 0);
-    void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
                          const std::function<void(BaseObject*)>& invisibleVisitor,
                          uint64_t stackScanEpoch = 0);
@@ -1052,7 +877,6 @@ private:
     bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase = nullptr,
                                const ScopedStopTheWorld* stw = nullptr) const;
     void FixMinorRootSlots(const ScopedStopTheWorld* stw = nullptr);
-    void FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorld* stw = nullptr);
     // stw: live handle lets relocate follow ZGC Phase 7/8 (zGeneration.cpp:573-580):
     // pause = flip + phase + root fix; concurrent = ForwardFromSpace; re-STW = heap
     // slot catch-up + evac_finish. nullptr keeps the whole evacuate under the caller STW.
@@ -1062,11 +886,9 @@ private:
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void DoYoungGarbageCollection();
-    void RunOldCollection();
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
     // stores (zBarrier.inline.hpp:742-749). Seed them into the old TRACE stack.
-    void FlushAllocationRegions();
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef,
                                const ForwardingProvenance& provenance) const;
@@ -1077,11 +899,8 @@ private:
     void RemapYoungRoots();
     bool Preforward();
     void StartRelocationTasks(ZGenerationId generation);
-    void PreforwardDiscoveredExternObjects(Generation generation);
-    void PreforwardAllResurrectExportFromObjects(Generation generation);
-    CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);
 #if defined(MRT_GC_UNIT_TESTS)
-    CrossRefHandler cycleRefHandlerForTest = nullptr;
+
 #endif
 
 

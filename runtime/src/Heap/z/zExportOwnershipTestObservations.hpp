@@ -5,7 +5,7 @@
 #pragma once
 
 #if defined(MRT_TESTABLE_INTERNALS)
-void HeapGcState::ObserveExportOwnershipForTest(bool afterHandoff)
+void ZCrossVM::ObserveExportOwnershipForTest(bool afterHandoff)
 {
     if (!testExportOwnershipResult) {
         return;

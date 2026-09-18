@@ -52,7 +52,7 @@ run_ohos_host_arm() {
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::HeapGcState::DoGarbageCollection(MapleRuntime::ZGenerationId)' \
-      'MapleRuntime::HeapGcState::PostResolveCycleTask()'; do
+      'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
       return 21
@@ -101,7 +101,7 @@ run_ohos_host_arm() {
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
       'MapleRuntime::HeapGcState::DoGarbageCollection(MapleRuntime::ZGenerationId)' \
-      'MapleRuntime::HeapGcState::PostResolveCycleTask()'; do
+      'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
       echo "GC_UNIT_OHOS_HOST_LOCAL_PRODUCT_DEFINITION symbol=$symbol" >&2
       return 24
@@ -109,7 +109,7 @@ run_ohos_host_arm() {
   done
   for symbol in \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
-      'MapleRuntime::HeapGcState::PostResolveCycleTask()'; do
+      'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
       return 25
@@ -117,7 +117,7 @@ run_ohos_host_arm() {
   done
 
   objdump -drC "$so" | sed -n \
-    '/<MapleRuntime::HeapGcState::PostResolveCycleTask()>/,/^$/p' >"$post_disassembly"
+    '/<MapleRuntime::ZCrossVM::PostResolveCycleTask()>/,/^$/p' >"$post_disassembly"
   if ! /usr/bin/grep -F -q 'CJ_MRT_RolveCycleRef' "$post_disassembly"; then
     if [[ "${GC_UNIT_OHOS_HOST_ALLOW_MISSING_POST_DISPATCH:-0}" == "1" ]]; then
       echo "GC_UNIT_OHOS_HOST_POST_DISPATCH_MISSING_ALLOWED"
@@ -291,7 +291,6 @@ PACKAGE_INIT_UNRELATED_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
-  "$SRC/gc_unit_stubs.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"

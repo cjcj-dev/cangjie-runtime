@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
+#include "Heap/z/zCrossVM.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
@@ -54,13 +55,13 @@ struct ZGenerationRootTestAccess {
             strongSlots[i]->StoreColoured(coloured.GetFieldValue(), std::memory_order_relaxed);
         }
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            collector.resurrectedExportObjectes.insert(objects[2]);
-            collector.resurrectedExportObjectesForwardPhase.insert(objects[3]);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.insert(objects[2]);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.insert(objects[3]);
         }
         {
-            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-            collector.cycleRefWorkStack[objects[4]].push_back(objects[5]);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+            Heap::GetHeap().cross_vm().cycleRefWorkStack[objects[4]].push_back(objects[5]);
         }
     }
     static void Remove(HeapGcState& collector, const std::array<BaseObject*, 6>& objects)
@@ -72,13 +73,13 @@ struct ZGenerationRootTestAccess {
             slot = nullptr;
         }
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            collector.resurrectedExportObjectes.erase(objects[2]);
-            collector.resurrectedExportObjectesForwardPhase.erase(objects[3]);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.erase(objects[2]);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.erase(objects[3]);
         }
         {
-            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-            collector.cycleRefWorkStack.erase(objects[4]);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+            Heap::GetHeap().cross_vm().cycleRefWorkStack.erase(objects[4]);
         }
     }
 };

@@ -9,6 +9,7 @@
 #define MRT_HEAP_H
 
 #include "Heap/z/zServiceability.hpp"
+#include "Heap/z/zCrossVM.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -22,6 +23,7 @@
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zObjectAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
 #include <memory>
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
@@ -84,7 +86,11 @@ public:
     void RequestGC(GCReason reason, bool async);
     void ResolveCycleRef();
     Allocator& GetAllocator();
+    RegionManager& page_allocator() { return _page_allocator; }
+    const RegionManager& page_allocator() const { return _page_allocator; }
     ZObjectAllocator& object_allocator() { return _object_allocator; }
+    ZCrossVM& cross_vm() { return _cross_vm; }
+    const ZCrossVM& cross_vm() const { return _cross_vm; }
     void MarkYoungRootObject(BaseObject* object);
     void MarkObjectIfActive(BaseObject* object);
     void MarkYoungObjectIfActive(BaseObject* object);
@@ -266,15 +272,18 @@ public:
 
 private:
     static Heap* _heap;
-    // Cangjie constructs Heap before heapSize is known (Init(param)); the page
-    // allocator and table storage therefore need deferred initialization. Both outlive
-    // the generation members, as in ZGC zHeap.hpp:48-56.
-    std::unique_ptr<RegionSpace> _page_allocator;
+    // zHeap.hpp:48-56: the heap directly owns the page allocator; its
+    // mapped caches and backing resources outlive both generation members.
+    RegionManager _page_allocator;
+    // Object/TLAB adapter remains pending P16; it owns no page allocator.
+    std::unique_ptr<RegionSpace> _allocation_adapter;
     ZPageTable _page_table;
     ZObjectAllocator _object_allocator;
     ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;
+    // Cangjie foreign-cycle ownership has no Java/JNI counterpart.
+    ZCrossVM _cross_vm;
     std::unique_ptr<HeapGcState> collectorImpl;
     ExportRootTable* exportRootsTable { nullptr };
     StaticRootTable* staticRootTable { nullptr };
@@ -302,4 +311,7 @@ private:
     static std::vector<HeapSlotAddressRange> heapReservations;
 };
 } // namespace MapleRuntime
+
+#include "Heap/z/zObjectAllocator.inline.hpp"
+#include "Heap/z/zRelocationSet.inline.hpp"
 #endif // MRT_HEAP_MANAGER_H

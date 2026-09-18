@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
+#include "Heap/z/zCrossVM.hpp"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -24,17 +25,17 @@ namespace MapleRuntime {
 struct ZGenerationRootTestAccess {
     static void Seed(HeapGcState& collector, BaseObject* object)
     {
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.emplace(ValueRoot(object),
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        Heap::GetHeap().cross_vm().cycleRefWorkStack.emplace(ValueRoot(object),
                                             ValueRootList{});
     }
 
     static void Clear(HeapGcState& collector)
     {
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.clear();
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        Heap::GetHeap().cross_vm().cycleRefWorkStack.clear();
     }
-    static void PostResolveCycleTask(HeapGcState& collector) { collector.PostResolveCycleTask(); }
+    static void PostResolveCycleTask(HeapGcState& collector) { Heap::GetHeap().cross_vm().PostResolveCycleTask(); }
 };
 } // namespace MapleRuntime
 
