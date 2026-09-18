@@ -112,7 +112,7 @@ void HeapGcState::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
     // static roots stay Phase-C coloured (writable statics need colour; rostatic skips non-heap CAS).
     // plainroots only applies to stack/reg ObjectRef slots (RootSlotWriteback via !IsHeapAddress).
-    RefField<> newField = GetAndTryTagRefField(latest);
+    RefField<> newField = ZBarrier::GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
              latest->GetTypeInfo(), latest->GetSize());
@@ -151,7 +151,7 @@ BaseObject* HeapGcState::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefF
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
                  latest, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
-    RefField<> newField = GetAndTryTagRefField(latest);
+    RefField<> newField = ZBarrier::GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
@@ -215,7 +215,7 @@ void HeapGcState::DiscoverFinalizableRoot(NativeSlot& slot) const
     CHECK(Heap::GetHeap().old().IsPhaseMark());
     BaseObject* object = ZBarrier::ReadStaticRef(slot);
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
-    object = ValidateCurrentValue(object, provenance);
+    object = ZBarrier::ValidateCurrentValue(object, provenance);
     if (object == nullptr) return;
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
@@ -519,7 +519,7 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
     // A free/garbage target means forwarding authority was retired before
     // coverage completed; fail closed instead of manufacturing a null heal.
     (void)field.CompareExchange(oldField.GetFieldValue(), zpointer::null);
-    HeapGcState::FailClosedLoad(
+    ZBarrier::FailClosedLoad(
         "HeapGcState::ScrubMinorFreeTarget.unresolved", target, oldVal,
         ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
 }

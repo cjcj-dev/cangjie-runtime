@@ -62,7 +62,7 @@ struct PartialArrayTestAccess {
 
     static void StoreTarget(const HeapGcState& collector, RefField<>& field, BaseObject* target)
     {
-        const RefField<> coloured = collector.GetAndTryTagRefField(target);
+        const RefField<> coloured = ZBarrier::GetAndTryTagRefField(target);
         field.StoreColoured(coloured.GetFieldValue());
     }
 };

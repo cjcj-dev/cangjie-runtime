@@ -237,16 +237,7 @@ namespace {
 // uncoloured non-null). Count rejects before IsValidObject/IsMarkedObject.
 
 
-HandVerdict ClassifyRawHeader(uint64_t header)
-{
-    if (((header >> 48) & 0x3u) == 3u) {
-        return HandVerdict::Forwarded;
-    }
-    if ((header & 0xffffffffffffull) == 0) {
-        return HandVerdict::ZeroHeader;
-    }
-    return HandVerdict::Usable;
-}
+
 
 const char* HandVerdictName(HandVerdict verdict)
 {
@@ -272,104 +263,22 @@ const char* ToAnswerName(int)
 // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
 // Synchronous root operations consume the generation of their phase context.
 // Unlike ZStackWatermark, these closures do not retain frames across relocations.
-BaseObject* HeapGcState::ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const
-{
-    if (ref == nullptr || !Heap::IsHeapAddress(ref) || JudgeHandOutTarget(ref) == HandVerdict::Usable) {
-        return ref;
-    }
-    FailClosedLoad("current raw value required", ref, 0, provenance);
-}
 
 
 
-BaseObject* HeapGcState::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const
-{
-    if (obj == nullptr) {
-        return nullptr;
-    }
 
-    BaseObject* to = FindToVersion(obj, generation).GetOrFailClosed("HeapGcState::FindLatestVersion", provenance);
-    if (to != nullptr) {
-        if (to != obj && Heap::IsHeapAddress(to) && !to->IsValidObject()) {
-            CHECK_DETAIL(obj->IsValidObject(),
-                         "FindLatestVersion: route dest %p has no tip and from %p is not valid",
-                         to, obj);
-            return obj;
-        }
-        return to;
-    }
-    CHECK_DETAIL(obj->IsValidObject(),
-                 "FindLatestVersion: no to-version for invalid from-object %p "
-                 "(stale old-tag after ghost dispel; do not fall back to from)",
-                 obj);
-    return obj;
-}
+
 
 // loadfc: best-effort detection verdict. Same header-word shape as Barrier.cpp's former staleguard
 // judge (StateWord.h:215-228: bits 0-47 TypeInfo, bits 48-49 stateCode; FORWARDED=3). This one
 // relaxed read classifies the observed word; it does not establish object lifetime or happens-before.
-HandVerdict HeapGcState::JudgeHandOutTarget(BaseObject* target)
-{
-    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-        return HandVerdict::Usable;
-    }
-    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
-    return ClassifyRawHeader(hdr);
-}
+
 
 
 // loadfc (zBarrier.inline.hpp:327-343): the slow path must produce a verified current version or
 // stop the mutator in a controlled, attributable place -- never hand back a structurally dead
 // from-address. The [LOADFC] tag is the population-accounting signature.
-[[noreturn]] void HeapGcState::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
-                                            const ForwardingProvenance& provenance)
-{
-    const HandVerdict verdict = JudgeHandOutTarget(target);
-    const MAddress from = target != nullptr ? reinterpret_cast<MAddress>(target) : 0;
-    ZPage* region = (from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader)
-        ? Heap::page(from)
-        : nullptr;
-    const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
-    const MAddress lookupTo = canLookup
-        ? forwarding_find(Heap::GetHeap().ObjectGeneration(target), from)
-        : 0;
-    // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
-    // gc_unit other-vm children can enter before the generation cycle is active.
-    const unsigned gcPhase = Heap::GetHeap().IsGcStarted() && ZGeneration::old() != nullptr
-        ? static_cast<unsigned>(ZGeneration::old()->Snapshot().phase)
-        : 0xffu;
-    std::fprintf(stderr,
-                 "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
-                 "consumer=%s holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
-                 "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
-                 "field_type=%s field_offset=%zu from=%p from_region=%p "
-                 "region_type=%u generation=%u in_current_relocation_set=%u "
-                 "table_id=%#zx from_page_epoch=%llu lifeId=%llu "
-                 "lookup_state=%u gc_phase=%u "
-                 "unresolved non-Usable from-address must not be handed out\n",
-                 site != nullptr ? site : "?", static_cast<void*>(target),
-                 static_cast<unsigned>(verdict), slotBits,
-                 site != nullptr ? site : "unknown",
-                 ForwardingProvenance::KindName(provenance.kind),
-                 provenance.holder, provenance.slot,
-                 ForwardingProvenance::StageName(provenance.stage),
-                 ForwardingProvenance::WriterName(provenance.writerKind),
-                 ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
-                 provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
-                 provenance.fieldOffset, static_cast<void*>(target),
-                 static_cast<void*>(region),
-                 region != nullptr ? static_cast<unsigned>(0u) : 0xffu,
-                 region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
-                  lookupTo != 0 ? 1u : 0u,
-                  static_cast<size_t>(0),
-                  0ull,
-                  0ull,
-                  0u,
-                 gcPhase);
-    (void)fflush(stderr);
-    (void)fflush(stdout);
-    std::abort();
-}
+
 
 // Virtual default: this collector type does not implement the method. Always abort;
 // body is out-of-line so HeapGcState.h stays free of FormatLog / string payloads.

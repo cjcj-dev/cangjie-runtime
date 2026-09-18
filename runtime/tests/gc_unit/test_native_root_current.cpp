@@ -10,6 +10,7 @@
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "root_publication_snapshot.hpp"

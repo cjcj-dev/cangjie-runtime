@@ -102,7 +102,7 @@ struct RelocationReceiptTestAccess {
 
     static RefField<> QualifyStoreValue(HeapGcState& collector, BaseObject* value)
     {
-        return collector.GetAndTryTagRefField(value);
+        return ZBarrier::GetAndTryTagRefField(value);
     }
 
     static BaseObject* ResolveStoreValue(HeapGcState& collector, BaseObject* value)
@@ -113,7 +113,7 @@ struct RelocationReceiptTestAccess {
 
     static void CheckStoreGoodTarget(HeapGcState& collector, BaseObject* value)
     {
-        collector.CheckStoreGoodTarget("ForwardingLookupWitness", value,
+        ZBarrier::CheckStoreGoodTarget("ForwardingLookupWitness", value,
             ForwardingProvenance{ ForwardingHolderKind::HeapRef, value, &value });
     }
 
@@ -1682,7 +1682,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
 
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, first);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(resolved), reinterpret_cast<MAddress>(final));
-    GC_EXPECT_TRUE(HeapGcState::JudgeHandOutTarget(resolved) == HandVerdict::Usable);
+    GC_EXPECT_TRUE(ZBarrier::JudgeHandOutTarget(resolved) == HandVerdict::Usable);
 
     firstPublication = nullptr;
     secondPublication = nullptr;
@@ -2738,7 +2738,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartWithUsableT
     compactedStart->SetStateCode(ObjectState::NORMAL);
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, compactedStart);
     GC_EXPECT_TRUE(resolved != nullptr);
-    GC_EXPECT_TRUE(HeapGcState::JudgeHandOutTarget(resolved) == HandVerdict::Usable);
+    GC_EXPECT_TRUE(ZBarrier::JudgeHandOutTarget(resolved) == HandVerdict::Usable);
 
     RelocationReceiptTestAccess::BindCollector(nullptr);
     CleanupPartialCompact(fx, state);

@@ -418,3 +418,40 @@ GC_TEST(RelocateWorkers, ActualForwardTaskCompletesClaimedOwnerAtRegionExit)
     ExpectIsolatedScenarioPasses<RunActualTaskClaimedOwnerSuccess>();
 }
 #endif
+
+// The collected heap owns the runtime pool (ZGC zCollectedHeap.cpp:310-311),
+// independently of either generation's GC worker set.
+GC_TEST(RuntimeWorkers, CollectedHeapOwnsActiveRuntimePool)
+{
+    WorkerThreads* workers = ZCollectedHeap::heap()->safepoint_workers();
+    GC_EXPECT_TRUE(workers != nullptr);
+    const uint32_t count = workers->max_workers();
+    GC_EXPECT_TRUE(count > 0);
+    GC_EXPECT_EQ(workers->active_workers(), count);
+    GC_EXPECT_EQ(workers->created_workers(), count);
+    class RuntimeResultTask final : public WorkerTask {
+    public:
+        explicit RuntimeResultTask(uint32_t count)
+            : WorkerTask("RuntimeResultTask"), size(count), results(new std::atomic<uint32_t>[count])
+        {
+            for (uint32_t i = 0; i < size; ++i) results[i].store(0);
+        }
+        void work(uint32_t id) override
+        {
+            if (id >= size || WorkerThread::worker_id() != id) {
+                invalid.fetch_add(1);
+                return;
+            }
+            results[id].fetch_add(1);
+        }
+        const uint32_t size;
+        std::unique_ptr<std::atomic<uint32_t>[]> results;
+        std::atomic<uint32_t> invalid{0};
+    } task(count);
+    workers->run_task(&task);
+    std::fprintf(stderr, "RUNTIME_WORKERS_RESULT workers=%u invalid=%u\n", count, task.invalid.load());
+    GC_EXPECT_EQ(task.invalid.load(), 0u);
+    for (uint32_t i = 0; i < count; ++i) {
+        GC_EXPECT_EQ(task.results[i].load(), 1u);
+    }
+}

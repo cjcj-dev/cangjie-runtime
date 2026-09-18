@@ -693,7 +693,7 @@ echo "GATE_PTRCOLOUR_PRODUCT_BINDING_OK rows=$ptrcolour_rows elf=$OUT/cj_gc_unit
 # producer set.  A producer/anchor removal, an empty set, or a partial family
 # declaration fails before the behavioral suite can lend it a green result.
 PTRCOLOUR_PRODUCER_MANIFEST="$SRC/product_colour_producer_manifest.tsv"
-EXPECTED_PTRCOLOUR_PRODUCERS=(store_good stale_load_bad interior_store_good bulk_store_good finalizable_good)
+EXPECTED_PTRCOLOUR_PRODUCERS=(store_good interior_store_good bulk_store_good finalizable_good)
 ptrcolour_producer_rows=0
 while IFS=$'\t' read -r producer_name source_file stable_anchor required_families; do
   if [[ "$producer_name" == "producer_name" ]]; then

@@ -7,6 +7,7 @@
 #ifndef MRT_BARRIER_H
 #define MRT_BARRIER_H
 
+#include <atomic>
 #include "Common/BaseObject.h"
 #if defined(MRT_TESTABLE_INTERNALS)
 #include <functional>
@@ -22,6 +23,7 @@ namespace MapleRuntime {
 class HeapGcState;
 enum class ReferenceStrength : uint8_t { Strong, Weak, Phantom };
 struct ForwardingProvenance;
+enum class HandVerdict : uint8_t;
 
 class AllStatic {
     AllStatic() = delete;
@@ -34,6 +36,17 @@ using ZBarrierColor = zpointer (*)(zaddress, zpointer);
 
 class ZBarrier : public AllStatic {
 public:
+    static HandVerdict JudgeHandOutTarget(BaseObject* target);
+    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
+                                           const ForwardingProvenance& provenance);
+    static BaseObject* ValidateCurrentValue(BaseObject* target, const ForwardingProvenance& provenance);
+    static void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
+                                    const ForwardingProvenance& provenance);
+    static RefField<> GetAndTryTagRefField(BaseObject* target);
+    static RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* target,
+                                                       const ForwardingProvenance& provenance);
+    static void NoteStoreGoodOnBadTarget(BaseObject* target);
+
 
 #if defined(MRT_TESTABLE_INTERNALS)
     enum class FieldMarkKind { Old, Finalizable, Young, Remset };
@@ -174,6 +187,10 @@ public:
     static zpointer ColorLoadGood(zaddress address, zpointer previous);
     static zaddress promote_slow_path(zaddress addr);
     static void promote_barrier_on_young_oop_field(volatile zpointer* p);
+private:
+    static constexpr bool kColourWhoProbe = true;
+    static std::atomic<uint64_t> colourWhoTotal;
+    static std::atomic<uint64_t> colourWhoBad;
 };
 
 } // namespace MapleRuntime

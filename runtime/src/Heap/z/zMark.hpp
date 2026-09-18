@@ -44,6 +44,7 @@ void VerifyAllEmpty(ZMark& domain);
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zMarkingSMR.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
@@ -305,10 +306,6 @@ class HeapGcState {
     friend class ZMarkTask;
 
 public:
-    static HandVerdict JudgeHandOutTarget(BaseObject* target);
-    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
-                                            const ForwardingProvenance& provenance);
-    BaseObject* ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const;
     bool IsLoadBad(RefField<>& ref) const
     {
         return (raw(ref.GetFieldValue()) & ::g_cjLoadBadMask) != 0;
@@ -321,7 +318,6 @@ public:
         }
         return ZGeneration::generation(remap_generation(ref))->relocate_or_remap_object(target, provenance);
     }
-    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const;
 
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
@@ -573,7 +569,7 @@ public:
                 const ForwardingProvenance provenance{
                     ForwardingHolderKind::HeapRef, this, &obj
                 };
-                obj = ValidateCurrentValue(obj, provenance);
+                obj = ZBarrier::ValidateCurrentValue(obj, provenance);
             }
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -636,8 +632,6 @@ public:
     }
 
 protected:
-    void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
-                              const ForwardingProvenance& provenance) const;
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
 
@@ -673,112 +667,6 @@ protected:
     // the address.  This is deliberately separate from GetAndTryTagRefField:
     // unclassified store values still have to pass ResolveStoreValue first.
 
-    // The ONE adapter from a raw managed pointer to the typed pair.  This is where the proof that
-    // ZPointer::uncolor asserts gets actually established, instead of being assumed by
-    // ColourTypes.h's from_object ("凭什么: a live BaseObject* in hand"), which checks nothing.
-    //
-    // ⭐ The authority is the object's own state word, not the region's type.  IsFromObject /
-    // IsGhostFromObject ask the *region* whether it is from-space, and a region type is a moving
-    // property: once the cycle retires the region becomes TO/RECENT_FULL while the from-version
-    // still sits in it with FORWARDED in its header (StateWord.h:22-30 FORWARDED = 3;
-    // StateWord.h:174-178 puts stateCode at bits 48-49, which is why a stale value read with the
-    // compiler's bare `mov (%rbx),%rdi` faults non-canonically as #GP rather than as a page
-    // fault).  Same defect shape as the remset condition fixed in abe3c4d8 -- a predicate testing
-    // a property that moves instead of the object's own authoritative state.  ZGC never asks the
-    // page either: is_load_good compares the pointer's colour to the global remap colour, and
-    // forwarding identity is a per-address ZForwarding lookup.
-    // ZGC resolves a field word exactly once.  ZBarrier::make_load_good is the resolve
-    // (zBarrier.inline.hpp:294-343); the colouring step that follows it is a pure recolour --
-    // ZPointer::uncolor / ZAddress::store_good rebuild the word from the address they were
-    // handed and never consult the forwarding table (zAddress.inline.hpp:609-624,806-811).
-    //
-    // GetAndTryTagRefField resolves again, and under in-place compaction that second resolve is
-    // not idempotent: from- and to-addresses share one page span, so a destination this page
-    // already produced is itself a from-index of the same table and the lookup shifts it a
-    // second time.  Measured on NW256, one 512-element reference array, 3/3: 383 elements
-    // rewritten from the correct current address to that address minus the page's own
-    // compaction delta, every one of them by this step, with the load-good funnel taking no
-    // remap exit at all.
-    //
-    // The three checks are kept, and they now carry the invariant instead of a resolve: the
-    // address handed to the colour producer is already resolved, and an unresolved one stops
-    // here rather than being laundered into a store-good word.
-    RefField<> GetAndTryTagRefField(BaseObject* target) const
-    {
-        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
-        return GetAndTryTagRefFieldWithProvenance(target, provenance);
-    }
-
-    RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* target,
-                                                  const ForwardingProvenance& provenance) const
-    {
-        // Null carries no colour (ZGC zAddress: null is never load-bad).
-        if (target == nullptr) {
-            return RefField<>(static_cast<BaseObject*>(nullptr));
-        }
-        // TypeInfo* / binary constants / immortal metadata are not relocated,
-        // but a non-null HeapSlot word is still coloured.  The load-good mask
-        // fast path peels it without routing through the collector.
-        if (!Heap::IsHeapAddress(target)) {
-            return RefField<>(ZAddress::store_good(from_object(target)));
-        }
-        // ZPointer::uncolor is the sole producer accepted by ZAddress::store_good
-        // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
-        // make-load-good producer: a relocation-set address is looked up or copied
-        // by this thread; an unresolved address never reaches colouring.
-        target = ValidateCurrentValue(target, provenance);
-        CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
-                     "store-good requires a resolved heap address");
-        CheckStoreGoodTarget("GetAndTryTagRefField", target, provenance);
-        // colourwho: installed-slot checking sits after Barrier::WriteReference, so it only sees the
-        // mutator store path.  That path now measures ~0 while the read barrier still hands out
-        // load-good slots naming from-versions, which means the writer is on the *collector* side --
-        // preforward/ref_fix/self-heal all colour through here too.  This is the single funnel for
-        // every coloured value in the runtime, so the count belongs here.
-        //
-        // Fires when we are about to paint the current (load-good) colour on a target whose own
-        // header already says FORWARDED, or whose header is zeroed.  Both are the crash families.
-        if (kColourWhoProbe) {
-            NoteStoreGoodOnBadTarget(target);
-        }
-        return RefField<>(ZAddress::store_good(from_object(target)));
-    }
-
-    // holdermark: probe-only view of the old-generation mark bit.
-
-    // flipwitness: the probe needs the colour currently handed out, without reaching into members.
-
-    // colourwho: compile-time gated -- this is the funnel every coloured write goes through.
-    static constexpr bool kColourWhoProbe = true;
-
-    void NoteStoreGoodOnBadTarget(BaseObject* target) const
-    {
-        if (target == nullptr || !Heap::IsHeapAddress(target)) {
-            return;
-        }
-        const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
-        const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
-        const uint64_t typeInfo = hdr & 0xffffffffffffull;
-        const uint64_t seen = colourWhoTotal.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (seen == 1) {
-            // Positive control: a zero below must not be readable as a dead probe.
-            LOG(RTLOG_ERROR, "[COLOURWHO] armed first sc=%u", stateCode);
-        }
-        if (stateCode == 0 && typeInfo != 0) {
-            return;
-        }
-        const uint64_t bad = colourWhoBad.fetch_add(1, std::memory_order_relaxed) + 1;
-        if ((bad & (bad - 1)) != 0) {
-            return;
-        }
-        LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
-            bad, seen, static_cast<void*>(target), stateCode, typeInfo, IsFromObject(target) ? 1 : 0,
-            IsGhostFromObject(target) ? 1 : 0,
-            ZGeneration::old() != nullptr ? static_cast<int>(ZGeneration::old()->Snapshot().phase) : -1);
-    }
-    mutable std::atomic<uint64_t> colourWhoTotal{ 0 };
-    mutable std::atomic<uint64_t> colourWhoBad{ 0 };
-
     // A store value is stale if *either* authority says so: the region it sits in is from-space,
     // or the object's own state word says it has been forwarded.  Region type moves; the state
     // word does not, so asking only the region is what let load-good slots name FORWARDED targets.
@@ -794,7 +682,7 @@ protected:
     bool IsAlreadyToStoreValue(BaseObject* target, Generation generation) const
     {
         return target != nullptr && Heap::IsHeapAddress(target) &&
-            HeapGcState::JudgeHandOutTarget(target) == HandVerdict::Usable &&
+            ZBarrier::JudgeHandOutTarget(target) == HandVerdict::Usable &&
             generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(target)) == nullptr;
     }
 
@@ -805,7 +693,7 @@ protected:
     // ZUncoloredRoot.  There is no runtime switch between the two contracts.
     RefField<> RootSlotWriteback(BaseObject* target, const RefField<>& /*slot*/) const
     {
-        return GetAndTryTagRefField(target);
+        return ZBarrier::GetAndTryTagRefField(target);
     }
 
     void CollectLargeGarbage()

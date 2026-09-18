@@ -390,7 +390,7 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* own
     // preserves load-good identity. IncomingNew carries the caller's current
     // identity; a page owner alone cannot distinguish overlapping from/to keys.
     if (stage == ForwardingStage::IncomingNew) {
-        return Heap::GetHeap().GetCollector().ValidateCurrentValue(value, provenance);
+        return ZBarrier::ValidateCurrentValue(value, provenance);
     }
     // Stored roots still need remapping using their source page's generation,
     // which can differ from the generation currently visiting the roots.
@@ -405,7 +405,7 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* own
     }
     CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
                  "value root resolve requires a heap to-address from=%p current=%p", value, current);
-    CHECK_DETAIL(HeapGcState::JudgeHandOutTarget(current) == HandVerdict::Usable,
+    CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable,
                  "value root resolve requires a usable target from=%p current=%p", value, current);
     return current;
 }

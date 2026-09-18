@@ -9,6 +9,7 @@
 #define MRT_COLLECTOR_H
 
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zRuntimeWorkers.hpp"
 #include "Heap/z/zForwardingLookup.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include <atomic>
@@ -20,11 +21,6 @@ class ZDirector;
 class ZDriverMajor;
 class ZDriverMinor;
 class ZStat;
-
-class ZRuntimeWorkers {
-public:
-    ZRuntimeWorkers() = default;
-};
 
 class ZCollectedHeap {
 public:
@@ -43,6 +39,7 @@ public:
     ZDriverMajor* driver_major() const { return _driver_major; }
     ZDirector* director() const { return _director; }
     ZStat* stat() const { return _stat; }
+    WorkerThreads* safepoint_workers() { return _runtime_workers.workers(); }
     FinalizerProcessor& finalizer_processor() { return _finalizer_processor; }
     int32_t concurrent_gc_threads() const { return _concurrent_gc_threads; }
 #if defined(MRT_TESTABLE_INTERNALS)

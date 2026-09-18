@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Base/Macros.h"
 #include "Base/Panic.h"
@@ -835,4 +836,162 @@ void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
     }
 }
 
+namespace {
+HandVerdict ClassifyRawHeader(uint64_t header)
+{
+    if (((header >> 48) & 0x3u) == 3u) {
+        return HandVerdict::Forwarded;
+    }
+    if ((header & 0xffffffffffffull) == 0) {
+        return HandVerdict::ZeroHeader;
+    }
+    return HandVerdict::Usable;
+}
+}
+std::atomic<uint64_t> ZBarrier::colourWhoTotal{0};
+std::atomic<uint64_t> ZBarrier::colourWhoBad{0};
+
+RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
+{
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
+    return ZBarrier::GetAndTryTagRefFieldWithProvenance(target, provenance);
+}
+
+RefField<> ZBarrier::GetAndTryTagRefFieldWithProvenance(BaseObject* target,
+                                              const ForwardingProvenance& provenance)
+{
+    // Null carries no colour (ZGC zAddress: null is never load-bad).
+    if (target == nullptr) {
+        return RefField<>(zpointer::null);
+    }
+    // TypeInfo* / binary constants / immortal metadata are not relocated,
+    // but a non-null HeapSlot word is still coloured.  The load-good mask
+    // fast path peels it without routing through the collector.
+    if (!Heap::IsHeapAddress(target)) {
+        return RefField<>(ZAddress::store_good(from_object(target)));
+    }
+    // ZPointer::uncolor is the sole producer accepted by ZAddress::store_good
+    // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
+    // make-load-good producer: a relocation-set address is looked up or copied
+    // by this thread; an unresolved address never reaches colouring.
+    target = ZBarrier::ValidateCurrentValue(target, provenance);
+    CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
+                 "store-good requires a resolved heap address");
+    ZBarrier::CheckStoreGoodTarget("GetAndTryTagRefField", target, provenance);
+    // colourwho: installed-slot checking sits after Barrier::WriteReference, so it only sees the
+    // mutator store path.  That path now measures ~0 while the read barrier still hands out
+    // load-good slots naming from-versions, which means the writer is on the *collector* side --
+    // preforward/ref_fix/self-heal all colour through here too.  This is the single funnel for
+    // every coloured value in the runtime, so the count belongs here.
+    //
+    // Fires when we are about to paint the current (load-good) colour on a target whose own
+    // header already says FORWARDED, or whose header is zeroed.  Both are the crash families.
+    if (kColourWhoProbe) {
+        ZBarrier::NoteStoreGoodOnBadTarget(target);
+    }
+    return RefField<>(ZAddress::store_good(from_object(target)));
+}
+
+void ZBarrier::NoteStoreGoodOnBadTarget(BaseObject* target)
+{
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
+    const uint64_t typeInfo = hdr & 0xffffffffffffull;
+    const uint64_t seen = colourWhoTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (seen == 1) {
+        // Positive control: a zero below must not be readable as a dead probe.
+        LOG(RTLOG_ERROR, "[COLOURWHO] armed first sc=%u", stateCode);
+    }
+    if (stateCode == 0 && typeInfo != 0) {
+        return;
+    }
+    const uint64_t bad = colourWhoBad.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((bad & (bad - 1)) != 0) {
+        return;
+    }
+    const bool inFrom = Heap::GetHeap().GetCollector().IsFromObject(target);
+    LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
+        bad, seen, static_cast<void*>(target), stateCode, typeInfo, inFrom ? 1 : 0,
+        inFrom ? 1 : 0,
+        ZGeneration::old() != nullptr ? static_cast<int>(ZGeneration::old()->Snapshot().phase) : -1);
+}
+
+BaseObject* ZBarrier::ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance)
+{
+    if (ref == nullptr || !Heap::IsHeapAddress(ref) || ZBarrier::JudgeHandOutTarget(ref) == HandVerdict::Usable) {
+        return ref;
+    }
+    ZBarrier::FailClosedLoad("current raw value required", ref, 0, provenance);
+}
+
+HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
+{
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return HandVerdict::Usable;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    return ClassifyRawHeader(hdr);
+}
+
+[[noreturn]] void ZBarrier::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
+                                            const ForwardingProvenance& provenance)
+{
+    const HandVerdict verdict = ZBarrier::JudgeHandOutTarget(target);
+    const MAddress from = target != nullptr ? reinterpret_cast<MAddress>(target) : 0;
+    ZPage* region = (from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader)
+        ? Heap::page(from)
+        : nullptr;
+    const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
+    const MAddress lookupTo = canLookup
+        ? forwarding_find(Heap::GetHeap().ObjectGeneration(target), from)
+        : 0;
+    // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
+    // gc_unit other-vm children can enter before the generation cycle is active.
+    const unsigned gcPhase = Heap::GetHeap().IsGcStarted() && ZGeneration::old() != nullptr
+        ? static_cast<unsigned>(ZGeneration::old()->Snapshot().phase)
+        : 0xffu;
+    std::fprintf(stderr,
+                 "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
+                 "consumer=%s holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
+                 "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
+                 "field_type=%s field_offset=%zu from=%p from_region=%p "
+                 "region_type=%u generation=%u in_current_relocation_set=%u "
+                 "table_id=%#zx from_page_epoch=%llu lifeId=%llu "
+                 "lookup_state=%u gc_phase=%u "
+                 "unresolved non-Usable from-address must not be handed out\n",
+                 site != nullptr ? site : "?", static_cast<void*>(target),
+                 static_cast<unsigned>(verdict), slotBits,
+                 site != nullptr ? site : "unknown",
+                 ForwardingProvenance::KindName(provenance.kind),
+                 provenance.holder, provenance.slot,
+                 ForwardingProvenance::StageName(provenance.stage),
+                 ForwardingProvenance::WriterName(provenance.writerKind),
+                 ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
+                 provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
+                 provenance.fieldOffset, static_cast<void*>(target),
+                 static_cast<void*>(region),
+                 region != nullptr ? static_cast<unsigned>(0u) : 0xffu,
+                 region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
+                  lookupTo != 0 ? 1u : 0u,
+                  static_cast<size_t>(0),
+                  0ull,
+                  0ull,
+                  0u,
+                 gcPhase);
+    (void)fflush(stderr);
+    (void)fflush(stdout);
+    std::abort();
+}
+
+void ZBarrier::CheckStoreGoodTarget(const char* consumer, BaseObject* target,
+                                      const ForwardingProvenance& provenance)
+{
+    // zAddress.inline.hpp:store_good consumes an already current address.
+    // The originating load/root operation performed generation-specific remap.
+    (void)consumer;
+    (void)ZBarrier::ValidateCurrentValue(target, provenance);
+}
 } // namespace MapleRuntime

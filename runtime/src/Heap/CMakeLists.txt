@@ -13,6 +13,7 @@ set(SRC_LIST
     "z/workerThread.cpp"
     "z/zTask.cpp"
     "z/zWorkers.cpp"
+    "z/zRuntimeWorkers.cpp"
     "z/concurrentGCThread.cpp"
     "z/zThread.cpp"
     "z/zUtils.cpp"

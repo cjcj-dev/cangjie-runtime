@@ -67,7 +67,7 @@ struct RemsetRearmTestAccess {
 
     static RefField<> Tag(HeapGcState& collector, BaseObject* object)
     {
-        return collector.GetAndTryTagRefField(object);
+        return ZBarrier::GetAndTryTagRefField(object);
     }
 
     static void BeginMinor(HeapGcState& collector)

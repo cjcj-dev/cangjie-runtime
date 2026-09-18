@@ -8,6 +8,7 @@
 #include "HeapManager.h"
 
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zHeuristics.hpp"
 
 namespace MapleRuntime {
 HeapManager::HeapManager() {}
@@ -17,7 +18,13 @@ MAddress HeapManager::Allocate(size_t allocSize, AllocType allocType)
     return Heap::GetHeap().Allocate(allocSize, allocType);
 }
 
-void HeapManager::Init(const HeapParam& param) { Heap::GetHeap().Init(param); }
+void HeapManager::Init(const HeapParam& param)
+{
+    // Heap sizing precedes collector construction and runtime worker selection
+    // (Universe::initialize_heap_sizes -> create_heap, zArguments.cpp:243).
+    ZHeuristics::set_max_heap_size(param.heapSize * 1024);
+    Heap::GetHeap().Init(param);
+}
 
 void HeapManager::Fini() { Heap::GetHeap().Fini(); }
 } // namespace MapleRuntime
