@@ -255,7 +255,7 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_FALSE(region->is_marked());
     GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
 
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     GC_EXPECT_FALSE(collector.MarkObject(fx.obj0)); // false = newly marked
     GC_EXPECT_TRUE(region->is_marked());
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
@@ -280,7 +280,7 @@ GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 {
     GcHeapFixture fx;
     ZPage* region = fx.region0;
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     GC_EXPECT_FALSE(collector.ResurrectObject(fx.obj0, offset, region));
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
@@ -452,7 +452,7 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
     ZPage* region = fx.region0;
     BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     if (initiallyFinalizable) {
         GC_EXPECT_FALSE(collector.ResurrectObject(object, region->GetAddressOffset(
             reinterpret_cast<MAddress>(object)), region));
@@ -556,7 +556,7 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     BaseObject* warmOther = fx.PlaceObject(start + neighbourOffset + 16);
     BaseObject* seed = fx.PlaceObject(start + 1024);
     region->SetRegionAllocPtr(start + 1024 + seed->GetSize());
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     // Initialize both old segments through real marks at different starts, so
     // both target bits are known clear before the controlled next-cycle reset.
     GC_EXPECT_FALSE(collector.MarkObject(warmFirst));
@@ -663,7 +663,7 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     BaseObject* other = fx.PlaceObject(region->GetRegionStart() + 256);
     BaseObject* seed = fx.PlaceObject(region->GetRegionStart() + 512);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(seed) + seed->GetSize());
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     GC_EXPECT_FALSE(collector.MarkObject(seed));
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     ResetSchedule schedule(&region->livemap());
