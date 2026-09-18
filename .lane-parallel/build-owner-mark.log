@@ -1,0 +1,58 @@
+# kkk2_build_two lane=sym_cangjie_runtime_700_implement_r5723534433-owner-mark head=f49bd78712f5cd31043a1456f85292050f3bc8ce dirty_files=23 source_sha256=0ffcb6ffe5e326b0…
+== default configure_rc=1 build_rc=NOT_RUN wall=3s
+-- first errors (default):
+default-configure.log:474:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:20: error: member access into incomplete type 'MapleRuntime::Mu
+default-configure.log:495:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:41: error: incomplete type 'MapleRuntime::Mutator' named in nes
+default-configure.log:516:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:173:16: error: member access into incomplete type 'MapleRuntime::Mu
+default-configure.log:537:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:178:16: error: member access into incomplete type 'MapleRuntime::Mu
+default-configure.log:558:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:178:37: error: incomplete type 'MapleRuntime::Mutator' named in nes
+default-configure.log:578:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:20: error: member access into incomplete type 'MapleRuntime::Mu
+default-configure.log:598:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:41: error: incomplete type 'MapleRuntime::Mutator' named in nes
+default-configure.log:618:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:20: error: member access into incomplete type 'MapleRuntime::Mu
+default-configure.log:650: In file included from error: /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Heap/z/zPageAllocator.hppincomplete type 'MapleRuntime::Mutato
+default-configure.log:653:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/Mutator.inline.h:14:13: error: incomplete type 'MapleRuntime::Mutator' named in nest
+default-configure.log:678:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/Mutator.inline.h:20:13: error: incomplete type 'MapleRuntime::Mutator' named in nest
+default-configure.log:698:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/Mutator.inline.h:34:13: error: incomplete type 'MapleRuntime::Mutator' named in nest
+default-configure.log:717:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:20:28: error: incomplete type 'MapleRuntime::Mutator' named in n
+default-configure.log:737:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:173:16: error: member access into incomplete type 'MapleRuntime::Mu
+default-configure.log:770:26/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h::58178:: 16error: :member access into incomplete type 'MapleRunti
+default-configure.log:796:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:178In file included from :/root/sym_cangjie_runtime_700_implement_r
+default-configure.log:815:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:33:32: error: incomplete type 'MapleRuntime::Mutator' named in n
+default-configure.log:834:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:34:26: error: member access into incomplete type 'MapleRuntime::
+default-configure.log:853:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:44:36: error: incomplete type 'MapleRuntime::Mutator' named in n
+default-configure.log:886:16/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:: 45error: :81member access into incomplete type 'MapleRuntime
+default-configure.log:887: error: member access into incomplete type 'MapleRuntime::Mutator'
+default-configure.log:915::In file included from  /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/src/runtime/schedule/include/inner/cjthread.herror: :member access into incomp
+default-configure.log:931:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:52:26: error: In file included from member access into incomplet
+default-configure.log:951:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:178:37: error: incomplete type 'MapleRuntime::Mutator' named in nes
+default-configure.log:970:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/default/runtime/src/CJThread/../../src/Mutator/Mutator.inline.h:14:13: error: incomplete type 'MapleRuntime::Mutator' named in nest
+-- SO (default):
+== testable configure_rc=1 build_rc=NOT_RUN wall=3s
+-- first errors (testable):
+testable-configure.log:473:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:20: error: member access into incomplete type 'MapleRuntime::
+testable-configure.log:493:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:41: error: incomplete type 'MapleRuntime::Mutator' named in n
+testable-configure.log:513:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:173:16: error: member access into incomplete type 'MapleRuntime::
+testable-configure.log:533:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:178:16: error: member access into incomplete type 'MapleRuntime::
+testable-configure.log:553:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:178:37: error: incomplete type 'MapleRuntime::Mutator' named in n
+testable-configure.log:573:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:20: error: member access into incomplete type 'MapleRuntime::
+testable-configure.log:593:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:41: error: incomplete type 'MapleRuntime::Mutator' named in n
+testable-configure.log:614:14In file included from :/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/src/runtime/schedule/include/inner/cjthread.h13:: 21error: :
+testable-configure.log:633:16In file included from :/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/src/runtime/schedule/include/inner/schedule_impl.h :error: 19member access 
+testable-configure.log:654:In file included from  /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/Mutator.herror: :incomplete type 'MapleRuntime::Mutator' na
+testable-configure.log:671:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:178:16: error: member access into incomplete type 'MapleRuntime::
+testable-configure.log:695:13In file included from /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Heap/Allocator/AllocBufferManager.h:: 15error: :
+testable-configure.log:710:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:178:37: error: incomplete type 'MapleRuntime::Mutator' named in n
+testable-configure.log:728:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:20:28: error: incomplete type 'MapleRuntime::Mutator' named in
+testable-configure.log:748:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:20: error: member access into incomplete type 'MapleRuntime::
+testable-configure.log:783:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/src/runtime/schedule/include/inner/cjthread.h In file included from :error: /root/sym_cangjie_runtim
+testable-configure.log:787:41:In file included from  /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Heap/Allocator/Allocator.herror: :incomplete type 'MapleRuntime:
+testable-configure.log:806::26:58In file included from : /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/src/runtime/schedule/src/schedule.cpperror: :member access into incomp
+testable-configure.log:826:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Mutator/MutatorManager.h:167:41: error: incomplete type 'MapleRuntime::Mutator' named in n
+testable-configure.log:859::/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h20::33 :error: 32member access into incomplete type 'MapleRunt
+testable-configure.log:860: error: incomplete type 'MapleRuntime::Mutator' named in nested name specifier
+testable-configure.log:896: In file included from error: /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.hmember access into incomplete typ
+testable-configure.log:901:error: /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/ObjectModel/MethodInfo.hincomplete type 'MapleRuntime::Mutator' named in nested nam
+testable-configure.log:922:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:44:36: error: incomplete type 'MapleRuntime::Mutator' named in
+testable-configure.log:940:/root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/testable/runtime/src/CJThread/../../src/Common/ScopedObjectAccess.h:45:81: error: member access into incomplete type 'MapleRuntime
+-- SO (testable):
+-- logs: /root/sym_cangjie_runtime_700_implement_r5723534433-owner-mark/{default,testable}-{configure,build}.log

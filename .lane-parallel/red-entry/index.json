@@ -1,0 +1,42 @@
+[
+  {
+    "name": "export-producer",
+    "file": "runtime/src/Heap/z/zGeneration.cpp",
+    "line": 1115,
+    "removed": "    Heap::GetHeap().cross_vm().ProcessExportRoots(oldMarkForeignRoots);",
+    "rc": 1,
+    "json": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_700_implement_r5723534433/.lane-parallel/red-entry/export-producer.json"
+  },
+  {
+    "name": "export-consumer",
+    "file": "runtime/src/Heap/z/zRelocationSet.cpp",
+    "line": 66,
+    "removed": "    Heap::GetHeap().cross_vm().PrepareCycleRef();",
+    "rc": 1,
+    "json": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_700_implement_r5723534433/.lane-parallel/red-entry/export-consumer.json"
+  },
+  {
+    "name": "crossvm-consumer",
+    "file": "runtime/src/Heap/z/zCrossVM.cpp",
+    "line": 272,
+    "removed": "            destination.splice(destination.end(), entry.second);",
+    "rc": 1,
+    "json": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_700_implement_r5723534433/.lane-parallel/red-entry/crossvm-consumer.json"
+  },
+  {
+    "name": "runtime-stop",
+    "file": "runtime/src/Heap/z/zCollectedHeap.cpp",
+    "line": 188,
+    "removed": "    collected->_runtime_workers.stop();",
+    "rc": 1,
+    "json": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_700_implement_r5723534433/.lane-parallel/red-entry/runtime-stop.json"
+  },
+  {
+    "name": "heap-stop",
+    "file": "runtime/src/Heap/z/zHeap.cpp",
+    "line": 416,
+    "removed": "void Heap::StopGCWork() { ZCollectedHeap::stop(); }",
+    "rc": 1,
+    "json": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_700_implement_r5723534433/.lane-parallel/red-entry/heap-stop.json"
+  }
+]

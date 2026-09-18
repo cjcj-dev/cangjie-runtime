@@ -1,0 +1,49 @@
+{
+ "repo": "/root/cj_build/cangjie_runtime_wt/sym_cangjie_runtime_700_implement_r5723534433",
+ "base": "8da2396b88608f0ab3ddbc65ddf7b05a414abc0c",
+ "head": "398d880bf5d04c8b86452194f1d8e9e4d8750324",
+ "mode": "product",
+ "ok": false,
+ "verdicts": [
+  {
+   "cut": ".lane-parallel/red-entry/export-producer.diff",
+   "file": "runtime/src/Heap/z/zGeneration.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "runtime/src/Heap/z/zGeneration.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "8da2396b88608f0ab3ddbc65ddf7b05a414abc0c:runtime/src/Heap/z/zGeneration.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": false,
+     "detail": "缺: Heap::GetHeap().cross_vm().ProcessExportRoots(oldMarkForeignRoots);"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": false,
+     "detail": "断到候选新增行: Heap::GetHeap().cross_vm().ProcessExportRoots(oldMarkForeignRoots);"
+    }
+   ],
+   "phase_hits": [],
+   "ok": false
+  },
+  {
+   "cut": "*",
+   "file": "*",
+   "checks": [
+    {
+     "name": "至少一处断线落在真实相位入口函数",
+     "ok": false,
+     "detail": "RunGarbageCollection, RequestGC, DoGarbageCollection, PushYoungObject, FindUselessExternObjects, Preforward, PostTrace, PublishMarkCoverage, ReclaimRetired, RehomeCompactedInPlaceRegion, TryAllocateForRelocation, SetRelocationRegion, ResolveCycleRef, ResolveCycleRefImpl, RouteOrCompactRegionImpl, PostResolveCycleTask, VerifyFaceEnabled, VerifyPhaseEnter, GCPhasePreForward, TransitionToGCPhaseExclusive, ForwardObjectImpl, ForwardObjectExclusive, RelocateObjectInner, TryMutatorRelocate, WaitForPageForwarding, RunCycle, Uncommit, VisitHeapRootSlots, WriteReference, RecordCrossGenEdge, ZeroAndFill, runtime/src/Heap/z/zStat.cpp:Sort, PublishForwardingCarrier, PrepareForwardableRegion, DoYoungGarbageCollection, DoTracing, ProcessOldNonStrongReferences, PostWriteReference, WaitForAck, ProcessDriverRequest, RequestGCAndWait, DrainStackWatermark, VisitRawObjects, NoteLargeArrayInitRootVisit, runtime/src/Heap/z/zMarkingSMR.cpp:free_node, runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:MRT_TransitMutatorToExit, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:LibInit, runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:UnloadLibrary, runtime/src/CangjieRuntimeApi.cpp:UnloadCJLibrary, runtime/src/Heap/z/workerThread.cpp:coordinator_distribute_task, runtime/src/Heap/z/zWorkers.cpp:run, runtime/src/Heap/z/zBarrier.cpp:store_barrier_on_heap_oop_field"
+    }
+   ],
+   "ok": false
+  }
+ ]
+}

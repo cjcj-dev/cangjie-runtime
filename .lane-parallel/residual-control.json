@@ -1,0 +1,31 @@
+[
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "snapshotFinalizerNum|fixReferences|HealFpTable|HealFpIndex|HealFpMark|HealFpTest|kHealFpBits|kMembershipFromTable|kLoneFromIsFrom|loneFromHits",
+      "6013e7fb12559db9b36fa1a101c0d81832c65687",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit"
+    ],
+    "rc": 0,
+    "output": "6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:346:    static constexpr size_t kHealFpBits = 1u << 22;\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:347:    static uint64_t* HealFpTable()\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:349:        static uint64_t table[kHealFpBits / 64] = {};\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:352:    static size_t HealFpIndex(uintptr_t slot)\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:355:        return static_cast<size_t>(h) & (kHealFpBits - 1);\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:357:    static void HealFpMark(uintptr_t slot)\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:359:        const size_t i = HealFpIndex(slot);\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:360:        __atomic_fetch_or(&HealFpTable()[i / 64], uint64_t(1) << (i % 64), __ATOMIC_RELAXED);\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:362:    static bool HealFpTest(uintptr_t slot)\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:364:        const size_t i = HealFpIndex(slot);\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:365:        return (__atomic_load_n(&HealFpTable()[i / 64], __ATOMIC_RELAXED) & (uint64_t(1) << (i % 64))) != 0;\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:499:    U32 snapshotFinalizerNum = 0;\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:504:    bool fixReferences = false;\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:764:    static constexpr bool kLoneFromIsFrom = true;\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:765:    mutable std::atomic<uint64_t> loneFromHits{ 0 };\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:775:    static constexpr bool kMembershipFromTable = true;\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:779:        if (kMembershipFromTable) {\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:790:            if (kLoneFromIsFrom && regionInfo->IsLoneFromRegion()) {\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/src/Heap/z/zMark.hpp:793:                const uint64_t n = loneFromHits.fetch_add(1, std::memory_order_relaxed) + 1;\n6013e7fb12559db9b36fa1a101c0d81832c65687:runtime/tests/gc_unit/test_stay_young.cpp:80:// Product EnlistStayYoungSurvivor must not leave LONE_FROM (kLoneFromIsFrom).\n"
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "snapshotFinalizerNum|fixReferences|HealFpTable|HealFpIndex|HealFpMark|HealFpTest|kHealFpBits|kMembershipFromTable|kLoneFromIsFrom|loneFromHits",
+      "--",
+      "runtime/src",
+      "runtime/tests/gc_unit"
+    ],
+    "rc": 1,
+    "output": ""
+  }
+]
