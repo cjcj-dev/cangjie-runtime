@@ -427,10 +427,6 @@ public:
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
 
-    // ZGC-style per-generation request ports.  Requests on one port never
-    // consume or coalesce requests from the other generation.
-    ZDriverPort& GetMinorDriverPort();
-    ZDriverPort& GetMajorDriverPort();
     void RequestAbort(GCDriverKind kind)
     {
         ZAbort::abort();

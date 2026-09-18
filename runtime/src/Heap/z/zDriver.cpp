@@ -391,16 +391,6 @@ void CollectorResources::StartGCThreads()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-ZDriverPort& CollectorResources::GetMinorDriverPort()
-{
-    return ZCollectedHeap::heap()->driver_minor()->port();
-}
-
-ZDriverPort& CollectorResources::GetMajorDriverPort()
-{
-    return ZCollectedHeap::heap()->driver_major()->port();
-}
-
 ZWorkers& CollectorResources::GetWorkers(ZGenerationId generation) const
 {
     return *Heap::GetHeap().GetZGeneration(generation).Workers();
