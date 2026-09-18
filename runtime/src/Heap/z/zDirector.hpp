@@ -6,13 +6,10 @@
 #include <mutex>
 
 namespace MapleRuntime {
-class CollectorResources;
-
 class ZDirector : public ZThread {
 private:
     static const uint64_t DecisionHz = 100;
     static ZDirector* _director;
-    CollectorResources& resources;
     std::mutex monitor;
     std::condition_variable condition;
     bool stopped = false;
@@ -27,7 +24,7 @@ public:
     void terminate() override;
 
 public:
-    explicit ZDirector(CollectorResources& resources);
+    ZDirector();
 
     static void evaluate_rules();
     void notify_reevaluate();

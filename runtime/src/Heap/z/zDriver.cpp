@@ -404,7 +404,7 @@ void CollectorResources::StartGCThreads()
     ZCollectedHeap* collected = ZCollectedHeap::heap();
     collected->_driver_minor = new ZDriverMinor(*this);
     collected->_driver_major = new ZDriverMajor(*this);
-    collected->_director = new ZDirector(*this);
+    collected->_director = new ZDirector();
     collected->_driver_minor->start();
     collected->_driver_major->start();
 }

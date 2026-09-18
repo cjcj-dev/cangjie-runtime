@@ -65,7 +65,7 @@ struct ZDirectorStats {
     size_t relocation_headroom = 0;
 };
 
-ZDirector::ZDirector(CollectorResources& resources) : resources(resources)
+ZDirector::ZDirector()
 {
     _director = this;
     set_name("ZDirector");
@@ -644,11 +644,11 @@ void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
         reevaluate = false;
-        if (Runtime::CurrentRef() == nullptr || !resources.IsGCActive()) {
+        if (Runtime::CurrentRef() == nullptr || !Heap::GetHeap().IsGCEnabled()) {
             continue;
         }
         const ZDirectorStats stats = sample_stats(TimeUtil::NanoSeconds(),
-            busy(true), busy(false), resources.concurrentGcThreadCount);
+            busy(true), busy(false), ZCollectedHeap::heap()->resources().concurrentGcThreadCount);
         if (!MapleRuntime::start_gc(stats)) {
             adjust_gc(stats);
         }
