@@ -21,7 +21,7 @@ using ProductMark = bool (*)(const HeapGcState*, BaseObject*, bool, MarkLiveCach
 ProductMark CachedMark()
 {
     auto fn = reinterpret_cast<ProductMark>(dlsym(RTLD_DEFAULT,
-        "_ZNK12MapleRuntime10CopyCollector14MarkObjectImplEPNS_10BaseObjectEbPNS_13MarkLiveCacheE"));
+        "_ZNK12MapleRuntime11HeapGcState14MarkObjectImplEPNS_10BaseObjectEbPNS_13MarkLiveCacheE"));
     GC_EXPECT_TRUE(fn != nullptr);
     return fn;
 }
@@ -35,7 +35,7 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
         fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
         fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + fx.obj0->GetSize());
     }
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     const size_t size = fx.obj0->GetSize();
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     if (finalizable) {
@@ -92,7 +92,7 @@ GC_TEST(MarkPort203Entries, LargeFinalizableUpgradeDoesNotAccountTwice)
 GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 {
     GcHeapFixture fx;
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     // Choose a legal power-of-two shift from actual fixture addresses rather
     // than assuming that mmap placed both pages below one bucket boundary.
     size_t stripes = 1;
@@ -138,10 +138,7 @@ namespace MapleRuntime {
 struct MarkPort203TestAccess {
     static void Bind(CollectorResources& resources, HeapGcState* collector, int32_t count = 1)
     {
-        if (collector != nullptr && resources.testCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
-        }
-        resources.testCollector = collector;
+        if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
         resources.concurrentGcThreadCount = count;
     }
     static void Collect(HeapGcState& collector, bool major)
@@ -314,7 +311,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     GC_EXPECT_TRUE(next <= fx.region1->GetRegionEnd());
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     MarkPort203TestAccess::Bind(resources, &collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
