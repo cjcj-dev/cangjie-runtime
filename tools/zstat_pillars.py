@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "runtime/tests/perf_vs_official"))
 
-from gclog_schema import PILLARS, build_phase_leaf_ledger, parse_gclog, parse_zstat, pillar_for  # noqa: E402
+from gclog_schema import PILLARS, parse_gclog, parse_zstat, pillar_for  # noqa: E402
 
 
 REFERENCE = {"mark": 65.0, "drain": 19.0, "copy": 6.3, "evac_finish": 5.2, "ref_fix": 4.5}
@@ -61,18 +61,19 @@ def main() -> int:
     try:
         gclog = parse_gclog(text)
         zstat = parse_zstat(text)
-        ledger = build_phase_leaf_ledger(gclog)
     except ValueError as exc:
         print(f"RED: structured ledger invalid: {exc}")
         return 1
 
-    owned_leaves = [record for record in gclog.phase_leaves if record.seq > 0]
-    unknown_kinds = [record for record in owned_leaves if record.kind == "unknown"]
+    # P15: rec=phase_leaf is gone (no ZGC counterpart); owned work records are
+    # the positive-seq rec=phase rows, the population the retired Timer saw.
+    owned_phases = [record for record in gclog.phases if record.seq > 0]
+    unknown_kinds = [record for record in owned_phases if record.kind == "unknown"]
     if unknown_kinds:
         print(
             "PHASE_KIND_CLASSIFICATION_UNAVAILABLE "
-            f"unknown={len(unknown_kinds)} owned_structural_leaves={len(owned_leaves)}; "
-            "this MRT_ZSTAT=OFF-compatible ledger does not provide pause/conc classification"
+            f"unknown={len(unknown_kinds)} owned_phases={len(owned_phases)}; "
+            "this ledger does not provide pause/conc classification"
         )
         return 1
 
@@ -95,29 +96,34 @@ def main() -> int:
         print("RED: all ZSTAT phase totals are zero (dead-device guard)")
         return 1
 
-    leaf_pillar_ns = defaultdict(int)
-    leaf_pause_ns = defaultdict(int)
-    for record in gclog.phase_leaves:
-        key = pillar_for(record.path)
+    work_pillar_ns = defaultdict(int)
+    work_pause_ns = defaultdict(int)
+    for record in gclog.phases:
+        key = pillar_for(record.name)
         if key is None or record.seq == 0:
             continue
-        leaf_pillar_ns[key] += record.ns
+        work_pillar_ns[key] += record.ns
         if record.kind == "pause":
-            leaf_pause_ns[key] += record.ns
+            work_pause_ns[key] += record.ns
 
-    print("INEQUALITY_1 all positive-seq structural leaves joined to the cycle master table")
-    for row in ledger["cycles"]:
-        pillars = " ".join(f"{name}_ns={row['pillars_ns'][name]}" for name, _pattern in PILLARS)
+    print("INEQUALITY_1 all positive-seq work phases joined to the cycle master table")
+    cycle_rows = {}
+    for record in gclog.phases:
+        if record.seq == 0:
+            continue
+        row = cycle_rows.setdefault(record.seq, {name: 0 for name, _pattern in PILLARS})
+        key = pillar_for(record.name)
+        if key is not None:
+            row[key] += record.ns
+    for cycle in sorted(gclog.cycles, key=lambda record: record.seq):
+        row = cycle_rows.get(cycle.seq, {name: 0 for name, _pattern in PILLARS})
+        pillar_sum = sum(row.values())
+        pillars = " ".join(f"{name}_ns={row[name]}" for name, _pattern in PILLARS)
+        verdict = "PASS" if pillar_sum <= cycle.dur_ns else "FAIL"
         print(
-            f"CYCLE_BOUND seq={row['seq']} {pillars} leaf_pillar_ns={row['leaf_pillar_ns']} "
-            f"structural_leaf_ns={row['structural_leaf_ns']} "
-            f"cycle_dur_ns={row['cycle_dur_ns']} verdict=PASS"
+            f"CYCLE_BOUND seq={cycle.seq} {pillars} work_pillar_ns={pillar_sum} "
+            f"cycle_dur_ns={cycle.dur_ns} verdict={verdict}"
         )
-    print(
-        "LEAF_DIAGNOSTIC "
-        f"matched={ledger['matched_leaf_records']} excluded_nonpillar={ledger['excluded_nonpillar_leaf_records']} "
-        f"unowned_nonpillar={ledger['unowned_nonpillar_leaf_records']}"
-    )
 
     # Contract 1: exact conservation of each positive-seq Timer sample and the zcycle rollup.
     gc_phase = defaultdict(int)
@@ -252,14 +258,14 @@ def main() -> int:
     contract_3_ok = positive_phase_samples > 0 and not phase_cycle_mismatches
     print(f"CONTRACT_3_PHASE_CYCLE verdict={'PASS' if contract_3_ok else 'FAIL'}")
 
-    pillar_total = sum(leaf_pillar_ns.values())
+    pillar_total = sum(work_pillar_ns.values())
     print(f"{'pillar':<12} {'self-norm%':>10} {'ref%':>6} {'delta':>7}  pause-share%")
     legacy_red = False
     for key, _pattern in PILLARS:
-        pct = 100.0 * leaf_pillar_ns[key] / pillar_total if pillar_total else 0.0
+        pct = 100.0 * work_pillar_ns[key] / pillar_total if pillar_total else 0.0
         ref = REFERENCE[key]
         delta = pct - ref
-        pause_share = 100.0 * leaf_pause_ns[key] / leaf_pillar_ns[key] if leaf_pillar_ns[key] else 0.0
+        pause_share = 100.0 * work_pause_ns[key] / work_pillar_ns[key] if work_pillar_ns[key] else 0.0
         if args.legacy_tolerance is not None and abs(delta) > args.legacy_tolerance:
             legacy_red = True
         print(f"{key:<12} {pct:>10.1f} {ref:>6.1f} {delta:>+7.1f}  {pause_share:>8.1f}")

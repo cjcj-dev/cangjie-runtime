@@ -871,8 +871,10 @@ void ZStatPhaseCollection::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     if (ZAbort::should_abort()) {
         return;
     }
+    // rec=cycle is the collection-level structured record; rec=phase covers
+    // pause/concurrent/subphase/critical work (same population the retired
+    // Timer observed).
     sampler.Sample(endNs - startNs);
-    EmitPhaseRecord(*this, "conc", startNs, endNs);
 }
 
 ZStatPhaseGeneration::ZStatPhaseGeneration(const char* name, ZGenerationId id)
@@ -891,7 +893,6 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     }
     sampler.Sample(endNs - startNs);
     ZStatMMU::Print();
-    EmitPhaseRecord(*this, "conc", startNs, endNs);
 }
 
 uint64_t ZStatPhasePause::maxNs;
