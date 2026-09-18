@@ -13,6 +13,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zMark.hpp"
+#include "UnwindStack/StackFrameCursor.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
 #if defined(__linux__)
@@ -62,7 +63,7 @@ void CheckNativeFrameScan(bool derived)
         size_t visits = 0;
         const RootVisitor roots = [&](RootSlot&) { ++visits; };
         const DerivedPtrVisitor derivedRoots = [&](BasePtrType, DerivedSlot&) { ++visits; };
-        HeapGcState::Process(roots, derived ? &derivedRoots : nullptr, registers, frame, mutator);
+        StackFrameCursor::ProcessManagedFrame(roots, derived ? &derivedRoots : nullptr, registers, frame, mutator);
         _exit(visits == 0 ? 0 : 1);
     }
     int status = 0;
