@@ -407,6 +407,8 @@ void CollectorResources::StartGCThreads()
     minorDriver = collected->_driver_minor;
     majorDriver = collected->_driver_major;
     director = collected->_director;
+    minorDriver->start();
+    majorDriver->start();
 }
 
 

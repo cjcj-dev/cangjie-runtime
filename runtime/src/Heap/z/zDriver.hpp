@@ -355,6 +355,7 @@ protected:
 class ZDriverMinor final : public ZDriver {
 public:
     explicit ZDriverMinor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MINOR, _port) {}
+    void start() { create_and_start(); }
     void collect(const ZDriverRequest& request);
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
@@ -365,6 +366,7 @@ private:
 class ZDriverMajor final : public ZDriver {
 public:
     explicit ZDriverMajor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MAJOR, _port) {}
+    void start() { create_and_start(); }
     void collect(const ZDriverRequest& request);
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
