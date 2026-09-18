@@ -45,26 +45,25 @@ extern "C" uintptr_t MRT_StopGCWork()
 // zDriver.cpp:118-127,319-328: each driver names itself and starts in its
 // constructor; run_thread is the request loop (zDriver.cpp:201-225,463-488)
 // and terminate closes the port so the loop's receive returns (:227-231).
-ZDriver::ZDriver(CollectorResources& resources, GCDriverKind kind) : resources(resources), kind(kind)
+ZDriver::ZDriver(CollectorResources& resources, GCDriverKind kind, ZDriverPort& port)
+    : resources(resources), kind(kind), port(port)
 {
     set_name(kind == GCDriverKind::MINOR ? "ZDriverMinor" : "ZDriverMajor");
-    create_and_start();
 }
 
 void ZDriver::run_thread()
 {
-    resources.RunDriverLoop(kind);
+    resources.RunDriverLoop(kind, port);
 }
 
 void ZDriver::terminate()
 {
-    (kind == GCDriverKind::MINOR ? resources.GetMinorDriverPort() : resources.GetMajorDriverPort())
-        .send_async(ZDriverRequest(GC_REASON_INVALID, 0, 0));
+    port.send_async(ZDriverRequest(GC_REASON_INVALID, 0, 0));
 }
 
 bool ZDriver::is_busy() const
 {
-    return (kind == GCDriverKind::MINOR ? resources.GetMinorDriverPort() : resources.GetMajorDriverPort()).is_busy();
+    return port.is_busy();
 }
 
 void ZDriverMinor::collect(const ZDriverRequest& request)
@@ -179,9 +178,8 @@ void CollectorResources::StopGCThreads()
     gcThreadRunning.store(false, std::memory_order_release);
 }
 
-void CollectorResources::RunDriverLoop(GCDriverKind kind)
+void CollectorResources::RunDriverLoop(GCDriverKind kind, ZDriverPort& port)
 {
-    ZDriverPort& port = kind == GCDriverKind::MINOR ? GetMinorDriverPort() : GetMajorDriverPort();
     for (;;) {
         const ZDriverRequest request = port.receive();
         if (request.cause() == GC_REASON_INVALID) {

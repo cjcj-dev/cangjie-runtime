@@ -342,18 +342,19 @@ class CollectorResourcesTestPeer;
 // receives requests from their port and whose terminate closes that port.
 class ZDriver : public ZThread {
 public:
-    ZDriver(CollectorResources& resources, GCDriverKind kind);
+    ZDriver(CollectorResources& resources, GCDriverKind kind, ZDriverPort& port);
     void run_thread() override;
     void terminate() override;
     bool is_busy() const;
 protected:
     CollectorResources& resources;
     const GCDriverKind kind;
+    ZDriverPort& port;
 };
 
 class ZDriverMinor final : public ZDriver {
 public:
-    explicit ZDriverMinor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MINOR) {}
+    explicit ZDriverMinor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MINOR, _port) {}
     void collect(const ZDriverRequest& request);
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
@@ -363,7 +364,7 @@ private:
 
 class ZDriverMajor final : public ZDriver {
 public:
-    explicit ZDriverMajor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MAJOR) {}
+    explicit ZDriverMajor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MAJOR, _port) {}
     void collect(const ZDriverRequest& request);
     ZDriverPort& port() { return _port; }
     const ZDriverPort& port() const { return _port; }
@@ -441,7 +442,7 @@ private:
 
     void StartGCThreads();
     void StopGCThreads();
-    void RunDriverLoop(GCDriverKind kind);
+    void RunDriverLoop(GCDriverKind kind, ZDriverPort& port);
     void RunDirectorLoop();
     void EvaluateDirector(uint64_t now);
     bool start_gc(uint64_t now);
