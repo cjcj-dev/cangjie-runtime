@@ -428,7 +428,6 @@ public:
     // consume or coalesce requests from the other generation.
     ZDriverPort& GetMinorDriverPort();
     ZDriverPort& GetMajorDriverPort();
-    ZDriverPort& GetYoungDriverPort();
     void RequestAbort(GCDriverKind kind)
     {
         ZAbort::abort();

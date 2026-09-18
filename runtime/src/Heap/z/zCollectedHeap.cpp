@@ -71,7 +71,7 @@ void ZCollectedHeap::collect(GCReason reason, bool async)
         return;
     }
     ZDriverPort& port = reason == GC_REASON_YOUNG
-        ? _resources->GetMinorDriverPort() : _resources->GetMajorDriverPort();
+        ? _driver_minor->port() : _driver_major->port();
     const ZDriverRequest request(reason, 0, 0);
     if (async) {
         CHECK(!g_gcRequests[reason].IsSyncGC());

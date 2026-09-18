@@ -76,11 +76,11 @@ void ZDriverMinor::collect(const ZDriverRequest& request)
 {
     switch (request.cause()) {
         case GC_REASON_YOUNG:
-            resources.GetMinorDriverPort().send_async(request);
+            _port.send_async(request);
             break;
         case GC_REASON_HEU_SYNC:
         case GC_REASON_NATIVE_SYNC:
-            resources.GetMinorDriverPort().send_sync(request);
+            _port.send_sync(request);
             break;
         default:
             CHECK(false);
@@ -94,17 +94,17 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
         case GC_REASON_USER:
         case GC_REASON_FORCE:
         case GC_REASON_OOM:
-            resources.GetMajorDriverPort().send_sync(request);
+            _port.send_sync(request);
             break;
         case GC_REASON_BACKUP:
         case GC_REASON_HEU:
         case GC_REASON_NATIVE:
         case GC_REASON_WARMUP:
-            resources.GetMajorDriverPort().send_async(request);
+            _port.send_async(request);
             break;
         case GC_REASON_WB_BREAKPOINT:
             ZBreakpoint::StartGC();
-            resources.GetMajorDriverPort().send_async(request);
+            _port.send_async(request);
             break;
         default:
             CHECK(false);
@@ -559,11 +559,6 @@ bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
     return manager.IsAllocationStalling();
 }
 
-ZDriverPort& CollectorResources::GetYoungDriverPort()
-{
-    return Heap::GetHeap().young().YoungType() == ZYoungType::minor
-        ? GetMinorDriverPort() : GetMajorDriverPort();
-}
 
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
