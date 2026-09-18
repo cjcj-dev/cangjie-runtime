@@ -306,19 +306,6 @@ class HeapGcState {
     friend class ZMarkTask;
 
 public:
-    bool IsLoadBad(RefField<>& ref) const
-    {
-        return (raw(ref.GetFieldValue()) & ::g_cjLoadBadMask) != 0;
-    }
-    BaseObject* make_load_good(RefField<>& ref, const ForwardingProvenance& provenance) const
-    {
-        BaseObject* target = to_object(ref.GetTargetObject());
-        if (target == nullptr || ZPointer::is_load_good(ref.GetFieldValue())) {
-            return target;
-        }
-        return ZGeneration::generation(remap_generation(ref))->relocate_or_remap_object(target, provenance);
-    }
-
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
     friend struct ZGenerationRootTestAccess;
@@ -491,8 +478,6 @@ public:
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field);
     BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
     BaseObject* ForwardObjectExclusive(BaseObject* obj);
-    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
-                                  Generation generation) const;
 
 
     // Phase A of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
@@ -520,26 +505,6 @@ public:
 
     // OpenJDK ZBarrier::remap_generation (zBarrier.inline.hpp:110-137): one generation-good
     // bit identifies the other generation; a double-bad colour consults the forwarding side table.
-    ZGenerationId remap_generation(RefField<>& ref) const
-    {
-        CHECK_DETAIL(!ZPointer::is_load_good(ref.GetFieldValue()), "load-good reference does not need remap");
-        if (ZPointer::is_old_load_good(ref.GetFieldValue())) return ZGenerationId::young;
-        if (ZPointer::is_young_load_good(ref.GetFieldValue())) return ZGenerationId::old;
-        // zBarrier.inline.hpp:124-136: the remembered bits disambiguate old
-        // heap fields; otherwise test the young generation's forwarding map.
-        if ((raw(ref.GetFieldValue()) & ZPointerRememberedMask) == ZPointerRememberedMask) {
-            return ZGenerationId::old;
-        }
-        const MAddress address = raw(ref.GetTargetObject());
-        if (address == 0) {
-            return ZGenerationId::old;
-        }
-        if (Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(address) != nullptr) {
-            return ZGenerationId::young;
-        }
-        return ZGenerationId::old;
-    }
-
     void AddRawPointerObject(BaseObject* obj)
     {
         (void)PinRawPointerObject(obj);
@@ -621,15 +586,7 @@ public:
     // 0x6282f2... is the compiler's own image, the same range as start_ip in that run's stack-map
     // lines.  Gating only the first site moved the abort to the second, which is what showed the
     // population was the old-tag paths rather than one call site.
-    FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const
-    {
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-            return FindToVersionResult::NotManaged();
-        }
-        const MAddress to = forwarding_find(generation, reinterpret_cast<MAddress>(obj));
-        return to != 0 ? FindToVersionResult::Found(reinterpret_cast<BaseObject*>(to))
-                       : FindToVersionResult::NotForwarded();
-    }
+
 
 protected:
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
@@ -679,12 +636,7 @@ protected:
     // current to-version as a historical from-version.  Do not turn a lookup
     // miss into success here: current from-range members remain on the normal
     // receipt/relocate path and therefore retain fail-closed handling.
-    bool IsAlreadyToStoreValue(BaseObject* target, Generation generation) const
-    {
-        return target != nullptr && Heap::IsHeapAddress(target) &&
-            ZBarrier::JudgeHandOutTarget(target) == HandVerdict::Usable &&
-            generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(target)) == nullptr;
-    }
+
 
 
 

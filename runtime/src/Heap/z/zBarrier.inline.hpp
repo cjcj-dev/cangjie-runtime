@@ -13,6 +13,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zForwardingLookup.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
@@ -252,14 +253,29 @@ inline zaddress ZBarrier::remap(zaddress_unsafe addr, ZGeneration* generation)
 
 inline zaddress ZBarrier::make_load_good(zpointer ptr)
 {
+    return make_load_good_impl(ptr, nullptr);
+}
+
+// Cangjie raw carriers retain their diagnostic provenance through the same
+// colored-word routing as ordinary field barriers (zBarrier.inline.hpp:294).
+inline zaddress ZBarrier::make_load_good(zpointer ptr, const ForwardingProvenance& provenance)
+{
+    return make_load_good_impl(ptr, &provenance);
+}
+
+inline zaddress ZBarrier::make_load_good_impl(zpointer ptr, const ForwardingProvenance* provenance)
+{
     if (is_null_any(ptr)) {
         return zaddress::null;
     }
     if (ZPointer::is_load_good_or_null(ptr)) {
         return RefField<>(ptr).GetTargetObject();
     }
-    return relocate_or_remap(to_zaddress_unsafe(untype(RefField<>(ptr).GetTargetObject())),
-                            remap_generation(ptr));
+    ZGeneration* generation = remap_generation(ptr);
+    BaseObject* object = to_object(RefField<>(ptr).GetTargetObject());
+    return from_object(provenance == nullptr
+        ? generation->relocate_or_remap_object(object)
+        : generation->relocate_or_remap_object(object, *provenance));
 }
 
 inline zaddress ZBarrier::make_load_good_no_relocate(zpointer ptr)

@@ -88,6 +88,8 @@ public:
     static ZGeneration* remap_generation(zpointer ptr);
     static void remap_young_relocated(volatile zpointer* p, zpointer o);
     static zaddress make_load_good(zpointer ptr);
+    static zaddress make_load_good(zpointer ptr, const ForwardingProvenance& provenance);
+    static zaddress make_load_good_impl(zpointer ptr, const ForwardingProvenance* provenance);
     static zaddress make_load_good_no_relocate(zpointer ptr);
     static void remember(volatile zpointer* p);
     static void mark_and_remember(volatile zpointer* p, zaddress addr);

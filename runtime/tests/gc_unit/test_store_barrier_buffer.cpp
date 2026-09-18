@@ -13,9 +13,11 @@
 #include <unistd.h>
 #endif
 
-// Match the existing test_young_conc test-peer shape: this TU alone needs the
-// CollectorProxy friendship to publish a real product TRACE phase.  Product
-// libraries retain their configured macro set.
+// Enable the existing mark-publication test peer after heap layout is fixed.
+// Parse value-owned heap resources with the product macro configuration before
+// enabling the existing test peers; their member offsets must match the SO.
+#include "Heap/z/zHeap.hpp"
+
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1
 #endif

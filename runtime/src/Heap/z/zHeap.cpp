@@ -211,7 +211,7 @@ void Heap::MarkNewObject(BaseObject* obj)
 
 BaseObject* Heap::make_load_good(RefField<>& ref, const ForwardingProvenance& provenance)
 {
-    return GetCollector().make_load_good(ref, provenance);
+    return to_object(ZBarrier::make_load_good(ref.GetFieldValue(), provenance));
 }
 
 void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)

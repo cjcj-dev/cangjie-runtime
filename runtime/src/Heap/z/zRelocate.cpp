@@ -142,12 +142,12 @@ bool HeapGcState::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, Base
                                        BaseObject*& toObj, const ForwardingProvenance& provenance) const
 {
     RefField<> oldRef(field);
-    if (IsLoadBad(oldRef)) {
+    if (ZPointer::is_load_bad(oldRef.GetFieldValue())) {
         fromObj = to_object(oldRef.GetTargetObject());
         if (forward) {
-            toObj = ZGeneration::generation(remap_generation(oldRef))->relocate_or_remap_object(fromObj);
+            toObj = ZBarrier::remap_generation(oldRef.GetFieldValue())->relocate_or_remap_object(fromObj);
         } else {
-            toObj = FindToVersion(fromObj, static_cast<Generation>(remap_generation(oldRef))).GetOrFailClosed(
+            toObj = ZRelocate::FindToVersion(fromObj, static_cast<Generation>(ZBarrier::remap_generation(oldRef.GetFieldValue())->id())).GetOrFailClosed(
                 "HeapGcState::TryUpdateRefFieldImpl", provenance);
         }
         if (toObj == nullptr) {
@@ -516,7 +516,7 @@ BaseObject* HeapGcState::ResolveMinorReference(RefField<>& field, const ScopedSt
     // references pass through make-load-good before the concrete slot is
     // healed. Colour alone is not forwarding provenance.
     const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-    BaseObject* resolved = make_load_good(observed, provenance);
+    BaseObject* resolved = to_object(ZBarrier::make_load_good(observed.GetFieldValue(), provenance));
     CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved),
                  "minor resolve requires a heap to-address from=%p", from);
     CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
@@ -537,7 +537,7 @@ BaseObject* HeapGcState::ResolveMinorReference(RootSlot& root, const ScopedStopT
     // ZUncoloredRootProcessOopClosure applies the load barrier and writes the
     // resolved address back uncolored (zGeneration.cpp:1458-1523).
     const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &root };
-    BaseObject* resolved = ResolveStoreValue(from, provenance, Generation::Young);
+    BaseObject* resolved = ZRelocate::ResolveStoreValue(from, provenance, Generation::Young);
     CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved),
                  "minor root resolve requires a heap to-address from=%p", from);
     CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
@@ -572,7 +572,7 @@ bool HeapGcState::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase
             return false;
         }
         const ForwardingProvenance provenance{ ForwardingHolderKind::Derived, knownBase, &field };
-        BaseObject* resolvedBase = ResolveStoreValue(knownBase, provenance, Generation::Young);
+        BaseObject* resolvedBase = ZRelocate::ResolveStoreValue(knownBase, provenance, Generation::Young);
         CHECK_DETAIL(resolvedBase != nullptr && Heap::IsHeapAddress(resolvedBase) &&
                          ZBarrier::JudgeHandOutTarget(resolvedBase) == HandVerdict::Usable,
                      "derived heal requires a resolved base base=%p resolved=%p offset=%zu",
@@ -692,7 +692,7 @@ bool HeapGcState::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld
         // refuses silently leaving from (seqnum-bounded table already rejects
         // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
         const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &root };
-        BaseObject* viaTable = FindToVersion(target, Generation::Young).GetOrFailClosed(
+        BaseObject* viaTable = ZRelocate::FindToVersion(target, Generation::Young).GetOrFailClosed(
             "HeapGcState::FixMinorEvacuatedSlot", provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
@@ -963,7 +963,7 @@ static BaseObject* RemapPromotedField(HeapGcState& collector, RefField<>& field,
         return to_object(value.GetTargetObject());
     }
     const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-    BaseObject* target = collector.make_load_good(value, provenance);
+    BaseObject* target = to_object(ZBarrier::make_load_good(value.GetFieldValue(), provenance));
     CHECK_DETAIL(target != nullptr || !(!is_null_any(to_zpointer(raw(observed)))),
                  "promotion remap must preserve a non-null reference");
     // ZAddress::load_good: upgrade remap bits without claiming a marking epoch.
@@ -1245,8 +1245,25 @@ BaseObject* ZRelocate::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& l
     return toVersion;
 }
 
-BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
-                                         Generation generation) const
+FindToVersionResult ZRelocate::FindToVersion(BaseObject* obj, Generation generation)
+{
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return FindToVersionResult::NotManaged();
+    }
+    const MAddress to = forwarding_find(generation, reinterpret_cast<MAddress>(obj));
+    return to != 0 ? FindToVersionResult::Found(reinterpret_cast<BaseObject*>(to))
+                   : FindToVersionResult::NotForwarded();
+}
+
+bool ZRelocate::IsAlreadyToStoreValue(BaseObject* target, Generation generation)
+{
+    return target != nullptr && Heap::IsHeapAddress(target) &&
+        ZBarrier::JudgeHandOutTarget(target) == HandVerdict::Usable &&
+        generation_forwarding_table(generation).get(reinterpret_cast<MAddress>(target)) == nullptr;
+}
+
+BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+                                         Generation generation)
 {
     // zBarrier.inline.hpp:695-716 store_barrier_on_heap_oop_field:
     // color_store_good includes remap. A movable ghost-from value must go
@@ -1257,7 +1274,7 @@ BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProv
         if (current == nullptr || !Heap::IsHeapAddress(current)) {
             return current;
         }
-        if (IsAlreadyToStoreValue(current, generation)) {
+        if (ZRelocate::IsAlreadyToStoreValue(current, generation)) {
             return current;
         }
         const MAddress currentAddr = reinterpret_cast<MAddress>(current);
@@ -1293,7 +1310,7 @@ BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProv
                 return current;
             }
         }
-        FindToVersionResult found = FindToVersion(current, generation);
+        FindToVersionResult found = ZRelocate::FindToVersion(current, generation);
         // A forwarding entry qualifies one hop, not necessarily the final
         // load-good value. The destination can already belong to the next
         // relocation set; follow that address-keyed forwarding generation too.
@@ -1334,7 +1351,7 @@ BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProv
             }
             const MAddress lookupTo = forwarding_find(generation, currentAddr);
             LOG(RTLOG_ERROR,
-                "[FWDTABLE][resolve-miss] site=no-forwarding consumer=HeapGcState::ResolveStoreValue "
+                "[FWDTABLE][resolve-miss] site=no-forwarding consumer=ZRelocate::ResolveStoreValue "
                 "holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
                 "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
                 "field_type=%s field_offset=%zu "
@@ -1361,7 +1378,7 @@ BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProv
                 live != nullptr ? live->RelocateObserve() : 0u,
                 reinterpret_cast<void*>(lookupTo),
                 static_cast<unsigned>(ZBarrier::JudgeHandOutTarget(current)));
-            ZBarrier::FailClosedLoad("HeapGcState::ResolveStoreValue.no-forwarding", current, 0, provenance);
+            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.no-forwarding", current, 0, provenance);
         }
         // A pointer with ghost membership belongs to a published forwarding
         // generation. Even after its route state changes it cannot be
@@ -1373,13 +1390,13 @@ BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProv
         }
         BaseObject* resolved = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(current, provenance);
         if (resolved == nullptr) {
-            ZBarrier::FailClosedLoad("HeapGcState::ResolveStoreValue.unresolved", current, 0, provenance);
+            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.unresolved", current, 0, provenance);
         }
         if (resolved == current) {
             // In-place completion must have published its identity receipt;
             // without it, returning current would recreate the removed
             // lookup-miss fallback.
-            FindToVersionResult identity = FindToVersion(current, generation);
+            FindToVersionResult identity = ZRelocate::FindToVersion(current, generation);
             if (identity.found() == current &&
                 ZBarrier::JudgeHandOutTarget(current) == HandVerdict::Usable) {
                 return current;
@@ -1392,7 +1409,7 @@ BaseObject* HeapGcState::ResolveStoreValue(BaseObject* ref, const ForwardingProv
                 ZPage::GetGhostFromRegionAt(currentAddr) == nullptr) {
                 return current;
             }
-            ZBarrier::FailClosedLoad("HeapGcState::ResolveStoreValue.missing-identity", current, 0, provenance);
+            ZBarrier::FailClosedLoad("ZRelocate::ResolveStoreValue.missing-identity", current, 0, provenance);
         }
         current = resolved;
     }

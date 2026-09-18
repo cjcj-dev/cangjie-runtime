@@ -21,6 +21,7 @@
 #include "Heap/z/zPageAge.hpp"
 
 namespace MapleRuntime {
+class FindToVersionResult;
 
 // ZRelocateQueue (zRelocate.hpp:39-77; zRelocate.cpp:57-307).
 class ZRelocateQueue {
@@ -136,6 +137,11 @@ private:
 
 class ZRelocate {
 public:
+    // Raw historical carriers have no source color; preserve explicit provenance.
+    static BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+                                         Generation generation);
+    static bool IsAlreadyToStoreValue(BaseObject* target, Generation generation);
+    static FindToVersionResult FindToVersion(BaseObject* obj, Generation generation);
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
     BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object,
                                 const ForwardingProvenance& provenance);

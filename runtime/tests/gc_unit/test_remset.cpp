@@ -27,6 +27,10 @@
 // (HeapGcState::RescanRememberedSet) calls Record
 // directly when it re-arms a scanned slot, so a test that cannot call it cannot model the re-arm at
 // all.  Same idiom the fixture already uses for ZPage; scoped to this one header.
+// Parse value-owned heap resources with the product macro configuration before
+// enabling the existing test peers; their member offsets must match the SO.
+#include "Heap/z/zHeap.hpp"
+
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1
 #endif

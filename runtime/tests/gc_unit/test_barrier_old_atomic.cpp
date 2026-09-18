@@ -8,18 +8,21 @@
 #include <thread>
 #include <vector>
 
-// This TU alone needs CollectorProxy friendship to publish a real heap phase.
-// Product libraries keep their configured macro set.
-#ifndef MRT_TESTABLE_INTERNALS
-#define MRT_TESTABLE_INTERNALS 1
-#endif
-
 // Populate reflection metadata in this TU; the runtime keeps its normal access.
 #include "Common/TypeDef.h"
 #include "Common/Dataref.h"
 #define private public
 #include "ObjectModel/FieldInfo.h"
 #undef private
+
+// This TU enables the existing mark-publication test peer after heap layout is fixed.
+// Parse value-owned heap resources with the product macro configuration before
+// enabling the existing test peers; their member offsets must match the SO.
+#include "Heap/z/zHeap.hpp"
+
+#ifndef MRT_TESTABLE_INTERNALS
+#define MRT_TESTABLE_INTERNALS 1
+#endif
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"

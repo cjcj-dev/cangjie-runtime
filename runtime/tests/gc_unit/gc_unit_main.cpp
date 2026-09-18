@@ -12,11 +12,12 @@
 
 #include "gc_unittest.hpp"
 
-// Standalone unit processes do not run Heap::Init(), while several tests enter
-// product barriers or GC request APIs that dereference CollectorProxy's active
-// collector. A whole-suite process used to inherit this binding from an earlier
-// test, which made those cases order-dependent. Bind the proxy's built-in
-// collector at the isolated-process entry without initializing or running it.
+// Standalone unit processes obtain the unique product heap collector before
+// entering tests, without starting a runtime or a collection.
+// Parse value-owned heap resources with the product macro configuration before
+// enabling the existing test peers; their member offsets must match the SO.
+#include "Heap/z/zHeap.hpp"
+
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1
 #endif

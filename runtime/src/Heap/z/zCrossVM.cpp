@@ -401,7 +401,7 @@ BaseObject* ZCrossVM::ResolveCurrentValueRoot(BaseObject* value, const void* own
     if (forwarding) {
         const MAddress target = forwarding->find(reinterpret_cast<MAddress>(value));
         current = target != 0 ? reinterpret_cast<BaseObject*>(target)
-            : Heap::GetHeap().GetCollector().ResolveStoreValue(value, provenance, static_cast<Generation>(forwarding->table_generation()));
+            : ZRelocate::ResolveStoreValue(value, provenance, static_cast<Generation>(forwarding->table_generation()));
     }
     CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
                  "value root resolve requires a heap to-address from=%p current=%p", value, current);

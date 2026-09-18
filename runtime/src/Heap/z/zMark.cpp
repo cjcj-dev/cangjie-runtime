@@ -103,7 +103,7 @@ void HeapGcState::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     }
 
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
-    BaseObject* latest = make_load_good(oldField, provenance);
+    BaseObject* latest = to_object(ZBarrier::make_load_good(oldField.GetFieldValue(), provenance));
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
@@ -144,7 +144,7 @@ BaseObject* HeapGcState::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefF
         return targetObj;
     }
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    latest = make_load_good(oldField, provenance);
+    latest = to_object(ZBarrier::make_load_good(oldField.GetFieldValue(), provenance));
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;

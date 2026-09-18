@@ -108,7 +108,7 @@ struct RelocationReceiptTestAccess {
     static BaseObject* ResolveStoreValue(HeapGcState& collector, BaseObject* value)
     {
         const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, value, &value };
-        return collector.ResolveStoreValue(value, provenance, Generation::Old);
+        return ZRelocate::ResolveStoreValue(value, provenance, Generation::Old);
     }
 
     static void CheckStoreGoodTarget(HeapGcState& collector, BaseObject* value)
@@ -159,7 +159,7 @@ struct RelocationReceiptTestAccess {
 
     static FindToVersionResult ProductFindToVersion(HeapGcState& collector, BaseObject* from, Generation generation)
     {
-        return collector.FindToVersion(from, generation);
+        return ZRelocate::FindToVersion(from, generation);
     }
 
     static BaseObject* ProductRelocateOrRemap(
@@ -907,7 +907,7 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
 // A single product-linked construction exercises two distinct Unavailable producers.  It proves
 // the route witness is not a constant formatter: one arm closes an installed publication while
 // keeping its ghost region, and the other uses an unarmed, non-ghost region with a FORWARDED
-// header. Both answers come from HeapGcState::FindToVersion in libcangjie-runtime.so.
+// header. Both answers come from ZRelocate::FindToVersion in libcangjie-runtime.so.
 
 // LookupTo returns the decision record itself.  Change both metadata faces only
 // after the product lookup returns, then prove the record still describes the
