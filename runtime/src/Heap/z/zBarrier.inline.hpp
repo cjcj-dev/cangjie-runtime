@@ -13,7 +13,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/z/zForwardingLookup.hpp"
+#include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"

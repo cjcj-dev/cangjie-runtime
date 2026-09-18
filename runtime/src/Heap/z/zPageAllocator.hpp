@@ -572,9 +572,6 @@ public:
         return generation == Generation::Young;
     }
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    void DumpZPage() const;
-#endif
 
     void DumpRegionStats(const char* msg) const;
 

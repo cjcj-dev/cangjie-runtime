@@ -40,7 +40,6 @@
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/z/zGcInfos.hpp"
 #include "Heap/z/zSafeDelete.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zForwardingTable.hpp"
@@ -446,10 +445,6 @@ public:
 
     size_t GetRegionAllocatedSize() const { return GetRegionAllocPtr() - GetRegionStart(); }
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    void DumpZPage(LogType type) const;
-    const char* GetTypeName() const;
-#endif
 
     // ZGC has no allocPtr-linear object walk (zPage.inline.hpp:319-331 iterates
     // the livemap). Kept for the relocation residual sweep until the relocate

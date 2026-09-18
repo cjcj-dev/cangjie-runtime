@@ -989,19 +989,6 @@ size_t RegionManager::CollectLargeGarbage()
     return garbageSize;
 }
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-void RegionManager::DumpZPage() const
-{
-    if (!ENABLE_LOG(ALLOC)) {
-        return;
-    }
-    VisitPageOwners([&](ZPage* region) {
-        if (!region->IsFreeRegion()) {
-            region->DumpZPage(ALLOC);
-        }
-    });
-}
-#endif
 
 void RegionManager::DumpRegionStats(const char* msg) const
 {

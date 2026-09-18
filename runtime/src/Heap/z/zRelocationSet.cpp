@@ -51,7 +51,6 @@
 #include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
-#include "Heap/z/zExportOwnershipTestObservations.hpp"
 
 void ZGenerationOld::PostTrace()
 {

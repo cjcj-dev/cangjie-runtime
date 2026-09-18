@@ -10,7 +10,7 @@
 
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRuntimeWorkers.hpp"
-#include "Heap/z/zForwardingLookup.hpp"
+#include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zReferenceProcessor.hpp"
 #include <atomic>
 

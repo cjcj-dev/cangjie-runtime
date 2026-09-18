@@ -76,7 +76,7 @@ void WorkerTaskDispatcher::worker_run_task()
 
 // gc/shared/workerThread.cpp:85-91
 WorkerThreads::WorkerThreads(const char* name, uint32_t max_workers)
-    : _name(name), _workers(new WorkerThread*[max_workers]), _max_workers(max_workers), _created_workers(0),
+    : _name(name), _workers(new WorkerThread*[max_workers]()), _max_workers(max_workers), _created_workers(0),
       _active_workers(0), _dispatcher() {}
 
 // Infrastructure difference (see ~WorkerThreads): the only task the pool
@@ -89,6 +89,13 @@ public:
 
 WorkerThreads::~WorkerThreads()
 {
+    stop();
+    delete[] _workers;
+}
+
+void WorkerThreads::stop()
+{
+    std::lock_guard<std::mutex> guard(_stop_lock);
     const uint32_t created = created_workers();
     if (created != 0) {
         WorkerThreadExitTask task;
@@ -96,9 +103,11 @@ WorkerThreads::~WorkerThreads()
         for (uint32_t i = 0; i < created; ++i) {
             CHECK_PTHREAD_CALL(pthread_join, (_workers[i]->os_thread(), nullptr), "WorkerThreads");
             delete _workers[i];
+            _workers[i] = nullptr;
         }
     }
-    delete[] _workers;
+    _active_workers = 0;
+    _created_workers.store(0, std::memory_order_release);
 }
 
 // gc/shared/workerThread.cpp:93-98. No UseDynamicNumberOfGCThreads flag

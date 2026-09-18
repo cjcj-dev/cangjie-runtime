@@ -126,34 +126,6 @@ const size_t ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD = MapleRuntime::MRT_PAGE_SIZE
                                                             MapleRuntime::MRT_PAGE_SIZE : 32 * KB;
 // max size of per region is 128KB.
 const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntime::MRT_PAGE_SIZE;
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-void ZPage::DumpZPage(LogType type) const
-{
-    DLOG(type, "Region index: %zu, type: %s, address: 0x%zx-0x%zx, allocated(B) %zu, live(B) %zu", GetUnitIdx(),
-         GetTypeName(), GetRegionStart(), GetRegionEnd(), GetRegionAllocatedSize(), livemap().live_bytes());
-}
-
-const char* ZPage::GetTypeName() const
-{
-    static constexpr const char* regionNames[] = {
-        "undefined region",
-        "thread local region",
-        "recent fullregion",
-        "from region",
-        "unmovable from region",
-        "to region",
-        "full pinned region",
-        "recent pinned region",
-        "raw pointer pinned region",
-        "tl raw pointer region",
-        "large region",
-        "recent large region",
-        "garbage region",
-    };
-    auto* owner = GetRegionListOwner();
-    return owner != nullptr ? owner->GetListName() : "unlisted";
-}
-#endif
 
 // ZPage::clone_for_promotion (zPage.cpp:64-71). ZPage is an indexed
 // slot rather than a separately allocated page descriptor, so the original

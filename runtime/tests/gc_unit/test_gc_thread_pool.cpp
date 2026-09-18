@@ -455,3 +455,26 @@ GC_TEST(RuntimeWorkers, CollectedHeapOwnsActiveRuntimePool)
         GC_EXPECT_EQ(task.results[i].load(), 1u);
     }
 }
+
+// Runtime threads are created by the real collected-heap constructor. Exercise
+// its normal shutdown in an exec-isolated process so other fixtures keep theirs.
+GC_OTHER_VM_TEST(RuntimeWorkers, HeapStopJoinsRuntimePool)
+{
+    WorkerThreads* workers = ZCollectedHeap::heap()->safepoint_workers();
+    GC_EXPECT_TRUE(workers != nullptr);
+    const uint32_t createdBefore = workers->created_workers();
+    const uint32_t activeBefore = workers->active_workers();
+    GC_EXPECT_TRUE(createdBefore > 0);
+    GC_EXPECT_TRUE(activeBefore > 0);
+
+    Heap::GetHeap().StopGCWork();
+    std::fprintf(stderr, "RUNTIME_WORKERS_STOP_RESULT before_created=%u before_active=%u created=%u active=%u\n",
+                 createdBefore, activeBefore, workers->created_workers(), workers->active_workers());
+    GC_EXPECT_EQ(workers->created_workers(), 0u);
+    GC_EXPECT_EQ(workers->active_workers(), 0u);
+
+    // The main entry also stops an existing heap before static destruction.
+    Heap::GetHeap().StopGCWork();
+    GC_EXPECT_EQ(workers->created_workers(), 0u);
+    GC_EXPECT_EQ(workers->active_workers(), 0u);
+}

@@ -36,7 +36,6 @@ list(APPEND SRC_LIST
     "z/zBreakpoint.cpp"
     "z/concurrentGCBreakpoints.cpp"
     "z/zAbort.cpp"
-    "z/zRelocateSupport.cpp"
     "z/zHeapIterator.cpp"
     "z/zIterator.cpp"
     "z/zCollectedHeap.cpp"
@@ -56,7 +55,6 @@ list(APPEND SRC_LIST
 )
 
 list(APPEND SRC_LIST
-    "z/zGenerationCycle.cpp"
     "z/zCrossVM.cpp"
     "z/zGeneration.cpp"
     "z/zMark.cpp"

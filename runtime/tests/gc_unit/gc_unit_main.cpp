@@ -15,6 +15,7 @@
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zCPU.hpp"
+#include "Heap/z/zHeap.hpp"
 
 int main(int argc, char** argv)
 {
@@ -43,5 +44,10 @@ int main(int argc, char** argv)
         }
         (void)setenv("GC_UNIT_FILTER", argv[i] + std::strlen(filterPrefix), 1);
     }
-    return MapleRuntime::GcUnit::RunAll();
+    const int result = MapleRuntime::GcUnit::RunAll();
+    // Stop only an existing heap; listing/filtering must not construct one.
+    if (MapleRuntime::Heap::heap() != nullptr) {
+        MapleRuntime::Heap::GetHeap().StopGCWork();
+    }
+    return result;
 }

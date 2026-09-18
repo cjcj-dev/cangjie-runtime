@@ -12,6 +12,7 @@ class ZRuntimeWorkers {
 public:
     ZRuntimeWorkers();
     WorkerThreads* workers() { return &_workers; }
+    void stop() { _workers.stop(); }
     void threads_do(const std::function<void(WorkerThread*)>& visitor) const
     {
         _workers.threads_do(visitor);

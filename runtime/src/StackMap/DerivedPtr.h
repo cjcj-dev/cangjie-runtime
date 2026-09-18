@@ -95,13 +95,6 @@ private:
         };
         RegDebugVisitor regDebug = nullptr;
         (void)debugVisitor;
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-        if (debugVisitor != nullptr) {
-            regDebug = [&debugVisitor, basePtr](RegisterNum, zaddress_unsafe derivedPtr) {
-                debugVisitor(basePtr, derivedPtr);
-            };
-        }
-#endif
         regRoot.VisitGCRoots(rootVisitor, regDebug, regSlotsMap);
     }
     inline void VisitSlotDerivedPtr(const DerivedPtrVisitor& visitor, const DerivedPtrDebugVisitor debugVisitor,
@@ -114,13 +107,6 @@ private:
         };
         SlotDebugVisitor slotDebug = nullptr;
         (void)debugVisitor;
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-        if (debugVisitor != nullptr) {
-            slotDebug = [&debugVisitor, basePtr](SlotBias, zaddress_unsafe derivedPtr) {
-                debugVisitor(basePtr, derivedPtr);
-            };
-        }
-#endif
         slotRoot.VisitGCRoots(rootVisitor, slotDebug, fp);
     }
     DerivedPtrTable derivePtrTable;

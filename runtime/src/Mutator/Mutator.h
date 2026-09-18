@@ -16,7 +16,6 @@
 #include "Exception/Exception.h"
 #include "Heap/Allocator/Allocator.h"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/z/zGcInfos.hpp"
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"
 #include "schedule.h"
@@ -373,21 +372,6 @@ public:
 
     ExceptionWrapper& GetExceptionWrapper() { return exceptionWrapper; }
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    void PushFrameInfoForTrace(const GCInfoNode& frameGCInfo) { gcInfos.PushFrameInfoForTrace(frameGCInfo); }
-
-    void PushFrameInfoForTrace(const GCInfoNode&& frameGCInfo) { gcInfos.PushFrameInfoForTrace(frameGCInfo); }
-
-    void PushFrameInfoForFix(const GCInfoNodeForFix& frameGCInfo) { gcInfos.PushFrameInfoForFix(frameGCInfo); }
-
-    void PushFrameInfoForFix(const GCInfoNodeForFix&& frameGCInfo) { gcInfos.PushFrameInfoForFix(frameGCInfo); }
-
-    void DumpGCInfos() const
-    {
-        DLOG(ENUM, "dump mutator gc info thread id: %d", tid);
-        gcInfos.DumpGCInfos();
-    }
-#endif
 
     bool IsManagedContext() const { return inManagedContext.load(std::memory_order_acquire); }
 
@@ -565,9 +549,6 @@ private:
 
     NativeRootHandles localFinalizers;
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    GCInfos gcInfos;
-#endif
     // this flag is used for gc unwind stack, when runtime-thread stack doesn't include managed frame,
     // we don't need to scan it.
     std::atomic<bool> inManagedContext = { true };

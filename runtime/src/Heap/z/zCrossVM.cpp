@@ -478,3 +478,37 @@ void ZCrossVM::PreforwardAllResurrectExportFromObjects(Generation generation)
     CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
 }
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+void ZCrossVM::ObserveExportOwnershipForTest(bool afterHandoff)
+{
+    if (!testExportOwnershipResult) {
+        return;
+    }
+    ExportOwnershipTestObservation observation;
+    observation.afterHandoff = afterHandoff;
+    {
+        std::lock_guard<std::mutex> lock(externMtx);
+        observation.discoveredOwners = discoveredExternObjects.size();
+        for (const auto& owner : discoveredExternObjects) {
+            for (const auto& value : owner.second) {
+                observation.discovered.emplace_back(owner.first, value);
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+        observation.handoffOwners = cycleRefWorkStack.size();
+        for (const auto& owner : cycleRefWorkStack) {
+            for (const auto& value : owner.second) {
+                observation.handoff.emplace_back(owner.first, value);
+            }
+        }
+    }
+    // No references to mutable product carriers escape this observation.
+    testExportOwnershipResult(observation);
+}
+#endif
+
+}

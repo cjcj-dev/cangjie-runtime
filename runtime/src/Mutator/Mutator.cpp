@@ -273,9 +273,6 @@ void Mutator::SuspendForSync()
     }
 }
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-void Mutator::CreateCurrentGCInfo() { gcInfos.CreateCurrentGCInfo(); }
-#endif
 
 // zVerify.cpp:323-342: verify only the roots whose watermark processing
 // has started, and never read frames still waiting for processing.
@@ -301,9 +298,6 @@ void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisi
         return;
     }
     IncObserver();
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    CreateCurrentGCInfo();
-#endif
     StackManager::VisitStackRoots(uwContext, func, *this);
     VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
@@ -379,9 +373,6 @@ void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, cons
         return;
     }
     IncObserver();
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    CreateCurrentGCInfo();
-#endif
     StackManager::VisitHeapReferencesOnStack(
         uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this, young);
     VisitRawObjects(rawObjectVisitor);

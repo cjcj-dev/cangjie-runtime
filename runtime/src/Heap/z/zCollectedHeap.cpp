@@ -182,6 +182,10 @@ void ZCollectedHeap::stop()
         collected->_stat = nullptr;
     }
     StringDedup::Instance().Stop();
+    // Native teardown does not destroy this process-lifetime heap. The drivers
+    // and generation workers above can no longer submit safepoint work, so join
+    // the runtime pool explicitly before runtime services are torn down.
+    collected->_runtime_workers.stop();
 }
 
 } // namespace MapleRuntime
