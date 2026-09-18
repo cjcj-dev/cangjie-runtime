@@ -14,6 +14,7 @@
 #include "Base/GcLog.h"
 #include "Base/LogFile.h"
 #include "CangjieRuntime.h"
+#include "Heap/z/zAbort.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -436,48 +437,48 @@ bool ZStat::WorldStoppedNow() { return stwDepth.load(std::memory_order_relaxed) 
 
 namespace MapleRuntime {
 namespace ZStatPhases {
-const ZStatPhase PCollectFromSpaceGarbage("Old Subphase", "CollectFromSpaceGarbage");
-const ZStatPhase PCollectLargeGarbage("Old Subphase", "Collect large garbage");
-const ZStatPhase PConcurrentMarking("Old Subphase", "Concurrent marking");
-const ZStatPhase PConcurrentReMarking("Old Subphase", "Concurrent re-marking");
-const ZStatPhase PConcurrentResurrection("Old Subphase", "concurrent resurrection");
-const ZStatPhase PDoTracing("Old Subphase", "DoTracing");
-const ZStatPhase PEnumRootsUpdateOldPointersWithin("Old Subphase", "enum roots & update old pointers within");
-const ZStatPhase PExemptFromRegions("Old Subphase", "ExemptFromRegions");
+const ZStatSubPhase PCollectFromSpaceGarbage("CollectFromSpaceGarbage", ZGenerationId::old);
+const ZStatSubPhase PCollectLargeGarbage("Collect large garbage", ZGenerationId::old);
+const ZStatSubPhase PConcurrentMarking("Concurrent marking", ZGenerationId::old);
+const ZStatSubPhase PConcurrentReMarking("Concurrent re-marking", ZGenerationId::old);
+const ZStatSubPhase PConcurrentResurrection("concurrent resurrection", ZGenerationId::old);
+const ZStatSubPhase PDoTracing("DoTracing", ZGenerationId::old);
+const ZStatSubPhase PEnumRootsUpdateOldPointersWithin("enum roots & update old pointers within", ZGenerationId::old);
+const ZStatSubPhase PExemptFromRegions("ExemptFromRegions", ZGenerationId::old);
 const ZStatCriticalPhase PFinalizer("Finalizer");
 const ZStatCriticalPhase PFinalizerProcessorWaittingTime("finalizerProcessor waitting time");
-const ZStatPhase YoungForwardFromRegions("Young Subphase", "ForwardFromRegions");
-const ZStatPhase OldForwardFromRegions("Old Subphase", "ForwardFromRegions");
-const ZStatPhase PIdentifyUselessExternRef("Old Subphase", "identify useless extern ref");
-const ZStatPhase POldRelocateStart("Old Pause", "old.relocate_start");
-const ZStatPhase PPostTrace("Old Subphase", "PostTrace");
-const ZStatPhase PPreforward("Old Subphase", "Preforward");
+const ZStatSubPhase YoungForwardFromRegions("ForwardFromRegions", ZGenerationId::young);
+const ZStatSubPhase OldForwardFromRegions("ForwardFromRegions", ZGenerationId::old);
+const ZStatSubPhase PIdentifyUselessExternRef("identify useless extern ref", ZGenerationId::old);
+const ZStatPhasePause POldRelocateStart("old.relocate_start", ZGenerationId::old);
+const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
+const ZStatSubPhase PPreforward("Preforward", ZGenerationId::old);
 const ZStatCriticalPhase PReclaimGarbageRegions("ReclaimGarbageRegions");
-const ZStatPhase PRemapYoungRoots("Old Subphase", "RemapYoungRoots");
-const ZStatPhase PTraceLiveObjectsUpdateOldPointersInRefFields("Old Subphase", "trace live objects & update old pointers in ref-fields");
-const ZStatPhase PYoungConcPromoteWalk("Young Subphase", "young.conc_promote_walk");
-const ZStatPhase PYoungConcurrentRelocate("Young Subphase", "young.concurrent_relocate");
-const ZStatPhase PYoungEvacFinish("Young Subphase", "young.evac_finish");
-const ZStatPhase PYoungEvacRetire("Young Subphase", "young.evac_retire");
-const ZStatPhase PYoungFlushAlloc("Young Subphase", "young.flush_alloc");
-const ZStatPhase PYoungMarkClosure("Young Subphase", "young.mark_closure");
-const ZStatPhase PYoungMarkFollow("Young Subphase", "young.mark_follow");
-const ZStatPhase PYoungMarkFromRemset("Young Subphase", "young.mark_from_remset");
-const ZStatPhase PYoungPinnedScan("Young Subphase", "young.pinned_scan");
-const ZStatPhase PYoungPostEvacFinish("Young Subphase", "young.post_evac_finish");
-const ZStatPhase PYoungPreEvacClear("Young Subphase", "young.pre_evac_clear");
-const ZStatPhase PYoungPrepareCandidates("Young Subphase", "young.prepare_candidates");
-const ZStatPhase PYoungRefFix("Young Subphase", "young.ref_fix");
-const ZStatPhase PYoungRefFixBulk("Young Subphase", "young.ref_fix_bulk");
-const ZStatPhase PYoungRefFixPrepare("Young Subphase", "young.ref_fix_prepare");
-const ZStatPhase PYoungRefFixRootPass1("Young Subphase", "young.ref_fix_root_pass1");
-const ZStatPhase PYoungRemsetDrain("Young Subphase", "young.remset_drain");
-const ZStatPhase PYoungRemsetRescan("Young Subphase", "young.remset_rescan");
-const ZStatPhase PYoungRootEnum("Young Subphase", "young.root_enum");
-const ZStatPhase YoungGeneration("Young Generation", "Young Generation");
-const ZStatPhase OldGeneration("Old Generation", "Old Generation");
-const ZStatPhase MinorCollection("Minor Collection", "Minor Collection");
-const ZStatPhase MajorCollection("Major Collection", "Major Collection");
+const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
+const ZStatSubPhase PTraceLiveObjectsUpdateOldPointersInRefFields("trace live objects & update old pointers in ref-fields", ZGenerationId::old);
+const ZStatSubPhase PYoungConcPromoteWalk("young.conc_promote_walk", ZGenerationId::young);
+const ZStatSubPhase PYoungConcurrentRelocate("young.concurrent_relocate", ZGenerationId::young);
+const ZStatSubPhase PYoungEvacFinish("young.evac_finish", ZGenerationId::young);
+const ZStatSubPhase PYoungEvacRetire("young.evac_retire", ZGenerationId::young);
+const ZStatSubPhase PYoungFlushAlloc("young.flush_alloc", ZGenerationId::young);
+const ZStatSubPhase PYoungMarkClosure("young.mark_closure", ZGenerationId::young);
+const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
+const ZStatSubPhase PYoungMarkFromRemset("young.mark_from_remset", ZGenerationId::young);
+const ZStatSubPhase PYoungPinnedScan("young.pinned_scan", ZGenerationId::young);
+const ZStatSubPhase PYoungPostEvacFinish("young.post_evac_finish", ZGenerationId::young);
+const ZStatSubPhase PYoungPreEvacClear("young.pre_evac_clear", ZGenerationId::young);
+const ZStatSubPhase PYoungPrepareCandidates("young.prepare_candidates", ZGenerationId::young);
+const ZStatSubPhase PYoungRefFix("young.ref_fix", ZGenerationId::young);
+const ZStatSubPhase PYoungRefFixBulk("young.ref_fix_bulk", ZGenerationId::young);
+const ZStatSubPhase PYoungRefFixPrepare("young.ref_fix_prepare", ZGenerationId::young);
+const ZStatSubPhase PYoungRefFixRootPass1("young.ref_fix_root_pass1", ZGenerationId::young);
+const ZStatSubPhase PYoungRemsetDrain("young.remset_drain", ZGenerationId::young);
+const ZStatSubPhase PYoungRemsetRescan("young.remset_rescan", ZGenerationId::young);
+const ZStatSubPhase PYoungRootEnum("young.root_enum", ZGenerationId::young);
+const ZStatPhaseGeneration YoungGeneration("Young Generation", ZGenerationId::young);
+const ZStatPhaseGeneration OldGeneration("Old Generation", ZGenerationId::old);
+const ZStatPhaseCollection MinorCollection("Minor Collection", true);
+const ZStatPhaseCollection MajorCollection("Major Collection", false);
 } // namespace ZStatPhases
 } // namespace MapleRuntime
 
@@ -845,25 +846,133 @@ void ZStatMMU::Print()
 }
 } // namespace MapleRuntime
 
+// zStat.cpp:597-876 — stat phases. Host infra difference (D4=A): the
+// ConcurrentGCTimer/JFR calls of ZGC's register_start/register_end have no
+// counterpart; the structured record goes to GCLOG from the same routing
+// point (ZTracer::report_stat_phase ≈ GcLog::Phase).
 namespace MapleRuntime {
+static void EmitPhaseRecord(const ZStatPhase& phase, const char* kind, uint64_t startNs, uint64_t endNs)
+{
+    GcLog::Phase(GcLog::CurrentSeq(), phase.Name(), kind, startNs, endNs - startNs);
+}
+
 const char* ZStatPhase::Name() const { return sampler.Name(); }
-}
 
-namespace MapleRuntime {
-void ZStatPhase::RegisterEnd(uint64_t duration) const { sampler.Sample(duration); }
-}
+ZStatPhaseCollection::ZStatPhaseCollection(const char* name, bool minor)
+    : ZStatPhase(minor ? "Minor Collection" : "Major Collection", name), minor(minor)
+{}
 
-namespace MapleRuntime {
-ZStatCriticalPhase::ZStatCriticalPhase(const char* name)
-        : ZStatPhase("Critical", name), counter("Critical", name, ZStatUnit::OPS_PER_SECOND) {}
-}
+// zStat.cpp:655-687 — the abort early-exit keeps an aborted cycle out of
+// every downstream statistic.
+void ZStatPhaseCollection::RegisterStart(uint64_t startNs) const { (void)startNs; }
 
-namespace MapleRuntime {
-void ZStatCriticalPhase::RegisterEnd(uint64_t duration) const {
-        ZStatPhase::RegisterEnd(duration);
-        counter.Increment();
+void ZStatPhaseCollection::RegisterEnd(uint64_t startNs, uint64_t endNs) const
+{
+    if (ZAbort::should_abort()) {
+        return;
     }
+    sampler.Sample(endNs - startNs);
+    EmitPhaseRecord(*this, "conc", startNs, endNs);
 }
+
+ZStatPhaseGeneration::ZStatPhaseGeneration(const char* name, ZGenerationId id)
+    : ZStatPhase(id == ZGenerationId::old ? "Old Generation" : "Young Generation", name), id(id)
+{}
+
+void ZStatPhaseGeneration::RegisterStart(uint64_t startNs) const { (void)startNs; }
+
+// zStat.cpp:711-759 — the per-collection report is printed once from here;
+// the stalls/Load/Mark/References/relocation/heap units are added as those
+// stat units land (later commits on this branch).
+void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
+{
+    if (ZAbort::should_abort()) {
+        return;
+    }
+    sampler.Sample(endNs - startNs);
+    ZStatMMU::Print();
+    EmitPhaseRecord(*this, "conc", startNs, endNs);
+}
+
+uint64_t ZStatPhasePause::maxNs;
+
+ZStatPhasePause::ZStatPhasePause(const char* name, ZGenerationId id)
+    : ZStatPhase(id == ZGenerationId::young ? "Young Pause" : "Old Pause", name)
+{}
+
+uint64_t ZStatPhasePause::Max() { return maxNs; }
+
+void ZStatPhasePause::RegisterStart(uint64_t startNs) const { (void)startNs; }
+
+// zStat.cpp:766-797 — pauses feed the duration sampler, the max-pause
+// tracker and the MMU ring; RegisterPause is the only MMU writer.
+void ZStatPhasePause::RegisterEnd(uint64_t startNs, uint64_t endNs) const
+{
+    const uint64_t duration = endNs - startNs;
+    sampler.Sample(duration);
+
+    // Track max pause time
+    if (maxNs < duration) {
+        maxNs = duration;
+    }
+
+    // Track minimum mutator utilization
+    ZStatMMU::RegisterPause(startNs, endNs);
+
+    EmitPhaseRecord(*this, "pause", startNs, endNs);
+}
+
+ZStatPhaseConcurrent::ZStatPhaseConcurrent(const char* name, ZGenerationId id)
+    : ZStatPhase(id == ZGenerationId::young ? "Young Phase" : "Old Phase", name)
+{}
+
+void ZStatPhaseConcurrent::RegisterStart(uint64_t startNs) const { (void)startNs; }
+
+void ZStatPhaseConcurrent::RegisterEnd(uint64_t startNs, uint64_t endNs) const
+{
+    if (ZAbort::should_abort()) {
+        return;
+    }
+    sampler.Sample(endNs - startNs);
+    EmitPhaseRecord(*this, "conc", startNs, endNs);
+}
+
+ZStatSubPhase::ZStatSubPhase(const char* name, ZGenerationId id)
+    : ZStatPhase(id == ZGenerationId::young ? "Young Subphase" : "Old Subphase", name)
+{}
+
+void ZStatSubPhase::RegisterStart(uint64_t startNs) const { (void)startNs; }
+
+// zStat.cpp:826-846 — ZTracer::report_thread_phase routes here; on this host
+// the thread-phase datum is the GCLOG phase record.
+void ZStatSubPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
+{
+    if (ZAbort::should_abort()) {
+        return;
+    }
+    sampler.Sample(endNs - startNs);
+    EmitPhaseRecord(*this, "conc", startNs, endNs);
+}
+
+ZStatCriticalPhase::ZStatCriticalPhase(const char* name, bool verbose)
+    : ZStatPhase("Critical", name), counter("Critical", name, ZStatUnit::OPS_PER_SECOND), verbose(verbose)
+{}
+
+void ZStatCriticalPhase::RegisterStart(uint64_t startNs) const
+{
+    // This is called from sensitive contexts, for example before an
+    // allocation stall has been resolved. Nothing useful can be logged here.
+    (void)startNs;
+}
+
+// zStat.cpp:862-876
+void ZStatCriticalPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
+{
+    sampler.Sample(endNs - startNs);
+    counter.Increment();
+    EmitPhaseRecord(*this, "conc", startNs, endNs);
+}
+} // namespace MapleRuntime
 
 namespace MapleRuntime {
 ZStatHeap::ZStatHeap(const char* group) : reclaimed(group, "Reclaimed", ZStatUnit::BYTES) {}

@@ -339,7 +339,7 @@ public:
         EmitTimerRecords(cycleSeq, name.Str(), startTimeNs, diffTimeNs, isLeaf,
                          (zstatPauseAtStart ? 1 : 0), depth, pathOk, path);
         if (statPhase != nullptr) {
-            statPhase->RegisterEnd(diffTimeNs);
+            statPhase->RegisterEnd(startTimeNs, stopTimeNs);
         }
     }
 

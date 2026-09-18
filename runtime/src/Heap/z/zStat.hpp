@@ -262,93 +262,175 @@ private:
     static double CalculateMMU(double timeSliceMs);
 };
 
-// zStat.cpp:600-875: phase group and generation are properties of the
-// static phase object; neither the observed name nor a cycle table owns it.
+// zStat.hpp:212-296, zStat.cpp:597-876: phase group and generation are
+// properties of the static phase object; neither the observed name nor a
+// cycle table owns it. Host infra difference (D4=A): ConcurrentGCTimer and
+// the JFR tracers have no counterpart, so register_start/register_end carry
+// no timer parameter; the structured phase record is emitted to GCLOG from
+// the same routing point (ZTracer::report_stat_phase ≈ GcLog::Phase).
 class ZStatPhase {
-public:
+protected:
+    const ZStatSampler sampler;
+
     ZStatPhase(const char* group, const char* name);
+
+public:
     const char* Name() const;
-    virtual void RegisterEnd(uint64_t duration) const;
+
+    virtual void RegisterStart(uint64_t startNs) const = 0;
+    virtual void RegisterEnd(uint64_t startNs, uint64_t endNs) const = 0;
     virtual ~ZStatPhase() = default;
     const ZStatSampler& Sampler() const { return sampler; }
-private:
-    const ZStatSampler sampler;
 };
 
-// zStat.cpp:848-875: critical phases register both duration and frequency.
-class ZStatCriticalPhase : public ZStatPhase {
+// zStat.hpp:228-242
+class ZStatPhaseCollection : public ZStatPhase {
 public:
-    explicit ZStatCriticalPhase(const char* name);
-    void RegisterEnd(uint64_t duration) const override;
+    ZStatPhaseCollection(const char* name, bool minor);
+
+    void RegisterStart(uint64_t startNs) const override;
+    void RegisterEnd(uint64_t startNs, uint64_t endNs) const override;
+
 private:
-    const ZStatCounter counter;
+    const bool minor;
 };
 
+// zStat.hpp:244-255
+class ZStatPhaseGeneration : public ZStatPhase {
+public:
+    ZStatPhaseGeneration(const char* name, ZGenerationId id);
+
+    void RegisterStart(uint64_t startNs) const override;
+    void RegisterEnd(uint64_t startNs, uint64_t endNs) const override;
+
+private:
+    const ZGenerationId id;
+};
+
+// zStat.hpp:257-268
+class ZStatPhasePause : public ZStatPhase {
+public:
+    ZStatPhasePause(const char* name, ZGenerationId id);
+
+    static uint64_t Max();
+
+    void RegisterStart(uint64_t startNs) const override;
+    void RegisterEnd(uint64_t startNs, uint64_t endNs) const override;
+
+private:
+    static uint64_t maxNs; // Max pause time
+};
+
+// zStat.hpp:270-276
+class ZStatPhaseConcurrent : public ZStatPhase {
+public:
+    ZStatPhaseConcurrent(const char* name, ZGenerationId id);
+
+    void RegisterStart(uint64_t startNs) const override;
+    void RegisterEnd(uint64_t startNs, uint64_t endNs) const override;
+};
+
+// zStat.hpp:278-284
 class ZStatSubPhase : public ZStatPhase {
 public:
-    ZStatSubPhase(const char* name, ZGenerationId id)
-        : ZStatPhase("Concurrent", name), generation(id)
-    {
-        (void)generation;
-    }
-private:
-    const ZGenerationId generation;
+    ZStatSubPhase(const char* name, ZGenerationId id);
+
+    void RegisterStart(uint64_t startNs) const override;
+    void RegisterEnd(uint64_t startNs, uint64_t endNs) const override;
 };
 
-class ZStatTimerOld {
+// zStat.hpp:286-296: critical phases register both duration and frequency.
+class ZStatCriticalPhase : public ZStatPhase {
 public:
-    explicit ZStatTimerOld(const ZStatPhase& phase)
-        : phase(phase), start(TimeUtil::NanoSeconds())
-    {}
-    ~ZStatTimerOld() { phase.RegisterEnd(TimeUtil::NanoSeconds() - start); }
+    explicit ZStatCriticalPhase(const char* name, bool verbose = true);
+
+    void RegisterStart(uint64_t startNs) const override;
+    void RegisterEnd(uint64_t startNs, uint64_t endNs) const override;
+
+private:
+    const ZStatCounter counter;
+    const bool verbose;
+};
+
+// zStat.hpp:301-342. The Young/Old variants select the generation's timer in
+// ZGC; with no ConcurrentGCTimer on this host all three variants share the
+// one RAII body (zStat.cpp:878-886).
+class ZStatTimer {
+public:
+    explicit ZStatTimer(const ZStatPhase& phase) : phase(phase), start(TimeUtil::NanoSeconds())
+    {
+        phase.RegisterStart(start);
+    }
+    ~ZStatTimer()
+    {
+        phase.RegisterEnd(start, TimeUtil::NanoSeconds());
+    }
+    ZStatTimer(const ZStatTimer&) = delete;
+    ZStatTimer& operator=(const ZStatTimer&) = delete;
+
 private:
     const ZStatPhase& phase;
     const uint64_t start;
 };
 
+class ZStatTimerYoung : public ZStatTimer {
+public:
+    explicit ZStatTimerYoung(const ZStatPhase& phase) : ZStatTimer(phase) {}
+};
+
+class ZStatTimerOld : public ZStatTimer {
+public:
+    explicit ZStatTimerOld(const ZStatPhase& phase) : ZStatTimer(phase) {}
+};
+
+class ZStatTimerWorker : public ZStatTimer {
+public:
+    explicit ZStatTimerWorker(const ZStatPhase& phase) : ZStatTimer(phase) {}
+};
+
 namespace ZStatPhases {
-extern const ZStatPhase PCollectFromSpaceGarbage;
-extern const ZStatPhase PCollectLargeGarbage;
-extern const ZStatPhase PConcurrentMarking;
-extern const ZStatPhase PConcurrentReMarking;
-extern const ZStatPhase PConcurrentResurrection;
-extern const ZStatPhase PDoTracing;
-extern const ZStatPhase PEnumRootsUpdateOldPointersWithin;
-extern const ZStatPhase PExemptFromRegions;
+extern const ZStatSubPhase PCollectFromSpaceGarbage;
+extern const ZStatSubPhase PCollectLargeGarbage;
+extern const ZStatSubPhase PConcurrentMarking;
+extern const ZStatSubPhase PConcurrentReMarking;
+extern const ZStatSubPhase PConcurrentResurrection;
+extern const ZStatSubPhase PDoTracing;
+extern const ZStatSubPhase PEnumRootsUpdateOldPointersWithin;
+extern const ZStatSubPhase PExemptFromRegions;
 extern const ZStatCriticalPhase PFinalizer;
 extern const ZStatCriticalPhase PFinalizerProcessorWaittingTime;
-extern const ZStatPhase YoungForwardFromRegions;
-extern const ZStatPhase OldForwardFromRegions;
-extern const ZStatPhase PIdentifyUselessExternRef;
-extern const ZStatPhase POldRelocateStart;
-extern const ZStatPhase PPostTrace;
-extern const ZStatPhase PPreforward;
+extern const ZStatSubPhase YoungForwardFromRegions;
+extern const ZStatSubPhase OldForwardFromRegions;
+extern const ZStatSubPhase PIdentifyUselessExternRef;
+extern const ZStatPhasePause POldRelocateStart;
+extern const ZStatSubPhase PPostTrace;
+extern const ZStatSubPhase PPreforward;
 extern const ZStatCriticalPhase PReclaimGarbageRegions;
-extern const ZStatPhase PRemapYoungRoots;
-extern const ZStatPhase PTraceLiveObjectsUpdateOldPointersInRefFields;
-extern const ZStatPhase PYoungConcPromoteWalk;
-extern const ZStatPhase PYoungConcurrentRelocate;
-extern const ZStatPhase PYoungEvacFinish;
-extern const ZStatPhase PYoungEvacRetire;
-extern const ZStatPhase PYoungFlushAlloc;
-extern const ZStatPhase PYoungMarkClosure;
-extern const ZStatPhase PYoungMarkFollow;
-extern const ZStatPhase PYoungMarkFromRemset;
-extern const ZStatPhase PYoungPinnedScan;
-extern const ZStatPhase PYoungPostEvacFinish;
-extern const ZStatPhase PYoungPreEvacClear;
-extern const ZStatPhase PYoungPrepareCandidates;
-extern const ZStatPhase PYoungRefFix;
-extern const ZStatPhase PYoungRefFixBulk;
-extern const ZStatPhase PYoungRefFixPrepare;
-extern const ZStatPhase PYoungRefFixRootPass1;
-extern const ZStatPhase PYoungRemsetDrain;
-extern const ZStatPhase PYoungRemsetRescan;
-extern const ZStatPhase PYoungRootEnum;
-extern const ZStatPhase YoungGeneration;
-extern const ZStatPhase OldGeneration;
-extern const ZStatPhase MinorCollection;
-extern const ZStatPhase MajorCollection;
+extern const ZStatSubPhase PRemapYoungRoots;
+extern const ZStatSubPhase PTraceLiveObjectsUpdateOldPointersInRefFields;
+extern const ZStatSubPhase PYoungConcPromoteWalk;
+extern const ZStatSubPhase PYoungConcurrentRelocate;
+extern const ZStatSubPhase PYoungEvacFinish;
+extern const ZStatSubPhase PYoungEvacRetire;
+extern const ZStatSubPhase PYoungFlushAlloc;
+extern const ZStatSubPhase PYoungMarkClosure;
+extern const ZStatSubPhase PYoungMarkFollow;
+extern const ZStatSubPhase PYoungMarkFromRemset;
+extern const ZStatSubPhase PYoungPinnedScan;
+extern const ZStatSubPhase PYoungPostEvacFinish;
+extern const ZStatSubPhase PYoungPreEvacClear;
+extern const ZStatSubPhase PYoungPrepareCandidates;
+extern const ZStatSubPhase PYoungRefFix;
+extern const ZStatSubPhase PYoungRefFixBulk;
+extern const ZStatSubPhase PYoungRefFixPrepare;
+extern const ZStatSubPhase PYoungRefFixRootPass1;
+extern const ZStatSubPhase PYoungRemsetDrain;
+extern const ZStatSubPhase PYoungRemsetRescan;
+extern const ZStatSubPhase PYoungRootEnum;
+extern const ZStatPhaseGeneration YoungGeneration;
+extern const ZStatPhaseGeneration OldGeneration;
+extern const ZStatPhaseCollection MinorCollection;
+extern const ZStatPhaseCollection MajorCollection;
 }
 
 // zStat.cpp:935-1017 — ZStatMutatorAllocRate.
