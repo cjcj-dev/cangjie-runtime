@@ -344,7 +344,7 @@ class ZDriver : public ZThread {
 public:
     static void lock();
     static void unlock();
-    ZDriver(CollectorResources& resources, GCDriverKind kind, ZDriverPort& port);
+    ZDriver(GCDriverKind kind, ZDriverPort& port);
     void run_thread() override;
     void terminate() override;
     bool is_busy() const;
@@ -352,7 +352,6 @@ public:
     void RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup);
     bool ExecuteDriverRequest(const ZDriverRequest& request);
 protected:
-    CollectorResources& resources;
     const GCDriverKind kind;
     ZDriverPort& port;
 private:
@@ -361,7 +360,7 @@ private:
 
 class ZDriverMinor final : public ZDriver {
 public:
-    explicit ZDriverMinor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MINOR, _port) {}
+    ZDriverMinor() : ZDriver(GCDriverKind::MINOR, _port) {}
     void start() { create_and_start(); }
     void collect(const ZDriverRequest& request);
     ZDriverPort& port() { return _port; }
@@ -372,7 +371,7 @@ private:
 
 class ZDriverMajor final : public ZDriver {
 public:
-    explicit ZDriverMajor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MAJOR, _port) {}
+    ZDriverMajor() : ZDriver(GCDriverKind::MAJOR, _port) {}
     void start() { create_and_start(); }
     void collect(const ZDriverRequest& request);
     ZDriverPort& port() { return _port; }

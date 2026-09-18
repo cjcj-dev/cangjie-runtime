@@ -53,8 +53,8 @@ extern "C" uintptr_t MRT_StopGCWork()
 // zDriver.cpp:118-127,319-328: each driver names itself and starts in its
 // constructor; run_thread is the request loop (zDriver.cpp:201-225,463-488)
 // and terminate closes the port so the loop's receive returns (:227-231).
-ZDriver::ZDriver(CollectorResources& resources, GCDriverKind kind, ZDriverPort& port)
-    : resources(resources), kind(kind), port(port)
+ZDriver::ZDriver(GCDriverKind kind, ZDriverPort& port)
+    : kind(kind), port(port)
 {
     set_name(kind == GCDriverKind::MINOR ? "ZDriverMinor" : "ZDriverMajor");
 }
@@ -76,7 +76,7 @@ void ZDriver::run_thread()
             const bool completed = !ZAbort::should_abort() && ExecuteDriverRequest(request);
             port.ack();
 #if defined(MRT_GC_UNIT_TESTS)
-            if (completed) resources.testCompletionCount.fetch_add(1, std::memory_order_relaxed);
+            if (completed) ZCollectedHeap::heap()->resources().testCompletionCount.fetch_add(1, std::memory_order_relaxed);
 #endif
             if (major) ZBreakpoint::AtAfterGC();
             ZCollectedHeap::heap()->director()->set_busy(!major, false);
@@ -256,8 +256,10 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
 
     // Set the request's generation budgets before mark-start can consume
     // them, including the old mark domain prepared by the young prelude.
-    const uint32_t youngCount = request.young_nworkers() == 0 ? resources.concurrentGcThreadCount : request.young_nworkers();
-    const uint32_t oldCount = request.old_nworkers() == 0 ? resources.concurrentGcThreadCount : request.old_nworkers();
+    const uint32_t youngCount = request.young_nworkers() == 0
+        ? ZCollectedHeap::heap()->resources().concurrentGcThreadCount : request.young_nworkers();
+    const uint32_t oldCount = request.old_nworkers() == 0
+        ? ZCollectedHeap::heap()->resources().concurrentGcThreadCount : request.old_nworkers();
     const bool warmup = request.cause() == GC_REASON_WARMUP;
     // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
     // selected worker counts into each generation's ZWorkers.
@@ -287,8 +289,8 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
             preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
         accumulate(ZGenerationId::young);
 #if defined(MRT_GC_UNIT_TESTS)
-        if (resources.testAfterYoungPrelude) {
-            resources.testAfterYoungPrelude();
+        if (ZCollectedHeap::heap()->resources().testAfterYoungPrelude) {
+            ZCollectedHeap::heap()->resources().testAfterYoungPrelude();
         }
 #endif
         if (ZAbort::should_abort()) {
@@ -380,8 +382,8 @@ void CollectorResources::StartGCThreads()
     // Cangjie Heap lives in ImmortalWrapper constructed at load; threads start
     // here after Heap::Init so capacity/workers exist (ZGC constructs later).
     ZCollectedHeap* collected = ZCollectedHeap::heap();
-    collected->_driver_minor = new ZDriverMinor(*this);
-    collected->_driver_major = new ZDriverMajor(*this);
+    collected->_driver_minor = new ZDriverMinor();
+    collected->_driver_major = new ZDriverMajor();
     collected->_director = new ZDirector();
     collected->_driver_minor->start();
     collected->_driver_major->start();
