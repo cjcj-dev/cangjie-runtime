@@ -105,16 +105,14 @@ Heap::Heap()
     _page_allocator.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
-    collectorImpl = static_cast<HeapGcState*>(::operator new(sizeof(HeapGcState)));
-    collectorResources = new CollectorResources(*collectorImpl);
-    new (collectorImpl) HeapGcState(*collectorResources);
+    collectorResources = new CollectorResources();
+    collectorImpl = new HeapGcState();
 }
 
 Heap::~Heap()
 {
     if (collectorImpl != nullptr) {
-        collectorImpl->~HeapGcState();
-        ::operator delete(collectorImpl);
+        delete collectorImpl;
         collectorImpl = nullptr;
     }
     delete collectorResources;

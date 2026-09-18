@@ -107,7 +107,7 @@ void HeapGcState::CollectSmallSpace()
 #if defined(__EULER__)
     Heap::GetHeap().GetAllocator().TryReclaimGarbageMemory();
 #endif
-    collectorResources.GetFinalizerProcessor().NotifyToReclaimGarbage();
+    Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().NotifyToReclaimGarbage();
 }
 } // namespace MapleRuntime
 

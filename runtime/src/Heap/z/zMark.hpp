@@ -436,7 +436,7 @@ public:
         WEAK_REFERENT,
     };
 
-    explicit HeapGcState(CollectorResources& resources);
+    HeapGcState();
 
     ~HeapGcState() = default;
     ZMark* MajorMark() { return Heap::GetHeap().old().MarkPtr(); }
@@ -532,7 +532,8 @@ public:
 
     bool DiscoverReference(BaseObject* reference, ReferenceType type)
     {
-        return collectorResources.GetFinalizerProcessor().GetReferenceProcessor().DiscoverReference(reference, type);
+        return Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor()
+            .DiscoverReference(reference, type);
     }
     void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);
 
@@ -575,13 +576,10 @@ protected:
     void ForwardFromSpace(ZGenerationId generation);
     void RefineFromSpace();
 
-    void RequestGCInternal(GCReason reason, bool async) { collectorResources.RequestGC(reason, async); }
-
-    // A collectorResources provides the resources that the tracing collector need,
-    // such as gc thread/threadPool, gc task queue.
-    // Also provides the resource access interfaces, such as invokeGC, waitGC.
-    // This resource should be singleton and shared for multi-collectors
-    CollectorResources& collectorResources;
+    void RequestGCInternal(GCReason reason, bool async)
+    {
+        Heap::GetHeap().GetCollectorResources().RequestGC(reason, async);
+    }
     U32 snapshotFinalizerNum = 0;
 
 

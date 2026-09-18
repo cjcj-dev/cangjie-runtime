@@ -434,7 +434,7 @@ void ZGenerationYoung::collect()
 {
     ZGenerationCollectionScopeYoung scope(*this);
     pause_mark_start();
-    DriverUnlocker unlocker(TheCollector().collectorResources);
+    DriverUnlocker unlocker(Heap::GetHeap().GetCollectorResources());
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -494,7 +494,7 @@ void HeapGcState::RunYoungCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
-    collectorResources.NoteYoungMarkStart(Heap::GetHeap().young().YoungType());
+    Heap::GetHeap().GetCollectorResources().NoteYoungMarkStart(Heap::GetHeap().young().YoungType());
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
     YoungCollectionStats stats = Heap::GetHeap().young().StartYoungMark(*this);
@@ -940,8 +940,8 @@ void HeapGcState::ProcessOldNonStrongReferences(WorkStack& workStack)
     Handshake::execute(&rendezvous);
     ZRendezvousGCThreads gcRendezvous;
     gcRendezvous.doit();
-    collectorResources.UnblockResurrection();
-    collectorResources.GetFinalizerProcessor().EnqueueReferences();
+    Heap::GetHeap().GetCollectorResources().UnblockResurrection();
+    Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().EnqueueReferences();
 }
 
 bool HeapGcState::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
@@ -969,7 +969,7 @@ bool HeapGcState::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet
     MarkingStacks::VerifyAllEmpty(Heap::GetHeap().old().Mark());
     Heap::GetHeap().old().set_phase(ZGeneration::Phase::MarkComplete);
     ZVerify::AfterMark();
-    collectorResources.BlockResurrection();
+    Heap::GetHeap().GetCollectorResources().BlockResurrection();
     ReportMarkTerminateContinue();
     return true;
 }
@@ -1298,7 +1298,7 @@ void ZGenerationOld::collect()
 {
     HeapGcState& collector = TheCollector();
     ZGenerationCollectionScopeOld scope(*this);
-    DriverUnlocker unlocker(collector.collectorResources);
+    DriverUnlocker unlocker(Heap::GetHeap().GetCollectorResources());
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -1315,7 +1315,7 @@ void ZGenerationOld::collect()
     concurrent_select_relocation_set();
     abortpoint();
     {
-        DriverLocker locker(collector.collectorResources);
+        DriverLocker locker(Heap::GetHeap().GetCollectorResources());
         concurrent_remap_young_roots();
         abortpoint();
         pause_relocate_start();

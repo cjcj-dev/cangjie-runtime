@@ -115,8 +115,8 @@ void CollectorResources::Init()
     GetGCStats(ZGenerationId::old).Init();
     ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();
-    collector.GetZGeneration(ZGenerationId::young).CycleStats().Initialize(now);
-    collector.GetZGeneration(ZGenerationId::old).CycleStats().Initialize(now);
+    Heap::GetHeap().young().CycleStats().Initialize(now);
+    Heap::GetHeap().old().CycleStats().Initialize(now);
     statistics = new ZStat();
     ZCollectedHeap::heap()->_stat = statistics;
     StartGCThreads();
@@ -174,8 +174,8 @@ void CollectorResources::StopGCThreads()
     minorDriver = nullptr;
     majorDriver = nullptr;
     // Drivers have terminated; no worker task can be submitted any more.
-    collector.GetZGeneration(ZGenerationId::young).StopWorkers();
-    collector.GetZGeneration(ZGenerationId::old).StopWorkers();
+    Heap::GetHeap().young().StopWorkers();
+    Heap::GetHeap().old().StopWorkers();
     gcThreadRunning.store(false, std::memory_order_release);
 }
 
@@ -228,7 +228,7 @@ void CollectorResources::RunCollection(HeapGcState& collector, uint64_t index, G
 bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
-    HeapGcState* activeCollector = &collector;
+    HeapGcState* activeCollector = &Heap::GetHeap().GetCollector();
     ZDriverPort& port = request.cause() == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
     if (ZAbort::should_abort()) {
         return false;
@@ -344,7 +344,7 @@ bool CollectorResources::ProcessDriverRequest(ZDriverPort& port, const ZDriverRe
 
 void CollectorResources::CancelDriverRequestLifecycle(GCDriverKind kind)
 {
-    collector.GetZGeneration(kind == GCDriverKind::MINOR
+    Heap::GetHeap().GetCollector().GetZGeneration(kind == GCDriverKind::MINOR
         ? ZGenerationId::young : ZGenerationId::old).End();
 }
 
@@ -395,7 +395,7 @@ void CollectorResources::StartGCThreads()
         return;
     }
     // Initialize both generation worker sets.
-    if (collector.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
+    if (Heap::GetHeap().young().Workers() == nullptr) {
         unsigned int activeProcessorCount = std::thread::hardware_concurrency();
         bool affinityDetected = false;
 #if defined(__linux__) || defined(hongmeng)
@@ -433,10 +433,10 @@ void CollectorResources::StartGCThreads()
         // zArguments.cpp:67-99, zWorkers.cpp:45-64: each generation uses
         // the concurrent budget as its maximum and initial active count.
         // ZWorkers counts participants, excluding the coordinating driver.
-        collector.GetZGeneration(ZGenerationId::young).InitializeWorkers(concurrentGcThreadCount);
-        collector.GetZGeneration(ZGenerationId::old).InitializeWorkers(concurrentGcThreadCount);
+        Heap::GetHeap().young().InitializeWorkers(concurrentGcThreadCount);
+        Heap::GetHeap().old().InitializeWorkers(concurrentGcThreadCount);
         finalizerProcessor.GetReferenceProcessor().set_workers(
-            collector.GetZGeneration(ZGenerationId::old).Workers());
+            Heap::GetHeap().old().Workers());
     }
 
     // zCollectedHeap.cpp:62-70: drivers and director start in ZCollectedHeap().
@@ -453,10 +453,6 @@ void CollectorResources::StartGCThreads()
 
 
 } // namespace MapleRuntime
-
-namespace MapleRuntime {
-CollectorResources::CollectorResources(HeapGcState& c) : collector(c) {}
-}
 
 namespace MapleRuntime {
 ZWorkers& CollectorResources::GetWorkers(ZGenerationId generation) const
@@ -597,7 +593,7 @@ bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
 
 ZDriverPort& CollectorResources::GetYoungDriverPort()
 {
-    return collector.GetZGeneration(ZGenerationId::young).YoungType() == ZYoungType::minor
+    return Heap::GetHeap().young().YoungType() == ZYoungType::minor
         ? minorDriverPort : majorDriverPort;
 }
 

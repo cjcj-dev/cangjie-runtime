@@ -488,7 +488,7 @@ void HeapGcState::DiscoverFinalizableRoot(NativeSlot& slot) const
     if (object == nullptr) return;
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
-    auto& processor = collectorResources.GetFinalizerProcessor().GetReferenceProcessor();
+    auto& processor = Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor();
     (void)processor.DiscoverReference(object, ReferenceType::FINAL);
     ZBarrier::MarkFinalizableBarrierOnRoot(slot);
 }
@@ -954,7 +954,7 @@ void HeapGcState::MarkNewObject(BaseObject* obj)
 
 void HeapGcState::ProcessFinalizers()
 {
-    FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
+    FinalizerProcessor& fp = Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor();
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
 }
 
@@ -1898,9 +1898,8 @@ void FollowPartialReferences(const MarkStackEntry& entry,
 }
 
 namespace MapleRuntime {
-HeapGcState::HeapGcState(CollectorResources& resources)
-        : collectorResources(resources),
-          fwdTable(reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()))
+HeapGcState::HeapGcState()
+        : fwdTable(reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()))
     {
     }
 }

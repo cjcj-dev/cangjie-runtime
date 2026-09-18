@@ -376,9 +376,8 @@ public:
     friend struct RelocationReceiptTestAccess;
     friend struct MarkPort203TestAccess;
 public:
-    // a collectorResources without a collector entity is functionless
-    explicit CollectorResources(HeapGcState& collector);
-    ATTR_NO_INLINE virtual ~CollectorResources() = default;
+    CollectorResources() = default;
+    ~CollectorResources() = default;
 
     void Init();
     void Fini();
@@ -476,7 +475,6 @@ private:
     ZStat* statistics = nullptr;
     int32_t concurrentGcThreadCount = 1;
     std::atomic<bool> gcThreadRunning = { false };
-    HeapGcState& collector;
     FinalizerProcessor finalizerProcessor;
 };
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.
