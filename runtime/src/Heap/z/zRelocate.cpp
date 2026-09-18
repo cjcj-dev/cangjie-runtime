@@ -106,7 +106,6 @@ namespace MapleRuntime {
 
 void ZRelocate::ForwardFromSpace(ZGenerationId generation)
 {
-    ScopedEntryTrace trace("CJRT_GC_FORWARD");
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     GCStats& stats = Heap::GetHeap().GetGCStats(generation);
@@ -237,7 +236,6 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 
 bool ZRelocate::Preforward()
 {
-    ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
     ZStatTimerOld zstatTimer(ZStatPhases::PPreforward);
     {
         // Caller holds DriverLocker (ZGenerationOld::collect zGeneration.cpp:1054-1063).

@@ -1292,7 +1292,6 @@ void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     Heap::GetHeap().DumpBeforeGC();
 #endif
-    TRACE_COUNT("CJRT_pre_GC_HeapSize", Heap::GetHeap().GetAllocatedSize());
 }
 }
 

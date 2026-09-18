@@ -251,7 +251,6 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
 namespace MapleRuntime {
 void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
-    ScopedEntryTrace trace("CJRT_GC_START");
 
     const ZGenerationId generation = reason == GC_REASON_YOUNG
         ? ZGenerationId::young : ZGenerationId::old;

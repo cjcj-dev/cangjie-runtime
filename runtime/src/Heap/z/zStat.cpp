@@ -258,7 +258,6 @@ ZStatSampler* ZStatSampler::first = nullptr;
 uint32_t ZStatSampler::count = 0;
 ZStatCounter* ZStatCounter::first = nullptr;
 uint32_t ZStatCounter::count = 0;
-std::atomic<int> ZStat::stwDepth {0};
 size_t ZStatValue::stride = 0;
 char* ZStatValue::base = nullptr;
 
@@ -430,9 +429,6 @@ void ZStat::run_thread()
     Print(history);
 }
 
-void ZStat::EnterStwScope() { stwDepth.fetch_add(1, std::memory_order_relaxed); }
-void ZStat::ExitStwScope() { stwDepth.fetch_sub(1, std::memory_order_relaxed); }
-bool ZStat::WorldStoppedNow() { return stwDepth.load(std::memory_order_relaxed) != 0; }
 } // namespace MapleRuntime
 
 namespace MapleRuntime {

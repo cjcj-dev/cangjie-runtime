@@ -200,7 +200,6 @@ void ZMark::EnumAllExportRoots(RootSet &foreignRootsSet)
 }
 void ZMark::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
-    ScopedEntryTrace trace("CJRT_GC_ENUM");
     EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()));
     MergeMutatorRoots(workStack);
     EnumAllExportRoots(foreignRootsSet);

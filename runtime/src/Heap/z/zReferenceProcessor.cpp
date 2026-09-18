@@ -943,7 +943,6 @@ void FinalizerProcessor::RegisterFinalizers(NativeRootHandles& objs)
 
 void FinalizerProcessor::ReclaimHeapGarbage()
 {
-    ScopedEntryTrace trace("CJRT_GC_RECLAIM");
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
 }
 

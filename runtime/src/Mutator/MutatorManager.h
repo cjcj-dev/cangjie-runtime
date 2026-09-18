@@ -374,7 +374,6 @@ public:
         int = 0) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
-        ZStat::EnterStwScope();
         MutatorManager::Instance().StopTheWorld();
         stoppedTime = TimeUtil::NanoSeconds();
     }
@@ -389,7 +388,6 @@ public:
         // rec=cycle/rec=phase instead.
         GcLog::Stw(reason, startTime, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StartTheWorld();
-        ZStat::ExitStwScope();
     }
 
     uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
@@ -408,7 +406,6 @@ public:
         int = 0) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
-        ZStat::EnterStwScope();
         MutatorManager::Instance().StartLightSync();
         stoppedTime = TimeUtil::NanoSeconds();
     }
@@ -421,7 +418,6 @@ public:
         // held intervals in the same structured pause ledger so pause sums cannot omit it.
         GcLog::Stw(reason, startTime, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StopLightSync();
-        ZStat::ExitStwScope();
     }
 
     uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }

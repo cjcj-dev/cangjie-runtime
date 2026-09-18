@@ -487,15 +487,10 @@ public:
     static ZStatCollection& Collections();
     static ZStatHeap& YoungHeap();
     static ZStatHeap& OldHeap();
-    // Existing GCLOG kind observer. It does not select sampler identity or group.
-    static void EnterStwScope();
-    static void ExitStwScope();
-    static bool WorldStoppedNow();
 private:
     // zStat.hpp:387-389: the sampling thread ticks off a ZMetronome.
     static constexpr uint64_t SampleHz = 1;
     ZMetronome metronome;
-    static std::atomic<int> stwDepth;
 };
 
 class ZStatReferences {

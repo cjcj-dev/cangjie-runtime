@@ -1143,52 +1143,7 @@ void RegionManager::DumpRegionStats(const char* msg) const
                           usedUnitCapacity, usedUnitCount, allUnits, usedUnitFragRate);
 #undef DUMP_REGION_STATS_LOG
 
-    TRACE_COUNT("CJRT_GC_totalSize", totalSize);
-    TRACE_COUNT("CJRT_GC_totalUnits", totalUnits);
-    TRACE_COUNT("CJRT_GC_activeSize", activeSize);
-    TRACE_COUNT("CJRT_GC_activeUnits", activeUnits);
-    TRACE_COUNT("CJRT_GC_tlRegions", tlRegions);
-    TRACE_COUNT("CJRT_GC_tlUnits", tlUnits);
-    TRACE_COUNT("CJRT_GC_tlSize", tlSize);
-    TRACE_COUNT("CJRT_GC_allocTLSize", allocTLSize);
-    TRACE_COUNT("CJRT_GC_fromRegions", fromRegions);
-    TRACE_COUNT("CJRT_GC_fromUnits", fromUnits);
-    TRACE_COUNT("CJRT_GC_fromSize", fromSize);
-    TRACE_COUNT("CJRT_GC_allocFromSize", allocFromSize);
-    TRACE_COUNT("CJRT_GC_recentFullRegions", recentFullRegions);
-    TRACE_COUNT("CJRT_GC_recentFullUnits", recentFullUnits);
-    TRACE_COUNT("CJRT_GC_recentFullSize", recentFullSize);
-    TRACE_COUNT("CJRT_GC_allocRecentFullSize", allocRecentFullSize);
-    TRACE_COUNT("CJRT_GC_garbageRegions", garbageRegions);
-    TRACE_COUNT("CJRT_GC_garbageUnits", garbageUnits);
-    TRACE_COUNT("CJRT_GC_garbageSize", garbageSize);
-    TRACE_COUNT("CJRT_GC_allocGarbageSize", allocGarbageSize);
-    TRACE_COUNT("CJRT_GC_pinnedRegions", pinnedRegions);
-    TRACE_COUNT("CJRT_GC_pinnedUnits", pinnedUnits);
-    TRACE_COUNT("CJRT_GC_pinnedSize", pinnedSize);
-    TRACE_COUNT("CJRT_GC_allocPinnedSize", allocPinnedSize);
-    TRACE_COUNT("CJRT_GC_recentPinnedRegions", recentPinnedRegions);
-    TRACE_COUNT("CJRT_GC_recentPinnedUnits", recentPinnedUnits);
-    TRACE_COUNT("CJRT_GC_recentPinnedSize", recentPinnedSize);
-    TRACE_COUNT("CJRT_GC_allocRecentPinnedSize", allocRecentPinnedSize);
-    TRACE_COUNT("CJRT_GC_rawPointerPinnedRegions", rawPointerPinnedRegions);
-    TRACE_COUNT("CJRT_GC_rawPointerPinnedUnits", rawPointerPinnedUnits);
-    TRACE_COUNT("CJRT_GC_rawPointerPinnedSize", rawPointerPinnedSize);
-    TRACE_COUNT("CJRT_GC_allocRawPointerPinnedSize", allocRawPointerPinnedSize);
-    TRACE_COUNT("CJRT_GC_largeRegions", largeRegions);
-    TRACE_COUNT("CJRT_GC_largeUnits", largeUnits);
-    TRACE_COUNT("CJRT_GC_largeSize", largeSize);
-    TRACE_COUNT("CJRT_GC_allocLargeSize", allocLargeSize);
-    TRACE_COUNT("CJRT_GC_recentlargeRegions", recentlargeRegions);
-    TRACE_COUNT("CJRT_GC_recentlargeUnits", recentlargeUnits);
-    TRACE_COUNT("CJRT_GC_recentLargeSize", recentLargeSize);
-    TRACE_COUNT("CJRT_GC_allocRecentLargeSize", allocRecentLargeSize);
-    TRACE_COUNT("CJRT_GC_usedUnits", usedUnitCount);
-    TRACE_COUNT("CJRT_GC_dirtyUnits", dirtyUnits);
-    TRACE_COUNT("CJRT_GC_listedUnits", totalUnitCount);
     [[maybe_unused]] constexpr size_t decimalPrecision = 10000;
-    TRACE_COUNT("CJRT_GC_objectCapacity", static_cast<size_t>(objectCapacity * decimalPrecision));
-    TRACE_COUNT("CJRT_GC_unitCapacity", static_cast<size_t>(unitCapacity * decimalPrecision));
 }
 
 
