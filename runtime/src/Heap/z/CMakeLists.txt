@@ -7,12 +7,12 @@
 set(SRC_LIST
     "../Collector/Generation.cpp"
     "WCollector.cpp"
-    "../z/zGeneration.cpp"
-    "../z/zMark.cpp"
-    "../z/zRelocate.cpp"
-    "../z/zJNICritical.cpp"
-    "../z/zRemembered.cpp"
-    "../z/zRelocationSet.cpp"
+    "zGeneration.cpp"
+    "zMark.cpp"
+    "zRelocate.cpp"
+    "zJNICritical.cpp"
+    "zRemembered.cpp"
+    "zRelocationSet.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)

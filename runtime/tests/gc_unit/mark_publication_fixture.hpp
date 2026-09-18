@@ -3,10 +3,10 @@
 #define MRT_MARK_PUBLICATION_FIXTURE_HPP
 #include "gc_worker_fixture.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 #include "Heap/z/zDriver.hpp"
 #include "gc_heap_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 namespace MapleRuntime {
 struct MarkPublicationFixture {
     inline static MarkPublicationFixture* current = nullptr;

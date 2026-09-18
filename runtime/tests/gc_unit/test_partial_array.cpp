@@ -21,7 +21,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "gc_heap_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "ObjectModel/MArray.inline.h"

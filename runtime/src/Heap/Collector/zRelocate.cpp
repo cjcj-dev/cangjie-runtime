@@ -48,7 +48,7 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 
 #include <array>
 #include <atomic>
@@ -83,7 +83,7 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/WCollectorInternal.h"
 
 #include "Heap/z/zPageAllocator.hpp"
 
@@ -228,7 +228,7 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 
 #include <array>
 #include <atomic>
@@ -263,7 +263,7 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/WCollectorInternal.h"
 
 #include "Heap/z/zPageAllocator.hpp"
 

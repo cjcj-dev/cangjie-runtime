@@ -6,7 +6,7 @@
 
 
 #include "Heap/z/zAbort.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 #include "Heap/Allocator/RegionList.h"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -48,7 +48,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/WCollectorInternal.h"
 
 namespace MapleRuntime {
 #include "Heap/Collector/ExportOwnershipTestObservations.h"

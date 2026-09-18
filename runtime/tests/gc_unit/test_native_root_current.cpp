@@ -3,7 +3,7 @@
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
 #include "b09_runtime_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zMark.hpp"

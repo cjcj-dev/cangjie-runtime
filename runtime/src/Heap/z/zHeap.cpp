@@ -12,7 +12,7 @@
 #include "Heap/z/zPageTable.hpp"
 #include "Heap/z/zArray.hpp"
 
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 #include "Heap/z/zArguments.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Interpreter/Options.h"

@@ -7,7 +7,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/z/concurrentGCBreakpoints.hpp"
 #include "ObjectModel/MArray.inline.h"

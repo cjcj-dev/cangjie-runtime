@@ -9,7 +9,7 @@
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/WCollector.h"
 
 #include <array>
 #include <atomic>
@@ -54,7 +54,7 @@
 #include "ObjectModel/RefField.inline.h"
 #include "Mutator/Handshake.h"
 #include "TypeInfoManager.h"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/WCollectorInternal.h"
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
