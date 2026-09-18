@@ -852,7 +852,7 @@ int8_t MRT_StopSubScheduler(void* schedule)
 
 static void ResolveCycleRefImpl()
 {
-    Heap::GetHeap().GetCollector().ResolveCycleRef();
+    Heap::GetHeap().ResolveCycleRef();
 }
 extern "C" void CJ_MRT_RolveCycleRef()
 {

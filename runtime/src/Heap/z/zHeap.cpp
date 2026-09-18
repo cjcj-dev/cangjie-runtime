@@ -182,6 +182,8 @@ Collector& Heap::GetCollector() { return collectorResources->ActiveCollector(); 
 
 void Heap::RequestGC(GCReason reason, bool async) { GetCollector().RequestGC(reason, async); }
 
+void Heap::ResolveCycleRef() { GetCollector().ResolveCycleRef(); }
+
 void Heap::MarkYoungRootObject(BaseObject* object) { GetCollector().MarkYoungRootObject(object); }
 
 void Heap::MarkObjectIfActive(BaseObject* object) { GetCollector().MarkObjectIfActive(object); }

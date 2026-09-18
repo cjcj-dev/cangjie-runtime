@@ -74,6 +74,7 @@ public:
 
     Collector& GetCollector();
     void RequestGC(GCReason reason, bool async);
+    void ResolveCycleRef();
     Allocator& GetAllocator();
     void MarkYoungRootObject(BaseObject* object);
     void MarkObjectIfActive(BaseObject* object);
