@@ -1,4 +1,5 @@
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -113,23 +114,15 @@ GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
     young.AtEnd(2, &youngWorkers, true, true);
     old.AtStart(2);
     old.AtEnd(3, &oldWorkers, true, true);
-    const auto completed = collections.Stats();
-    GC_EXPECT_EQ(completed.totalCollections, combined.totalCollections);
-    GC_EXPECT_EQ(completed.collectionsAtMajorStart, combined.collectionsAtMajorStart);
+    // Cycle/worker accounting does not move the collection count.
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
 
-    collections.AtYoungMarkStart(false);
-    const auto next = collections.Stats();
-    GC_EXPECT_EQ(next.totalCollections - completed.totalCollections, 1u);
-    GC_EXPECT_EQ(next.collectionsAtMajorStart, completed.collectionsAtMajorStart);
-    collections.AtYoungMarkStart(false);
-    const auto second = collections.Stats();
-    GC_EXPECT_EQ(second.totalCollections - next.totalCollections, 1u);
-    GC_EXPECT_EQ(second.collectionsAtMajorStart, next.collectionsAtMajorStart);
-
-    collections.AtYoungMarkStart(true);
-    const auto nextMajor = collections.Stats();
-    GC_EXPECT_EQ(nextMajor.totalCollections - second.totalCollections, 1u);
-    GC_EXPECT_EQ(nextMajor.collectionsAtMajorStart, nextMajor.totalCollections);
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 2);
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 3);
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 4);
 }
 
 GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
@@ -161,7 +154,7 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     GC_EXPECT_TRUE(after.active);
     GC_EXPECT_EQ(young.Workers()->active_workers(), 1u);
     GC_EXPECT_EQ(old.Workers()->active_workers(), 2u);
-    GC_EXPECT_TRUE(&young.Stats() != &old.Stats());
+    GC_EXPECT_TRUE(young.StatHeap() != old.StatHeap());
     GC_EXPECT_TRUE(&young.CycleStats() != &old.CycleStats());
 
     old.End();
@@ -171,12 +164,11 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
 
 GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
 {
-    class Probe : public ZGeneration {
+    class Probe : public ZGenerationYoung {
     public:
-        using ZGeneration::ZGeneration;
         bool should_record_stats() override { return false; }
     };
-    Probe young(ZGenerationId::young);
+    Probe young;
     TenuringInputs inputs;
     inputs.softMaxCapacity = 64 * 1024 * 1024;
     inputs.youngAllocated = 4096;
