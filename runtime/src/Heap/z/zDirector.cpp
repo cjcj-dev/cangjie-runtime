@@ -643,7 +643,14 @@ void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
         reevaluate = false;
-        resources.EvaluateDirector(TimeUtil::NanoSeconds());
+        if (Runtime::CurrentRef() == nullptr || !resources.IsGCActive()) {
+            continue;
+        }
+        const ZDirectorStats stats = sample_stats(resources, TimeUtil::NanoSeconds(),
+            busy(true), busy(false), resources.concurrentGcThreadCount);
+        if (!MapleRuntime::start_gc(resources, stats)) {
+            adjust_gc(resources, stats);
+        }
     }
 }
 
@@ -652,27 +659,6 @@ void ZDirector::terminate()
     std::lock_guard<std::mutex> locker(monitor);
     stopped = true;
     condition.notify_all();
-}
-
-bool CollectorResources::start_gc(uint64_t now)
-{
-    EvaluateDirector(now);
-    ZDirector* director = ZCollectedHeap::heap()->director();
-    return director->busy(true) || director->busy(false) ||
-        GetMinorDriverPort().is_busy() || GetMajorDriverPort().is_busy();
-}
-
-void CollectorResources::EvaluateDirector(uint64_t now)
-{
-    if (Runtime::CurrentRef() == nullptr || !IsGCActive()) {
-        return;
-    }
-    ZDirector* director = ZCollectedHeap::heap()->director();
-    const ZDirectorStats stats = sample_stats(*this, now, director->busy(true), director->busy(false),
-                                              concurrentGcThreadCount);
-    if (!MapleRuntime::start_gc(*this, stats)) {
-        adjust_gc(*this, stats);
-    }
 }
 
 } // namespace MapleRuntime

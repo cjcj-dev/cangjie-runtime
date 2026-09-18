@@ -447,8 +447,6 @@ private:
     void StartGCThreads();
     void StopGCThreads();
     void RunDriverLoop(GCDriverKind kind, ZDriverPort& port);
-    void EvaluateDirector(uint64_t now);
-    bool start_gc(uint64_t now);
     void CompleteDriverRequest(ZDriverPort& port);
     void RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup);
     void RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup);
