@@ -136,7 +136,7 @@ void Heap::Init(const HeapParam& param)
     Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
     collectorImpl->Init();
     {
-        const auto& heapMap = ZPageTable::heap_table().map();
+        const auto& heapMap = page_table().map();
         const size_t heapSpan = heapMap.size() * heapMap.granule();
         young().forwarding_table().initialize(
             heapSpan, heapMap.base(), heapMap.granule());
@@ -144,7 +144,7 @@ void Heap::Init(const HeapParam& param)
             heapSpan, heapMap.base(), heapMap.granule());
     }
     young().remembered()->bind(
-        &ZPageTable::heap_table(),
+        &page_table(),
         &old().forwarding_table(),
         &_page_allocator->GetRegionManager());
     if (young().Workers() == nullptr) {
@@ -460,7 +460,7 @@ void RegionManager::StampCensusBoundaries()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-ZPage* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr); }
+ZPage* Heap::page(MAddress addr) { return page_table().get(addr); }
 
 ZPageTable& Heap::page_table() { return *GetHeap()._page_table; }
 
