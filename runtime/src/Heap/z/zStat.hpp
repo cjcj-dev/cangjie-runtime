@@ -493,12 +493,54 @@ private:
     ZMetronome metronome;
 };
 
+// zStat.hpp:484-487, zStat.cpp:1410-1420: system load average, printed as
+// an absolute value and as a share of the CPU count.
+class ZStatLoad {
+public:
+    static void Print();
+};
+
+// zStat.hpp:492-511, zStat.cpp:1423-1456
+class ZStatMark {
+public:
+    ZStatMark();
+
+    void AtMarkStart(size_t nstripes);
+    void AtMarkEnd(size_t nproactiveflush, size_t nterminateflush, size_t ntrycomplete, size_t ncontinue);
+
+    void Print();
+
+private:
+    size_t _nstripes;
+    size_t _nproactiveflush;
+    size_t _nterminateflush;
+    size_t _ntrycomplete;
+    size_t _ncontinue;
+    size_t _markStackUsage;
+};
+
+// zStat.hpp:568-585, zStat.cpp:1642-1697
 class ZStatReferences {
 public:
     static void set_soft(size_t encountered, size_t discovered, size_t enqueued);
     static void set_weak(size_t encountered, size_t discovered, size_t enqueued);
     static void set_final(size_t encountered, size_t discovered, size_t enqueued);
     static void set_phantom(size_t encountered, size_t discovered, size_t enqueued);
+
+    static void Print();
+
+private:
+    struct ZCount {
+        size_t encountered = 0;
+        size_t discovered = 0;
+        size_t enqueued = 0;
+    };
+    static ZCount soft;
+    static ZCount weak;
+    static ZCount final;
+    static ZCount phantom;
+
+    static void Set(ZCount* count, size_t encountered, size_t discovered, size_t enqueued);
 };
 
 class GCStats {

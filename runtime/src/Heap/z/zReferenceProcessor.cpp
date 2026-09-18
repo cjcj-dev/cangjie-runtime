@@ -40,36 +40,6 @@ std::function<void()> g_beforeWeakCleanCasForTest;
 }
 #endif
 
-namespace {
-size_t g_statEncountered[4] = {};
-size_t g_statDiscovered[4] = {};
-size_t g_statEnqueued[4] = {};
-}
-
-void ZStatReferences::set_soft(size_t encountered, size_t discovered, size_t enqueued)
-{
-    g_statEncountered[0] = encountered;
-    g_statDiscovered[0] = discovered;
-    g_statEnqueued[0] = enqueued;
-}
-void ZStatReferences::set_weak(size_t encountered, size_t discovered, size_t enqueued)
-{
-    g_statEncountered[1] = encountered;
-    g_statDiscovered[1] = discovered;
-    g_statEnqueued[1] = enqueued;
-}
-void ZStatReferences::set_final(size_t encountered, size_t discovered, size_t enqueued)
-{
-    g_statEncountered[2] = encountered;
-    g_statDiscovered[2] = discovered;
-    g_statEnqueued[2] = enqueued;
-}
-void ZStatReferences::set_phantom(size_t encountered, size_t discovered, size_t enqueued)
-{
-    g_statEncountered[3] = encountered;
-    g_statDiscovered[3] = discovered;
-    g_statEnqueued[3] = enqueued;
-}
 
 uint32_t ReferenceProcessor::worker_index()
 {

@@ -840,6 +840,92 @@ void ZStatMMU::Print()
     LOG(RTLOG_INFO, "MMU: 2ms/%.1f%%, 5ms/%.1f%%, 10ms/%.1f%%, 20ms/%.1f%%, 50ms/%.1f%%, 100ms/%.1f%%",
         mmu2ms, mmu5ms, mmu10ms, mmu20ms, mmu50ms, mmu100ms);
 }
+
+// zStat.cpp:1410-1420
+void ZStatLoad::Print()
+{
+#if defined(__linux__) || defined(hongmeng)
+    double loadavg[3] = {};
+    if (getloadavg(loadavg, 3) != -1) {
+        const double cpus = static_cast<double>(ZCPU::count());
+        LOG(RTLOG_INFO, "Load: %.2f (%.0f%%) / %.2f (%.0f%%) / %.2f (%.0f%%)",
+            loadavg[0], loadavg[0] / cpus * 100.0,
+            loadavg[1], loadavg[1] / cpus * 100.0,
+            loadavg[2], loadavg[2] / cpus * 100.0);
+    }
+#endif
+}
+
+// zStat.cpp:1423-1456
+ZStatMark::ZStatMark()
+    : _nstripes(0), _nproactiveflush(0), _nterminateflush(0), _ntrycomplete(0), _ncontinue(0), _markStackUsage(0)
+{}
+
+void ZStatMark::AtMarkStart(size_t nstripes)
+{
+    _nstripes = nstripes;
+}
+
+void ZStatMark::AtMarkEnd(size_t nproactiveflush, size_t nterminateflush, size_t ntrycomplete, size_t ncontinue)
+{
+    _nproactiveflush = nproactiveflush;
+    _nterminateflush = nterminateflush;
+    _ntrycomplete = ntrycomplete;
+    _ncontinue = ncontinue;
+}
+
+void ZStatMark::Print()
+{
+    LOG(RTLOG_INFO,
+        "Mark: %zu stripe(s), %zu proactive flush(es), %zu terminate flush(es), "
+        "%zu completion(s), %zu continuation(s) ",
+        _nstripes, _nproactiveflush, _nterminateflush, _ntrycomplete, _ncontinue);
+}
+
+// zStat.cpp:1642-1697
+ZStatReferences::ZCount ZStatReferences::soft;
+ZStatReferences::ZCount ZStatReferences::weak;
+ZStatReferences::ZCount ZStatReferences::final;
+ZStatReferences::ZCount ZStatReferences::phantom;
+
+void ZStatReferences::Set(ZCount* count, size_t encountered, size_t discovered, size_t enqueued)
+{
+    count->encountered = encountered;
+    count->discovered = discovered;
+    count->enqueued = enqueued;
+}
+
+void ZStatReferences::set_soft(size_t encountered, size_t discovered, size_t enqueued)
+{
+    Set(&soft, encountered, discovered, enqueued);
+}
+
+void ZStatReferences::set_weak(size_t encountered, size_t discovered, size_t enqueued)
+{
+    Set(&weak, encountered, discovered, enqueued);
+}
+
+void ZStatReferences::set_final(size_t encountered, size_t discovered, size_t enqueued)
+{
+    Set(&final, encountered, discovered, enqueued);
+}
+
+void ZStatReferences::set_phantom(size_t encountered, size_t discovered, size_t enqueued)
+{
+    Set(&phantom, encountered, discovered, enqueued);
+}
+
+void ZStatReferences::Print()
+{
+    LOG(RTLOG_INFO, "%-20s %12s %12s %12s", "References:", "Encountered", "Discovered", "Enqueued");
+    auto printRow = [](const char* name, const ZCount& ref) {
+        LOG(RTLOG_INFO, "%-20s %12zu %12zu %12zu", name, ref.encountered, ref.discovered, ref.enqueued);
+    };
+    printRow("Soft", soft);
+    printRow("Weak", weak);
+    printRow("Final", final);
+    printRow("Phantom", phantom);
+}
 } // namespace MapleRuntime
 
 // zStat.cpp:597-876 — stat phases. Host infra difference (D4=A): the
@@ -888,7 +974,14 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
         return;
     }
     sampler.Sample(endNs - startNs);
+    // zStat.cpp:724-735 — the one-shot per-collection report. The stalls,
+    // mark, relocation and heap units join as their per-generation stat
+    // objects land on this branch.
+    ZStatLoad::Print();
     ZStatMMU::Print();
+    if (id == ZGenerationId::old) {
+        ZStatReferences::Print();
+    }
 }
 
 uint64_t ZStatPhasePause::maxNs;
