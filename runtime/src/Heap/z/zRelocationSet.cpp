@@ -53,7 +53,7 @@
 namespace MapleRuntime {
 #include "Heap/z/zExportOwnershipTestObservations.hpp"
 
-void HeapGcState::PostTrace()
+void ZGenerationOld::PostTrace()
 {
     MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -75,14 +75,14 @@ void HeapGcState::PostTrace()
     if (ZAbort::should_abort()) {
         return;
     }
-    RefineFromSpace();
+    ZRelocate::RefineFromSpace();
     space.PrepareFromSpace<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.
     space.GetRegionManager().ReleaseMarkQuarantine();
 }
-void HeapGcState::CollectSmallSpace()
+void ZGenerationOld::CollectSmallSpace()
 {
     GCStats& stats = Heap::GetHeap().GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());

@@ -51,7 +51,7 @@ run_ohos_host_arm() {
       'MRT_GC_UNIT_OHOS_HOST_RECEIPT' \
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
-      'MapleRuntime::HeapGcState::DoGarbageCollection(MapleRuntime::ZGenerationId)' \
+      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
@@ -100,7 +100,7 @@ run_ohos_host_arm() {
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
       'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
-      'MapleRuntime::HeapGcState::DoGarbageCollection(MapleRuntime::ZGenerationId)' \
+      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
       'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
       echo "GC_UNIT_OHOS_HOST_LOCAL_PRODUCT_DEFINITION symbol=$symbol" >&2
@@ -572,7 +572,7 @@ REFERENCE_PROCESSOR_CONSUMERS=(
 )
 # The direct weak-discovery test in test_young_conc.cpp is testable-only.
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::HeapGcState::DiscoverWeakReference(')
+  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::ZMark::DiscoverWeakReference(')
 fi
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
@@ -596,7 +596,8 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
-    'MapleRuntime::HeapGcState::DoGarbageCollection(MapleRuntime::ZGenerationId)'
+    'MapleRuntime::ZGenerationYoung::collect()'
+    'MapleRuntime::ZGenerationOld::collect()'
     'MapleRuntime::ZGenerationOld::concurrent_mark()'
     'MapleRuntime::ZGenerationOld::pause_mark_end()'
     'MapleRuntime::ZGenerationOld::process_non_strong_references()'
@@ -620,7 +621,7 @@ fi
 LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RegionManager::RememberFlipPromotedPages('
   'MapleRuntime::RegionManager::RememberPromotedObject('
-  'MapleRuntime::HeapGcState::RemapYoungRoots('
+  'MapleRuntime::ZRelocate::RemapYoungRoots('
 )
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   LOADHEAL_PRODUCT_CONSUMERS+=(

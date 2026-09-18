@@ -24,6 +24,7 @@
 #include "gc_unittest.hpp"
 #include "mark_publication_fixture.hpp"
 #include <cstdio>
+#include "Heap/z/zBarrier.hpp"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -71,7 +72,7 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     GC_EXPECT_EQ(reached.size(), 1u);
     GC_EXPECT_TRUE(reached.front() == fx.obj1);
     // Completing/cleaning young work must leave old's object and carrier intact.
-    GC_EXPECT_TRUE(mark.collector.IsMarkedObject<Generation::Young>(fx.obj1));
+    GC_EXPECT_TRUE(RegionSpace::IsMarkedObject<Generation::Young>(fx.obj1));
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     std::vector<BaseObject*> oldObjects;
     mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });

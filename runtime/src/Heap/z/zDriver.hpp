@@ -331,7 +331,6 @@ private:
 
 enum class GCDriverKind : uint8_t { MINOR, MAJOR };
 
-class HeapGcState;
 
 // zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
 // receives requests from their port and whose terminate closes that port.

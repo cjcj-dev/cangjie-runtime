@@ -127,12 +127,12 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct MarkPort203TestAccess {
-    static void Bind(HeapGcState* collector, int32_t count = 1)
+    static void Bind(Heap* collector, int32_t count = 1)
     {
-        if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
+        if (collector != nullptr) CHECK(collector == &Heap::GetHeap());
         ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(count);
     }
-    static void Collect(HeapGcState& collector, bool major)
+    static void Collect(Heap& collector, bool major)
     {
         // The major driver normally initializes old marking in its young prelude.
         // This focused old-body fixture supplies the same product initialization.
@@ -147,7 +147,11 @@ struct MarkPort203TestAccess {
             Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
             Heap::GetHeap().old().Mark().Start();
         }
-        collector.DoGarbageCollection(major ? ZGenerationId::old : ZGenerationId::young);
+        if (major) {
+            Heap::GetHeap().old().collect();
+        } else {
+            Heap::GetHeap().young().collect();
+        }
     }
 };
 }
@@ -302,7 +306,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     fx.region1->SetRegionAllocPtr(next);
     GC_EXPECT_TRUE(next <= fx.region1->GetRegionEnd());
 
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     MarkPort203TestAccess::Bind(&collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {

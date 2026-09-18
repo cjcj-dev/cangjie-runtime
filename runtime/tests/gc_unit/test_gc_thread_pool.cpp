@@ -38,14 +38,14 @@ struct RelocationReceiptTestAccess {
     }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-    static void BindCollector(HeapGcState& collector)
+    static void BindCollector(Heap& collector)
     {
-        CHECK(&collector == &Heap::GetHeap().GetCollector());
+        CHECK(&collector == &Heap::GetHeap());
     }
-    static void ForwardYoungFromRuntimeEntry(HeapGcState& collector)
+    static void ForwardYoungFromRuntimeEntry(Heap& collector)
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
-        collector.ForwardFromSpace(ZGenerationId::young);
+        ZRelocate::ForwardFromSpace(ZGenerationId::young);
     }
 #endif
 };
@@ -189,7 +189,7 @@ bool RunYoungRuntimeProductEntry()
 
     ZRelocateQueue& queue = manager.GetZRelocateQueue();
 
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
 #if defined(MRT_TESTABLE_INTERNALS)
     RelocationReceiptTestAccess::BindCollector(collector);
 #endif

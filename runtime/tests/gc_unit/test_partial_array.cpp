@@ -39,7 +39,7 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct PartialArrayTestAccess {
-    static void StartFieldMark(HeapGcState& collector)
+    static void StartFieldMark(Heap& collector)
     {
         auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         if (old.Workers() == nullptr) old.InitializeWorkers(1);
@@ -49,9 +49,9 @@ struct PartialArrayTestAccess {
         old.PublishPhase(ZGenerationPhase::Mark);
     }
 
-    static void ReadPublished(HeapGcState& collector, WorkStack& result)
+    static void ReadPublished(Heap& collector, WorkStack& result)
     {
-        auto& domain = *collector.MajorMark();
+        auto& domain = *Heap::GetHeap().old().MarkPtr();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
             if (auto* stack = domain.Stacks().StealLocal(stripe)) {
                 while (!stack->IsEmpty()) result.push_back(stack->Pop());
@@ -60,7 +60,7 @@ struct PartialArrayTestAccess {
         }
     }
 
-    static void StoreTarget(const HeapGcState& collector, RefField<>& field, BaseObject* target)
+    static void StoreTarget(const Heap& collector, RefField<>& field, BaseObject* target)
     {
         const RefField<> coloured = ZBarrier::GetAndTryTagRefField(target);
         field.StoreColoured(coloured.GetFieldValue());
@@ -189,7 +189,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     SlotBuf buf(MarkPartialArray::MIN_LENGTH);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     WorkStack workStack;
     RefField<>* const chunk = reinterpret_cast<RefField<>*>(buf.slots);
     for (size_t i = 0; i < MarkPartialArray::MIN_LENGTH; ++i) {
@@ -204,7 +204,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     // barrier does; the old caller-owned staging stack is not that consumer.
     PartialArrayTestAccess::StartFieldMark(collector);
     ZGlobalsPointers::flip_old_mark_start();
-    auto& domain = *collector.MajorMark();
+    auto& domain = *Heap::GetHeap().old().MarkPtr();
     MarkContext context(1, 0, domain.Stripes(), domain.Stacks());
     domain.MarkAndFollow(context, partial);
     PartialArrayTestAccess::ReadPublished(collector, workStack);

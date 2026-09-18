@@ -869,7 +869,7 @@ bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size
     return scanned;
 }
 
-inline void Mutator::ForwardLocalFinalizers(HeapGcState&)
+inline void Mutator::ForwardLocalFinalizers()
 {
     for (NativeSlot& root : localFinalizers) {
         (void)ZBarrier::ReadStaticRef(root);
@@ -962,7 +962,7 @@ inline void Mutator::GCPhasePreForward()
     };
 
     DerivedPtrVisitor derivedPtrVisitor = MakeDerivedRootVisitor(visitor);
-    ForwardLocalFinalizers(Heap::GetHeap().GetCollector());
+    ForwardLocalFinalizers();
     size_t frames = 0;
     const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
     if (!StackWatermarkSet::finish_processing(*this, visitor, visitor, epoch, &derivedPtrVisitor, frames)) {

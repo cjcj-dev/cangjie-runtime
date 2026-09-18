@@ -1388,7 +1388,7 @@ struct TypeInfoLayoutCheck {
             "DYN_TypeInfo alignment must match TypeInfo -- raise ATTR_PACKED in MClass.h and "
             "TYPE_INFO_ATTRS in include/Interpreter/RuntimeTypes.h together");
         // The collector treats a tip that is not 8-byte aligned as not-a-TypeInfo
-        // (StateWord::ADDRESS_ALIGN_MASK, consumed at HeapGcState.cpp:104 and :304
+        // (StateWord::ADDRESS_ALIGN_MASK, consumed at the colored-slot remapping path
         // and asserted fatally at Mutator.cpp:597 and :754). Declaring less than
         // that is what let the arena hand out addresses the collector rejects.
         static_assert(alignof(TypeInfo) >= StateWord::ADDRESS_ALIGN_MASK + 1,

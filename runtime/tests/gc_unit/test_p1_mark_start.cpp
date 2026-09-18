@@ -43,7 +43,7 @@ void Expect(bool value, const char* invariant)
 extern "C" int p1MarkStartExercise()
 {
     failures = 0;
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)] {};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -59,7 +59,7 @@ extern "C" int p1MarkStartExercise()
 
     std::array<StartState, 2> state {};
     bool youngComplete = false;
-    HeapGcState::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point,
+    ZGeneration::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point,
                                                const ZMark* domain) {
         const size_t index = generation == ZGenerationId::young ? 0 : 1;
         auto& before = state[index];
@@ -127,7 +127,7 @@ extern "C" int p1MarkStartExercise()
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     const auto youngAfter = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
     const auto oldAfter = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
-    HeapGcState::testMarkStartState = nullptr;
+    ZGeneration::testMarkStartState = nullptr;
     Expect(oldAfterMajor.sequence > oldBefore.sequence, "major_request_started_old");
     Expect(oldAfter.sequence == oldAfterMajor.sequence, "minor_preserves_old_identity");
     Expect(state[0].starts == youngAfter.sequence - youngBefore.sequence && state[0].starts != 0,

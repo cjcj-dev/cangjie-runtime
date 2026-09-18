@@ -375,7 +375,6 @@ private:
 #include "Heap/Allocator/SlotList.h"
 
 namespace MapleRuntime {
-class HeapGcState;
 class CompactCollector;
 template<Generation G>
 class ForwardTask;

@@ -166,3 +166,88 @@ void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
     heapMap.RecordCalleeSaved(regSlotsMap);
 }
 }
+
+namespace MapleRuntime {
+namespace {
+struct SkippedStackMapCounts {
+    std::atomic<size_t> zeroEntries{ 0 };
+    std::atomic<size_t> pcMiss{ 0 };
+    std::atomic<size_t> zeroRootIndices{ 0 };
+};
+
+SkippedStackMapCounts g_skippedStackMapCounts;
+thread_local size_t g_currentThreadRootMapMissCount = 0;
+
+} // namespace
+
+const char* StackMapInvalidReasonName(StackMapInvalidReason reason)
+{
+    switch (reason) {
+        case StackMapInvalidReason::NONE:
+            return "none";
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            return "present-but-zero-entries";
+        case StackMapInvalidReason::PC_MISS:
+            return "pc-miss-exact";
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            return "zero-root-indices";
+    }
+    return "unknown";
+}
+
+void ResetSkippedStackMapCounts()
+{
+    g_skippedStackMapCounts.zeroEntries.store(0, std::memory_order_relaxed);
+    g_skippedStackMapCounts.pcMiss.store(0, std::memory_order_relaxed);
+    g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+}
+
+void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
+                       const Mutator& mutator)
+{
+    (void)reason;
+    (void)frame;
+    (void)startIP;
+    (void)frameIP;
+    (void)mutator;
+    ++g_currentThreadRootMapMissCount;
+}
+
+ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo&, uintptr_t,
+                                          uintptr_t)
+{
+    std::atomic<size_t>* skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+    switch (reason) {
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            skippedCount = &g_skippedStackMapCounts.zeroEntries;
+            break;
+        case StackMapInvalidReason::PC_MISS:
+            skippedCount = &g_skippedStackMapCounts.pcMiss;
+            break;
+        case StackMapInvalidReason::NONE:
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+            break;
+    }
+    skippedCount->fetch_add(1, std::memory_order_relaxed);
+
+}
+
+void ReportSkippedStackMapCounts()
+{
+    size_t zeroEntries = g_skippedStackMapCounts.zeroEntries.load(std::memory_order_relaxed);
+    size_t pcMiss = g_skippedStackMapCounts.pcMiss.load(std::memory_order_relaxed);
+    size_t zeroRootIndices = g_skippedStackMapCounts.zeroRootIndices.load(std::memory_order_relaxed);
+    if (zeroEntries != 0 || pcMiss != 0 || zeroRootIndices != 0) {
+        LOG(RTLOG_ERROR,
+            "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
+            "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
+            zeroEntries, pcMiss, zeroRootIndices);
+    }
+}
+
+
+
+
+}
+

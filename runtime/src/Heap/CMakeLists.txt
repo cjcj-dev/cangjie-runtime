@@ -43,7 +43,6 @@ list(APPEND SRC_LIST
     "z/zDriver.cpp"
     "z/zDirector.cpp"
     "z/zDriverPort.cpp"
-    "z/zTracing.cpp"
     "z/zRootsIterator.cpp"
     "z/zWeakRootsProcessor.cpp"
     "z/zResurrection.cpp"

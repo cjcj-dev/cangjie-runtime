@@ -359,6 +359,8 @@ class RegionManager;
 
 class ZStat final : public ZThread {
 public:
+    static void UpdateGCStats();
+public:
     ZStat();
     ~ZStat() override = default;
     void run_thread() override;

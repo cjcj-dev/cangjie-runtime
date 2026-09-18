@@ -170,8 +170,8 @@ void JavaThreadsIterator::Apply(const std::function<void(Mutator&)>& visitor)
     }
 }
 
-void HeapGcState::VisitStrongPlainRoots(
-    const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor) const
+void ZMark::VisitStrongPlainRoots(
+    const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor)
 {
     if (threadVisitor) {
         MutatorManager::Instance().VisitAllMutators(threadVisitor);
@@ -180,28 +180,28 @@ void HeapGcState::VisitStrongPlainRoots(
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
 }
 
-void HeapGcState::VisitStaticRoots(const NativeSlotVisitor& visitor) const
+void ZMark::VisitStaticRoots(const NativeSlotVisitor& visitor)
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 
-void HeapGcState::MergeMutatorRoots(WorkStack& workStack)
+void ZMark::MergeMutatorRoots(WorkStack& workStack)
 {
     (void)workStack;
     (void)Heap::GetHeap().old().Mark().Flush();
 }
 
-void HeapGcState::EnumAllExportRoots(RootSet &foreignRootsSet)
+void ZMark::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
-    Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet, this](NativeSlot& root) {
+    Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet](NativeSlot& root) {
 
         EnumRefFieldRoot(root, foreignRootsSet);
     });
 }
-void HeapGcState::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
+void ZMark::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_ENUM");
-    EnumAllCommonRoots(GetWorkers(ZGenerationId::old));
+    EnumAllCommonRoots((*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()));
     MergeMutatorRoots(workStack);
     EnumAllExportRoots(foreignRootsSet);
 }

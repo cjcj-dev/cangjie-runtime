@@ -34,6 +34,129 @@
 #include <vector>
 
 namespace MapleRuntime {
+std::atomic<size_t> g_minorRefCasFail{ 0 };
+std::atomic<size_t> g_minorRefCasOk{ 0 };
+
+template<bool forward>
+bool ZBarrier::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
+                                       BaseObject*& toObj, const ForwardingProvenance& provenance)
+{
+    RefField<> oldRef(field);
+    if (ZPointer::is_load_bad(oldRef.GetFieldValue())) {
+        fromObj = to_object(oldRef.GetTargetObject());
+        if (forward) {
+            toObj = ZBarrier::remap_generation(oldRef.GetFieldValue())->relocate_or_remap_object(fromObj);
+        } else {
+            toObj = ZRelocate::FindToVersion(fromObj, static_cast<Generation>(ZBarrier::remap_generation(oldRef.GetFieldValue())->id())).GetOrFailClosed(
+                "ZBarrier::TryUpdateRefFieldImpl", provenance);
+        }
+        if (toObj == nullptr) {
+            return false;
+        }
+        // R7：写回必须经规范色单产地，禁 plain RefField<>(toObj)。
+        // expected 仍是 observed-raw（oldRef.GetFieldValue()）；模板 = GetAndTryTagRefField。
+        RefField<> tmpField = ZBarrier::GetAndTryTagRefField(toObj);
+        if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
+            if (obj != nullptr) {
+                DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
+                     obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
+                     raw(tmpField.GetFieldValue()));
+            } else {
+                DLOG(TRACE, "update ref@%p: 0x%zx -> %p", &field, raw(oldRef.GetFieldValue()), toObj);
+            }
+            return true;
+        } else {
+            if (obj != nullptr) {
+                DLOG(TRACE,
+                     "update obj %p<%p>(%zu)+%zu but cas failed ref-field@%p: %#zx(%#zx) -> %#zx but cas failed ", obj,
+                     obj->GetTypeInfo(), obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field,
+                     raw(oldRef.GetFieldValue()), raw(field.GetFieldValue()), raw(tmpField.GetFieldValue()));
+            } else {
+                DLOG(TRACE, "update but cas failed ref@%p: 0x%zx(%zx) -> %p", &field, raw(oldRef.GetFieldValue()),
+                     field.GetFieldValue(), toObj);
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool ZBarrier::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef)
+{
+    BaseObject* oldRef = nullptr;
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
+}
+
+bool ZBarrier::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
+                                          bool allowNull)
+{
+    BaseObject* object = to_object(target);
+    if (object != nullptr) {
+        CHECK_DETAIL(Heap::IsHeapAddress(object),
+                     "resolved heal target must be a heap address target=%p", object);
+        CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(object) == HandVerdict::Usable,
+                     "resolved heal target must be usable target=%p", object);
+    }
+    zpointer desired = is_null(target) ? zpointer::null : RefField<>(ZAddress::store_good(target)).GetFieldValue();
+    if (expected == raw(desired)) {
+        return true;
+    }
+    const zpointer observed = to_zpointer(expected);
+    auto loadGood = [](zpointer value) {
+        RefField<> probe(value);
+        return is_null(probe.GetTargetObject()) || ZPointer::is_load_good(probe.GetFieldValue());
+    };
+    if (loadGood(observed)) {
+        return true;
+    }
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&field), observed, desired,
+                        allowNull);
+    const bool healed = true;
+    if (healed) {
+        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+BaseObject* ZBarrier::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
+{
+    RefField<> oldField(field);
+    const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
+    BaseObject* latest = nullptr;
+    if (ZPointer::is_mark_good(oldField.GetFieldValue())) {
+        BaseObject* targetObj = to_object(oldField.GetTargetObject());
+        if (!Heap::IsHeapAddress(targetObj)) {
+            return nullptr;
+        }
+        // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
+        CHECK_DETAIL(targetObj->IsValidObject(),
+                     "Invalid object %p is referenced by %s object %p: %s and offset %zd", targetObj, sourceKind, obj,
+                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+        return targetObj;
+    }
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    latest = to_object(ZBarrier::make_load_good(oldField.GetFieldValue(), provenance));
+    // target object could be null or non-heap for some static variable.
+    if (!Heap::IsHeapAddress(latest)) {
+        return nullptr;
+    }
+    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
+                 latest, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+    RefField<> newField = ZBarrier::GetAndTryTagRefField(latest);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
+    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
+            raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
+    }
+    return latest;
+}
+
 #if defined(MRT_TESTABLE_INTERNALS)
 std::function<void(ZBarrier::FieldMarkKind, RefField<>&, zpointer, zaddress)> ZBarrier::testFieldMarkResult;
 #endif
@@ -912,7 +1035,7 @@ void ZBarrier::NoteStoreGoodOnBadTarget(BaseObject* target)
     if ((bad & (bad - 1)) != 0) {
         return;
     }
-    const bool inFrom = Heap::GetHeap().GetCollector().IsFromObject(target);
+    const bool inFrom = ZRelocate::IsFromObject(target);
     LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
         bad, seen, static_cast<void*>(target), stateCode, typeInfo, inFrom ? 1 : 0,
         inFrom ? 1 : 0,

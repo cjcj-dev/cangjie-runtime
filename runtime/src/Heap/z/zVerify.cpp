@@ -112,9 +112,8 @@ void PlainRoot(ObjectRef& root)
 void ZVerify::RootsStrong(bool afterOldMark)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
-    auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     RootsIteratorStrongColored().Apply([&](NativeSlot& root) { ColoredRoot(root, afterOldMark); });
-    collector.VisitStrongPlainRoots(PlainRoot, [](Mutator& mutator) {
+    ZMark::VisitStrongPlainRoots(PlainRoot, [](Mutator& mutator) {
         mutator.VisitProcessedRoots([&](ObjectRef& root) {
             mutator.VisitHeapRootSlots(root, PlainRoot);
         });
@@ -124,7 +123,6 @@ void ZVerify::RootsWeak()
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!ZResurrection::is_blocked());
-    auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     RootsIteratorWeakColored().Apply([](NativeSlot& root) { ColoredRoot(root, true); });
 }
 
@@ -160,7 +158,6 @@ void ZVerify::Object(BaseObject* object, const void* slot)
 void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
 {
     const zpointer value = field.GetFieldValue(std::memory_order_acquire);
-    auto& collector = Heap::GetHeap().GetCollector();
     if (!verifyWeaks && value == zpointer::null) {
         // zVerify.cpp:133-136: raw null is only possible when flip promoting.
         CHECK_DETAIL(ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark_complete(),

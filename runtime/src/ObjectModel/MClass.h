@@ -601,7 +601,7 @@ private:
 //
 // The alignment here is not cosmetic: the collector treats a tip whose low three
 // bits are set as not-a-TypeInfo (StateWord::ADDRESS_ALIGN_MASK), softly at
-// HeapGcState.cpp:104 and :304 and fatally at Mutator.cpp:597 and :754. Declaring
+// the colored-slot remapping path and fatally at Mutator.cpp:597 and :754. Declaring
 // 4 while requiring 8 is what let TypeInfoManager's arena hand out addresses the
 // collector then rejected. Raising 4 -> 8 costs nothing in layout: sizeof stays
 // 96 (already a multiple of 8) and every field offset is unchanged, because

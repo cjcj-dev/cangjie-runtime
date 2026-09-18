@@ -729,7 +729,7 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
     owner.join();
     size_t young = 0;
     size_t old = 0;
-    marking.DrainDomain(*marking.collector.YoungMark(), [&](BaseObject* object, bool follow) {
+    marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
         GC_EXPECT_TRUE(object == heap.obj0);
         GC_EXPECT_TRUE(follow);
         ++young;

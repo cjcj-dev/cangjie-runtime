@@ -59,8 +59,90 @@
 #include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
+// ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
+// "the pre-pause test was right every time" rather than "nobody is counting".
+std::atomic<size_t> g_markTerminateContinue{ 0 };
+std::atomic<size_t> g_markTerminatePauses{ 0 };
+std::atomic<size_t> g_markTerminateFlushed{ 0 };
+std::atomic<bool> g_markTerminateAtexitInstalled{ false };
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<uint64_t> g_markTerminateMaxPauseNs{ 0 };
+std::atomic<size_t> g_markTerminatePauseY2y{ 0 };
+std::atomic<size_t> g_markTerminateClosureDuringPause{ 0 };
+#endif
+
+void NoteMarkTerminatePause() { g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed); }
+
+void NoteMarkTerminateFlushed(size_t n)
+{
+    g_markTerminateFlushed.fetch_add(n, std::memory_order_relaxed);
+}
+
+void NoteMarkTerminateContinue(size_t stackSize)
+{
+    const size_t nContinue = g_markTerminateContinue.fetch_add(1, std::memory_order_relaxed) + 1;
+    LOG(RTLOG_ERROR, "[GCV2][markterm] pause found unflushed SATB work: ncontinue=%zu stack=%zu", nContinue,
+        stackSize);
+}
+
+void ReportMarkTerminateContinue()
+{
+    if (!g_markTerminateAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
+        (void)std::atexit([]() {
+            LOG(RTLOG_ERROR, "[GCV2][markterm] atexit pauses=%zu flushedInPause=%zu ncontinue=%zu",
+                g_markTerminatePauses.load(std::memory_order_relaxed),
+                g_markTerminateFlushed.load(std::memory_order_relaxed),
+                g_markTerminateContinue.load(std::memory_order_relaxed));
+        });
+    }
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void ResetMarkTerminateTestReceipt()
+{
+    g_markTerminateContinue.store(0, std::memory_order_relaxed);
+    g_markTerminatePauses.store(0, std::memory_order_relaxed);
+    g_markTerminateFlushed.store(0, std::memory_order_relaxed);
+    g_markTerminateMaxPauseNs.store(0, std::memory_order_relaxed);
+    g_markTerminatePauseY2y.store(0, std::memory_order_relaxed);
+    g_markTerminateClosureDuringPause.store(0, std::memory_order_relaxed);
+}
+
+MarkTerminateTestReceipt ReadMarkTerminateTestReceipt()
+{
+    return { g_markTerminatePauses.load(std::memory_order_relaxed),
+             g_markTerminateFlushed.load(std::memory_order_relaxed),
+             g_markTerminateContinue.load(std::memory_order_relaxed),
+             g_markTerminateMaxPauseNs.load(std::memory_order_relaxed),
+             g_markTerminatePauseY2y.load(std::memory_order_relaxed),
+             g_markTerminateClosureDuringPause.load(std::memory_order_relaxed) };
+}
+
+void NoteMarkTerminatePauseDuration(uint64_t pauseNs)
+{
+    uint64_t observed = g_markTerminateMaxPauseNs.load(std::memory_order_relaxed);
+    while (observed < pauseNs &&
+           !g_markTerminateMaxPauseNs.compare_exchange_weak(observed, pauseNs, std::memory_order_relaxed)) {}
+}
+
+void NoteMarkTerminatePauseProducers(size_t y2y)
+{
+    g_markTerminatePauseY2y.fetch_add(y2y, std::memory_order_relaxed);
+}
+
+void NoteTraceYoungClosureDuringPause()
+{
+    g_markTerminateClosureDuringPause.fetch_add(1, std::memory_order_relaxed);
+}
+#endif
+
+
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void(ZGenerationId, NativeSlot*)> ZMark::testColoredRootResult;
+std::function<void(Mutator&)> ZMark::testOldMarkThreadResult;
+#endif
 // RefFieldRoot is root in tagged pointer format.
-void HeapGcState::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
+void ZMark::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet)
 {
     RefField<> oldField(field);
     // The major root iterator bypasses ReadStaticRef. Enforce the same
@@ -127,44 +209,12 @@ void HeapGcState::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 }
 
 
-BaseObject* HeapGcState::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
-{
-    RefField<> oldField(field);
-    const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
-    BaseObject* latest = nullptr;
-    if (ZPointer::is_mark_good(oldField.GetFieldValue())) {
-        BaseObject* targetObj = to_object(oldField.GetTargetObject());
-        if (!Heap::IsHeapAddress(targetObj)) {
-            return nullptr;
-        }
-        // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
-        CHECK_DETAIL(targetObj->IsValidObject(),
-                     "Invalid object %p is referenced by %s object %p: %s and offset %zd", targetObj, sourceKind, obj,
-                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
-        return targetObj;
-    }
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    latest = to_object(ZBarrier::make_load_good(oldField.GetFieldValue(), provenance));
-    // target object could be null or non-heap for some static variable.
-    if (!Heap::IsHeapAddress(latest)) {
-        return nullptr;
-    }
-    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
-                 latest, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
-    RefField<> newField = ZBarrier::GetAndTryTagRefField(latest);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
-    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
-            raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
-    }
-    return latest;
-}
+
 
 // Shared by mark roots and Cangjie foreign-root traversal.
 thread_local const char* gMinorRootOrigin = "unknown";
 
-void HeapGcState::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
+void ZMark::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                                      uint64_t stackScanEpoch)
 {
 #if defined(MRT_GC_UNIT_TESTS)
@@ -210,7 +260,7 @@ void HeapGcState::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& 
 // ZReferenceProcessor::should_discover/discover (zReferenceProcessor.cpp:174-201,
 // 239-250). Native registration owns the original referent slot, rather than a
 // Java FinalReference object. The load barrier heals remapping before discovery.
-void HeapGcState::DiscoverFinalizableRoot(NativeSlot& slot) const
+void ZMark::DiscoverFinalizableRoot(NativeSlot& slot)
 {
     CHECK(Heap::GetHeap().old().IsPhaseMark());
     BaseObject* object = ZBarrier::ReadStaticRef(slot);
@@ -224,15 +274,15 @@ void HeapGcState::DiscoverFinalizableRoot(NativeSlot& slot) const
     ZBarrier::MarkFinalizableBarrierOnRoot(slot);
 }
 
-void HeapGcState::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
+void ZMark::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
 {
     HeapSlot<>& referentField =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
-    BaseObject* referent = GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, reference, referentField);
+    BaseObject* referent = ZBarrier::GetAndTryTagObj(ZBarrier::RefSlotKind::WEAK_REFERENT, reference, referentField);
     if (referent == nullptr) {
         return;
     }
-    (void)DiscoverReference(reference, ReferenceType::WEAK);
+    (void)Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().DiscoverReference(reference, ReferenceType::WEAK);
     (void)workStack;
 }
 
@@ -260,8 +310,8 @@ public:
         (void)StackWatermarkSet::finish_processing(mutator, markRoot, markRoot, StackWatermark::epoch_id(),
                                                    nullptr, frames, reinterpret_cast<void*>(root_function()));
 #if defined(MRT_TESTABLE_INTERNALS)
-        if (HeapGcState::testOldMarkThreadResult) {
-            HeapGcState::testOldMarkThreadResult(mutator);
+        if (ZMark::testOldMarkThreadResult) {
+            ZMark::testOldMarkThreadResult(mutator);
         }
 #endif
     }
@@ -282,8 +332,8 @@ public:
         rootsColored.Apply([&](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
-            if (HeapGcState::testColoredRootResult) {
-                HeapGcState::testColoredRootResult(ZGenerationId::old, &slot);
+            if (ZMark::testColoredRootResult) {
+                ZMark::testColoredRootResult(ZGenerationId::old, &slot);
             }
 #endif
         });
@@ -294,8 +344,8 @@ public:
         // different from the set of workers executing during mark.
         ThreadLocal::FlushCurrentThreadMarkStacks();
 #if defined(MRT_TESTABLE_INTERNALS)
-        if (HeapGcState::testColoredRootResult) {
-            HeapGcState::testColoredRootResult(ZGenerationId::old, nullptr);
+        if (ZMark::testColoredRootResult) {
+            ZMark::testColoredRootResult(ZGenerationId::old, nullptr);
         }
 #endif
     }
@@ -311,11 +361,11 @@ private:
 };
 } // namespace
 
-void HeapGcState::EnumAllCommonRoots(ZWorkers& workers)
+void ZMark::EnumAllCommonRoots(ZWorkers& workers)
 {
     CHECK_DETAIL(Heap::GetHeap().old().MarkPtr() != nullptr, "old mark domain must start before roots");
     MarkOldRootsTask task(Heap::GetHeap().old().Mark(),
-                         [this](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
+                         [](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
             MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
         }, {});
@@ -346,8 +396,8 @@ public:
         rootsColored.Apply([this](NativeSlot& slot) {
             coloredClosure.DoOop(slot);
 #if defined(MRT_TESTABLE_INTERNALS)
-            if (HeapGcState::testColoredRootResult) {
-                HeapGcState::testColoredRootResult(ZGenerationId::young, &slot);
+            if (ZMark::testColoredRootResult) {
+                ZMark::testColoredRootResult(ZGenerationId::young, &slot);
             }
 #endif
         });
@@ -355,8 +405,8 @@ public:
         // zMark.cpp:887-891: flush and free worker stacks for both generations.
         ThreadLocal::FlushCurrentThreadMarkStacks();
 #if defined(MRT_TESTABLE_INTERNALS)
-        if (HeapGcState::testColoredRootResult) {
-            HeapGcState::testColoredRootResult(ZGenerationId::young, nullptr);
+        if (ZMark::testColoredRootResult) {
+            ZMark::testColoredRootResult(ZGenerationId::young, nullptr);
         }
 #endif
     }
@@ -368,16 +418,16 @@ private:
 };
 } // namespace
 
-void HeapGcState::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
+void ZMark::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
                                  const std::function<void(BaseObject*)>& invisibleVisitor,
                                  uint64_t stackScanEpoch)
 {
-    RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
-        BaseObject* obj = ResolveMinorReference(root);
+    RootVisitor rawRootVisitor = [&visitor](ObjectRef& root) {
+        BaseObject* obj = ZRelocate::ResolveMinorReference(root);
         visitor(obj);
     };
-    RootVisitor invisibleRootVisitor = [this, &invisibleVisitor](ObjectRef& root) {
-        BaseObject* obj = ResolveMinorReference(root);
+    RootVisitor invisibleRootVisitor = [&invisibleVisitor](ObjectRef& root) {
+        BaseObject* obj = ZRelocate::ResolveMinorReference(root);
         invisibleVisitor(obj);
     };
     MarkYoungRootsTask task([&] {
@@ -386,19 +436,19 @@ void HeapGcState::VisitMinorRoots(const std::function<void(BaseObject*)>& visito
         gMinorRootOrigin = "export";
         Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) { visitor(ZBarrier::ReadStaticRef(slot)); });
         gMinorRootOrigin = "unknown";
-    }, GetWorkers(ZGenerationId::young).active_workers());
+    }, (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).active_workers());
     SuspendibleThreadSetJoiner joiner;
-    GetWorkers(ZGenerationId::young).run(&task);
+    (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()).run(&task);
 
 }
 
-void HeapGcState::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
+void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin)
 {
     PushYoungObject(object, workStack, origin, false);
 }
 
-void HeapGcState::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin,
-                                  bool finalizable) const
+void ZMark::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin,
+                                  bool finalizable)
 {
     if (!Heap::IsHeapAddress(object)) {
         return;
@@ -520,7 +570,7 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
     // coverage completed; fail closed instead of manufacturing a null heal.
     (void)field.CompareExchange(oldField.GetFieldValue(), zpointer::null);
     ZBarrier::FailClosedLoad(
-        "HeapGcState::ScrubMinorFreeTarget.unresolved", target, oldVal,
+        "ZMark::ScrubMinorFreeTarget.unresolved", target, oldVal,
         ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
 }
 
@@ -548,10 +598,10 @@ private:
     const bool partial;
 };
 
-void HeapGcState::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
-                                          std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                          MinorSlotSet& weakSlots,
-                                          const MinorSlotSet* reachableSlotDomain)
+void ZMark::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
+                                          std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
+                                          std::unordered_set<MAddress>& weakSlots,
+                                          const std::unordered_set<MAddress>* reachableSlotDomain)
 {
     (void)fullYoungScan;
     (void)reachableVec;
@@ -561,7 +611,7 @@ void HeapGcState::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungS
     (void)workStack;
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = ZPage::GetTdWindowCount();
-    ZWorkers& workersSet = GetWorkers(ZGenerationId::young);
+    ZWorkers& workersSet = (*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers());
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
     ZMark& domain = Heap::GetHeap().young().Mark();
     (void)ZMark::PublishHandshakeMarkWork(workStack, &domain);
@@ -579,10 +629,10 @@ void HeapGcState::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungS
                  dispelAtExit);
 }
 
-void HeapGcState::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
-                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                   MinorSlotSet& weakSlots,
-                                   const MinorSlotSet* reachableSlotDomain)
+void ZMark::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
+                                   std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
+                                   std::unordered_set<MAddress>& weakSlots,
+                                   const std::unordered_set<MAddress>* reachableSlotDomain)
 {
 #if defined(MRT_TESTABLE_INTERNALS)
     // Observe the completed closure result before the following GC phases
@@ -608,9 +658,9 @@ void HeapGcState::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
 
 // ZGenerationYoung::concurrent_mark_continue follows the generation's
 // published mark work. Young marking has no SATB queue (zBarrier.cpp:160-180).
-bool HeapGcState::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
-                                     std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                     MinorSlotSet& weakSlots,
+bool ZMark::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
+                                     std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
+                                     std::unordered_set<MAddress>& weakSlots,
                                      YoungConcWindowStats* windowStats)
 {
     MRT_PHASE_TIMER(ZStatPhases::PYoungMarkFollow);
@@ -636,7 +686,7 @@ bool HeapGcState::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
     return true;
 }
 
-bool HeapGcState::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)
+bool ZMark::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)
 {
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
@@ -653,10 +703,10 @@ bool HeapGcState::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* wi
 }
 
 
-void HeapGcState::ProcessFinalizers()
+void ZMark::ProcessFinalizers()
 {
     FinalizerProcessor& fp = Heap::GetHeap().GetFinalizerProcessor();
-    fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
+    fp.ProcessReferences([](BaseObject* obj) { return RegionSpace::IsMarkedObject<Generation::Old>(obj); });
 }
 
 bool ZMark::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
@@ -700,7 +750,7 @@ void ZMark::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, 
     buffer->MergeY2yDirtyHolders(work);
     buffer->MergeY2yDirtySlots([&work](MAddress slot) {
         RefField<>& field = HeapSlotAt<>(slot);
-        BaseObject* target = Heap::GetHeap().GetCollector().ResolveMinorReference(field);
+        BaseObject* target = ZRelocate::ResolveMinorReference(field);
         if (target != nullptr && Heap::IsHeapAddress(target)) {
             work.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(target))), true, true, true, false));
         }
@@ -797,7 +847,7 @@ namespace MapleRuntime {
 
 
 namespace MapleRuntime {
-void HeapGcState::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
+void ZMark::MarkOldObjectIfActive(BaseObject* object, bool gcThread)
 {
     if (!Heap::IsHeapAddress(object)) {
         return;
@@ -1070,7 +1120,6 @@ void ZMark::MarkFollow(bool partial)
 
 void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
 {
-    auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     if (generation == MarkingStacks::MarkingGeneration::YOUNG) {
         auto visitSlot = [](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
@@ -1149,7 +1198,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
         }
         if (UNLIKELY(obj->IsWeakRef())) {
             WorkStack discovered;
-            collector.DiscoverWeakReference(obj, discovered);
+            ZMark::DiscoverWeakReference(obj, discovered);
             while (!discovered.empty()) {
                 publish(discovered.back());
                 discovered.pop_back();

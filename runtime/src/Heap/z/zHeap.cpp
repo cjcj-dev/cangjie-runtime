@@ -106,7 +106,6 @@ Heap::Heap()
     _allocation_adapter.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
-    collectorImpl.reset(new HeapGcState());
 }
 
 Heap::~Heap()
@@ -164,8 +163,6 @@ void Heap::Fini()
     old().StopWorkers();
 }
 
-HeapGcState& Heap::GetCollector() { return *collectorImpl; }
-const HeapGcState& Heap::GetCollector() const { return *collectorImpl; }
 
 void Heap::RequestGC(GCReason reason, bool async) { ZCollectedHeap::heap()->collect(reason, async); }
 
@@ -247,13 +244,13 @@ void Heap::PublishThreadRoot(BaseObject* object, bool young, bool follow)
     ZMark::PublishThreadRoot(object, young, follow);
 }
 
-bool Heap::IsGhostFromObject(BaseObject* obj) const { return GetCollector().IsGhostFromObject(obj); }
+bool Heap::IsGhostFromObject(BaseObject* obj) const { return ZRelocate::IsFromObject(obj); }
 
-bool Heap::IsUnmovableFromObject(BaseObject* obj) const { return GetCollector().IsUnmovableFromObject(obj); }
+bool Heap::IsUnmovableFromObject(BaseObject* obj) const { return ZRelocate::IsUnmovableFromObject(obj); }
 
 BaseObject* Heap::ForwardObject(BaseObject* fromVersion, Generation generation)
 {
-    return GetCollector().ForwardObject(fromVersion, generation);
+    return ZRelocate::ForwardObject(fromVersion, generation);
 }
 
 BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
@@ -600,4 +597,152 @@ void Heap::object_and_field_iterate_for_verify(ObjectClosure* object_cl, bool vi
     HeapIterator iter(visit_weaks, true, 1);
     iter.object_and_field_iterate([&](BaseObject* object) { object_cl->do_object(object); }, {}, 0);
 }
+}
+
+namespace MapleRuntime {
+void Heap::AddRawPointerObject(BaseObject* obj)
+{
+    (void)PinRawPointerObject(obj);
+    // ⚠ Callers of this void form (Sync futures/mutexes) keep using the pointer they
+    // passed in. If that pointer was a movable from-copy resolved above, their later
+    // RemoveRawPointerObject would Dec the from region — same pairing hazard as
+    // oracleblack face c. Sync objects are pinned at creation (never from) today;
+    // adopting the resolved pointer there is a tracked follow-up, not done here.
+}
+
+BaseObject* Heap::PinRawPointerObject(BaseObject* obj)
+{
+    // oracle R4 / RegionManager.h:507: do not pin a movable from-copy
+    // during PREFORWARD/FORWARD (CHECK would fire). Resolve to `to` first;
+    // a true VisitLive hole is already Exempt-kept, TryDeleteRegion(FROM)
+    // fails and the else arm is taken. CHECK is not relaxed.
+    //
+    // oracleblack round 10, face c: the resolved pointer MUST flow back to the
+    // caller. Inc lands on region(to); MCC_ReleaseRawData Decs the region of the
+    // payload pointer the caller kept. Pinning to while handing out from both
+    // underflowed the from region's count and gave C a payload the young cycle
+    // was about to relocate.
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+        const MAddress addr = reinterpret_cast<MAddress>(obj);
+        if (Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+            Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr) {
+            const ForwardingProvenance provenance{
+                ForwardingHolderKind::HeapRef, this, &obj
+            };
+            obj = ZBarrier::ValidateCurrentValue(obj, provenance);
+        }
+    }
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.AddRawPointerObject(obj);
+    return obj;
+}
+
+void Heap::RemoveRawPointerObject(BaseObject* obj)
+{
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.RemoveRawPointerObject(obj);
+}
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+void Heap::DumpHeap(const CString& tag)
+{
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "Not In STW");
+    DLOG(FRAGMENT, "DumpHeap %s", tag.Str());
+    // dump roots
+    DumpRoots(FRAGMENT);
+    // dump object contents
+    auto dumpVisitor = [](BaseObject* obj) { obj->DumpObject(FRAGMENT); };
+    bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
+    CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj() in DumpHeap() return false.");
+
+    // dump object types
+    DLOG(FRAGMENT, "Print Type information");
+    std::set<TypeInfo*> classinfoSet;
+    auto assembleClassInfoVisitor = [&classinfoSet](BaseObject* obj) {
+        TypeInfo* classInfo = obj->GetTypeInfo();
+        // No need to check the result of insertion, because there are multiple-insertions.
+        (void)classinfoSet.insert(classInfo);
+    };
+    ret = Heap::GetHeap().ForEachObj(assembleClassInfoVisitor, false);
+    CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj()#2 in DumpHeap() return false.");
+
+    for (auto it = classinfoSet.begin(); it != classinfoSet.end(); it++) {
+        TypeInfo* classInfo = *it;
+        DLOG(FRAGMENT, "%p %s", classInfo, classInfo->GetName());
+    }
+    DLOG(FRAGMENT, "Dump Allocator");
+}
+#endif
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+void Heap::DumpRoots(LogType logType)
+{
+    RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
+        zaddress_unsafe value = ref.LoadPlain();
+        if (is_null(value)) {
+            return;
+        }
+        // DumpRoots is called while the root owner retains the target for inspection.
+        auto obj = to_object(safe(value));
+        DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
+              Heap::GetHeap().GetAllocator().IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+              Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(obj)));
+    };
+
+    DLOG(logType, "stack roots");
+    MutatorManager::Instance().VisitAllMutators(
+        [&rootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rootVisitor); });
+
+    DLOG(logType, "finalizer processor roots");
+
+    NativeSlotVisitor rootSlotVisitor = [this, logType](NativeSlot& ref) {
+        zpointer value = ref.GetFieldValue();
+        if (is_null(value)) {
+            return;
+        }
+        // StaticRootTable keeps the referent live while DumpRoots inspects it.
+        auto obj = ZBarrier::ReadStaticRef(ref);
+        if (obj == nullptr) {
+            return;
+        }
+        DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
+              Heap::GetHeap().GetAllocator().IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+              Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(obj)));
+    };
+
+    DLOG(logType, "static fields");
+    Heap::GetHeap().GetFinalizerProcessor().VisitGCRoots(rootSlotVisitor);
+    ZMark::VisitStaticRoots(rootSlotVisitor);
+
+    DLOG(logType, "Dump GCRoots end");
+}
+#endif
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+void Heap::DumpBeforeGC()
+    {
+        if (ENABLE_LOG(FRAGMENT)) {
+            if (MutatorManager::Instance().WorldStopped()) {
+                DumpHeap("before_gc");
+            } else {
+                ScopedStopTheWorld stw("dump before gc");
+                DumpHeap("before_gc");
+            }
+        }
+    }
+#endif
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+void Heap::DumpAfterGC()
+    {
+        if (ENABLE_LOG(FRAGMENT)) {
+            if (MutatorManager::Instance().WorldStopped()) {
+                DumpHeap("after_gc");
+            } else {
+                ScopedStopTheWorld stw("dump after gc");
+                DumpHeap("after_gc");
+            }
+        }
+    }
+#endif
 }

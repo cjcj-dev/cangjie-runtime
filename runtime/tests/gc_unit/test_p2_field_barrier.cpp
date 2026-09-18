@@ -70,7 +70,7 @@ extern "C" int p2FieldBarrierExercise()
     // entry rather than a generic source; this is input TypeInfo, not GC state.
     finalType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     auto& heap = Heap::GetHeap();
-    auto& collector = heap.GetCollector();
+    auto& collector = heap;
     auto* holder = MObject::NewPinnedObject(holderType, 24);
     auto* oldChild = MObject::NewPinnedObject(leafType, 16);
     const U64 root = heap.RegisterExportRoot(holder);
@@ -196,7 +196,7 @@ extern "C" int p2FieldBarrierExercise()
     const bool minorOnly = std::getenv("P2_MINOR_ONLY") != nullptr;
     // Read the actual bitmap before relocation can make an unmarked target
     // unavailable. These are the target invariants, not existence guards.
-    HeapGcState::testYoungMarkCompleted = [&] {
+    ZGeneration::testYoungMarkCompleted = [&] {
         auto* childPage = Heap::page(reinterpret_cast<MAddress>(child));
         auto* sentinelPage = Heap::page(reinterpret_cast<MAddress>(sentinel));
         auto* controlPage = Heap::page(reinterpret_cast<MAddress>(rootedControl));
@@ -208,7 +208,7 @@ extern "C" int p2FieldBarrierExercise()
                "independent_young_root_control");
     };
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    HeapGcState::testYoungMarkCompleted = nullptr;
+    ZGeneration::testYoungMarkCompleted = nullptr;
     if (failures.load() != 0) {
         // The target state has been observed. Do not dereference an object
         // that the faulty product has just classified as unreachable.
@@ -225,7 +225,7 @@ extern "C" int p2FieldBarrierExercise()
     currentChild = childBeforeNext;
     BaseObject* sentinelBeforeNext = ZBarrier::ReadReference(childBeforeNext, Slot(childBeforeNext));
     unsigned completed = 0;
-    HeapGcState::testYoungMarkCompleted = [&] {
+    ZGeneration::testYoungMarkCompleted = [&] {
         ++completed;
         auto* childPage = Heap::page(reinterpret_cast<MAddress>(childBeforeNext));
         auto* sentinelPage = Heap::page(reinterpret_cast<MAddress>(sentinelBeforeNext));
@@ -235,7 +235,7 @@ extern "C" int p2FieldBarrierExercise()
                "remset_retains_sentinel_next_cycle");
     };
     Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
-    HeapGcState::testYoungMarkCompleted = nullptr;
+    ZGeneration::testYoungMarkCompleted = nullptr;
     Expect(completed != 0, "young_completion_observation_reached");
     if (!minorOnly) {
         // The control was needed only for remset liveness. End its real export
@@ -288,7 +288,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     smallType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     largeType->SetSourceGeneric(reinterpret_cast<TypeTemplate*>(&P2Finalize));
     auto& heap = Heap::GetHeap();
-    auto& collector = heap.GetCollector();
+    auto& collector = heap;
     auto& references = heap.GetFinalizerProcessor().GetReferenceProcessor();
     auto* delayedOld = MObject::NewPinnedObject(smallType, 16);
     NativeSlot oldRoot(zpointer::null);
@@ -335,7 +335,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     bool youngSmall = false, youngLarge = false;
     size_t oldCandidates = 0;
     bool pinnedDiscovered = false, delayedDiscovered = false;
-    HeapGcState::testYoungMarkCompleted = [&] {
+    ZGeneration::testYoungMarkCompleted = [&] {
         heap.GetFinalizerProcessor().VisitFinalizers([&](NativeSlot& slot) {
             const auto word = slot.GetFieldValue();
             if (is_null_any(word)) return;
@@ -351,7 +351,7 @@ extern "C" int p2FinalizerRegistrationExercise()
             }
         });
     };
-    HeapGcState::testOldMarkStarted = [&] {
+    ZGeneration::testOldMarkStarted = [&] {
         heap.GetFinalizerProcessor().VisitFinalizers([&](NativeSlot& slot) {
             const auto word = slot.GetFieldValue();
             if (is_null_any(word)) return;
@@ -373,8 +373,8 @@ extern "C" int p2FinalizerRegistrationExercise()
         }
     };
     Heap::GetHeap().RequestGC(GC_REASON_USER, false);
-    HeapGcState::testYoungMarkCompleted = nullptr;
-    HeapGcState::testOldMarkStarted = nullptr;
+    ZGeneration::testYoungMarkCompleted = nullptr;
+    ZGeneration::testOldMarkStarted = nullptr;
     dumpRegistrations("next-complete");
     Expect(youngSmall, "late_small_next_young_consumer_reached");
     Expect(youngLarge, "late_large_next_young_consumer_reached");
@@ -459,7 +459,7 @@ extern "C" int p2ArrayFieldExercise()
     arrayType->SetComponentTypeInfo(structArray ? structType : leafType);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(reinterpret_cast<MAddress>(arrayType), sizeof(TypeInfo));
     auto& heap = Heap::GetHeap();
-    auto& collector = heap.GetCollector();
+    auto& collector = heap;
     const bool finalizable = std::getenv("P2_ARRAY_FINALIZABLE") != nullptr;
     auto* first = MObject::NewPinnedObject(leafType, 16);
     auto* last = MObject::NewPinnedObject(leafType, 16);
@@ -525,18 +525,18 @@ extern "C" int p2ArrayFieldExercise()
 namespace {
 class P2FieldInputTask final : public ZTask {
 public:
-    P2FieldInputTask(HeapGcState& collector, std::function<void()> exercise)
+    P2FieldInputTask(Heap& collector, std::function<void()> exercise)
         : ZTask("P2FieldInputTask"), collector(collector), exercise(std::move(exercise)) {}
     void work() override
     {
         if (!claimed.exchange(true)) exercise();
         // Same GC-worker tail protocol as MarkOldRootsTask. The field entry
         // produced these entries; the test never supplies mark/current output.
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.MajorMark());
-        Expect(collector.MajorMark()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *Heap::GetHeap().old().MarkPtr());
+        Expect(Heap::GetHeap().old().MarkPtr()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
     }
 private:
-    HeapGcState& collector;
+    Heap& collector;
     std::function<void()> exercise;
     std::atomic<bool> claimed{false};
 };
@@ -553,7 +553,7 @@ extern "C" int p2SlowFieldInputExercise()
     auto* edgeType = Type(types[1], true, 1);
     auto* leafType = Type(types[2], false, 1);
     auto& heap = Heap::GetHeap();
-    auto& collector = static_cast<HeapGcState&>(heap.GetCollector());
+    auto& collector = static_cast<Heap&>(heap);
     auto* strongHolder = MObject::NewPinnedObject(holderType, 24);
     auto* finalHolder = MObject::NewPinnedObject(holderType, 24);
     auto* oldChild = MObject::NewPinnedObject(edgeType, 16);
@@ -611,7 +611,7 @@ extern "C" int p2SlowFieldInputExercise()
         if (&field == &Slot(finalChild) && kind == ZBarrier::FieldMarkKind::Finalizable) ++finalFollow;
     };
     unsigned started = 0;
-    HeapGcState::testYoungMarkStarted = [&] {
+    ZGeneration::testYoungMarkStarted = [&] {
         if (!Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsMajorRoots()) return;
         ++started;
         Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
@@ -621,9 +621,9 @@ extern "C" int p2SlowFieldInputExercise()
         };
         const bool before = bit();
         P2FieldInputTask task(collector, [&] {
-            auto& youngStacks = collector.YoungMark()->Stacks();
+            auto& youngStacks = Heap::GetHeap().young().MarkPtr()->Stacks();
             const size_t youngBefore = youngStacks.Population();
-            const size_t oldBefore = collector.MajorMark()->Stacks().Population();
+            const size_t oldBefore = Heap::GetHeap().old().MarkPtr()->Stacks().Population();
             inputTask = true;
             ZBarrier::MarkBarrierOnOldOopField(strongHolder, Slot(strongHolder), false);
             ZBarrier::MarkBarrierOnOldOopField(finalHolder, Slot(finalHolder), true);
@@ -633,7 +633,7 @@ extern "C" int p2SlowFieldInputExercise()
             ZBarrier::MarkBarrierOnOldOopField(finalHolder, Slot(finalHolder, 1), true);
             inputTask = false;
             Expect(youngStacks.Population() == youngBefore, "slow_old_fields_do_not_publish_young_entries");
-            Expect(collector.MajorMark()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
+            Expect(Heap::GetHeap().old().MarkPtr()->Stacks().Population() > oldBefore, "slow_old_controls_publish_real_entries");
         });
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()->run(&task);
         Expect(bit() == before, "slow_old_fields_do_not_write_young_bitmap");
@@ -646,7 +646,7 @@ extern "C" int p2SlowFieldInputExercise()
         }
     };
     Heap::GetHeap().RequestGC(GC_REASON_HEU_SYNC, false);
-    HeapGcState::testYoungMarkStarted = nullptr;
+    ZGeneration::testYoungMarkStarted = nullptr;
     ZBarrier::testFieldMarkResult = nullptr;
     Expect(started == 1, "slow_input_real_major_roots_phase_reached");
     auto* strongPage = Heap::page(reinterpret_cast<MAddress>(oldSentinel));

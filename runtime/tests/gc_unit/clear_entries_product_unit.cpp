@@ -76,10 +76,10 @@ struct RelocationReceiptTestAccess {
         GC_EXPECT_TRUE(region == nullptr || region->GetRegionListOwner() == nullptr);
     }
 
-    static void BindCollector(HeapGcState* collector)
+    static void BindCollector(Heap* collector)
     {
         if (collector == nullptr) return;
-        CHECK(collector == &Heap::GetHeap().GetCollector());
+        CHECK(collector == &Heap::GetHeap());
         for (ZGenerationId generation : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = Heap::GetHeap().GetZGeneration(generation);
             if (cycle.Sequence() != 0) continue;
@@ -100,24 +100,24 @@ struct RelocationReceiptTestAccess {
         manager.ExemptFromRegion(region);
     }
 
-    static RefField<> QualifyStoreValue(HeapGcState& collector, BaseObject* value)
+    static RefField<> QualifyStoreValue(Heap& collector, BaseObject* value)
     {
         return ZBarrier::GetAndTryTagRefField(value);
     }
 
-    static BaseObject* ResolveStoreValue(HeapGcState& collector, BaseObject* value)
+    static BaseObject* ResolveStoreValue(Heap& collector, BaseObject* value)
     {
         const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, value, &value };
         return ZRelocate::ResolveStoreValue(value, provenance, Generation::Old);
     }
 
-    static void CheckStoreGoodTarget(HeapGcState& collector, BaseObject* value)
+    static void CheckStoreGoodTarget(Heap& collector, BaseObject* value)
     {
         ZBarrier::CheckStoreGoodTarget("ForwardingLookupWitness", value,
             ForwardingProvenance{ ForwardingHolderKind::HeapRef, value, &value });
     }
 
-    static BaseObject* ForwardUpdateRawRef(HeapGcState& collector, ObjectRef& root)
+    static BaseObject* ForwardUpdateRawRef(Heap& collector, ObjectRef& root)
     {
         const zaddress_unsafe observed = root.LoadPlain();
         BaseObject* oldObj = to_object(safe(observed));
@@ -129,41 +129,41 @@ struct RelocationReceiptTestAccess {
         return mapped;
     }
 
-    static bool FixMinorField(HeapGcState& collector, RefField<>& field, BaseObject* knownBase = nullptr)
+    static bool FixMinorField(Heap& collector, RefField<>& field, BaseObject* knownBase = nullptr)
     {
-        return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr);
+        return ZRelocate::FixMinorEvacuatedSlot(field, knownBase, nullptr);
     }
 
-    static bool FixMinorRoot(HeapGcState& collector, RootSlot& root)
+    static bool FixMinorRoot(Heap& collector, RootSlot& root)
     {
-        return collector.FixMinorEvacuatedSlot(root, nullptr);
+        return ZRelocate::FixMinorEvacuatedSlot(root, nullptr);
     }
 
-    static BaseObject* TryForward(HeapGcState& collector, BaseObject* object)
+    static BaseObject* TryForward(Heap& collector, BaseObject* object)
     {
         return Heap::GetHeap().old().relocate_or_remap_object(object);
     }
 
     static BaseObject* WaitRoutedTipReady(
-        HeapGcState& collector, BaseObject* from, BaseObject* to, ZPage* forwarding)
+        Heap& collector, BaseObject* from, BaseObject* to, ZPage* forwarding)
     {
         (void)to;
         ZPage::RetainScope lease(forwarding);
         return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object_inner(from, forwarding);
     }
 
-    static bool TryUpdateRefField(HeapGcState& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
+    static bool TryUpdateRefField(Heap& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
     {
-        return collector.TryUpdateRefField(obj, field, newRef);
+        return ZBarrier::TryUpdateRefField(obj, field, newRef);
     }
 
-    static FindToVersionResult ProductFindToVersion(HeapGcState& collector, BaseObject* from, Generation generation)
+    static FindToVersionResult ProductFindToVersion(Heap& collector, BaseObject* from, Generation generation)
     {
         return ZRelocate::FindToVersion(from, generation);
     }
 
     static BaseObject* ProductRelocateOrRemap(
-        HeapGcState& collector, BaseObject* from, ZGenerationId generation)
+        Heap& collector, BaseObject* from, ZGenerationId generation)
     {
         using ProductFn = BaseObject* (*)(Heap*, BaseObject*, ZGenerationId);
         void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
@@ -184,20 +184,20 @@ struct RelocationReceiptTestAccess {
     }
 
     static BaseObject* ForwardExclusive(
-        HeapGcState& collector, BaseObject* from)
+        Heap& collector, BaseObject* from)
     {
-        return collector.ForwardObjectExclusive(from);
+        return ZRelocate::ForwardObjectExclusive(from);
     }
 
-    static BaseObject* ForwardImpl(HeapGcState& collector, BaseObject* from, ZPage* copyPage)
+    static BaseObject* ForwardImpl(Heap& collector, BaseObject* from, ZPage* copyPage)
     {
         ZPage::RetainScope lease(copyPage);
         return lease.ok() ? ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object_inner(from, copyPage) : nullptr;
     }
 
-    static void RemapYoungRoots(HeapGcState& collector) { collector.RemapYoungRoots(); }
+    static void RemapYoungRoots(Heap& collector) { ZRelocate::RemapYoungRoots(); }
 
-    static void SeedValueRoots(HeapGcState& collector, BaseObject* value)
+    static void SeedValueRoots(Heap& collector, BaseObject* value)
     {
         {
             std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
@@ -211,7 +211,7 @@ struct RelocationReceiptTestAccess {
         Heap::GetHeap().cross_vm().cycleRefWorkStack[value].push_back(value);
     }
 
-    static bool AllValueRootCarriersEqual(HeapGcState& collector, BaseObject* value)
+    static bool AllValueRootCarriersEqual(Heap& collector, BaseObject* value)
     {
         bool resurrected = false;
         {
@@ -228,7 +228,7 @@ struct RelocationReceiptTestAccess {
             it->second.front() == value;
     }
 
-    static bool BothResurrectionSetsEqual(HeapGcState& collector, BaseObject* value)
+    static bool BothResurrectionSetsEqual(Heap& collector, BaseObject* value)
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
         return Heap::GetHeap().cross_vm().resurrectedExportObjectes.size() == 1 &&
@@ -237,7 +237,7 @@ struct RelocationReceiptTestAccess {
             Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.count(value) == 1;
     }
 
-    static std::vector<BaseObject*> VisitMinorValueRoots(HeapGcState& collector)
+    static std::vector<BaseObject*> VisitMinorValueRoots(Heap& collector)
     {
         std::vector<BaseObject*> visited;
         Heap::GetHeap().cross_vm().VisitMinorValueRoots([&visited](BaseObject* value) { visited.push_back(value); });
@@ -246,7 +246,7 @@ struct RelocationReceiptTestAccess {
 
     // The product old-roots task feeds these objects to MarkOldObjectIfActive
     // (zMark.cpp mark_old_roots); observe the same visitor output.
-    static std::vector<BaseObject*> EnumMajorValueRoots(HeapGcState& collector)
+    static std::vector<BaseObject*> EnumMajorValueRoots(Heap& collector)
     {
         std::vector<BaseObject*> visited;
         Heap::GetHeap().cross_vm().VisitSurrectedExportRoots([&](BaseObject* object) { visited.push_back(object); });
@@ -254,7 +254,7 @@ struct RelocationReceiptTestAccess {
         return visited;
     }
 
-    static void RunLateValueRootRekey(HeapGcState& collector)
+    static void RunLateValueRootRekey(Heap& collector)
     {
         Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Old);
         Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Old);
@@ -270,27 +270,27 @@ struct LoadHealDeliveryTestAccess {
         size_t consumed;
     };
 
-    static void PublishColours(HeapGcState& collector) { ZGlobalsPointers::initialize(); }
+    static void PublishColours(Heap& collector) { ZGlobalsPointers::initialize(); }
 
-    static uintptr_t DoubleBadColour(const HeapGcState& collector)
+    static uintptr_t DoubleBadColour(const Heap& collector)
     {
         return ZPointerRemappedMask & ~ZPointerRemappedYoungMask &
             ~ZPointerRemappedOldMask;
     }
 
-    static void RemapYoungRoots(HeapGcState& collector) { collector.RemapYoungRoots(); }
+    static void RemapYoungRoots(Heap& collector) { ZRelocate::RemapYoungRoots(); }
 
-    static void FlipYoungRelocateStart(HeapGcState& collector)
+    static void FlipYoungRelocateStart(Heap& collector)
     {
         ZGlobalsPointers::flip_young_relocate_start();
     }
 
-    static void FlipOldRelocateStart(HeapGcState& collector)
+    static void FlipOldRelocateStart(Heap& collector)
     {
         ZGlobalsPointers::flip_old_relocate_start();
     }
 
-    static RemsetConsumeResult ConsumeRemembered(HeapGcState& collector,
+    static RemsetConsumeResult ConsumeRemembered(Heap& collector,
                                                   const std::unordered_set<MAddress>& previous,
                                                   BaseObject* currentMinorRoot)
     {
@@ -305,17 +305,17 @@ struct LoadHealDeliveryTestAccess {
         MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
         young.PublishPhase(ZGenerationPhase::Mark);
         ZGlobalsPointers::flip_young_mark_start();
-        WorkStack workStack = collector.NewWorkStack();
-        HeapGcState::MinorSlotSet reachableSlots;
-        HeapGcState::MinorSlotSet weakSlots;
-        HeapGcState::MinorObjectSet currentMinorRoots;
-        HeapGcState::MinorSlotSet consumed;
+        WorkStack workStack = WorkStack{};
+        std::unordered_set<MAddress> reachableSlots;
+        std::unordered_set<MAddress> weakSlots;
+        std::unordered_set<BaseObject*> currentMinorRoots;
+        std::unordered_set<MAddress> consumed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
-        auto& domain = *collector.YoungMark();
+        auto& domain = *Heap::GetHeap().young().MarkPtr();
         auto& stacks = domain.Stacks();
         const size_t work = stacks.Population();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
@@ -367,7 +367,7 @@ uintptr_t OneLoadBadRemap()
 class ResolveBarrier final {
 public:
     ResolveBarrier() = default;
-    ResolveBarrier(HeapGcState&, RememberedSet&) {}
+    ResolveBarrier(Heap&, RememberedSet&) {}
 
     BaseObject* Resolve(BaseObject* from) const
     {
@@ -571,7 +571,7 @@ struct LateBackfillState {
     Generation generation;
 };
 
-LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, HeapGcState& collector,
+LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, Heap& collector,
                                     Generation generation = Generation::Old, bool publishMapping = true)
 {
     ZPage* region = ResetDeliveryUnit(fx, 5);
@@ -621,7 +621,7 @@ struct PartialCompactState {
     size_t objectSize;
 };
 
-PartialCompactState PreparePartialCompact(GcHeapFixture& fx, HeapGcState& collector, bool exhaustDestination)
+PartialCompactState PreparePartialCompact(GcHeapFixture& fx, Heap& collector, bool exhaustDestination)
 {
     ZPage* region = ResetDeliveryUnit(fx, 1);
     ZPage* destination = ResetDeliveryUnit(fx, 2);
@@ -678,7 +678,7 @@ void EmptyBothRememberedFaces(RememberedSet& remembered)
     remembered.DrainForMinor(discarded);
 }
 
-LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, HeapGcState& collector)
+LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, Heap& collector)
 {
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     ZForwarding* publication = forwarding_for_page(
@@ -717,7 +717,7 @@ void CompleteValueRootCoverage()
 GC_OTHER_VM_TEST(ValueRootCurrentization, MinorConsumerRewritesEveryCarrierBeforeCoverage)
 {
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     LateBackfillState state = PrepareValueRootForwarding(fx, collector);
     RelocationReceiptTestAccess::SeedValueRoots(collector, state.from);
 
@@ -750,7 +750,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorConsumerRewritesEveryCarrierBefor
 GC_OTHER_VM_TEST(ValueRootCurrentization, MajorConsumerRewritesEveryCarrierBeforeCoverage)
 {
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     LateBackfillState state = PrepareValueRootForwarding(fx, collector);
     RelocationReceiptTestAccess::SeedValueRoots(collector, state.from);
 
@@ -783,7 +783,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorConsumerRewritesEveryCarrierBefor
 GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAuthority)
 {
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     LateBackfillState state = PrepareValueRootForwarding(fx, collector);
 
     // Incoming registration receives a current value (ZGC load-good root).
@@ -812,7 +812,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
 GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollector)
 {
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     RememberedSet rememberedSet;
     rememberedSet.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
@@ -842,7 +842,7 @@ void ExerciseMutatorCopy(bool runtimeEntry)
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + size);
     const MAddress expected = destination->GetRegionStart();
     destination->SetRegionAllocPtr(expected);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
@@ -876,7 +876,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
 
 GC_OTHER_VM_TEST(FindToPublicState, NotManagedIsObservable)
 {
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, nullptr, Generation::Old);
     GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::NotManaged);
     GC_EXPECT_TRUE(result.found() == nullptr);
@@ -889,7 +889,7 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
     region->SetRegionListOwner(nullptr);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
@@ -944,7 +944,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     region->SetRegionListOwner(nullptr);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
     Heap::GetHeap().GetZGeneration(region->GetOwnerGeneration()).reset_relocation_set();
@@ -969,7 +969,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     BaseObject* deadObject = fx.PlaceObject(region->GetRegionStart() + liveObject->GetSize());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(deadObject) + deadObject->GetSize());
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
     RegionManager manager;
@@ -1130,7 +1130,7 @@ void ExpectDiagnosticLookupIdentity(const std::string& output, const LookupWitne
 void CheckLookupWitness(bool publishReceipt)
 {
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     LateBackfillState state = PrepareLateBackfill(fx, collector, Generation::Old, false);
     const MAddress from = reinterpret_cast<MAddress>(state.from);
     const MAddress to = reinterpret_cast<MAddress>(state.to);
@@ -1281,7 +1281,7 @@ void RunDerivedBaseProducer(bool tagged, bool moving = false, bool expectFailClo
     auto& image = derivedBaseMapImage;
 
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     LateBackfillState state {};
     if (unresolvedGhost) {
@@ -1371,7 +1371,7 @@ GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedUnresolved
 GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWithoutLookup)
 {
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     Heap::GetHeap().GetZGeneration(state.region->GetOwnerGeneration()).reset_relocation_set();
     GC_EXPECT_TRUE(generation_forwarding_table(state.generation).get(state.region->GetRegionStart()) == nullptr);
@@ -1452,7 +1452,7 @@ static void CheckForwardingWinner(bool identity)
     region->SetRegionAllocPtr(fromAddr + from->GetSize());
     BaseObject* winner = identity ? from : fx.obj1;
     BaseObject* loser = identity ? fx.obj1 : from;
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, fromAddr);
@@ -1507,7 +1507,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedForwardingMissRejectsOriginalAddr
         BaseObject* from = fx.PlaceObject(region->GetRegionStart());
         const MAddress fromAddr = reinterpret_cast<MAddress>(from);
         region->SetRegionAllocPtr(fromAddr + from->GetSize());
-        HeapGcState& collector = Heap::GetHeap().GetCollector();
+        Heap& collector = Heap::GetHeap();
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         RelocationReceiptTestAccess::BindCollector(&collector);
         (void)PrepareForwardable(fx, region, fromAddr);
@@ -1537,7 +1537,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     region->SetRegionListOwner(nullptr);
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
@@ -1587,7 +1587,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     BaseObject* to = fx.PlaceObject(region->GetRegionStart() + 256);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     ZForwarding* publication =
@@ -1621,7 +1621,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
     region->SetRegionListOwner(nullptr);
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
@@ -1658,7 +1658,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
     secondRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
     finalRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(final) + final->GetSize());
 
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     RegionList selected("forwarding-chain-fixture");
     selected.PrependRegion(firstRegion);
@@ -1698,7 +1698,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestinati
 GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt)
 {
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     PartialCompactState state = PreparePartialCompact(fx, collector, false);
     const MAddress from = reinterpret_cast<MAddress>(state.liveObject);
     const MAddress expected = state.destination->GetRegionStart();
@@ -1731,7 +1731,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt
 GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
 {
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     PartialCompactState state = PreparePartialCompact(fx, collector, true);
     const MAddress from = reinterpret_cast<MAddress>(state.liveObject);
     const MAddress expected = state.region->GetRegionStart();
@@ -1790,7 +1790,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     routeDestination->SetRegionAllocPtr(routeDestination->GetRegionStart());
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = productSpace.GetRegionManager();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, from);
@@ -1867,7 +1867,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
 
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = productSpace.GetRegionManager();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, from);
@@ -1944,7 +1944,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     region->SetRegionAllocPtr(from + objectSize);
 
     RegionManager manager;
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
@@ -1996,7 +1996,7 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     const MAddress from = reinterpret_cast<MAddress>(fromObject);
     const MAddress to = reinterpret_cast<MAddress>(toObject);
 
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     (void)PrepareForwardable(fx, region, from);
 
@@ -2023,7 +2023,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierProducerCapturesOldTopAndLivemap)
 {
     GcHeapFixture& fx = ProductFixture();
     ZPage* region = ResetDeliveryUnit(fx, 0);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + 64);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
@@ -2051,7 +2051,7 @@ GC_TEST(LoadHealDeliveryProduct, DualCarrierConsumerSurvivesCurrentPageResetUnti
 {
     GcHeapFixture& fx = ProductFixture();
     ZPage* region = ResetDeliveryUnit(fx, 0);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + 64);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
@@ -2107,7 +2107,7 @@ GC_TEST(LoadHealDeliveryProduct, FlipPromotedPageRemembersOnlyLiveHolder)
     holderRegion->reset(PageAge::old);
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     ZStatWorkers statWorkers;
     ZWorkers workers(ZGenerationId::young, 2, &statWorkers);
@@ -2147,7 +2147,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedObjectRemembersYoungTargetOnly)
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     field.StoreColoured(GcUnit::StoreGoodPointer(target));
     RegionManager::RememberPromotedObject(holder);
@@ -2179,7 +2179,7 @@ GC_TEST(LoadHealDeliveryProduct, PromotedFieldsHealForwardedOldTarget)
         auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
         RememberedSet& remembered = DeliveryRememberedSet(fx);
         EmptyBothRememberedFaces(remembered);
-        HeapGcState& collector = Heap::GetHeap().GetCollector();
+        Heap& collector = Heap::GetHeap();
         RelocationReceiptTestAccess::BindCollector(&collector);
         LoadHealDeliveryTestAccess::PublishColours(collector);
         (void)PrepareForwardable(fx, fromRegion, reinterpret_cast<MAddress>(from));
@@ -2268,7 +2268,7 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
 
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     LoadHealDeliveryTestAccess::PublishColours(collector);
     {
         DeliveryNoAllocBufferScope directRemember;
@@ -2363,7 +2363,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
 
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     LoadHealDeliveryTestAccess::PublishColours(collector);
     {
@@ -2424,7 +2424,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
 {
     ZStat::Initialize();
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     LoadHealDeliveryTestAccess::PublishColours(collector);
     LateBackfillState forwarding {};
@@ -2601,7 +2601,7 @@ static void CheckCompactIncoming(bool overlapping, bool external = false, bool m
 {
     B09RuntimeFixture runtime;
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     auto* region = fx.region0;
     const MAddress start = region->GetRegionStart();
     auto* dead = fx.PlaceObject(start);
@@ -2699,7 +2699,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartRejectsNonU
 {
 #if defined(__linux__)
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     PartialCompactState state = PreparePartialCompact(fx, collector, true);
 
     RegionManager manager;
@@ -2725,7 +2725,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartWithUsableT
 {
 #if defined(__linux__)
     GcHeapFixture& fx = ProductFixture();
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     PartialCompactState state = PreparePartialCompact(fx, collector, true);
 
     RegionManager manager;
@@ -2786,7 +2786,7 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     const MAddress to = reinterpret_cast<MAddress>(fixture.obj1);
     auto* forwarding = generation_forwarding_table(Generation::Young).get(from);
     GC_EXPECT_EQ(forwarding->insert(from, to), to);
-    auto& collector = Heap::GetHeap().GetCollector();
+    auto& collector = Heap::GetHeap();
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Young);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
     auto original = region->CloneForPromotion();
@@ -2813,7 +2813,7 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     RelocationReceiptTestAccess::BindCollector(nullptr);
     GcHeapFixture fixture;
     auto* region = fixture.region0;
-    auto& collector = Heap::GetHeap().GetCollector();
+    auto& collector = Heap::GetHeap();
     for (uint8_t young : {1, 0, 1, 0}) {
         region->reset(young ? PageAge::eden : PageAge::old);
         const Generation expected = young ? Generation::Young : Generation::Old;

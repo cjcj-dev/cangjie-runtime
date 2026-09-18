@@ -238,7 +238,7 @@ GC_TEST(ZForwardingRemembered, RetainedScanRejectsPublication)
 GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
 {
     GcHeapFixture heap;
-    auto& collector = Heap::GetHeap().GetCollector();
+    auto& collector = Heap::GetHeap();
     const ZGenerationPhase youngPhase = Heap::GetHeap().GetZGeneration(ZGenerationId::young).GcPhase();
     const ZGenerationPhase oldPhase = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
     for (bool marking : { false, true }) {

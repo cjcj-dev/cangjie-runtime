@@ -24,6 +24,7 @@
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "root_publication_snapshot.hpp"
+#include "Heap/z/zBarrier.hpp"
 
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
@@ -45,7 +46,7 @@ namespace MapleRuntime {
 // whose predicate it did not set.
 struct ZGenerationRootTestAccess {
     inline static std::array<NativeSlot*, 2> strongSlots {};
-    static void Install(HeapGcState& collector, const std::array<BaseObject*, 6>& objects)
+    static void Install(Heap& collector, const std::array<BaseObject*, 6>& objects)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (size_t i = 0; i < strongSlots.size(); ++i) {
@@ -64,7 +65,7 @@ struct ZGenerationRootTestAccess {
             Heap::GetHeap().cross_vm().cycleRefWorkStack[objects[4]].push_back(objects[5]);
         }
     }
-    static void Remove(HeapGcState& collector, const std::array<BaseObject*, 6>& objects)
+    static void Remove(Heap& collector, const std::array<BaseObject*, 6>& objects)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (NativeSlot*& slot : strongSlots) {
@@ -103,7 +104,7 @@ bool Same(const GCCycleSnapshot& a, const GCCycleSnapshot& b)
 }
 void* Exercise(void*)
 {
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     cpu_set_t cpus;
     CPU_ZERO(&cpus);
     const int affinityRc = sched_getaffinity(0, sizeof(cpus), &cpus);
@@ -124,7 +125,7 @@ void* Exercise(void*)
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent);
 #if defined(MRT_TESTABLE_INTERNALS)
-    auto& tracing = static_cast<HeapGcState&>(collector);
+    auto& tracing = static_cast<Heap&>(collector);
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;
@@ -134,7 +135,7 @@ void* Exercise(void*)
     uintptr_t preludeOldColor = 0;
     // Port the VM_ZMarkStartYoungAndOld/VM_ZMarkStartYoung phase invariants
     // (zGeneration.cpp:583-659) through the real driver request below.
-    tracing.testYoungMarkStarted = [&]() {
+    ZGeneration::testYoungMarkStarted = [&]() {
         const auto young = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
         const auto old = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
         Expect(young.active, "young_mark_start_active");
@@ -168,7 +169,7 @@ void* Exercise(void*)
         auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
         handle = Heap::GetHeap().RegisterExportRoot(object);
     }
-    tracing.testCyclePrepared = [&]() {
+    ZGeneration::testCyclePrepared = [&]() {
         // The real driver has selected and prepared its cycle. Add captures
         // its own state; the test does not provide a phase or generation.
         StoreBarrierBuffer buffer;
@@ -207,8 +208,8 @@ void* Exercise(void*)
     // EnumAllExportRoots fills the driver-local foreign stack that only
     // ProcessExportRoots consumes, so a witness is observed here only if its
     // family scan published it.
-    tracing.testOldMarkStarted = [&]() {
-        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*tracing.MajorMark());
+    ZGeneration::testOldMarkStarted = [&]() {
+        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*Heap::GetHeap().old().MarkPtr());
         size_t expected = 0;
         bool included = true;
         Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
@@ -283,9 +284,9 @@ void* Exercise(void*)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
     Expect(rootResults > 0, "worker_root_result_observed");
     Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
-    tracing.testYoungMarkStarted = nullptr;
-    tracing.testCyclePrepared = nullptr;
-    tracing.testOldMarkStarted = nullptr;
+    ZGeneration::testYoungMarkStarted = nullptr;
+    ZGeneration::testCyclePrepared = nullptr;
+    ZGeneration::testOldMarkStarted = nullptr;
     for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);
 #endif
     return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));

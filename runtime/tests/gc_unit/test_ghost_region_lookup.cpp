@@ -17,6 +17,7 @@
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zMark.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/z/zRelocate.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -60,8 +61,8 @@ int RunIsUnmovableChild(bool armRetireHook)
     (void)armRetireHook;
 #endif
 
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
-    const bool unmovable = collector.IsUnmovableFromObject(fx.obj0);
+    Heap& collector = Heap::GetHeap();
+    const bool unmovable = ZRelocate::IsUnmovableFromObject(fx.obj0);
 #if defined(MRT_GC_UNIT_TESTS)
     const bool oneLookup = !armRetireHook || ZPage::GhostLookupTestHookCalls() == 1;
     const bool retired = true;

@@ -103,6 +103,40 @@
 
 
 namespace MapleRuntime {
+
+void ZRelocate::ForwardFromSpace(ZGenerationId generation)
+{
+    ScopedEntryTrace trace("CJRT_GC_FORWARD");
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    GCStats& stats = Heap::GetHeap().GetGCStats(generation);
+    stats.liveBytesBeforeGC = space.AllocatedBytes();
+    stats.fromSpaceSize = space.FromSpaceSize();
+    if (generation == ZGenerationId::young) {
+        space.ForwardFromSpace<Generation::Young>(*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers());
+    } else {
+        space.ForwardFromSpace<Generation::Old>(*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers());
+    }
+
+}
+
+void ZRelocate::RefineFromSpace()
+{
+    GCStats& stats = Heap::GetHeap().GetGCStats();
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    stats.smallGarbageSize = space.RefineFromSpace();
+}
+
+bool ZRelocate::IsFromObject(BaseObject* obj)
+    {
+        if (!Heap::IsHeapAddress(obj)) {
+            return false;
+        }
+        const MAddress addr = reinterpret_cast<MAddress>(obj);
+        return Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+               Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
+    }
+
 #if defined(MRT_TESTABLE_INTERNALS)
 void NoteRawRemapYoungRootsTestReceipt(ObjectRef& root, uintptr_t before);
 void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
@@ -117,7 +151,7 @@ std::atomic<size_t> g_installDomainGrant{ 0 };
 std::atomic<size_t> g_installDomainAlready{ 0 };
 std::atomic<size_t> g_installDomainTooLate{ 0 };
 std::atomic<size_t> g_installDomainSkip{ 0 };
-bool HeapGcState::IsUnmovableFromObject(BaseObject* obj) const
+bool ZRelocate::IsUnmovableFromObject(BaseObject* obj)
 {
     // filter const string object.
     if (!Heap::IsHeapAddress(obj)) {
@@ -137,61 +171,13 @@ bool HeapGcState::IsUnmovableFromObject(BaseObject* obj) const
 
 
 
-template<bool forward>
-bool HeapGcState::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
-                                       BaseObject*& toObj, const ForwardingProvenance& provenance) const
-{
-    RefField<> oldRef(field);
-    if (ZPointer::is_load_bad(oldRef.GetFieldValue())) {
-        fromObj = to_object(oldRef.GetTargetObject());
-        if (forward) {
-            toObj = ZBarrier::remap_generation(oldRef.GetFieldValue())->relocate_or_remap_object(fromObj);
-        } else {
-            toObj = ZRelocate::FindToVersion(fromObj, static_cast<Generation>(ZBarrier::remap_generation(oldRef.GetFieldValue())->id())).GetOrFailClosed(
-                "HeapGcState::TryUpdateRefFieldImpl", provenance);
-        }
-        if (toObj == nullptr) {
-            return false;
-        }
-        // R7：写回必须经规范色单产地，禁 plain RefField<>(toObj)。
-        // expected 仍是 observed-raw（oldRef.GetFieldValue()）；模板 = GetAndTryTagRefField。
-        RefField<> tmpField = ZBarrier::GetAndTryTagRefField(toObj);
-        if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
-            if (obj != nullptr) {
-                DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
-                     obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
-                     raw(tmpField.GetFieldValue()));
-            } else {
-                DLOG(TRACE, "update ref@%p: 0x%zx -> %p", &field, raw(oldRef.GetFieldValue()), toObj);
-            }
-            return true;
-        } else {
-            if (obj != nullptr) {
-                DLOG(TRACE,
-                     "update obj %p<%p>(%zu)+%zu but cas failed ref-field@%p: %#zx(%#zx) -> %#zx but cas failed ", obj,
-                     obj->GetTypeInfo(), obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field,
-                     raw(oldRef.GetFieldValue()), raw(field.GetFieldValue()), raw(tmpField.GetFieldValue()));
-            } else {
-                DLOG(TRACE, "update but cas failed ref@%p: 0x%zx(%zx) -> %p", &field, raw(oldRef.GetFieldValue()),
-                     field.GetFieldValue(), toObj);
-            }
-            return true;
-        }
-    }
 
-    return false;
-}
-bool HeapGcState::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
-{
-    BaseObject* oldRef = nullptr;
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
-}
+
 
 
 // this api untags current pointer as well as old pointer, caller should take care of this.
 
-void HeapGcState::RemapYoungRoots()
+void ZRelocate::RemapYoungRoots()
 {
     SuspendibleThreadSetJoiner joiner;
     MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
@@ -199,7 +185,7 @@ void HeapGcState::RemapYoungRoots()
     ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
     Heap::GetHeap().remembered().remap_current(&remsetIter);
     RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
-    RootVisitor visitor = [this](ObjectRef& root) {
+    RootVisitor visitor = [](ObjectRef& root) {
         const zaddress_unsafe observed = root.LoadPlain();
         // ZGeneration::remap_object (zGeneration.inline.hpp:142-151): only
         // the selected generation's forwarding table qualifies this root.
@@ -217,7 +203,7 @@ void HeapGcState::RemapYoungRoots()
         NoteRawRemapYoungRootsTestReceipt(root, raw(observed));
 #endif
     };
-    VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
+    ZMark::VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
         // Cangjie stack maps may name stack objects/headerless records. Expand
         // their plain fields before remapping, as verification and mark do.
         // ZGC zStackWatermark.cpp:164-214 processes each oop frame slot.
@@ -240,16 +226,16 @@ void HeapGcState::RemapYoungRoots()
 
 
 
-void HeapGcState::StartRelocationTasks(ZGenerationId generation)
+void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = space.GetRegionManager();
-    ZWorkers& workers = GetWorkers(generation);
+    ZWorkers& workers = *Heap::GetHeap().GetZGeneration(generation).Workers();
     if (generation == ZGenerationId::young) manager.StartForwardFromRegions<Generation::Young>(workers);
     else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
 
-bool HeapGcState::Preforward()
+bool ZRelocate::Preforward()
 {
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
     MRT_PHASE_TIMER(ZStatPhases::PPreforward);
@@ -280,10 +266,10 @@ bool HeapGcState::Preforward()
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     manager.DrainForwardFromRegions<Generation::Old>();
-    ZWorkers& workers = GetWorkers(ZGenerationId::old);
+    ZWorkers& workers = *Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers();
     const std::function<void()> families[] = {
         [&] { RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
-        [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
+        [&] { ZMark::VisitStrongPlainRoots([](ObjectRef& root) {
             const zaddress_unsafe observed = root.LoadPlain();
             BaseObject* oldObj = to_object(safe(observed));
             if (oldObj != nullptr && Heap::IsHeapAddress(oldObj)) {
@@ -318,8 +304,6 @@ bool HeapGcState::Preforward()
 // N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
 // Same-value concurrent writes converge; first writer wins. Counters for positive control.
 namespace {
-std::atomic<size_t> g_minorRefCasFail{ 0 };
-std::atomic<size_t> g_minorRefCasOk{ 0 };
 
 // installdomain (ZGC mark_and_remember shape, GC-thread side): before installing a
 // from/ghost-from address into a heap slot (or forwarding it), ensure the survivor
@@ -347,7 +331,7 @@ static ZLiveMap* RouteLiveMap(ZPage* region, ZGenerationId& id)
     return &region->livemap();
 }
 
-void EnsureRouteDomainMembership(HeapGcState* collector, BaseObject* obj)
+void EnsureRouteDomainMembership(BaseObject* obj)
 {
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
@@ -357,7 +341,7 @@ void EnsureRouteDomainMembership(HeapGcState* collector, BaseObject* obj)
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    if (collector->IsUnmovableFromObject(obj)) {
+    if (ZRelocate::IsUnmovableFromObject(obj)) {
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -366,8 +350,8 @@ void EnsureRouteDomainMembership(HeapGcState* collector, BaseObject* obj)
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    const bool isGhost = collector->IsGhostFromObject(obj);
-    const bool isFrom = collector->IsFromObject(obj);
+    const bool isGhost = ZRelocate::IsFromObject(obj);
+    const bool isFrom = ZRelocate::IsFromObject(obj);
     if (!isGhost && !isFrom) {
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
         return;
@@ -429,12 +413,12 @@ void EnsureRouteDomainMembership(HeapGcState* collector, BaseObject* obj)
 // statresid: force ghost livemap paint while still FORWARDABLE (before any Route
 // freezes geometry). Used by the root grant pass and as last-chance before Forward.
 // Returns true when AdmitForRoute would accept `obj` after the paint attempt.
-bool ForceRootRouteDomainWhileForwardable(HeapGcState* collector, BaseObject* obj)
+bool ForceRootRouteDomainWhileForwardable(BaseObject* obj)
 {
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return false;
     }
-    EnsureRouteDomainMembership(collector, obj);
+    EnsureRouteDomainMembership(obj);
     ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
         region = Heap::page(reinterpret_cast<MAddress>(obj));
@@ -468,41 +452,9 @@ bool ForceRootRouteDomainWhileForwardable(HeapGcState* collector, BaseObject* ob
 // Install a logical resolved target into a heap field. Callers cannot supply a
 // pre-encoded RefField: this controlled entry applies the current heap colour here.
 // On CAS fail, accept the peer's update (major TryUpdateRefFieldImpl shape).
-bool HeapGcState::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
-                                          bool allowNull) const
-{
-    BaseObject* object = to_object(target);
-    if (object != nullptr) {
-        CHECK_DETAIL(Heap::IsHeapAddress(object),
-                     "resolved heal target must be a heap address target=%p", object);
-        CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(object) == HandVerdict::Usable,
-                     "resolved heal target must be usable target=%p", object);
-    }
-    zpointer desired = is_null(target) ? zpointer::null : RefField<>(ZAddress::store_good(target)).GetFieldValue();
-    if (expected == raw(desired)) {
-        return true;
-    }
-    const zpointer observed = to_zpointer(expected);
-    auto loadGood = [this](zpointer value) {
-        RefField<> probe(value);
-        return is_null(probe.GetTargetObject()) || ZPointer::is_load_good(probe.GetFieldValue());
-    };
-    if (loadGood(observed)) {
-        return true;
-    }
-    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
-                        reinterpret_cast<volatile zpointer*>(&field), observed, desired,
-                        allowNull);
-    const bool healed = true;
-    if (healed) {
-        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
-        return true;
-    }
-    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
-    return true;
-}
 
-BaseObject* HeapGcState::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
+
+BaseObject* ZRelocate::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw)
 {
     (void)stw;
 
@@ -522,10 +474,10 @@ BaseObject* HeapGcState::ResolveMinorReference(RefField<>& field, const ScopedSt
     CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
                  "minor resolve requires a usable target from=%p resolved=%p", from, resolved);
 
-    (void)CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), false);
+    (void)ZBarrier::CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), false);
     return resolved;
 }
-BaseObject* HeapGcState::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
+BaseObject* ZRelocate::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw)
 {
     (void)stw;
     zaddress_unsafe observed = root.LoadPlain();
@@ -536,7 +488,7 @@ BaseObject* HeapGcState::ResolveMinorReference(RootSlot& root, const ScopedStopT
 
     // ZUncoloredRootProcessOopClosure applies the load barrier and writes the
     // resolved address back uncolored (zGeneration.cpp:1458-1523).
-    const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &root };
+    const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, &Heap::GetHeap().young().relocate(), &root };
     BaseObject* resolved = ZRelocate::ResolveStoreValue(from, provenance, Generation::Young);
     CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved),
                  "minor root resolve requires a heap to-address from=%p", from);
@@ -546,8 +498,8 @@ BaseObject* HeapGcState::ResolveMinorReference(RootSlot& root, const ScopedStopT
     ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return resolved;
 }
-bool HeapGcState::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
-                                      const ScopedStopTheWorld* stw) const
+bool ZRelocate::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
+                                      const ScopedStopTheWorld* stw)
 {
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
@@ -610,10 +562,10 @@ bool HeapGcState::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase
     const bool alreadyTo = (target != oldObj) || compactDestination;
     BaseObject* current = target;
     const bool hasForwardingFace = targetRegion != nullptr && targetRegion->FromPageLiveMap() != nullptr;
-    if (!alreadyTo && hasForwardingFace && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+    if (!alreadyTo && hasForwardingFace && IsFromObject(target) && !IsUnmovableFromObject(target)) {
         // installdomain: route-domain grant before ForwardObject → GetRoute.
-        EnsureRouteDomainMembership(const_cast<HeapGcState*>(this), target);
-        current = const_cast<HeapGcState*>(this)->ForwardObject(target, Generation::Young);
+        EnsureRouteDomainMembership(target);
+        current = ZRelocate::ForwardObject(target, Generation::Young);
     }
     // ForwardObject null = movable ghost with no to-version (survivor-gate miss).
     // Drop the edge; do not reinstall the from address that is about to be reclaimed.
@@ -624,13 +576,13 @@ bool HeapGcState::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase
         // substitute for an unresolved product.
         (void)field.CompareExchange(field.GetFieldValue(), zpointer::null);
         ZBarrier::FailClosedLoad(
-            "HeapGcState::FixMinorEvacuatedSlot.unresolved", target,
+            "ZRelocate::FixMinorEvacuatedSlot.unresolved", target,
             static_cast<uintptr_t>(raw(field.GetFieldValue())),
             ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
     }
     // plainroots: stack/reg root slots → plain current; heap remset/fields → Phase C colour.
     // Plain on heap was the trust-state install that AssertColouredWriteIfEnabled fires on.
-    RefField<> newField = RootSlotWriteback(current, field);
+    RefField<> newField = ZBarrier::GetAndTryTagRefField(current);
     MAddress oldVal = raw(oldField.GetFieldValue());
     MAddress newVal = raw(newField.GetFieldValue());
     if (oldVal == newVal) {
@@ -656,7 +608,7 @@ bool HeapGcState::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase
     return true;
 }
 
-bool HeapGcState::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw) const
+bool ZRelocate::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw)
 {
     MAddress oldValue = raw(root.LoadPlain());
     BaseObject* target = ResolveMinorReference(root, stw);
@@ -672,17 +624,17 @@ bool HeapGcState::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld
     const bool alreadyTo = (target != oldObj) || compactDestination;
     BaseObject* current = target;
     const bool hasForwardingFace = targetRegion != nullptr && targetRegion->FromPageLiveMap() != nullptr;
-    if (!alreadyTo && hasForwardingFace && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+    if (!alreadyTo && hasForwardingFace && IsFromObject(target) && !IsUnmovableFromObject(target)) {
         // Last-chance domain paint while FORWARDABLE (grant pass covers the bulk case;
         // this catches roots dirtied after the grant pass or parallel races).
-        (void)ForceRootRouteDomainWhileForwardable(const_cast<HeapGcState*>(this), target);
-        current = const_cast<HeapGcState*>(this)->ForwardObject(target, Generation::Young);
+        (void)ForceRootRouteDomainWhileForwardable(target);
+        current = ZRelocate::ForwardObject(target, Generation::Young);
         // Third disposition (statresid): if still null and region still FORWARDABLE,
         // force-paint once more and retry Forward — never HealRoot(null), never leave
         // a reclaimable from named by a live root without a second attempt.
         if (current == nullptr) {
-            if (ForceRootRouteDomainWhileForwardable(const_cast<HeapGcState*>(this), target)) {
-                current = const_cast<HeapGcState*>(this)->ForwardObject(target, Generation::Young);
+            if (ForceRootRouteDomainWhileForwardable(target)) {
+                current = ZRelocate::ForwardObject(target, Generation::Young);
             }
         }
     }
@@ -691,18 +643,18 @@ bool HeapGcState::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld
         // I2: Forward miss still consults FindToVersion/receipt. Stale miss
         // refuses silently leaving from (seqnum-bounded table already rejects
         // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
-        const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &root };
+        const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, &Heap::GetHeap().young().relocate(), &root };
         BaseObject* viaTable = ZRelocate::FindToVersion(target, Generation::Young).GetOrFailClosed(
-            "HeapGcState::FixMinorEvacuatedSlot", provenance);
+            "ZRelocate::FixMinorEvacuatedSlot", provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
             return true;
         }
         ZBarrier::FailClosedLoad(
-            "HeapGcState::FixMinorEvacuatedSlot.unresolved", target,
+            "ZRelocate::FixMinorEvacuatedSlot.unresolved", target,
             reinterpret_cast<uintptr_t>(&root),
-            ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
+            ForwardingProvenance{ ForwardingHolderKind::StackSlot, &Heap::GetHeap().young().relocate(), &root });
     }
     MAddress newValue = reinterpret_cast<MAddress>(current);
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
@@ -712,248 +664,37 @@ bool HeapGcState::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld
     return true;
 }
 
-bool HeapGcState::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase,
-                                      const ScopedStopTheWorld* stw) const
+bool ZRelocate::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase,
+                                      const ScopedStopTheWorld* stw)
 {
     const zaddress_unsafe observed = derived.LoadDerived();
     if (knownBase == nullptr) {
         return false;
     }
-    RootVisitor root = [this, stw](RootSlot& slot) { (void)FixMinorEvacuatedSlot(slot, stw); };
+    RootVisitor root = [stw](RootSlot& slot) { (void)FixMinorEvacuatedSlot(slot, stw); };
     auto closure = Mutator::MakeDerivedRootVisitor(root);
     closure(to_zaddress_unsafe(reinterpret_cast<MAddress>(knownBase)), derived);
     return raw(observed) != raw(derived.LoadDerived());
 }
 
-void HeapGcState::FixMinorRootSlots(const ScopedStopTheWorld* stw)
+void ZRelocate::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 {
     // The phase handshake has already completed each stack watermark. Only
     // non-frame plain carriers and colored storage remain at this entry.
-        RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
+        RootVisitor rawRootVisitor = [stw](ObjectRef& root) {
         (void)FixMinorEvacuatedSlot(root, stw);
     };
-    VisitStrongPlainRoots(rawRootVisitor, {});
+    ZMark::VisitStrongPlainRoots(rawRootVisitor, {});
     RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
 
 }
 
 
-void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
-                                       const MinorSlotSet& rememberedSlots,
-                                       bool refFixSlotsCoveredByReachable,
-                                       const MinorInteriorBaseMap& interiorBases,
-                                       std::unique_ptr<ScopedStopTheWorld>* stw)
-{
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    (void)reachableVec;
-    (void)refFixSlotsCoveredByReachable;
-    // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
-    // is flip + set_phase(Relocate) + _relocate.start(); object copy is concurrent.
-    // Flip is the trap that makes mutator loads take the self-heal / relocate_object
-    // path; without it, concurrent copy is the empty window concreffix measured.
-    auto liveStw = [stw]() -> const ScopedStopTheWorld* {
-        return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
-    };
-    const bool doYoungFlip = !Heap::GetHeap().GetZGeneration(ZGenerationId::young).is_phase_relocate();
-    ZWorkers& workers = GetWorkers(ZGenerationId::young);
 
-    std::vector<MAddress> remsetVec;
-    remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
-
-    // zRemembered.cpp:remap_current visits remembered slots. Stack completion
-    // belongs to the phase watermark; it does not require a reachable-heap sweep.
-    auto remapRemembered = [&](ZWorkers& pool) {
-        // zArray.hpp:104 ZArrayParallelIterator over the remembered slots.
-        ZArrayParallelIterator<MAddress> slots(remsetVec.data(), remsetVec.size());
-        class RememberedTask final : public ZTask {
-        public:
-            explicit RememberedTask(std::function<void()> body) : ZTask("ZRemapRememberedTask"), body(std::move(body)) {}
-            void work() override { body(); }
-        private:
-            std::function<void()> body;
-        } task([&] {
-            for (MAddress slot; slots.next(&slot);) {
-                if (!Heap::IsHeapAddress(slot)) {
-                    continue;
-                }
-                auto known = interiorBases.find(slot);
-                BaseObject* base = known == interiorBases.end() ? nullptr : known->second;
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw());
-            }
-        });
-        pool.run(&task);
-    };
-
-    // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
-
-    {
-        // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
-        MRT_PHASE_TIMER(ZStatPhases::PYoungRefFix);
-
-        // ZGC relocate_start (zGeneration.cpp:918-931): flip remap colour then
-        // enter Relocate. Product path.
-        //
-        // fliporder: that citation covers only half of what ZGC does here.  ZGC installs the
-        // relocation set at zGeneration.cpp:254, inside the *concurrent* select_relocation_set,
-        // and only then runs pause_relocate_start -> relocate_start -> flip_relocate_start
-        // (:918 -> :922 -> :651).  So when ZGC's colour flips, the set of pages that will move is
-        // already fixed and published.
-        //
-        // Ours flipped first and prepared from-space afterwards (PrepareForwardTable<Young> below),
-        // which opens a window where the current remap colour is already the new one while no
-        // region is marked FROM yet.  Anything painted store-good in that window names an object
-        // whose region is about to become FROM: once it is copied the slot is load-good and names
-        // the from-version, so the read barrier's fast path hands it straight to the mutator with
-        // ObjectState::FORWARDED still in its header -- and the compiler reads that header as one
-        // 64-bit word, so (3 << 48) enters an address and faults non-canonically.
-        //
-        // target really was forwarded, is not in an unmovable region, and the slot was load-good --
-        // which after a flip can only mean it was written after that flip.
-        //
-        // Our own major path already has the ZGC order: PrepareForwardTable<Old> at :2533 runs
-        // before flip_young/old_relocate_start at :2552-2553.  The two paths disagreed.
-        {
-            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixPrepare);
-
-            // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
-            // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
-            // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
-            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareFromSpace<Generation::Young>();
-            // ZGenerationYoung::collect: last abortpoint after selection,
-            // before relocate-start. Once flipped, finish every remaining page.
-            if (ZAbort::should_abort()) {
-                return;
-            }
-            // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
-            // ZGC pause() wraps VMOp_ZRelocateStartYoung with JNICritical block
-            // (zGeneration.cpp:475-483, block_jni_critical at :832).
-            ZJNICritical::block();
-            if (doYoungFlip) {
-                ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
-                    data.storeBarrierBuffer->install_base_pointers();
-                });
-                ZGlobalsPointers::flip_young_relocate_start();
-                ZVerify::OnColorFlip();
-            }
-            // Publish the relocate phase and submit page work while the
-            // existing young pause still excludes mutator execution. Root
-            // transition may now wait for a real page task on allocation failure.
-            StartRelocationTasks(ZGenerationId::young);
-            ZJNICritical::unblock();
-        }
-
-        // pass1 root fix after the domain snapshot.
-        // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
-        {
-            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixRootPass1);
-            FixMinorRootSlots(liveStw());
-            Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
-            Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
-        }
-
-        // Reset CAS counters for this fix window (positive-control visibility).
-        g_minorRefCasFail.store(0, std::memory_order_relaxed);
-        g_minorRefCasOk.store(0, std::memory_order_relaxed);
-
-    }
-
-    {
-        {
-            if (stw != nullptr && *stw != nullptr) {
-                stw->reset();
-            }
-            MRT_PHASE_TIMER(ZStatPhases::PYoungConcurrentRelocate);
-            VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
-                 reachableVec.size());
-            ForwardFromSpace(ZGenerationId::young);
-            manager.FinishIncompleteFromRegions(ZGenerationId::young);
-        }
-        VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
-        {
-            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
-            g_minorRefCasFail.store(0, std::memory_order_relaxed);
-            g_minorRefCasOk.store(0, std::memory_order_relaxed);
-            FixMinorRootSlots(liveStw());
-            Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
-            Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
-            remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
-            {
-                // ZGC immediately scans buffered entries that crossed the young
-                // flip (zStoreBarrierBuffer.cpp:162-187). Publish all mutator
-                // buffers before the active-face Snapshot used for this ref fix.
-                (void)ZMark::FlushAllGenerations();
-                std::unordered_set<MAddress> concRemset;
-                ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
-                for (ZRemsetTableEntry entry; remsetIter.next(&entry);) {
-                    if (entry._page == nullptr) {
-                        continue;
-                    }
-                    entry._page->oops_do_current_remembered([&](volatile zpointer* p) {
-                        concRemset.insert(reinterpret_cast<MAddress>(p));
-                    });
-                }
-                remsetVec.reserve(remsetVec.size() + concRemset.size());
-                for (MAddress slot : concRemset) {
-                    remsetVec.push_back(slot);
-                }
-                VLOG(REPORT,
-                     "[GCV2][relocate][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
-                     rememberedSlots.size(), concRemset.size(), remsetVec.size());
-            }
-            remapRemembered(workers);
-        }
-    }
-
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungEvacFinish);
-        {
-        // Select flip-promoted pages; field iteration runs after world release.
-        for (ZPage* region : Heap::GetHeap().young().minorCandidateRegions) {
-            if (region->IsYoungRegion()) {
-                // markwater2: allocating pages never entered the route plan
-                // (zGeneration.cpp:211-213). Leave them young on unmovableFrom.
-                // ZPage::is_marked (zPage.inline.hpp:223-226): only a page marked
-                // this cycle has object liveness to promote.
-                if (region->IsAllocating() || !region->is_marked()) {
-                    continue;
-                }
-                if (kPageAgeAdaptiveTenuring &&
-                    !ShouldPromoteAge(region->GetYoungAge(), Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold)) {
-                    if (region->IsLoneFromRegion() || region->IsFromRegion()) {
-                        manager.EnlistStayYoungSurvivor(region);
-                    } else if (!(region->OnNamedList("recent full regions"))) {
-                        RegionManager::FinishStayYoungInPlace(region);
-                    }
-                    continue;
-                }
-                manager.AddFlipPromotedPage(region);
-            }
-        }
-        }
-    }
-
-    // zRelocate.cpp:1289-1306: finish relocation before walking flip-promoted pages.
-    // Keep forwarding entries available until every field has been remapped.
-    if (stw != nullptr && *stw != nullptr) {
-        stw->reset();
-    }
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungConcPromoteWalk);
-        manager.RememberFlipPromotedPages(workers);
-
-    }
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungEvacRetire);
-        // zGeneration.cpp:563: keep this set until the next young mark-end reset.
-        // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
-        manager.FinishIncompleteFromRegions(ZGenerationId::young);
-        manager.ReassembleFromSpace();
-    }
-}
 // ZBarrier::barrier / remap_young_relocated (zBarrier.inline.hpp:318-361).
 // Resolve and heal the same preloaded word. Preserve mark/remember metadata;
 // another writer's load-good value terminates the shared self-heal CAS loop.
-static BaseObject* RemapPromotedField(HeapGcState& collector, RefField<>& field, zpointer observed)
+static BaseObject* RemapPromotedField(RefField<>& field, zpointer observed)
 {
     RefField<> value(observed);
     auto loadGood = [](zpointer word) {
@@ -981,7 +722,6 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
     if (!object->HasRefField()) {
         return;
     }
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
     // zRelocate.cpp:798: this relocation-work consumer uses the unsafe entry.
     ZIterator::basic_oop_iterate(object, [&](RefField<>& field) {
         const zpointer observed = field.GetFieldValue();
@@ -1002,7 +742,7 @@ void RegionManager::RememberPromotedObject(BaseObject* object)
         }
         // Only completed/non-relocating old targets reach eager remapping.
         // Unfinished young forwarding above stays deferred in the remset.
-        RemapPromotedField(collector, field, observed);
+        RemapPromotedField(field, observed);
     });
 }
 
@@ -1028,7 +768,7 @@ void RegionManager::RememberFlipPromotedPages(ZWorkers& workers)
                 page->ObjectIterate([&](BaseObject* object) {
                     RefFieldVisitor remapAndRemember = [&](RefField<>& field) {
                         const zpointer observed = field.GetFieldValue();
-                        BaseObject* target = RemapPromotedField(Heap::GetHeap().GetCollector(), field, observed);
+                        BaseObject* target = RemapPromotedField(field, observed);
                         if (target != nullptr && Heap::IsHeapAddress(target) &&
                             Heap::page(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
                             // RegionManager owns access to the remset producer.
@@ -1232,7 +972,7 @@ BaseObject* ZRelocate::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& l
     // A mutator can publish a previously white from-object after young mark
     // terminated. Admit it before copying; a next-minor remset entry is too late.
     // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
-    EnsureRouteDomainMembership(&Heap::GetHeap().GetCollector(), obj);
+    EnsureRouteDomainMembership(obj);
     BaseObject* toVersion = relocate_object_inner(
         obj, lease.forwarding()->page());
     lease.Release(); // release_page
@@ -1415,7 +1155,7 @@ BaseObject* ZRelocate::ResolveStoreValue(BaseObject* ref, const ForwardingProven
     }
 }
 
-BaseObject* HeapGcState::ForwardObject(BaseObject* obj, Generation generation)
+BaseObject* ZRelocate::ForwardObject(BaseObject* obj, Generation generation)
 {
     BaseObject* to = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate_or_remap_object(obj);
     if (to != nullptr && to != obj) {
@@ -1425,7 +1165,7 @@ BaseObject* HeapGcState::ForwardObject(BaseObject* obj, Generation generation)
     // to-version is not a stable address. Returning `obj` here reinstalls a from
     // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
-    if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+    if (IsFromObject(obj) && !IsUnmovableFromObject(obj)) {
         ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
         BaseObject* waited = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate()
             .WaitForPageForwarding(obj, forwarding_for_page(region));
@@ -1446,7 +1186,7 @@ BaseObject* HeapGcState::ForwardObject(BaseObject* obj, Generation generation)
     return obj;
 }
 
-BaseObject* HeapGcState::ForwardObjectExclusive(BaseObject* obj)
+BaseObject* ZRelocate::ForwardObjectExclusive(BaseObject* obj)
 {
     ZPage* page = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (page == nullptr) {
@@ -1826,7 +1566,6 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
     MAddress regionStart = region->GetRegionStart();
     MAddress regionLimit = region->GetRegionAllocPtr();
-    HeapGcState& collector = reinterpret_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     bool allocFailed = false;
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t) {
         if (allocFailed) {
@@ -1836,7 +1575,7 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
         if (liveFwd != nullptr && liveFwd->find(reinterpret_cast<MAddress>(currentObj))) {
             return;
         }
-        if (collector.ForwardObjectExclusive(currentObj) == nullptr) {
+        if (ZRelocate::ForwardObjectExclusive(currentObj) == nullptr) {
             allocFailed = true;
         }
     });

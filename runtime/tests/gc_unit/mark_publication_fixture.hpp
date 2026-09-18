@@ -12,7 +12,7 @@ struct MarkPublicationFixture {
     inline static MarkPublicationFixture* current = nullptr;
     MarkPublicationFixture* previousFixture = current;
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     MarkPublicationFixture()
     {
         current = this;
@@ -61,13 +61,13 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void DrainOld(Visitor&& visitor)
     {
-        DrainDomain(*collector.MajorMark(), std::forward<Visitor>(visitor));
+        DrainDomain(*Heap::GetHeap().old().MarkPtr(), std::forward<Visitor>(visitor));
     }
     bool FollowYoung(WorkStack& work, std::vector<BaseObject*>& reached)
     {
-        HeapGcState::MinorSlotSet slots;
-        HeapGcState::MinorSlotSet weakSlots;
-        return collector.FollowYoungMark(work, false, reached, slots, weakSlots);
+        std::unordered_set<MAddress> slots;
+        std::unordered_set<MAddress> weakSlots;
+        return ZMark::FollowYoungMark(work, false, reached, slots, weakSlots);
     }
     void CompleteOldMarkForAdmissionTest()
     {
@@ -75,19 +75,19 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void Drain(Visitor&& visitor)
     {
-        DrainDomain(*collector.YoungMark(), visitor);
-        DrainDomain(*collector.MajorMark(), visitor);
+        DrainDomain(*Heap::GetHeap().young().MarkPtr(), visitor);
+        DrainDomain(*Heap::GetHeap().old().MarkPtr(), visitor);
     }
     template<class Stack> void DrainObjects(Stack& stack)
     {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
     size_t YoungPending() const {
-        auto* mark = const_cast<HeapGcState&>(collector).YoungMark();
+        auto* mark = Heap::GetHeap().young().MarkPtr();
         return mark->Stripes().Population() + mark->Stacks().Population();
     }
     size_t OldPending() const {
-        auto* mark = const_cast<HeapGcState&>(collector).MajorMark();
+        auto* mark = Heap::GetHeap().old().MarkPtr();
         return mark->Stripes().Population() + mark->Stacks().Population();
     }
 };

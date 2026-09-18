@@ -16,7 +16,6 @@
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
-class HeapGcState;
 class ZDirector;
 class ZDriverMajor;
 class ZDriverMinor;

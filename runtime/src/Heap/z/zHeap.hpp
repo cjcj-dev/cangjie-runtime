@@ -52,7 +52,6 @@ class Allocator;
 class RegionSpace;
 class AllocBuffer;
 class FinalizerProcessor;
-class HeapGcState;
 struct ForwardingProvenance;
 struct ThreadLocalData;
 struct ThreadGCData;
@@ -81,10 +80,17 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType);
 
-    HeapGcState& GetCollector();
-    const HeapGcState& GetCollector() const;
     void RequestGC(GCReason reason, bool async);
     void ResolveCycleRef();
+    void AddRawPointerObject(BaseObject* obj);
+    BaseObject* PinRawPointerObject(BaseObject* obj);
+    void RemoveRawPointerObject(BaseObject* obj);
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    void DumpRoots(LogType logType);
+    void DumpHeap(const CString& tag);
+    void DumpBeforeGC();
+    void DumpAfterGC();
+#endif
     Allocator& GetAllocator();
     RegionManager& page_allocator() { return _page_allocator; }
     const RegionManager& page_allocator() const { return _page_allocator; }
@@ -284,7 +290,6 @@ private:
     ZGenerationYoung _young;
     // Cangjie foreign-cycle ownership has no Java/JNI counterpart.
     ZCrossVM _cross_vm;
-    std::unique_ptr<HeapGcState> collectorImpl;
     ExportRootTable* exportRootsTable { nullptr };
     StaticRootTable* staticRootTable { nullptr };
     std::atomic<bool> isGCEnabled { true };

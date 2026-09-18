@@ -3,5 +3,5 @@ LoadHealDeliveryProduct.DualCarrierProducerCapturesOldTopAndLivemap	ZForwarding:
 LoadHealDeliveryProduct.DualCarrierConsumerSurvivesCurrentPageResetUntilRetire	ZPage::GetFromPageView	product_so	region->IsOwnerSurvivedObject(offset)	GetFromPageView(
 LoadHealDeliveryProduct.FlipPromotedPageRemembersOnlyLiveHolder	RegionManager::RememberFlipPromotedPages	product_so	manager.RememberFlipPromotedPages(	workers.run(&task);
 LoadHealDeliveryProduct.PromotedObjectRemembersYoungTargetOnly	RegionManager::RememberPromotedObject	product_so	RegionManager::RememberPromotedObject(	RegionManager::RememberPromotedObject(to);
-LoadHealDeliveryProduct.CurrentRemsetRemapsLiveRemoteArrayField	HeapGcState::RemapYoungRoots	product_so	LoadHealDeliveryTestAccess::RemapYoungRoots(	field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())
+LoadHealDeliveryProduct.CurrentRemsetRemapsLiveRemoteArrayField	ZRelocate::RemapYoungRoots	product_so	LoadHealDeliveryTestAccess::RemapYoungRoots(	field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())
 LoadHealDeliveryProduct.MajorDispatchRemapsLiveRemoteArrayField	ZDriver::RunGarbageCollection	product_so	ZDriver::RunGarbageCollection(1, GC_REASON_USER)	RemapYoungRoots();

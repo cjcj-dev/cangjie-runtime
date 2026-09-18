@@ -656,7 +656,7 @@ ZStatHeapStats ZStatHeap::Stats() const
 
 
 namespace MapleRuntime {
-void HeapGcState::UpdateGCStats()
+void ZStat::UpdateGCStats()
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     GCStats& gcStats = Heap::GetHeap().GetGCStats();

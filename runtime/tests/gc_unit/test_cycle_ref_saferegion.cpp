@@ -42,20 +42,20 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void BindCollector(HeapGcState* collector)
+    static void BindCollector(Heap* collector)
     {
-        if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
+        if (collector != nullptr) CHECK(collector == &Heap::GetHeap());
     }
-    static void AddCycleRoot(HeapGcState& collector, BaseObject* owner, BaseObject* target)
+    static void AddCycleRoot(Heap& collector, BaseObject* owner, BaseObject* target)
     {
         Heap::GetHeap().cross_vm().cycleRefWorkStack[owner].push_back(target);
     }
-    static void ClearCycleRoots(HeapGcState& collector) { Heap::GetHeap().cross_vm().cycleRefWorkStack.clear(); }
-    static void VisitCycleRoots(HeapGcState& collector, const std::function<void(BaseObject*)>& visitor)
+    static void ClearCycleRoots(Heap& collector) { Heap::GetHeap().cross_vm().cycleRefWorkStack.clear(); }
+    static void VisitCycleRoots(Heap& collector, const std::function<void(BaseObject*)>& visitor)
     {
         Heap::GetHeap().cross_vm().VisitSurrectedExportRoots(visitor);
     }
-    static void VisitMinorRoots(HeapGcState& collector, const std::function<void(BaseObject*)>& visitor)
+    static void VisitMinorRoots(Heap& collector, const std::function<void(BaseObject*)>& visitor)
     {
         Heap::GetHeap().cross_vm().VisitMinorValueRoots(visitor);
     }
@@ -117,7 +117,7 @@ void SafepointingCycleRefHandler(BaseObject* exportObj, BaseObject* externObj)
 }
 
 struct PhaseFlipContext {
-    HeapGcState* collector = nullptr;
+    Heap* collector = nullptr;
     std::atomic<size_t> calls{ 0 };
 };
 
@@ -138,7 +138,7 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
 {
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
     resolverMutator.SetSuspensionFlag(Mutator::SUSPENSION_FOR_SYNC);
@@ -208,7 +208,7 @@ GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
 {
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
 
     auto* exportRoot = reinterpret_cast<BaseObject*>(0x1000);
     auto* externRoot = reinterpret_cast<BaseObject*>(0x2000);
@@ -243,7 +243,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
@@ -340,7 +340,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     RelocationReceiptTestAccess::BindCollector(&collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);

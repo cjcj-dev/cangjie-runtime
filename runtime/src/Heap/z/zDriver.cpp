@@ -259,7 +259,7 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     if (!cycle.Snapshot().active) {
         cycle.SelectReason(reason);
     }
-    Heap::GetHeap().GetCollector().PreGarbageCollection(generation, reason != GC_REASON_YOUNG, gcIndex);
+    cycle.PreGarbageCollection(reason != GC_REASON_YOUNG, gcIndex);
     ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
     VLOG(REPORT, "[GC] Start ZGC %s gcIndex= %lu", g_gcRequests[reason].name, gcIndex);
     GCStats& gcStats = Heap::GetHeap().GetGCStats(generation);
@@ -290,7 +290,7 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(true);
     }
 
-    Heap::GetHeap().GetCollector().PostGarbageCollection(generation, gcIndex);
+    cycle.PostGarbageCollection(gcIndex);
     gcStats.gcEndTime = TimeUtil::NanoSeconds();
     const char* phaseName = "major.old";
     if (generation == ZGenerationId::young) {
@@ -307,7 +307,7 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     GcLog::Phase(GCIdMark::Current(), phaseName, "unknown", gcStats.gcStartTime,
                  gcStats.gcEndTime - gcStats.gcStartTime);
     if (reason != GC_REASON_YOUNG) {
-        Heap::GetHeap().GetCollector().UpdateGCStats();
+        ZStat::UpdateGCStats();
     }
     uint64_t gcTimeNs = gcStats.gcEndTime - gcStats.gcStartTime;
     ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);

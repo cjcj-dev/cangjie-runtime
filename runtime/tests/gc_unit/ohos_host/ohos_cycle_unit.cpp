@@ -23,19 +23,19 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct ZGenerationRootTestAccess {
-    static void Seed(HeapGcState& collector, BaseObject* object)
+    static void Seed(Heap& collector, BaseObject* object)
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
         Heap::GetHeap().cross_vm().cycleRefWorkStack.emplace(ValueRoot(object),
                                             ValueRootList{});
     }
 
-    static void Clear(HeapGcState& collector)
+    static void Clear(Heap& collector)
     {
         std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
         Heap::GetHeap().cross_vm().cycleRefWorkStack.clear();
     }
-    static void PostResolveCycleTask(HeapGcState& collector) { Heap::GetHeap().cross_vm().PostResolveCycleTask(); }
+    static void PostResolveCycleTask(Heap& collector) { Heap::GetHeap().cross_vm().PostResolveCycleTask(); }
 };
 } // namespace MapleRuntime
 
@@ -72,7 +72,7 @@ void* RunMajorCycle(void*)
     // ZHeap owns both generations (zHeap.cpp:60-70); a major request runs
     // its young prelude before the old body (zDriver.cpp:443-451). Use the
     // initialized heap collector and driver instead of a second collector.
-    auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<Heap&>(Heap::GetHeap());
     alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
     auto* type = reinterpret_cast<TypeInfo*>(typeStorage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -86,16 +86,16 @@ void* RunMajorCycle(void*)
     // (after the old root task returned, before follow). The export root
     // keeping the object alive is not in this window (it feeds the driver's
     // foreign stack), so the cycle-owner family scan is what publishes it.
-    collector.testOldMarkStarted = [handle, &collector]() {
+    ZGeneration::testOldMarkStarted = [handle, &collector]() {
         BaseObject* current = Heap::GetHeap().GetExportObject(handle);
-        const bool found = RootPublicationSnapshot::Contains(*collector.MajorMark(), current);
+        const bool found = RootPublicationSnapshot::Contains(*Heap::GetHeap().old().MarkPtr(), current);
         gMajorRootObserved.store(found, std::memory_order_relaxed);
         std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
                     static_cast<void*>(current), static_cast<unsigned>(found));
         std::fflush(stdout);
     };
     Heap::GetHeap().RequestGC(GC_REASON_USER, false);
-    collector.testOldMarkStarted = nullptr;
+    ZGeneration::testOldMarkStarted = nullptr;
     ZGenerationRootTestAccess::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;
@@ -106,7 +106,7 @@ GC_TEST(OHOSCycle, PostResolvePostsProductTask)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     ZGenerationRootTestAccess::Seed(collector, reinterpret_cast<BaseObject*>(uintptr_t{1}));
     ZGenerationRootTestAccess::PostResolveCycleTask(collector);
     ZGenerationRootTestAccess::Clear(collector);
@@ -117,7 +117,7 @@ GC_TEST(OHOSCycle, EmptyWorkDoesNotPost)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
-    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    Heap& collector = Heap::GetHeap();
     ZGenerationRootTestAccess::Clear(collector);
     ZGenerationRootTestAccess::PostResolveCycleTask(collector);
     ExpectPostState("OHOSCycle.EmptyWorkDoesNotPost", 0U);

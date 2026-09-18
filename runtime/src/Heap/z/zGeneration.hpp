@@ -41,7 +41,6 @@ struct GCCycleSnapshot {
     ZGenerationPhase phase;
     bool active;
 };
-class HeapGcState;
 class ScopedStopTheWorld;
 class ZGeneration;
 class ZGenerationYoung;
@@ -58,6 +57,15 @@ public:
     ZGeneration(const ZGeneration&) = delete;
     ZGeneration& operator=(const ZGeneration&) = delete;
     ZGenerationId id() const;
+    void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
+    void PostGarbageCollection(uint64_t gcIndex);
+#if defined(MRT_TESTABLE_INTERNALS)
+    static std::function<void()> testCyclePrepared;
+    static std::function<void()> testYoungMarkStarted;
+    static std::function<void()> testOldMarkStarted;
+    static std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> testMarkStartState;
+    static std::function<void()> testYoungMarkCompleted;
+#endif
     ZGenerationIdOptional id_optional() const;
     bool is_young() const;
     bool is_old() const;
@@ -211,6 +219,10 @@ private:
 class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung();
+    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
+        const std::unordered_set<MAddress>& rememberedSlots, bool refFixSlotsCoveredByReachable,
+        const std::unordered_map<MAddress, BaseObject*>& interiorBases,
+        std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
     ~ZGenerationYoung();
     bool should_record_stats() override;
     void collect();
@@ -226,7 +238,6 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
-    friend class HeapGcState;
     using MinorObjectSet = std::unordered_set<BaseObject*>;
     using MinorRegionSet = std::unordered_set<ZPage*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
@@ -254,6 +265,10 @@ private:
 class ZGenerationOld : public ZGeneration {
 public:
     ZGenerationOld();
+    void PostTrace();
+    void CollectSmallSpace();
+    void CollectLargeGarbage();
+    void CollectPinnedGarbage();
     ~ZGenerationOld();
     bool should_record_stats() override;
     void collect();
@@ -272,7 +287,6 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
-    friend class HeapGcState;
     WorkStack oldMarkWorkStack;
     WorkStack oldMarkForeignRoots;
     ZGenerationOld* previousOld { nullptr };

@@ -367,7 +367,7 @@ void ZCrossVM::ProcessExportRoots(WorkStack& foreignRootsSet)
             // Discovery is not keep-alive (zReferenceProcessor.cpp:175-203):
             // do not turn a weak referent into an export ownership edge.
             object->ForEachRefField([&](RefField<>& field) {
-                BaseObject* target = Heap::GetHeap().GetCollector().GetAndTryTagObj(HeapGcState::RefSlotKind::STRONG, object, field);
+                BaseObject* target = ZBarrier::GetAndTryTagObj(ZBarrier::RefSlotKind::STRONG, object, field);
                 if (target != nullptr) {
                     pending.push_back(target);
                 }
