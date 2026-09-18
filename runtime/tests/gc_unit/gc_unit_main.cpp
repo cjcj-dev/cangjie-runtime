@@ -12,36 +12,9 @@
 
 #include "gc_unittest.hpp"
 
-// Standalone unit processes obtain the unique product heap collector before
-// entering tests, without starting a runtime or a collection.
-// Parse value-owned heap resources with the product macro configuration before
-// enabling the existing test peers; their member offsets must match the SO.
-#include "Heap/z/zHeap.hpp"
-#include "Heap/z/zBarrier.inline.hpp"
-
-#ifndef MRT_TESTABLE_INTERNALS
-#define MRT_TESTABLE_INTERNALS 1
-#endif
-#include "Heap/z/zMark.hpp"
-#include "Heap/z/zDriver.hpp"
-#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zCPU.hpp"
-
-namespace MapleRuntime {
-struct RelocationReceiptTestAccess {
-    static void PrepareIsolatedGcUnit()
-    {
-        (void)Heap::GetHeap().GetCollector();
-    }
-};
-} // namespace MapleRuntime
-
-namespace {
-void PrepareIsolatedGcUnitProcess()
-{
-    MapleRuntime::RelocationReceiptTestAccess::PrepareIsolatedGcUnit();
-}
-} // namespace
 
 int main(int argc, char** argv)
 {
@@ -54,7 +27,6 @@ int main(int argc, char** argv)
     MapleRuntime::ZCPU::initialize();
     constexpr const char* filterPrefix = "--gtest_filter=";
     constexpr const char* listTests = "--gtest_list_tests";
-    bool isolatedTest = false;
     if (argc > 2) {
         std::fprintf(stderr, "usage: %s [--gtest_list_tests|--gtest_filter=Suite.Test]\n", argv[0]);
         return 2;
@@ -70,10 +42,6 @@ int main(int argc, char** argv)
             return 2;
         }
         (void)setenv("GC_UNIT_FILTER", argv[i] + std::strlen(filterPrefix), 1);
-        isolatedTest = true;
-    }
-    if (isolatedTest) {
-        PrepareIsolatedGcUnitProcess();
     }
     return MapleRuntime::GcUnit::RunAll();
 }
