@@ -159,7 +159,6 @@ private:
     ZRelocateQueue relocateQueue;
 };
 
-namespace CopyCollectorInternal {
 bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
 bool HolderObjectIsLive(BaseObject* holder);
 bool SlotHeldByLiveObject(const void* slot);
@@ -173,9 +172,6 @@ size_t LedgerCount(const SetT& set, const KeyT& key)
 {
     return set.count(key);
 }
-}
-
-using namespace CopyCollectorInternal;
 
 } // namespace MapleRuntime
 

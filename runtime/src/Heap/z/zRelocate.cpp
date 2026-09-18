@@ -111,8 +111,6 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 
 
 
-namespace CopyCollectorInternal {
-} // namespace CopyCollectorInternal
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
 // outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
 std::atomic<size_t> g_installDomainGrant{ 0 };

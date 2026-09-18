@@ -31,7 +31,7 @@ add_subdirectory(Allocator)
 add_subdirectory(Barrier)
 add_subdirectory(Verify)
 
-set(COLLECTOR_SRC
+list(APPEND SRC_LIST
     "z/zBreakpoint.cpp"
     "z/concurrentGCBreakpoints.cpp"
     "z/zAbort.cpp"
@@ -54,12 +54,8 @@ set(COLLECTOR_SRC
     "z/zUncommitter.cpp"
     "z/zForwarding.cpp"
 )
-add_library(Collector STATIC ${COLLECTOR_SRC})
-if (MRT_GC_UNIT_TESTS)
-    target_compile_definitions(Collector PRIVATE MRT_TESTABLE_INTERNALS=1)
-endif()
 
-set(WCOLLECTOR_SRC
+list(APPEND SRC_LIST
     "z/zGenerationCycle.cpp"
     "z/zCrossVM.cpp"
     "z/zGeneration.cpp"
@@ -69,7 +65,6 @@ set(WCOLLECTOR_SRC
     "z/zRemembered.cpp"
     "z/zRelocationSet.cpp"
 )
-add_library(WCollector STATIC ${WCOLLECTOR_SRC})
 
 add_library(Heap STATIC ${SRC_LIST})
 if (MRT_GC_UNIT_TESTS)

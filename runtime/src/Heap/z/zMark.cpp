@@ -693,8 +693,6 @@ BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void*
 
 } // namespace
 
-namespace CopyCollectorInternal {
-} // namespace CopyCollectorInternal
 
 namespace {
 size_t MarkStripeCount(size_t workers)
@@ -709,7 +707,6 @@ size_t MarkStripeCount(size_t workers)
 
 } // namespace
 
-namespace CopyCollectorInternal {
 // h3seed3 乙: live-holder slot → free|garbage target → CAS null.
 // Criterion fields (RegionInfo state word): IsFreeRegion() / IsGarbageRegion()
 // via TryGetRegionInfoAt(target) at the call site (closure edge or Fix).
@@ -742,7 +739,6 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
         ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
 }
 
-} // namespace CopyCollectorInternal
 
 
 class ZMarkTask : public ZRestartableTask {

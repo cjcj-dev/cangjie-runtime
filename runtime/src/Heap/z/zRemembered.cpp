@@ -33,7 +33,6 @@ namespace MapleRuntime {
 #if defined(__GNUC__)
 #pragma GCC visibility push(hidden)
 #endif
-namespace CopyCollectorInternal {
 bool HolderObjectIsLive(BaseObject* holder)
 {
     if (holder == nullptr || !Heap::IsHeapAddress(holder) || !holder->IsValidObject()) {
@@ -69,7 +68,6 @@ bool SlotHeldByLiveObject(const void* slot)
     }
     return HolderObjectIsLive(holder);
 }
-} // namespace CopyCollectorInternal
 #if defined(__GNUC__)
 #pragma GCC visibility pop
 #endif
