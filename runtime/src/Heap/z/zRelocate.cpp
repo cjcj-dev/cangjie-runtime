@@ -302,7 +302,7 @@ void HeapGcState::PreforwardAllResurrectExportFromObjects(Generation generation)
 }
 void HeapGcState::StartRelocationTasks(ZGenerationId generation)
 {
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
     RegionManager& manager = space.GetRegionManager();
     ZWorkers& workers = GetWorkers(generation);
     if (generation == ZGenerationId::young) manager.StartForwardFromRegions<Generation::Young>(workers);
@@ -338,7 +338,7 @@ bool HeapGcState::Preforward()
         ZJNICritical::unblock();
     }
 
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
     manager.DrainForwardFromRegions<Generation::Old>();
     ZWorkers& workers = GetWorkers(ZGenerationId::old);
     const std::function<void()> families[] = {
@@ -819,7 +819,7 @@ void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachable
                                        const MinorInteriorBaseMap& interiorBases,
                                        std::unique_ptr<ScopedStopTheWorld>* stw)
 {
-    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
     (void)reachableVec;
     (void)refFixSlotsCoveredByReachable;
     // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
@@ -1263,7 +1263,7 @@ BaseObject* HeapGcState::WaitForPageForwarding(BaseObject* obj, ZForwarding* own
     if (const MAddress found = owner->find(from)) {
         return reinterpret_cast<BaseObject*>(found);
     }
-    auto& manager = static_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    auto& manager = static_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
     if (MutatorManager::Instance().WorldStopped() && !owner->is_done()) {
         // #498: without return barriers roots are completed eagerly. There is
         // no concurrent page worker in this pause; reuse its in-place task.
@@ -1555,7 +1555,7 @@ BaseObject* HeapGcState::RelocateObjectInner(BaseObject* obj, ZPage* copyPage)
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
     const PageAge toAge = ComputeToAge(fromAge, GetGCStats(ZGenerationId::young).tenuringThreshold);
-    auto& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    auto& manager = reinterpret_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
     BaseObject* toObj = reinterpret_cast<BaseObject*>(manager.AllocSharedObject(size, toAge, true));
     if (toObj == nullptr) return nullptr;
     BaseObject* result = nullptr;

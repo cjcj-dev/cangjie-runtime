@@ -107,7 +107,7 @@ Heap::Heap()
     staticRootTable = new StaticRootTable();
     collectorImpl = static_cast<HeapGcState*>(::operator new(sizeof(HeapGcState)));
     collectorResources = new CollectorResources(*collectorImpl);
-    new (collectorImpl) HeapGcState(*_page_allocator, *collectorResources);
+    new (collectorImpl) HeapGcState(*collectorResources);
 }
 
 Heap::~Heap()

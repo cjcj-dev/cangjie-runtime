@@ -293,7 +293,7 @@ void HeapGcState::MarkYoungRootObject(BaseObject* object) const
 
 void HeapGcState::FlushAllocationRegions()
 {
-    theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
+    GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
 }
 
 class VM_ZOperation {
@@ -498,7 +498,7 @@ void HeapGcState::RunYoungCollection()
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
     YoungCollectionStats stats = Heap::GetHeap().young().StartYoungMark(*this);
-    RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
+    RegionSpace& space = static_cast<RegionSpace&>(GetAllocator());
     RegionManager& manager = space.GetRegionManager();
     MinorSlotSet rememberedSlots;
     MinorSlotSet liveRememberedSlots;
@@ -567,7 +567,7 @@ void HeapGcState::ConcurrentYoungMark()
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
     auto mergeY2yDirtyWork = [&](WorkStack& destination) {
-        theAllocator.VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
+        GetAllocator().VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
             buffer.MergeY2yDirtyHolders(destination);
             buffer.MergeY2yDirtySlots([this, &destination](MAddress slot) {
                 RefField<>& field = HeapSlotAt<>(slot);
@@ -579,7 +579,7 @@ void HeapGcState::ConcurrentYoungMark()
 #if defined(MRT_TESTABLE_INTERNALS)
     auto pendingY2yDirtyWorkCount = [&]() {
         size_t pending = 0;
-        theAllocator.VisitAllocBuffers([&pending](AllocBuffer& buffer) {
+        GetAllocator().VisitAllocBuffers([&pending](AllocBuffer& buffer) {
             pending += buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount();
         });
         return pending;
@@ -636,7 +636,7 @@ void HeapGcState::ConcurrentYoungMark()
         CHECK_DETAIL(stackScanEpoch != 0,
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
-        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        reinterpret_cast<RegionSpace&>(GetAllocator()).PrepareTrace();
         mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyWorkCount());
@@ -693,14 +693,14 @@ bool HeapGcState::YoungMarkEndPause()
     const size_t y2yBatchAtMarkEnd = 0;
     (void)y2yBatchAtMarkEnd;
 #endif
-    theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) {
+    GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) {
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteMarkTerminatePauseProducers(buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
 #else
         (void)buffer;
 #endif
     });
-    theAllocator.VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
+    GetAllocator().VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
         buffer.MergeY2yDirtyHolders(workStack);
         buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
             RefField<>& field = HeapSlotAt<>(slot);
@@ -741,7 +741,7 @@ void HeapGcState::FinishYoungMarkHandoff()
     if (ZAbort::should_abort()) {
         return;
     }
-    RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
+    RegionSpace& space = static_cast<RegionSpace&>(GetAllocator());
     {
         youngConcWindow.markedAtExit = youngReachableVec.size();
         if (youngConcWindowStartNs != 0) {
@@ -1614,7 +1614,7 @@ namespace MapleRuntime {
 void ReportSkippedStackMapCounts();
 void HeapGcState::PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex)
 {
-    reinterpret_cast<RegionSpace&>(theAllocator).DumpRegionStats("region statistics when gc ends");
+    reinterpret_cast<RegionSpace&>(GetAllocator()).DumpRegionStats("region statistics when gc ends");
     GetWorkers(generation).set_inactive();
     ReportSkippedStackMapCounts();
     PagePool::Instance().Trim();
@@ -1629,7 +1629,7 @@ void HeapGcState::ForwardFromSpace(ZGenerationId generation)
 {
     ScopedEntryTrace trace("CJRT_GC_FORWARD");
 
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
     GCStats& stats = GetGCStats(generation);
     stats.liveBytesBeforeGC = space.AllocatedBytes();
     stats.fromSpaceSize = space.FromSpaceSize();
@@ -1644,7 +1644,7 @@ void HeapGcState::ForwardFromSpace(ZGenerationId generation)
 void HeapGcState::RefineFromSpace()
 {
     GCStats& stats = GetGCStats();
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
     stats.smallGarbageSize = space.RefineFromSpace();
 }
 } // namespace MapleRuntime

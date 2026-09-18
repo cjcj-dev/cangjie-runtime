@@ -390,7 +390,7 @@ void HeapGcState::TraceHeap()
     {
         MRT_PHASE_TIMER(ZStatPhases::PTraceLiveObjectsUpdateOldPointersInRefFields);
         markedObjectCount.store(0, std::memory_order_relaxed);
-        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        reinterpret_cast<RegionSpace&>(GetAllocator()).PrepareTrace();
         DoTracing(workStack, foreignStack);
         if (ZAbort::should_abort()) {
             return;
@@ -1898,9 +1898,9 @@ void FollowPartialReferences(const MarkStackEntry& entry,
 }
 
 namespace MapleRuntime {
-HeapGcState::HeapGcState(Allocator& allocator, CollectorResources& resources)
-        : theAllocator(allocator), collectorResources(resources),
-          fwdTable(reinterpret_cast<RegionSpace&>(allocator))
+HeapGcState::HeapGcState(CollectorResources& resources)
+        : collectorResources(resources),
+          fwdTable(reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()))
     {
     }
 }

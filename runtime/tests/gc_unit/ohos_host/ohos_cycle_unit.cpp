@@ -34,6 +34,7 @@ struct ZGenerationRootTestAccess {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
         collector.cycleRefWorkStack.clear();
     }
+    static void PostResolveCycleTask(HeapGcState& collector) { collector.PostResolveCycleTask(); }
 };
 } // namespace MapleRuntime
 
@@ -53,21 +54,6 @@ bool NoHigherPriorityTask()
 {
     return false;
 }
-
-class PostResolveProbeCollector final : public CopyCollector {
-public:
-    using HeapGcState::DoGarbageCollection;
-
-    PostResolveProbeCollector(Allocator& allocator, CollectorResources& resources)
-        : HeapGcState(allocator, resources)
-    {
-    }
-
-    void SeedCycleWork()
-    {
-        cycleRefWorkStack.emplace(ValueRoot(reinterpret_cast<BaseObject*>(uintptr_t{1})), ValueRootList{});
-    }
-};
 
 void ExpectPostState(const char* test, unsigned expected)
 {
@@ -119,9 +105,10 @@ GC_TEST(OHOSCycle, PostResolvePostsProductTask)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
-    PostResolveProbeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SeedCycleWork();
-    collector.PostResolveCycleTask();
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    ZGenerationRootTestAccess::Seed(collector, reinterpret_cast<BaseObject*>(uintptr_t{1}));
+    ZGenerationRootTestAccess::PostResolveCycleTask(collector);
+    ZGenerationRootTestAccess::Clear(collector);
     ExpectPostState("OHOSCycle.PostResolvePostsProductTask", 1U);
 }
 
@@ -129,8 +116,9 @@ GC_TEST(OHOSCycle, EmptyWorkDoesNotPost)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
-    PostResolveProbeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.PostResolveCycleTask();
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
+    ZGenerationRootTestAccess::Clear(collector);
+    ZGenerationRootTestAccess::PostResolveCycleTask(collector);
     ExpectPostState("OHOSCycle.EmptyWorkDoesNotPost", 0U);
 }
 

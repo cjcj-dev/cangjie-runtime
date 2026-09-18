@@ -436,7 +436,7 @@ public:
         WEAK_REFERENT,
     };
 
-    explicit HeapGcState(Allocator& allocator, CollectorResources& resources);
+    explicit HeapGcState(CollectorResources& resources);
 
     ~HeapGcState() = default;
     ZMark* MajorMark() { return Heap::GetHeap().old().MarkPtr(); }
@@ -558,7 +558,7 @@ public:
 
 
 
-    Allocator& GetAllocator() const { return theAllocator; }
+    Allocator& GetAllocator() const { return Heap::GetHeap().GetAllocator(); }
 
 
     MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason);
@@ -576,8 +576,6 @@ protected:
     void RefineFromSpace();
 
     void RequestGCInternal(GCReason reason, bool async) { collectorResources.RequestGC(reason, async); }
-
-    Allocator& theAllocator;
 
     // A collectorResources provides the resources that the tracing collector need,
     // such as gc thread/threadPool, gc task queue.
@@ -869,14 +867,14 @@ public:
                 obj = ValidateCurrentValue(obj, provenance);
             }
         }
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
         space.AddRawPointerObject(obj);
         return obj;
     }
 
     void RemoveRawPointerObject(BaseObject* obj)
     {
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
         space.RemoveRawPointerObject(obj);
     }
 
@@ -1191,7 +1189,7 @@ protected:
     void CollectLargeGarbage()
     {
         MRT_PHASE_TIMER(ZStatPhases::PCollectLargeGarbage);
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
         GCStats& stats = GetGCStats();
         stats.largeSpaceSize = space.LargeObjectBytes();
         stats.largeGarbageSize = space.CollectLargeGarbage();
@@ -1200,7 +1198,7 @@ protected:
 
     void CollectPinnedGarbage()
     {
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(GetAllocator());
         GCStats& stats = GetGCStats();
         stats.pinnedSpaceSize = space.PinnedSpaceSize();
         stats.pinnedGarbageSize = space.CollectPinnedGarbage();

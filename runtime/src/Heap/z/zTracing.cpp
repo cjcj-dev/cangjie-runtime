@@ -152,8 +152,8 @@ void HeapGcState::DumpRoots(LogType logType)
         // DumpRoots is called while the root owner retains the target for inspection.
         auto obj = to_object(safe(value));
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
-             theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
-             theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
+              GetAllocator().IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+              GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(obj)));
     };
 
     DLOG(logType, "stack roots");
@@ -173,8 +173,8 @@ void HeapGcState::DumpRoots(LogType logType)
             return;
         }
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
-             theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
-             theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
+              GetAllocator().IsHeapAddress(reinterpret_cast<MAddress>(obj)),
+              GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(obj)));
     };
 
     DLOG(logType, "static fields");
