@@ -648,7 +648,7 @@ void ZDirector::run_thread()
             continue;
         }
         const ZDirectorStats stats = sample_stats(TimeUtil::NanoSeconds(),
-            busy(true), busy(false), ZCollectedHeap::heap()->resources().concurrentGcThreadCount);
+            busy(true), busy(false), ZCollectedHeap::heap()->concurrent_gc_threads());
         if (!MapleRuntime::start_gc(stats)) {
             adjust_gc(stats);
         }

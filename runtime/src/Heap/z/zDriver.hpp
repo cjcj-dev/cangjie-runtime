@@ -431,10 +431,6 @@ private:
     std::atomic<size_t> testCompletionCount { 0 };
 #endif
 
-    // zCollectedHeap.cpp:65-71 / zHeap.hpp: the concurrent GC threads are
-    // created when GC starts and stopped through ConcurrentGCThread::stop.
-    int32_t concurrentGcThreadCount = 1;
-    std::atomic<bool> gcThreadRunning = { false };
     FinalizerProcessor finalizerProcessor;
 };
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.

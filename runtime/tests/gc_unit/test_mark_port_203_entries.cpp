@@ -139,7 +139,7 @@ struct MarkPort203TestAccess {
     static void Bind(CollectorResources& resources, HeapGcState* collector, int32_t count = 1)
     {
         if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
-        resources.concurrentGcThreadCount = count;
+        ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(count);
     }
     static void Collect(HeapGcState& collector, bool major)
     {

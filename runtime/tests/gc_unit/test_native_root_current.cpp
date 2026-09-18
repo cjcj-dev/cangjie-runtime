@@ -38,7 +38,7 @@ struct RelocationReceiptTestAccess {
     static void BindNativeRootFixture(CollectorResources& resources, HeapGcState& collector, uint32_t workers = 1)
     {
         CHECK(&collector == &Heap::GetHeap().GetCollector());
-        resources.concurrentGcThreadCount = workers;
+        ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(workers);
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = collector.GetZGeneration(gen);
             if (cycle.Snapshot().active) {

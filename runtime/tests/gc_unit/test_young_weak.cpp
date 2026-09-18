@@ -82,7 +82,7 @@ struct RelocationReceiptTestAccess {
     // zArguments: the concurrent worker budget the driver hands each request.
     static void BindWorkerBudget(CollectorResources& resources, int32_t threadCount = 1)
     {
-        resources.concurrentGcThreadCount = threadCount;
+        ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(threadCount);
     }
 
     static void RunYoungCollection(HeapGcState& collector)

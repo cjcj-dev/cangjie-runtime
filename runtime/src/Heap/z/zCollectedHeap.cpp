@@ -84,13 +84,13 @@ void ZCollectedHeap::initialize_gc()
 void ZCollectedHeap::finalize_gc()
 {
     MRT_ASSERT(!_resources->finalizerProcessor.IsRunning(), "Invalid finalizerProcessor status");
-    MRT_ASSERT(!_resources->gcThreadRunning.load(std::memory_order_relaxed), "Invalid GC thread status");
+    MRT_ASSERT(!_gc_thread_running.load(std::memory_order_relaxed), "Invalid GC thread status");
 }
 
 void ZCollectedHeap::start_gc_threads()
 {
     bool expected = false;
-    if (!_resources->gcThreadRunning.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+    if (!_gc_thread_running.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
         return;
     }
     if (_heap.young().Workers() == nullptr) {
@@ -114,17 +114,17 @@ void ZCollectedHeap::start_gc_threads()
         CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
         const size_t heapWorkers = maxHeap / 50 / regionBytes;
         const uint64_t cpus = activeProcessorCount;
-        _resources->concurrentGcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
+        _concurrent_gc_threads = static_cast<int32_t>(std::max<size_t>(1,
             std::min<size_t>((cpus + 3) / 4, heapWorkers)));
-        ConcGCThreads = static_cast<uint32_t>(_resources->concurrentGcThreadCount);
+        ConcGCThreads = static_cast<uint32_t>(_concurrent_gc_threads);
         ZYoungGCThreads = ConcGCThreads;
         ZOldGCThreads = ConcGCThreads;
         VLOG(REPORT,
              "concurrent gc thread count %d, active processor count %u, affinity detected %d, region bytes %zu",
-             _resources->concurrentGcThreadCount, activeProcessorCount, affinityDetected, regionBytes);
+             _concurrent_gc_threads, activeProcessorCount, affinityDetected, regionBytes);
 
-        _heap.young().InitializeWorkers(_resources->concurrentGcThreadCount);
-        _heap.old().InitializeWorkers(_resources->concurrentGcThreadCount);
+        _heap.young().InitializeWorkers(_concurrent_gc_threads);
+        _heap.old().InitializeWorkers(_concurrent_gc_threads);
         _resources->finalizerProcessor.GetReferenceProcessor().set_workers(_heap.old().Workers());
     }
 
@@ -178,7 +178,7 @@ void ZCollectedHeap::stop()
     if (resources.finalizerProcessor.IsRunning()) {
         resources.finalizerProcessor.Stop();
     }
-    if (resources.gcThreadRunning.load(std::memory_order_acquire)) {
+    if (collected->_gc_thread_running.load(std::memory_order_acquire)) {
         for (ZThread* thread : { static_cast<ZThread*>(collected->_director),
                                  static_cast<ZThread*>(collected->_driver_major),
                                  static_cast<ZThread*>(collected->_driver_minor) }) {
@@ -192,7 +192,7 @@ void ZCollectedHeap::stop()
         collected->_driver_major = nullptr;
         Heap::GetHeap().young().StopWorkers();
         Heap::GetHeap().old().StopWorkers();
-        resources.gcThreadRunning.store(false, std::memory_order_release);
+        collected->_gc_thread_running.store(false, std::memory_order_release);
     }
     if (collected->_stat != nullptr) {
         collected->_stat->stop();
