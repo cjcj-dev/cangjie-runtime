@@ -667,9 +667,6 @@ void ZGenerationYoung::concurrent_mark_free()
     GCStats& gcStats = Stats();
     gcStats.youngCandidateBytes = youngStats.candidateBytes;
     gcStats.youngPromotedBytes = liveBytes;
-    for (uint32_t i = 0; i < kPageAgeCount; ++i) {
-        gcStats.liveByAge[i] = tenuringIn.liveByAge[i];
-    }
     Heap::GetHeap().young().SelectTenuringThreshold(tenuringIn);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
@@ -1317,11 +1314,10 @@ YoungTypeSetter::~YoungTypeSetter()
 }
 
 namespace MapleRuntime {
-void ZGeneration::SelectTenuringThreshold(const TenuringInputs& inputs)
+void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
 {
-    CHECK(_cycle == ZGenerationId::young);
     // zGeneration.cpp:704-715: preclean promotes all, other types compute.
-    stats.tenuringThreshold = YoungType() == ZYoungType::major_full_preclean
+    _tenuring_threshold = YoungType() == ZYoungType::major_full_preclean
         ? 0 : ComputeTenuringThreshold(inputs);
 }
 
@@ -1374,7 +1370,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
             inputs.liveByAge[untype(age)] =
                 st.small(age).live() + st.medium(age).live() + st.large(age).live();
         }
-        SelectTenuringThreshold(inputs);
+        ZGeneration::young()->SelectTenuringThreshold(inputs);
     }
     _relocation_set.install(&selector);
     if (_cycle == ZGenerationId::young) {
@@ -1686,7 +1682,7 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                     continue;
                 }
                 if (kPageAgeAdaptiveTenuring &&
-                    !ShouldPromoteAge(region->GetYoungAge(), Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold)) {
+                    !ShouldPromoteAge(region->GetYoungAge(), ZGeneration::young()->tenuring_threshold())) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
                         manager.EnlistStayYoungSurvivor(region);
                     } else if (!(region->OnNamedList("recent full regions"))) {

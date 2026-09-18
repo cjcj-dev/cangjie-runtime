@@ -126,7 +126,6 @@ public:
     void SelectReason(GCReason value, uint64_t index = 0);
     ZYoungType YoungType() const { return youngType.load(std::memory_order_acquire); }
     void SetYoungType(ZYoungType type);
-    void SelectTenuringThreshold(const TenuringInputs& inputs);
     bool IsMajorRoots() const
     {
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
@@ -219,6 +218,10 @@ private:
 class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung();
+    // zGeneration.hpp:199,244-246 — tenuring threshold is young-generation
+    // state, selected after select_relocation_set (zGeneration.cpp:250).
+    uint32_t tenuring_threshold() { return _tenuring_threshold; }
+    void SelectTenuringThreshold(const TenuringInputs& inputs);
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
         const std::unordered_set<MAddress>& rememberedSlots, bool refFixSlotsCoveredByReachable,
         const std::unordered_map<MAddress, BaseObject*>& interiorBases,
@@ -243,6 +246,7 @@ private:
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
+    uint32_t _tenuring_threshold = 0;
     uint64_t minorTotalRuns = 0;
     MinorRegionSet minorCandidateRegions;
     std::unique_ptr<ScopedStopTheWorld> youngStw;

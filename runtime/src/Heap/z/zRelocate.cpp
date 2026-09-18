@@ -1235,7 +1235,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, ZGeneration::young()->tenuring_threshold());
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
     if (toObj == nullptr) return nullptr;
@@ -1597,7 +1597,7 @@ void RegionManager::CompactRegion(ZPage* region)
 
     const bool fromYoung = region->IsYoungRegion();
     const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, ZGeneration::young()->tenuring_threshold());
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), 0u);
@@ -1753,7 +1753,7 @@ bool StayYoungThisCycle(ZPage* region)
     if (!kPageAgeAdaptiveTenuring) {
         return false;
     }
-    const uint32_t thr = Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold;
+    const uint32_t thr = ZGeneration::young()->tenuring_threshold();
     return !ShouldPromoteAge(region->GetYoungAge(), thr);
 }
 
@@ -2312,7 +2312,7 @@ size_t ZRelocateQueue::SynchronizedWorkerCount() const
 
 PageAge ZRelocate::compute_to_age(PageAge fromAge)
 {
-    const uint32_t threshold = Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold;
+    const uint32_t threshold = ZGeneration::young()->tenuring_threshold();
     return ComputeToAge(fromAge, threshold);
 }
 
