@@ -5,7 +5,7 @@
 #pragma once
 
 #if defined(MRT_TESTABLE_INTERNALS)
-void CopyCollector::ObserveExportOwnershipForTest(bool afterHandoff)
+void Collector::ObserveExportOwnershipForTest(bool afterHandoff)
 {
     if (!testExportOwnershipResult) {
         return;

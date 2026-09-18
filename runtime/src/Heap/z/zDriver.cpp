@@ -477,7 +477,7 @@ bool CollectorResources::IsGcStarted() const
 }
 
 namespace MapleRuntime {
-void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
+void Collector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
     ScopedEntryTrace trace("CJRT_GC_START");
 

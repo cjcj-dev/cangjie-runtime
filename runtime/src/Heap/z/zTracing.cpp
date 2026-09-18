@@ -24,14 +24,14 @@
 namespace MapleRuntime {
 
 #if defined(MRT_TESTABLE_INTERNALS)
-std::function<void(ZGenerationId, NativeSlot*)> CopyCollector::testColoredRootResult;
-std::function<void()> CopyCollector::testCyclePrepared;
-std::function<void()> CopyCollector::testYoungMarkStarted;
-std::function<void()> CopyCollector::testOldMarkStarted;
-std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> CopyCollector::testMarkStartState;
-std::function<void()> CopyCollector::testYoungMarkCompleted;
-std::function<void(const ExportOwnershipTestObservation&)> CopyCollector::testExportOwnershipResult;
-std::function<void(Mutator&)> CopyCollector::testOldMarkThreadResult;
+std::function<void(ZGenerationId, NativeSlot*)> Collector::testColoredRootResult;
+std::function<void()> Collector::testCyclePrepared;
+std::function<void()> Collector::testYoungMarkStarted;
+std::function<void()> Collector::testOldMarkStarted;
+std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> Collector::testMarkStartState;
+std::function<void()> Collector::testYoungMarkCompleted;
+std::function<void(const ExportOwnershipTestObservation&)> Collector::testExportOwnershipResult;
+std::function<void(Mutator&)> Collector::testOldMarkThreadResult;
 #endif
 
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
@@ -112,7 +112,7 @@ void NoteTraceYoungClosureDuringPause()
 #endif
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void CopyCollector::DumpHeap(const CString& tag)
+void Collector::DumpHeap(const CString& tag)
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "Not In STW");
     DLOG(FRAGMENT, "DumpHeap %s", tag.Str());
@@ -142,7 +142,7 @@ void CopyCollector::DumpHeap(const CString& tag)
 }
 
 ATTR_NO_SANITIZE_ADDRESS
-void CopyCollector::DumpRoots(LogType logType)
+void Collector::DumpRoots(LogType logType)
 {
     RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
         zaddress_unsafe value = ref.LoadPlain();
@@ -265,7 +265,7 @@ void ReportSkippedStackMapCounts()
             zeroEntries, pcMiss, zeroRootIndices);
     }
 }
-size_t CopyCollector::CurrentThreadRootMapMissCount()
+size_t Collector::CurrentThreadRootMapMissCount()
 {
     return g_currentThreadRootMapMissCount;
 }
@@ -276,7 +276,7 @@ size_t CopyCollector::CurrentThreadRootMapMissCount()
 
 namespace MapleRuntime {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-void CopyCollector::DumpBeforeGC()
+void Collector::DumpBeforeGC()
     {
         if (ENABLE_LOG(FRAGMENT)) {
             if (MutatorManager::Instance().WorldStopped()) {
@@ -288,7 +288,7 @@ void CopyCollector::DumpBeforeGC()
         }
     }
 
-void CopyCollector::DumpAfterGC()
+void Collector::DumpAfterGC()
     {
         if (ENABLE_LOG(FRAGMENT)) {
             if (MutatorManager::Instance().WorldStopped()) {

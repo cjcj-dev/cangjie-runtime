@@ -36,7 +36,7 @@ struct GCCycleSnapshot {
     ZGenerationPhase phase;
     bool active;
 };
-class CopyCollector;
+class Collector;
 struct YoungCollectionStats;
 class ZGeneration;
 class ZGenerationYoung;
@@ -119,8 +119,8 @@ public:
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
     void Begin(uint64_t index);
-    YoungCollectionStats StartYoungMark(CopyCollector& collector);
-    void StartOldMark(CopyCollector& collector);
+    YoungCollectionStats StartYoungMark(Collector& collector);
+    void StartOldMark(Collector& collector);
     void PublishPhase(ZGenerationPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;

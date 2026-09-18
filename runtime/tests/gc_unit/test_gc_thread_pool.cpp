@@ -38,7 +38,7 @@ struct RelocationReceiptTestAccess {
     }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-    static void BindCollector(CollectorResources& resources, CopyCollector& collector)
+    static void BindCollector(CollectorResources& resources, Collector& collector)
     {
         resources.testCollector = &collector;
     }
@@ -158,7 +158,7 @@ bool RunSerialProductEntryClosesGeneration()
 class YoungForwardRuntimeCollector : public CopyCollector {
 public:
     YoungForwardRuntimeCollector(Allocator& allocator, CollectorResources& resources)
-        : CopyCollector(allocator, resources) {}
+        : Collector(allocator, resources) {}
 
     void ForwardYoungFromRuntimeEntry()
     {

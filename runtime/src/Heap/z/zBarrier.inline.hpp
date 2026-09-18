@@ -12,6 +12,7 @@
 #include "Base/Log.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zHeap.hpp"

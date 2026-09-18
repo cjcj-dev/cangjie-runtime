@@ -136,20 +136,20 @@ void ResetSkippedStackMapCounts();
 void ReportSkippedStackMapCounts();
 // ZGenerationYoung::mark_start (zGeneration.cpp:855-880). The collector
 // supplies the existing allocator/mark domain; this cycle owns phase and seq.
-YoungCollectionStats ZGeneration::StartYoungMark(CopyCollector& collector)
+YoungCollectionStats ZGeneration::StartYoungMark(Collector& collector)
 {
     CHECK(_cycle == ZGenerationId::young);
     CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
     }
 #endif
     ZGlobalsPointers::flip_young_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
     }
 #endif
 
@@ -173,8 +173,8 @@ YoungCollectionStats ZGeneration::StartYoungMark(CopyCollector& collector)
     // Flush pre-flip producers before invalidating their generation sequence.
     (void)ZMark::FlushAllGenerations();
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
     }
 #endif
     {
@@ -184,14 +184,14 @@ YoungCollectionStats ZGeneration::StartYoungMark(CopyCollector& collector)
     }
     set_phase(Phase::Mark);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
     }
 #endif
     collector.StartYoungMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
     }
 #endif
     {
@@ -199,28 +199,28 @@ YoungCollectionStats ZGeneration::StartYoungMark(CopyCollector& collector)
         Heap::GetHeap().remembered().flip();
     }
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
     }
 #endif
     return stats;
 }
 
 // ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
-void ZGeneration::StartOldMark(CopyCollector& collector)
+void ZGeneration::StartOldMark(Collector& collector)
 {
     CHECK(_cycle == ZGenerationId::old);
     CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
     }
 #endif
     ZGlobalsPointers::flip_old_mark_start();
     ZVerify::OnColorFlip();
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
     }
 #endif
     auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
@@ -230,8 +230,8 @@ void ZGeneration::StartOldMark(CopyCollector& collector)
     std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
     space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
     }
 #endif
     {
@@ -242,15 +242,15 @@ void ZGeneration::StartOldMark(CopyCollector& collector)
     pinnedLock.unlock();
     set_phase(Phase::Mark);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
     }
 #endif
     Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     collector.StartOldMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
+    if (Collector::testMarkStartState) {
+        Collector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
     }
 #endif
 }
@@ -283,7 +283,7 @@ void Collector::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhas
 
 
 // ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
-void CopyCollector::MarkYoungRootObject(BaseObject* object) const
+void Collector::MarkYoungRootObject(BaseObject* object) const
 {
     // #596's barrier already established current and selected young. Keep the
     // generation mark-phase assertion at ZGeneration::mark_object's entry.
@@ -291,7 +291,7 @@ void CopyCollector::MarkYoungRootObject(BaseObject* object) const
     cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
 }
 
-void CopyCollector::FlushAllocationRegions()
+void Collector::FlushAllocationRegions()
 {
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
 }
@@ -321,7 +321,7 @@ public:
 
 class VM_ZMarkStartYoung : public VM_ZOperation {
 public:
-    explicit VM_ZMarkStartYoung(CopyCollector& collector) : collector(collector) {}
+    explicit VM_ZMarkStartYoung(Collector& collector) : collector(collector) {}
     bool do_operation() override
     {
         collector.RunYoungCollection();
@@ -329,12 +329,12 @@ public:
     }
     bool block_jni_critical() const override { return true; }
 private:
-    CopyCollector& collector;
+    Collector& collector;
 };
 
 class VM_ZMarkStartYoungAndOld : public VM_ZOperation {
 public:
-    explicit VM_ZMarkStartYoungAndOld(CopyCollector& collector) : collector(collector) {}
+    explicit VM_ZMarkStartYoungAndOld(Collector& collector) : collector(collector) {}
     bool do_operation() override
     {
         collector.RunYoungCollection();
@@ -342,15 +342,15 @@ public:
     }
     bool block_jni_critical() const override { return true; }
 private:
-    CopyCollector& collector;
+    Collector& collector;
 };
 
 class VM_ZMarkEndYoung : public VM_ZOperation {
 public:
-    explicit VM_ZMarkEndYoung(CopyCollector& collector) : collector(collector) {}
+    explicit VM_ZMarkEndYoung(Collector& collector) : collector(collector) {}
     bool do_operation() override { return collector.YoungMarkEndPause(); }
 private:
-    CopyCollector& collector;
+    Collector& collector;
 };
 
 class VM_ZRelocateStartYoung : public VM_ZOperation {
@@ -369,7 +369,7 @@ class VM_ZMarkEndOld : public VM_ZOperation {
 public:
     bool do_operation() override
     {
-        CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+        Collector& collector = static_cast<Collector&>(Heap::GetHeap().GetCollector());
         return collector.TryEndOldMark(collector.oldMarkWorkStack, collector.oldMarkForeignRoots);
     }
 };
@@ -398,7 +398,7 @@ public:
     }
 };
 
-void CopyCollector::DoYoungGarbageCollection()
+void Collector::DoYoungGarbageCollection()
 {
     Heap::GetHeap().young().collect();
 }
@@ -437,9 +437,9 @@ ZGenerationCollectionScopeOld::~ZGenerationCollectionScopeOld()
     generation.at_collection_end();
 }
 
-static CopyCollector& TheCollector()
+static Collector& TheCollector()
 {
-    return static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    return static_cast<Collector&>(Heap::GetHeap().GetCollector());
 }
 
 void ZGenerationYoung::collect()
@@ -465,7 +465,7 @@ void ZGenerationYoung::collect()
 
 void ZGenerationYoung::pause_mark_start()
 {
-    CopyCollector& collector = TheCollector();
+    Collector& collector = TheCollector();
     if (IsMajorRoots()) {
         VM_ZMarkStartYoungAndOld op(collector);
         (void)op.pause();
@@ -493,7 +493,7 @@ void ZGenerationYoung::concurrent_mark_free()
     TheCollector().FinishYoungMarkHandoff();
 }
 
-void CopyCollector::RunYoungCollection()
+void Collector::RunYoungCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
@@ -561,7 +561,7 @@ void CopyCollector::RunYoungCollection()
     youngStartNs = start;
 }
 
-void CopyCollector::ConcurrentYoungMark()
+void Collector::ConcurrentYoungMark()
 {
     uint64_t stackScanEpoch = youngStackScanEpoch;
     WorkStack& workStack = youngWorkStack;
@@ -692,7 +692,7 @@ void CopyCollector::ConcurrentYoungMark()
     youngFullScan = fullYoungScan;
 }
 
-bool CopyCollector::YoungMarkEndPause()
+bool Collector::YoungMarkEndPause()
 {
     WorkStack& workStack = youngWorkStack;
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -736,14 +736,14 @@ bool CopyCollector::YoungMarkEndPause()
     return false;
 }
 
-void CopyCollector::ConcurrentYoungMarkContinue()
+void Collector::ConcurrentYoungMarkContinue()
 {
     MinorSlotSet reachableSlots;
     (void)FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
                           &youngConcWindow);
 }
 
-void CopyCollector::FinishYoungMarkHandoff()
+void Collector::FinishYoungMarkHandoff()
 {
     if (ZAbort::should_abort()) {
         return;
@@ -791,7 +791,7 @@ void CopyCollector::FinishYoungMarkHandoff()
         MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
         // tracecache: PrepareTrace above switched the TRACE-phase region caches on
         // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
-        // same place CopyCollector::PostTrace drains them for a major (RelocationSet.cpp:73-78).
+        // same place Collector::PostTrace drains them for a major (RelocationSet.cpp:73-78).
         // Without this call the minor leaves the cache active forever, so every region a
         // mutator fills afterwards is diverted off recentFullRegionList and is invisible to
         // both collection-set builders (PrepareYoungGarbageCandidates and
@@ -835,7 +835,7 @@ void ZGenerationYoung::pause_relocate_start()
 
 void ZGenerationYoung::concurrent_relocate()
 {
-    CopyCollector& collector = TheCollector();
+    Collector& collector = TheCollector();
     if (ZAbort::should_abort()) {
         return;
     }
@@ -922,7 +922,7 @@ public:
     void do_thread(ThreadLocalData*) override {}
 };
 
-void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
+void Collector::ProcessOldNonStrongReferences(WorkStack& workStack)
 {
     ZBreakpoint::AtAfterReferenceProcessingStarted();
     CHECK_DETAIL(Heap::GetHeap().old().is_phase_mark_complete(),
@@ -951,7 +951,7 @@ void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     collectorResources.GetFinalizerProcessor().EnqueueReferences();
 }
 
-bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
+bool Collector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
     MarkStripeSet& stripes = Heap::GetHeap().old().Mark().Stripes();
@@ -981,7 +981,7 @@ bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsS
     return true;
 }
 
-bool CopyCollector::FlushMarkProducers(ZMark* domain)
+bool Collector::FlushMarkProducers(ZMark* domain)
 {
     bool flushed = domain != nullptr ? domain->TryTerminateFlush() : ZMark::FlushAllGenerations();
     if (domain != nullptr) {
@@ -1018,11 +1018,11 @@ bool CopyCollector::FlushMarkProducers(ZMark* domain)
 
 
 namespace MapleRuntime {
-void CopyCollector::Init() {}
+void Collector::Init() {}
 
-void CopyCollector::Fini() { Collector::Fini(); }
+void Collector::Fini() { Collector::Fini(); }
 
-BaseObject* CopyCollector::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
+BaseObject* Collector::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
                                                       ForwardingStage stage) const
 {
     if (value == nullptr || !Heap::IsHeapAddress(value)) {
@@ -1056,7 +1056,7 @@ BaseObject* CopyCollector::ResolveCurrentValueRoot(BaseObject* value, const void
     return current;
 }
 
-void CopyCollector::CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const
+void Collector::CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const
 {
     ValueRootSet current;
     current.reserve(roots.size());
@@ -1067,7 +1067,7 @@ void CopyCollector::CurrentizeValueRootSet(ValueRootSet& roots, Generation gener
     roots.swap(current);
 }
 
-void CopyCollector::CurrentizeValueRootMap(
+void Collector::CurrentizeValueRootMap(
     ValueRootMap& roots, Generation generation) const
 {
     ValueRootMap current;
@@ -1088,7 +1088,7 @@ void CopyCollector::CurrentizeValueRootMap(
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
 
 
-void CopyCollector::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor)
+void Collector::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor)
 {
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
@@ -1280,7 +1280,7 @@ void ZGeneration::StopWorkers()
 }
 
 namespace MapleRuntime {
-void CopyCollector::DoGarbageCollection(ZGenerationId generation)
+void Collector::DoGarbageCollection(ZGenerationId generation)
 {
     if (generation == ZGenerationId::young) {
         DoYoungGarbageCollection();
@@ -1291,7 +1291,7 @@ void CopyCollector::DoGarbageCollection(ZGenerationId generation)
 
 void ZGenerationOld::collect()
 {
-    CopyCollector& collector = TheCollector();
+    Collector& collector = TheCollector();
     ZGenerationCollectionScopeOld scope(*this);
     DriverUnlocker unlocker(collector.collectorResources);
     concurrent_mark();
@@ -1334,7 +1334,7 @@ bool ZGenerationOld::pause_mark_end()
 
 void ZGenerationOld::concurrent_mark_continue()
 {
-    CopyCollector& collector = TheCollector();
+    Collector& collector = TheCollector();
     collector.TracingImpl(collector.oldMarkWorkStack);
 }
 void ZGenerationOld::concurrent_mark_free() {}
@@ -1365,7 +1365,7 @@ void ZGenerationOld::pause_relocate_start()
 
 void ZGenerationOld::concurrent_relocate()
 {
-    CopyCollector& collector = TheCollector();
+    Collector& collector = TheCollector();
     collector.ForwardFromSpace(ZGenerationId::old);
     reinterpret_cast<RegionSpace&>(collector.GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
         ZGenerationId::old);
@@ -1374,14 +1374,14 @@ void ZGenerationOld::concurrent_relocate()
     collector.CollectSmallSpace();
 }
 
-void CopyCollector::RunOldCollection()
+void Collector::RunOldCollection()
 {
     Heap::GetHeap().old().collect();
 }
 }
 
 namespace MapleRuntime {
-void CopyCollector::PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex)
+void Collector::PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex)
 {
     const bool continuingPrelude = GetZGeneration(generation).Snapshot().active;
     if (!continuingPrelude) {
@@ -1511,7 +1511,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
 }
 
 namespace MapleRuntime {
-void CopyCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
+void Collector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_TRACE");
     MRT_PHASE_TIMER(ZStatPhases::PDoTracing);

@@ -57,23 +57,23 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
             (void)young;
-            CopyCollector::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+            Collector::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
         case FrameType::STACKGROW:
             LOG(RTLOG_FATAL, "STACKGROW frame is not supported in Process");
             break;
         case FrameType::SAFEPOINT:
-            CopyCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            Collector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2R_STUB:
-            CopyCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            Collector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2N_STUB:
-            CopyCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            Collector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::EXSLUSIVE:
-            CopyCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
+            Collector::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                              reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         default:
@@ -83,12 +83,12 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
             (void)young;
-            CopyCollector::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+            Collector::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
         case FrameType::SAFEPOINT:
         case FrameType::STACKGROW:
-            CopyCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            Collector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2R_STUB:
         case FrameType::C2N_STUB:
@@ -96,7 +96,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #ifdef INTERPRETER_ENABLED
         case FrameType::INTERPRETER_C2I:
 #endif
-            CopyCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            Collector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         default:
             break;

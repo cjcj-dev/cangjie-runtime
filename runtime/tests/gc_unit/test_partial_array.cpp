@@ -38,17 +38,17 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct PartialArrayTestAccess {
-    static void Push(const CopyCollector& collector, RefField<>* addr, size_t length,
+    static void Push(const Collector& collector, RefField<>* addr, size_t length,
                      WorkStack& workStack)
     {
         collector.PushPartialArray(addr, length, workStack);
     }
 
-    static void StartFieldMark(CopyCollector& collector)
+    static void StartFieldMark(Collector& collector)
     {
-        auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+        auto& heap = static_cast<Collector&>(Heap::GetHeap().GetCollector());
         GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
-        auto arm = [](CopyCollector& c) {
+        auto arm = [](Collector& c) {
             auto& old = c.GetZGeneration(ZGenerationId::old);
             old.InitializeWorkers(1);
             if (!old.Snapshot().active) {
@@ -61,9 +61,9 @@ struct PartialArrayTestAccess {
         arm(heap);
     }
 
-    static void ReadPublished(CopyCollector& collector, WorkStack& result)
+    static void ReadPublished(Collector& collector, WorkStack& result)
     {
-        auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+        auto& heap = static_cast<Collector&>(Heap::GetHeap().GetCollector());
         auto& domain = heap.MajorMark() != nullptr ? *heap.MajorMark()
                                                          : *collector.MajorMark();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
@@ -74,7 +74,7 @@ struct PartialArrayTestAccess {
         }
     }
 
-    static void StoreTarget(const CopyCollector& collector, RefField<>& field, BaseObject* target)
+    static void StoreTarget(const Collector& collector, RefField<>& field, BaseObject* target)
     {
         const RefField<> coloured = collector.GetAndTryTagRefField(target);
         field.StoreColoured(coloured.GetFieldValue());

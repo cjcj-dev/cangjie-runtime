@@ -87,7 +87,7 @@ void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 }
 
 
-void CopyCollector::Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
+void Collector::Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
                                RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator)
 {
     ElfUnloadQuiescence::ReadScope metadataReader;
@@ -124,24 +124,24 @@ void CopyCollector::Process(const RootVisitor& visitor, const DerivedPtrVisitor*
 
 
 
-void CopyCollector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+void Collector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordStubCalleeSaved(regSlotsMap, fp);
 }
 
 #ifdef __arm__
-void CopyCollector::RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+void Collector::RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, fp);
 }
 
-void CopyCollector::RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
+void Collector::RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap, fp);
 }
 #endif
 
-void CopyCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
+void Collector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordStubAllRegister(regSlotsMap, fp);
 }
@@ -154,57 +154,57 @@ void CopyCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 
 
 
-void CopyCollector::VisitExportColoredRoots(const NativeSlotVisitor& visitor) const
+void Collector::VisitExportColoredRoots(const NativeSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitAllExportRoots(visitor);
 }
 
-OopStorage& CopyCollector::StrongRootStorage() const
+OopStorage& Collector::StrongRootStorage() const
 {
     return collectorResources.GetFinalizerProcessor().StrongRootStorage();
 }
 
-OopStorage& CopyCollector::WeakFinalizerRootStorage() const
+OopStorage& Collector::WeakFinalizerRootStorage() const
 {
     return collectorResources.GetFinalizerProcessor().WeakRootStorage();
 }
 
-OopStorage& CopyCollector::SyncWeakRootStorage() const
+OopStorage& Collector::SyncWeakRootStorage() const
 {
     return SyncWeakOopStorage();
 }
 
-void CopyCollector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
+void Collector::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
 {
     VisitStaticRoots(visitor);
 }
 
-void CopyCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
+void Collector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
 {
     RootsIteratorStrongColored roots(*this);
     roots.Apply(visitor);
 }
 
-void CopyCollector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
+void Collector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
 {
     RootsIteratorWeakColored roots(*this);
     roots.Apply(visitor);
 }
 
-void CopyCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
+void Collector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
 {
     RootsIteratorAllColored roots(*this);
     roots.Apply(visitor);
 }
 
-OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const CopyCollector& collector, unsigned workers,
+OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const Collector& collector, unsigned workers,
                                                          ZGenerationIdOptional generation)
     : states{{{collector.StrongRootStorage(), workers}}}, generation(generation)
 {
     (void)this->generation;
 }
 
-OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const CopyCollector& collector, unsigned workers,
+OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const Collector& collector, unsigned workers,
                                                      ZGenerationIdOptional generation)
     : states{{{collector.WeakFinalizerRootStorage(), workers},
               {Heap::GetHeap().GetExportRootStorage(), workers},
@@ -277,7 +277,7 @@ void JavaThreadsIterator::Apply(const std::function<void(Mutator&)>& visitor)
     }
 }
 
-void CopyCollector::VisitStrongPlainRoots(
+void Collector::VisitStrongPlainRoots(
     const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor) const
 {
     if (threadVisitor) {
@@ -287,32 +287,32 @@ void CopyCollector::VisitStrongPlainRoots(
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
 }
 
-void CopyCollector::VisitStaticRoots(const NativeSlotVisitor& visitor) const
+void Collector::VisitStaticRoots(const NativeSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 
-void CopyCollector::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
+void Collector::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
 {
     collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
 }
 
 
 
-void CopyCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
+void Collector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                        Mutator& mutator)
 {
     Process(visitor, nullptr, regSlotsMap, frame, mutator);
 }
 
-void CopyCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
+void Collector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
                                                   const FrameInfo& frame, Mutator& mutator, bool young)
 {
     VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
 }
 
-void CopyCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
+void Collector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                                   const RootVisitor& slotRootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
                                                   const FrameInfo& frame, Mutator& mutator, bool young)
@@ -377,20 +377,20 @@ void CopyCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor
     heapMap.RecordCalleeSaved(regSlotsMap);
 }
 
-void CopyCollector::MergeMutatorRoots(WorkStack& workStack)
+void Collector::MergeMutatorRoots(WorkStack& workStack)
 {
     (void)workStack;
     (void)Heap::GetHeap().old().Mark().Flush();
 }
 
-void CopyCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
+void Collector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
     VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
 
         EnumRefFieldRoot(root, foreignRootsSet);
     });
 }
-void CopyCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
+void Collector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_ENUM");
     EnumAllCommonRoots(GetWorkers(ZGenerationId::old));

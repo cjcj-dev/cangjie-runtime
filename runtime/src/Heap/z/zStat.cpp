@@ -656,7 +656,7 @@ ZStatHeapStats ZStatHeap::Stats() const
 
 
 namespace MapleRuntime {
-void CopyCollector::UpdateGCStats()
+void Collector::UpdateGCStats()
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     GCStats& gcStats = GetGCStats();

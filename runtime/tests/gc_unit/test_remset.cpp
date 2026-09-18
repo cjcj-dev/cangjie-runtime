@@ -24,7 +24,7 @@
 #endif
 
 // RememberedSet::Record is private. The minor's consumer
-// (CopyCollector::RescanRememberedSet) calls Record
+// (Collector::RescanRememberedSet) calls Record
 // directly when it re-arms a scanned slot, so a test that cannot call it cannot model the re-arm at
 // all.  Same idiom the fixture already uses for ZPage; scoped to this one header.
 #ifndef MRT_TESTABLE_INTERNALS
@@ -50,7 +50,7 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 // The product minor path drains the previous face in Generation.cpp and then
-// hands that exact set to CopyCollector::RescanRememberedSet. Keep this test peer
+// hands that exact set to Collector::RescanRememberedSet. Keep this test peer
 // limited to that hand-off; all filtering, resolving, marking and re-arming
 // remain in the product function compiled into libcangjie-runtime.so.
 struct RemsetRearmTestAccess {
@@ -60,17 +60,17 @@ struct RemsetRearmTestAccess {
         RemsetScanStats stats;
     };
 
-    static ZGeneration& YoungCycle(CopyCollector& collector)
+    static ZGeneration& YoungCycle(Collector& collector)
     {
         return collector.youngCycle;
     }
 
-    static RefField<> Tag(CopyCollector& collector, BaseObject* object)
+    static RefField<> Tag(Collector& collector, BaseObject* object)
     {
         return collector.GetAndTryTagRefField(object);
     }
 
-    static void BeginMinor(CopyCollector& collector)
+    static void BeginMinor(Collector& collector)
     {
         // This remains a synthetic remset component fixture, not a mark-start
         // acceptance test. Bind its actual collector/domain/phase before the
@@ -85,19 +85,19 @@ struct RemsetRearmTestAccess {
         ZGlobalsPointers::flip_young_mark_start();
     }
 
-    static bool FixInteriorSlot(CopyCollector& collector, RefField<>& field, BaseObject* knownBase)
+    static bool FixInteriorSlot(Collector& collector, RefField<>& field, BaseObject* knownBase)
     {
         return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr);
     }
 
-    static ConsumeResult ConsumePrevious(CopyCollector& collector, const std::unordered_set<MAddress>& previous,
+    static ConsumeResult ConsumePrevious(Collector& collector, const std::unordered_set<MAddress>& previous,
                                           BaseObject* currentMinorRoot)
     {
         WorkStack workStack = collector.NewWorkStack();
-        CopyCollector::MinorSlotSet reachableSlots;
-        CopyCollector::MinorSlotSet weakSlots;
-        CopyCollector::MinorObjectSet currentMinorRoots;
-        CopyCollector::MinorSlotSet consumed;
+        Collector::MinorSlotSet reachableSlots;
+        Collector::MinorSlotSet weakSlots;
+        Collector::MinorObjectSet currentMinorRoots;
+        Collector::MinorSlotSet consumed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
@@ -328,7 +328,7 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
 }
 
 // Product-path form of the r6b failure arm. Generation drains the previous
-// face, then CopyCollector::RescanRememberedSet consumes it and re-arms the slot
+// face, then Collector::RescanRememberedSet consumes it and re-arms the slot
 // while its resolved target is still young (zRemembered.cpp:578-589). The
 // compiler-like bare store below makes no runtime call; minor #2 must still
 // receive the slot from the current face established by that product consumer.
@@ -710,7 +710,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 // time instead: ZRemembered::scan_field (zRemembered.cpp:578-589) re-arms every scanned slot whose
 // healed target is still young, and drops the rest by simply not re-arming them.
 //
-// We do the same in CopyCollector::RescanRememberedSet.  That fix rests on one property of this class
+// We do the same in Collector::RescanRememberedSet.  That fix rests on one property of this class
 // that nothing tested: a Record() issued while consuming a drained set must land in the *next*
 // cycle's buffer.  If it landed in the one being drained the re-arm would either be lost or loop.
 //
@@ -1053,7 +1053,7 @@ GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
 GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
 {
     GcHeapFixture heap;
-    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<Collector&>(Heap::GetHeap().GetCollector());
     ZGeneration& young = RemsetRearmTestAccess::YoungCycle(collector);
     RememberedSet& rs = HeapTestRemset();
     // The fixture may leave its liveness-setup cycle active. Complete that
