@@ -57,23 +57,23 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
             (void)young;
-            HeapGcState::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+            StackFrameCursor::ProcessManagedFrame(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
         case FrameType::STACKGROW:
             LOG(RTLOG_FATAL, "STACKGROW frame is not supported in Process");
             break;
         case FrameType::SAFEPOINT:
-            HeapGcState::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2R_STUB:
-            HeapGcState::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2N_STUB:
-            HeapGcState::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::EXSLUSIVE:
-            HeapGcState::RecordExclusiveStubCalleeSaved(regSlotsMap,
+            RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                              reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         default:
@@ -83,12 +83,12 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
             (void)young;
-            HeapGcState::Process(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+            StackFrameCursor::ProcessManagedFrame(visitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
             break;
         }
         case FrameType::SAFEPOINT:
         case FrameType::STACKGROW:
-            HeapGcState::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            RegRoot::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         case FrameType::C2R_STUB:
         case FrameType::C2N_STUB:
@@ -96,7 +96,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #ifdef INTERPRETER_ENABLED
         case FrameType::INTERPRETER_C2I:
 #endif
-            HeapGcState::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
+            RegRoot::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
             break;
         default:
             break;
@@ -125,3 +125,44 @@ void StackFrameCursor::ProcessAll(const RootVisitor& visitor, Mutator& mutator,
 }
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
+                      uintptr_t frameIP, const Mutator& mutator);
+
+// HotSpot frame::oops_do_internal (frame.cpp:1166-1177) dispatches the
+// managed frame map. Cangjie uses StackMapBuilder and a RegSlotsMap instead.
+void StackFrameCursor::ProcessManagedFrame(const RootVisitor& visitor,
+                                         const DerivedPtrVisitor* derivedPtrVisitor,
+                                         RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator)
+{
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+#ifdef __APPLE__
+    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
+#else
+    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
+#endif
+        return;
+    }
+    uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+    uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
+    StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
+    SlotDebugVisitor slotDebugFunc = nullptr;
+    RegDebugVisitor regDebugFunc = nullptr;
+    DerivedPtrVisitor derived =
+        derivedPtrVisitor != nullptr ? *derivedPtrVisitor : Mutator::MakeDerivedRootVisitor(visitor);
+    if (heapMap.IsValid()) {
+        heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
+        heapMap.VisitSlotRoots(visitor, slotDebugFunc);
+        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
+            LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
+                reinterpret_cast<void*>(frameIP));
+        }
+    } else {
+        RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
+    }
+    heapMap.RecordCalleeSaved(regSlotsMap);
+}
+}

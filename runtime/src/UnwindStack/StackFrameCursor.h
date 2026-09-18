@@ -62,6 +62,8 @@ public:
     // ProcessOne drain that stopped at resumeIndex; then leaves index at resumeIndex.
     // Returns false if resumeIndex is out of range.
     // Shared per-frame dispatch used by the legacy full-stack loop and this cursor.
+    static void ProcessManagedFrame(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
+                                    RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
     static void ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
                              Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor = nullptr,
                              bool young = false);

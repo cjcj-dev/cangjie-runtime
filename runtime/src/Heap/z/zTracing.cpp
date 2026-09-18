@@ -265,10 +265,7 @@ void ReportSkippedStackMapCounts()
             zeroEntries, pcMiss, zeroRootIndices);
     }
 }
-size_t HeapGcState::CurrentThreadRootMapMissCount()
-{
-    return g_currentThreadRootMapMissCount;
-}
+
 
 
 

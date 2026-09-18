@@ -86,61 +86,9 @@ void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
     weakStorage.OopsDo(visitor);
 }
 
-
-void HeapGcState::Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                               RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator)
-{
-    ElfUnloadQuiescence::ReadScope metadataReader;
-    uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-#ifdef __APPLE__
-    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
-#else
-    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
-#endif
-        return;
-    }
-    uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
-    uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-    StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
-    SlotDebugVisitor slotDebugFunc = nullptr;
-    RegDebugVisitor regDebugFunc = nullptr;
-    DerivedPtrVisitor derived =
-        derivedPtrVisitor != nullptr ? *derivedPtrVisitor : Mutator::MakeDerivedRootVisitor(visitor);
-    if (heapMap.IsValid()) {
-        heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
-        heapMap.VisitSlotRoots(visitor, slotDebugFunc);
-        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
-            LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
-                reinterpret_cast<void*>(frameIP));
-        }
-    } else {
-        RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
-    }
-    heapMap.RecordCalleeSaved(regSlotsMap);
-}
-
-void HeapGcState::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
-{
-    RegRoot::RecordStubCalleeSaved(regSlotsMap, fp);
-}
-
 #ifdef __arm__
-void HeapGcState::RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
-{
-    RegRoot::RecordC2NStubCalleeSaved(regSlotsMap, fp);
-}
 
-void HeapGcState::RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
-{
-    RegRoot::RecordExclusiveStubCalleeSaved(regSlotsMap, fp);
-}
 #endif
-
-void HeapGcState::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
-{
-    RegRoot::RecordStubAllRegister(regSlotsMap, fp);
-}
 
 OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
                                                          ZGenerationIdOptional generation)
@@ -235,84 +183,6 @@ void HeapGcState::VisitStrongPlainRoots(
 void HeapGcState::VisitStaticRoots(const NativeSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
-}
-
-void HeapGcState::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
-                                       Mutator& mutator)
-{
-    Process(visitor, nullptr, regSlotsMap, frame, mutator);
-}
-
-void HeapGcState::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
-                                                  const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                                  const FrameInfo& frame, Mutator& mutator, bool young)
-{
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
-}
-
-void HeapGcState::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
-                                                  const RootVisitor& slotRootVisitor,
-                                                  const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                                  const FrameInfo& frame, Mutator& mutator, bool young)
-{
-    ElfUnloadQuiescence::ReadScope metadataReader;
-    uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-    // HotSpot frame::oops_do_internal (frame.cpp:1166-1177) dispatches only
-    // frames with managed metadata to oop-map scanning. Native callbacks
-    // expose managed references through handles, not a Cangjie stack map.
-#ifdef __APPLE__
-    if (MFuncDesc::GetFuncDesc(frame.mFrame.GetFA()) == nullptr) {
-#else
-    if (MFuncDesc::GetFuncDesc(startIP) == nullptr) {
-#endif
-        return;
-    }
-    uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
-    uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-    StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    auto infoNode = GCInfoNodeForFix::BuildNodeForFix(startIP, frameIP, frame.mFrame.GetFA());
-    auto slotDebugFunc = [&infoNode](SlotBias off, const BaseObject* root) {
-        if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
-            infoNode.InsertSlotRoots<true>(off, root);
-        } else {
-            infoNode.InsertSlotRoots<false>(off, root);
-        }
-    };
-    auto regDebugFunc = [&infoNode](RegisterNum i, const BaseObject* root) {
-        if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
-            infoNode.InsertRegRoot<true>(i, root);
-        } else {
-            infoNode.InsertRegRoot<false>(i, root);
-        }
-    };
-    auto derivedPtrDebugFunc = [&infoNode](BasePtrType basePtr, DerivedPtrType derivedPtr) {
-        infoNode.InsertDerivedPtrRef(basePtr, derivedPtr);
-    };
-#else
-    RegDebugVisitor regDebugFunc = nullptr;
-    SlotDebugVisitor slotDebugFunc = nullptr;
-    DerivedPtrDebugVisitor derivedPtrDebugFunc = nullptr;
-#endif
-    DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
-    if (heapMap.IsValid()) {
-        heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
-        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap, young)) {
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-            mutator.PushFrameInfoForFix(infoNode);
-#endif
-            LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
-                reinterpret_cast<void*>(frameIP));
-        }
-        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc, young);
-    } else {
-        RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
-    }
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    mutator.PushFrameInfoForFix(infoNode);
-#endif
-    heapMap.RecordCalleeSaved(regSlotsMap);
 }
 
 void HeapGcState::MergeMutatorRoots(WorkStack& workStack)

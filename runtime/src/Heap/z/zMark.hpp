@@ -418,26 +418,6 @@ public:
     void PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex);
     void PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex);
 
-    static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
-                                Mutator& mutator);
-    static void Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                        RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
-    static size_t CurrentThreadRootMapMissCount();
-
-    static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
-                                           RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator,
-                                           bool young = false);
-
-    static void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
-                                           const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                           const FrameInfo& frame, Mutator& mutator, bool young = false);
-
-    static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
-#ifdef __arm__
-    static void RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
-    static void RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
-#endif
-    static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp);
 #if defined(MRT_TESTABLE_INTERNALS)
     // Observers see the product result after dispatch; none supplies work.
     // Static storage keeps the instance layout identical in both build shapes.
