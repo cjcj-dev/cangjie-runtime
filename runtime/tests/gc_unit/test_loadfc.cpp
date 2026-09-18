@@ -42,26 +42,6 @@ extern "C" void CJ_MCC_ArrayCopyRef(MapleRuntime::ObjectPtr dstObj, MapleRuntime
 
 namespace {
 
-class NoAnswerCollector final : public Collector {
-public:
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*, Generation) const override { return FindToVersionResult::NotForwarded(); }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>&) const override { return false; }
-    bool IsFromObject(BaseObject*) const override { return false; }
-    bool IsGhostFromObject(BaseObject*) const override { return false; }
-    bool IsUnmovableFromObject(BaseObject*) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* object) const override
-    {
-        const uintptr_t remap = ZPointerRemapped;
-        return RefField<>(GcUnit::ColouredPointer(object, remap));
-    }
-    ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
-    BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
-};
-
 struct LoadFcFixture {
     LoadFcFixture()
     {
@@ -83,7 +63,6 @@ struct LoadFcFixture {
     }
 
     GcHeapFixture heap;
-    NoAnswerCollector collector;
     RememberedSet rememberedSet;
     RefField<false>* field = nullptr;
 };
@@ -170,4 +149,3 @@ GC_TEST(LoadFc, BulkCopyHealthySourceReturnsNormally)
 
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
-

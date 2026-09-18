@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
+#include "Heap/z/zCrossVM.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
@@ -16,13 +17,14 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "root_publication_snapshot.hpp"
+#include "Heap/z/zBarrier.hpp"
 
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
@@ -44,7 +46,7 @@ namespace MapleRuntime {
 // whose predicate it did not set.
 struct ZGenerationRootTestAccess {
     inline static std::array<NativeSlot*, 2> strongSlots {};
-    static void Install(CopyCollector& collector, const std::array<BaseObject*, 6>& objects)
+    static void Install(Heap& collector, const std::array<BaseObject*, 6>& objects)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (size_t i = 0; i < strongSlots.size(); ++i) {
@@ -54,16 +56,16 @@ struct ZGenerationRootTestAccess {
             strongSlots[i]->StoreColoured(coloured.GetFieldValue(), std::memory_order_relaxed);
         }
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            collector.resurrectedExportObjectes.insert(objects[2]);
-            collector.resurrectedExportObjectesForwardPhase.insert(objects[3]);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.insert(objects[2]);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.insert(objects[3]);
         }
         {
-            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-            collector.cycleRefWorkStack[objects[4]].push_back(objects[5]);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+            Heap::GetHeap().cross_vm().cycleRefWorkStack[objects[4]].push_back(objects[5]);
         }
     }
-    static void Remove(CopyCollector& collector, const std::array<BaseObject*, 6>& objects)
+    static void Remove(Heap& collector, const std::array<BaseObject*, 6>& objects)
     {
         OopStorage& storage = Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
         for (NativeSlot*& slot : strongSlots) {
@@ -72,13 +74,13 @@ struct ZGenerationRootTestAccess {
             slot = nullptr;
         }
         {
-            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
-            collector.resurrectedExportObjectes.erase(objects[2]);
-            collector.resurrectedExportObjectesForwardPhase.erase(objects[3]);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().resurrectExportMtx);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectes.erase(objects[2]);
+            Heap::GetHeap().cross_vm().resurrectedExportObjectesForwardPhase.erase(objects[3]);
         }
         {
-            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-            collector.cycleRefWorkStack.erase(objects[4]);
+            std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+            Heap::GetHeap().cross_vm().cycleRefWorkStack.erase(objects[4]);
         }
     }
 };
@@ -102,8 +104,7 @@ bool Same(const GCCycleSnapshot& a, const GCCycleSnapshot& b)
 }
 void* Exercise(void*)
 {
-    Collector& collector = Heap::GetHeap().GetCollector();
-    auto& resources = Heap::GetHeap().GetCollectorResources();
+    Heap& collector = Heap::GetHeap();
     cpu_set_t cpus;
     CPU_ZERO(&cpus);
     const int affinityRc = sched_getaffinity(0, sizeof(cpus), &cpus);
@@ -114,8 +115,8 @@ void* Exercise(void*)
         .GetRegionManager().GetThreadLocalRegionSize();
     const size_t heapLimit = heapBytes / regionBytes / 50;
     const size_t concurrent = std::max<size_t>(1, std::min((cpuCount + 3) / 4, heapLimit));
-    ZWorkers& youngWorkers = resources.GetWorkers(ZGenerationId::young);
-    ZWorkers& oldWorkers = resources.GetWorkers(ZGenerationId::old);
+    ZWorkers& youngWorkers = *Heap::GetHeap().young().Workers();
+    ZWorkers& oldWorkers = *Heap::GetHeap().old().Workers();
     // ZWorkers (zWorkers.cpp:60-64) initializes each generation with all
     // concurrent workers active, and no generation is active before a cycle.
     Expect(youngWorkers.active_workers() == concurrent && oldWorkers.active_workers() == concurrent,
@@ -124,7 +125,7 @@ void* Exercise(void*)
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent);
 #if defined(MRT_TESTABLE_INTERNALS)
-    auto& tracing = static_cast<CopyCollector&>(collector);
+    auto& tracing = static_cast<Heap&>(collector);
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;
@@ -134,11 +135,11 @@ void* Exercise(void*)
     uintptr_t preludeOldColor = 0;
     // Port the VM_ZMarkStartYoungAndOld/VM_ZMarkStartYoung phase invariants
     // (zGeneration.cpp:583-659) through the real driver request below.
-    tracing.testYoungMarkStarted = [&]() {
-        const auto young = collector.GetCycleSnapshot(ZGenerationId::young);
-        const auto old = collector.GetCycleSnapshot(ZGenerationId::old);
+    ZGeneration::testYoungMarkStarted = [&]() {
+        const auto young = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
+        const auto old = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
         Expect(young.active, "young_mark_start_active");
-        if (collector.GetZGeneration(ZGenerationId::young).IsMajorRoots()) {
+        if (Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsMajorRoots()) {
             ++combinedMarkStarts;
             preludeOld = old;
             preludeOldColor = ::g_cjMarkBadMask & ZPointerMarkedOldMask;
@@ -168,16 +169,18 @@ void* Exercise(void*)
         auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
         handle = Heap::GetHeap().RegisterExportRoot(object);
     }
-    tracing.testCyclePrepared = [&]() {
+    ZGeneration::testCyclePrepared = [&]() {
         // The real driver has selected and prepared its cycle. Add captures
         // its own state; the test does not provide a phase or generation.
         StoreBarrierBuffer buffer;
         RootSlot slot;
         buffer.add(reinterpret_cast<MAddress>(&slot), zpointer::null);
         const auto storedPending = buffer.Pending();
-        const bool young = collector.GetCycleSnapshot(ZGenerationId::young).active;
-        ZWorkers& current = resources.GetWorkers(young ? ZGenerationId::young : ZGenerationId::old);
-        ZWorkers& other = resources.GetWorkers(young ? ZGenerationId::old : ZGenerationId::young);
+        const bool young = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young).active;
+        ZWorkers& current = *Heap::GetHeap().GetZGeneration(
+            young ? ZGenerationId::young : ZGenerationId::old).Workers();
+        ZWorkers& other = *Heap::GetHeap().GetZGeneration(
+            young ? ZGenerationId::old : ZGenerationId::young).Workers();
         std::printf("WORKER_PREPARED generation=%s active=%u other_active=%u workers=%u\n",
                     young ? "young" : "old", current.is_active(), other.is_active(), current.active_workers());
         Expect(current.active_workers() == concurrent, "worker_prepared_concurrent_budget");
@@ -188,7 +191,7 @@ void* Exercise(void*)
             Expect(storedPending == 1u, "store_buffer_young_color");
         } else {
             ++oldLabels;
-            const auto old = collector.GetCycleSnapshot(ZGenerationId::old);
+            const auto old = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
             Expect(old.sequence == preludeOld.sequence && old.requestIndex == preludeOld.requestIndex,
                    "old_body_keeps_prelude_identity");
             Expect((::g_cjMarkBadMask & ZPointerMarkedOldMask) == preludeOldColor,
@@ -205,8 +208,8 @@ void* Exercise(void*)
     // EnumAllExportRoots fills the driver-local foreign stack that only
     // ProcessExportRoots consumes, so a witness is observed here only if its
     // family scan published it.
-    tracing.testOldMarkStarted = [&]() {
-        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*tracing.MajorMark());
+    ZGeneration::testOldMarkStarted = [&]() {
+        const std::set<BaseObject*> observed = RootPublicationSnapshot::Objects(*Heap::GetHeap().old().MarkPtr());
         size_t expected = 0;
         bool included = true;
         Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
@@ -240,7 +243,7 @@ void* Exercise(void*)
         }
         ZGenerationRootTestAccess::Remove(tracing, witnesses);
         ++rootResults;
-        const auto old = collector.GetCycleSnapshot(ZGenerationId::old);
+        const auto old = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
         std::printf("ROOT_RESULT expected_static=%zu observed_objects=%zu old_active=%u old_phase=%u\n",
                     expected, observed.size(), unsigned(old.active), static_cast<unsigned>(old.phase));
         Expect(expected > 0, "worker_root_witness_exists");
@@ -248,28 +251,28 @@ void* Exercise(void*)
         Expect(old.active && old.phase == ZGenerationPhase::Mark, "worker_root_result_owner");
     };
 #endif
-    auto y0 = collector.GetCycleSnapshot(ZGenerationId::young);
-    auto o0 = collector.GetCycleSnapshot(ZGenerationId::old);
-    collector.RequestGC(GC_REASON_USER, false);
+    auto y0 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
+    auto o0 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     Expect(youngWorkers.active_workers() == concurrent && oldWorkers.active_workers() == concurrent,
            "worker_major_phase_budget");
     Expect(!youngWorkers.is_active() && !oldWorkers.is_active(), "worker_major_completion");
     // ZStatCycle::at_end (zStat.cpp:1252-1253) reset the old generation's
     // worker accounting at the end of the major; a minor must not add to it.
-    const auto oldWorkerStats1 = collector.GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
-    auto y1 = collector.GetCycleSnapshot(ZGenerationId::young);
-    auto o1 = collector.GetCycleSnapshot(ZGenerationId::old);
+    const auto oldWorkerStats1 = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
+    auto y1 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
+    auto o1 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
     Expect(y1.sequence == y0.sequence + 1, "major_prelude_young_sequence");
     Expect(o1.sequence == o0.sequence + 1, "major_old_sequence");
     Expect(o1.reason == GC_REASON_USER && !o1.active, "major_reason_completion");
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     Expect(youngWorkers.active_workers() == concurrent && !youngWorkers.is_active(), "worker_minor_phase_budget");
-    const auto oldWorkerStats2 = collector.GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
+    const auto oldWorkerStats2 = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
     Expect(oldWorkerStats2._accumulated_duration == oldWorkerStats1._accumulated_duration &&
            oldWorkerStats2._accumulated_time == oldWorkerStats1._accumulated_time &&
            oldWorkers.active_workers() == concurrent && !oldWorkers.is_active(), "worker_minor_preserves_old");
-    auto y2 = collector.GetCycleSnapshot(ZGenerationId::young);
-    auto o2 = collector.GetCycleSnapshot(ZGenerationId::old);
+    auto y2 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
+    auto o2 = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
     Expect(y2.sequence == y1.sequence + 1, "minor_sequence");
     Expect(Same(o1, o2), "minor_preserves_old_state");
     Expect(y2.reason == GC_REASON_YOUNG && !y2.active, "minor_reason_completion");
@@ -281,9 +284,9 @@ void* Exercise(void*)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
     Expect(rootResults > 0, "worker_root_result_observed");
     Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
-    tracing.testYoungMarkStarted = nullptr;
-    tracing.testCyclePrepared = nullptr;
-    tracing.testOldMarkStarted = nullptr;
+    ZGeneration::testYoungMarkStarted = nullptr;
+    ZGeneration::testCyclePrepared = nullptr;
+    ZGeneration::testOldMarkStarted = nullptr;
     for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);
 #endif
     return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));

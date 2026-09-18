@@ -8,13 +8,22 @@
 #ifndef MRT_COLLECTOR_RESOURCES_H
 #define MRT_COLLECTOR_RESOURCES_H
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <limits>
+#include <type_traits>
 
 #include "Base/Macros.h"
 #include "Heap/z/zStat.hpp"
-#include "Heap/Collector/FinalizerProcessor.h"
-#include "Heap/Collector/TaskQueue.h"
+#include "Heap/z/zReferenceProcessor.hpp"
+#include <condition_variable>
+#include <cstdint>
+#include <list>
+#include "Base/Panic.h"
+#include "Common/PageAllocator.h"
+#include "Heap/z/zHeap.hpp"
+#include "Inspector/HeapSnapshotJsonSerializer.h"
 #include "Heap/z/zThread.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Inspector/CjHeapData.h"
@@ -25,188 +34,360 @@
 
 namespace MapleRuntime {
 
+class GCTask {
+public:
+    enum class TaskType : uint32_t {
+        TASK_TYPE_INVALID = 0,
+        TASK_TYPE_TERMINATE_GC = 1,  // terminate gc
+        TASK_TYPE_TIMEOUT_GC = 2,    // timeout gc
+        TASK_TYPE_INVOKE_GC = 3,     // invoke gc
+        TASK_TYPE_DUMP_HEAP = 4,     // dump heap
+        TASK_TYPE_DUMP_HEAP_OOM = 5, // dump heap after oom
+        TASK_TYPE_DUMP_HEAP_IDE = 6, // dump heap for IDE
+    };
+
+    enum TaskIndex : uint64_t {
+        INVALID_TASK_INDEX = 0,
+        TASK_INDEX_FOR_EXIT = 1,
+        SYNC_TASK_MIN_INDEX = 2,
+        // other task index among (SYNC_TASK_MIN_INDEX, ASYNC_TASK_INDEX).
+        ASYNC_TASK_INDEX = std::numeric_limits<uint64_t>::max(),
+    };
+
+    explicit GCTask(TaskType type) : taskType(type), taskIndex(ASYNC_TASK_INDEX) {}
+    virtual ~GCTask() = default;
+
+    TaskType GetType() const { return taskType; }
+
+    void SetTaskKind(TaskType type) { taskType = type; }
+
+    TaskIndex GetTaskIndex() const { return taskIndex; }
+
+    void SetTaskIndex(TaskIndex index) { taskIndex = index; }
+
+    virtual bool NeedFilter() const { return false; }
+
+    virtual bool Execute(void* owner) = 0;
+
+protected:
+    GCTask(const GCTask& task) = default;
+    virtual GCTask& operator=(const GCTask&) = default;
+    TaskType taskType;
+    TaskIndex taskIndex;
+};
+
+class GCExecutor : public GCTask {
+public:
+    // For a task, we give it a priority based on schedule type and gc reason.
+    // Termination and timeout events get highest prio, and override lower-prio tasks.
+    // Each gc invocation task gets its prio relative to its reason.
+    // This prio is used by the async task queue.
+    static constexpr uint32_t PRIO_TERMINATE = 0;
+    static constexpr uint32_t PRIO_TIMEOUT = 1;
+    static constexpr uint32_t PRIO_INVOKE_GC = 2;
+
+    static_assert(PRIO_INVOKE_GC + static_cast<uint32_t>(GC_REASON_MAX) <= std::numeric_limits<uint32_t>::digits,
+                  "task queue reached max capacity");
+
+    GCExecutor() : GCTask(TaskType::TASK_TYPE_INVALID), gcReason(GC_REASON_INVALID) {}
+
+    explicit GCExecutor(TaskType type) : GCTask(type), gcReason(GC_REASON_INVALID)
+    {
+        MRT_ASSERT(type != TaskType::TASK_TYPE_INVOKE_GC, "invalid gc task!");
+    }
+
+    GCExecutor(TaskType type, GCReason reason) : GCTask(type), gcReason(reason)
+    {
+        MRT_ASSERT(gcReason < GC_REASON_MAX, "invalid reason");
+    }
+
+    GCExecutor(const GCExecutor& task) = default;
+    ~GCExecutor() override = default;
+    GCExecutor& operator=(const GCExecutor&) = default;
+
+    static inline GCExecutor GetGCExecutor(uint32_t prio)
+    {
+        if (prio == PRIO_TERMINATE) {
+            return GCExecutor(TaskType::TASK_TYPE_TERMINATE_GC);
+        } else if (prio == PRIO_TIMEOUT) {
+            return GCExecutor(TaskType::TASK_TYPE_TIMEOUT_GC);
+        } else if (prio - PRIO_INVOKE_GC < GC_REASON_MAX) {
+            return GCExecutor(TaskType::TASK_TYPE_INVOKE_GC, static_cast<GCReason>(prio - PRIO_INVOKE_GC));
+        } else {
+            LOG(RTLOG_FATAL, "Invalid priority in GetGCRequestByPrio function");
+            return GCExecutor();
+        }
+    }
+
+    inline uint32_t GetPriority() const
+    {
+        if (taskType == TaskType::TASK_TYPE_TERMINATE_GC) {
+            return PRIO_TERMINATE;
+        } else if (taskType == TaskType::TASK_TYPE_TIMEOUT_GC) {
+            return PRIO_TIMEOUT;
+        } else if (taskType == TaskType::TASK_TYPE_INVOKE_GC) {
+            return PRIO_INVOKE_GC + gcReason;
+        }
+        LOG(RTLOG_FATAL, "Invalid task in GetPriority function");
+        return 0;
+    }
+
+    static inline GCExecutor GetInvalidExecutor() { return GCExecutor(); }
+
+    inline bool IsInvalid() const
+    {
+        return (taskType == TaskType::TASK_TYPE_INVALID) && (gcReason == GC_REASON_INVALID);
+    }
+
+    // Only for asyn gc task queues,
+    // the TaskType::TASK_TYPE_TIMEOUT_GC and TaskType::TASK_TYPE_TERMINATE_GC gc task will remove all others
+    inline bool IsOverriding() const { return (taskType != TaskType::TASK_TYPE_INVOKE_GC); }
+
+    inline GCReason GetGCReason() const { return gcReason; }
+
+    inline void SetGCReason(GCReason reason) { gcReason = reason; }
+
+    bool NeedFilter() const override { return true; }
+
+    bool Execute(void* owner) override;
+
+private:
+    GCReason gcReason;
+};
+
+// Lockless async task queue implementation.
+// This queue manages a list of deduplicated tasks.
+// Each bit of the queueWord indicates the corresponding priority task.
+// Lower bit indicates higher priority task.
+template<typename T>
+class LocklessTaskQueue {
+public:
+    // Add one async task to asyncTaskQueue
+    // One higher priority task might erase all lower-priority tasks in queueWord
+    void Push(const T& task)
+    {
+        bool overriding = task.IsOverriding();
+        uint32_t taskMask = (1U << task.GetPriority());
+        uint32_t oldWord = queueWord.load(std::memory_order_relaxed);
+        uint32_t newWord = 0;
+        do {
+            if (overriding) {
+                newWord = taskMask | ((taskMask - 1) & oldWord);
+            } else {
+                newWord = taskMask | oldWord;
+            }
+        } while (!queueWord.compare_exchange_weak(oldWord, newWord, std::memory_order_relaxed));
+    }
+
+    // Get the highest priority task in queueWord, or get one invalid task if queueWord is empty
+    T Pop()
+    {
+        uint32_t oldWord = queueWord.load(std::memory_order_relaxed);
+        uint32_t newWord = 0;
+        uint32_t dequeued = oldWord;
+        do {
+            newWord = oldWord & (oldWord - 1);
+            dequeued = oldWord;
+        } while (!queueWord.compare_exchange_weak(oldWord, newWord, std::memory_order_relaxed));
+        if (oldWord == 0) {
+            return T::GetInvalidExecutor();
+        }
+        // count the number of trailing zeros
+        return T::GetGCExecutor(__builtin_ctz(dequeued));
+    }
+
+    // When gc thread exits, clear all tasks in queueWord
+    void Clear() { queueWord.store(0, std::memory_order_relaxed); }
+
+private:
+    std::atomic<uint32_t> queueWord = {};
+};
+
+template<typename T>
+class TaskQueue {
+    static_assert(std::is_base_of<GCTask, T>::value, "T is not a subclass of MapleRuntime::GCTask");
+
+public:
+    using TaskFilter = std::function<bool(T& oldTask, T& newTask)>;
+    using TaskQueueType = std::list<T, StdContainerAllocator<T, GC_TASK_QUEUE>>;
+
+    void Init() { syncTaskIndex = GCTask::SYNC_TASK_MIN_INDEX; }
+
+    void Fini()
+    {
+        std::lock_guard<std::recursive_mutex> lock(taskQueueLock);
+        asyncTaskQueue.Clear();
+        syncTaskQueue.clear();
+    }
+
+    // Add one task to syncTaskQueue
+    // Return the accumulated gc times
+    uint64_t EnqueueSync(T& task, TaskFilter& filter)
+    {
+        std::unique_lock<std::recursive_mutex> lock(taskQueueLock);
+        TaskQueueType& queue = syncTaskQueue;
+
+        if (!queue.empty() && task.NeedFilter()) {
+            for (auto iter = queue.rbegin(); iter != queue.rend(); ++iter) {
+                if (filter(*iter, task)) {
+                    return (*iter).GetTaskIndex();
+                }
+            }
+        }
+        // Keep receipts in the legal ring; sentinel values are protocol state,
+        // never synchronous request identifiers.
+        if (syncTaskIndex >= GCTask::ASYNC_TASK_INDEX - 1) {
+            syncTaskIndex = GCTask::SYNC_TASK_MIN_INDEX;
+        } else {
+            ++syncTaskIndex;
+        }
+        task.SetTaskIndex(static_cast<GCTask::TaskIndex>(syncTaskIndex));
+        queue.push_back(task);
+        taskQueueCondVar.notify_all();
+        return task.GetTaskIndex();
+    }
+
+    // Add one task to asyncTaskQueue
+    void EnqueueAsync(const T& task)
+    {
+        asyncTaskQueue.Push(task);
+        std::unique_lock<std::recursive_mutex> lock(taskQueueLock);
+        taskQueueCondVar.notify_all();
+    }
+
+    // Non-blocking control-plane dequeue used by the generation drivers.  GC
+    // work itself lives in ZDriverPort; this method only services shutdown and
+    // diagnostic tasks without allowing one generation to consume the other.
+    bool TryDequeue(T& task)
+    {
+        std::unique_lock<std::recursive_mutex> lock(taskQueueLock);
+        if (!syncTaskQueue.empty()) {
+            task = syncTaskQueue.front();
+            syncTaskQueue.pop_front();
+            return true;
+        }
+        T candidate = asyncTaskQueue.Pop();
+        if (candidate.IsInvalid()) {
+            return false;
+        }
+        task = candidate;
+        return true;
+    }
+
+    // Get one gc task from task queue
+    // Firstly get from syncTaskQueue, then get from asyncTaskQueue
+    T Dequeue()
+    {
+        std::cv_status cvResult = std::cv_status::no_timeout;
+        std::chrono::nanoseconds waitTime(DEFAULT_GC_TASK_INTERVAL_TIMEOUT_NS);
+        while (true) {
+            std::unique_lock<std::recursive_mutex> lock(taskQueueLock);
+            // check sync queue firstly
+            if (!syncTaskQueue.empty()) {
+                T curTask(syncTaskQueue.front());
+                syncTaskQueue.pop_front();
+                return curTask;
+            }
+
+            if (cvResult == std::cv_status::timeout && Heap::GetHeap().IsGCEnabled()) {
+                asyncTaskQueue.Push(T(GCTask::TaskType::TASK_TYPE_TIMEOUT_GC));
+            }
+
+            T task = asyncTaskQueue.Pop();
+            if (!task.IsInvalid()) {
+                VLOG(GCPHASE, "dequeue gc task: type %u. reason %u", task.GetType(), task.GetGCReason());
+                return task;
+            } else {
+                VLOG(GCPHASE, "invalid gc task: type %u, reason %u", task.GetType(), task.GetGCReason());
+            }
+
+            cvResult = taskQueueCondVar.wait_for(lock, waitTime);
+        }
+    }
+
+    // GC thread polling task queue and execute gc task
+    void DrainTaskQueue(void* owner)
+    {
+        while (true) {
+            T task = Dequeue();
+            if (!task.Execute(owner)) {
+                Fini();
+                break;
+            }
+        }
+    }
+
+private:
+#if defined(MRT_GC_UNIT_TESTS)
+#endif
+
+    static constexpr uint64_t DEFAULT_GC_TASK_INTERVAL_TIMEOUT_NS = 1000L * 1000 * 1000; // default 1s
+    std::recursive_mutex taskQueueLock;
+    std::condition_variable_any taskQueueCondVar;
+    uint64_t syncTaskIndex = 0;
+    TaskQueueType syncTaskQueue;
+    LocklessTaskQueue<T> asyncTaskQueue;
+};
+
 enum class GCDriverKind : uint8_t { MINOR, MAJOR };
 
-class Collector;
-class CollectorResources;
-#if defined(MRT_TESTABLE_INTERNALS)
-class CollectorResourcesTestPeer;
-#endif
 
 // zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
 // receives requests from their port and whose terminate closes that port.
 class ZDriver : public ZThread {
 public:
-    ZDriver(CollectorResources& resources, GCDriverKind kind);
+    static void lock();
+    static void unlock();
+    ZDriver(GCDriverKind kind, ZDriverPort& port);
     void run_thread() override;
     void terminate() override;
     bool is_busy() const;
+    MRT_EXPORT static void RunGarbageCollection(uint64_t gcIndex, GCReason reason);
+    void RunCollection(uint64_t index, GCReason reason, bool warmup);
+    void RunYoungCollection(uint64_t index, ZYoungType type, bool warmup);
+    bool ExecuteDriverRequest(const ZDriverRequest& request);
 protected:
-    CollectorResources& resources;
     const GCDriverKind kind;
+    ZDriverPort& port;
+private:
+    static std::mutex driverLock;
 };
 
 class ZDriverMinor final : public ZDriver {
 public:
-    explicit ZDriverMinor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MINOR) {}
+    ZDriverMinor() : ZDriver(GCDriverKind::MINOR, _port) { create_and_start(); }
     void collect(const ZDriverRequest& request);
+    ZDriverPort& port() { return _port; }
+    const ZDriverPort& port() const { return _port; }
+private:
+    ZDriverPort _port;
 };
 
 class ZDriverMajor final : public ZDriver {
 public:
-    explicit ZDriverMajor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MAJOR) {}
+    ZDriverMajor() : ZDriver(GCDriverKind::MAJOR, _port) { create_and_start(); }
     void collect(const ZDriverRequest& request);
+    ZDriverPort& port() { return _port; }
+    const ZDriverPort& port() const { return _port; }
+private:
+    ZDriverPort _port;
 };
 
-// CollectorResources provides the resources that a functional collector need,
-// such as GC drivers and workers.
-class CollectorResources {
-public:
-    Collector* boundCollector = nullptr;
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct MarkPublicationFixture;
-#endif
-    friend class ZDirector;
-    friend class ZDriver;
-    friend struct RelocationReceiptTestAccess;
-    friend struct MarkPort203TestAccess;
-public:
-    // a collectorResources without a collector entity is functionless
-    explicit CollectorResources(Collector& collector);
-    ATTR_NO_INLINE virtual ~CollectorResources() = default;
-
-    void Init();
-    void Fini();
-    void StopGCWork();
-    void LockDriver() { driverLock.lock(); }
-    void UnlockDriver() { driverLock.unlock(); }
-    void RequestGC(GCReason reason, bool async);
-
-    ZWorkers& GetWorkers(ZGenerationId generation) const;
-
-    // ZYoungType::major_full_roots selects the combined mark-start pause.
-
-    // Called once in the young mark-start pause, for both minor and
-    // combined young/old starts (zGeneration.cpp:600-602,637).
-    void NoteYoungMarkStart(ZYoungType type)
-    {
-        ZStat::Collections().AtYoungMarkStart(type == ZYoungType::major_full_roots ||
-                                             type == ZYoungType::major_partial_roots);
-    }
-
-    // ZResurrection (zResurrection.cpp:35-47): shared by both generations.
-    // Block only in the successful old mark-end pause; unblock after the
-    // non-strong reference rendezvous, before finalizer enqueue.
-    void BlockResurrection() { ZResurrection::block(); }
-    void UnblockResurrection() { ZResurrection::unblock(); }
-    bool IsResurrectionBlocked() const { return ZResurrection::is_blocked(); }
-
-    bool IsGcStarted() const;
-
-    bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }
-
-    FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
-    Collector& bound_collector() { return collector; }
-    Collector& ActiveCollector() const
-    {
-#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-        if (testCollector != nullptr) {
-            return *testCollector;
-        }
-#endif
-        return boundCollector != nullptr ? *boundCollector : collector;
-    }
-    void BindCollector(Collector* c) { boundCollector = c; }
-
-    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
-
-    // ZGC-style per-generation request ports.  Requests on one port never
-    // consume or coalesce requests from the other generation.
-    ZDriverPort& GetMinorDriverPort() { return minorDriverPort; }
-    ZDriverPort& GetMajorDriverPort() { return majorDriverPort; }
-    ZDriverPort& GetYoungDriverPort();
-    void RequestAbort(GCDriverKind kind)
-    {
-        ZAbort::abort();
-    }
-
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct RelocationReceiptTestAccess;
-    friend struct MarkPort203TestAccess;
-#endif
-
-private:
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend class CollectorResourcesTestPeer;
-#endif
-
-    void StartGCThreads();
-    void StopGCThreads();
-    void RunDriverLoop(GCDriverKind kind);
-    void RunDirectorLoop();
-    void EvaluateDirector(uint64_t now);
-    bool start_gc(uint64_t now);
-    void CompleteDriverRequest(ZDriverPort& port);
-    void RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup);
-    void RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup);
-    bool ShouldPrecleanYoung(GCReason reason) const;
-
-    // Notify the GC thread to start GC, and doesn't wait.
-    // Called by mutator.
-    // reason: The reason for this GC.
-    void RequestAsyncGC(GCReason reason);
-    void RequestGCAndWait(GCReason reason);
-    bool ExecuteDriverRequest(const ZDriverRequest& request);
-    bool ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request);
-    void CancelDriverRequestLifecycle(GCDriverKind kind);
-    ZDriverPort minorDriverPort;
-    ZDriverPort majorDriverPort;
-    // zDriver.cpp:59-72: held by young; old releases it for its body.
-    std::mutex driverLock;
-#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-public:
-    Collector* testCollector = nullptr;
-private:
-    std::function<void()> testAfterYoungPrelude;
-    std::atomic<size_t> testCompletionCount { 0 };
-#endif
-
-    // zCollectedHeap.cpp:65-71 / zHeap.hpp: the concurrent GC threads are
-    // created when GC starts and stopped through ConcurrentGCThread::stop.
-    ZDirector* director = nullptr;
-    ZDriverMinor* minorDriver = nullptr;
-    ZDriverMajor* majorDriver = nullptr;
-    std::mutex directorMutex;
-    std::condition_variable directorCondition;
-    bool directorStopped = false;
-    bool directorReevaluate = false;
-    bool minorBusy = false;
-    bool majorBusy = false;
-    ZStat* statistics = nullptr;
-    int32_t concurrentGcThreadCount = 1;
-    std::atomic<bool> gcThreadRunning = { false };
-    Collector& collector;
-    FinalizerProcessor finalizerProcessor;
-};
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.
 class DriverLocker {
 public:
-    explicit DriverLocker(CollectorResources& resources) : resources(resources) { resources.LockDriver(); }
-    ~DriverLocker() { resources.UnlockDriver(); }
+    DriverLocker() { ZDriver::lock(); }
+    ~DriverLocker() { ZDriver::unlock(); }
     DriverLocker(const DriverLocker&) = delete;
     DriverLocker& operator=(const DriverLocker&) = delete;
-private:
-    CollectorResources& resources;
 };
 
 class DriverUnlocker {
 public:
-    explicit DriverUnlocker(CollectorResources& resources) : resources(resources) { resources.UnlockDriver(); }
-    ~DriverUnlocker() { resources.LockDriver(); }
+    DriverUnlocker() { ZDriver::unlock(); }
+    ~DriverUnlocker() { ZDriver::lock(); }
     DriverUnlocker(const DriverUnlocker&) = delete;
     DriverUnlocker& operator=(const DriverUnlocker&) = delete;
-private:
-    CollectorResources& resources;
 };
 } // namespace MapleRuntime
 #endif // MRT_COLLECTOR_RESOURCES_H

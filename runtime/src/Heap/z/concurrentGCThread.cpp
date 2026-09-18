@@ -13,9 +13,35 @@
 #endif
 
 #include "Base/Log.h"
+#include "Base/ImmortalWrapper.h"
 #include "Mutator/ThreadLocal.h"
 
 namespace MapleRuntime {
+namespace {
+// Matches InitCompleted_lock and _init_completed in runtime/init.cpp.
+// Standalone fixtures may leave GC threads waiting until process exit, so
+// the monitor shares their process lifetime rather than static destruction.
+struct RuntimeInitialization {
+    std::mutex lock;
+    std::condition_variable condition;
+    std::atomic<bool> completed { false };
+};
+
+RuntimeInitialization& RuntimeInit()
+{
+    static ImmortalWrapper<RuntimeInitialization> initialization;
+    return *initialization;
+}
+} // namespace
+
+void ConcurrentGCThread::NotifyRuntimeInitialized()
+{
+    auto& initialization = RuntimeInit();
+    std::lock_guard<std::mutex> guard(initialization.lock);
+    initialization.completed.store(true, std::memory_order_release);
+    initialization.condition.notify_all();
+}
+
 // gc/shared/concurrentGCThread.cpp:33-35
 ConcurrentGCThread::ConcurrentGCThread() : _should_terminate(false), _has_terminated(false), _thread()
 {
@@ -53,11 +79,20 @@ void* ConcurrentGCThread::entry(void* arg)
     return nullptr;
 }
 
-// gc/shared/concurrentGCThread.cpp:43-53. wait_init_completed() is a
-// HotSpot init-order guard; this runtime starts GC threads after Heap::Init.
+// gc/shared/concurrentGCThread.cpp:38-48: wait_init_completed precedes
+// run_service. A stop before initialization cancels the pending service.
 void ConcurrentGCThread::run()
 {
-    run_service();
+    {
+        auto& initialization = RuntimeInit();
+        std::unique_lock<std::mutex> guard(initialization.lock);
+        initialization.condition.wait(guard, [&] {
+            return initialization.completed.load(std::memory_order_acquire) || should_terminate();
+        });
+    }
+    if (!should_terminate()) {
+        run_service();
+    }
 
     // Signal thread has terminated
     std::lock_guard<std::mutex> ml(_terminator_lock);
@@ -73,8 +108,14 @@ void ConcurrentGCThread::stop()
     CHECK_DETAIL(!should_terminate(), "Invalid state");
     CHECK_DETAIL(!has_terminated(), "Invalid state");
 
-    // Signal thread to terminate
-    _should_terminate.store(true, std::memory_order_seq_cst);
+    // Wake both an initialized service and a thread still awaiting VM init.
+    // Use the same monitor as the wait predicate to prevent a lost wakeup.
+    {
+        auto& initialization = RuntimeInit();
+        std::lock_guard<std::mutex> guard(initialization.lock);
+        _should_terminate.store(true, std::memory_order_release);
+        initialization.condition.notify_all();
+    }
 
     stop_service();
 

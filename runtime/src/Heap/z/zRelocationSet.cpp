@@ -6,7 +6,7 @@
 
 
 #include "Heap/z/zAbort.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/Allocator/RegionList.h"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -48,44 +48,43 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
-#include "Heap/Collector/ExportOwnershipTestObservations.h"
 
-void WCollector::PostTrace()
+void ZGenerationOld::PostTrace()
 {
     MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
     // Complete their owner handoff while that authority is queryable.
     // zGeneration.cpp:1261 mark_end does not reset forwarding.
 #if defined(MRT_TESTABLE_INTERNALS)
-    ObserveExportOwnershipForTest(false);
+    Heap::GetHeap().cross_vm().ObserveExportOwnershipForTest(false);
 #endif
-    PrepareCycleRef();
+    Heap::GetHeap().cross_vm().PrepareCycleRef();
 #if defined(MRT_TESTABLE_INTERNALS)
-    ObserveExportOwnershipForTest(true);
+    Heap::GetHeap().cross_vm().ObserveExportOwnershipForTest(true);
 #endif
     CollectLargeGarbage();
     CollectPinnedGarbage();
     // zGeneration.cpp:1042 / :1131-1133: reset previous set before select.
-    Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).reset_relocation_set();
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).reset_relocation_set();
     if (ZAbort::should_abort()) {
         return;
     }
-    RefineFromSpace();
-    fwdTable.PrepareForwardTable<Generation::Old>();
+    ZRelocate::RefineFromSpace();
+    space.PrepareFromSpace<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.
     space.GetRegionManager().ReleaseMarkQuarantine();
 }
-void WCollector::CollectSmallSpace()
+void ZGenerationOld::CollectSmallSpace()
 {
-    GCStats& stats = GetGCStats();
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    GCStats& stats = Heap::GetHeap().GetGCStats();
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     {
         MRT_PHASE_TIMER(ZStatPhases::PCollectFromSpaceGarbage);
         stats.collectedBytes += stats.smallGarbageSize;
@@ -107,7 +106,7 @@ void WCollector::CollectSmallSpace()
 #if defined(__EULER__)
     Heap::GetHeap().GetAllocator().TryReclaimGarbageMemory();
 #endif
-    collectorResources.GetFinalizerProcessor().NotifyToReclaimGarbage();
+    Heap::GetHeap().GetFinalizerProcessor().NotifyToReclaimGarbage();
 }
 } // namespace MapleRuntime
 

@@ -3,6 +3,7 @@
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zBarrier.inline.hpp"
 #include "Heap/z/zUncoloredRoot.inline.hpp"
 #include "Mutator/Mutator.h"
@@ -159,11 +160,10 @@ void HeapIterator::UncoloredRootOopClosure::do_root(ObjectRef& root)
 
 void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
 {
-    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     ColoredRootOopClosure<false> colored(*this, context);
-    collector.VisitStrongColoredRoots([&](NativeSlot& root) { colored.do_root(root); });
+    RootsIteratorStrongColored().Apply([&](NativeSlot& root) { colored.do_root(root); });
     UncoloredRootOopClosure uncolored(*this, context);
-    collector.VisitStrongPlainRoots([&](ObjectRef& root) { uncolored.do_root(root); }, [&](Mutator& mutator) {
+    ZMark::VisitStrongPlainRoots([&](ObjectRef& root) { uncolored.do_root(root); }, [&](Mutator& mutator) {
         mutator.VisitMutatorRoots([&](ObjectRef& root) { mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
             uncolored.do_root(slot);
         }); }, [](ObjectRef&) {});
@@ -175,9 +175,8 @@ void HeapIterator::push_weak_roots(const HeapIteratorContext& context)
     if (!visitWeaks) {
         return;
     }
-    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     ColoredRootOopClosure<true> colored(*this, context);
-    collector.VisitWeakColoredRoots([&](NativeSlot& root) { colored.do_root(root); });
+    RootsIteratorWeakColored().Apply([&](NativeSlot& root) { colored.do_root(root); });
 }
 
 void HeapIterator::drain(const HeapIteratorContext& context)
@@ -247,7 +246,7 @@ void HeapIterator::object_and_field_iterate(const ObjectVisitor& objectVisitor, 
                                             uint32_t worker_id)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
-    DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
+    DCHECK(!ZResurrection::is_blocked());
     HeapIteratorContext context(*this, &objectVisitor, fieldVisitor ? &fieldVisitor : nullptr, worker_id);
     if (worker_id == 0) {
         push_strong_roots(context);

@@ -13,6 +13,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zMark.hpp"
+#include "UnwindStack/StackFrameCursor.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
 #if defined(__linux__)
@@ -62,7 +63,7 @@ void CheckNativeFrameScan(bool derived)
         size_t visits = 0;
         const RootVisitor roots = [&](RootSlot&) { ++visits; };
         const DerivedPtrVisitor derivedRoots = [&](BasePtrType, DerivedSlot&) { ++visits; };
-        CopyCollector::Process(roots, derived ? &derivedRoots : nullptr, registers, frame, mutator);
+        StackFrameCursor::ProcessManagedFrame(roots, derived ? &derivedRoots : nullptr, registers, frame, mutator);
         _exit(visits == 0 ? 0 : 1);
     }
     int status = 0;
@@ -116,7 +117,7 @@ void* AllocateThroughCycle(void*)
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     const size_t maximum = manager.GetThreadLocalRegionSize();
-    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     buffer = AllocBuffer::GetOrCreateAllocBuffer();
     const size_t initial = buffer->ComputeTLABSize(objectSize, maximum);
     size_t backingBytes = 0;
@@ -133,7 +134,7 @@ void* AllocateThroughCycle(void*)
         }
         requestedBytes += objectSize;
     }
-    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     buffer = AllocBuffer::GetOrCreateAllocBuffer();
     // ZHeap::account_alloc_page: the cycle denominator retains backing
     // capacity, including unused TLAB tails. These values come from actual

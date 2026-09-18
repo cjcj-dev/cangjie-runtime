@@ -1,4 +1,5 @@
 #include "Heap/z/zDirector.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 
 #include <algorithm>
@@ -10,7 +11,7 @@
 #include "CangjieRuntime.h"
 #include "Common/Runtime.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -64,7 +65,7 @@ struct ZDirectorStats {
     size_t relocation_headroom = 0;
 };
 
-ZDirector::ZDirector(CollectorResources& resources) : resources(resources)
+ZDirector::ZDirector()
 {
     _director = this;
     set_name("ZDirector");
@@ -76,21 +77,42 @@ void ZDirector::evaluate_rules()
     if (_director == nullptr) {
         return;
     }
-    std::lock_guard<std::mutex> lock(_director->resources.directorMutex);
-    _director->resources.directorReevaluate = true;
-    _director->resources.directorCondition.notify_one();
+    _director->notify_reevaluate();
+}
+
+void ZDirector::notify_reevaluate()
+{
+    std::lock_guard<std::mutex> lock(monitor);
+    reevaluate = true;
+    condition.notify_one();
+}
+
+void ZDirector::set_busy(bool minor, bool busy)
+{
+    std::lock_guard<std::mutex> lock(monitor);
+    (minor ? minorBusy : majorBusy) = busy;
+    if (!busy) {
+        reevaluate = true;
+        condition.notify_one();
+    }
+}
+
+bool ZDirector::busy(bool minor)
+{
+    std::lock_guard<std::mutex> lock(monitor);
+    return minor ? minorBusy : majorBusy;
 }
 
 bool ZDirector::wait_for_tick()
 {
     const uint64_t interval_ms = 1000 / DecisionHz;
-    std::unique_lock<std::mutex> lock(resources.directorMutex);
-    if (resources.directorStopped) {
+    std::unique_lock<std::mutex> lock(monitor);
+    if (stopped) {
         return false;
     }
-    resources.directorCondition.wait_for(lock, std::chrono::milliseconds(interval_ms),
-        [this] { return resources.directorStopped || resources.directorReevaluate; });
-    return !resources.directorStopped;
+    condition.wait_for(lock, std::chrono::milliseconds(interval_ms),
+        [this] { return stopped || reevaluate; });
+    return !stopped;
 }
 
 static uint32_t young_gc_threads(const ZDirectorStats&)
@@ -487,7 +509,7 @@ static ZWorkerCounts select_worker_threads(const ZDirectorStats& stats, uint32_t
     return {young_workers, old_workers};
 }
 
-static void adjust_gc(CollectorResources& resources, const ZDirectorStats& stats)
+static void adjust_gc(const ZDirectorStats& stats)
 {
     if (!UseDynamicNumberOfGCThreads) {
         return;
@@ -511,10 +533,10 @@ static void adjust_gc(CollectorResources& resources, const ZDirectorStats& stats
     const ZWorkerCounts selection = select_worker_threads(stats, desired_young_workers, type);
     if (stats.old_stats.resize.is_active &&
         stats.old_stats.resize.nworkers_current != selection.old_workers) {
-        resources.GetWorkers(ZGenerationId::old).request_resize_workers(selection.old_workers);
+        Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
     }
     if (stats.young_stats.resize.nworkers_current != selection.young_workers) {
-        resources.GetWorkers(ZGenerationId::young).request_resize_workers(selection.young_workers);
+        Heap::GetHeap().young().Workers()->request_resize_workers(selection.young_workers);
     }
 }
 
@@ -530,36 +552,37 @@ static ZWorkerCounts initial_workers(const ZDirectorStats& stats, ZWorkerSelecti
     return select_worker_threads(stats, young_workers, type);
 }
 
-static void start_major_gc(CollectorResources& resources, const ZDirectorStats& stats, GCReason cause)
+static void start_major_gc(const ZDirectorStats& stats, GCReason cause)
 {
     const ZWorkerCounts selection = initial_workers(stats, ZWorkerSelectionType::start_major);
-    resources.GetMajorDriverPort().send_async(ZDriverRequest(cause, selection.young_workers, selection.old_workers));
+    ZCollectedHeap::heap()->driver_major()->port().send_async(
+        ZDriverRequest(cause, selection.young_workers, selection.old_workers));
 }
 
-static void start_minor_gc(CollectorResources& resources, const ZDirectorStats& stats, GCReason cause)
+static void start_minor_gc(const ZDirectorStats& stats, GCReason cause)
 {
     const ZWorkerSelectionType type =
         stats.major_busy ? ZWorkerSelectionType::minor_during_old : ZWorkerSelectionType::normal;
     const ZWorkerCounts selection = initial_workers(stats, type);
     if (stats.major_busy && stats.old_stats.resize.nworkers_current != selection.old_workers) {
-        resources.GetWorkers(ZGenerationId::old).request_resize_workers(selection.old_workers);
+        Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
     }
-    resources.GetMinorDriverPort().send_async(ZDriverRequest(cause, selection.young_workers, 0));
+    ZCollectedHeap::heap()->driver_minor()->port().send_async(ZDriverRequest(cause, selection.young_workers, 0));
 }
 
-static bool start_gc(CollectorResources& resources, const ZDirectorStats& stats)
+static bool start_gc(const ZDirectorStats& stats)
 {
     const GCReason major_cause = make_major_gc_decision(stats);
     if (major_cause != GC_REASON_INVALID) {
-        start_major_gc(resources, stats, major_cause);
+        start_major_gc(stats, major_cause);
         return true;
     }
     const GCReason minor_cause = make_minor_gc_decision(stats);
     if (minor_cause != GC_REASON_INVALID) {
         if (!stats.major_busy && rule_major_allocation_rate(stats)) {
-            start_major_gc(resources, stats, GC_REASON_HEU);
+            start_major_gc(stats, GC_REASON_HEU);
         } else {
-            start_minor_gc(resources, stats, minor_cause);
+            start_minor_gc(stats, minor_cause);
         }
         return true;
     }
@@ -579,11 +602,10 @@ static ZWorkerResizeStats sample_worker_resize_stats(const ZStatCycleStats& cycl
     return {true, serial_gc_time_passed, parallel_gc_time_passed, workers->active_workers()};
 }
 
-static ZDirectorStats sample_stats(CollectorResources& resources, uint64_t now, bool minorBusy, bool majorBusy,
+static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     int32_t concurrentGcThreadCount)
 {
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    auto& collector = Heap::GetHeap().GetCollector();
     ZDirectorStats stats;
     stats.mutator_alloc_rate = ZStatMutatorAllocRate::stats();
     stats.max_capacity = Heap::GetHeap().GetMaxCapacity();
@@ -594,21 +616,21 @@ static ZDirectorStats sample_stats(CollectorResources& resources, uint64_t now, 
     stats.heap.used = Heap::GetHeap().GetAllocator().AllocatedBytes();
     const auto collectionStats = ZStat::Collections().Stats();
     stats.heap.total_collections = collectionStats.totalCollections;
-    stats.young_stats.cycle = collector.GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
-    stats.old_stats.cycle = collector.GetZGeneration(ZGenerationId::old).CycleStats().Stats(now);
-    stats.young_stats.workers = collector.GetZGeneration(ZGenerationId::young).StatWorkers()->stats();
-    stats.old_stats.workers = collector.GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
+    stats.young_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
+    stats.old_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old).CycleStats().Stats(now);
+    stats.young_stats.workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).StatWorkers()->stats();
+    stats.old_stats.workers = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
     stats.young_stats.resize = sample_worker_resize_stats(stats.young_stats.cycle, stats.young_stats.workers,
-        &resources.GetWorkers(ZGenerationId::young));
+        Heap::GetHeap().young().Workers());
     stats.old_stats.resize = sample_worker_resize_stats(stats.old_stats.cycle, stats.old_stats.workers,
-        &resources.GetWorkers(ZGenerationId::old));
+        Heap::GetHeap().old().Workers());
     stats.young_stats.stat_heap = ZStat::YoungHeap().Stats();
     stats.old_stats.stat_heap = ZStat::OldHeap().Stats();
     stats.young_stats.general.used = regions.GetYoungAllocatedSize();
     stats.old_stats.general.used = stats.heap.used - std::min(stats.heap.used, stats.young_stats.general.used);
     stats.old_stats.general.total_collections_at_start = collectionStats.collectionsAtMajorStart;
-    stats.minor_busy = minorBusy || resources.GetMinorDriverPort().is_busy();
-    stats.major_busy = majorBusy || resources.GetMajorDriverPort().is_busy();
+    stats.minor_busy = minorBusy || ZCollectedHeap::heap()->driver_minor()->port().is_busy();
+    stats.major_busy = majorBusy || ZCollectedHeap::heap()->driver_major()->port().is_busy();
     stats.allocation_stalling = regions.IsAllocationStalling();
     stats.conc_gc_threads = static_cast<uint32_t>(std::max(concurrentGcThreadCount, 1));
     stats.collection_interval_sec =
@@ -620,40 +642,23 @@ static ZDirectorStats sample_stats(CollectorResources& resources, uint64_t now, 
 void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
-        resources.directorReevaluate = false;
-        resources.EvaluateDirector(TimeUtil::NanoSeconds());
+        reevaluate = false;
+        if (Runtime::CurrentRef() == nullptr || !Heap::GetHeap().IsGCEnabled()) {
+            continue;
+        }
+        const ZDirectorStats stats = sample_stats(TimeUtil::NanoSeconds(),
+            busy(true), busy(false), ZCollectedHeap::heap()->concurrent_gc_threads());
+        if (!MapleRuntime::start_gc(stats)) {
+            adjust_gc(stats);
+        }
     }
 }
 
 void ZDirector::terminate()
 {
-    std::lock_guard<std::mutex> locker(resources.directorMutex);
-    resources.directorStopped = true;
-    resources.directorCondition.notify_all();
-}
-
-void CollectorResources::RunDirectorLoop()
-{
-    if (director != nullptr) {
-        director->run_thread();
-    }
-}
-
-bool CollectorResources::start_gc(uint64_t now)
-{
-    EvaluateDirector(now);
-    return minorBusy || majorBusy || minorDriverPort.is_busy() || majorDriverPort.is_busy();
-}
-
-void CollectorResources::EvaluateDirector(uint64_t now)
-{
-    if (Runtime::CurrentRef() == nullptr || !IsGCActive()) {
-        return;
-    }
-    const ZDirectorStats stats = sample_stats(*this, now, minorBusy, majorBusy, concurrentGcThreadCount);
-    if (!MapleRuntime::start_gc(*this, stats)) {
-        adjust_gc(*this, stats);
-    }
+    std::lock_guard<std::mutex> locker(monitor);
+    stopped = true;
+    condition.notify_all();
 }
 
 } // namespace MapleRuntime

@@ -148,7 +148,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
     remset.Initialize(fixture.heapStart, 2 * ZPage::UNIT_SIZE);
     ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner); });
     remset.Record(slot);
-    if (!Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
+    if (!Heap::GetHeap().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
     ZVerify::BeforeRelocation(owner);
 }
 
@@ -156,7 +156,7 @@ GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
 GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
 {
     GcVerifyFixture fixture;
-    auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
+    auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
     cycle.PublishPhase(ZGenerationPhase::Mark);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
@@ -172,7 +172,7 @@ GC_OTHER_VM_TEST(ZVerify, RawNullRequiresYoungMarkComplete)
 GC_OTHER_VM_TEST(ZVerify, RawNullRequiresAllocatingHolder)
 {
     GcVerifyFixture fixture;
-    auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young);
+    auto& cycle = Heap::GetHeap().GetZGeneration(Generation::Young);
     cycle.PublishPhase(ZGenerationPhase::MarkComplete);
     RefField<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);

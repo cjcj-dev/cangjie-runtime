@@ -31,28 +31,86 @@ void VerifyAllEmpty(ZMark& domain);
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
+#include <list>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/zForwardingTable.hpp"
 
 #include "Heap/z/zMarkStack.hpp"
+#include "Common/MarkWorkStack.h"
+#include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zAbort.hpp"
+#include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zMarkingSMR.hpp"
 #include "Heap/z/zMarkTerminate.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 
 class MarkStripeSet;
 class ZWorkers;
 class MarkContext;
+class AllocBuffer;
+struct ThreadGCData;
 struct ThreadLocalData;
 class Mutator;
+struct YoungConcWindowStats;
 
 // Per-generation mark ownership (zMark.hpp:42-124, zMark.cpp:80-92).
 class ZMark {
     friend class ZMarkTask;
 public:
+    static void VisitStrongPlainRoots(const RootVisitor& visitor,
+                              const std::function<void(Mutator&)>& threadVisitor);
+    static void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);
+    static void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false);
+    static void EnumAllCommonRoots(ZWorkers& workers);
+    static void EnumAllExportRoots(RootSet& foreignRootsSet);
+    static void DiscoverFinalizableRoot(NativeSlot& slot);
+    static void MergeMutatorRoots(WorkStack& workStack);
+    static void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
+    static void VisitStaticRoots(const NativeSlotVisitor& visitor);
+    static void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet);
+    static void ProcessFinalizers();
+    static void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
+                             uint64_t stackScanEpoch = 0);
+    static void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
+                         const std::function<void(BaseObject*)>& invisibleVisitor,
+                         uint64_t stackScanEpoch = 0);
+    static void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown");
+    static void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin, bool finalizable);
+    static void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
+                           std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
+                           std::unordered_set<MAddress>& weakSlots,
+                           const std::unordered_set<MAddress>* reachableSlotDomain = nullptr);
+    static void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
+                                  std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
+                                  std::unordered_set<MAddress>& weakSlots,
+                                  const std::unordered_set<MAddress>* reachableSlotDomain = nullptr);
+    static bool FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
+                             std::vector<BaseObject*>& reachableVec, std::unordered_set<MAddress>& reachableSlots,
+                             std::unordered_set<MAddress>& weakSlots,
+                             YoungConcWindowStats* windowStats = nullptr);
+    static bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
+#if defined(MRT_TESTABLE_INTERNALS)
+    static std::function<void(ZGenerationId, NativeSlot*)> testColoredRootResult;
+    static std::function<void(Mutator&)> testOldMarkThreadResult;
+#endif
+
+    static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
+    static void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
+    static void PublishThreadRoot(BaseObject* object, bool young, bool follow);
+    static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
+    static bool FlushThreadMarkProducers(ThreadLocalData* tls);
+    static bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);
+    static bool FlushGCDataMarkProducers(ThreadGCData& data);
     static constexpr bool Resurrect = true;
     static constexpr bool DontResurrect = false;
     static constexpr bool GCThread = true;
@@ -77,6 +135,7 @@ public:
     void FollowWorkComplete(bool partial);
     bool FollowWorkPartial();
     void MarkAndFollow(MarkContext& context, const MarkStackEntry& entry);
+    static bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry, MarkLiveCache* cache);
     void BindWorkers(ZWorkers* workers) { gcWorkers = workers; }
     bool PollStop();
     MarkStripeSet& Stripes() { return stripes; }
@@ -204,14 +263,7 @@ constexpr int MARK_PREFETCH_DISTANCE = 16; // when it is changed, remember to ch
 // target slot is armed by a test, but the observed word is produced and sampled
 // inside the product remap loop before relocate-start changes the good masks.
 // Read-only copies of the product's ownership carriers at PostTrace's handoff.
-struct ExportOwnershipTestObservation {
-    using Edge = std::pair<BaseObject*, BaseObject*>;
-    bool afterHandoff = false;
-    size_t discoveredOwners = 0;
-    size_t handoffOwners = 0;
-    std::vector<Edge> discovered;
-    std::vector<Edge> handoff;
-};
+
 
 struct RemapYoungRootsTestReceipt {
     uintptr_t targetSlot = 0;
@@ -230,318 +282,73 @@ void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot);
 RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt();
 #endif
 
-class MarkingWork;
-class CopyCollector : public Collector {
-    friend class ZMarkTask;
 #if defined(MRT_TESTABLE_INTERNALS)
-    friend struct RelocationReceiptTestAccess;
-    friend struct ZGenerationRootTestAccess;
-#endif
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct MarkPublicationFixture;
-#endif
-public:
-    enum class RefSlotKind : U8 {
-        STRONG,
-        WEAK_REFERENT,
-    };
-
-    explicit CopyCollector(Allocator& allocator, CollectorResources& resources);
-
-    ~CopyCollector() override = default;
-    ZMark* MajorMark() { return oldCycle.MarkPtr(); }
-    const ZMark* MajorMark() const { return oldCycle.MarkPtr(); }
-    virtual void PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex);
-    virtual void PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex);
-
-    static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
-                                Mutator& mutator);
-    static void Process(const RootVisitor& visitor, const DerivedPtrVisitor* derivedPtrVisitor,
-                        RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
-    static size_t CurrentThreadRootMapMissCount();
-
-    static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
-                                           RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator,
-                                           bool young = false);
-
-    static void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
-                                           const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                           const FrameInfo& frame, Mutator& mutator, bool young = false);
-
-    static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
-#ifdef __arm__
-    static void RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
-    static void RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
-#endif
-    static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp);
-#if defined(MRT_TESTABLE_INTERNALS)
-    // Observers see the product result after dispatch; none supplies work.
-    // Static storage keeps the instance layout identical in both build shapes.
-    // Observes the post-closure slot; nullptr denotes that worker completing.
-    static std::function<void(ZGenerationId, NativeSlot*)> testColoredRootResult;
-    static std::function<void()> testCyclePrepared;
-    static std::function<void()> testYoungMarkStarted;
-    static std::function<void()> testOldMarkStarted;
-    static std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> testMarkStartState;
-    static std::function<void()> testYoungMarkCompleted;
-    static std::function<void(const ExportOwnershipTestObservation&)> testExportOwnershipResult;
-    static std::function<void(Mutator&)> testOldMarkThreadResult;
-#endif
-
-    void Init() override;
-    void Fini() override;
-
-    // zRootsIterator.cpp:159-220. The language has no weak plain code-cache roots.
-    void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
-    OopStorage& StrongRootStorage() const;
-    OopStorage& WeakFinalizerRootStorage() const;
-    OopStorage& SyncWeakRootStorage() const;
-    void VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const;
-    void VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const;
-    void VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const;
-    void VisitAllColoredRoots(const NativeSlotVisitor& visitor) const;
-    void VisitStrongPlainRoots(const RootVisitor& visitor,
-                              const std::function<void(Mutator&)>& threadVisitor) const;
-
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    void DumpRoots(LogType logType);
-    void DumpHeap(const CString& tag);
-    void DumpBeforeGC();
-
-    void DumpAfterGC();
-#endif
-
-    void ResurrectExportObject(BaseObject* obj)
-    {
-        ZGeneration* generation = ObjectGeneration(obj) == Generation::Young ?
-            static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old());
-        std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        if (generation == nullptr || !generation->is_phase_relocate()) {
-            resurrectedExportObjectes.erase(obj);
-            resurrectedExportObjectes.insert(ValueRoot(ResolveCurrentValueRoot(
-                obj, &resurrectedExportObjectes, ObjectGeneration(obj), ForwardingStage::IncomingNew),
-                ForwardingStage::IncomingNew));
-        } else {
-            resurrectedExportObjectesForwardPhase.erase(obj);
-            resurrectedExportObjectesForwardPhase.insert(ValueRoot(
-                ResolveCurrentValueRoot(
-                    obj, &resurrectedExportObjectesForwardPhase, ObjectGeneration(obj), ForwardingStage::IncomingNew),
-                ForwardingStage::IncomingNew));
-        }
-    }
-
-    void VisitAllResurrectExportObjects(const RootVisitor& visitor)
-    {
-        std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        for (auto& obj : resurrectedExportObjectes) {
-            visitor(reinterpret_cast<ObjectRef&>(*obj));
-        }
-    }
-
-    bool ShouldIgnoreRequest(GCRequest& request) override { return request.ShouldBeIgnored(); }
-
-    bool DiscoverReference(BaseObject* reference, ReferenceType type)
-    {
-        return collectorResources.GetFinalizerProcessor().GetReferenceProcessor().DiscoverReference(reference, type);
-    }
-    void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);
-
-    // live but not resurrected object.  The generation is part of the predicate;
-    // there is intentionally no IsMarkedObject(BaseObject*) compatibility API.
-    template<Generation G>
-    bool IsMarkedObject(const BaseObject* obj) const { return RegionSpace::IsMarkedObject<G>(obj); }
-
-    // live or resurrected object.
-    template<Generation G>
-    inline bool IsSurvivedObject(const BaseObject* obj) const
-    {
-        return RegionSpace::IsMarkedObject<G>(obj) ||
-            (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
-    }
-    void StartOldMarkWork();
-    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override;
-    virtual bool MarkObject(BaseObject* obj) const;
-
-    // Consume one object entry. Partial arrays must be decoded before this
-    // entry point; mark=false carries an already-owned accounting obligation.
-    bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
-                                 MarkLiveCache* cache) const;
-
-    virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
-    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false)
-    {
-        Collector::AbortUnimplemented("CopyCollector::TraceObjectRefFields");
-    }
-    // Follow one partial-array chunk popped off the work stack. Ported from
-    // ZGC's ZMark::follow_partial_array (zMark.cpp:265-270). Only reachable
-    // for typed partial-array entries published by the array traversal.
-    virtual void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack);
-    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
-    {
-        Collector::AbortUnimplemented("CopyCollector::GetAndTryTagObj");
-    }
-    inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
-
-    // ZPage::mark_object(addr, finalizable = true) with direct inc_live accounting.
-    virtual bool ResurrectObject(BaseObject* obj, size_t offset, ZPage* regionInfo)
-    {
-        (void)offset;
-        bool incLive = false;
-        const bool newlyMarked = regionInfo->mark_object(from_object(obj), true, incLive);
-        if (incLive) {
-            regionInfo->inc_live(1, obj->GetSize());
-        }
-        bool resurrected = !newlyMarked;
-        if (!resurrected) {
-            size_t objSize = obj->GetSize();
-            if (!fixReferences && regionInfo->IsFromRegion()) {
-                VLOG(REPORT, "resurrection tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
-            }
-        }
-        return resurrected;
-    }
-
-    Allocator& GetAllocator() const { return theAllocator; }
-
-
-    MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
-    virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
-
-    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old) override
-    {
-        return GetZGeneration(generation).Stats();
-    }
-
-    virtual void UpdateGCStats();
-
-
-protected:
-    virtual void ForwardFromSpace(ZGenerationId generation);
-    virtual void RefineFromSpace();
-    virtual void DoGarbageCollection(ZGenerationId generation) = 0;
-    void RequestGCInternal(GCReason reason, bool async) override { collectorResources.RequestGC(reason, async); }
-
-    Allocator& theAllocator;
-
-    // A collectorResources provides the resources that the tracing collector need,
-    // such as gc thread/threadPool, gc task queue.
-    // Also provides the resource access interfaces, such as invokeGC, waitGC.
-    // This resource should be singleton and shared for multi-collectors
-    CollectorResources& collectorResources;
-    U32 snapshotFinalizerNum = 0;
-
-
-    // indicate whether to fix references (including global roots and reference fields).
-    // this member field is useful for optimizing concurrent copying gc.
-    bool fixReferences = false;
-
-    std::atomic<size_t> markedObjectCount = { 0 };
-    std::mutex externMtx;
-    // ZGC zUncoloredRoot.hpp:46-49: uncolored roots keep their color in
-    // the container. A current address must not be interpreted as a from-key.
-    struct ValueRoot {
-        BaseObject* object;
-        ForwardingStage stage;
-        uintptr_t color;
-        Generation generation;
-        ValueRoot(BaseObject* value, ForwardingStage source = ForwardingStage::OverwritePrevious)
-            : object(value), stage(source), color(::g_cjLoadGoodMask),
-              generation(source == ForwardingStage::IncomingNew && Heap::IsHeapAddress(value)
-                  ? Heap::page(reinterpret_cast<MAddress>(value))->GetOwnerGeneration()
-                  : Generation::Old) {}
-        operator BaseObject*() const { return object; }
-        ForwardingStage Stage() const
-        {
-            // ZGC zUncoloredRoot.inline.hpp:64-65 selects the remap generation.
-            // An unrelated generation flip cannot invalidate this current root.
-            const uintptr_t mask = generation == Generation::Young
-                ? ZPointerRemappedYoungMask
-                : ZPointerRemappedOldMask;
-            return (ZPointer::remap_bits(color) & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
-        }
-    };
-    struct ValueRootHash {
-        size_t operator()(const ValueRoot& root) const { return std::hash<BaseObject*>{}(root.object); }
-    };
-    using ValueRootSet = std::unordered_set<ValueRoot, ValueRootHash>;
-    using ValueRootList = std::list<ValueRoot>;
-    using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>;
-    ValueRootMap discoveredExternObjects;
-#if defined(MRT_TESTABLE_INTERNALS)
-    void ObserveExportOwnershipForTest(bool afterHandoff);
-#endif
-    // Resolver callbacks may enter managed code and therefore must not own the
-    // root-carrier mutex.  Keep resolver serialization separate from the mutex
-    // used by GC root and preforward consumers.
-    std::mutex cycleResolverMtx;
-    std::mutex cycleWorkStackMtx;
-    ValueRootMap cycleRefWorkStack;
-    // Number of callbacks already delivered for each stable export id. A
-    // resolver can be reposted when PREFORWARD is published while a managed
-    // callback is running, so progress must outlive one ResolveCycleRef call.
-    // Protected by cycleWorkStackMtx together with the root carrier.
-    std::unordered_map<U32, size_t> cycleRefProgress;
-    std::mutex resurrectExportMtx;
-    ValueRootSet resurrectedExportObjectes;
-    ValueRootSet resurrectedExportObjectesForwardPhase;
-
-    // Value-only root containers have no addressable RootSlot to heal. Keep
-    // their RootObligation on the existing ResolveStoreValue authority and
-    // rebuild key-bearing containers while their owner lock is held.
-    BaseObject* ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
-                                        ForwardingStage stage = ForwardingStage::OverwritePrevious) const;
-    void CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const;
-    void CurrentizeValueRootMap(ValueRootMap& roots, Generation generation) const;
-
-    inline WorkStack NewWorkStack() const
-    {
-        WorkStack workStack = WorkStack();
-        return workStack;
-    }
-
-
-    // enum all common roots.
-    void EnumAllCommonRoots(ZWorkers& workers);
-    ZWorkers& GetWorkers(ZGenerationId generation) const
-    {
-        return *GetZGeneration(generation).Workers();
-    }
-    // enum roots referenced by foreign languages.
-    void EnumAllExportRoots(RootSet& foreignRootsSet);
-    // let finalizerProcessor process finalizers, and mark resurrected if in light sync gc
-    virtual void ProcessFinalizers() {}
-    void DiscoverFinalizableRoot(NativeSlot& slot) const;
-
-    void MergeMutatorRoots(WorkStack& workStack);
-    void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
-    void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
-    WorkStack oldMarkWorkStack;
-    WorkStack oldMarkForeignRoots;
-    bool FlushMarkProducers(ZMark* domain);
-    void ProcessOldNonStrongReferences(WorkStack& workStack);
-    void ProcessExportRoots(WorkStack& foreignRootsSet);
-
-    // concurrent marking.
-    void TracingImpl(WorkStack& workStack);
-
-    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet, Generation generation) const
-    {
-        Collector::AbortUnimplemented("CopyCollector::EnumAndTagRawRoot");
-    }
-
-    void FindUselessExternObjects();
-
-    // Export-root producer consumed by the old roots task (zMark.cpp
-    // mark_old_roots -> MarkOldObjectIfActive).
-    void VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor);
-
-private:
-    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
-    void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
-
-    void VisitStaticRoots(const NativeSlotVisitor& visitor) const;
-    void VisitFinalizerRoots(const NativeSlotVisitor& visitor) const;
+struct Y2yHandoffTestReceipt {
+    uint64_t phase0 = 0; // release-boundary observation
+    uint64_t phase1 = 0; // roots consumed after release
+    uint64_t phase2 = 0; // STW2 merge
+    uint64_t beforeRelease = 0;
+    uint64_t afterRoot = 0;
+    uint64_t afterStw2 = 0;
 };
+void ResetY2yHandoffTestReceipt();
+Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt();
+void NoteY2yBeforeReleaseTestReceipt(uint64_t pending);
+void NoteY2yAfterRootTestReceipt(uint64_t pending);
+void NoteY2yAfterStw2TestReceipt(uint64_t pending);
+void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications);
+void PublishY2yAfterReleaseTestReceipt();
+void ArmMarkBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second = nullptr);
+void PublishMarkBeforeMarkEndTestReceipt();
+void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder);
+void PublishConcurrentYoungProducersTestReceipt();
+void ArmLeftoverBeforePauseTestReceipt(BaseObject* y2yHolder);
+void PublishLeftoverBeforePauseTestReceipt();
+
+struct ExportRootPublicationTestReceipt {
+    uint64_t registrationsAfterT1 = 0;
+    uint64_t producerFlushes = 0;
+    uint64_t observedAtT2 = 0;
+    U64 handle = std::numeric_limits<U64>::max();
+    bool holderMarked = false;
+    bool childMarked = false;
+};
+void ResetExportRootPublicationTestReceipt();
+void ArmExportRootAfterT1TestReceipt(Mutator* producer, BaseObject* holder, BaseObject* child);
+void PublishExportRootAfterT1TestReceipt();
+void FlushExportRootAfterT1TestReceipt();
+void NoteExportRootPublicationAtT2TestReceipt();
+ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt();
+#endif
+
+// portyoungconc: work accounting for the concurrent young mark window.
+// ZGC anchor: ZGenerationYoung::concurrent_mark() = mark_roots() + mark_follow()
+// (zGeneration.cpp:665-669) — everything a young collector does between
+// pause_mark_start and pause_mark_end runs with mutators alive.
+// Every field below counts GC work performed while the world is running. A
+// Duration alone does not establish that the concurrent window performed marking work.
+
+
+#if defined(MRT_TESTABLE_INTERNALS)
+
+
+#endif
+
+
+
+
+
+class VM_ZMarkStartYoung;
+class VM_ZMarkStartYoungAndOld;
+class VM_ZMarkEndYoung;
+class VM_ZRelocateStartYoung;
+class VM_ZMarkEndOld;
+class VM_ZRelocateStartOld;
+class VM_ZVerifyOld;
+
+
+class MarkingWork;
+
+
 } // namespace MapleRuntime
 #endif // MRT_COLLECTOR_TRACING_H

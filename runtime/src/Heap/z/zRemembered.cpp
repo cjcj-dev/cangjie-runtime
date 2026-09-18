@@ -20,7 +20,7 @@
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zWorkers.hpp"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/zRelocate.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/BaseObject.h"
 #include "Common/SuspendibleThreadSet.h"
@@ -33,7 +33,6 @@ namespace MapleRuntime {
 #if defined(__GNUC__)
 #pragma GCC visibility push(hidden)
 #endif
-namespace WCollectorInternal {
 bool HolderObjectIsLive(BaseObject* holder)
 {
     if (holder == nullptr || !Heap::IsHeapAddress(holder) || !holder->IsValidObject()) {
@@ -69,7 +68,6 @@ bool SlotHeldByLiveObject(const void* slot)
     }
     return HolderObjectIsLive(holder);
 }
-} // namespace WCollectorInternal
 #if defined(__GNUC__)
 #pragma GCC visibility pop
 #endif
@@ -158,7 +156,7 @@ void ZRemembered::oops_do_forwarded_via_containing(const std::vector<ZRemembered
     for (const ZRememberedSetContaining containing : *array) {
         if (from_addr != containing._addr) {
             from_addr = containing._addr;
-            BaseObject* to = Heap::GetHeap().GetCollector().relocate_or_remap_object(
+            BaseObject* to = Heap::GetHeap().relocate_or_remap_object(
                 reinterpret_cast<BaseObject*>(from_addr), ZGenerationId::old);
             to_addr = reinterpret_cast<MAddress>(to);
             object_size = to != nullptr ? RegionSpace::GetAllocSize(*to) : 0;
@@ -172,11 +170,10 @@ void ZRemembered::oops_do_forwarded_via_containing(const std::vector<ZRemembered
 
 bool ZRemembered::should_scan_page(ZPage* page) const
 {
-    Collector& collector = Heap::GetHeap().GetCollector();
     if (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_relocate()) {
         return true;
     }
-    ZForwarding* forwarding = collector.GetZGeneration(ZGenerationId::old).forwarding(
+    ZForwarding* forwarding = Heap::GetHeap().GetZGeneration(ZGenerationId::old).forwarding(
         untype(ZOffset::address_unsafe(page->start())));
     if (forwarding == nullptr) {
         return true;
@@ -189,7 +186,6 @@ bool ZRemembered::should_scan_page(ZPage* page) const
 
 bool ZRemembered::scan_page_and_clear_remset(ZPage* page) const
 {
-    Collector& collector = Heap::GetHeap().GetCollector();
     const bool can_trust_live_bits =
         page->is_relocatable() && (ZGeneration::old() == nullptr || !ZGeneration::old()->is_phase_mark());
     bool result = false;
@@ -384,7 +380,7 @@ void ZRemembered::scan_and_follow(ZMark* mark)
 {
     {
         ZRememberedScanMarkFollowTask task(this, mark);
-        ZWorkers* workers = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).Workers();
+        ZWorkers* workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers();
         if (workers != nullptr) {
             workers->run(&task);
         } else {

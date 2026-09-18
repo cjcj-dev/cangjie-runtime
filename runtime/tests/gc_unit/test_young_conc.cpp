@@ -44,12 +44,12 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #if defined(MRT_TESTABLE_INTERNALS)
 #include "young_closure_observation.hpp"
 #include "mark_publication_fixture.hpp"
@@ -71,14 +71,14 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     WorkStack workStack;
-    collector.DiscoverWeakReference(fx.obj0, workStack);
+    ZMark::DiscoverWeakReference(fx.obj0, workStack);
 
     GC_EXPECT_TRUE(workStack.empty());
     GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(fx.obj1)));
     ReferenceProcessor& processor =
-        Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor();
+        Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
     processor.ProcessReferences([](BaseObject*) { return true; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
 }
@@ -91,72 +91,40 @@ extern "C" int CJ_ScheduleManagerInit();
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
+    static void BindCollector(Heap* collector)
     {
-        if (collector == nullptr && resources.testCollector != nullptr) {
-            // Worker TLS teardown flushes through the still-bound collector.
-            for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-                resources.testCollector->GetZGeneration(generation).StopWorkers();
-            }
-        }
-        if (collector != nullptr && resources.testCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
-        }
-        resources.testCollector = collector;
         if (collector != nullptr) {
+            CHECK(collector == &Heap::GetHeap());
             // Product driver startup owns one worker set per generation
             // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).
             for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-                auto& cycle = collector->GetZGeneration(generation);
+                auto& cycle = Heap::GetHeap().GetZGeneration(generation);
                 if (cycle.Workers() == nullptr) cycle.InitializeWorkers(2);
             }
         }
     }
 
-    static void FlipYoungMarkForNativeBarrier(WCollector& collector)
+    static void FlipYoungMarkForNativeBarrier(Heap& collector)
     {
         ZGlobalsPointers::flip_young_mark_start();
     }
 
-    static void StartYoungRelocate(WCollector& collector)
+    static void StartYoungRelocate(Heap& collector)
     {
         ZGlobalsPointers::flip_young_relocate_start();
     }
 
-    static void RunCollectionDispatch(WCollector& collector)
+    static void RunCollectionDispatch(Heap& collector)
     {
-        auto& cycle = collector.GetZGeneration(ZGenerationId::young);
+        auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
         if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
         YoungTypeSetter type(cycle, ZYoungType::minor);
-        collector.DoGarbageCollection(ZGenerationId::young);
+        Heap::GetHeap().young().collect();
     }
 };
 } // namespace MapleRuntime
 
 namespace {
-
-class TestCollector final : public Collector {
-public:
-    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
-    { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }
-    void MarkYoungObjectIfActive(BaseObject* object) const override
-    { MarkPublicationFixture::Current().collector.MarkYoungObjectIfActive(object); }
-    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const override
-    { return MarkPublicationFixture::Current().collector.GetCycleSnapshot(generation); }
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*, Generation) const override
-    {
-        return FindToVersionResult::NotForwarded();
-    }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>&) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
-    {
-        return RefField<>(GcUnit::StoreGoodPointer(obj));
-    }
-};
 
 class YoungConcTestRuntime final : public Runtime {
 public:
@@ -212,7 +180,7 @@ GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
 }
 
 // Paint-then-claim-skip: already-marked MarkObject returns true; without grey ledger
-// TraceYoungClosure would drop reachableVec/fields (WCollector.cpp:8110-8136).
+// TraceYoungClosure would drop reachableVec/fields (CopyCollector.cpp:8110-8136).
 // A mutator publishes ordinary SATB work after coordinated mark workers have
 // terminated but before pause-mark-end starts. Each pause is allowed exactly
 // one flush. Two publications therefore require two continue edges followed by
@@ -231,21 +199,20 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + 64);
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
+    Heap& collector = Heap::GetHeap();
+    RelocationReceiptTestAccess::BindCollector(&collector);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(first);
     space.GetRegionManager().AddRawPointerObject(second);
     Mutator producer;
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
     ResetMarkTerminateTestReceipt();
     ArmMarkBeforeMarkEndTestReceipt(&producer, first);
 
@@ -265,8 +232,8 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     (void)second;
 
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 // ZGC zGeneration.cpp:550-552,897-905: published work prevents mark completion.
@@ -285,19 +252,18 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
+    Heap& collector = Heap::GetHeap();
+    RelocationReceiptTestAccess::BindCollector(&collector);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
     ResetMarkTerminateTestReceipt();
     ArmY2yDuringConcurrentTestReceipt(fx.obj1);
 
@@ -314,8 +280,8 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     GC_EXPECT_TRUE(closure.Saw(child));
 
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 // ZGC zGeneration.cpp:550-552,897-905: published work prevents mark completion.
@@ -335,19 +301,18 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
+    Heap& collector = Heap::GetHeap();
+    RelocationReceiptTestAccess::BindCollector(&collector);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
     ResetMarkTerminateTestReceipt();
     ResetY2yHandoffTestReceipt();
     Mutator producer;
@@ -373,8 +338,8 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     GC_EXPECT_TRUE(closure.Saw(child));
 
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 // Worker termination then mutator leftover y2y before STW.
@@ -394,20 +359,19 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     auto* y2yField = &HeapSlotAt<>(reinterpret_cast<MAddress>(y2yHolder) + TYPEINFO_PTR_SIZE);
     y2yField->StoreColoured(GcUnit::StoreGoodPointer(y2yChild));
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
+    Heap& collector = Heap::GetHeap();
+    RelocationReceiptTestAccess::BindCollector(&collector);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     space.GetRegionManager().AddRawPointerObject(y2yHolder);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
     ResetMarkTerminateTestReceipt();
     ArmLeftoverBeforePauseTestReceipt(y2yHolder);
 
@@ -425,8 +389,8 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     GC_EXPECT_TRUE(closure.Saw(y2yChild));
 
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
@@ -440,19 +404,18 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     fx.region1->reset(PageAge::eden);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj1) + 64);
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
+    Heap& collector = Heap::GetHeap();
+    RelocationReceiptTestAccess::BindCollector(&collector);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
     ResetMarkTerminateTestReceipt();
 
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
@@ -463,8 +426,8 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
 
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
 // ZGC native stores consume prev (zBarrier.inline.hpp:709-715), including
@@ -515,7 +478,6 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
     fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -691,8 +653,8 @@ GC_TEST(YoungConc, IdleStoreDoesNotPublishMarkWork)
     MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
-    markFixture.collector.GetZGeneration(ZGenerationId::young).PublishPhase(ZGenerationPhase::Relocate);
-    markFixture.collector.GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::Relocate);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).PublishPhase(ZGenerationPhase::Relocate);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::Relocate);
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(to_zpointer(raw(StoreGoodPointer(fx.obj1)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
     ZBarrier::WriteReference(fx.obj0, field, nullptr);
@@ -721,7 +683,7 @@ GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
     MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::eden);
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
-    markFixture.collector.MarkYoungObjectIfActive(fx.obj0);
+    Heap::GetHeap().MarkYoungObjectIfActive(fx.obj0);
     GC_EXPECT_EQ(markFixture.YoungPending(), 1u);
     GC_EXPECT_EQ(markFixture.OldPending(), 0u);
 }
@@ -859,7 +821,7 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     if (young && finalizable) continue;
                     GcHeapFixture fx;
                     MarkPublicationFixture publication;
-                    auto& cycle = publication.collector.GetZGeneration(
+                    auto& cycle = Heap::GetHeap().GetZGeneration(
                         young ? ZGenerationId::young : ZGenerationId::old);
                     fx.region0->reset(young ? PageAge::eden : PageAge::old);
                     fx.region0->ResetPageSequence();
@@ -873,8 +835,8 @@ GC_TEST(P1Mark, AllocatingAndRelocatablePolicyMatrix)
                     GcHeapFixture::AdvanceGeneration(young ? Generation::Young : Generation::Old);
                     cycle.PublishPhase(ZGenerationPhase::Mark);
                     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, gcThread, follow, finalizable);
-                    ZMark& domain = young ? *publication.collector.YoungMark()
-                                              : *publication.collector.MajorMark();
+                    ZMark& domain = young ? *Heap::GetHeap().young().MarkPtr()
+                                              : *Heap::GetHeap().old().MarkPtr();
                     ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), domain);
                     MarkStackEntry entry;
                     size_t entries = 0;
@@ -910,7 +872,7 @@ GC_OTHER_VM_TEST(P1Mark, DuplicateAnyThreadStopsAtConsumer)
     fx.region0->reset(PageAge::eden);
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Young);
-    auto& cycle = publication.collector.GetZGeneration(ZGenerationId::young);
+    auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     cycle.PublishPhase(ZGenerationPhase::Mark);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
     CallMarkObjectIfActive(cycle, from_object(fx.obj0), false, false, false, false);
@@ -929,8 +891,8 @@ GC_TEST(P1Mark, ResurrectAndInactivePhasePolicies)
 {
     GcHeapFixture fx;
     MarkPublicationFixture publication;
-    auto& cycle = publication.collector.GetZGeneration(ZGenerationId::old);
-    auto& domain = *publication.collector.MajorMark();
+    auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+    auto& domain = *Heap::GetHeap().old().MarkPtr();
     fx.region0->reset(PageAge::old);
     fx.region0->ResetPageSequence();
     GcHeapFixture::AdvanceGeneration(Generation::Old);

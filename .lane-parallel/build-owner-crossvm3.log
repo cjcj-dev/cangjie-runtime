@@ -1,0 +1,14 @@
+# kkk2_build_two lane=sym_cangjie_runtime_700_implement_r5723534433-owner-crossvm3 head=f49bd78712f5cd31043a1456f85292050f3bc8ce dirty_files=42 source_sha256=dcff8977d52f4832…
+== default configure_rc=0 build_rc=2 wall=12s
+-- first errors (default):
+default-build.log:7804:/usr/src/cangjie-runtime/build/src/Heap/../../../runtime/src/Heap/z/zCrossVM.cpp:339: undefined reference to `void MapleRuntime::ZGeneration::MarkObjectIfActive<false, true, true, false>(MapleRunti
+default-build.log:7805:clang: error: linker command failed with exit code 1 (use -v to see invocation)
+-- SO (default):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+== testable configure_rc=0 build_rc=0 wall=15s
+-- SO (testable):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+52efa693b0147d94a2bb56ce1a1040d5acf9e808c730b329c3db4f0b53f7d0c5  build/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+-- logs: /root/sym_cangjie_runtime_700_implement_r5723534433-owner-crossvm3/{default,testable}-{configure,build}.log

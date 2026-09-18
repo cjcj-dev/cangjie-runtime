@@ -3,29 +3,18 @@
 // with Runtime Library Exception.
 
 #include "gc_cycle_sequence_fixture.hpp"
-#include <dlfcn.h>
 #include <memory>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zMarkStack.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
-// Bind the existing product implementation, never instantiate a second copy
-// of the mark claim in the test ELF. The runtime entry arms are separate from
-// these focused accounting checks.
-using ProductMark = bool (*)(const WCollector*, BaseObject*, bool, MarkLiveCache*);
-ProductMark CachedMark()
-{
-    auto fn = reinterpret_cast<ProductMark>(dlsym(RTLD_DEFAULT,
-        "_ZNK12MapleRuntime10WCollector14MarkObjectImplEPNS_10BaseObjectEbPNS_13MarkLiveCacheE"));
-    GC_EXPECT_TRUE(fn != nullptr);
-    return fn;
-}
-
+// Exercise the product mark-entry page claim and live accounting directly.
+// Runtime entry arms remain separate from these focused accounting checks.
 void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
 {
     GcHeapFixture fx;
@@ -35,15 +24,16 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
         fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
         fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + fx.obj0->GetSize());
     }
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     const size_t size = fx.obj0->GetSize();
-    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     if (finalizable) {
-        GC_EXPECT_FALSE(collector.ResurrectObject(fx.obj0, offset, fx.region0));
+        GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
     }
     MarkLiveCache cache(1);
-    const bool already = CachedMark()(&collector, fx.obj0, false, &cache);
-    const bool secondAlready = repeat ? CachedMark()(&collector, fx.obj0, false, &cache) : true;
+    const bool already = ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
+    const bool secondAlready = repeat ? ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache) : true;
     cache.Flush();
     const uint64_t bytes = fx.region0->live_bytes();
     const uint32_t objects = fx.region0->live_objects();
@@ -92,7 +82,6 @@ GC_TEST(MarkPort203Entries, LargeFinalizableUpgradeDoesNotAccountTwice)
 GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 {
     GcHeapFixture fx;
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     // Choose a legal power-of-two shift from actual fixture addresses rather
     // than assuming that mmap placed both pages below one bucket boundary.
     size_t stripes = 1;
@@ -105,8 +94,10 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
     uint64_t evictedBytes = 0;
     {
         MarkLiveCache cache(stripes);
-        (void)CachedMark()(&collector, fx.obj0, false, &cache);
-        (void)CachedMark()(&collector, fx.obj1, false, &cache);
+        (void)ZMark::MarkEntryObject(fx.obj0,
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), &cache);
+        (void)ZMark::MarkEntryObject(fx.obj1,
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj1))), true, true, false, false), &cache);
         evictedObjects = fx.region0->live_objects();
         evictedBytes = fx.region0->live_bytes();
     }
@@ -125,7 +116,7 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 #if defined(MRT_TESTABLE_INTERNALS)
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MArray.inline.h"
@@ -136,29 +127,31 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct MarkPort203TestAccess {
-    static void Bind(CollectorResources& resources, CopyCollector* collector, int32_t count = 1)
+    static void Bind(Heap* collector, int32_t count = 1)
     {
-        if (collector != nullptr && resources.testCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
-        }
-        resources.testCollector = collector;
-        resources.concurrentGcThreadCount = count;
+        if (collector != nullptr) CHECK(collector == &Heap::GetHeap());
+        ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(count);
     }
-    static void Collect(WCollector& collector, bool major)
+    static void Collect(Heap& collector, bool major)
     {
         // The major driver normally initializes old marking in its young prelude.
         // This focused old-body fixture supplies the same product initialization.
         if (major) {
-            auto& old = collector.GetZGeneration(ZGenerationId::old);
+            auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
             if (!old.Snapshot().active) old.Begin(0);
             // The fixture bypasses the young prelude, so preserve its real
             // old mark-start color transition before the sequence/domain.
             // ZGenerationOld::mark_start, zGeneration.cpp:1213-1226.
             ZGlobalsPointers::flip_old_mark_start();
             GenerationSequenceFixture::Advance(old);
-            collector.StartOldMarkWork();
+            Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+            Heap::GetHeap().old().Mark().Start();
         }
-        collector.DoGarbageCollection(major ? ZGenerationId::old : ZGenerationId::young);
+        if (major) {
+            Heap::GetHeap().old().collect();
+        } else {
+            Heap::GetHeap().young().collect();
+        }
     }
 };
 }
@@ -313,16 +306,15 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     fx.region1->SetRegionAllocPtr(next);
     GC_EXPECT_TRUE(next <= fx.region1->GetRegionEnd());
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    MarkPort203TestAccess::Bind(resources, &collector, static_cast<int32_t>(helpers + 1));
+    Heap& collector = Heap::GetHeap();
+    MarkPort203TestAccess::Bind(&collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-        collector.GetZGeneration(generation).InitializeWorkers(helpers + 1);
+        Heap::GetHeap().GetZGeneration(generation).InitializeWorkers(helpers + 1);
     }
-    collector.GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
+    Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
         .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
-    collector.GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
+    Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(children.back());
@@ -333,24 +325,26 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     AllocBuffer* invisibleBuffer = nullptr;
     bool ownsInvisibleBuffer = false;
     if (finalizable) {
-        resources.GetFinalizerProcessor().RegisterFinalizer(finalizerRoot);
+        Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizer(finalizerRoot);
     } else if (markOnly || duplicateRootOrder != 0) {
         ownsInvisibleBuffer = AllocBuffer::GetAllocBuffer() == nullptr;
         invisibleBuffer = AllocBuffer::GetOrCreateAllocBuffer();
-        collector.StartYoungMarkWork();
+        Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+        Heap::GetHeap().young().Mark().Start();
+        MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
         if (duplicateRootOrder != 0) {
             // Two snapshots of one root use the actual private producers.
             // The TLS stack and GC decide the consumer order.
             if (duplicateRootOrder < 0) {
-                collector.PublishThreadRoot(array, true, true);
+                ZMark::PublishThreadRoot(array, true, true);
             }
-            collector.PublishThreadRoot(array, true, false);
+            ZMark::PublishThreadRoot(array, true, false);
             if (duplicateRootOrder > 0) {
-                collector.PublishThreadRoot(array, true, true);
+                ZMark::PublishThreadRoot(array, true, true);
             }
         } else {
             array->SetInvisibleObject(true);
-            collector.PublishThreadRoot(array, true, false);
+            ZMark::PublishThreadRoot(array, true, false);
         }
     } else if (commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {
@@ -367,12 +361,14 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
             space.GetRegionManager().AddRawPointerObject(child);
         }
     }
-    const bool wasStarted = resources.IsGcStarted();
-    const GCReason oldReason = resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason;
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young);
+    const bool wasStarted = Heap::GetHeap().IsGcStarted();
+    const GCReason oldReason = Heap::GetHeap().GetGCStats(
+        major ? ZGenerationId::old : ZGenerationId::young).reason;
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason = major ? GC_REASON_USER : GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason =
+        major ? GC_REASON_USER : GC_REASON_YOUNG;
     ArrayClosureResult result;
     result.region = fx.region1;
     result.array = array;
@@ -395,7 +391,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     const size_t expectedBytes = arrayBytes + expectedChildren * children[0]->GetSize() +
         (finalizable ? finalizerRoot->GetSize() : 0);
     if (finalizable) {
-        resources.GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
+        Heap::GetHeap().GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
             root.StoreColoured(StoreGoodPointer(nullptr));
         });
     } else if (markOnly || duplicateRootOrder != 0) {
@@ -411,13 +407,13 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         Heap::GetHeap().RemoveExportObject(handle);
     }
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason = oldReason;
+    Heap::GetHeap().GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason = oldReason;
 
-    // Worker TLS cleanup must finish while its collector still owns publication.
+    // Worker TLS cleanup must finish while the heap generation owns publication.
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
-        collector.GetZGeneration(generation).StopWorkers();
+        Heap::GetHeap().GetZGeneration(generation).StopWorkers();
     }
-    MarkPort203TestAccess::Bind(resources, nullptr);
+    MarkPort203TestAccess::Bind(nullptr);
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",
                  variant, arrayMarked, markedChildren, objects, static_cast<size_t>(bytes), expectedBytes);
     GC_EXPECT_EQ(markedChildren, expectedChildren);

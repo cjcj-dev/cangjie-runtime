@@ -8,19 +8,23 @@
 #include <atomic>
 #include <mutex>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include "Common/MarkWorkStack.h"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Heap/z/zStat.hpp"
-#include "Heap/Collector/GcStats.h"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zGenerationId.hpp"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSet.hpp"
 #include "Heap/z/zRemembered.hpp"
 namespace MapleRuntime {
 class ZMark;
 class ZRelocate;
+struct ForwardingProvenance;
 class ZRelocationSetSelector;
 enum class zaddress : Uptr;
 struct TenuringInputs;
@@ -37,8 +41,7 @@ struct GCCycleSnapshot {
     ZGenerationPhase phase;
     bool active;
 };
-class WCollector;
-struct YoungCollectionStats;
+class ScopedStopTheWorld;
 class ZGeneration;
 class ZGenerationYoung;
 class ZGenerationOld;
@@ -54,6 +57,15 @@ public:
     ZGeneration(const ZGeneration&) = delete;
     ZGeneration& operator=(const ZGeneration&) = delete;
     ZGenerationId id() const;
+    void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
+    void PostGarbageCollection(uint64_t gcIndex);
+#if defined(MRT_TESTABLE_INTERNALS)
+    static std::function<void()> testCyclePrepared;
+    static std::function<void()> testYoungMarkStarted;
+    static std::function<void()> testOldMarkStarted;
+    static std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> testMarkStartState;
+    static std::function<void()> testYoungMarkCompleted;
+#endif
     ZGenerationIdOptional id_optional() const;
     bool is_young() const;
     bool is_old() const;
@@ -120,8 +132,6 @@ public:
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
     void Begin(uint64_t index);
-    YoungCollectionStats StartYoungMark(WCollector& collector);
-    void StartOldMark(WCollector& collector);
     void PublishPhase(ZGenerationPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
@@ -134,11 +144,13 @@ public:
     ZRelocationSet& relocation_set() { return _relocation_set; }
     ZRelocate& relocate() { return *_relocate; }
     ZForwarding* forwarding(MAddress addr) const { return addr == 0 ? nullptr : _forwarding_table.get(addr); }
+    BaseObject* relocate_or_remap_object(BaseObject* object);
+    BaseObject* relocate_or_remap_object(BaseObject* object, const ForwardingProvenance& provenance);
     void reset_relocation_set();
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
     void flip_age_pages(const ZRelocationSetSelector* selector);
     void select_relocation_set(bool promote_all);
-    private:
+protected:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
 #endif
@@ -207,11 +219,17 @@ private:
 class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung();
+    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
+        const std::unordered_set<MAddress>& rememberedSlots, bool refFixSlotsCoveredByReachable,
+        const std::unordered_map<MAddress, BaseObject*>& interiorBases,
+        std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
     ~ZGenerationYoung();
     bool should_record_stats() override;
     void collect();
+    void mark_start();
     void pause_mark_start();
     void concurrent_mark();
+    bool mark_end();
     bool pause_mark_end();
     void concurrent_mark_continue();
     void concurrent_mark_free();
@@ -220,20 +238,48 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    using MinorObjectSet = std::unordered_set<BaseObject*>;
+    using MinorRegionSet = std::unordered_set<ZPage*>;
+    using MinorSlotSet = std::unordered_set<MAddress>;
+    using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
+    // gc index 0 or 1 is used to distinguish previous gc and current gc.
+    uint64_t minorTotalRuns = 0;
+    MinorRegionSet minorCandidateRegions;
+    std::unique_ptr<ScopedStopTheWorld> youngStw;
+    std::vector<BaseObject*> youngReachableVec;
+    MinorSlotSet youngConsumedSlots;
+    MinorInteriorBaseMap youngRemsetInteriorBases;
+    YoungCollectionStats youngStats;
+    uint64_t youngStartNs = 0;
+    size_t youngLiveBytes = 0;
+    size_t youngLiveRememberedCount = 0;
+    bool youngFullScan = false;
+    WorkStack youngWorkStack;
+    uint64_t youngStackScanEpoch = 0;
+    YoungConcWindowStats youngConcWindow;
+    uint64_t youngConcWindowStartNs = 0;
+    MinorSlotSet youngWeakSlots;
     ZGenerationYoung* previousYoung { nullptr };
 };
 
 class ZGenerationOld : public ZGeneration {
 public:
     ZGenerationOld();
+    void PostTrace();
+    void CollectSmallSpace();
+    void CollectLargeGarbage();
+    void CollectPinnedGarbage();
     ~ZGenerationOld();
     bool should_record_stats() override;
     void collect();
+    void mark_start();
     void concurrent_mark();
+    bool mark_end();
     bool pause_mark_end();
     void concurrent_mark_continue();
     void concurrent_mark_free();
     void concurrent_process_non_strong_references();
+    void process_non_strong_references();
     void concurrent_reset_relocation_set();
     void pause_verify();
     void concurrent_select_relocation_set();
@@ -241,6 +287,8 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    WorkStack oldMarkWorkStack;
+    WorkStack oldMarkForeignRoots;
     ZGenerationOld* previousOld { nullptr };
 };
 

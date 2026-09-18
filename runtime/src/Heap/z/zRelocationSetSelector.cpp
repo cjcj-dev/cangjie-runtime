@@ -29,7 +29,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/CopyCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"
@@ -259,18 +259,6 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
     clearList(largeTraceRegions);
 }
 
-// routedest: drop the destination holds of one route generation. Called from
-// PrepareFromRegionList, immediately after the ghost dispel walk and before the next
-// generation's destinations are enrolled — placing it there rather than at the three
-// PrepareForwardTable call sites is what makes it immune to a missed site, and there are
-// three, two of them inside a single minor (WCollector.cpp:5117 and :5570) plus the major
-// PostTrace one (:2124).
-//
-// Walks the same eleven lists as ClearNotRelocatableThisCycleFlags, and reports the gauge
-// before clearing: holds that leak never get dropped and show up as monotonic growth in
-// held_regions, which is the only way to tell that failure apart from the opposite one.
-
-
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
     (void)collectAll;
@@ -398,7 +386,7 @@ bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
 // Semi-sort by per-page live fraction, then select the last profitable prefix.
 size_t RegionManager::ExemptFromRegions()
 {
-    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     old.select_relocation_set(false);
     ZRelocationSetIterator rs_iter(&old.relocation_set());
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {

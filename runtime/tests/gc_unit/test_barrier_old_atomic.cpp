@@ -8,18 +8,22 @@
 #include <thread>
 #include <vector>
 
-// This TU alone needs CollectorProxy friendship to publish a real heap phase.
-// Product libraries keep their configured macro set.
-#ifndef MRT_TESTABLE_INTERNALS
-#define MRT_TESTABLE_INTERNALS 1
-#endif
-
 // Populate reflection metadata in this TU; the runtime keeps its normal access.
 #include "Common/TypeDef.h"
 #include "Common/Dataref.h"
 #define private public
 #include "ObjectModel/FieldInfo.h"
 #undef private
+
+// This TU enables the existing mark-publication test peer after heap layout is fixed.
+// Parse value-owned heap resources with the product macro configuration before
+// enabling the existing test peers; their member offsets must match the SO.
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
+
+#ifndef MRT_TESTABLE_INTERNALS
+#define MRT_TESTABLE_INTERNALS 1
+#endif
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -33,7 +37,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
@@ -50,66 +54,7 @@ using namespace MapleRuntime::GcUnit;
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicReadReference(
     MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field, MapleRuntime::MemoryOrder order);
 
-namespace MapleRuntime {
-
-struct RelocationReceiptTestAccess {
-    static void EnsureCollectorProxyBound(CollectorResources& resources)
-    {
-        (void)resources;
-    }
-};
-
-} // namespace MapleRuntime
-
 namespace {
-
-class BarrierCollector final : public Collector {
-public:
-    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
-    { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }
-    void MarkYoungObjectIfActive(BaseObject* object) const override
-    { MarkPublicationFixture::Current().collector.MarkYoungObjectIfActive(object); }
-    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const override
-    { return MarkPublicationFixture::Current().collector.GetCycleSnapshot(generation); }
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject* object, Generation) const override
-    {
-        return object == from && to != nullptr ? FindToVersionResult::Found(to) :
-                                                FindToVersionResult::NotForwarded();
-    }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>& field) const override { return IsLoadBad(field); }
-    bool IsCurrentPointer(RefField<>& field) const override { return ZPointer::is_load_good(field.GetFieldValue()); }
-    bool IsFromObject(BaseObject* object) const override { return object == from && to != nullptr; }
-    bool IsGhostFromObject(BaseObject*) const override { return false; }
-    bool IsUnmovableFromObject(BaseObject*) const override { return false; }
-    ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
-    BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override
-    {
-        std::unique_lock<std::mutex> lock(hookMutex);
-        if (pauseBeforeHeal) {
-            slowLoadObserved = true;
-            hookCv.notify_all();
-            hookCv.wait(lock, [this]() { return winnerStored; });
-        }
-        return object == from && to != nullptr ? to : object;
-    }
-    RefField<> GetAndTryTagRefField(BaseObject* object) const override
-    {
-        const uintptr_t remap = ZPointerRemapped;
-        return RefField<>(GcUnit::ColouredPointer(object, remap));
-    }
-
-    BaseObject* from = nullptr;
-    BaseObject* to = nullptr;
-    mutable std::mutex hookMutex;
-    mutable std::condition_variable hookCv;
-    mutable bool pauseBeforeHeal = false;
-    mutable bool slowLoadObserved = false;
-    mutable bool winnerStored = false;
-};
 
 class AllocBufferScope final {
 public:
@@ -147,26 +92,23 @@ private:
 class MarkWindowScope final {
 public:
     MarkWindowScope()
-        : resources(Heap::GetHeap().GetCollectorResources()), started(resources.IsGcStarted()),
-          reason(resources.GetGCStats().reason)
+        : started(Heap::GetHeap().IsGcStarted()), reason(Heap::GetHeap().GetGCStats().reason)
     {
-        RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-        phase = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-        activityCycle = &Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+        phase = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+        activityCycle = &Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         ownerWasActive = activityCycle->Snapshot().active;
         if (!ownerWasActive) activityCycle->Begin(1);
-        resources.GetGCStats().reason = GC_REASON_USER;
-        Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+        Heap::GetHeap().GetGCStats().reason = GC_REASON_USER;
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     }
     ~MarkWindowScope()
     {
-        Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phase);
-        resources.GetGCStats().reason = reason;
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phase);
+        Heap::GetHeap().GetGCStats().reason = reason;
         if (!ownerWasActive) activityCycle->End();
     }
 
 private:
-    CollectorResources& resources;
     bool started;
     ZGeneration* activityCycle = nullptr;
     bool ownerWasActive = false;
@@ -217,7 +159,6 @@ struct StoreFixture {
 
     GcHeapFixture heap;
     MarkPublicationFixture marking;
-    BarrierCollector collector;
     ZPage* regionOld = nullptr;
     ZPage* regionNew = nullptr;
     BaseObject* holder = nullptr;
@@ -282,7 +223,6 @@ GC_TEST(BarrierOldAtomic, AllocBufferOverwriteRetiresOldValueControl)
 GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
 {
     GcHeapFixture heap;
-    BarrierCollector collector;
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(heap.obj0);
     field.StoreColoured(before);
@@ -303,12 +243,10 @@ GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
 GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
 {
     GcHeapFixture heap;
-    BarrierCollector collector;
-    collector.from = heap.obj0;
-    collector.to = heap.PlaceObject(heap.heapStart + 256);
-    heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(collector.to) + collector.to->GetSize());
+    BaseObject* to = heap.PlaceObject(heap.heapStart + 256);
+    heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
-    const zpointer before = LoadBadPointer(collector.from);
+    const zpointer before = LoadBadPointer(heap.obj0);
     field.StoreColoured(before);
 
     BaseObject* const returned = CJ_MCC_AtomicReadReference(heap.obj1, &field, std::memory_order_seq_cst);
@@ -319,15 +257,14 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
                  static_cast<unsigned>(ZPointer::is_load_good((terminal).GetFieldValue())));
     std::fflush(stderr);
 
-    GC_EXPECT_TRUE(returned == collector.from);
-    GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == collector.from);
+    GC_EXPECT_TRUE(returned == heap.obj0);
+    GC_EXPECT_TRUE(to_object(terminal.GetTargetObject()) == heap.obj0);
     GC_EXPECT_TRUE(ZPointer::is_load_good((terminal).GetFieldValue()));
 }
 
 GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
 {
     GcHeapFixture heap;
-    BarrierCollector collector;
     BaseObject* const winner = heap.PlaceObject(heap.heapStart + 256);
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
@@ -347,9 +284,6 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
 GC_TEST(BarrierOldAtomic, NativeBulkLoadBadSourceResolvesBeforeHeapPublication)
 {
     GcHeapFixture heap;
-    BarrierCollector collector;
-    collector.from = heap.obj0;
-    collector.to = heap.obj1;
     NativeSlot source(LoadBadPointer(heap.obj0));
     HeapSlot<>& destination = HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     destination.StoreColoured(zpointer::null);
@@ -375,7 +309,6 @@ GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
         MarkPublicationFixture marking;
         heap.region0->reset(PageAge::old);
         heap.region1->reset(PageAge::eden);
-        BarrierCollector collector;
                 alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)] {};
         auto* component = reinterpret_cast<TypeInfo*>(componentStorage);
         component->SetType(TypeKind::TYPE_KIND_CLASS);

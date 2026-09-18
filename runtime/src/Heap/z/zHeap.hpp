@@ -9,6 +9,7 @@
 #define MRT_HEAP_H
 
 #include "Heap/z/zServiceability.hpp"
+#include "Heap/z/zCrossVM.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -18,13 +19,18 @@
 
 #include "Heap/z/zBarrier.hpp"
 #include "Base/ImmortalWrapper.h"
-#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGenerationId.hpp"
+#include "Heap/z/zPageTable.hpp"
+#include "Heap/z/zObjectAllocator.hpp"
+#include "Heap/z/zPageAllocator.hpp"
+#include <memory>
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
 #include "Heap/Allocator/RegionListTypes.hpp"
 #include "Heap/z/zPageFwd.hpp"
 #include "Common/BaseObject.h"
+#include "ObjectModel/RefField.h"
 #include "RuntimeConfig.h"
 
 #include <atomic>
@@ -43,30 +49,107 @@ class OopStorage;
 class ObjectClosure;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
+class RegionSpace;
 class AllocBuffer;
 class FinalizerProcessor;
-class CollectorResources;
+struct ForwardingProvenance;
+struct ThreadLocalData;
+struct ThreadGCData;
 class ZRemembered;
-
+class ExportRootTable;
+class StaticRootTable;
 
 class Heap {
+    friend class ZCollectedHeap;
 public:
     static Heap& GetHeap();
+    static Heap* heap() { return _heap; }
+    Heap();
+    ~Heap();
+    void install_page_table(MAddress base, size_t heapSize, size_t granule);
     ZRemembered& remembered();
-    virtual void Init(const HeapParam& vmHeapParam) = 0;
-    virtual void Fini() = 0;
-    virtual bool IsSurvivedObject(const BaseObject*) const = 0;
+    void Init(const HeapParam& vmHeapParam);
+    void Fini();
+    bool IsSurvivedObject(const BaseObject*) const;
     bool IsGarbage(const BaseObject* obj) const { return !IsSurvivedObject(obj); }
 
-    virtual bool IsGcStarted() const = 0;
+    bool IsGcStarted() const;
 
-    virtual bool IsGCEnabled() const = 0;
-    virtual void EnableGC(bool val) = 0;
+    bool IsGCEnabled() const;
+    void EnableGC(bool val);
 
-    virtual MAddress Allocate(size_t size, AllocType allocType) = 0;
+    MAddress Allocate(size_t size, AllocType allocType);
 
-    virtual Collector& GetCollector() = 0;
-    virtual Allocator& GetAllocator() = 0;
+    void RequestGC(GCReason reason, bool async);
+    void ResolveCycleRef();
+    void AddRawPointerObject(BaseObject* obj);
+    BaseObject* PinRawPointerObject(BaseObject* obj);
+    void RemoveRawPointerObject(BaseObject* obj);
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    void DumpRoots(LogType logType);
+    void DumpHeap(const CString& tag);
+    void DumpBeforeGC();
+    void DumpAfterGC();
+#endif
+    Allocator& GetAllocator();
+    RegionManager& page_allocator() { return _page_allocator; }
+    const RegionManager& page_allocator() const { return _page_allocator; }
+    ZObjectAllocator& object_allocator() { return _object_allocator; }
+    ZCrossVM& cross_vm() { return _cross_vm; }
+    const ZCrossVM& cross_vm() const { return _cross_vm; }
+    void MarkYoungRootObject(BaseObject* object);
+    void MarkObjectIfActive(BaseObject* object);
+    void MarkYoungObjectIfActive(BaseObject* object);
+    void MarkNewObject(BaseObject* object);
+    BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId generation);
+    BaseObject* make_load_good(RefField<>& ref, const ForwardingProvenance& provenance);
+    Generation ObjectGeneration(BaseObject* object) const;
+    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
+    {
+        return GetZGeneration(generation).Stats();
+    }
+    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
+    {
+        return GetZGeneration(generation).Snapshot();
+    }
+    bool OldActiveRemsetIsCurrent() const
+    {
+        return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
+            GetZGeneration(ZGenerationId::young).Sequence());
+    }
+    void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
+    bool FlushGCDataMarkProducers(ThreadGCData& data);
+    bool FlushThreadMarkProducers(ThreadLocalData* tls);
+    void PublishThreadRoot(BaseObject* object, bool young, bool follow);
+    bool IsGhostFromObject(BaseObject* obj) const;
+    bool IsUnmovableFromObject(BaseObject* obj) const;
+    BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
+    ZGenerationYoung& young() { return _young; }
+    const ZGenerationYoung& young() const { return _young; }
+    ZGenerationOld& old() { return _old; }
+    const ZGenerationOld& old() const { return _old; }
+    ZGeneration& GetZGeneration(ZGenerationId generation)
+    {
+        if (generation == ZGenerationId::young) {
+            return _young;
+        }
+        return _old;
+    }
+    const ZGeneration& GetZGeneration(ZGenerationId generation) const
+    {
+        if (generation == ZGenerationId::young) {
+            return _young;
+        }
+        return _old;
+    }
+    ZGeneration& GetZGeneration(Generation generation)
+    {
+        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
+    }
+    const ZGeneration& GetZGeneration(Generation generation) const
+    {
+        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
+    }
     /* to avoid misunderstanding, variant types of heap size are defined as followed:
      * |------------------------------ max capacity ---------------------------------|
      * |------------------------------ current capacity ------------------------|
@@ -76,35 +159,27 @@ public:
      * |------------------------------ net size ------------|
      * so that inequality size <= capacity <= max capacity always holds.
      */
-    virtual size_t GetMaxCapacity() const = 0;
-    virtual ZMemoryUsageInfo GetMemoryUsage() const = 0;
+    size_t GetMaxCapacity() const;
+    ZMemoryUsageInfo GetMemoryUsage() const;
 
     // or current capacity: a continuous address space to help heap management such as GC.
-    virtual size_t GetCurrentCapacity() const = 0;
+    size_t GetCurrentCapacity() const;
 
     // already used by allocator, including memory block cached for speeding up allocation.
     // we measure it in OS page granularity because physical memory is occupied by page.
-    virtual size_t GetUsedPageSize() const = 0;
+    size_t GetUsedPageSize() const;
 
     // total memory allocated for each allocation request, including memory fragment for alignment or padding.
-    virtual size_t GetAllocatedSize() const = 0;
+    size_t GetAllocatedSize() const;
 
-    virtual MAddress GetStartAddress() const = 0;
-    virtual MAddress GetSpaceEndAddress() const = 0;
+    MAddress GetStartAddress() const;
+    MAddress GetSpaceEndAddress() const;
 
     // Only reserved payload ranges are heap addresses. The outer address
     // envelope sizes offset tables, but its holes are never managed memory.
-    static bool IsHeapAddress(MAddress addr)
-    {
-        for (const auto& range : heapReservations) {
-            if (addr >= range.start && addr < range.end) {
-                return true;
-            }
-        }
-        return false;
-    }
+    static bool IsHeapAddress(MAddress addr) { return is_heap_address(addr); }
 
-    static bool IsHeapAddress(const void* addr) { return IsHeapAddress(reinterpret_cast<MAddress>(addr)); }
+    static bool IsHeapAddress(const void* addr) { return is_heap_address(addr); }
 
     static ZPage* page(MAddress addr);
     static bool is_in(MAddress addr);
@@ -122,37 +197,36 @@ public:
     void object_iterate(ObjectClosure* object_cl, bool visit_weaks);
     void object_and_field_iterate_for_verify(ObjectClosure* object_cl, bool visit_weaks);
 
-    virtual bool ForEachObj(const std::function<void(BaseObject*)>&, bool safe) const = 0;
+    bool ForEachObj(const std::function<void(BaseObject*)>&, bool safe) const;
 
-    virtual void RegisterStaticRoots(Uptr, U32) = 0;
+    void RegisterStaticRoots(Uptr, U32);
 
-    virtual void UnregisterStaticRoots(Uptr, U32) = 0;
+    void UnregisterStaticRoots(Uptr, U32);
 
-    virtual void VisitStaticRoots(const NativeSlotVisitor& visitor) = 0;
+    void VisitStaticRoots(const NativeSlotVisitor& visitor);
 
-    virtual U64 RegisterExportRoot(BaseObject*) = 0;
-    virtual OopStorage& GetExportRootStorage() = 0;
-    virtual void VisitAllExportRoots(const NativeSlotVisitor& visitor) = 0;
+    U64 RegisterExportRoot(BaseObject*);
+    OopStorage& GetExportRootStorage();
+    void VisitAllExportRoots(const NativeSlotVisitor& visitor);
 
-    virtual BaseObject* GetExportObject(U64) = 0;
-    virtual void RemoveExportObject(U64) = 0;
+    BaseObject* GetExportObject(U64);
+    void RemoveExportObject(U64);
 
-    virtual void SetExportObjActiveState(U64, bool) = 0;
-    virtual bool CheckExportObjState(U64, BaseObject*) = 0;
+    void SetExportObjActiveState(U64, bool);
+    bool CheckExportObjState(U64, BaseObject*);
 
-    virtual ssize_t GetHeapPhysicalMemorySize() const = 0;
+    ssize_t GetHeapPhysicalMemorySize() const;
 
-    virtual FinalizerProcessor& GetFinalizerProcessor() = 0;
+    FinalizerProcessor& GetFinalizerProcessor();
 
-    virtual CollectorResources& GetCollectorResources() = 0;
 
-    virtual void RegisterAllocBuffer(AllocBuffer& buffer) = 0;
+    void RegisterAllocBuffer(AllocBuffer& buffer);
 
-    virtual void RemoveAllocBuffer(AllocBuffer& buffer) = 0;
+    void RemoveAllocBuffer(AllocBuffer& buffer);
 
-    virtual void CrossAccessBarrier(I64) = 0;
+    void CrossAccessBarrier(I64);
 
-    virtual void StopGCWork() = 0;
+    void StopGCWork();
 
     // Partial-array mark entries encode a 4K-shifted heap-relative offset
     // (zMark.cpp:177-186).  The codec owns the relative-alignment predicate;
@@ -200,10 +274,27 @@ public:
         PublishCompilerHeapRanges();
     }
 
-    virtual ~Heap() {}
     static MAddress heapCurrentEnd;
 
 private:
+    static Heap* _heap;
+    // zHeap.hpp:48-56: the heap directly owns the page allocator; its
+    // mapped caches and backing resources outlive both generation members.
+    RegionManager _page_allocator;
+    // Object/TLAB adapter remains pending P16; it owns no page allocator.
+    std::unique_ptr<RegionSpace> _allocation_adapter;
+    ZPageTable _page_table;
+    ZObjectAllocator _object_allocator;
+    ZServiceability _serviceability;
+    ZGenerationOld _old;
+    ZGenerationYoung _young;
+    // Cangjie foreign-cycle ownership has no Java/JNI counterpart.
+    ZCrossVM _cross_vm;
+    ExportRootTable* exportRootsTable { nullptr };
+    StaticRootTable* staticRootTable { nullptr };
+    std::atomic<bool> isGCEnabled { true };
+    bool _initialized { false };
+
     static void PublishCompilerHeapRanges()
     {
         constexpr unsigned kCap = kCjHeapRangeCap;
@@ -225,4 +316,7 @@ private:
     static std::vector<HeapSlotAddressRange> heapReservations;
 };
 } // namespace MapleRuntime
+
+#include "Heap/z/zObjectAllocator.inline.hpp"
+#include "Heap/z/zRelocationSet.inline.hpp"
 #endif // MRT_HEAP_MANAGER_H

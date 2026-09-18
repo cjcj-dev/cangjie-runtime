@@ -13,6 +13,7 @@ set(SRC_LIST
     "z/workerThread.cpp"
     "z/zTask.cpp"
     "z/zWorkers.cpp"
+    "z/zRuntimeWorkers.cpp"
     "z/concurrentGCThread.cpp"
     "z/zThread.cpp"
     "z/zUtils.cpp"
@@ -29,9 +30,40 @@ else()
 endif()
 add_subdirectory(Allocator)
 add_subdirectory(Barrier)
-add_subdirectory(Collector)
-add_subdirectory(WCollector)
 add_subdirectory(Verify)
+
+list(APPEND SRC_LIST
+    "z/zBreakpoint.cpp"
+    "z/concurrentGCBreakpoints.cpp"
+    "z/zAbort.cpp"
+    "z/zHeapIterator.cpp"
+    "z/zIterator.cpp"
+    "z/zCollectedHeap.cpp"
+    "z/zDriver.cpp"
+    "z/zDirector.cpp"
+    "z/zDriverPort.cpp"
+    "z/zRootsIterator.cpp"
+    "z/zWeakRootsProcessor.cpp"
+    "z/zResurrection.cpp"
+    "z/zMarkStack.cpp"
+    "z/zMarkingSMR.cpp"
+    "z/zMarkCache.cpp"
+    "z/zReferenceProcessor.cpp"
+    "shared/stringdedup/stringDedup.cpp"
+    "z/zUncommitter.cpp"
+    "z/zForwarding.cpp"
+)
+
+list(APPEND SRC_LIST
+    "z/zCrossVM.cpp"
+    "z/zGeneration.cpp"
+    "z/zMark.cpp"
+    "z/zRelocate.cpp"
+    "z/zJNICritical.cpp"
+    "z/zRemembered.cpp"
+    "z/zRelocationSet.cpp"
+)
+
 add_library(Heap STATIC ${SRC_LIST})
 if (MRT_GC_UNIT_TESTS)
     target_compile_definitions(Heap PRIVATE MRT_TESTABLE_INTERNALS=1)

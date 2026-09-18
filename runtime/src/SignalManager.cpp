@@ -22,14 +22,11 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "LoaderManager.h"
-// paramzero: avoid #include WCollector.h (its Heap include graph needs WCollector TU paths).
-namespace MapleRuntime {
-}
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Signal/SignalUtils.h"
 #include "Inspector/CjHeapData.h"
-#include "Heap/Collector/TaskQueue.h"
+#include "Heap/z/zDriver.hpp"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);

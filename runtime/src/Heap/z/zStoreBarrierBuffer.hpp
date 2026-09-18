@@ -14,7 +14,6 @@
 #include "Heap/z/zAddress.hpp"
 
 namespace MapleRuntime {
-class Collector;
 constexpr bool kBufferStoreBarriers = true;
 constexpr size_t kStoreBarrierBufferLength = 32;
 

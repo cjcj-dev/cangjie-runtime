@@ -7,6 +7,7 @@
 #ifndef MRT_BARRIER_H
 #define MRT_BARRIER_H
 
+#include <atomic>
 #include "Common/BaseObject.h"
 #if defined(MRT_TESTABLE_INTERNALS)
 #include <functional>
@@ -19,9 +20,11 @@
 #include "ObjectModel/MClass.h"
 
 namespace MapleRuntime {
-class Collector;
+extern std::atomic<size_t> g_minorRefCasFail;
+extern std::atomic<size_t> g_minorRefCasOk;
 enum class ReferenceStrength : uint8_t { Strong, Weak, Phantom };
 struct ForwardingProvenance;
+enum class HandVerdict : uint8_t;
 
 class AllStatic {
     AllStatic() = delete;
@@ -34,6 +37,26 @@ using ZBarrierColor = zpointer (*)(zaddress, zpointer);
 
 class ZBarrier : public AllStatic {
 public:
+    enum class RefSlotKind : U8 { STRONG, WEAK_REFERENT };
+    static BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field);
+    static bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef);
+    template<bool forward>
+    static bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
+                                      BaseObject*& toObj, const ForwardingProvenance& provenance);
+    static bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
+                                         bool allowNull = false);
+
+    static HandVerdict JudgeHandOutTarget(BaseObject* target);
+    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
+                                           const ForwardingProvenance& provenance);
+    static BaseObject* ValidateCurrentValue(BaseObject* target, const ForwardingProvenance& provenance);
+    static void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
+                                    const ForwardingProvenance& provenance);
+    static RefField<> GetAndTryTagRefField(BaseObject* target);
+    static RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* target,
+                                                       const ForwardingProvenance& provenance);
+    static void NoteStoreGoodOnBadTarget(BaseObject* target);
+
 
 #if defined(MRT_TESTABLE_INTERNALS)
     enum class FieldMarkKind { Old, Finalizable, Young, Remset };
@@ -75,6 +98,8 @@ public:
     static ZGeneration* remap_generation(zpointer ptr);
     static void remap_young_relocated(volatile zpointer* p, zpointer o);
     static zaddress make_load_good(zpointer ptr);
+    static zaddress make_load_good(zpointer ptr, const ForwardingProvenance& provenance);
+    static zaddress make_load_good_impl(zpointer ptr, const ForwardingProvenance* provenance);
     static zaddress make_load_good_no_relocate(zpointer ptr);
     static void remember(volatile zpointer* p);
     static void mark_and_remember(volatile zpointer* p, zaddress addr);
@@ -174,6 +199,10 @@ public:
     static zpointer ColorLoadGood(zaddress address, zpointer previous);
     static zaddress promote_slow_path(zaddress addr);
     static void promote_barrier_on_young_oop_field(volatile zpointer* p);
+private:
+    static constexpr bool kColourWhoProbe = true;
+    static std::atomic<uint64_t> colourWhoTotal;
+    static std::atomic<uint64_t> colourWhoBad;
 };
 
 } // namespace MapleRuntime

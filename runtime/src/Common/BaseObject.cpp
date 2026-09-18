@@ -9,7 +9,8 @@
 #include "BaseObject.h"
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
@@ -169,7 +170,7 @@ size_t BaseObject::GetSize() const
 void BaseObject::OnFinalizerCreated()
 {
     Heap& heap = Heap::GetHeap();
-    heap.GetCollector().MarkNewObject(this);
+    heap.MarkNewObject(this);
     Mutator* mutator = Mutator::GetMutator();
     if (mutator != nullptr) {
         mutator->AddLocalFinalizer(this);

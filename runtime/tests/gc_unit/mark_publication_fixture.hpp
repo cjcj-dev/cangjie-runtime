@@ -3,47 +3,48 @@
 #define MRT_MARK_PUBLICATION_FIXTURE_HPP
 #include "gc_worker_fixture.hpp"
 #include "gc_cycle_sequence_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "gc_heap_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 namespace MapleRuntime {
 struct MarkPublicationFixture {
     inline static MarkPublicationFixture* current = nullptr;
     MarkPublicationFixture* previousFixture = current;
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector { Heap::GetHeap().GetAllocator(), resources };
-    Collector* previousCollector;
+    Heap& collector = Heap::GetHeap();
     MarkPublicationFixture()
-        : previousCollector(resources.testCollector)
     {
         current = this;
-        collector.youngCycle.InitializeWorkers(1);
-        collector.oldCycle.InitializeWorkers(1);
-        if (previousCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *previousCollector);
+        if (Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
+            Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
         }
-        resources.testCollector = &collector;
-        resources.BindCollector(&collector);
-        collector.youngCycle.SelectReason(GC_REASON_YOUNG);
-        collector.youngCycle.Begin(1);
+        if (Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
+            Heap::GetHeap().GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
+        }
+        auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
+        auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+        if (young.Snapshot().active) young.End();
+        if (old.Snapshot().active) old.End();
+        young.SelectReason(GC_REASON_YOUNG);
+        young.Begin(1);
         // ZGenerationYoung::mark_start advances the sequence with the remset
         // flip (zGeneration.cpp:855-881), before mark work can be published.
-        GenerationSequenceFixture::AdvanceYoung(collector.youngCycle);
-        collector.StartYoungMarkWork();
-        collector.youngCycle.PublishPhase(ZGenerationPhase::Mark);
-        collector.oldCycle.SelectReason(GC_REASON_USER);
-        collector.oldCycle.Begin(2);
-        GenerationSequenceFixture::Advance(collector.oldCycle);
-        collector.StartOldMarkWork();
-        collector.oldCycle.PublishPhase(ZGenerationPhase::Mark);
+        GenerationSequenceFixture::AdvanceYoung(young);
+        Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+        Heap::GetHeap().young().Mark().Start();
+        MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
+        young.PublishPhase(ZGenerationPhase::Mark);
+        old.SelectReason(GC_REASON_USER);
+        old.Begin(2);
+        GenerationSequenceFixture::Advance(old);
+        Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+        Heap::GetHeap().old().Mark().Start();
+        old.PublishPhase(ZGenerationPhase::Mark);
     }
     ~MarkPublicationFixture()
     {
         Drain([](BaseObject*, bool) {});
-        resources.testCollector = previousCollector;
-        resources.BindCollector(previousCollector);
         current = previousFixture;
     }
     template<class Visitor> void DrainDomain(ZMark& domain, Visitor&& visitor)
@@ -60,33 +61,33 @@ struct MarkPublicationFixture {
     }
     template<class Visitor> void DrainOld(Visitor&& visitor)
     {
-        DrainDomain(*collector.MajorMark(), std::forward<Visitor>(visitor));
+        DrainDomain(*Heap::GetHeap().old().MarkPtr(), std::forward<Visitor>(visitor));
     }
     bool FollowYoung(WorkStack& work, std::vector<BaseObject*>& reached)
     {
-        WCollector::MinorSlotSet slots;
-        WCollector::MinorSlotSet weakSlots;
-        return collector.FollowYoungMark(work, false, reached, slots, weakSlots);
+        std::unordered_set<MAddress> slots;
+        std::unordered_set<MAddress> weakSlots;
+        return ZMark::FollowYoungMark(work, false, reached, slots, weakSlots);
     }
     void CompleteOldMarkForAdmissionTest()
     {
-        collector.oldCycle.PublishPhase(ZGenerationPhase::MarkComplete);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::MarkComplete);
     }
     template<class Visitor> void Drain(Visitor&& visitor)
     {
-        DrainDomain(*collector.YoungMark(), visitor);
-        DrainDomain(*collector.MajorMark(), visitor);
+        DrainDomain(*Heap::GetHeap().young().MarkPtr(), visitor);
+        DrainDomain(*Heap::GetHeap().old().MarkPtr(), visitor);
     }
     template<class Stack> void DrainObjects(Stack& stack)
     {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
     size_t YoungPending() const {
-        auto* mark = const_cast<WCollector&>(collector).YoungMark();
+        auto* mark = Heap::GetHeap().young().MarkPtr();
         return mark->Stripes().Population() + mark->Stacks().Population();
     }
     size_t OldPending() const {
-        auto* mark = const_cast<WCollector&>(collector).MajorMark();
+        auto* mark = Heap::GetHeap().old().MarkPtr();
         return mark->Stripes().Population() + mark->Stacks().Population();
     }
 };

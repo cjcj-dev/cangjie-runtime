@@ -30,7 +30,7 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/CopyCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"
@@ -126,34 +126,6 @@ const size_t ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD = MapleRuntime::MRT_PAGE_SIZE
                                                             MapleRuntime::MRT_PAGE_SIZE : 32 * KB;
 // max size of per region is 128KB.
 const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntime::MRT_PAGE_SIZE;
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-void ZPage::DumpZPage(LogType type) const
-{
-    DLOG(type, "Region index: %zu, type: %s, address: 0x%zx-0x%zx, allocated(B) %zu, live(B) %zu", GetUnitIdx(),
-         GetTypeName(), GetRegionStart(), GetRegionEnd(), GetRegionAllocatedSize(), livemap().live_bytes());
-}
-
-const char* ZPage::GetTypeName() const
-{
-    static constexpr const char* regionNames[] = {
-        "undefined region",
-        "thread local region",
-        "recent fullregion",
-        "from region",
-        "unmovable from region",
-        "to region",
-        "full pinned region",
-        "recent pinned region",
-        "raw pointer pinned region",
-        "tl raw pointer region",
-        "large region",
-        "recent large region",
-        "garbage region",
-    };
-    auto* owner = GetRegionListOwner();
-    return owner != nullptr ? owner->GetListName() : "unlisted";
-}
-#endif
 
 // ZPage::clone_for_promotion (zPage.cpp:64-71). ZPage is an indexed
 // slot rather than a separately allocated page descriptor, so the original
@@ -263,16 +235,15 @@ void ZPage::ResetPageSequence()
 {
     const auto owner = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
     const auto other = IsYoungRegion() ? ZGenerationId::old : ZGenerationId::young;
-    auto& collector = Heap::GetHeap().GetCollector();
-    _seqnum = static_cast<uint32_t>(collector.GetCycleSnapshot(owner).sequence);
-    _seqnum_other = static_cast<uint32_t>(collector.GetCycleSnapshot(other).sequence);
+    _seqnum = static_cast<uint32_t>(Heap::GetHeap().GetCycleSnapshot(owner).sequence);
+    _seqnum_other = static_cast<uint32_t>(Heap::GetHeap().GetCycleSnapshot(other).sequence);
 }
 
 uint64_t ZPage::GetSnapshotEpoch() const
 {
     const ZGenerationId generation = GetOwnerGeneration() == Generation::Young
         ? ZGenerationId::young : ZGenerationId::old;
-    return Heap::GetHeap().GetCollector().GetCycleSnapshot(generation).sequence;
+    return Heap::GetHeap().GetCycleSnapshot(generation).sequence;
 }
 } // namespace MapleRuntime
 
@@ -398,4 +369,29 @@ bool ZPage::undo_alloc_object_atomic(uintptr_t addr, size_t size)
     const size_t aligned = AlignUp<size_t>(size, object_alignment());
     return UndoAllocObjectAtomic(addr, aligned);
 }
+
+ZForwarding* ZPage::GetFromPageCarrier() const
+    {
+        const MAddress start = GetRegionStart();
+        if (start == 0) {
+            return nullptr;
+        }
+        ZForwarding* carrier = Heap::GetHeap().GetZGeneration(GetOwnerGeneration()).forwarding_table().get(start);
+        return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
+    }
+
+void ZPage::ClearUnits(size_t idx, size_t cnt)
+    {
+        uintptr_t unitAddress = ZPage::GetUnitAddress(idx);
+        size_t size = cnt * ZPage::UNIT_SIZE;
+        CHECK(ContainsUnitRange(unitAddress, size));
+        ZPage* wipeRegion = Heap::page(unitAddress);
+        WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
+
+        DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
+             unitAddress + size);
+
+        MapleRuntime::MemorySet(unitAddress, size, 0, size);
+    }
+
 }

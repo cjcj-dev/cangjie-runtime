@@ -389,7 +389,7 @@ union GCTib {
 
     // STACK_ROOTS_STAY_PLAIN: a non-heap destination (static/global storage) is a *root*,
     // not a heap field. StaticRootTable registers those words as RootSlot and
-    // WCollector::EnumAndTagRawRoot heals them with StorePlain, so a coloured write there is
+    // Plain root visitors heal them with StorePlain, so a coloured write there is
     // both pointless (the next root enumeration overwrites it plain) and hazardous (relroroot:
     // static slots can sit on RELRO read-only pages where lock cmpxchg faults).
     // Yielding RootSlot makes the coloured spelling not compile: RootSlot has no
@@ -601,7 +601,7 @@ private:
 //
 // The alignment here is not cosmetic: the collector treats a tip whose low three
 // bits are set as not-a-TypeInfo (StateWord::ADDRESS_ALIGN_MASK), softly at
-// Collector.cpp:104 and :304 and fatally at Mutator.cpp:597 and :754. Declaring
+// the colored-slot remapping path and fatally at Mutator.cpp:597 and :754. Declaring
 // 4 while requiring 8 is what let TypeInfoManager's arena hand out addresses the
 // collector then rejected. Raising 4 -> 8 costs nothing in layout: sizeof stays
 // 96 (already a multiple of 8) and every field offset is unchanged, because

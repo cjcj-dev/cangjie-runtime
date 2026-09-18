@@ -13,7 +13,13 @@
 #include "Heap/z/zRange.hpp"
 #include "Heap/z/zRangeRegistry.hpp"
 #include "Heap/z/zValue.hpp"
-#include "zPhysicalMemoryBacking.hpp"
+#if defined(_WIN64)
+#include "Heap/z/os/windows/zPhysicalMemoryBacking.hpp"
+#elif defined(__APPLE__)
+#include "Heap/z/os/bsd/zPhysicalMemoryBacking.hpp"
+#else
+#include "Heap/z/os/linux/zPhysicalMemoryBacking.hpp"
+#endif
 
 namespace MapleRuntime {
 

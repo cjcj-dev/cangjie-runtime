@@ -6,9 +6,9 @@
 
 
 #include "Heap/z/zHeap.hpp"
-#include "Heap/Collector/TaskQueue.h"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zDriverPort.hpp"
 #include "Inspector/FileStream.h"
 #include "Inspector/CjAllocData.h"
 #include "Heap/z/zPage.hpp"
@@ -88,7 +88,7 @@ void StopTrackingHeapObjects(const std::string &message, SendMsgCB sendMsg)
 
 void CollectGarbage(const std::string &message, SendMsgCB sendMsg)
 {
-    MapleRuntime::Heap::GetHeap().GetCollectorResources().RequestGC(MapleRuntime::GC_REASON_HEU, false);
+    MapleRuntime::Heap::GetHeap().RequestGC(MapleRuntime::GC_REASON_HEU, false);
     SetEnd(message, MapleRuntime::MsgType::END);
 }
 

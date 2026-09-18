@@ -21,7 +21,7 @@
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/Collector/GcStats.h"
+#include "Heap/z/zStat.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "ObjectModel/RefField.h"
 
@@ -33,7 +33,7 @@ extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const Maple
 #include "gc_unittest.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -48,7 +48,7 @@ namespace {
 constexpr Uptr kAddrMask = (Uptr(1) << 48) - 1u;
 
 // Model of FixOldTagged / ResolveMinor non-heap arm: recolour (or keep) — never install 0.
-// Product: WCollector.cpp FixOldTaggedRefField (nullslot 2da28bee / 6a6cf3d8) and
+// Product: CopyCollector.cpp FixOldTaggedRefField (nullslot 2da28bee / 6a6cf3d8) and
 // ResolveMinorReference non-heap early return (zcdnull / B-4 ③).
 Uptr ModelRecolourNonHeapNeverNull(Uptr /*slotVal*/, Uptr nonHeapTarget, bool isHeapTarget)
 {
@@ -76,23 +76,6 @@ bool ModelShouldSelfHealCas(bool loadGoodIsHeap)
 {
     return loadGoodIsHeap;
 }
-
-class ExportHandleTestCollector final : public Collector {
-public:
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*, Generation) const override
-    {
-        return FindToVersionResult::NotForwarded();
-    }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>&) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
-    {
-        return RefField<>(GcUnit::StoreGoodPointer(obj));
-    }
-};
 
 class InstalledExportAllocBuffer final {
 public:
@@ -155,14 +138,10 @@ struct ExportHandleFixture {
     }
 
     GcHeapFixture heap;
-    ExportHandleTestCollector collector;
 };
 
 struct CompilerStoreFixture {
-    CompilerStoreFixture()
-        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()) {}
     GcHeapFixture heap;
-    WCollector collector;
 };
 
 } // namespace
@@ -239,7 +218,7 @@ GC_TEST(DefectRegress, StaticRootHealDoesNotClobberConcurrentStore)
 }
 
 // ⑤ minor ResolveMinor non-heap arm (same contract as ② on the minor side).
-// Product: ResolveMinorReference — non-heap returns as-is, never CAS-null (WCollector.cpp:1935).
+// Product: ResolveMinorReference — non-heap returns as-is, never CAS-null (CopyCollector.cpp:1935).
 GC_TEST(DefectRegress, MinorNonHeapResolveNeverCasNull)
 {
     GcHeapFixture fx;

@@ -26,6 +26,16 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
+RegionManager& RegionSpace::GetRegionManager() const noexcept
+{
+    return Heap::GetHeap().page_allocator();
+}
+
+void RegionSpace::Init(const HeapParam& param)
+{
+    GetRegionManager().Init(param);
+}
+
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 bool RegionSpace::IsHeapObject(MAddress addr) const
 {
@@ -39,13 +49,13 @@ void RegionSpace::FeedHungryBuffers()
     allocBufferManager->SwapHungryBuffers(hungryBuffers);
     for (auto* buffer : hungryBuffers) {
         if (buffer->GetPreparedRegion() != nullptr) { continue; }
-        ZPage* region = regionManager.AllocateThreadLocalRegion(
-            buffer->ComputeTLABSize(0, regionManager.GetThreadLocalRegionSize()), true);
+        ZPage* region = GetRegionManager().AllocateThreadLocalRegion(
+            buffer->ComputeTLABSize(0, GetRegionManager().GetThreadLocalRegionSize()), true);
         if (region == nullptr) { return; }
         if (!buffer->SetPreparedRegion(region)) {
             // This extent was computed for this buffer's history. Return it
             // instead of handing that thread's size to another buffer.
-            regionManager.UndoThreadLocalRegionAllocation(region);
+            GetRegionManager().UndoThreadLocalRegionAllocation(region);
         }
     }
 }

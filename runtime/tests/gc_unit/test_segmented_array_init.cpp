@@ -27,7 +27,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zIterator.hpp"
 #include "Heap/z/zHeapIterator.hpp"
@@ -40,7 +40,8 @@
 #include "TypeInfoManager.h"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zBarrier.hpp"
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);
@@ -233,9 +234,9 @@ struct SegmentedArrayContext {
         if (ctx.gcRequests < ctx.gcLimit && ctx.gc != YieldGc::NONE) {
             ctx.requestedGc = true;
             ++ctx.gcRequests;
-            ctx.youngSequenceBefore = Heap::GetHeap().GetCollector().GetCycleSnapshot(
+            ctx.youngSequenceBefore = Heap::GetHeap().GetCycleSnapshot(
                 ZGenerationId::young).sequence;
-            ctx.oldSequenceBefore = Heap::GetHeap().GetCollector().GetCycleSnapshot(
+            ctx.oldSequenceBefore = Heap::GetHeap().GetCycleSnapshot(
                 ZGenerationId::old).sequence;
             ctx.colorBefore = ::g_cjStoreGoodMask;
             Mutator* mutator = Mutator::GetMutator();
@@ -254,17 +255,17 @@ struct SegmentedArrayContext {
             }
             mutator->SetManagedContext(false);
             if (ctx.gc == YieldGc::YOUNG) {
-                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+                Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
             } else {
-                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
+                Heap::GetHeap().RequestGC(GC_REASON_FORCE, false);
             }
             mutator->SetManagedContext(true);
             if (youngSeedRoot != 0) {
                 Heap::GetHeap().RemoveExportObject(youngSeedRoot);
             }
-            ctx.youngSequenceAfter = Heap::GetHeap().GetCollector().GetCycleSnapshot(
+            ctx.youngSequenceAfter = Heap::GetHeap().GetCycleSnapshot(
                 ZGenerationId::young).sequence;
-            ctx.oldSequenceAfter = Heap::GetHeap().GetCollector().GetCycleSnapshot(
+            ctx.oldSequenceAfter = Heap::GetHeap().GetCycleSnapshot(
                 ZGenerationId::old).sequence;
             ctx.colorAfter = ::g_cjStoreGoodMask;
             MArray* rootAfter = static_cast<MArray*>(Mutator::GetMutator()->LoadInvisibleRoot());
@@ -754,7 +755,7 @@ void* RunLargeYoungClosureCase(void*)
     SetMarkClosureObserverForTest(LargeYoungClosureResult::Observe);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     SetMarkClosureObserverForTest(nullptr);
     LargeYoungClosureResult::target = nullptr;
     std::fprintf(stderr, "LARGE_YOUNG_TARGET_LIVE_ASSERT_EXECUTED holder_young=%d observations=%zu live=%d followed=%d\n",
@@ -801,7 +802,7 @@ void* RunMarkAllocationCase(void* rawExisting)
         return page->is_object_strongly_live(from_object(object));
     };
     auto& heap = Heap::GetHeap();
-    auto& collector = heap.GetCollector();
+    auto& collector = heap;
     Mutator* mutator = Mutator::GetMutator();
     MArray* beforeSmall = MCC_NewArray8(GetByteArrayTypeInfos().array, 16);
     const U64 beforeSmallRoot = heap.RegisterExportRoot(beforeSmall);
@@ -814,7 +815,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     MarkAllocationWindow::timedOut = false;
     SetMarkClosureObserverForTest(MarkAllocationWindow::Observe);
     mutator->SetManagedContext(false);
-    collector.RequestGC(GC_REASON_YOUNG, true);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, true);
     bool entered;
     {
         ScopedEnterSaferegion safe(false);
@@ -845,8 +846,8 @@ void* RunMarkAllocationCase(void* rawExisting)
     const bool live = productLive(page, holder);
     const bool targetLive = productLive(targetPage, target);
     const bool excluded = page->IsAllocating() && !page->IsKnownYoungEmpty();
-    auto& productCollector = static_cast<WCollector&>(collector);
-    ZMark* domain = productCollector.YoungMark();
+    auto& productCollector = static_cast<Heap&>(collector);
+    ZMark* domain = Heap::GetHeap().young().MarkPtr();
     const size_t pendingBefore = domain->Stripes().Population() + domain->Stacks().Population();
     holder->OnFinalizerCreated();
     const size_t pendingAfter = domain->Stripes().Population() + domain->Stacks().Population();
@@ -857,15 +858,15 @@ void* RunMarkAllocationCase(void* rawExisting)
                  static_cast<unsigned long long>(page->BirthSequence()),
                  static_cast<unsigned long long>(page->GetSnapshotEpoch()), noExplicitMark,
                  pendingBefore, pendingAfter);
-    const auto during = collector.GetCycleSnapshot(ZGenerationId::young);
+    const auto during = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
     const auto phase = during.phase;
     std::fprintf(stderr, "MARK_ALLOC_TARGET_ASSERT_EXECUTED existing=%d phase=%u young=%d large=%d "
                  "implicit=%d live=%d target_live=%d excluded=%d\n",                   existing, static_cast<unsigned>(phase),
                  page->IsYoungRegion(), page->IsLargeRegion(), implicit, live, targetLive, excluded);
     size_t markEndObservations = 0;
     bool markEndTargetLive = false;
-    CopyCollector::testYoungMarkCompleted = [&, target, productLive]() {
-        const auto markEnd = collector.GetCycleSnapshot(ZGenerationId::young);
+    ZGeneration::testYoungMarkCompleted = [&, target, productLive]() {
+        const auto markEnd = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
         if (markEnd.sequence != during.sequence) return;
         ZPage* endPage = Heap::page(reinterpret_cast<uintptr_t>(target));
         markEndTargetLive = productLive(endPage, target);
@@ -884,9 +885,9 @@ void* RunMarkAllocationCase(void* rawExisting)
     }
     // Wait through the real driver's acknowledgement, then check next-cycle
     // watermark resampling using the same rooted holder.
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     SetMarkClosureObserverForTest(nullptr);
-    CopyCollector::testYoungMarkCompleted = nullptr;
+    ZGeneration::testYoungMarkCompleted = nullptr;
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
     page = Heap::page(reinterpret_cast<uintptr_t>(holder));
     auto& completedField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder->ConvertToCArray()));
@@ -897,7 +898,7 @@ void* RunMarkAllocationCase(void* rawExisting)
         static_cast<MArray*>(completedTarget)->GetLength() == 16;
     std::fprintf(stderr, "MARK_ALLOC_COMPLETED_VALUE_ASSERT_EXECUTED length_valid=%d\n", completedValue);
     const bool resampled = !page->IsAllocating();
-    const auto after = collector.GetCycleSnapshot(ZGenerationId::young);
+    const auto after = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
     const bool nextCycle = after.sequence > during.sequence;
     std::fprintf(stderr, "MARK_ALLOC_NEXT_CYCLE_ASSERT_EXECUTED before=%llu after=%llu resampled=%d\n",
                  static_cast<unsigned long long>(during.sequence),
@@ -932,7 +933,7 @@ void PausePinnedPageBeforeInstall(ZPage* page)
     pinnedAcquiredBirth = page->BirthSequence();
     auto* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_USER, true);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, true);
     {
         ScopedEnterSaferegion safe(false);
         pinnedAcquiredWindow = MarkAllocationWindow::Wait(MarkAllocationWindow::entered);
@@ -943,19 +944,19 @@ void PausePinnedPageBeforeInstall(ZPage* page)
 void* RunPinnedPublicationCase(void*)
 {
     auto& heap = Heap::GetHeap();
-    auto& collector = heap.GetCollector();
+    auto& collector = heap;
     auto* mutator = Mutator::GetMutator();
     // Retire any existing shortcut through the real collector before acquiring
     // the new page. The hook only schedules a second real collection.
     mutator->SetManagedContext(false);
-    collector.RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     mutator->SetManagedContext(true);
     MarkAllocationWindow::entered = false;
     MarkAllocationWindow::released = false;
     MarkAllocationWindow::completed = false;
     MarkAllocationWindow::timedOut = false;
     pinnedAcquiredWindow = false;
-    CopyCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
+    ZGeneration::testOldMarkStarted = ObservePinnedAllocationWindow;
     RegionManager::testPinnedPageAcquired = PausePinnedPageBeforeInstall;
     TypeInfo* type = GetReferenceArrayTypeInfos().component;
     const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
@@ -980,8 +981,8 @@ void* RunPinnedPublicationCase(void*)
         ScopedEnterSaferegion safe(false);
         MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
     }
-    collector.RequestGC(GC_REASON_USER, false);
-    CopyCollector::testOldMarkStarted = nullptr;
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    ZGeneration::testOldMarkStarted = nullptr;
     const bool retained = heap.GetExportObject(root) == fresh;
     heap.RemoveExportObject(root);
     mutator->SetManagedContext(true);
@@ -992,7 +993,7 @@ void* RunPinnedPublicationCase(void*)
 void* RunPinnedMarkStartCase(void*)
 {
     auto& heap = Heap::GetHeap();
-    auto& collector = heap.GetCollector();
+    auto& collector = heap;
     auto* mutator = Mutator::GetMutator();
     TypeInfo* type = GetReferenceArrayTypeInfos().component;
     const size_t size = AlignUp(type->GetInstanceSize() + TYPEINFO_PTR_SIZE, size_t{8});
@@ -1005,9 +1006,9 @@ void* RunPinnedMarkStartCase(void*)
     MarkAllocationWindow::released = false;
     MarkAllocationWindow::completed = false;
     MarkAllocationWindow::timedOut = false;
-    CopyCollector::testOldMarkStarted = ObservePinnedAllocationWindow;
+    ZGeneration::testOldMarkStarted = ObservePinnedAllocationWindow;
     mutator->SetManagedContext(false);
-    collector.RequestGC(GC_REASON_USER, true);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, true);
     bool entered;
     {
         ScopedEnterSaferegion safe(false);
@@ -1015,7 +1016,7 @@ void* RunPinnedMarkStartCase(void*)
     }
     if (!entered) {
         MarkAllocationWindow::released = true;
-        CopyCollector::testOldMarkStarted = nullptr;
+        ZGeneration::testOldMarkStarted = nullptr;
         mutator->SetManagedContext(true);
         return reinterpret_cast<void*>(2);
     }
@@ -1025,7 +1026,7 @@ void* RunPinnedMarkStartCase(void*)
     const bool current = after->IsAllocating();
     const bool different = after != before;
     const bool noMark = !after->is_marked();
-    const bool window = collector.GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark;
+    const bool window = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).phase == ZGenerationPhase::Mark;
     std::fprintf(stderr, "P1_PINNED_WINDOW_ASSERT_EXECUTED reuse=%d different=%d current=%d no_bitmap=%d trace=%d birth=%llu owner=%llu\n",
         reused, different, current, noMark, window,
         static_cast<unsigned long long>(after->BirthSequence()),
@@ -1036,8 +1037,8 @@ void* RunPinnedMarkStartCase(void*)
         ScopedEnterSaferegion safe(false);
         MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
     }
-    collector.RequestGC(GC_REASON_USER, false);
-    CopyCollector::testOldMarkStarted = nullptr;
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    ZGeneration::testOldMarkStarted = nullptr;
     const bool retained = heap.GetExportObject(root) == first;
     heap.RemoveExportObject(root);
     mutator->SetManagedContext(true);
@@ -1058,7 +1059,7 @@ void* RunPinnedBirthCase(void*)
     const bool shared = Heap::page(reinterpret_cast<uintptr_t>(survivor)) == oldPage;
     const U64 root = heap.RegisterExportRoot(survivor);
     mutator->SetManagedContext(false);
-    heap.GetCollector().RequestGC(GC_REASON_USER, false);
+    heap.RequestGC(GC_REASON_USER, false);
     mutator->SetManagedContext(true);
     MObject* fresh = MObject::NewPinnedObject(type, size);
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(fresh));

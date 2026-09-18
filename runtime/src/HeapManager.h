@@ -10,7 +10,7 @@
 
 #include "Base/Macros.h"
 #include "Common/TypeDef.h"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "RuntimeConfig.h"
 
 namespace MapleRuntime {

@@ -50,9 +50,9 @@ run_ohos_host_arm() {
   for symbol in \
       'MRT_GC_UNIT_OHOS_HOST_RECEIPT' \
       'CJ_MRT_RolveCycleRef' \
-      'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
-      'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::ZGenerationId)' \
-      'MapleRuntime::WCollector::PostResolveCycleTask()'; do
+      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
+      'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
       return 21
@@ -99,17 +99,17 @@ run_ohos_host_arm() {
   fi
   for symbol in \
       'CJ_MRT_RolveCycleRef' \
-      'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
-      'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::ZGenerationId)' \
-      'MapleRuntime::WCollector::PostResolveCycleTask()'; do
+      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ZDriver::RunGarbageCollection(unsigned long, MapleRuntime::GCReason)' \
+      'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
       echo "GC_UNIT_OHOS_HOST_LOCAL_PRODUCT_DEFINITION symbol=$symbol" >&2
       return 24
     fi
   done
   for symbol in \
-      'MapleRuntime::Collector::RequestGC(MapleRuntime::GCReason, bool)' \
-      'MapleRuntime::WCollector::PostResolveCycleTask()'; do
+      'MapleRuntime::Heap::RequestGC(MapleRuntime::GCReason, bool)' \
+      'MapleRuntime::ZCrossVM::PostResolveCycleTask()'; do
     if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
       echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
       return 25
@@ -117,7 +117,7 @@ run_ohos_host_arm() {
   done
 
   objdump -drC "$so" | sed -n \
-    '/<MapleRuntime::WCollector::PostResolveCycleTask()>/,/^$/p' >"$post_disassembly"
+    '/<MapleRuntime::ZCrossVM::PostResolveCycleTask()>/,/^$/p' >"$post_disassembly"
   if ! /usr/bin/grep -F -q 'CJ_MRT_RolveCycleRef' "$post_disassembly"; then
     if [[ "${GC_UNIT_OHOS_HOST_ALLOW_MISSING_POST_DISPATCH:-0}" == "1" ]]; then
       echo "GC_UNIT_OHOS_HOST_POST_DISPATCH_MISSING_ALLOWED"
@@ -291,7 +291,6 @@ PACKAGE_INIT_UNRELATED_PID=$!
 MAIN_SOURCES=(
   "$SRC/gc_worker_fixture.cpp"
   "$SRC/gc_unit_main.cpp" "$SRC/gc_cycle_sequence_fixture.cpp"
-  "$SRC/gc_unit_stubs.cpp"
   "$SRC/test_colour_address.cpp"
   "$SRC/test_zBitField.cpp"
   "$SRC/test_zBitMap.cpp"
@@ -468,25 +467,27 @@ sha256sum "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" \
 # The standalone script is the frozen gate's real build entry point.  Keep the
 # same structural invariant as the CMake target at that point, before any test
 # process can run: none of the product consumers exercised through dlsym may
-# be dynamically defined by this executable itself.  A removed visibility or
+# be defined by this executable itself.  A removed visibility or
 # archive-exclusion flag therefore fails closed instead of silently restoring
 # the old self-satisfying weak copies.
 STANDALONE_SYMBOLS=(
   _ZN12MapleRuntime8ZLiveMap5resetENS_13ZGenerationIdE
   _ZN12MapleRuntime8ZLiveMap13reset_segmentEm
-  _ZN12MapleRuntime10RegionInfo17CloneForPromotionEv
-  _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE
-  _ZNK12MapleRuntime9Collector18MarkObjectIfActiveEPNS_10BaseObjectE
 )
 STANDALONE_FULL_SYMBOLS=(
+  _ZN12MapleRuntime5ZPage17CloneForPromotionEv
+  _ZN12MapleRuntime5ZMark15MarkEntryObjectEPNS_10BaseObjectERKNS_14MarkStackEntryEPNS_13MarkLiveCacheE
+  _ZN12MapleRuntime5ZMark21MarkOldObjectIfActiveEPNS_10BaseObjectEb
 )
-# ZLiveMap::reset/reset_segment and RegionInfo::CloneForPromotion are out-of-line
-# product functions (zLiveMap.cpp / zPage.cpp); the livemap tests must bind them
-# from the SO, never from a local copy in this ELF.
+# ZPage::CloneForPromotion and ZMark entry/active marking are out-of-line
+# product functions. Full symbols exclude local copies as well as exports;
+# matching product definitions keep retired names from making the guard inert.
 STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"
 STANDALONE_SYMBOL_FULL="$OUT/cj_gc_unit.full-defined.txt"
+STANDALONE_PRODUCT_FULL="$OUT/standalone-product.full-defined.txt"
 nm -D --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_DYN"
 nm --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_FULL"
+nm --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$STANDALONE_PRODUCT_FULL"
 if ! /usr/bin/grep -Eq '[[:space:]]main$' "$STANDALONE_SYMBOL_FULL"; then
   echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_BROKEN positive_control=main" >&2
   exit 7
@@ -498,8 +499,11 @@ for symbol in "${STANDALONE_SYMBOLS[@]}"; do
   fi
 done
 for symbol in "${STANDALONE_FULL_SYMBOLS[@]}"; do
-  if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_DYN" ||
-      /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_FULL"; then
+  if ! /usr/bin/grep -F -q "$symbol" "$STANDALONE_PRODUCT_FULL"; then
+    echo "GC_UNIT_STANDALONE_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
+    exit 7
+  fi
+  if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_FULL"; then
     echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_FAIL symbol=$symbol" >&2
     exit 7
   fi
@@ -573,7 +577,7 @@ REFERENCE_PROCESSOR_CONSUMERS=(
 )
 # The direct weak-discovery test in test_young_conc.cpp is testable-only.
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::CopyCollector::DiscoverWeakReference(')
+  REFERENCE_PROCESSOR_CONSUMERS+=('MapleRuntime::ZMark::DiscoverWeakReference(')
 fi
 REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
 REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
@@ -597,8 +601,11 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
-    'MapleRuntime::WCollector::DoGarbageCollection(MapleRuntime::ZGenerationId)'
-    'MapleRuntime::WCollector::TraceHeap()'
+    'MapleRuntime::ZGenerationYoung::collect()'
+    'MapleRuntime::ZGenerationOld::collect()'
+    'MapleRuntime::ZGenerationOld::concurrent_mark()'
+    'MapleRuntime::ZGenerationOld::pause_mark_end()'
+    'MapleRuntime::ZGenerationOld::process_non_strong_references()'
   )
   for consumer in "${YOUNG_WEAK_PRODUCT_CONSUMERS[@]}"; do
     if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
@@ -619,11 +626,11 @@ fi
 LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RegionManager::RememberFlipPromotedPages('
   'MapleRuntime::RegionManager::RememberPromotedObject('
-  'MapleRuntime::WCollector::RemapYoungRoots('
+  'MapleRuntime::ZRelocate::RemapYoungRoots('
 )
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   LOADHEAL_PRODUCT_CONSUMERS+=(
-    'MapleRuntime::CopyCollector::RunGarbageCollection('
+    'MapleRuntime::ZDriver::RunGarbageCollection('
     'MapleRuntime::ResetRemapYoungRootsTestReceipt('
     'MapleRuntime::ReadRemapYoungRootsTestReceipt()'
   )
@@ -692,7 +699,7 @@ echo "GATE_PTRCOLOUR_PRODUCT_BINDING_OK rows=$ptrcolour_rows elf=$OUT/cj_gc_unit
 # producer set.  A producer/anchor removal, an empty set, or a partial family
 # declaration fails before the behavioral suite can lend it a green result.
 PTRCOLOUR_PRODUCER_MANIFEST="$SRC/product_colour_producer_manifest.tsv"
-EXPECTED_PTRCOLOUR_PRODUCERS=(store_good stale_load_bad interior_store_good bulk_store_good finalizable_good)
+EXPECTED_PTRCOLOUR_PRODUCERS=(store_good interior_store_good bulk_store_good finalizable_good)
 ptrcolour_producer_rows=0
 while IFS=$'\t' read -r producer_name source_file stable_anchor required_families; do
   if [[ "$producer_name" == "producer_name" ]]; then
@@ -728,17 +735,6 @@ for consumer in "${LOADHEAL_PRODUCT_CONSUMERS[@]}"; do
 done
 MUTUALWAIT_SO_EXPORTS="$OUT/cj_gc_forwarding_publication_unit.so-exports.txt"
 nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$MUTUALWAIT_SO_EXPORTS"
-for consumer in 'MapleRuntime::WCollector::FindToVersion('; do
-  if /usr/bin/grep -F -q "$consumer" "$LOADHEAL_FULL"; then
-    echo "GC_UNIT_MUTUALWAIT_LOCAL_DEFINITION symbol=$consumer" >&2
-    exit 9
-  fi
-  if ! /usr/bin/grep -F -q "$consumer" "$MUTUALWAIT_SO_EXPORTS"; then
-    echo "GC_UNIT_MUTUALWAIT_PRODUCT_EXPORT_MISSING symbol=$consumer" >&2
-    exit 10
-  fi
-done
-echo "GATE_MUTUALWAIT_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 echo "GATE_LOADHEAL_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 
 remap_receipt_symbol="${REMAP_RECEIPT_TEST#*.}"

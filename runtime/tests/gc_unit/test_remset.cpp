@@ -24,9 +24,14 @@
 #endif
 
 // RememberedSet::Record is private. The minor's consumer
-// (WCollector::RescanRememberedSet) calls Record
+// (ZRemembered::scan_and_follow) calls Record
 // directly when it re-arms a scanned slot, so a test that cannot call it cannot model the re-arm at
 // all.  Same idiom the fixture already uses for ZPage; scoped to this one header.
+// Parse value-owned heap resources with the product macro configuration before
+// enabling the existing test peers; their member offsets must match the SO.
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
+
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1
 #endif
@@ -40,9 +45,10 @@
 #include "Heap/z/zBarrier.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "gc_unittest.hpp"
 #include "Mutator/ThreadLocal.h"
+#include "Heap/z/zRelocate.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -50,7 +56,7 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 // The product minor path drains the previous face in Generation.cpp and then
-// hands that exact set to WCollector::RescanRememberedSet. Keep this test peer
+// hands that exact set to ZRemembered::scan_and_follow. Keep this test peer
 // limited to that hand-off; all filtering, resolving, marking and re-arming
 // remain in the product function compiled into libcangjie-runtime.so.
 struct RemsetRearmTestAccess {
@@ -60,44 +66,45 @@ struct RemsetRearmTestAccess {
         RemsetScanStats stats;
     };
 
-    static ZGeneration& YoungCycle(WCollector& collector)
+    static ZGeneration& YoungCycle(Heap& collector)
     {
-        return collector.youngCycle;
+        return Heap::GetHeap().young();
     }
 
-    static RefField<> Tag(WCollector& collector, BaseObject* object)
+    static RefField<> Tag(Heap& collector, BaseObject* object)
     {
-        return collector.GetAndTryTagRefField(object);
+        return ZBarrier::GetAndTryTagRefField(object);
     }
 
-    static void BeginMinor(WCollector& collector)
+    static void BeginMinor(Heap& collector)
     {
         // This remains a synthetic remset component fixture, not a mark-start
         // acceptance test. Bind its actual collector/domain/phase before the
         // linked product barrier can call ZGeneration::mark_object (:118-122).
-        if (collector.youngCycle.Workers() == nullptr) {
-            GcHeapFixture::AdoptGenerationIdentity(collector, Heap::GetHeap().GetCollector());
-            collector.youngCycle.InitializeWorkers(1);
-            collector.StartYoungMarkWork();
-            collector.youngCycle.Begin(0);
+        if (Heap::GetHeap().young().Workers() == nullptr) {
+            Heap::GetHeap().young().InitializeWorkers(1);
+            Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+            Heap::GetHeap().young().Mark().Start();
+            MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
+            Heap::GetHeap().young().Begin(0);
         }
-        collector.youngCycle.PublishPhase(ZGenerationPhase::Mark);
+        Heap::GetHeap().young().PublishPhase(ZGenerationPhase::Mark);
         ZGlobalsPointers::flip_young_mark_start();
     }
 
-    static bool FixInteriorSlot(WCollector& collector, RefField<>& field, BaseObject* knownBase)
+    static bool FixInteriorSlot(Heap& collector, RefField<>& field, BaseObject* knownBase)
     {
-        return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr);
+        return ZRelocate::FixMinorEvacuatedSlot(field, knownBase, nullptr);
     }
 
-    static ConsumeResult ConsumePrevious(WCollector& collector, const std::unordered_set<MAddress>& previous,
+    static ConsumeResult ConsumePrevious(Heap& collector, const std::unordered_set<MAddress>& previous,
                                           BaseObject* currentMinorRoot)
     {
-        WorkStack workStack = collector.NewWorkStack();
-        WCollector::MinorSlotSet reachableSlots;
-        WCollector::MinorSlotSet weakSlots;
-        WCollector::MinorObjectSet currentMinorRoots;
-        WCollector::MinorSlotSet consumed;
+        WorkStack workStack = WorkStack{};
+        std::unordered_set<MAddress> reachableSlots;
+        std::unordered_set<MAddress> weakSlots;
+        std::unordered_set<BaseObject*> currentMinorRoots;
+        std::unordered_set<MAddress> consumed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
@@ -106,7 +113,7 @@ struct RemsetRearmTestAccess {
         // Mark work now belongs to the generation domain, not the obsolete
         // caller staging vector. Only dispose fixture-owned pending work here;
         // real follow/termination is covered by p2FieldBarrierExercise.
-        auto& domain = *collector.YoungMark();
+        auto& domain = *Heap::GetHeap().young().MarkPtr();
         auto& stacks = domain.Stacks();
         const size_t work = stacks.Population();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
@@ -136,7 +143,7 @@ GC_TEST(RelocateInterior, MinorFixPublishesCurrentStoreGoodColour)
     const uintptr_t initial = desired ^ ZPointerRememberedMask;
     field->StoreColoured(to_zpointer(initial));
 
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     const bool changed = RemsetRearmTestAccess::FixInteriorSlot(collector, *field, fx.obj1);
     const uintptr_t finalWord = raw(field->GetFieldValue());
     std::fprintf(stderr,
@@ -259,7 +266,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -279,7 +286,7 @@ GC_TEST(Remset, StoreGoodSkipsAndPreviousEpochRecords)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
@@ -306,7 +313,7 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -328,7 +335,7 @@ GC_TEST(Remset, StoreGoodRewriteRequiresEpochChangeAfterDrain)
 }
 
 // Product-path form of the r6b failure arm. Generation drains the previous
-// face, then WCollector::RescanRememberedSet consumes it and re-arms the slot
+// face, then ZRemembered::scan_and_follow consumes it and re-arms the slot
 // while its resolved target is still young (zRemembered.cpp:578-589). The
 // compiler-like bare store below makes no runtime call; minor #2 must still
 // receive the slot from the current face established by that product consumer.
@@ -352,7 +359,7 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
 
     RememberedSet& rs = HeapTestRemset();
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -448,7 +455,7 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
 
     RememberedSet& rs = HeapTestRemset();
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
 
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
@@ -500,7 +507,7 @@ GC_TEST(Remset, CompilerPostStoreSkipsGoodAndRecordsPreviousEpoch)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     GC_EXPECT_EQ(ClassifySlotWord(reinterpret_cast<uintptr_t>(fx.obj1)), SlotWordVerdict::kIllegal);
@@ -524,7 +531,7 @@ GC_TEST(Remset, CompilerPostStoreFastPathIgnoresNewTargetGeneration)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -549,7 +556,7 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
     fx.region1->reset(PageAge::eden);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -566,7 +573,7 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
     fx.region1->reset(PageAge::eden);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -584,7 +591,7 @@ GC_TEST(Remset, CompareAndSwapRemembersBeforeAttempt)
     fx.region1->reset(PageAge::eden);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -612,7 +619,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     field->StoreColoured(PreviousRememberedPointer(fx.obj1));
     ZBarrier::WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(ExpectRecorded(HeapTestRemset(), reinterpret_cast<MAddress>(field)));
@@ -626,7 +633,7 @@ GC_TEST(Remset, StaticRootNotRecorded)
     fx.region1->reset(PageAge::eden);
     fx.region1->reset(PageAge::eden);
 
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     NativeSlot root(zpointer::null);
@@ -648,7 +655,7 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -687,7 +694,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -710,7 +717,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
 // time instead: ZRemembered::scan_field (zRemembered.cpp:578-589) re-arms every scanned slot whose
 // healed target is still young, and drops the rest by simply not re-arming them.
 //
-// We do the same in WCollector::RescanRememberedSet.  That fix rests on one property of this class
+// We do the same in ZRemembered::scan_and_follow.  That fix rests on one property of this class
 // that nothing tested: a Record() issued while consuming a drained set must land in the *next*
 // cycle's buffer.  If it landed in the one being drained the re-arm would either be lost or loop.
 //
@@ -728,7 +735,7 @@ GC_TEST(Remset, DrainIsDestructiveSoAnEdgeWrittenOnceIsLost)
     fx.region1->reset(PageAge::eden);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -755,7 +762,7 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 
@@ -1053,7 +1060,7 @@ GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
 GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
 {
     GcHeapFixture heap;
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<Heap&>(Heap::GetHeap());
     ZGeneration& young = RemsetRearmTestAccess::YoungCycle(collector);
     RememberedSet& rs = HeapTestRemset();
     // The fixture may leave its liveness-setup cycle active. Complete that
@@ -1066,19 +1073,19 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
     };
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;
-    collector.PublishGenerationPhase(ZGenerationId::young, ZGenerationPhase::Relocate);
+    Heap::GetHeap().PublishGenerationPhase(ZGenerationId::young, ZGenerationPhase::Relocate);
     size_t checked = 0;
     for (uint8_t initial = 0; initial != 2; ++initial) {
         for (size_t flips = 0; flips != 4; ++flips) {
             rs.ClearRegion(heap.heapStart, heap.heapStart + 2 * ZPage::UNIT_SIZE);
             if (rs.activeBuffer.load() != initial) markStart();
-            collector.PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
-            collector.PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
+            Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
+            Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
             rs.Record(from + sizeof(void*));
             for (size_t flip = 0; flip != flips; ++flip) markStart();
             // FORWARD is the same relocation: it must not replace the snapshot.
-            collector.PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
-            GC_EXPECT_EQ(collector.OldActiveRemsetIsCurrent(), flips % 2 == 0);
+            Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
+            GC_EXPECT_EQ(Heap::GetHeap().OldActiveRemsetIsCurrent(), flips % 2 == 0);
             GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
             GC_EXPECT_TRUE(SlotPageRemembered(to + sizeof(void*)));
             ++checked;
@@ -1092,11 +1099,11 @@ GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
 GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
 {
     GcHeapFixture heap;
-    auto& collector = Heap::GetHeap().GetCollector();
+    auto& collector = Heap::GetHeap();
     RememberedSet& rs = HeapTestRemset();
-    collector.PublishGenerationPhase(ZGenerationId::young, ZGenerationPhase::Relocate);
-    collector.PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
-    collector.PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
+    Heap::GetHeap().PublishGenerationPhase(ZGenerationId::young, ZGenerationPhase::Relocate);
+    Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
+    Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;
     rs.Record(from + sizeof(void*));
@@ -1110,10 +1117,10 @@ GC_OTHER_VM_TEST(Remset, RelocatedFieldsEnterCurrentOutsideYoungMark)
 GC_OTHER_VM_TEST(Remset, InPlacePreviousFieldsPublishDuringYoungMark)
 {
     GcHeapFixture heap;
-    auto& collector = Heap::GetHeap().GetCollector();
+    auto& collector = Heap::GetHeap();
     RememberedSet& rs = HeapTestRemset();
-    collector.PublishGenerationPhase(ZGenerationId::young, ZGenerationPhase::Mark);
-    collector.PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
+    Heap::GetHeap().PublishGenerationPhase(ZGenerationId::young, ZGenerationPhase::Mark);
+    Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::Relocate);
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;
     rs.Record(from + sizeof(void*));

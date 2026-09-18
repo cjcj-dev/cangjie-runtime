@@ -1,0 +1,43 @@
+# kkk2_build_two lane=sym_cangjie_runtime_700_implement_r5723534433-owner-crossvm head=f49bd78712f5cd31043a1456f85292050f3bc8ce dirty_files=42 source_sha256=38657c726a40dbb3…
+== default configure_rc=0 build_rc=2 wall=19s
+-- first errors (default):
+default-build.log:1448:../../../runtime/src/Heap/z/zForwarding.hpp:100:77: error: unknown type name 'PageAge'
+default-build.log:1451:../../../runtime/src/Heap/z/zForwarding.hpp:122:5: error: unknown type name 'PageAge'
+default-build.log:1454:../../../runtime/src/Heap/z/zForwarding.hpp:123:5: error: unknown type name 'PageAge'
+default-build.log:1457:../../../runtime/src/Heap/z/zForwarding.hpp:299:42: error: unknown type name 'PageAge'
+default-build.log:1460:../../../runtime/src/Heap/z/zForwarding.hpp:299:60: error: unknown type name 'PageAge'
+default-build.log:1463:../../../runtime/src/Heap/z/zForwarding.hpp:307:11: error: unknown type name 'PageAge'
+default-build.log:1466:../../../runtime/src/Heap/z/zForwarding.hpp:308:11: error: unknown type name 'PageAge'
+default-build.log:1469:../../../runtime/src/Heap/z/zForwarding.hpp:124:53: error: use of undeclared identifier 'PageAge'
+default-build.log:1472:../../../runtime/src/Heap/z/zForwarding.hpp:124:80: error: use of undeclared identifier 'PageAge'
+default-build.log:1477:../../../runtime/src/Heap/z/zForwarding.inline.hpp:92:13: error: use of undeclared identifier 'PageAge'
+default-build.log:1480:../../../runtime/src/Heap/z/zForwarding.inline.hpp:92:27: error: use of undeclared identifier 'PageAge'
+default-build.log:1483:../../../runtime/src/Heap/z/zForwarding.inline.hpp:244:42: error: unknown type name 'PageAge'
+default-build.log:1486:../../../runtime/src/Heap/z/zForwarding.inline.hpp:244:60: error: unknown type name 'PageAge'
+default-build.log:1519:../../../runtime/src/Heap/z/zForwarding.cpp:34:27: error: out-of-line definition of 'alloc' does not match any declaration in 'MapleRuntime::ZForwarding'
+default-build.log:1522:../../../runtime/src/Heap/z/zForwarding.cpp:38:25: error: no matching constructor for initialization of 'MapleRuntime::ZForwarding'
+-- SO (default):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+== testable configure_rc=0 build_rc=2 wall=19s
+-- first errors (testable):
+testable-build.log:1621:../../../runtime/src/Heap/z/zForwarding.hpp:100:77: error: unknown type name 'PageAge'
+testable-build.log:1624:../../../runtime/src/Heap/z/zForwarding.hpp:122:5: error: unknown type name 'PageAge'
+testable-build.log:1627:../../../runtime/src/Heap/z/zForwarding.hpp:123:5: error: unknown type name 'PageAge'
+testable-build.log:1630:../../../runtime/src/Heap/z/zForwarding.hpp:299:42: error: unknown type name 'PageAge'
+testable-build.log:1633:../../../runtime/src/Heap/z/zForwarding.hpp:299:60: error: unknown type name 'PageAge'
+testable-build.log:1636:../../../runtime/src/Heap/z/zForwarding.hpp:307:11: error: unknown type name 'PageAge'
+testable-build.log:1639:../../../runtime/src/Heap/z/zForwarding.hpp:308:11: error: unknown type name 'PageAge'
+testable-build.log:1642:../../../runtime/src/Heap/z/zForwarding.hpp:124:53: error: use of undeclared identifier 'PageAge'
+testable-build.log:1645:../../../runtime/src/Heap/z/zForwarding.hpp:124:80: error: use of undeclared identifier 'PageAge'
+testable-build.log:1650:../../../runtime/src/Heap/z/zForwarding.inline.hpp:92:13: error: use of undeclared identifier 'PageAge'
+testable-build.log:1653:../../../runtime/src/Heap/z/zForwarding.inline.hpp:92:27: error: use of undeclared identifier 'PageAge'
+testable-build.log:1656:../../../runtime/src/Heap/z/zForwarding.inline.hpp:244:42: error: unknown type name 'PageAge'
+testable-build.log:1659:../../../runtime/src/Heap/z/zForwarding.inline.hpp:244:60: error: unknown type name 'PageAge'
+testable-build.log:1692:../../../runtime/src/Heap/z/zForwarding.cpp:34:27: error: out-of-line definition of 'alloc' does not match any declaration in 'MapleRuntime::ZForwarding'
+testable-build.log:1695:../../../runtime/src/Heap/z/zForwarding.cpp:38:25: error: no matching constructor for initialization of 'MapleRuntime::ZForwarding'
+testable-build.log:2200:../../../runtime/src/Heap/z/zCrossVM.cpp:106:5: error: unknown type name 'ScopedObjectAccess'
+-- SO (testable):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+-- logs: /root/sym_cangjie_runtime_700_implement_r5723534433-owner-crossvm/{default,testable}-{configure,build}.log

@@ -60,43 +60,9 @@ inline size_t RegionManager::CollectRegion(ZPage* region)
         }
     }
 
-inline void RegionManager::AddRawPointerObject(BaseObject* obj)
-    {
-        // Pin needs a plain load-good address. High colour bits ⇒ missing barrier
-        // at the call site (would OOB in GetUnitIdxAt; fail closed here).
-        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
-        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
-        ZPage* region = Heap::page(rawAddr);
-        region->IncRawPointerObjectCount();
 
-        // CSet empty-free (ExemptFromRegions) TryDeletes FROM under the same
-        // list lock (zGeneration.cpp:211-221 register_empty_page). Inc first so
-        // a GC that already claimed GARBAGE still sees rawPtrCnt>0. Retry the
-        // unlisted window between TryDelete and Prepend.
-        for (;;) {
-            if (fromRegionList.TryDeleteRegion(region) ||
-                garbageRegionList.TryDeleteRegion(region)) {
-                ZGeneration* generation = region->IsYoungRegion() ? static_cast<ZGeneration*>(ZGeneration::young())
-                                                                  : static_cast<ZGeneration*>(ZGeneration::old());
-                CHECK(generation == nullptr || !generation->is_phase_relocate());
-                rawPointerPinnedRegionList.PrependRegion(region);
-                break;
-            }
-            if (!region->IsFromRegion() && !region->IsGarbageRegion()) {
-                CHECK(!region->IsLoneFromRegion());
-                break;
-            }
-            std::this_thread::yield();
-        }
-    }
 
-inline void RegionManager::RemoveRawPointerObject(BaseObject* obj)
-    {
-        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
-        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
-        ZPage* region = Heap::page(rawAddr);
-        region->DecRawPointerObjectCount();
-    }
+
 
 inline void RegionManager::ReclaimGarbageRegions()
     {
@@ -132,25 +98,7 @@ inline size_t RegionManager::GetUsedUnitCount() const
             tlRegionList.GetUnitCount();
     }
 
-inline size_t RegionManager::GetAllocatedSize() const
-    {
-        size_t threadLocalSize = 0;
-        AllocBufferVisitor visitor = [&threadLocalSize](AllocBuffer& regionBuffer) {
-            ZPage* region = regionBuffer.GetRegion();
-            if (UNLIKELY(region == ZPage::NullRegion())) {
-                return;
-            }
-            threadLocalSize += region->GetRegionAllocatedSize();
-        };
-        Heap::GetHeap().GetAllocator().VisitAllocBuffers(visitor);
-        // exclude garbageRegionList for live object set.
-        return fromRegionList.GetAllocatedSize() + unmovableFromRegionList.GetAllocatedSize() +
-            recentFullRegionList.GetAllocatedSize() + oldLargeRegionList.GetAllocatedSize() +
-            recentLargeRegionList.GetAllocatedSize() + oldPinnedRegionList.GetAllocatedSize() +
-            recentPinnedRegionList.GetAllocatedSize() + rawPointerPinnedRegionList.GetAllocatedSize() +
-            largeTraceRegions.GetAllocatedSize() + fullTraceRegions.GetAllocatedSize() +
-            threadLocalSize;
-    }
+
 
 inline void RegionManager::MergeRawPointerRegions(RegionList& smallSizeRegionList, RegionList& largeSizeRegionList)
     {
@@ -278,12 +226,7 @@ inline size_t RegionManager::GetGatedGarbageBytes()
         return 0;
     }
 
-inline void RegionManager::LockRegionListInSaferegion(std::mutex& listMutex)
-    {
-        while (!listMutex.try_lock()) {
-            ScopedEnterSaferegion enterSaferegion(true);
-        }
-    }
+
 
 
 } // namespace MapleRuntime

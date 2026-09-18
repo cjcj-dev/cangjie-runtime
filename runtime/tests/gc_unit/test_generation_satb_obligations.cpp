@@ -6,7 +6,7 @@
 //
 // Companion of run_generation_cycle_context.sh. Its fixtures reach product
 // internals through MRT_TESTABLE_INTERNALS friend access (MarkPublicationFixture
-// in WCollector.h/CollectorProxy.h/zMark.hpp/zDriver.hpp), so it only exists in
+// in CopyCollector.h/CollectorProxy.h/zMark.hpp/zDriver.hpp), so it only exists in
 // the testable configuration; the runner builds it only against a testable
 // product SO and reports SATB_RC=NOT_RUN otherwise. The process entry is
 // gc_unit_main.cpp, the same one as cj_gc_unit, so --gtest_filter= /
@@ -19,10 +19,12 @@
 #include "Common/Runtime.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Concurrency/Concurrency.h"
 #include "gc_unittest.hpp"
 #include "mark_publication_fixture.hpp"
 #include <cstdio>
+#include "Heap/z/zBarrier.hpp"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -58,8 +60,8 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     MarkPublicationFixture mark;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
-    mark.collector.MarkObjectIfActive(fx.obj0);
-    mark.collector.MarkObjectIfActive(fx.obj1);
+    Heap::GetHeap().MarkObjectIfActive(fx.obj0);
+    Heap::GetHeap().MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     GC_EXPECT_EQ(mark.YoungPending(), 1u);
     WorkStack work;
@@ -70,7 +72,7 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     GC_EXPECT_EQ(reached.size(), 1u);
     GC_EXPECT_TRUE(reached.front() == fx.obj1);
     // Completing/cleaning young work must leave old's object and carrier intact.
-    GC_EXPECT_TRUE(mark.collector.IsMarkedObject<Generation::Young>(fx.obj1));
+    GC_EXPECT_TRUE(RegionSpace::IsMarkedObject<Generation::Young>(fx.obj1));
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     std::vector<BaseObject*> oldObjects;
     mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });
@@ -85,10 +87,10 @@ GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    mark.collector.MarkObjectIfActive(fx.obj0);
+    Heap::GetHeap().MarkObjectIfActive(fx.obj0);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     mark.CompleteOldMarkForAdmissionTest();
-    mark.collector.MarkObjectIfActive(fx.obj1);
+    Heap::GetHeap().MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     std::vector<BaseObject*> oldObjects;
     mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });
@@ -103,11 +105,9 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     struct RestoreBlock {
-        CollectorResources& resources;
-        ~RestoreBlock() { resources.UnblockResurrection(); }
-    } restore { resources };
+        ~RestoreBlock() { ZResurrection::unblock(); }
+    } restore;
     RestoreMarkFlips flips;
     const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
     GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
@@ -115,7 +115,7 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
                  ZPointer::is_mark_bad(stored) ? 1 : 0);
     RefField<> field(stored);
     mark.CompleteOldMarkForAdmissionTest();
-    resources.BlockResurrection();
+    ZResurrection::block();
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
     (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
@@ -127,13 +127,11 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    auto& resources = Heap::GetHeap().GetCollectorResources();
     struct RestoreBlock {
-        CollectorResources& resources;
-        ~RestoreBlock() { resources.UnblockResurrection(); }
-    } restore { resources };
+        ~RestoreBlock() { ZResurrection::unblock(); }
+    } restore;
     fx.region0->reset(PageAge::eden);
-    resources.BlockResurrection();
+    ZResurrection::block();
     RestoreMarkFlips flips;
     const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, true, false);
     GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));

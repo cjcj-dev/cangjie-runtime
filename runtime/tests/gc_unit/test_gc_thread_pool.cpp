@@ -17,9 +17,9 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zRelocate.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
 #include "gc_unittest.hpp"
@@ -38,9 +38,14 @@ struct RelocationReceiptTestAccess {
     }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-    static void BindCollector(CollectorResources& resources, CopyCollector& collector)
+    static void BindCollector(Heap& collector)
     {
-        resources.testCollector = &collector;
+        CHECK(&collector == &Heap::GetHeap());
+    }
+    static void ForwardYoungFromRuntimeEntry(Heap& collector)
+    {
+        Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+        ZRelocate::ForwardFromSpace(ZGenerationId::young);
     }
 #endif
 };
@@ -155,18 +160,6 @@ bool RunSerialProductEntryClosesGeneration()
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-class YoungForwardRuntimeCollector : public WCollector {
-public:
-    YoungForwardRuntimeCollector(Allocator& allocator, CollectorResources& resources)
-        : WCollector(allocator, resources) {}
-
-    void ForwardYoungFromRuntimeEntry()
-    {
-        GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
-        ForwardFromSpace(ZGenerationId::young);
-    }
-};
-
 class YoungForwardTestRuntime : public Runtime {
 public:
     explicit YoungForwardTestRuntime(MutatorManager& manager)
@@ -196,13 +189,13 @@ bool RunYoungRuntimeProductEntry()
 
     ZRelocateQueue& queue = manager.GetZRelocateQueue();
 
-    YoungForwardRuntimeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
 #if defined(MRT_TESTABLE_INTERNALS)
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), collector);
+    RelocationReceiptTestAccess::BindCollector(collector);
 #endif
-    collector.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
     ZStat::Initialize();
-    collector.ForwardYoungFromRuntimeEntry();
+    RelocationReceiptTestAccess::ForwardYoungFromRuntimeEntry(collector);
 
     return !queue.IsActive() && queue.PendingCount() == 0;
 }
@@ -425,3 +418,63 @@ GC_TEST(RelocateWorkers, ActualForwardTaskCompletesClaimedOwnerAtRegionExit)
     ExpectIsolatedScenarioPasses<RunActualTaskClaimedOwnerSuccess>();
 }
 #endif
+
+// The collected heap owns the runtime pool (ZGC zCollectedHeap.cpp:310-311),
+// independently of either generation's GC worker set.
+GC_TEST(RuntimeWorkers, CollectedHeapOwnsActiveRuntimePool)
+{
+    WorkerThreads* workers = ZCollectedHeap::heap()->safepoint_workers();
+    GC_EXPECT_TRUE(workers != nullptr);
+    const uint32_t count = workers->max_workers();
+    GC_EXPECT_TRUE(count > 0);
+    GC_EXPECT_EQ(workers->active_workers(), count);
+    GC_EXPECT_EQ(workers->created_workers(), count);
+    class RuntimeResultTask final : public WorkerTask {
+    public:
+        explicit RuntimeResultTask(uint32_t count)
+            : WorkerTask("RuntimeResultTask"), size(count), results(new std::atomic<uint32_t>[count])
+        {
+            for (uint32_t i = 0; i < size; ++i) results[i].store(0);
+        }
+        void work(uint32_t id) override
+        {
+            if (id >= size || WorkerThread::worker_id() != id) {
+                invalid.fetch_add(1);
+                return;
+            }
+            results[id].fetch_add(1);
+        }
+        const uint32_t size;
+        std::unique_ptr<std::atomic<uint32_t>[]> results;
+        std::atomic<uint32_t> invalid{0};
+    } task(count);
+    workers->run_task(&task);
+    std::fprintf(stderr, "RUNTIME_WORKERS_RESULT workers=%u invalid=%u\n", count, task.invalid.load());
+    GC_EXPECT_EQ(task.invalid.load(), 0u);
+    for (uint32_t i = 0; i < count; ++i) {
+        GC_EXPECT_EQ(task.results[i].load(), 1u);
+    }
+}
+
+// Runtime threads are created by the real collected-heap constructor. Exercise
+// its normal shutdown in an exec-isolated process so other fixtures keep theirs.
+GC_OTHER_VM_TEST(RuntimeWorkers, HeapStopJoinsRuntimePool)
+{
+    WorkerThreads* workers = ZCollectedHeap::heap()->safepoint_workers();
+    GC_EXPECT_TRUE(workers != nullptr);
+    const uint32_t createdBefore = workers->created_workers();
+    const uint32_t activeBefore = workers->active_workers();
+    GC_EXPECT_TRUE(createdBefore > 0);
+    GC_EXPECT_TRUE(activeBefore > 0);
+
+    Heap::GetHeap().StopGCWork();
+    std::fprintf(stderr, "RUNTIME_WORKERS_STOP_RESULT before_created=%u before_active=%u created=%u active=%u\n",
+                 createdBefore, activeBefore, workers->created_workers(), workers->active_workers());
+    GC_EXPECT_EQ(workers->created_workers(), 0u);
+    GC_EXPECT_EQ(workers->active_workers(), 0u);
+
+    // The main entry also stops an existing heap before static destruction.
+    Heap::GetHeap().StopGCWork();
+    GC_EXPECT_EQ(workers->created_workers(), 0u);
+    GC_EXPECT_EQ(workers->active_workers(), 0u);
+}

@@ -14,7 +14,7 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/Handshake.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 
 namespace MapleRuntime {
 RwLock ThreadLocal::tlEnableLock;
@@ -78,10 +78,10 @@ void ThreadLocal::FlushCurrentThreadMarkStacks()
     if (tls->buffer == nullptr && empty(tls->gcData) && empty(tls->nativeGCData)) {
         return;
     }
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    (void)collector.FlushThreadMarkProducers(tls);
+    Heap& heap = Heap::GetHeap();
+    (void)heap.FlushThreadMarkProducers(tls);
     if (tls->nativeGCData != nullptr && tls->nativeGCData != tls->gcData) {
-        (void)collector.FlushGCDataMarkProducers(*tls->nativeGCData);
+        (void)heap.FlushGCDataMarkProducers(*tls->nativeGCData);
     }
 }
 

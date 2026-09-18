@@ -2,6 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
+#include "Heap/z/zCrossVM.hpp"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -9,7 +10,7 @@
 
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
@@ -22,18 +23,19 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct ZGenerationRootTestAccess {
-    static void Seed(CopyCollector& collector, BaseObject* object)
+    static void Seed(Heap& collector, BaseObject* object)
     {
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.emplace(CopyCollector::ValueRoot(object),
-                                            CopyCollector::ValueRootList{});
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        Heap::GetHeap().cross_vm().cycleRefWorkStack.emplace(ValueRoot(object),
+                                            ValueRootList{});
     }
 
-    static void Clear(CopyCollector& collector)
+    static void Clear(Heap& collector)
     {
-        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.clear();
+        std::lock_guard<std::mutex> lock(Heap::GetHeap().cross_vm().cycleWorkStackMtx);
+        Heap::GetHeap().cross_vm().cycleRefWorkStack.clear();
     }
+    static void PostResolveCycleTask(Heap& collector) { Heap::GetHeap().cross_vm().PostResolveCycleTask(); }
 };
 } // namespace MapleRuntime
 
@@ -54,21 +56,6 @@ bool NoHigherPriorityTask()
     return false;
 }
 
-class PostResolveProbeCollector final : public WCollector {
-public:
-    using WCollector::DoGarbageCollection;
-
-    PostResolveProbeCollector(Allocator& allocator, CollectorResources& resources)
-        : WCollector(allocator, resources)
-    {
-    }
-
-    void SeedCycleWork()
-    {
-        cycleRefWorkStack.emplace(ValueRoot(reinterpret_cast<BaseObject*>(uintptr_t{1})), ValueRootList{});
-    }
-};
-
 void ExpectPostState(const char* test, unsigned expected)
 {
     const unsigned posted = gPosted.load(std::memory_order_relaxed);
@@ -85,7 +72,7 @@ void* RunMajorCycle(void*)
     // ZHeap owns both generations (zHeap.cpp:60-70); a major request runs
     // its young prelude before the old body (zDriver.cpp:443-451). Use the
     // initialized heap collector and driver instead of a second collector.
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<Heap&>(Heap::GetHeap());
     alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
     auto* type = reinterpret_cast<TypeInfo*>(typeStorage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -99,16 +86,16 @@ void* RunMajorCycle(void*)
     // (after the old root task returned, before follow). The export root
     // keeping the object alive is not in this window (it feeds the driver's
     // foreign stack), so the cycle-owner family scan is what publishes it.
-    collector.testOldMarkStarted = [handle, &collector]() {
+    ZGeneration::testOldMarkStarted = [handle, &collector]() {
         BaseObject* current = Heap::GetHeap().GetExportObject(handle);
-        const bool found = RootPublicationSnapshot::Contains(*collector.MajorMark(), current);
+        const bool found = RootPublicationSnapshot::Contains(*Heap::GetHeap().old().MarkPtr(), current);
         gMajorRootObserved.store(found, std::memory_order_relaxed);
         std::printf("OHOS_HOST_ROOT_RESULT current=%p found=%u\n",
                     static_cast<void*>(current), static_cast<unsigned>(found));
         std::fflush(stdout);
     };
-    collector.RequestGC(GC_REASON_USER, false);
-    collector.testOldMarkStarted = nullptr;
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    ZGeneration::testOldMarkStarted = nullptr;
     ZGenerationRootTestAccess::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);
     return nullptr;
@@ -119,9 +106,10 @@ GC_TEST(OHOSCycle, PostResolvePostsProductTask)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
-    PostResolveProbeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SeedCycleWork();
-    collector.PostResolveCycleTask();
+    Heap& collector = Heap::GetHeap();
+    ZGenerationRootTestAccess::Seed(collector, reinterpret_cast<BaseObject*>(uintptr_t{1}));
+    ZGenerationRootTestAccess::PostResolveCycleTask(collector);
+    ZGenerationRootTestAccess::Clear(collector);
     ExpectPostState("OHOSCycle.PostResolvePostsProductTask", 1U);
 }
 
@@ -129,8 +117,9 @@ GC_TEST(OHOSCycle, EmptyWorkDoesNotPost)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
-    PostResolveProbeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.PostResolveCycleTask();
+    Heap& collector = Heap::GetHeap();
+    ZGenerationRootTestAccess::Clear(collector);
+    ZGenerationRootTestAccess::PostResolveCycleTask(collector);
     ExpectPostState("OHOSCycle.EmptyWorkDoesNotPost", 0U);
 }
 

@@ -20,7 +20,6 @@
 #include "Heap/z/zGenerationId.hpp"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
-class CopyCollector;
 class Mutator;
 
 class HandleMark {
@@ -56,10 +55,10 @@ public:
 
 class OopStorageSetIteratorStrong {
 public:
-    OopStorageSetIteratorStrong(const CopyCollector& collector, unsigned workers,
+    OopStorageSetIteratorStrong(unsigned workers,
                                 ZGenerationIdOptional generation);
-    explicit OopStorageSetIteratorStrong(const CopyCollector& collector, unsigned workers = 1)
-        : OopStorageSetIteratorStrong(collector, workers, ZGenerationIdOptional::none) {}
+    explicit OopStorageSetIteratorStrong(unsigned workers = 1)
+        : OopStorageSetIteratorStrong(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
     std::array<OopStorage::ParState<true>, 1> states;
@@ -67,10 +66,10 @@ private:
 };
 class OopStorageSetIteratorWeak {
 public:
-    OopStorageSetIteratorWeak(const CopyCollector& collector, unsigned workers,
+    OopStorageSetIteratorWeak(unsigned workers,
                               ZGenerationIdOptional generation);
-    explicit OopStorageSetIteratorWeak(const CopyCollector& collector, unsigned workers = 1)
-        : OopStorageSetIteratorWeak(collector, workers, ZGenerationIdOptional::none) {}
+    explicit OopStorageSetIteratorWeak(unsigned workers = 1)
+        : OopStorageSetIteratorWeak(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
     void report_num_dead();
     size_t NumDeadForTest() const { return numDead; }
@@ -81,13 +80,9 @@ private:
 };
 class StaticRootsAdapterIterator {
 public:
-    StaticRootsAdapterIterator(const CopyCollector& collector, ZGenerationIdOptional)
-        : collector(collector) {}
-    explicit StaticRootsAdapterIterator(const CopyCollector& collector)
-        : StaticRootsAdapterIterator(collector, ZGenerationIdOptional::none) {}
+    explicit StaticRootsAdapterIterator(ZGenerationIdOptional = ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
-    const CopyCollector& collector;
     std::atomic<bool> claimed{false};
 };
 class JavaThreadsIterator {
@@ -102,11 +97,11 @@ private:
 };
 class RootsIteratorStrongColored {
 public:
-    RootsIteratorStrongColored(const CopyCollector& collector, unsigned workers,
+    RootsIteratorStrongColored(unsigned workers,
                                ZGenerationIdOptional generation)
-        : strong(collector, workers, generation), statics(collector, generation) {}
-    explicit RootsIteratorStrongColored(const CopyCollector& collector, unsigned workers = 1)
-        : RootsIteratorStrongColored(collector, workers, ZGenerationIdOptional::none) {}
+        : strong(workers, generation), statics(generation) {}
+    explicit RootsIteratorStrongColored(unsigned workers = 1)
+        : RootsIteratorStrongColored(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
     ParallelApply<OopStorageSetIteratorStrong> strong;
@@ -114,11 +109,11 @@ private:
 };
 class RootsIteratorWeakColored {
 public:
-    RootsIteratorWeakColored(const CopyCollector& collector, unsigned workers,
+    RootsIteratorWeakColored(unsigned workers,
                              ZGenerationIdOptional generation)
-        : weak(collector, workers, generation) {}
-    explicit RootsIteratorWeakColored(const CopyCollector& collector, unsigned workers = 1)
-        : RootsIteratorWeakColored(collector, workers, ZGenerationIdOptional::none) {}
+        : weak(workers, generation) {}
+    explicit RootsIteratorWeakColored(unsigned workers = 1)
+        : RootsIteratorWeakColored(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor)
     {
         NativeSlotVisitor copy = visitor;
@@ -130,12 +125,12 @@ private:
 };
 class RootsIteratorAllColored {
 public:
-    RootsIteratorAllColored(const CopyCollector& collector, unsigned workers,
+    RootsIteratorAllColored(unsigned workers,
                             ZGenerationIdOptional generation)
-        : strong(collector, workers, generation), weak(collector, workers, generation),
-          statics(collector, generation) {}
-    explicit RootsIteratorAllColored(const CopyCollector& collector, unsigned workers = 1)
-        : RootsIteratorAllColored(collector, workers, ZGenerationIdOptional::none) {}
+        : strong(workers, generation), weak(workers, generation),
+          statics(generation) {}
+    explicit RootsIteratorAllColored(unsigned workers = 1)
+        : RootsIteratorAllColored(workers, ZGenerationIdOptional::none) {}
     void Apply(const NativeSlotVisitor& visitor);
 private:
     ParallelApply<OopStorageSetIteratorStrong> strong;

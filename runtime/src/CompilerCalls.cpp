@@ -33,7 +33,7 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/GcStats.h"
+#include "Heap/z/zStat.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zAddress.inline.hpp"
@@ -895,14 +895,14 @@ static ArrayRef PinArray(const ArrayRef array)
     // The pin may resolve a movable from-copy to its to-version (oracleblack face c):
     // the caller must hand out the RESOLVED payload, and MCC_ReleaseRawData will Dec the
     // same region the pin Inc'd.
-    auto& collector = Heap::GetHeap().GetCollector();
+    Heap& heap = Heap::GetHeap();
     BaseObject* current = array;
     const MAddress addr = reinterpret_cast<MAddress>(current);
     const ZGenerationId id =
-        collector.GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr
+        heap.GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr
             ? ZGenerationId::young
             : ZGenerationId::old;
-    current = collector.relocate_or_remap_object(current, id);
+    current = heap.relocate_or_remap_object(current, id);
     ZJNICritical::enter();
     return static_cast<ArrayRef>(current);
 }

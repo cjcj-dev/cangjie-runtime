@@ -33,7 +33,7 @@ uint64_t ZLiveMap::generation_seqnum(ZGenerationId id)
 {
     const ZGenerationId generation = id == ZGenerationId::young ? ZGenerationId::young
                                                                     : ZGenerationId::old;
-    return Heap::GetHeap().GetCollector().GetCycleSnapshot(generation).sequence;
+    return Heap::GetHeap().GetZGeneration(generation).Snapshot().sequence;
 }
 
 // ZGC zLiveMap.cpp:38: (object_max_count / NumSegments) * BitsPerObject. Cangjie

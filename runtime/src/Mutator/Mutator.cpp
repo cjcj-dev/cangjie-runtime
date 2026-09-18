@@ -13,11 +13,11 @@
 #define NOGDI
 #include <windows.h>
 #endif
-#include "Collector/CopyCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
-#include "Heap/Collector/FinalizerProcessor.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zReferenceProcessor.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "ObjectModel/RefField.inline.h"
 #if defined(MRT_GC_UNIT_TESTS)
@@ -190,9 +190,9 @@ void Mutator::ResetMutator()
     }
     // Exit publishes the logical owner's private work before scheduler
     // unbinding can expose another owner through this OS TLS binding.
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    Heap& heap = Heap::GetHeap();
     gcData.storeBarrierBuffer->Flush();
-    (void)collector.FlushGCDataMarkProducers(gcData);
+    (void)heap.FlushGCDataMarkProducers(gcData);
     uwContext.Reset();
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
     // BeginCatch would have performed, or the guard stays expanded with nothing left to
@@ -273,9 +273,6 @@ void Mutator::SuspendForSync()
     }
 }
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-void Mutator::CreateCurrentGCInfo() { gcInfos.CreateCurrentGCInfo(); }
-#endif
 
 // zVerify.cpp:323-342: verify only the roots whose watermark processing
 // has started, and never read frames still waiting for processing.
@@ -301,9 +298,6 @@ void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisi
         return;
     }
     IncObserver();
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    CreateCurrentGCInfo();
-#endif
     StackManager::VisitStackRoots(uwContext, func, *this);
     VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
@@ -379,9 +373,6 @@ void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, cons
         return;
     }
     IncObserver();
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    CreateCurrentGCInfo();
-#endif
     StackManager::VisitHeapReferencesOnStack(
         uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this, young);
     VisitRawObjects(rawObjectVisitor);
@@ -794,11 +785,11 @@ static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
     if (!Heap::IsHeapAddress(object)) {
         return false;
     }
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    Heap& heap = Heap::GetHeap();
     // The eager relocation handshake makes saved uncolored roots current
     // before this mark pass (ZUncoloredRoot::make_load_good's current-color arm).
     BaseObject* current = object;
-    collector.PublishThreadRoot(current, young, follow);
+    heap.PublishThreadRoot(current, young, follow);
     ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return true;
 }
@@ -817,7 +808,7 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool
 // (String = {i8*, i32, i32}); the oop lives at record+0. Alloca-form FI already
 // names that word, so LoadPlain is a heap oop and never reaches here.
 // ZUncoloredRoot::barrier writes back the *same* p it loaded (zUncoloredRoot.inline.hpp:38,59).
-static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector, std::set<void*>& rootFieldSet)
+static void PreForwardHeaderlessRecord(BaseObject* record, Heap& collector, std::set<void*>& rootFieldSet)
 {
     if (record == nullptr) {
         return;
@@ -831,7 +822,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
         collector.IsUnmovableFromObject(oldObj)) {
         return;
     }
-    BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
+    BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
     CHECK_DETAIL(toObj != nullptr, "preforward headerless missing winner oldObj=%p", oldObj);
     if (oldObj != toObj) {
         ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&field), ZPointerLoadGoodMask);
@@ -869,7 +860,7 @@ bool Mutator::GcPhaseEnum(bool young, uint64_t stackScanEpoch, bool bySelf, size
     return scanned;
 }
 
-inline void Mutator::ForwardLocalFinalizers(Collector&)
+inline void Mutator::ForwardLocalFinalizers()
 {
     for (NativeSlot& root : localFinalizers) {
         (void)ZBarrier::ReadStaticRef(root);
@@ -901,7 +892,7 @@ inline void Mutator::GCPhasePreForward()
     std::set<BaseObject*> rootSet;
     std::set<void*> rootFieldSet;
     std::stack<BaseObject*> rootStack;
-    Collector& collector = reinterpret_cast<Collector&>(Heap::GetHeap().GetCollector());
+    Heap& collector = Heap::GetHeap();
     HeapSlotVisitor refVisitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this](HeapSlot<>& refFieldAddr) {
         // The containing object is stack allocated, so this metadata field is a RootSlot.
         RootSlot& rootField = RootSlotAt(
@@ -910,7 +901,7 @@ inline void Mutator::GCPhasePreForward()
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
-            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
+            BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward stack field missing winner oldObj=%p", oldObj);
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&rootField), ZPointerLoadGoodMask);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
@@ -942,7 +933,7 @@ inline void Mutator::GCPhasePreForward()
             // and the refusal below is the honest report of that.  ZGC's counterpart assert
             // (zRelocate.cpp:412-416) encodes the same invariant: an address a root names is a
             // live object start, or the collector is already wrong.
-            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
+            BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         } else if (oldObj != nullptr) {
@@ -962,7 +953,7 @@ inline void Mutator::GCPhasePreForward()
     };
 
     DerivedPtrVisitor derivedPtrVisitor = MakeDerivedRootVisitor(visitor);
-    ForwardLocalFinalizers(collector);
+    ForwardLocalFinalizers();
     size_t frames = 0;
     const uint64_t epoch = __atomic_load_n(ZPointerStoreGoodMaskLowOrderBitsAddr, __ATOMIC_ACQUIRE);
     if (!StackWatermarkSet::finish_processing(*this, visitor, visitor, epoch, &derivedPtrVisitor, frames)) {

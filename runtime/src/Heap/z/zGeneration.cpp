@@ -8,8 +8,9 @@
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
+#include "Heap/z/zResurrection.hpp"
+#include "Heap/z/zMark.hpp"
 
 #include <array>
 #include <atomic>
@@ -54,7 +55,7 @@
 #include "ObjectModel/RefField.inline.h"
 #include "Mutator/Handshake.h"
 #include "TypeInfoManager.h"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/zRelocate.hpp"
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
@@ -134,126 +135,6 @@ double ZGeneration::FragmentationLimit() const
 
 void ResetSkippedStackMapCounts();
 void ReportSkippedStackMapCounts();
-// ZGenerationYoung::mark_start (zGeneration.cpp:855-880). The collector
-// supplies the existing allocator/mark domain; this cycle owns phase and seq.
-YoungCollectionStats ZGeneration::StartYoungMark(WCollector& collector)
-{
-    CHECK(_cycle == ZGenerationId::young);
-    CHECK(Snapshot().active);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
-    }
-#endif
-    ZGlobalsPointers::flip_young_mark_start();
-    ZVerify::OnColorFlip();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
-    }
-#endif
-
-    auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
-    auto& manager = space.GetRegionManager();
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
-        manager.ResetTLABUsage();
-        manager.RetireSharedPages(kPageAgeRangeYoung);
-        collector.FlushAllocationRegions();
-    }
-    // Cangjie keeps allocation lists and candidate statistics in RegionManager.
-    // Preparing those lists retires the young shared/pinned allocation pages.
-    collector.minorCandidateRegions.clear();
-    YoungCollectionStats stats;
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
-        stats = manager.PrepareYoungGarbageCandidates(
-            [&collector](ZPage* region) { collector.minorCandidateRegions.insert(region); });
-    }
-    // Flush pre-flip producers before invalidating their generation sequence.
-    (void)ZMark::FlushAllGenerations();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
-    }
-#endif
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CHECK(sequence != UINT64_MAX);
-        ++sequence;
-    }
-    set_phase(Phase::Mark);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
-    }
-#endif
-    collector.StartYoungMarkWork();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
-    }
-#endif
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
-        Heap::GetHeap().remembered().flip();
-    }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
-    }
-#endif
-    return stats;
-}
-
-// ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
-void ZGeneration::StartOldMark(WCollector& collector)
-{
-    CHECK(_cycle == ZGenerationId::old);
-    CHECK(Snapshot().active);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
-    }
-#endif
-    ZGlobalsPointers::flip_old_mark_start();
-    ZVerify::OnColorFlip();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
-    }
-#endif
-    auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
-    // ZGC holds the VM mark-start pause across retirement and seqnum advance
-    // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
-    // explicitly because our handshake pause permits safe native threads.
-    std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
-    space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
-    }
-#endif
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CHECK(sequence != UINT64_MAX);
-        ++sequence;
-    }
-    pinnedLock.unlock();
-    set_phase(Phase::Mark);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
-    }
-#endif
-    Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
-    collector.StartOldMarkWork();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (CopyCollector::testMarkStartState) {
-        CopyCollector::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
-    }
-#endif
-}
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
 // young sequence once for the whole old relocation, not once per forwarding.
@@ -270,31 +151,12 @@ bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
     return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
 }
 
-void Collector::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
-{
-    ZGeneration& cycle = GetZGeneration(generation);
-    const ZGenerationPhase before = cycle.GcPhase();
-    if (generation == ZGenerationId::old &&
-        value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
-        oldCycle.RecordYoungSequenceAtRelocateStart(youngCycle.Sequence());
-    }
-    cycle.PublishPhase(value);
-}
+
 
 
 // ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
-void WCollector::MarkYoungRootObject(BaseObject* object) const
-{
-    // #596's barrier already established current and selected young. Keep the
-    // generation mark-phase assertion at ZGeneration::mark_object's entry.
-    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young));
-    cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
-}
 
-void WCollector::FlushAllocationRegions()
-{
-    theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
-}
+
 
 class VM_ZOperation {
 public:
@@ -321,36 +183,28 @@ public:
 
 class VM_ZMarkStartYoung : public VM_ZOperation {
 public:
-    explicit VM_ZMarkStartYoung(WCollector& collector) : collector(collector) {}
     bool do_operation() override
     {
-        collector.RunYoungCollection();
+        ZGeneration::young()->mark_start();
         return true;
     }
     bool block_jni_critical() const override { return true; }
-private:
-    WCollector& collector;
 };
 
 class VM_ZMarkStartYoungAndOld : public VM_ZOperation {
 public:
-    explicit VM_ZMarkStartYoungAndOld(WCollector& collector) : collector(collector) {}
     bool do_operation() override
     {
-        collector.RunYoungCollection();
+        ZGeneration::young()->mark_start();
+        ZGeneration::old()->mark_start();
         return true;
     }
     bool block_jni_critical() const override { return true; }
-private:
-    WCollector& collector;
 };
 
 class VM_ZMarkEndYoung : public VM_ZOperation {
 public:
-    explicit VM_ZMarkEndYoung(WCollector& collector) : collector(collector) {}
-    bool do_operation() override { return collector.YoungMarkEndPause(); }
-private:
-    WCollector& collector;
+    bool do_operation() override { return ZGeneration::young()->mark_end(); }
 };
 
 class VM_ZRelocateStartYoung : public VM_ZOperation {
@@ -367,11 +221,7 @@ public:
 
 class VM_ZMarkEndOld : public VM_ZOperation {
 public:
-    bool do_operation() override
-    {
-        WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-        return collector.TryEndOldMark(collector.oldMarkWorkStack, collector.oldMarkForeignRoots);
-    }
+    bool do_operation() override { return ZGeneration::old()->mark_end(); }
 };
 
 class VM_ZRelocateStartOld : public VM_ZOperation {
@@ -398,10 +248,7 @@ public:
     }
 };
 
-void WCollector::DoYoungGarbageCollection()
-{
-    youngCycle.collect();
-}
+
 
 void ZGeneration::at_collection_start(void* timer)
 {
@@ -437,16 +284,13 @@ ZGenerationCollectionScopeOld::~ZGenerationCollectionScopeOld()
     generation.at_collection_end();
 }
 
-static WCollector& TheCollector()
-{
-    return static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-}
+
 
 void ZGenerationYoung::collect()
 {
     ZGenerationCollectionScopeYoung scope(*this);
     pause_mark_start();
-    DriverUnlocker unlocker(TheCollector().collectorResources);
+    DriverUnlocker unlocker;
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -465,56 +309,100 @@ void ZGenerationYoung::collect()
 
 void ZGenerationYoung::pause_mark_start()
 {
-    WCollector& collector = TheCollector();
     if (IsMajorRoots()) {
-        VM_ZMarkStartYoungAndOld op(collector);
+        VM_ZMarkStartYoungAndOld op;
         (void)op.pause();
     } else {
-        VM_ZMarkStartYoung op(collector);
+        VM_ZMarkStartYoung op;
         (void)op.pause();
     }
 }
 
-void ZGenerationYoung::concurrent_mark()
-{
-    TheCollector().ConcurrentYoungMark();
-}
 bool ZGenerationYoung::pause_mark_end()
 {
-    VM_ZMarkEndYoung op(TheCollector());
+    VM_ZMarkEndYoung op;
     return op.pause();
 }
-void ZGenerationYoung::concurrent_mark_continue()
-{
-    TheCollector().ConcurrentYoungMarkContinue();
-}
-void ZGenerationYoung::concurrent_mark_free()
-{
-    TheCollector().FinishYoungMarkHandoff();
-}
 
-void WCollector::RunYoungCollection()
+void ZGenerationYoung::mark_start()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
-    collectorResources.NoteYoungMarkStart(youngCycle.YoungType());
+    const ZYoungType type = Heap::GetHeap().young().YoungType();
+    ZStat::Collections().AtYoungMarkStart(type == ZYoungType::major_full_roots ||
+                                         type == ZYoungType::major_partial_roots);
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
-    YoungCollectionStats stats = youngCycle.StartYoungMark(*this);
-    if (youngCycle.IsMajorRoots()) {
-        oldCycle.Begin(oldCycle.Snapshot().requestIndex);
-        oldCycle.StartOldMark(*this);
-    }
-    RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
-    RegionManager& manager = space.GetRegionManager();
-    MinorSlotSet rememberedSlots;
-    MinorSlotSet liveRememberedSlots;
-    MinorSlotSet consumedSlots;
-    MinorInteriorBaseMap remsetInteriorBases;
-    size_t liveRememberedCount = 0;
+    CHECK(_cycle == ZGenerationId::young);
+    CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (testYoungMarkStarted) {
-        testYoungMarkStarted();
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
+    }
+#endif
+    ZGlobalsPointers::flip_young_mark_start();
+    ZVerify::OnColorFlip();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
+    }
+#endif
+
+    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    auto& manager = space.GetRegionManager();
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
+        manager.ResetTLABUsage();
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+        Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
+    }
+    // Cangjie keeps allocation lists and candidate statistics in RegionManager.
+    // Preparing those lists retires the young shared/pinned allocation pages.
+    minorCandidateRegions.clear();
+    YoungCollectionStats stats;
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
+        stats = manager.PrepareYoungGarbageCandidates(
+            [this](ZPage* region) { minorCandidateRegions.insert(region); });
+    }
+    // Flush pre-flip producers before invalidating their generation sequence.
+    (void)ZMark::FlushAllGenerations();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
+    }
+#endif
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        CHECK(sequence != UINT64_MAX);
+        ++sequence;
+    }
+    set_phase(Phase::Mark);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
+    }
+#endif
+    Mark().BindWorkers(Workers());
+    Mark().Start();
+    MarkingStacks::VerifyEmpty(Mark().Stripes().Population());
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
+    }
+#endif
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
+        Heap::GetHeap().remembered().flip();
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
+    }
+#endif
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testYoungMarkStarted) {
+        ZGeneration::testYoungMarkStarted();
     }
 #endif
 
@@ -544,9 +432,6 @@ void WCollector::RunYoungCollection()
 
     // fysaudit: full non-young O→Y vs mutator remset (D1/D2/D3). Observe only.
 
-
-
-
     // promodomain: reset last cycle's flip-promoted table (CHECK registered==discharged).
     // Corresponds to ZGC reset_relocation_set before the new young collection.
     // flippromo: open broad-vs-product window for regions demoted last minor.
@@ -561,7 +446,7 @@ void WCollector::RunYoungCollection()
     youngStartNs = start;
 }
 
-void WCollector::ConcurrentYoungMark()
+void ZGenerationYoung::concurrent_mark()
 {
     uint64_t stackScanEpoch = youngStackScanEpoch;
     WorkStack& workStack = youngWorkStack;
@@ -574,19 +459,19 @@ void WCollector::ConcurrentYoungMark()
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
     auto mergeY2yDirtyWork = [&](WorkStack& destination) {
-        theAllocator.VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
+        Heap::GetHeap().GetAllocator().VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
             buffer.MergeY2yDirtyHolders(destination);
             buffer.MergeY2yDirtySlots([this, &destination](MAddress slot) {
                 RefField<>& field = HeapSlotAt<>(slot);
-                BaseObject* target = ResolveMinorReference(field);
-                PushYoungObject(target, destination, "y2y_slot");
+                BaseObject* target = ZRelocate::ResolveMinorReference(field);
+                ZMark::PushYoungObject(target, destination, "y2y_slot");
             });
         });
     };
 #if defined(MRT_TESTABLE_INTERNALS)
     auto pendingY2yDirtyWorkCount = [&]() {
         size_t pending = 0;
-        theAllocator.VisitAllocBuffers([&pending](AllocBuffer& buffer) {
+        Heap::GetHeap().GetAllocator().VisitAllocBuffers([&pending](AllocBuffer& buffer) {
             pending += buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount();
         });
         return pending;
@@ -600,15 +485,15 @@ void WCollector::ConcurrentYoungMark()
     auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER(ZStatPhases::PYoungRootEnum);
-        (void)youngCycle.Mark().Flush();
-        VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
+        (void)Heap::GetHeap().young().Mark().Flush();
+        ZMark::VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
                 if (region != nullptr && !region->IsYoungRegion()) {
                     currentMinorRoots.insert(object);
                 }
             }
-            PushYoungObject(object, workStack, "minor_root");
+            ZMark::PushYoungObject(object, workStack, "minor_root");
         }, [this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (!Heap::IsHeapAddress(object)) {
                 return;
@@ -617,12 +502,12 @@ void WCollector::ConcurrentYoungMark()
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
             }
-            PushYoungObject(object, workStack, "minor_root");
+            ZMark::PushYoungObject(object, workStack, "minor_root");
         }, stackScanEpoch);
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), youngCycle.Mark());
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yAfterRootTestReceipt(youngCycle.Mark().Stacks().Population());
+        NoteY2yAfterRootTestReceipt(Heap::GetHeap().young().Mark().Stacks().Population());
 #endif
     };
     // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent
@@ -643,7 +528,7 @@ void WCollector::ConcurrentYoungMark()
         CHECK_DETAIL(stackScanEpoch != 0,
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
-        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
         mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyWorkCount());
@@ -660,7 +545,7 @@ void WCollector::ConcurrentYoungMark()
         // The release above makes this ZGC mark_roots()+mark_follow work concurrent.
         MRT_PHASE_TIMER(ZStatPhases::PYoungMarkClosure);
         ++concWindow.closureCalls;
-        TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
+        ZMark::TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
                           reachableSlotDomain);
     }
     if (ZAbort::should_abort()) {
@@ -668,7 +553,7 @@ void WCollector::ConcurrentYoungMark()
     }
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetRescan);
-        Heap::GetHeap().remembered().scan_and_follow(youngCycle.MarkPtr());
+        Heap::GetHeap().remembered().scan_and_follow(Heap::GetHeap().young().MarkPtr());
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     // Deterministic T1->T2 export-root window: root enumeration has returned,
@@ -678,7 +563,7 @@ void WCollector::ConcurrentYoungMark()
     if (ZAbort::should_abort()) {
         return;
     }
-    (void)FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots, &concWindow);
+    (void)ZMark::FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots, &concWindow);
 #if defined(MRT_TESTABLE_INTERNALS)
     FlushExportRootAfterT1TestReceipt();
     PublishMarkBeforeMarkEndTestReceipt();
@@ -692,7 +577,7 @@ void WCollector::ConcurrentYoungMark()
     youngFullScan = fullYoungScan;
 }
 
-bool WCollector::YoungMarkEndPause()
+bool ZGenerationYoung::mark_end()
 {
     WorkStack& workStack = youngWorkStack;
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -700,22 +585,22 @@ bool WCollector::YoungMarkEndPause()
     const size_t y2yBatchAtMarkEnd = 0;
     (void)y2yBatchAtMarkEnd;
 #endif
-    theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) {
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) {
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteMarkTerminatePauseProducers(buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
 #else
         (void)buffer;
 #endif
     });
-    theAllocator.VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
         buffer.MergeY2yDirtyHolders(workStack);
         buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
             RefField<>& field = HeapSlotAt<>(slot);
-            BaseObject* target = ResolveMinorReference(field);
-            PushYoungObject(target, workStack, "y2y_slot");
+            BaseObject* target = ZRelocate::ResolveMinorReference(field);
+            ZMark::PushYoungObject(target, workStack, "y2y_slot");
         });
     });
-    const bool markEndSucceeded = TryEndYoungMark(workStack, &youngConcWindow);
+    const bool markEndSucceeded = ZMark::TryEndYoungMark(workStack, &youngConcWindow);
 #if defined(MRT_TESTABLE_INTERNALS)
     NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
 #endif
@@ -723,12 +608,12 @@ bool WCollector::YoungMarkEndPause()
         MarkingStacks::VerifyEmpty(workStack.size());
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteExportRootPublicationAtT2TestReceipt();
-        if (testYoungMarkCompleted) {
-            testYoungMarkCompleted();
+        if (ZGeneration::testYoungMarkCompleted) {
+            ZGeneration::testYoungMarkCompleted();
         }
 #endif
         ReportMarkTerminateContinue();
-        youngCycle.set_phase(ZGeneration::Phase::MarkComplete);
+        Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
         return true;
     }
     NoteMarkTerminateContinue(workStack.size());
@@ -736,19 +621,19 @@ bool WCollector::YoungMarkEndPause()
     return false;
 }
 
-void WCollector::ConcurrentYoungMarkContinue()
+void ZGenerationYoung::concurrent_mark_continue()
 {
     MinorSlotSet reachableSlots;
-    (void)FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
+    (void)ZMark::FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
                           &youngConcWindow);
 }
 
-void WCollector::FinishYoungMarkHandoff()
+void ZGenerationYoung::concurrent_mark_free()
 {
     if (ZAbort::should_abort()) {
         return;
     }
-    RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
+    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     {
         youngConcWindow.markedAtExit = youngReachableVec.size();
         if (youngConcWindowStartNs != 0) {
@@ -779,19 +664,19 @@ void WCollector::FinishYoungMarkHandoff()
         tenuringIn.liveByAge[age] += live;
     }
     tenuringIn.youngGarbage = youngStats.candidateBytes > liveBytes ? (youngStats.candidateBytes - liveBytes) : 0;
-    GCStats& gcStats = GetGCStats(ZGenerationId::young);
+    GCStats& gcStats = Stats();
     gcStats.youngCandidateBytes = youngStats.candidateBytes;
     gcStats.youngPromotedBytes = liveBytes;
     for (uint32_t i = 0; i < kPageAgeCount; ++i) {
         gcStats.liveByAge[i] = tenuringIn.liveByAge[i];
     }
-    youngCycle.SelectTenuringThreshold(tenuringIn);
+    Heap::GetHeap().young().SelectTenuringThreshold(tenuringIn);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
         // tracecache: PrepareTrace above switched the TRACE-phase region caches on
         // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
-        // same place WCollector::PostTrace drains them for a major (RelocationSet.cpp:73-78).
+        // same place ZGenerationOld::PostTrace drains them for a major (RelocationSet.cpp:73-78).
         // Without this call the minor leaves the cache active forever, so every region a
         // mutator fills afterwards is diverted off recentFullRegionList and is invisible to
         // both collection-set builders (PrepareYoungGarbageCandidates and
@@ -808,7 +693,7 @@ void WCollector::FinishYoungMarkHandoff()
         // the previous young relocation set. Independent of old remap.
         StringDedup::Instance().Clean([this](BaseObject* object) {
             ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-            return !region->IsYoungRegion() || IsMarkedObject<Generation::Young>(object);
+            return !region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Young>(object);
         });
     }
 
@@ -835,55 +720,54 @@ void ZGenerationYoung::pause_relocate_start()
 
 void ZGenerationYoung::concurrent_relocate()
 {
-    WCollector& collector = TheCollector();
     if (ZAbort::should_abort()) {
         return;
     }
-    RegionSpace& space = static_cast<RegionSpace&>(collector.GetAllocator());
+    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     size_t allocatedBefore = space.AllocatedBytes();
     // ⑥⑦⑧ inside EvacuateYoungRegions: pause relocate_start / concurrent copy / evac_finish
     // Pass STW so Phase 8 can release the world for concurrent_relocate.
     //
     // fysfixa / fysaudit D4: slot authority for remset fix = Rescan-admitted
     // consumedSlots, not the pre-rescan liveRememberedSlots ledger.
-    // liveRememberedSlots under FYS=0 = all non-weak recorded (WCollector.cpp
-    // live-build above); Rescan may drop retained-dead / free-holder / bad_target
+    // The pre-rescan ledger under FYS=0 held all non-weak recorded slots;
+    // rescan may drop retained-dead / free-holder / bad_target
     // without consuming, yet old Evacuate still Fixed those slots → from-object
     // not in liveInfo0 → AdmitForRoute miss → ForwardObjectExclusive
     // "invalid object route" (fysfloor B10). FYS=1 masked via reachableSlots
     // filtering both live-build and Rescan. Unifying on consumed restores
     // fix-domain ⊆ mark/route-domain without widening AdmitForRoute.
     // In non-concurrent FYS, remset consume is scan_and_follow;
-    // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
+    // its holder coverage belongs to the mark scan.
     // Concurrent mark force-admits slots without that proof.
     const bool refFixSlotsCoveredByReachable = false;
-    collector.EvacuateYoungRegions(collector.youngReachableVec, collector.youngConsumedSlots,
-                                   refFixSlotsCoveredByReachable, collector.youngRemsetInteriorBases,
-                                   &collector.youngStw);
+    EvacuateYoungRegions(youngReachableVec, youngConsumedSlots,
+                                   refFixSlotsCoveredByReachable, youngRemsetInteriorBases,
+                                   &youngStw);
     if (ZAbort::should_abort()) {
         return;
     }
     size_t allocatedAfter = space.AllocatedBytes();
-    collector.youngStats.reclaimedBytes =
+    youngStats.reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    collector.GetGCStats(ZGenerationId::young).collectedBytes = collector.youngStats.reclaimedBytes;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).collectedBytes = youngStats.reclaimedBytes;
 
-    if (collector.youngStw != nullptr) {
-        collector.youngStw.reset();
+    if (youngStw != nullptr) {
+        youngStw.reset();
     }
 
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungPostEvacFinish);
-        collector.MergeResurrectExportObjects(Generation::Young);
+        Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Young);
     }
-    ++collector.minorTotalRuns;
-    uint64_t pauseUs = (TimeUtil::NanoSeconds() - collector.youngStartNs) / NS_PER_US;
+    ++minorTotalRuns;
+    uint64_t pauseUs = (TimeUtil::NanoSeconds() - youngStartNs) / NS_PER_US;
     VLOG(REPORT,
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu liveBytes=%zu "
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
-         collector.minorTotalRuns, static_cast<unsigned>(collector.youngFullScan),
-         collector.youngStats.candidateRegions, collector.youngStats.candidateBytes,
-         collector.youngLiveBytes, collector.youngLiveRememberedCount, collector.youngStats.reclaimedBytes,
+         minorTotalRuns, static_cast<unsigned>(youngFullScan),
+         youngStats.candidateRegions, youngStats.candidateBytes,
+         youngLiveBytes, youngLiveRememberedCount, youngStats.reclaimedBytes,
          pauseUs);
 }
 
@@ -896,7 +780,7 @@ void ZGenerationYoung::concurrent_relocate()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -922,74 +806,38 @@ public:
     void do_thread(ThreadLocalData*) override {}
 };
 
-void CopyCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
+void ZGenerationOld::process_non_strong_references()
 {
     ZBreakpoint::AtAfterReferenceProcessingStarted();
-    CHECK_DETAIL(oldCycle.is_phase_mark_complete(),
+    CHECK_DETAIL(Heap::GetHeap().old().is_phase_mark_complete(),
                  "non-strong references require completed old marking");
     {
         MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
-        FindUselessExternObjects();
+        Heap::GetHeap().cross_vm().FindUselessExternObjects();
     }
     // Finalizable graphs were followed during mark discovery. This phase
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
-    ProcessFinalizers();
-    if (oldCycle.WeakRootsProcessor() != nullptr) {
-        oldCycle.WeakRootsProcessor()->process_weak_roots();
+    ZMark::ProcessFinalizers();
+    if (Heap::GetHeap().old().WeakRootsProcessor() != nullptr) {
+        Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
     }
     SyncRetireDead();
     StringDedup::Instance().Clean([this](BaseObject* object) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-        return region->IsYoungRegion() || IsMarkedObject<Generation::Old>(object);
+        return region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Old>(object);
     });
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     ZRendezvousHandshakeClosure rendezvous;
     Handshake::execute(&rendezvous);
     ZRendezvousGCThreads gcRendezvous;
     gcRendezvous.doit();
-    collectorResources.UnblockResurrection();
-    collectorResources.GetFinalizerProcessor().EnqueueReferences();
-}
+    ZResurrection::unblock();
+    Heap::GetHeap().GetFinalizerProcessor().EnqueueReferences();
 
-bool CopyCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
-{
-    // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
-    MarkStripeSet& stripes = oldCycle.Mark().Stripes();
-    NoteMarkTerminatePause();
-    const size_t before = stripes.Population();
-    (void)workStack;
-    const bool ended = oldCycle.Mark().TryEnd();
-    const size_t after = stripes.Population();
-    NoteMarkTerminateFlushed(after >= before ? after - before : 0);
-    if (!ended) {
-        NoteMarkTerminateContinue(workStack.size() + stripes.Population());
-        return false;
-    }
-    // Preserve export ownership discovery after the ordinary root closure,
-    // while the mark-end pause excludes new mutator publication.
-    ProcessExportRoots(foreignRootsSet);
-    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
-    // to the phase owner before verification or publishing mark completion.
-    if (ZAbort::should_abort()) {
-        return false;
-    }
-    MarkingStacks::VerifyAllEmpty(oldCycle.Mark());
-    oldCycle.set_phase(ZGeneration::Phase::MarkComplete);
-    ZVerify::AfterMark();
-    collectorResources.BlockResurrection();
-    ReportMarkTerminateContinue();
-    return true;
+#if defined(MRT_TESTABLE_INTERNALS)
+    ObserveMarkClosureForTest(nullptr);
+#endif
 }
-
-bool CopyCollector::FlushMarkProducers(ZMark* domain)
-{
-    bool flushed = domain != nullptr ? domain->TryTerminateFlush() : ZMark::FlushAllGenerations();
-    if (domain != nullptr) {
-        flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
-    }
-    return flushed;
-}
-
 
 
 } // namespace MapleRuntime
@@ -1001,7 +849,7 @@ bool CopyCollector::FlushMarkProducers(ZMark* domain)
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1018,101 +866,18 @@ bool CopyCollector::FlushMarkProducers(ZMark* domain)
 
 
 namespace MapleRuntime {
-void CopyCollector::Init() {}
 
-void CopyCollector::Fini() { Collector::Fini(); }
 
-BaseObject* CopyCollector::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
-                                                      ForwardingStage stage) const
-{
-    if (value == nullptr || !Heap::IsHeapAddress(value)) {
-        return value;
-    }
-    const ForwardingProvenance provenance{
-        ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
-        ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
-    };
-    // ZUncoloredRoot::make_load_good (zUncoloredRoot.inline.hpp:62-69)
-    // preserves load-good identity. IncomingNew carries the caller's current
-    // identity; a page owner alone cannot distinguish overlapping from/to keys.
-    if (stage == ForwardingStage::IncomingNew) {
-        return ValidateCurrentValue(value, provenance);
-    }
-    // Stored roots still need remapping using their source page's generation,
-    // which can differ from the generation currently visiting the roots.
-    (void)generation;
-    const auto forwarding = forwarding_for_page(
-        Heap::page(reinterpret_cast<MAddress>(value)));
-    BaseObject* current = value;
-    if (forwarding) {
-        const MAddress target = forwarding->find(reinterpret_cast<MAddress>(value));
-        current = target != 0 ? reinterpret_cast<BaseObject*>(target)
-            : ResolveStoreValue(value, provenance, static_cast<Generation>(forwarding->table_generation()));
-    }
-    CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
-                 "value root resolve requires a heap to-address from=%p current=%p", value, current);
-    CHECK_DETAIL(Collector::JudgeHandOutTarget(current) == HandVerdict::Usable,
-                 "value root resolve requires a usable target from=%p current=%p", value, current);
-    return current;
-}
 
-void CopyCollector::CurrentizeValueRootSet(ValueRootSet& roots, Generation generation) const
-{
-    ValueRootSet current;
-    current.reserve(roots.size());
-    for (const ValueRoot& value : roots) {
-        current.insert(ValueRoot(ResolveCurrentValueRoot(value, &roots, generation, value.Stage()),
-                                 ForwardingStage::IncomingNew));
-    }
-    roots.swap(current);
-}
 
-void CopyCollector::CurrentizeValueRootMap(
-    ValueRootMap& roots, Generation generation) const
-{
-    ValueRootMap current;
-    current.reserve(roots.size());
-    for (const auto& entry : roots) {
-        ValueRoot key(ResolveCurrentValueRoot(entry.first, &roots, generation, entry.first.Stage()),
-                      ForwardingStage::IncomingNew);
-        ValueRootList& values = current[key];
-        for (const ValueRoot& value : entry.second) {
-            values.emplace_back(ResolveCurrentValueRoot(value, &roots, generation, value.Stage()),
-                                ForwardingStage::IncomingNew);
-        }
-    }
-    roots.swap(current);
-}
+
+
 
 // Registered finalizers are discovered during old root marking and fixed by
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
 
 
-void CopyCollector::VisitSurrectedExportRoots(const std::function<void(BaseObject*)>& visitor)
-{
-    {
-        std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Old);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Old);
-        for (BaseObject* obj : resurrectedExportObjectes) {
-            visitor(obj);
-        }
-        for (BaseObject* obj : resurrectedExportObjectesForwardPhase) {
-            visitor(obj);
-        }
-    }
-    std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-    CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
-    auto it = cycleRefWorkStack.begin();
-    while (it != cycleRefWorkStack.end()) {
-        BaseObject* exportObj = it->first;
-        visitor(exportObj);
-        for (auto &externObj : it->second) {
-            visitor(externObj.object);
-        }
-        it++;
-    }
-}
+
 
 } // namespace MapleRuntime
 
@@ -1123,7 +888,7 @@ void CopyCollector::VisitSurrectedExportRoots(const std::function<void(BaseObjec
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1158,7 +923,7 @@ namespace MapleRuntime {
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Heap/Collector/GcStats.h"
+#include "Heap/z/zStat.hpp"
 #include "Common/BaseObject.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
@@ -1280,20 +1045,91 @@ void ZGeneration::StopWorkers()
 }
 
 namespace MapleRuntime {
-void WCollector::DoGarbageCollection(ZGenerationId generation)
+
+
+void ZGenerationOld::mark_start()
 {
-    if (generation == ZGenerationId::young) {
-        DoYoungGarbageCollection();
-        return;
+    Begin(Snapshot().requestIndex);
+    CHECK(_cycle == ZGenerationId::old);
+    CHECK(Snapshot().active);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
     }
-    oldCycle.collect();
+#endif
+    ZGlobalsPointers::flip_old_mark_start();
+    ZVerify::OnColorFlip();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
+    }
+#endif
+    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    // ZGC holds the VM mark-start pause across retirement and seqnum advance
+    // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
+    // explicitly because our handshake pause permits safe native threads.
+    std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
+    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
+    }
+#endif
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        CHECK(sequence != UINT64_MAX);
+        ++sequence;
+    }
+    pinnedLock.unlock();
+    set_phase(Phase::Mark);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
+    }
+#endif
+    Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
+    Mark().BindWorkers(Workers());
+    Mark().Start();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (ZGeneration::testMarkStartState) {
+        ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
+    }
+#endif
+}
+
+bool ZGenerationOld::mark_end()
+{
+    // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
+    MarkStripeSet& stripes = Mark().Stripes();
+    NoteMarkTerminatePause();
+    const size_t before = stripes.Population();
+    const bool ended = Mark().TryEnd();
+    const size_t after = stripes.Population();
+    NoteMarkTerminateFlushed(after >= before ? after - before : 0);
+    if (!ended) {
+        NoteMarkTerminateContinue(oldMarkWorkStack.size() + stripes.Population());
+        return false;
+    }
+    // Preserve export ownership discovery after the ordinary root closure,
+    // while the mark-end pause excludes new mutator publication.
+    Heap::GetHeap().cross_vm().ProcessExportRoots(oldMarkForeignRoots);
+    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
+    // to the phase owner before verification or publishing mark completion.
+    if (ZAbort::should_abort()) {
+        return false;
+    }
+    MarkingStacks::VerifyAllEmpty(Mark());
+    set_phase(ZGeneration::Phase::MarkComplete);
+    ZVerify::AfterMark();
+    ZResurrection::block();
+    ReportMarkTerminateContinue();
+    return true;
 }
 
 void ZGenerationOld::collect()
 {
-    WCollector& collector = TheCollector();
     ZGenerationCollectionScopeOld scope(*this);
-    DriverUnlocker unlocker(collector.collectorResources);
+    DriverUnlocker unlocker;
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -1310,7 +1146,7 @@ void ZGenerationOld::collect()
     concurrent_select_relocation_set();
     abortpoint();
     {
-        DriverLocker locker(collector.collectorResources);
+        DriverLocker locker;
         concurrent_remap_young_roots();
         abortpoint();
         pause_relocate_start();
@@ -1320,28 +1156,79 @@ void ZGenerationOld::collect()
 
 void ZGenerationOld::concurrent_mark()
 {
-    TheCollector().TraceHeap();
+    ZBreakpoint::AtAfterMarkingStarted();
+    oldMarkWorkStack.clear();
+    oldMarkForeignRoots.clear();
+    WorkStack& workStack = oldMarkWorkStack;
+    WorkStack& foreignStack = oldMarkForeignRoots;
+    MarkingStacks::VerifyEmpty(workStack.size());
+    MarkingStacks::VerifyEmpty(foreignStack.size());
+    const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
+    uint64_t stackScanEpoch = 0;
+
+    // Old mark-start belongs to the preceding young pause. The old body
+    // begins with concurrent roots/follow (zGeneration.cpp:1015-1020).
+    // ZGC old concurrent_mark has no extra stack-scan STW (zGeneration.cpp:1015-1020).
+    if (concurrentStackScan) {
+        stackScanEpoch = StackWatermark::epoch_id();
+    }
+
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PEnumRootsUpdateOldPointersWithin);
+        if (concurrentStackScan) {
+            MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
+                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                    (void)mutator.GcPhaseEnum(false, stackScanEpoch, false);
+                }
+                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                    (void)mutator.GcPhaseEnum(false);
+                }
+#if defined(MRT_GC_UNIT_TESTS)
+                NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
+                                            mutator.GetStackWatermark().IsDone(stackScanEpoch));
+#endif
+            });
+            ZMark::DoEnumeration(workStack, foreignStack);
+        } else {
+            ZMark::DoEnumeration(workStack, foreignStack);
+        }
+    }
+
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PTraceLiveObjectsUpdateOldPointersInRefFields);
+        reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (ZGeneration::testOldMarkStarted) ZGeneration::testOldMarkStarted();
+#endif
+        Mark().MarkFollow(false);
+        ZBreakpoint::AtBeforeMarkingCompleted();
+        if (ZAbort::should_abort()) {
+            return;
+        }
+
+        MarkingStacks::VerifyEmpty(workStack.size());
+        MarkingStacks::VerifyEmpty(foreignStack.size());
+
+    }
+
 }
 
 bool ZGenerationOld::pause_mark_end()
 {
-    if (is_phase_mark_complete()) {
-        return true;
-    }
     VM_ZMarkEndOld op;
     return op.pause();
 }
 
 void ZGenerationOld::concurrent_mark_continue()
 {
-    WCollector& collector = TheCollector();
-    collector.TracingImpl(collector.oldMarkWorkStack);
+    Mark().MarkFollow(false);
 }
 void ZGenerationOld::concurrent_mark_free() {}
 
 void ZGenerationOld::concurrent_process_non_strong_references()
 {
-    TheCollector().PostTrace();
+    process_non_strong_references();
+    PostTrace();
 }
 
 void ZGenerationOld::concurrent_reset_relocation_set() {}
@@ -1360,54 +1247,50 @@ void ZGenerationOld::pause_relocate_start()
 {
     VM_ZRelocateStartOld op;
     (void)op.pause();
-    (void)TheCollector().Preforward();
+    (void)ZRelocate::Preforward();
 }
 
 void ZGenerationOld::concurrent_relocate()
 {
-    WCollector& collector = TheCollector();
-    collector.ForwardFromSpace(ZGenerationId::old);
-    reinterpret_cast<RegionSpace&>(collector.GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
+    ZRelocate::ForwardFromSpace(ZGenerationId::old);
+    reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().FinishIncompleteFromRegions(
         ZGenerationId::old);
-    collector.MergeResurrectExportObjects(Generation::Old);
-    collector.PostResolveCycleTask();
-    collector.CollectSmallSpace();
+    Heap::GetHeap().cross_vm().MergeResurrectExportObjects(Generation::Old);
+    Heap::GetHeap().cross_vm().PostResolveCycleTask();
+    CollectSmallSpace();
 }
 
-void WCollector::RunOldCollection()
-{
-    oldCycle.collect();
-}
 }
 
 namespace MapleRuntime {
-void CopyCollector::PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex)
+void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
 {
-    const bool continuingPrelude = GetZGeneration(generation).Snapshot().active;
+    const ZGenerationId generation = id();
+    const bool continuingPrelude = Heap::GetHeap().GetZGeneration(generation).Snapshot().active;
     if (!continuingPrelude) {
-        GetZGeneration(generation).Begin(gcIndex);
+        Heap::GetHeap().GetZGeneration(generation).Begin(gcIndex);
     }
     ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s",
-         g_gcRequests[GetCycleSnapshot(generation).reason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
-         Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str());
+         g_gcRequests[Heap::GetHeap().GetCycleSnapshot(generation).reason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
+         Pretty(Heap::GetHeap().GetGCStats().GetThreshold()).Str());
 
     // zDriver.cpp:183,399-400: generation workers use their concurrent
     // budget for both pause and concurrent work. Parallel workers are separate.
-    const int32_t threadCount = static_cast<int32_t>(GetWorkers(generation).active_workers());
-    GetWorkers(generation).set_active();
+    const int32_t threadCount = static_cast<int32_t>((*Workers()).active_workers());
+    (*Workers()).set_active();
     VLOG(REPORT, "GC generation active workers: %d", threadCount);
 
-    GetGCStats(generation).reason = GetCycleSnapshot(generation).reason;
-    GetGCStats(generation).async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
-    GetGCStats(generation).isConcurrentMark = isConcurrent;
+    Heap::GetHeap().GetGCStats(generation).reason = Heap::GetHeap().GetCycleSnapshot(generation).reason;
+    Heap::GetHeap().GetGCStats(generation).async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
+    Heap::GetHeap().GetGCStats(generation).isConcurrentMark = isConcurrent;
 #if defined(MRT_TESTABLE_INTERNALS)
     if (testCyclePrepared) {
         testCyclePrepared();
     }
 #endif
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    DumpBeforeGC();
+    Heap::GetHeap().DumpBeforeGC();
 #endif
     TRACE_COUNT("CJRT_pre_GC_HeapSize", Heap::GetHeap().GetAllocatedSize());
 }
@@ -1511,48 +1394,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
 }
 
 namespace MapleRuntime {
-void CopyCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
-{
-    ScopedEntryTrace trace("CJRT_GC_TRACE");
-    MRT_PHASE_TIMER(ZStatPhases::PDoTracing);
-    VLOG(REPORT, "roots size: %zu", workStack.size());
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testOldMarkStarted) {
-        testOldMarkStarted();
-    }
-#endif
 
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
-        TracingImpl(workStack);
-    }
-
-    ZBreakpoint::AtBeforeMarkingCompleted();
-
-    // ZGenerationOld::collect (zGeneration.cpp:1020-1030): mark-follow
-    // returns to the phase owner before any mark-end retry consumes stripes.
-    if (ZAbort::should_abort()) {
-        return;
-    }
-    while (!VM_ZMarkEndOld().pause()) {
-        if (ZAbort::should_abort()) {
-            return;
-        }
-        MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
-        TracingImpl(workStack);
-        if (ZAbort::should_abort()) {
-            return;
-        }
-    }
-    ProcessOldNonStrongReferences(workStack);
-
-#if defined(MRT_TESTABLE_INTERNALS)
-    // All major tasks and finalizer work have flushed before page selection.
-    // Major has no reachableVec carrier; observers read the actual page state.
-    ObserveMarkClosureForTest(nullptr);
-#endif
-    VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
-}
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -1579,3 +1421,581 @@ template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, true, 
 template void MRT_P14A_EXPORT ZGeneration::MarkObjectIfActive<true, true, true, true>(zaddress);
 }
 #endif
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+
+#include "Heap/z/zMark.hpp"
+#include "Common/PagePool.h"
+
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+
+#include "Base/GcLog.h"
+#include "Heap/z/zStat.hpp"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/zDirector.hpp"
+#include "Common/Runtime.h"
+#include "Mutator/MutatorManager.h"
+#include "ObjectModel/RefField.inline.h"
+#include "schedule.h"
+#if defined(CANGJIE_TSAN_SUPPORT)
+#include "Sanitizer/SanitizerInterface.h"
+#endif
+
+namespace MapleRuntime {
+void ReportSkippedStackMapCounts();
+void ZGeneration::PostGarbageCollection(uint64_t gcIndex)
+{
+    const ZGenerationId generation = id();
+    reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).DumpRegionStats("region statistics when gc ends");
+    (*Workers()).set_inactive();
+    ReportSkippedStackMapCounts();
+    PagePool::Instance().Trim();
+    (void)gcIndex;
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    Heap::GetHeap().DumpAfterGC();
+#endif
+    MutatorManager::Instance().DestroyExpiredMutators();
+}
+
+
+
+
+} // namespace MapleRuntime
+
+namespace MapleRuntime {
+// zGeneration.inline.hpp:131-140: the owning generation qualifies forwarding.
+BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object)
+{
+    return relocate_or_remap_object(object,
+        ForwardingProvenance{ForwardingHolderKind::StackSlot, this, &object});
+}
+
+BaseObject* ZGeneration::relocate_or_remap_object(BaseObject* object,
+                                                const ForwardingProvenance& provenance)
+{
+    // Cangjie fields can also contain immortal metadata outside the managed heap.
+    if (object == nullptr || !Heap::IsHeapAddress(object)) return object;
+    ZForwarding* const forwarding = _forwarding_table.get(reinterpret_cast<MAddress>(object));
+    if (forwarding == nullptr) return object;
+    return _relocate->relocate_object(forwarding, object, provenance);
+}
+}
+
+namespace MapleRuntime {
+void ZGenerationOld::CollectLargeGarbage()
+{
+    MRT_PHASE_TIMER(ZStatPhases::PCollectLargeGarbage);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    GCStats& stats = Heap::GetHeap().GetGCStats();
+    stats.largeSpaceSize = space.LargeObjectBytes();
+    stats.largeGarbageSize = space.CollectLargeGarbage();
+    stats.collectedBytes += stats.largeGarbageSize;
+}
+
+void ZGenerationOld::CollectPinnedGarbage()
+{
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    GCStats& stats = Heap::GetHeap().GetGCStats();
+    stats.pinnedSpaceSize = space.PinnedSpaceSize();
+    stats.pinnedGarbageSize = space.CollectPinnedGarbage();
+    stats.collectedBytes += stats.pinnedGarbageSize;
+}
+
+void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
+                                       const MinorSlotSet& rememberedSlots,
+                                       bool refFixSlotsCoveredByReachable,
+                                       const MinorInteriorBaseMap& interiorBases,
+                                       std::unique_ptr<ScopedStopTheWorld>* stw)
+{
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    (void)reachableVec;
+    (void)refFixSlotsCoveredByReachable;
+    // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
+    // is flip + set_phase(Relocate) + _relocate.start(); object copy is concurrent.
+    // Flip is the trap that makes mutator loads take the self-heal / relocate_object
+    // path; without it, concurrent copy is the empty window concreffix measured.
+    auto liveStw = [stw]() -> const ScopedStopTheWorld* {
+        return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
+    };
+    const bool doYoungFlip = !Heap::GetHeap().GetZGeneration(ZGenerationId::young).is_phase_relocate();
+    ZWorkers& workers = *Workers();
+
+    std::vector<MAddress> remsetVec;
+    remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
+
+    // zRemembered.cpp:remap_current visits remembered slots. Stack completion
+    // belongs to the phase watermark; it does not require a reachable-heap sweep.
+    auto remapRemembered = [&](ZWorkers& pool) {
+        // zArray.hpp:104 ZArrayParallelIterator over the remembered slots.
+        ZArrayParallelIterator<MAddress> slots(remsetVec.data(), remsetVec.size());
+        class RememberedTask final : public ZTask {
+        public:
+            explicit RememberedTask(std::function<void()> body) : ZTask("ZRemapRememberedTask"), body(std::move(body)) {}
+            void work() override { body(); }
+        private:
+            std::function<void()> body;
+        } task([&] {
+            for (MAddress slot; slots.next(&slot);) {
+                if (!Heap::IsHeapAddress(slot)) {
+                    continue;
+                }
+                auto known = interiorBases.find(slot);
+                BaseObject* base = known == interiorBases.end() ? nullptr : known->second;
+                (void)ZRelocate::FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw());
+            }
+        });
+        pool.run(&task);
+    };
+
+    // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
+
+    {
+        // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
+        MRT_PHASE_TIMER(ZStatPhases::PYoungRefFix);
+
+        // ZGC relocate_start (zGeneration.cpp:918-931): flip remap colour then
+        // enter Relocate. Product path.
+        //
+        // fliporder: that citation covers only half of what ZGC does here.  ZGC installs the
+        // relocation set at zGeneration.cpp:254, inside the *concurrent* select_relocation_set,
+        // and only then runs pause_relocate_start -> relocate_start -> flip_relocate_start
+        // (:918 -> :922 -> :651).  So when ZGC's colour flips, the set of pages that will move is
+        // already fixed and published.
+        //
+        // Ours flipped first and prepared from-space afterwards (PrepareForwardTable<Young> below),
+        // which opens a window where the current remap colour is already the new one while no
+        // region is marked FROM yet.  Anything painted store-good in that window names an object
+        // whose region is about to become FROM: once it is copied the slot is load-good and names
+        // the from-version, so the read barrier's fast path hands it straight to the mutator with
+        // ObjectState::FORWARDED still in its header -- and the compiler reads that header as one
+        // 64-bit word, so (3 << 48) enters an address and faults non-canonically.
+        //
+        // target really was forwarded, is not in an unmovable region, and the slot was load-good --
+        // which after a flip can only mean it was written after that flip.
+        //
+        // Our own major path already has the ZGC order: PrepareForwardTable<Old> at :2533 runs
+        // before flip_young/old_relocate_start at :2552-2553.  The two paths disagreed.
+        {
+            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixPrepare);
+
+            // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
+            // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
+            // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
+            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareFromSpace<Generation::Young>();
+            // ZGenerationYoung::collect: last abortpoint after selection,
+            // before relocate-start. Once flipped, finish every remaining page.
+            if (ZAbort::should_abort()) {
+                return;
+            }
+            // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
+            // ZGC pause() wraps VMOp_ZRelocateStartYoung with JNICritical block
+            // (zGeneration.cpp:475-483, block_jni_critical at :832).
+            ZJNICritical::block();
+            if (doYoungFlip) {
+                ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
+                    data.storeBarrierBuffer->install_base_pointers();
+                });
+                ZGlobalsPointers::flip_young_relocate_start();
+                ZVerify::OnColorFlip();
+            }
+            // Publish the relocate phase and submit page work while the
+            // existing young pause still excludes mutator execution. Root
+            // transition may now wait for a real page task on allocation failure.
+            ZRelocate::StartRelocationTasks(ZGenerationId::young);
+            ZJNICritical::unblock();
+        }
+
+        // pass1 root fix after the domain snapshot.
+        // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
+        {
+            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixRootPass1);
+            ZRelocate::FixMinorRootSlots(liveStw());
+            Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
+            Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
+        }
+
+        // Reset CAS counters for this fix window (positive-control visibility).
+        g_minorRefCasFail.store(0, std::memory_order_relaxed);
+        g_minorRefCasOk.store(0, std::memory_order_relaxed);
+
+    }
+
+    {
+        {
+            if (stw != nullptr && *stw != nullptr) {
+                stw->reset();
+            }
+            MRT_PHASE_TIMER(ZStatPhases::PYoungConcurrentRelocate);
+            VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
+                 reachableVec.size());
+            ZRelocate::ForwardFromSpace(ZGenerationId::young);
+            manager.FinishIncompleteFromRegions(ZGenerationId::young);
+        }
+        VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
+        {
+            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
+            g_minorRefCasFail.store(0, std::memory_order_relaxed);
+            g_minorRefCasOk.store(0, std::memory_order_relaxed);
+            ZRelocate::FixMinorRootSlots(liveStw());
+            Heap::GetHeap().cross_vm().PreforwardDiscoveredExternObjects(Generation::Young);
+            Heap::GetHeap().cross_vm().PreforwardAllResurrectExportFromObjects(Generation::Young);
+            remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
+            {
+                // ZGC immediately scans buffered entries that crossed the young
+                // flip (zStoreBarrierBuffer.cpp:162-187). Publish all mutator
+                // buffers before the active-face Snapshot used for this ref fix.
+                (void)ZMark::FlushAllGenerations();
+                std::unordered_set<MAddress> concRemset;
+                ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
+                for (ZRemsetTableEntry entry; remsetIter.next(&entry);) {
+                    if (entry._page == nullptr) {
+                        continue;
+                    }
+                    entry._page->oops_do_current_remembered([&](volatile zpointer* p) {
+                        concRemset.insert(reinterpret_cast<MAddress>(p));
+                    });
+                }
+                remsetVec.reserve(remsetVec.size() + concRemset.size());
+                for (MAddress slot : concRemset) {
+                    remsetVec.push_back(slot);
+                }
+                VLOG(REPORT,
+                     "[GCV2][relocate][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
+                     rememberedSlots.size(), concRemset.size(), remsetVec.size());
+            }
+            remapRemembered(workers);
+        }
+    }
+
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungEvacFinish);
+        {
+        // Select flip-promoted pages; field iteration runs after world release.
+        for (ZPage* region : Heap::GetHeap().young().minorCandidateRegions) {
+            if (region->IsYoungRegion()) {
+                // markwater2: allocating pages never entered the route plan
+                // (zGeneration.cpp:211-213). Leave them young on unmovableFrom.
+                // ZPage::is_marked (zPage.inline.hpp:223-226): only a page marked
+                // this cycle has object liveness to promote.
+                if (region->IsAllocating() || !region->is_marked()) {
+                    continue;
+                }
+                if (kPageAgeAdaptiveTenuring &&
+                    !ShouldPromoteAge(region->GetYoungAge(), Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold)) {
+                    if (region->IsLoneFromRegion() || region->IsFromRegion()) {
+                        manager.EnlistStayYoungSurvivor(region);
+                    } else if (!(region->OnNamedList("recent full regions"))) {
+                        RegionManager::FinishStayYoungInPlace(region);
+                    }
+                    continue;
+                }
+                manager.AddFlipPromotedPage(region);
+            }
+        }
+        }
+    }
+
+    // zRelocate.cpp:1289-1306: finish relocation before walking flip-promoted pages.
+    // Keep forwarding entries available until every field has been remapped.
+    if (stw != nullptr && *stw != nullptr) {
+        stw->reset();
+    }
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungConcPromoteWalk);
+        manager.RememberFlipPromotedPages(workers);
+
+    }
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungEvacRetire);
+        // zGeneration.cpp:563: keep this set until the next young mark-end reset.
+        // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
+        manager.FinishIncompleteFromRegions(ZGenerationId::young);
+        manager.ReassembleFromSpace();
+    }
+}
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void()> ZGeneration::testCyclePrepared;
+std::function<void()> ZGeneration::testYoungMarkStarted;
+std::function<void()> ZGeneration::testOldMarkStarted;
+std::function<void(ZGenerationId, MarkStartPoint, const ZMark*)> ZGeneration::testMarkStartState;
+std::function<void()> ZGeneration::testYoungMarkCompleted;
+#endif
+}
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+
+#include "Heap/z/zVerify.hpp"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
+#include "Heap/z/zMark.hpp"
+
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include <unistd.h>
+
+#include "Concurrency/Concurrency.h"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/z/zDirector.hpp"
+#include "Heap/z/zMarkPartialArray.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
+#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Mutator/MutatorManager.h"
+#include "ObjectModel/MArray.inline.h"
+#include "UnwindStack/StackFrameCursor.h"
+#include "ObjectModel/RefField.inline.h"
+#include "TypeInfoManager.h"
+#include "Heap/z/zRelocate.hpp"
+
+namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+struct Y2yHandoffReceiptState {
+    std::atomic<uint64_t> phase0 { 0 };
+    std::atomic<uint64_t> phase1 { 0 };
+    std::atomic<uint64_t> phase2 { 0 };
+    std::atomic<uint64_t> beforeRelease { 0 };
+    std::atomic<uint64_t> afterRoot { 0 };
+    std::atomic<uint64_t> afterStw2 { 0 };
+};
+Y2yHandoffReceiptState g_y2yHandoffReceipt;
+std::atomic<BaseObject*> g_y2yAfterReleaseHolder { nullptr };
+std::atomic<uint64_t> g_y2yAfterReleasePublications { 0 };
+std::atomic<Mutator*> g_markBeforeMarkEndProducer { nullptr };
+std::atomic<BaseObject*> g_markBeforeMarkEndFirst { nullptr };
+std::atomic<BaseObject*> g_markBeforeMarkEndSecond { nullptr };
+std::atomic<uint64_t> g_markBeforeMarkEndPublications { 0 };
+std::atomic<BaseObject*> g_y2yDuringConcurrent { nullptr };
+std::atomic<BaseObject*> g_leftoverY2yBeforePause { nullptr };
+std::atomic<Mutator*> g_exportRootAfterT1Producer { nullptr };
+std::atomic<BaseObject*> g_exportRootAfterT1Holder { nullptr };
+std::atomic<BaseObject*> g_exportRootAfterT1Child { nullptr };
+std::atomic<uint64_t> g_exportRootAfterT1Armed { 0 };
+std::atomic<uint64_t> g_exportRootRegistrationsAfterT1 { 0 };
+std::atomic<uint64_t> g_exportRootProducerFlushes { 0 };
+std::atomic<uint64_t> g_exportRootObservedAtT2 { 0 };
+std::atomic<U64> g_exportRootHandle { std::numeric_limits<U64>::max() };
+std::atomic<bool> g_exportRootHolderMarked { false };
+std::atomic<bool> g_exportRootChildMarked { false };
+}
+
+void ResetY2yHandoffTestReceipt()
+{
+    g_y2yHandoffReceipt.phase0.store(0, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.phase1.store(0, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.phase2.store(0, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.beforeRelease.store(0, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.afterRoot.store(0, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.afterStw2.store(0, std::memory_order_relaxed);
+    g_y2yAfterReleaseHolder.store(nullptr, std::memory_order_relaxed);
+    g_y2yAfterReleasePublications.store(0, std::memory_order_relaxed);
+}
+
+Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt()
+{
+    return { g_y2yHandoffReceipt.phase0.load(std::memory_order_relaxed),
+             g_y2yHandoffReceipt.phase1.load(std::memory_order_relaxed),
+             g_y2yHandoffReceipt.phase2.load(std::memory_order_relaxed),
+             g_y2yHandoffReceipt.beforeRelease.load(std::memory_order_relaxed),
+             g_y2yHandoffReceipt.afterRoot.load(std::memory_order_relaxed),
+             g_y2yHandoffReceipt.afterStw2.load(std::memory_order_relaxed) };
+}
+
+void NoteY2yBeforeReleaseTestReceipt(uint64_t pending)
+{
+    g_y2yHandoffReceipt.phase0.fetch_add(1, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.beforeRelease.store(pending, std::memory_order_relaxed);
+}
+
+void NoteY2yAfterRootTestReceipt(uint64_t pending)
+{
+    g_y2yHandoffReceipt.phase1.fetch_add(1, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.afterRoot.store(pending, std::memory_order_relaxed);
+}
+
+void NoteY2yAfterStw2TestReceipt(uint64_t pending)
+{
+    g_y2yHandoffReceipt.phase2.fetch_add(1, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.afterStw2.fetch_add(pending, std::memory_order_relaxed);
+}
+
+void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications)
+{
+    g_y2yAfterReleaseHolder.store(holder, std::memory_order_release);
+    g_y2yAfterReleasePublications.store(publications, std::memory_order_release);
+}
+
+void PublishY2yAfterReleaseTestReceipt()
+{
+    auto claimPublication = [](std::atomic<uint64_t>& publications) {
+        uint64_t remaining = publications.load(std::memory_order_acquire);
+        while (remaining != 0 &&
+               !publications.compare_exchange_weak(remaining, remaining - 1,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_acquire)) {}
+        return remaining != 0;
+    };
+    if (claimPublication(g_y2yAfterReleasePublications)) {
+        BaseObject* holder = g_y2yAfterReleaseHolder.load(std::memory_order_acquire);
+        CHECK_DETAIL(holder != nullptr, "armed y2y after-release receipt without holder");
+        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(holder);
+    }
+}
+
+void ArmMarkBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second)
+{
+    g_markBeforeMarkEndProducer.store(producer, std::memory_order_release);
+    g_markBeforeMarkEndFirst.store(first, std::memory_order_release);
+    g_markBeforeMarkEndSecond.store(second, std::memory_order_release);
+    g_markBeforeMarkEndPublications.store(second == nullptr ? 1 : 2, std::memory_order_release);
+}
+
+void PublishMarkBeforeMarkEndTestReceipt()
+{
+    uint64_t remaining = g_markBeforeMarkEndPublications.load(std::memory_order_acquire);
+    while (remaining != 0 &&
+           !g_markBeforeMarkEndPublications.compare_exchange_weak(remaining, remaining - 1,
+                                                                  std::memory_order_acq_rel,
+                                                                  std::memory_order_acquire)) {}
+    if (remaining == 0) {
+        return;
+    }
+    Mutator* producer = g_markBeforeMarkEndProducer.load(std::memory_order_acquire);
+    BaseObject* first = g_markBeforeMarkEndFirst.load(std::memory_order_acquire);
+    BaseObject* second = g_markBeforeMarkEndSecond.load(std::memory_order_acquire);
+    BaseObject* object = remaining == 2 ? first : (second != nullptr ? second : first);
+    CHECK_DETAIL(producer != nullptr && object != nullptr, "armed mark-end receipt without producer/object");
+    Heap::GetHeap().MarkObjectIfActive(object);
+    producer->FlushStoreBarrierBuffer();
+}
+
+void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder)
+{
+    g_y2yDuringConcurrent.store(holder, std::memory_order_release);
+}
+
+void PublishConcurrentYoungProducersTestReceipt()
+{
+    BaseObject* y2y = g_y2yDuringConcurrent.exchange(nullptr, std::memory_order_acq_rel);
+    if (y2y != nullptr) {
+        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);
+    }
+}
+
+void ArmLeftoverBeforePauseTestReceipt(BaseObject* y2yHolder)
+{
+    g_leftoverY2yBeforePause.store(y2yHolder, std::memory_order_release);
+}
+
+void PublishLeftoverBeforePauseTestReceipt()
+{
+    BaseObject* y2y = g_leftoverY2yBeforePause.exchange(nullptr, std::memory_order_acq_rel);
+    if (y2y != nullptr) {
+        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);
+    }
+}
+
+void ResetExportRootPublicationTestReceipt()
+{
+    g_exportRootAfterT1Producer.store(nullptr, std::memory_order_relaxed);
+    g_exportRootAfterT1Holder.store(nullptr, std::memory_order_relaxed);
+    g_exportRootAfterT1Child.store(nullptr, std::memory_order_relaxed);
+    g_exportRootAfterT1Armed.store(0, std::memory_order_relaxed);
+    g_exportRootRegistrationsAfterT1.store(0, std::memory_order_relaxed);
+    g_exportRootProducerFlushes.store(0, std::memory_order_relaxed);
+    g_exportRootObservedAtT2.store(0, std::memory_order_relaxed);
+    g_exportRootHandle.store(std::numeric_limits<U64>::max(), std::memory_order_relaxed);
+    g_exportRootHolderMarked.store(false, std::memory_order_relaxed);
+    g_exportRootChildMarked.store(false, std::memory_order_relaxed);
+}
+
+void ArmExportRootAfterT1TestReceipt(Mutator* producer, BaseObject* holder, BaseObject* child)
+{
+    CHECK_DETAIL(producer != nullptr && holder != nullptr && child != nullptr,
+                 "export-root T1 receipt requires producer, holder, and child");
+    g_exportRootAfterT1Producer.store(producer, std::memory_order_release);
+    g_exportRootAfterT1Holder.store(holder, std::memory_order_release);
+    g_exportRootAfterT1Child.store(child, std::memory_order_release);
+    g_exportRootAfterT1Armed.store(1, std::memory_order_release);
+}
+
+void PublishExportRootAfterT1TestReceipt()
+{
+    if (g_exportRootAfterT1Armed.exchange(0, std::memory_order_acq_rel) == 0) {
+        return;
+    }
+    Mutator* producer = g_exportRootAfterT1Producer.load(std::memory_order_acquire);
+    BaseObject* holder = g_exportRootAfterT1Holder.load(std::memory_order_acquire);
+    CHECK_DETAIL(producer != nullptr && holder != nullptr, "armed export-root T1 receipt is incomplete");
+    Mutator* previous = ThreadLocal::GetMutator();
+    ThreadLocal::SetMutator(producer);
+    const U64 handle = Heap::GetHeap().RegisterExportRoot(holder);
+    ThreadLocal::SetMutator(previous);
+    g_exportRootHandle.store(handle, std::memory_order_release);
+    g_exportRootRegistrationsAfterT1.fetch_add(1, std::memory_order_relaxed);
+}
+
+void FlushExportRootAfterT1TestReceipt()
+{
+    if (g_exportRootRegistrationsAfterT1.load(std::memory_order_acquire) == 0 ||
+        g_exportRootProducerFlushes.exchange(1, std::memory_order_acq_rel) != 0) {
+        return;
+    }
+    Mutator* producer = g_exportRootAfterT1Producer.load(std::memory_order_acquire);
+    CHECK_DETAIL(producer != nullptr, "registered export-root T1 receipt has no producer");
+    producer->FlushStoreBarrierBuffer();
+}
+
+void NoteExportRootPublicationAtT2TestReceipt()
+{
+    if (g_exportRootRegistrationsAfterT1.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+    BaseObject* holder = g_exportRootAfterT1Holder.load(std::memory_order_acquire);
+    BaseObject* child = g_exportRootAfterT1Child.load(std::memory_order_acquire);
+    auto isMarked = [](BaseObject* object) {
+        ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
+        return region != nullptr && region->is_object_strongly_live(from_object(object));
+    };
+    g_exportRootHolderMarked.store(isMarked(holder), std::memory_order_relaxed);
+    g_exportRootChildMarked.store(isMarked(child), std::memory_order_relaxed);
+    g_exportRootObservedAtT2.fetch_add(1, std::memory_order_relaxed);
+}
+
+ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt()
+{
+    return { g_exportRootRegistrationsAfterT1.load(std::memory_order_relaxed),
+             g_exportRootProducerFlushes.load(std::memory_order_relaxed),
+             g_exportRootObservedAtT2.load(std::memory_order_relaxed),
+             g_exportRootHandle.load(std::memory_order_relaxed),
+             g_exportRootHolderMarked.load(std::memory_order_relaxed),
+             g_exportRootChildMarked.load(std::memory_order_relaxed) };
+}
+
+#endif
+}

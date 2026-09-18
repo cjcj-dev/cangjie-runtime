@@ -11,6 +11,7 @@
 #include "ExceptionManager.h"
 #include "Heap/z/zHeap.hpp"
 #include "HeapManager.h"
+#include "Heap/z/concurrentGCThread.hpp"
 #include "ObjectManager.h"
 #include "ObjectModel/MFuncdesc.inline.h"
 #include "StackManager.h"
@@ -23,7 +24,7 @@
 #endif
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/Concurrency.h"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "LoaderManager.h"
 #include "LogManager.h"
@@ -160,6 +161,7 @@ void CangjieRuntime::CreateAndInit(const RuntimeParam& runtimeParam)
     Runtime::runtime = cjRuntime;
     cjRuntime->Init();
     g_initialized.store(true, std::memory_order_release);
+    ConcurrentGCThread::NotifyRuntimeInitialized();
 }
 
 void CangjieRuntime::FiniAndDelete()

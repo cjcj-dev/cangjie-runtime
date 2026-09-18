@@ -13,20 +13,14 @@
 #include <memory>
 
 namespace MapleRuntime {
-
-namespace {
-std::unique_ptr<ZPageTable> g_heap_table;
-}
-
 void ZPageTable::install(MAddress base, size_t heapSize, size_t granule)
 {
-    g_heap_table.reset(new ZPageTable(heapSize, base, granule));
+    Heap::GetHeap().install_page_table(base, heapSize, granule);
 }
 
 ZPageTable& ZPageTable::heap_table()
 {
-    CHECK(g_heap_table != nullptr);
-    return *g_heap_table;
+    return Heap::GetHeap().page_table();
 }
 
 int ZPageTable::count() const
@@ -54,7 +48,7 @@ void ZPageTable::insert(ZPage* page)
     std::atomic_thread_fence(std::memory_order_release);
     _map.put(offset, page->GetRegionSize(), page);
     if (!page->IsYoungRegion()) {
-        Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).register_with_remset(page);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::young).register_with_remset(page);
     }
 }
 
@@ -73,7 +67,7 @@ void ZPageTable::replace(ZPage* old_page, ZPage* new_page)
     CHECK(_map.get(offset) == old_page);
     _map.release_put(offset, old_page->GetRegionSize(), new_page);
     if (!new_page->IsYoungRegion()) {
-        Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).register_with_remset(new_page);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::young).register_with_remset(new_page);
     }
 }
 

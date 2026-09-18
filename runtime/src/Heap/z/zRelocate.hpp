@@ -17,9 +17,12 @@
 #include "Heap/z/zArray.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/z/zPageAge.hpp"
 
 namespace MapleRuntime {
+class FindToVersionResult;
+class ScopedStopTheWorld;
 
 // ZRelocateQueue (zRelocate.hpp:39-77; zRelocate.cpp:57-307).
 class ZRelocateQueue {
@@ -113,6 +116,7 @@ private:
 class ZWorkers;
 class ZPage;
 class ZGeneration;
+struct ForwardingProvenance;
 template<typename T> class ZArray;
 
 class ZRelocationTargets {
@@ -134,7 +138,34 @@ private:
 
 class ZRelocate {
 public:
+    static void ForwardFromSpace(ZGenerationId generation);
+    static void RefineFromSpace();
+    static BaseObject* ForwardObject(BaseObject* object, Generation generation);
+    static BaseObject* ForwardObjectExclusive(BaseObject* object);
+    static bool IsFromObject(BaseObject* object);
+    static bool IsUnmovableFromObject(BaseObject* object);
+    static BaseObject* ResolveMinorReference(RefField<>& field,
+                                             const ScopedStopTheWorld* stw = nullptr);
+    static BaseObject* ResolveMinorReference(RootSlot& root,
+                                             const ScopedStopTheWorld* stw = nullptr);
+    static bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
+                                      const ScopedStopTheWorld* stw = nullptr);
+    static bool FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw = nullptr);
+    static bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase = nullptr,
+                                      const ScopedStopTheWorld* stw = nullptr);
+    static void FixMinorRootSlots(const ScopedStopTheWorld* stw = nullptr);
+    static void RemapYoungRoots();
+    static bool Preforward();
+    static void StartRelocationTasks(ZGenerationId generation);
+
+    // Raw historical carriers have no source color; preserve explicit provenance.
+    static BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+                                         Generation generation);
+    static bool IsAlreadyToStoreValue(BaseObject* target, Generation generation);
+    static FindToVersionResult FindToVersion(BaseObject* obj, Generation generation);
     explicit ZRelocate(ZGeneration* generation) : generation(generation) {}
+    BaseObject* relocate_object(ZForwarding* forwarding, BaseObject* object,
+                                const ForwardingProvenance& provenance);
     ZRelocateQueue* queue() { return &relocateQueue; }
     bool is_queue_active() const { return relocateQueue.IsActive(); }
     static PageAge compute_to_age(PageAge fromAge);
@@ -142,9 +173,31 @@ public:
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
 private:
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RelocationReceiptTestAccess;
+    friend struct MutatorPublishTestAccess;
+#endif
+    BaseObject* relocate_object_inner(BaseObject* obj, ZPage* copyPage);
+    static void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
+    BaseObject* TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease);
+    BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     ZGeneration* const generation;
     ZRelocateQueue relocateQueue;
 };
+
+bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
+bool HolderObjectIsLive(BaseObject* holder);
+bool SlotHeldByLiveObject(const void* slot);
+template <typename SetT, typename KeyT>
+bool LedgerInsert(SetT& set, const KeyT& key)
+{
+    return set.insert(key).second;
+}
+template <typename SetT, typename KeyT>
+size_t LedgerCount(const SetT& set, const KeyT& key)
+{
+    return set.count(key);
+}
 
 } // namespace MapleRuntime
 

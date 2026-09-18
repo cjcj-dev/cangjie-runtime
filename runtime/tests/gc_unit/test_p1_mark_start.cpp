@@ -43,8 +43,7 @@ void Expect(bool value, const char* invariant)
 extern "C" int p1MarkStartExercise()
 {
     failures = 0;
-    Collector& collector = Heap::GetHeap().GetCollector();
-    auto& resources = Heap::GetHeap().GetCollectorResources();
+    Heap& collector = Heap::GetHeap();
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)] {};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -60,15 +59,15 @@ extern "C" int p1MarkStartExercise()
 
     std::array<StartState, 2> state {};
     bool youngComplete = false;
-    CopyCollector::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point,
+    ZGeneration::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point,
                                                const ZMark* domain) {
         const size_t index = generation == ZGenerationId::young ? 0 : 1;
         auto& before = state[index];
-        const auto snapshot = collector.GetCycleSnapshot(generation);
+        const auto snapshot = Heap::GetHeap().GetCycleSnapshot(generation);
         const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
         const uintptr_t color = ::g_cjMarkBadMask & mask;
         const unsigned face = ZGenerationRootTestAccess::RemsetFace();
-        const unsigned workers = resources.GetWorkers(generation).ActiveWorkers();
+        const unsigned workers = Heap::GetHeap().GetZGeneration(generation).Workers()->ActiveWorkers();
         std::printf("P1_PRODUCT_STATE gen=%zu point=%u seq=%llu phase=%u color=%zx face=%u domain=%p domain_workers=%zu workers=%u\n",
                     index, static_cast<unsigned>(point), static_cast<unsigned long long>(snapshot.sequence),
                     static_cast<unsigned>(snapshot.phase), color, face, domain,
@@ -121,14 +120,14 @@ extern "C" int p1MarkStartExercise()
             std::fflush(stdout);
         }
     };
-    const auto youngBefore = collector.GetCycleSnapshot(ZGenerationId::young);
-    const auto oldBefore = collector.GetCycleSnapshot(ZGenerationId::old);
-    collector.RequestGC(GC_REASON_USER, false);
-    const auto oldAfterMajor = collector.GetCycleSnapshot(ZGenerationId::old);
-    collector.RequestGC(GC_REASON_YOUNG, false);
-    const auto youngAfter = collector.GetCycleSnapshot(ZGenerationId::young);
-    const auto oldAfter = collector.GetCycleSnapshot(ZGenerationId::old);
-    CopyCollector::testMarkStartState = nullptr;
+    const auto youngBefore = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
+    const auto oldBefore = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
+    const auto oldAfterMajor = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
+    const auto youngAfter = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young);
+    const auto oldAfter = Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old);
+    ZGeneration::testMarkStartState = nullptr;
     Expect(oldAfterMajor.sequence > oldBefore.sequence, "major_request_started_old");
     Expect(oldAfter.sequence == oldAfterMajor.sequence, "minor_preserves_old_identity");
     Expect(state[0].starts == youngAfter.sequence - youngBefore.sequence && state[0].starts != 0,

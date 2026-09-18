@@ -11,7 +11,6 @@ set(GC_UNIT_SOURCES
     gc_unit_main.cpp
     gc_worker_fixture.cpp
     gc_cycle_sequence_fixture.cpp
-    gc_unit_stubs.cpp
     test_colour_address.cpp
     test_zBitField.cpp
     test_zBitMap.cpp
@@ -174,7 +173,7 @@ endif()
 add_test(NAME cj_gc_allocation_stall_unit COMMAND cj_gc_allocation_stall_unit)
 
 # Isolated product-path arm for the cycle-root/saferegion lock order.  The test
-# calls both WCollector::ResolveCycleRef and its real root consumer from the
+# calls both ZCrossVM::ResolveCycleRef and its real root consumer from the
 # MRT_GC_UNIT_TESTS product SO; it does not compile either implementation into
 # the test executable.
 add_executable(cj_gc_cycle_saferegion_unit
@@ -243,7 +242,6 @@ add_test(NAME cj_gc_clear_entries_unit COMMAND cj_gc_clear_entries_unit)
 add_executable(cj_gc_uncommit_unit
     gc_unit_main.cpp
     gc_cycle_sequence_fixture.cpp
-    gc_unit_stubs.cpp
     test_string_dedup.cpp
     test_concurrent_gc_breakpoints.cpp
     test_uncommitter.cpp

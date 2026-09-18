@@ -15,6 +15,7 @@
 #include "ExceptionManager.inline.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "securec.h"
 #include "Interpreter/RTInterface.h"
 #include "LoaderManager.h"
@@ -527,9 +528,9 @@ int IsActiveGCPhase(DYN_ThreadLocalData tld)
     }
     // This callback asks whether either generation needs GC barriers, not
     // which operation this thread acknowledged most recently.
-    Collector& collector = Heap::GetHeap().GetCollector();
-    return collector.GetCycleSnapshot(ZGenerationId::young).active ||
-            collector.GetCycleSnapshot(ZGenerationId::old).active ? 1 : 0;
+    Heap& heap = Heap::GetHeap();
+    return heap.GetCycleSnapshot(ZGenerationId::young).active ||
+            heap.GetCycleSnapshot(ZGenerationId::old).active ? 1 : 0;
 }
 
 DYN_ExceptionWrapper GetExceptionWrapper()

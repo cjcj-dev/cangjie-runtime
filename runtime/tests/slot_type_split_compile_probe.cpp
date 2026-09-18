@@ -67,7 +67,7 @@ void WrongStaticStructCas(RootSlot& slot, zpointer coloured)
 #endif
 
 // ── heapdesired（5df0d717）────────────────────────────────────────────────────
-// HeapSlot(const BaseObject*) 已私有（friend WCollector）：外部代码不得把 plain 值
+// HeapSlot(const BaseObject*) 已私有（friend CopyCollector）：外部代码不得把 plain 值
 // 当堆 CAS 的 desired 递进去。此前这条纪律【没有常驻探针】。
 #if defined(MRT_NEGATIVE_HEAP_CAS_PLAIN_DESIRED)
 void WrongHeapCasPlainDesired(HeapSlot<>& field, zpointer expected, BaseObject* obj)

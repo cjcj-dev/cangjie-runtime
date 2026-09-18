@@ -22,4 +22,9 @@ struct ZMemoryUsageInfo {
 // committed capacity is partitioned with old occupancy taking precedence.
 ZMemoryUsageInfo ComputeMemoryUsageInfo(size_t capacity, size_t maxCapacity,
                                       size_t youngUsed, size_t oldUsed);
+
+class ZServiceability {
+public:
+    ZServiceability() = default;
+};
 }

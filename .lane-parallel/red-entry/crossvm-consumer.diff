@@ -1,0 +1,11 @@
+--- a/runtime/src/Heap/z/zCrossVM.cpp
++++ b/runtime/src/Heap/z/zCrossVM.cpp
+@@ -269,7 +269,7 @@
+         CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
+         for (auto& entry : discoveredExternObjects) {
+             ValueRootList& destination = cycleRefWorkStack[entry.first];
+-            destination.splice(destination.end(), entry.second);
++            // controlled disconnection proposed for preflight only
+         }
+         discoveredExternObjects.clear();
+     }

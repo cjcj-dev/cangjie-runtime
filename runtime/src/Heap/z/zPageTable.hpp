@@ -35,6 +35,7 @@ class ZPageTable {
     ZGranuleMap<ZPage*> _map;
 
 public:
+    ZPageTable() = default;
     ZPageTable(size_t max_offset, MAddress base, size_t granule) : _map(max_offset, base, granule) {}
 
     static void install(MAddress base, size_t heapSize, size_t granule);

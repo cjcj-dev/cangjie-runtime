@@ -19,43 +19,9 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace {
-
-class ToCollector final : public Collector {
-public:
-    BaseObject* from = nullptr;
-    BaseObject* to = nullptr;
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject* obj, Generation) const override
-    {
-        return obj == from ? FindToVersionResult::Found(to) : FindToVersionResult::NotForwarded();
-    }
-    ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
-    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId) const override
-    {
-        return obj == from ? to : obj;
-    }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>&) const override { return false; }
-    bool IsGhostFromObject(BaseObject*) const override { return false; }
-    bool IsUnmovableFromObject(BaseObject*) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
-    {
-        const uintptr_t remap = ZPointerRemapped;
-        return RefField<>(GcUnit::ColouredPointer(obj, remap));
-    }
-};
-
-} // namespace
-
 GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
 {
     GcHeapFixture fx;
-    ToCollector collector;
-    collector.from = fx.obj0;
-    collector.to = fx.obj1;
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
 
     RememberedSet rs;
@@ -78,9 +44,6 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
 GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
 {
     GcHeapFixture fx;
-    ToCollector collector;
-    collector.from = fx.obj0;
-    collector.to = fx.obj1;
     fx.obj0->SetStateCode(ObjectState::FORWARDED);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
@@ -95,7 +58,6 @@ GC_TEST(I2ReadRef, LoadGoodColourSelectsFastPath)
 GC_TEST(I2ReadRef, LoadBadHeapSlotIsHealedToCurrentColour)
 {
     GcHeapFixture fx;
-    ToCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
 

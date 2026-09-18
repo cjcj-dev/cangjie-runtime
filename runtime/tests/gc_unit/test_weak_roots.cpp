@@ -3,7 +3,7 @@
 #include "Heap/z/zAccess.hpp"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "gc_heap_fixture.hpp"
@@ -14,8 +14,7 @@ using namespace MapleRuntime::GcUnit;
 
 namespace {
 struct RestoreBlock {
-    CollectorResources& resources;
-    ~RestoreBlock() { resources.UnblockResurrection(); }
+    ~RestoreBlock() { ZResurrection::unblock(); }
 };
 
 zpointer* SlotOf(NativeSlot& slot)
@@ -67,12 +66,11 @@ GC_TEST(WeakHandleProduct, EmptyHandleIsNull)
 GC_TEST(WeakRootsProduct, PhantomCleanDeadClearsSlot)
 {
     GcHeapFixture fx;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    RestoreBlock restore{resources};
+    RestoreBlock restore;
     RestoreMarkFlips flips;
     NativeSlot slot(zpointer::null);
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
-    resources.BlockResurrection();
+    ZResurrection::block();
     GC_EXPECT_TRUE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
     GC_EXPECT_TRUE(is_null_any(*SlotOf(slot)));
     std::fprintf(stderr, "WEAK_ROOTS_DEAD_CLEAN_ASSERT_EXECUTED\n");
@@ -81,13 +79,12 @@ GC_TEST(WeakRootsProduct, PhantomCleanDeadClearsSlot)
 GC_TEST(WeakRootsProduct, PhantomCleanLiveRetainsSlot)
 {
     GcHeapFixture fx;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    RestoreBlock restore{resources};
+    RestoreBlock restore;
     RestoreMarkFlips flips;
     NativeSlot slot(zpointer::null);
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
     (void)GcHeapFixture::MarkStrong(fx.region0, fx.obj0);
-    resources.BlockResurrection();
+    ZResurrection::block();
     GC_EXPECT_FALSE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
     GC_EXPECT_TRUE(to_object(ZPointer::uncolor(*SlotOf(slot))) == fx.obj0);
     std::fprintf(stderr, "WEAK_ROOTS_LIVE_RETAIN_ASSERT_EXECUTED\n");
@@ -96,13 +93,12 @@ GC_TEST(WeakRootsProduct, PhantomCleanLiveRetainsSlot)
 GC_TEST(WeakRootsProduct, PhantomCleanFinalizableRetainsSlot)
 {
     GcHeapFixture fx;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    RestoreBlock restore{resources};
+    RestoreBlock restore;
     RestoreMarkFlips flips;
     NativeSlot slot(zpointer::null);
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
     (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
-    resources.BlockResurrection();
+    ZResurrection::block();
     GC_EXPECT_FALSE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
     GC_EXPECT_TRUE(to_object(ZPointer::uncolor(*SlotOf(slot))) == fx.obj0);
     std::fprintf(stderr, "WEAK_ROOTS_FINALIZABLE_RETAIN_ASSERT_EXECUTED\n");
@@ -111,12 +107,11 @@ GC_TEST(WeakRootsProduct, PhantomCleanFinalizableRetainsSlot)
 GC_TEST(WeakHandleProduct, PeekBlockedOldDoesNotKeepDead)
 {
     GcHeapFixture fx;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    RestoreBlock restore{resources};
+    RestoreBlock restore;
     RestoreMarkFlips flips;
     NativeSlot slot(zpointer::null);
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
-    resources.BlockResurrection();
+    ZResurrection::block();
     GC_EXPECT_TRUE(NativeAccess<ON_PHANTOM_OOP_REF | AS_NO_KEEPALIVE>::oop_load(&slot) == nullptr);
     GC_EXPECT_TRUE(NativeAccess<ON_PHANTOM_OOP_REF>::oop_load(&slot) == nullptr);
     std::fprintf(stderr, "WEAK_HANDLE_PEEK_DEAD_ASSERT_EXECUTED\n");
@@ -125,13 +120,12 @@ GC_TEST(WeakHandleProduct, PeekBlockedOldDoesNotKeepDead)
 GC_TEST(WeakRootsProduct, YoungBlockedAccessDoesNotDeathClean)
 {
     GcHeapFixture fx;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    RestoreBlock restore{resources};
+    RestoreBlock restore;
     fx.region0->reset(PageAge::eden);
     RestoreMarkFlips flips;
     NativeSlot slot(zpointer::null);
     *SlotOf(slot) = CaptureStoreGoodThenFlipMark(fx.obj0, flips, true, false);
-    resources.BlockResurrection();
+    ZResurrection::block();
     GC_EXPECT_FALSE(ZBarrier::clean_barrier_on_phantom_oop_field(SlotOf(slot)));
     GC_EXPECT_TRUE(to_object(ZPointer::uncolor(*SlotOf(slot))) == fx.obj0);
     std::fprintf(stderr, "WEAK_ROOTS_YOUNG_NO_DEATH_CLEAN_ASSERT_EXECUTED\n");

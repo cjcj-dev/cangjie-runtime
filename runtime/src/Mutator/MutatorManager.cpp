@@ -14,10 +14,10 @@
 #include "Base/TimeUtils.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
-#include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Handshake.h"
 #include "Mutator.inline.h"
 #include "Heap/z/zStackWatermark.hpp"
@@ -780,31 +780,9 @@ void MutatorManager::DumpMutators(uint32_t timeoutTimes)
     LOG(RTLOG_ERROR, "STW status info:%s", buf);
 }
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-void MutatorManager::DumpForDebug()
-{
-    size_t count = 0;
-    auto func = [&count](Mutator& mutator) {
-        mutator.DumpMutator();
-        count++;
-    };
-    VisitAllMutators(func);
-    LOG(RTLOG_INFO, "MutatorList size : %zu", count);
-}
-
-void MutatorManager::DumpAllGcInfos()
-{
-    auto func = [](Mutator& mutator) { mutator.DumpGCInfos(); };
-    VisitAllMutators(func);
-}
-#endif
 
 extern "C" void MRT_FlushGCInfo()
 {
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    // MutatorManager::Instance().DumpAllGcInfos();
-    Mutator::GetMutator()->DumpGCInfos();
-#endif
 }
 
 void MarkFlushOnEnterSaferegion()

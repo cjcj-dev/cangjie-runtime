@@ -29,7 +29,6 @@ namespace MapleRuntime {
 #define ARM32_MARKED_FLAG_BITS  2
 #endif
 class BaseObject;
-class WCollector;
 
 void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr);
 
@@ -50,7 +49,7 @@ public:
     static constexpr size_t GetSize() { return sizeof(fieldVal); }
 
     // 剥色地址位。返回 zaddress：调用方把「槽值地址位」当可解引用对象基址使用。
-    // ⚠ 本函数不做读屏障；需要 load-good 的路径必须走 Collector::make_load_good。
+    // ⚠ 本函数不做读屏障；需要 load-good 的路径必须走 ZBarrier::make_load_good。
     // 类型纪律见 ops/design/COLOUR_TYPE_DISCIPLINE.md。
     zaddress GetTargetObject(std::memory_order order = std::memory_order_relaxed) const
     {
@@ -160,13 +159,12 @@ public:
 
 private:
     // heapdesired: plain BaseObject* carrier is not a public heap-CAS desired.
-    // Only WCollector (GetAndTryTagRefField / RootSlotWriteback plain-root arm /
-    // null install) may mint it. Outside code that needs a plain value must say
+    // Only the friend owning the heap's GC state may mint it. Outside code
+    // that needs a plain value must say
     // so via zpointer/MAddress or the colour-carrying constructors above —
     // RefField<>(obj) as CompareExchange desired is a compile error.
     explicit HeapSlot(const BaseObject* obj)
         : fieldVal(raw(ZAddress::store_good(from_object(obj)))) {}
-    friend class WCollector;
     using RefFieldValue = MAddress;
     RefFieldValue fieldVal;
 };
@@ -220,7 +218,6 @@ private:
     zaddress_unsafe rootValue;
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);
-    friend class WCollector;
 };
 
 // Read-only root capability. This is intentionally const-qualified rather than a

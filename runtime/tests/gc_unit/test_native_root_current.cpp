@@ -3,13 +3,14 @@
 // with Runtime Library Exception.
 #include "gc_heap_fixture.hpp"
 #include "b09_runtime_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zStackWatermark.hpp"
+#include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "root_publication_snapshot.hpp"
@@ -25,26 +26,23 @@
 #include <fstream>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "Heap/z/zRelocate.hpp"
 
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void PreparePlainRoots(WCollector& collector)
+    static void PreparePlainRoots(Heap& collector)
     {
         // Match the eager product ordering before the direct TraceHeap fixture.
         // Full driver-entry coverage lives in RawRemapYoungProduct.
-        collector.RemapYoungRoots();
+        ZRelocate::RemapYoungRoots();
     }
-    static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, uint32_t workers = 1)
+    static void BindNativeRootFixture(Heap& collector, uint32_t workers = 1)
     {
-        if (resources.testCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.testCollector);
-        }
-        resources.testCollector = &collector;
-        resources.BindCollector(&collector);
-        resources.concurrentGcThreadCount = workers;
+        CHECK(&collector == &Heap::GetHeap());
+        ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(workers);
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
-            auto& cycle = collector.GetZGeneration(gen);
+            auto& cycle = Heap::GetHeap().GetZGeneration(gen);
             if (cycle.Snapshot().active) {
                 cycle.End();
             }
@@ -57,39 +55,43 @@ struct RelocationReceiptTestAccess {
         }
         ZGlobalsPointers::initialize();
     }
-    static void FlipNativeRootYoung(WCollector& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
-    static void NativeRootMajorPrelude(WCollector& collector)
+    static void FlipNativeRootYoung(Heap& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
+    static void NativeRootMajorPrelude(Heap& collector)
     {
-        collector.GetZGeneration(ZGenerationId::old).End();
-        auto& young = collector.GetZGeneration(ZGenerationId::young);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).End();
+        auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
-        collector.RunGarbageCollection(1, GC_REASON_YOUNG);
+        ZDriver::RunGarbageCollection(1, GC_REASON_YOUNG);
     }
-    static void NativeRootTrace(WCollector& collector)
+    static void NativeRootTrace(Heap& collector)
     {
         // This fixture enters tracing directly after in-place promotion. Match
         // the old mark-start sequence advance before consuming the new page
         // (ZGC zGeneration.cpp:1212-1237).
         GcUnit::GcHeapFixture::AdvanceGeneration(Generation::Old);
-        collector.StartOldMarkWork();
-        collector.TraceHeap();
+        Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+        Heap::GetHeap().old().Mark().Start();
+        auto& old = Heap::GetHeap().old();
+        old.concurrent_mark();
+        while (!old.pause_mark_end()) old.concurrent_mark_continue();
+        old.process_non_strong_references();
     }
-    static void RunOldRoots(WCollector& collector)
+    static void RunOldRoots(Heap& collector)
     {
-        collector.EnumAllCommonRoots(collector.GetWorkers(ZGenerationId::old));
+        ZMark::EnumAllCommonRoots(*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers());
     }
-    static size_t PendingYoungRootWork(WCollector& collector)
+    static size_t PendingYoungRootWork(Heap& collector)
     {
-        return ThreadLocal::GetMarkStacks(*collector.YoungMark()).Population();
+        return ThreadLocal::GetMarkStacks(*Heap::GetHeap().young().MarkPtr()).Population();
     }
-    static void DrainYoungRootWork(WCollector& collector)
+    static void DrainYoungRootWork(Heap& collector)
     {
-        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.YoungMark());
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *Heap::GetHeap().young().MarkPtr());
         WorkStack work;
         std::vector<BaseObject*> reachable;
-        WCollector::MinorSlotSet slots;
-        WCollector::MinorSlotSet weak;
-        collector.TraceYoungClosure(work, false, reachable, slots, weak);
+        std::unordered_set<MAddress> slots;
+        std::unordered_set<MAddress> weak;
+        ZMark::TraceYoungClosure(work, false, reachable, slots, weak);
     }
 };
 }
@@ -117,15 +119,14 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    Heap& collector = heap;
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     ZPage* region = fx.region0;
     region->reset(PageAge::eden);
     region->reset(PageAge::eden);
-    resources.GetGCStats(ZGenerationId::young).tenuringThreshold = 1;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold = 1;
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
     // Keep a second live object after the root object. In-place compaction
@@ -174,7 +175,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     selected.PrependRegion(region);
     GC_EXPECT_TRUE(BeginForwardingArena(Generation::Young, selected));
     (void)selected.TakeHeadRegion();
-    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::FlipNativeRootYoung(collector);
     auto& manager = static_cast<RegionSpace&>(heap.GetAllocator()).GetRegionManager();
     manager.CompactRegion(region);
@@ -216,8 +217,8 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
         return;
     }
     GC_EXPECT_TRUE(to_object(nullSlot.GetTargetObject()) == nullptr);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
-    Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
+    Heap::GetHeap().GetZGeneration(Generation::Young).reset_relocation_set();
     // Observe the product's published old mark stacks after the root task
     // returned and before follow starts (testOldMarkStarted fires at the top
     // of DoTracing, after DoEnumeration). The slot visit is recorded too, so
@@ -225,16 +226,16 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     bool enumerated = false;
     bool visited = false;
     bool observed = false;
-    collector.testColoredRootResult = [&](ZGenerationId generation, NativeSlot* visitedSlot) {
+    ZMark::testColoredRootResult = [&](ZGenerationId generation, NativeSlot* visitedSlot) {
         visited |= generation == ZGenerationId::old && visitedSlot == &slot;
     };
-    collector.testOldMarkStarted = [&]() {
+    ZGeneration::testOldMarkStarted = [&]() {
         observed = true;
-        enumerated |= RootPublicationSnapshot::Contains(*collector.MajorMark(), to);
+        enumerated |= RootPublicationSnapshot::Contains(*Heap::GetHeap().old().MarkPtr(), to);
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
-    collector.testOldMarkStarted = nullptr;
-    collector.testColoredRootResult = nullptr;
+    ZGeneration::testOldMarkStarted = nullptr;
+    ZMark::testColoredRootResult = nullptr;
     const bool oldMarkedCurrent = region->is_object_strongly_live(from_object(to)) &&
         !region->is_object_strongly_live(from_object(from));
     std::fprintf(stderr, "native_root_after_reset executed=1 observed=%u visited=%u enumerated=%u slot=%#zx expected=%p\n",
@@ -261,9 +262,8 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    Heap& collector = heap;
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     BaseObject* held = fx.obj0;
 
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
@@ -275,15 +275,16 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     GC_EXPECT_TRUE(parked->InSaferegion());
 
     bool workerSawParked = false;
-    collector.testOldMarkThreadResult = [&](Mutator& mutator) {
+    ZMark::testOldMarkThreadResult = [&](Mutator& mutator) {
         if (&mutator == parked) {
             workerSawParked = true;
         }
     };
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
-    collector.StartOldMarkWork();
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+    Heap::GetHeap().old().Mark().Start();
     RelocationReceiptTestAccess::RunOldRoots(collector);
-    collector.testOldMarkThreadResult = nullptr;
+    ZMark::testOldMarkThreadResult = nullptr;
 
     const bool watermarkDone = parked->GetStackWatermark().IsDone(StackWatermark::epoch_id());
     const bool live = fx.region0->is_object_strongly_live(from_object(held));
@@ -301,9 +302,8 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    Heap& collector = heap;
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     NativeSlot slot(zpointer::null);
     ZBarrier::WriteStaticRef(slot, fx.obj0);
     GC_EXPECT_TRUE(ZBarrier::ReadStaticRef(slot) == fx.obj0);
@@ -317,15 +317,16 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    Heap& collector = heap;
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     fx.region0->reset(PageAge::eden);
-    collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
-    collector.StartYoungMarkWork();
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().young().Mark().BindWorkers(Heap::GetHeap().young().Workers());
+    Heap::GetHeap().young().Mark().Start();
+    MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
     // Load-good, but the previous young/old mark epochs: the root must take
     // ZBarrier's mark-young slow path even though no remapping is needed.
     NativeSlot root(to_zpointer(raw(StoreGoodPointer(fx.obj0)) ^ ZPointerMarkedYoungMask ^ ZPointerMarkedOldMask));
@@ -359,22 +360,21 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    Heap& collector = heap;
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     fixture.region0->reset(PageAge::old);
     GC_EXPECT_FALSE(fixture.region0->is_object_strongly_live(from_object(fixture.obj0)));
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
-    resources.GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
+    Heap::GetHeap().GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
     bool published = false;
-    collector.testOldMarkStarted = [&]() {
-        published |= RootPublicationSnapshot::Contains(*collector.MajorMark(), fixture.obj0);
+    ZGeneration::testOldMarkStarted = [&]() {
+        published |= RootPublicationSnapshot::Contains(*Heap::GetHeap().old().MarkPtr(), fixture.obj0);
     };
     RelocationReceiptTestAccess::NativeRootTrace(collector);
-    collector.testOldMarkStarted = nullptr;
+    ZGeneration::testOldMarkStarted = nullptr;
     const bool marked = fixture.region0->is_object_strongly_live(from_object(fixture.obj0));
     std::fprintf(stderr, "ROOT_STORAGE_STRONG_TARGET executed=1 object=%p published=%u marked=%u\n",
                  fixture.obj0, unsigned(published), unsigned(marked));
@@ -391,13 +391,12 @@ void CheckRootStorageSegments(unsigned family)
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, 2);
+    Heap& collector = heap;
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector, 2);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     fixture.region0->reset(family != 0 ? PageAge::eden : PageAge::old);
-    auto& finalizers = resources.GetFinalizerProcessor();
+    auto& finalizers = Heap::GetHeap().GetFinalizerProcessor();
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
     constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
     for (size_t i = 0; i < count; ++i) {
@@ -418,9 +417,9 @@ void CheckRootStorageSegments(unsigned family)
     size_t otherConsumed = 0;
     bool valuesValid = true;
     struct ResetObserver {
-        ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { ZMark::testColoredRootResult = nullptr; }
     } reset;
-    collector.testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
+    ZMark::testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
         if ((generation == ZGenerationId::old) != (family == 0)) { return; }
         std::unique_lock<std::mutex> lock(mutex);
         if (slot == nullptr) {
@@ -446,7 +445,7 @@ void CheckRootStorageSegments(unsigned family)
     };
     if (family == 0) { RelocationReceiptTestAccess::NativeRootTrace(collector); }
     else { RelocationReceiptTestAccess::NativeRootMajorPrelude(collector); }
-    collector.testColoredRootResult = nullptr;
+    ZMark::testColoredRootResult = nullptr;
     bool exactlyOnce = visits.size() == count;
     for (const auto& entry : visits) { exactlyOnce &= entry.second == 1; }
     std::fprintf(stderr,
@@ -467,9 +466,8 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    Heap& collector = heap;
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     fixture.region0->reset(PageAge::eden);
@@ -487,9 +485,9 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     NativeSlot* addedSlot = nullptr;
     bool newSlotVisited = false;
     struct ResetObserver {
-        ~ResetObserver() { CopyCollector::testColoredRootResult = nullptr; }
+        ~ResetObserver() { ZMark::testColoredRootResult = nullptr; }
     } reset;
-    collector.testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
+    ZMark::testColoredRootResult = [&](ZGenerationId generation, NativeSlot* slot) {
         if (generation != ZGenerationId::young || slot == nullptr) { return; }
         if (slot == addedSlot) { newSlotVisited = true; }
         if (observed) { return; }
@@ -507,7 +505,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
         during = storage.BlockCountForTest();
     };
     RelocationReceiptTestAccess::NativeRootMajorPrelude(collector);
-    collector.testColoredRootResult = nullptr;
+    ZMark::testColoredRootResult = nullptr;
     const size_t after = storage.BlockCountForTest();
     const size_t remaining = storage.AllocationCount();
     std::fprintf(stderr,

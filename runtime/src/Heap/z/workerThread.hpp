@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <pthread.h>
 
 #include "Base/Semaphore.h"
@@ -78,6 +79,7 @@ private:
     std::atomic<uint32_t> _created_workers;
     uint32_t _active_workers;
     WorkerTaskDispatcher _dispatcher;
+    std::mutex _stop_lock;
 
     WorkerThread* create_worker(uint32_t name_suffix);
 
@@ -86,15 +88,18 @@ protected:
 
 public:
     WorkerThreads(const char* name, uint32_t max_workers);
-    // Infrastructure difference: HotSpot never destroys a WorkerThreads
-    // (CHeapObj, lives until VM exit). This runtime destroys it on Heap::Fini
-    // and in in-process gc_unit fixtures, so the created threads are asked to
-    // exit and joined here. There is no other stop path.
+    // Infrastructure difference: HotSpot worker pools live until VM exit.
+    // Native runtime teardown and in-process fixtures must join their pthreads;
+    // stop is also called explicitly for owners with process-lifetime storage.
     virtual ~WorkerThreads();
     WorkerThreads(const WorkerThreads&) = delete;
     WorkerThreads& operator=(const WorkerThreads&) = delete;
 
     void initialize_workers();
+    // Like task dispatch, initialization/restart and stop require the owner
+    // to have quiesced task coordinators. Concurrent stop calls are serialized.
+    // After return initialize_workers() may recreate workers in this pool.
+    void stop();
 
     uint32_t max_workers() const { return _max_workers; }
     uint32_t created_workers() const { return _created_workers.load(std::memory_order_acquire); }

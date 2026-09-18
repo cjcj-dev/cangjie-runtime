@@ -6,6 +6,7 @@
 #define MRT_ALLOCATION_STALL_QUEUE_H
 
 #include "Heap/Allocator/RegionManager.h"
+#include "Heap/z/zStat.hpp"
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -207,7 +208,6 @@ private:
 
 #include "Heap/Allocator/CartesianTree.h"
 #include "Heap/z/zPage.hpp"
-#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zUncommitter.hpp"
 
 namespace MapleRuntime {
@@ -274,14 +274,7 @@ public:
     // mark-epoch quarantine: units reclaimed after from-page reclaim must not enter the dirty
     // tree (mutator TakeRegion → ClearUnits) until the next major concurrent mark ends.
     // INV: concurrent mark may still hold plain strong refs into this range (SATB).
-    void AddMarkQuarantineUnits(UnitIndex idx, UnitCount num)
-    {
-        ScopedEnterSaferegion enterSaferegion(true);
-        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
-        if (UNLIKELY(!markQuarantineTree.MergeInsert(idx, num, true))) {
-            LOG(RTLOG_FATAL, "tid %d: failed to add mark-quarantine units [%u+%u, %u)", GetTid(), idx, num, idx + num);
-        }
-    }
+    void AddMarkQuarantineUnits(UnitIndex idx, UnitCount num);
 
     // Release point = major PostTrace entry (TRACE+CLEAR_SATB done). Moves all quarantined
     // units into the dirty tree so allocation may ClearUnits them again.
@@ -364,7 +357,6 @@ private:
 
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 
-#include "Heap/Allocator/Allocator.h"
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
@@ -381,41 +373,13 @@ private:
 #include "Heap/Allocator/RegionList.h"
 #include "securec.h"
 #include "Heap/Allocator/SlotList.h"
-#include "Sync/Sync.h"
 
 namespace MapleRuntime {
-class CopyCollector;
 class CompactCollector;
-class WCollector;
 template<Generation G>
 class ForwardTask;
 
-struct YoungCollectionStats {
-    size_t candidateRegions = 0;
-    size_t candidateBytes = 0;
-    size_t reclaimedRegions = 0;
-    size_t reclaimedBytes = 0;
 
-    // candfix: PrepareYoungGarbageCandidates selects regions and mutates region lists;
-    // it does not visit heap objects or reference slots. Keep the input inventory and
-    // skip reasons explicit so a long phase can be classified as "many entries" vs
-    // "expensive per entry" without adding an object walk merely for measurement.
-    size_t fromVisited = 0;
-    size_t fromVisitedUnits = 0;
-    size_t unmovableVisited = 0;
-    size_t unmovableVisitedUnits = 0;
-    size_t unmovableYoung = 0;
-    size_t recentFullVisited = 0;
-    size_t recentFullVisitedUnits = 0;
-    size_t recentFullYoung = 0;
-    size_t objectVisits = 0;
-    size_t slotVisits = 0;
-    uint64_t reparkNs = 0;
-    uint64_t unmovableNs = 0;
-    uint64_t recentFullNs = 0;
-    uint64_t visitorNs = 0;
-    uint64_t listMoveNs = 0;
-};
 
 
 struct FreePinnedSlotLists {
@@ -455,7 +419,11 @@ public:
 
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
+namespace GcUnit { struct GcHeapFixture; }
+
 class RegionManager {
+    friend struct GcUnit::GcHeapFixture;
+    friend class ZObjectAllocator;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
     friend struct IsFromRegTestAccess;
@@ -495,6 +463,12 @@ public:
     size_t GetHeapCapacity() const { return heapUnitCount * ZPage::UNIT_SIZE; }
 
 
+    // zPageAllocator.cpp:1201-1260: page resource ownership belongs to
+    // this allocator, not to its object-allocation consumers.
+    void Init(const HeapParam& param);
+    MAddress GetSpaceStartAddress() const { return reservedStart; }
+    MAddress GetSpaceEndAddress() const { return reservedEnd; }
+
     RegionManager();
 
     RegionManager(const RegionManager&) = delete;
@@ -507,8 +481,6 @@ public:
 
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
-    uintptr_t AllocSharedObject(size_t size, PageAge age, bool nonBlocking = false);
-    void RetireSharedPages(PageAgeRange ages);
     // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
     std::mutex& PinnedAllocationMutex() { return recentPinnedRegionList.GetListMutex(); }
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -600,9 +572,6 @@ public:
         return generation == Generation::Young;
     }
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    void DumpZPage() const;
-#endif
 
     void DumpRegionStats(const char* msg) const;
 
@@ -615,7 +584,7 @@ public:
     uintptr_t GetRegionHeapStart() const { return regionHeapStart; }
     uintptr_t GetRegionHeapEnd() const { return regionHeapEnd; }
 
-    ~RegionManager() = default;
+    ~RegionManager();
 
     // take a region with *num* units for allocation
     // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
@@ -788,28 +757,21 @@ private:
     static const size_t MAX_UNIT_COUNT_PER_REGION;
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
-    // ZObjectAllocator::PerAge (zObjectAllocator.hpp:37-71): per-CPU shared
-    // small page in ZPerCPU storage (zValue.hpp), one PerAge per page age
-    // constructed in place (zObjectAllocator.hpp:73 ZDeferredConstructed).
-    struct PerAgeObjectAllocator {
-        explicit PerAgeObjectAllocator(PageAge pageAge);
-        const PageAge age;
-        const bool usePerCpuSharedSmallPages;
-        ZPerCPU<ZPage*> sharedSmallPage;
-        ZContended<ZPage*> sharedMediumPage;
-        ZLock mediumPageAllocLock;
-        std::atomic<ZPage*> pinnedPage{nullptr};
-
-        ZPage** shared_small_page_addr();
-        ZPage* const* shared_small_page_addr() const;
-        ZPage** shared_medium_page_addr();
-        ZPage* const* shared_medium_page_addr() const;
-    };
     ZPage* AllocateSharedPage(size_t units, ZPageType role, PageAge age, bool nonBlocking);
     void UndoSharedPage(ZPage* page);
-    ZDeferredConstructed<PerAgeObjectAllocator> objectAllocators[kPageAgeCount];
-    PerAgeObjectAllocator* allocator(PageAge age);
+    size_t SharedPageUnitCount() const { return maxUnitCountPerRegion; }
 
+    MAddress reservedStart = 0;
+    MAddress reservedEnd = 0;
+    struct MetadataMapping {
+        void* base { nullptr };
+        size_t size { 0 };
+        ~MetadataMapping();
+    } metadata;
+    // Declared before the caches: backing/address resources are destroyed
+    // only after their page/cache entries, as in ZPageAllocator.
+    std::unique_ptr<ZVirtualMemoryManager> virtualMemory;
+    std::unique_ptr<ZPhysicalMemoryManager> physicalMemory;
     FreeRegionManager freeRegionManager;
 
     // region lists actually represent life cycle of regions.
@@ -907,8 +869,6 @@ private:
 
 } // namespace MapleRuntime
 
-#include "Heap/z/zObjectAllocator.hpp"
 #include "Heap/z/zPageAllocator.inline.hpp"
 #include "Heap/z/zRelocate.hpp"
-#include "Heap/z/zRelocationSet.inline.hpp"
 #endif // MRT_REGION_MANAGER_H

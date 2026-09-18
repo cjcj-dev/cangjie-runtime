@@ -5,7 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
@@ -21,7 +22,7 @@
 
 #include "Base/SysCall.h"
 #include "CangjieRuntime.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "Heap/z/zStat.hpp"
@@ -35,6 +36,14 @@
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
+std::mutex ZDriver::driverLock;
+
+static bool ShouldPrecleanYoung(GCReason reason);
+
+void ZDriver::lock() { driverLock.lock(); }
+
+void ZDriver::unlock() { driverLock.unlock(); }
+
 extern "C" uintptr_t MRT_StopGCWork()
 {
     Heap::GetHeap().StopGCWork();
@@ -44,37 +53,57 @@ extern "C" uintptr_t MRT_StopGCWork()
 // zDriver.cpp:118-127,319-328: each driver names itself and starts in its
 // constructor; run_thread is the request loop (zDriver.cpp:201-225,463-488)
 // and terminate closes the port so the loop's receive returns (:227-231).
-ZDriver::ZDriver(CollectorResources& resources, GCDriverKind kind) : resources(resources), kind(kind)
+ZDriver::ZDriver(GCDriverKind kind, ZDriverPort& port)
+    : kind(kind), port(port)
 {
     set_name(kind == GCDriverKind::MINOR ? "ZDriverMinor" : "ZDriverMajor");
-    create_and_start();
 }
 
 void ZDriver::run_thread()
 {
-    resources.RunDriverLoop(kind);
+    for (;;) {
+        const ZDriverRequest request = port.receive();
+        if (request.cause() == GC_REASON_INVALID) {
+            return;
+        }
+        ZCollectedHeap::heap()->director()->set_busy(kind == GCDriverKind::MINOR, true);
+        {
+            DriverLocker locker;
+            const bool major = kind == GCDriverKind::MAJOR;
+            ZAbort::reset();
+            if (major) ZBreakpoint::AtBeforeGC();
+            abortpoint();
+            const bool completed = !ZAbort::should_abort() && ExecuteDriverRequest(request);
+            port.ack();
+            if (major) ZBreakpoint::AtAfterGC();
+            ZCollectedHeap::heap()->director()->set_busy(!major, false);
+            if (completed && !major) ZDirector::evaluate_rules();
+        }
+        abortpoint();
+        auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        regions.SatisfyStalledAllocations();
+    }
 }
 
 void ZDriver::terminate()
 {
-    (kind == GCDriverKind::MINOR ? resources.minorDriverPort : resources.majorDriverPort)
-        .send_async(ZDriverRequest(GC_REASON_INVALID, 0, 0));
+    port.send_async(ZDriverRequest(GC_REASON_INVALID, 0, 0));
 }
 
 bool ZDriver::is_busy() const
 {
-    return (kind == GCDriverKind::MINOR ? resources.minorDriverPort : resources.majorDriverPort).is_busy();
+    return port.is_busy();
 }
 
 void ZDriverMinor::collect(const ZDriverRequest& request)
 {
     switch (request.cause()) {
         case GC_REASON_YOUNG:
-            resources.GetMinorDriverPort().send_async(request);
+            _port.send_async(request);
             break;
         case GC_REASON_HEU_SYNC:
         case GC_REASON_NATIVE_SYNC:
-            resources.GetMinorDriverPort().send_sync(request);
+            _port.send_sync(request);
             break;
         default:
             CHECK(false);
@@ -88,17 +117,17 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
         case GC_REASON_USER:
         case GC_REASON_FORCE:
         case GC_REASON_OOM:
-            resources.GetMajorDriverPort().send_sync(request);
+            _port.send_sync(request);
             break;
         case GC_REASON_BACKUP:
         case GC_REASON_HEU:
         case GC_REASON_NATIVE:
         case GC_REASON_WARMUP:
-            resources.GetMajorDriverPort().send_async(request);
+            _port.send_async(request);
             break;
         case GC_REASON_WB_BREAKPOINT:
             ZBreakpoint::StartGC();
-            resources.GetMajorDriverPort().send_async(request);
+            _port.send_async(request);
             break;
         default:
             CHECK(false);
@@ -106,133 +135,27 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
     }
 }
 
-void CollectorResources::Init()
-{
-    ZAbort::reset();
-    ZStat::Initialize();
-    GetGCStats(ZGenerationId::young).Init();
-    GetGCStats(ZGenerationId::old).Init();
-    ZStatMutatorAllocRate::initialize();
-    const uint64_t now = TimeUtil::NanoSeconds();
-    collector.GetZGeneration(ZGenerationId::young).CycleStats().Initialize(now);
-    collector.GetZGeneration(ZGenerationId::old).CycleStats().Initialize(now);
-    // zHeap.cpp: ZHeap owns _stat; its constructor starts the thread.
-    statistics = new ZStat();
-    StartGCThreads();
-    finalizerProcessor.Start();
-    StringDedup::Instance().Start();
-    if (Uncommitter::Enabled()) {
-        LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus",
-            static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND));
-    } else {
-        LOG(RTLOG_INFO, "Uncommit: Disabled");
-    }
-}
-
-void CollectorResources::Fini()
-{
-    MRT_ASSERT(!finalizerProcessor.IsRunning(), "Invalid finalizerProcessor status");
-    MRT_ASSERT(!gcThreadRunning.load(std::memory_order_relaxed), "Invalid GC thread status");
-}
-
-// zCollectedHeap.cpp:96-110 ZCollectedHeap::stop. Each ZThread::terminate
-// closes its own wait (director monitor, driver port); a driver's port stop
-// is also the shutdown acknowledgement for synchronous callers.
-void CollectorResources::StopGCWork()
-{
-    if (finalizerProcessor.IsRunning()) {
-        finalizerProcessor.Stop();
-    }
-    // zCollectedHeap.cpp:314-319 gc_threads_do order: director, major driver,
-    // minor driver, stat. StringDedup is not a ZGC thread and stops last.
-    StopGCThreads();
-    if (statistics != nullptr) {
-        statistics->stop();
-        delete statistics;
-        statistics = nullptr;
-    }
-    StringDedup::Instance().Stop();
-}
-
-// zCollectedHeap.cpp:96-110 ZCollectedHeap::stop: every ConcurrentGCThread
-// is stopped through ConcurrentGCThread::stop (should_terminate ->
-// stop_service -> ZThread::terminate -> wait for termination).
-void CollectorResources::StopGCThreads()
-{
-    if (gcThreadRunning.load(std::memory_order_acquire) == false) {
-        return;
-    }
-    for (ZThread* thread : { static_cast<ZThread*>(director), static_cast<ZThread*>(majorDriver),
-                             static_cast<ZThread*>(minorDriver) }) {
-        thread->stop();
-    }
-    delete director;
-    delete minorDriver;
-    delete majorDriver;
-    director = nullptr;
-    minorDriver = nullptr;
-    majorDriver = nullptr;
-    // Drivers have terminated; no worker task can be submitted any more.
-    collector.GetZGeneration(ZGenerationId::young).StopWorkers();
-    collector.GetZGeneration(ZGenerationId::old).StopWorkers();
-    gcThreadRunning.store(false, std::memory_order_release);
-}
-
-void CollectorResources::RunDriverLoop(GCDriverKind kind)
-{
-    ZDriverPort& port = kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort;
-    for (;;) {
-        const ZDriverRequest request = port.receive();
-        if (request.cause() == GC_REASON_INVALID) {
-            return;
-        }
-        {
-            std::lock_guard<std::mutex> lock(directorMutex);
-            (kind == GCDriverKind::MINOR ? minorBusy : majorBusy) = true;
-        }
-        abortpoint();
-        (void)ProcessDriverRequest(port, request);
-        abortpoint();
-        auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        regions.SatisfyStalledAllocations();
-    }
-}
-
-void CollectorResources::CompleteDriverRequest(ZDriverPort& port)
-{
-    std::lock_guard<std::mutex> lock(directorMutex);
-    (&port == &minorDriverPort ? minorBusy : majorBusy) = false;
-    directorReevaluate = true;
-    directorCondition.notify_one();
-}
-
-void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup)
+void ZDriver::RunCollection(uint64_t index, GCReason reason, bool warmup)
 {
     const bool isYoung = reason == GC_REASON_YOUNG;
-    ZGeneration& generation = collector.GetZGeneration(isYoung
+    ZGeneration& generation = Heap::GetHeap().GetZGeneration(isYoung
         ? ZGenerationId::young : ZGenerationId::old);
     ZStatCycle& cycle = generation.CycleStats();
     const uint64_t start = TimeUtil::NanoSeconds();
-    const ZYoungType type = collector.GetZGeneration(ZGenerationId::young).YoungType();
+    const ZYoungType type = Heap::GetHeap().GetZGeneration(ZGenerationId::young).YoungType();
     // zGeneration.cpp:381,388: at_start/at_end(stat_workers, should_record_stats)
     // bracket the collection; the parallel share is read from ZStatWorkers.
     const bool recordStats = !isYoung || type == ZYoungType::minor || type == ZYoungType::major_partial_roots;
     cycle.AtStart(start);
-    collector.RunGarbageCollection(index, reason);
+    ZDriver::RunGarbageCollection(index, reason);
     const uint64_t end = TimeUtil::NanoSeconds();
     cycle.AtEnd(end, generation.StatWorkers(), warmup, recordStats);
     (isYoung ? ZStatPhases::YoungGeneration : ZStatPhases::OldGeneration).RegisterEnd(end - start);
 }
 
-bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
+bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
-#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-    Collector* activeCollector = testCollector != nullptr ? testCollector : &collector;
-#else
-    Collector* activeCollector = &collector;
-#endif
-    ZDriverPort& port = request.cause() == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
     if (ZAbort::should_abort()) {
         return false;
     }
@@ -246,7 +169,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     // ZServiceabilityCycleTracer spans the request, including all young
     // prelude phases of a major. Capture existing generation stats before reuse.
     const auto accumulate = [&](ZGenerationId generation) {
-        GCStats& stats = activeCollector->GetGCStats(generation);
+        GCStats& stats = Heap::GetHeap().GetGCStats(generation);
         if (firstGeneration) liveBefore = stats.liveBytesBeforeGC;
         firstGeneration = false;
         liveAfter = stats.liveBytesAfterGC;
@@ -256,41 +179,41 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 
     // Set the request's generation budgets before mark-start can consume
     // them, including the old mark domain prepared by the young prelude.
-    const uint32_t youngCount = request.young_nworkers() == 0 ? concurrentGcThreadCount : request.young_nworkers();
-    const uint32_t oldCount = request.old_nworkers() == 0 ? concurrentGcThreadCount : request.old_nworkers();
+    const uint32_t youngCount = request.young_nworkers() == 0
+        ? ZCollectedHeap::heap()->concurrent_gc_threads() : request.young_nworkers();
+    const uint32_t oldCount = request.old_nworkers() == 0
+        ? ZCollectedHeap::heap()->concurrent_gc_threads() : request.old_nworkers();
     const bool warmup = request.cause() == GC_REASON_WARMUP;
     // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
     // selected worker counts into each generation's ZWorkers.
-    activeCollector->GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers()->set_active_workers(youngCount);
     if (request.cause() != GC_REASON_YOUNG) {
-        activeCollector->GetZGeneration(ZGenerationId::old).Workers()->set_active_workers(oldCount);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers()->set_active_workers(oldCount);
     }
 
     // zDriver.cpp:416-436: full causes preclean with promote-all, then
     // establish the combined young/old roots cycle. Other causes use partial roots.
     if (request.cause() != GC_REASON_YOUNG) {
         ZGCIdMajor majorId(GCIdMark::Current(), 'Y');
-        activeCollector->GetZGeneration(ZGenerationId::old).SelectReason(
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).SelectReason(
             request.cause(), GCTask::ASYNC_TASK_INDEX);
         const bool preclean = ShouldPrecleanYoung(request.cause());
         if (preclean) {
-            RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
+            ZCollectedHeap::heap()->driver_major()->RunYoungCollection(
+                GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
             accumulate(ZGenerationId::young);
             if (ZAbort::should_abort()) {
-                CancelDriverRequestLifecycle(&port == &minorDriverPort ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+                Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
+                    ? ZGenerationId::young : ZGenerationId::old).End();
                 return false;
             }
         }
-        RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX,
-                           preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
+        ZCollectedHeap::heap()->driver_major()->RunYoungCollection(GCTask::ASYNC_TASK_INDEX,
+            preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
         accumulate(ZGenerationId::young);
-#if defined(MRT_GC_UNIT_TESTS)
-        if (testAfterYoungPrelude) {
-            testAfterYoungPrelude();
-        }
-#endif
         if (ZAbort::should_abort()) {
-            CancelDriverRequestLifecycle(&port == &minorDriverPort ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+            Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
+                ? ZGenerationId::young : ZGenerationId::old).End();
             return false;
         }
     }
@@ -300,11 +223,11 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     const uint64_t index = GCTask::ASYNC_TASK_INDEX;
     if (request.cause() == GC_REASON_YOUNG) {
         ZGCIdMinor minorId(GCIdMark::Current());
-        RunYoungCollection(*activeCollector, index, ZYoungType::minor, warmup);
+        ZCollectedHeap::heap()->driver_minor()->RunYoungCollection(index, ZYoungType::minor, warmup);
         accumulate(ZGenerationId::young);
     } else {
         ZGCIdMajor majorId(GCIdMark::Current(), 'O');
-        RunCollection(*activeCollector, index, request.cause(), warmup);
+        ZCollectedHeap::heap()->driver_major()->RunCollection(index, request.cause(), warmup);
         accumulate(ZGenerationId::old);
     }
     (request.cause() == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
@@ -312,7 +235,8 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.
     if (ZAbort::should_abort()) {
-        CancelDriverRequestLifecycle(&port == &minorDriverPort ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+        Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
+            ? ZGenerationId::young : ZGenerationId::old).End();
         return false;
     }
     GcLog::Cycle(GCIdMark::Current(), request.cause() == GC_REASON_YOUNG ? "minor" : "major",
@@ -321,176 +245,24 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     return true;
 }
 
-bool CollectorResources::ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request)
-{
-    DriverLocker locker(*this);
-    const bool major = &port == &majorDriverPort;
-    ZAbort::reset();
-    if (major) ZBreakpoint::AtBeforeGC();
-    if (ZAbort::should_abort() || !ExecuteDriverRequest(request)) {
-        if (major) ZBreakpoint::AtAfterGC();
-        port.ack();
-        CompleteDriverRequest(port);
-        return false;
-    }
-    port.ack();
-#if defined(MRT_GC_UNIT_TESTS)
-    testCompletionCount.fetch_add(1, std::memory_order_relaxed);
-#endif
-    if (major) ZBreakpoint::AtAfterGC();
-    CompleteDriverRequest(port);
-    if (!major) {
-        ZDirector::evaluate_rules();
-    }
-    return true;
-}
-
-void CollectorResources::CancelDriverRequestLifecycle(GCDriverKind kind)
-{
-    collector.GetZGeneration(kind == GCDriverKind::MINOR
-        ? ZGenerationId::young : ZGenerationId::old).End();
-}
-
-void CollectorResources::RequestAsyncGC(GCReason reason)
-{
-    CHECK(reason < GC_REASON_MAX);
-    // Static synchronous reasons have no legal non-blocking completion
-    // contract. Keep the pre-driver fail-closed boundary before selecting a
-    // generation port; USER remains legal because its mode is per request.
-    CHECK(!g_gcRequests[reason].IsSyncGC());
-    ZDriverPort& port = reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
-    port.send_async(ZDriverRequest(reason, 0, 0));
-}
-
-void CollectorResources::RequestGCAndWait(GCReason reason)
-{
-    CHECK(reason < GC_REASON_MAX);
-    ScopedEnterSaferegion enterSaferegion(false);
-    ZDriverPort& port = reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
-    port.send_sync(ZDriverRequest(reason, 0, 0));
-}
-
-void CollectorResources::RequestGC(GCReason reason, bool async)
-{
-    CHECK(reason < GC_REASON_MAX);
-    if (!IsGCActive()) {
-        return;
-    }
-
-    if (reason == GC_REASON_WB_BREAKPOINT) {
-        ZBreakpoint::StartGC();
-        majorDriverPort.send_async(ZDriverRequest(reason, 0, 0));
-        return;
-    }
-
-    // zDriver.cpp:141-160/337-371: every accepted request goes to its port.
-    if (async) {
-        RequestAsyncGC(reason);
-    } else {
-        RequestGCAndWait(reason);
-    }
-}
-
-void CollectorResources::StartGCThreads()
-{
-    bool expected = false;
-    if (gcThreadRunning.compare_exchange_strong(expected, true, std::memory_order_acquire) == false) {
-        return;
-    }
-    // Initialize both generation worker sets.
-    if (collector.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
-        unsigned int activeProcessorCount = std::thread::hardware_concurrency();
-        bool affinityDetected = false;
-#if defined(__linux__) || defined(hongmeng)
-        cpu_set_t cpuSet;
-        CPU_ZERO(&cpuSet);
-        if (sched_getaffinity(0, sizeof(cpuSet), &cpuSet) == 0) {
-            int affinityProcessorCount = CPU_COUNT(&cpuSet);
-            if (affinityProcessorCount > 0) {
-                activeProcessorCount = static_cast<unsigned int>(affinityProcessorCount);
-                affinityDetected = true;
-            }
-        }
-#endif
-        activeProcessorCount = std::max(activeProcessorCount, 1U);
-        // zHeuristics.cpp:77-107: CPU shares are rounded up, while the
-        // relocation-buffer budget is capped at 2% of the maximum heap.
-        // Dividing before multiplying avoids overflow at the size_t boundary.
-        const size_t maxHeap = Heap::GetHeap().GetMaxCapacity();
-        const auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        const size_t regionBytes = regions.GetThreadLocalRegionSize();
-        CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
-        const size_t heapWorkers = maxHeap / 50 / regionBytes;
-        const uint64_t cpus = activeProcessorCount;
-        concurrentGcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
-            std::min<size_t>((cpus + 3) / 4, heapWorkers)));
-        // zArguments.cpp:67-81: ConcGCThreads is the per-generation maximum and
-        // sizes every ZPerWorker (zValue.inline.hpp:108-110); set before workers.
-        ConcGCThreads = static_cast<uint32_t>(concurrentGcThreadCount);
-        ZYoungGCThreads = ConcGCThreads;
-        ZOldGCThreads = ConcGCThreads;
-        VLOG(REPORT,
-             "concurrent gc thread count %d, active processor count %u, affinity detected %d, region bytes %zu",
-             concurrentGcThreadCount, activeProcessorCount, affinityDetected, regionBytes);
-
-        // zArguments.cpp:67-99, zWorkers.cpp:45-64: each generation uses
-        // the concurrent budget as its maximum and initial active count.
-        // ZWorkers counts participants, excluding the coordinating driver.
-        collector.GetZGeneration(ZGenerationId::young).InitializeWorkers(concurrentGcThreadCount);
-        collector.GetZGeneration(ZGenerationId::old).InitializeWorkers(concurrentGcThreadCount);
-        finalizerProcessor.GetReferenceProcessor().set_workers(
-            collector.GetZGeneration(ZGenerationId::old).Workers());
-    }
-
-    // zHeap.cpp / zCollectedHeap.cpp:65-71: the two drivers and the director
-    // are ZThreads that start in their constructors.
-    minorDriver = new ZDriverMinor(*this);
-    majorDriver = new ZDriverMajor(*this);
-    director = new ZDirector(*this);
-}
-
 
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-CollectorResources::CollectorResources(Collector& c) : collector(c) {}
-}
-
-namespace MapleRuntime {
-ZWorkers& CollectorResources::GetWorkers(ZGenerationId generation) const
-{
-    return *ActiveCollector().GetZGeneration(generation).Workers();
-}
-
-GCStats& CollectorResources::GetGCStats(ZGenerationId generation)
-{
-    return ActiveCollector().GetZGeneration(generation).Stats();
-}
-}
-
-namespace MapleRuntime {
-bool CollectorResources::IsGcStarted() const
-{
-    return ActiveCollector().GetCycleSnapshot(ZGenerationId::young).active ||
-           ActiveCollector().GetCycleSnapshot(ZGenerationId::old).active;
-}
-}
-
-namespace MapleRuntime {
-void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
+void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
     ScopedEntryTrace trace("CJRT_GC_START");
 
     const ZGenerationId generation = reason == GC_REASON_YOUNG
         ? ZGenerationId::young : ZGenerationId::old;
-    ZGeneration& cycle = GetZGeneration(generation);
+    ZGeneration& cycle = Heap::GetHeap().GetZGeneration(generation);
     if (!cycle.Snapshot().active) {
         cycle.SelectReason(reason);
     }
-    PreGarbageCollection(generation, reason != GC_REASON_YOUNG, gcIndex);
+    cycle.PreGarbageCollection(reason != GC_REASON_YOUNG, gcIndex);
     ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
-    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[reason].name, gcIndex);
-    GCStats& gcStats = GetGCStats(generation);
+    VLOG(REPORT, "[GC] Start ZGC %s gcIndex= %lu", g_gcRequests[reason].name, gcIndex);
+    GCStats& gcStats = Heap::GetHeap().GetGCStats(generation);
     gcStats.collectedBytes = 0;
     gcStats.youngCandidateBytes = 0;
     gcStats.youngPromotedBytes = 0;
@@ -509,7 +281,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     if (ZAbort::should_abort()) {
         // The phase owner already joined any submitted work. Keep mark and
         // forwarding storage alive for driver shutdown; skip normal reclaim.
-        GetWorkers(generation).set_inactive();
+        cycle.Workers()->set_inactive();
         cycle.End();
         return;
     }
@@ -518,7 +290,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(true);
     }
 
-    PostGarbageCollection(generation, gcIndex);
+    cycle.PostGarbageCollection(gcIndex);
     gcStats.gcEndTime = TimeUtil::NanoSeconds();
     const char* phaseName = "major.old";
     if (generation == ZGenerationId::young) {
@@ -535,7 +307,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     GcLog::Phase(GCIdMark::Current(), phaseName, "unknown", gcStats.gcStartTime,
                  gcStats.gcEndTime - gcStats.gcStartTime);
     if (reason != GC_REASON_YOUNG) {
-        UpdateGCStats();
+        ZStat::UpdateGCStats();
     }
     uint64_t gcTimeNs = gcStats.gcEndTime - gcStats.gcStartTime;
     ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);
@@ -562,13 +334,13 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 }
 
 namespace MapleRuntime {
-void CollectorResources::RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup)
+void ZDriver::RunYoungCollection(uint64_t index, ZYoungType type, bool warmup)
 {
-    YoungTypeSetter typeSetter(collector.GetZGeneration(ZGenerationId::young), type);
-    RunCollection(collector, index, GC_REASON_YOUNG, warmup);
+    YoungTypeSetter typeSetter(Heap::GetHeap().GetZGeneration(ZGenerationId::young), type);
+    RunCollection(index, GC_REASON_YOUNG, warmup);
 }
 
-bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
+static bool ShouldPrecleanYoung(GCReason reason)
 {
     // ZGC zDriver.cpp:270-299: explicit full collections, including breakpoints.
     switch (reason) {
@@ -593,9 +365,75 @@ bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
     return manager.IsAllocationStalling();
 }
 
-ZDriverPort& CollectorResources::GetYoungDriverPort()
+
+#ifdef COV_SIGNALHANDLE
+extern "C" void __gcov_dump(void);
+#endif
+
+bool GCExecutor::Execute(void* owner)
 {
-    return collector.GetZGeneration(ZGenerationId::young).YoungType() == ZYoungType::minor
-        ? minorDriverPort : majorDriverPort;
+    MRT_ASSERT(owner != nullptr, "task queue owner ptr should not be null!");
+
+    switch (taskType) {
+        case GCTask::TaskType::TASK_TYPE_TERMINATE_GC: {
+            return false;
+        }
+        case GCTask::TaskType::TASK_TYPE_TIMEOUT_GC: {
+            uint64_t curTime = TimeUtil::NanoSeconds();
+            if ((curTime - GCStats::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval) {
+                GCStats::SetPrevGCStartTime(curTime);
+                ZDriver::RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
+            }
+            break;
+        }
+        case GCTask::TaskType::TASK_TYPE_INVOKE_GC: {
+            GCStats::SetPrevGCStartTime(TimeUtil::NanoSeconds());
+            ZDriver::RunGarbageCollection(taskIndex, gcReason);
+            break;
+        }
+        case GCTask::TaskType::TASK_TYPE_DUMP_HEAP: {
+            CjHeapData* cjHeapData = new CjHeapData();
+            if (cjHeapData != nullptr) {
+                cjHeapData->DumpHeap();
+                delete cjHeapData;
+            } else {
+                LOG(RTLOG_ERROR, "cjHeapData Init Failed");
+            }
+#ifdef COV_SIGNALHANDLE
+            __gcov_dump();
+#endif
+            break;
+        }
+        case GCTask::TaskType::TASK_TYPE_DUMP_HEAP_IDE: {
+#if defined(__OHOS__) && (__OHOS__ == 1)
+            CjHeapDataForIDE* heapSnapshotJSONSerializer = new CjHeapDataForIDE();
+            if (heapSnapshotJSONSerializer != nullptr) {
+                heapSnapshotJSONSerializer->Serialize();
+                delete heapSnapshotJSONSerializer;
+            } else {
+                LOG(RTLOG_ERROR, "heapSnapshotJSONSerializer Init Failed");
+            }
+            break;
+#endif
+        }
+
+        case GCTask::TaskType::TASK_TYPE_DUMP_HEAP_OOM: {
+            CjHeapData* cjHeapData = new CjHeapData(true);
+            if (cjHeapData != nullptr) {
+                cjHeapData->DumpHeap();
+                delete cjHeapData;
+            } else {
+                LOG(RTLOG_ERROR, "cjHeapData Init Failed");
+            }
+#ifdef COV_SIGNALHANDLE
+            __gcov_dump();
+#endif
+            break;
+        }
+        default:
+            LOG(RTLOG_ERROR, "[GC] Error task type: %u ignored!", static_cast<uint32_t>(taskType));
+            break;
+    }
+    return true;
 }
 }

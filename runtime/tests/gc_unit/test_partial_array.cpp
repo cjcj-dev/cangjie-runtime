@@ -21,7 +21,8 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "gc_heap_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkContext.hpp"
 #include "gc_unittest.hpp"
 #include "zunittest.hpp"
 #include "ObjectModel/MArray.inline.h"
@@ -38,34 +39,19 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct PartialArrayTestAccess {
-    static void Push(const WCollector& collector, RefField<>* addr, size_t length,
-                     WorkStack& workStack)
+    static void StartFieldMark(Heap& collector)
     {
-        collector.PushPartialArray(addr, length, workStack);
+        auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+        if (old.Workers() == nullptr) old.InitializeWorkers(1);
+        if (!old.Snapshot().active) old.Begin(0);
+        Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
+        Heap::GetHeap().old().Mark().Start();
+        old.PublishPhase(ZGenerationPhase::Mark);
     }
 
-    static void StartFieldMark(WCollector& collector)
+    static void ReadPublished(Heap& collector, WorkStack& result)
     {
-        auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
-        GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
-        auto arm = [](CopyCollector& c) {
-            auto& old = c.GetZGeneration(ZGenerationId::old);
-            old.InitializeWorkers(1);
-            if (!old.Snapshot().active) {
-                old.Begin(0);
-            }
-            c.StartOldMarkWork();
-            old.PublishPhase(ZGenerationPhase::Mark);
-        };
-        arm(collector);
-        arm(heap);
-    }
-
-    static void ReadPublished(WCollector& collector, WorkStack& result)
-    {
-        auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
-        auto& domain = heap.MajorMark() != nullptr ? *heap.MajorMark()
-                                                         : *collector.MajorMark();
+        auto& domain = *Heap::GetHeap().old().MarkPtr();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
             if (auto* stack = domain.Stacks().StealLocal(stripe)) {
                 while (!stack->IsEmpty()) result.push_back(stack->Pop());
@@ -74,9 +60,9 @@ struct PartialArrayTestAccess {
         }
     }
 
-    static void StoreTarget(const WCollector& collector, RefField<>& field, BaseObject* target)
+    static void StoreTarget(const Heap& collector, RefField<>& field, BaseObject* target)
     {
-        const RefField<> coloured = collector.GetAndTryTagRefField(target);
+        const RefField<> coloured = ZBarrier::GetAndTryTagRefField(target);
         field.StoreColoured(coloured.GetFieldValue());
     }
 };
@@ -195,15 +181,15 @@ GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
 }
 
 #ifdef MRT_TESTABLE_INTERNALS
-// The product Push -> Encode handoff and FollowPartialArray decode the same
-// heap offset (zMark.cpp:185-196, 265-270); the sole non-null slot is reached.
+// Product ZMark::MarkAndFollow consumes the encoded heap offset through its
+// partial-array branch (ZGC zMark.cpp:393-401); the sole non-null slot is reached.
 GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
 {
     GcHeapFixture fx;
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     SlotBuf buf(MarkPartialArray::MIN_LENGTH);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     WorkStack workStack;
     RefField<>* const chunk = reinterpret_cast<RefField<>*>(buf.slots);
     for (size_t i = 0; i < MarkPartialArray::MIN_LENGTH; ++i) {
@@ -211,17 +197,16 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     }
     PartialArrayTestAccess::StoreTarget(collector, chunk[0], fx.obj0);
 
-    PartialArrayTestAccess::Push(collector, chunk, MarkPartialArray::MIN_LENGTH, workStack);
-    GC_EXPECT_FALSE(workStack.empty());
-    const MarkStackEntry partial = workStack.back();
-    workStack.pop_back();
+    const MarkStackEntry partial = MarkPartialArray::Encode(chunk, MarkPartialArray::MIN_LENGTH);
     GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(partial));
 
     // #607 fields publish into the generation mark domain, as ZMark's
     // barrier does; the old caller-owned staging stack is not that consumer.
     PartialArrayTestAccess::StartFieldMark(collector);
     ZGlobalsPointers::flip_old_mark_start();
-    collector.FollowPartialArray(partial, workStack);
+    auto& domain = *Heap::GetHeap().old().MarkPtr();
+    MarkContext context(1, 0, domain.Stripes(), domain.Stacks());
+    domain.MarkAndFollow(context, partial);
     PartialArrayTestAccess::ReadPublished(collector, workStack);
     GC_EXPECT_FALSE(workStack.empty());
     const MarkStackEntry reached = workStack.back();

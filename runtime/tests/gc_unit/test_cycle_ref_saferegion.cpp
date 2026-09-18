@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zCrossVM.hpp"
 
 #include "Base/SysCall.h"
 #include "Common/Runtime.h"
@@ -30,10 +31,10 @@
 // methods remain out-of-line symbols supplied by libcangjie-runtime.so.
 #define private public
 #define protected public
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #undef protected
 #undef private
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 
 using namespace MapleRuntime;
@@ -41,9 +42,22 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
+    static void BindCollector(Heap* collector)
     {
-        resources.testCollector = collector;
+        if (collector != nullptr) CHECK(collector == &Heap::GetHeap());
+    }
+    static void AddCycleRoot(Heap& collector, BaseObject* owner, BaseObject* target)
+    {
+        Heap::GetHeap().cross_vm().cycleRefWorkStack[owner].push_back(target);
+    }
+    static void ClearCycleRoots(Heap& collector) { Heap::GetHeap().cross_vm().cycleRefWorkStack.clear(); }
+    static void VisitCycleRoots(Heap& collector, const std::function<void(BaseObject*)>& visitor)
+    {
+        Heap::GetHeap().cross_vm().VisitSurrectedExportRoots(visitor);
+    }
+    static void VisitMinorRoots(Heap& collector, const std::function<void(BaseObject*)>& visitor)
+    {
+        Heap::GetHeap().cross_vm().VisitMinorValueRoots(visitor);
     }
 };
 } // namespace MapleRuntime
@@ -103,7 +117,7 @@ void SafepointingCycleRefHandler(BaseObject* exportObj, BaseObject* externObj)
 }
 
 struct PhaseFlipContext {
-    WCollector* collector = nullptr;
+    Heap* collector = nullptr;
     std::atomic<size_t> calls{ 0 };
 };
 
@@ -116,7 +130,7 @@ void FlipToPreforwardAfterFirstHandler(BaseObject*, BaseObject*)
     if (call == 1) {
         // Publish the product phase value that can change while the carrier
         // lock is released around a managed callback.
-        context->collector->GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     }
 }
 
@@ -124,7 +138,7 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
 {
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
     resolverMutator.SetSuspensionFlag(Mutator::SUSPENSION_FOR_SYNC);
@@ -134,7 +148,7 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
     std::atomic<bool> resolverReturned{ false };
     std::thread resolver([&] {
         ThreadLocal::SetMutator(&resolverMutator);
-        collector.ResolveCycleRef();
+        Heap::GetHeap().cross_vm().ResolveCycleRef();
         resolverReturned.store(true, std::memory_order_release);
         ThreadLocal::SetMutator(nullptr);
     });
@@ -152,7 +166,7 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
     bool consumerReturned = false;
     std::vector<BaseObject*> roots;
     std::thread consumer([&] {
-        collector.VisitSurrectedExportRoots([&](BaseObject* object) { roots.push_back(object); });
+        RelocationReceiptTestAccess::VisitCycleRoots(collector, [&](BaseObject* object) { roots.push_back(object); });
         {
             std::lock_guard<std::mutex> lock(completionMutex);
             consumerReturned = true;
@@ -194,14 +208,14 @@ GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
 {
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Heap& collector = Heap::GetHeap();
 
     auto* exportRoot = reinterpret_cast<BaseObject*>(0x1000);
     auto* externRoot = reinterpret_cast<BaseObject*>(0x2000);
-    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+    RelocationReceiptTestAccess::AddCycleRoot(collector, exportRoot, externRoot);
 
     std::vector<BaseObject*> roots;
-    collector.VisitSurrectedExportRoots([&](BaseObject* object) { roots.push_back(object); });
+    RelocationReceiptTestAccess::VisitCycleRoots(collector, [&](BaseObject* object) { roots.push_back(object); });
     BaseObject* observedExtern = roots.empty() ? nullptr : roots.back();
     roots.pop_back();
     const bool ownerPresentAfterExtern = !roots.empty();
@@ -209,7 +223,7 @@ GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
     if (ownerPresentAfterExtern) {
         roots.pop_back();
     }
-    collector.cycleRefWorkStack.clear();
+    RelocationReceiptTestAccess::ClearCycleRoots(collector);
 
     std::fprintf(stderr,
                  "CYCLE_REF_CONSUMER_TARGET_ASSERT reached owner_after_extern=%d drained=%d\n",
@@ -229,8 +243,8 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    Heap& collector = Heap::GetHeap();
+    RelocationReceiptTestAccess::BindCollector(&collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
 
@@ -239,18 +253,18 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(exportRoot);
     const U32 exportId = ExportRootTable::ExportHandleIndex(exportHandle);
     *reinterpret_cast<U32*>(reinterpret_cast<uintptr_t>(exportRoot) + TYPEINFO_PTR_SIZE) = exportId;
-    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+    RelocationReceiptTestAccess::AddCycleRoot(collector, exportRoot, externRoot);
 
     HandlerSafepointContext context;
     handlerSafepointContext = &context;
-    collector.SetCycleRefHandlerForTest(&SafepointingCycleRefHandler);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().cross_vm().SetCycleRefHandlerForTest(&SafepointingCycleRefHandler);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     manager.SetSuspensionMutatorCount(1);
 
     std::atomic<bool> resolverReturned{ false };
     std::thread resolver([&] {
         ThreadLocal::SetMutator(&resolverMutator);
-        collector.ResolveCycleRef();
+        Heap::GetHeap().cross_vm().ResolveCycleRef();
         resolverReturned.store(true, std::memory_order_release);
         ThreadLocal::SetMutator(nullptr);
     });
@@ -266,7 +280,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     bool consumerReturned = false;
     std::vector<BaseObject*> roots;
     std::thread consumer([&] {
-        collector.VisitMinorValueRoots([&](BaseObject* object) { roots.push_back(object); });
+        RelocationReceiptTestAccess::VisitMinorRoots(collector, [&](BaseObject* object) { roots.push_back(object); });
         {
             std::lock_guard<std::mutex> lock(completionMutex);
             consumerReturned = true;
@@ -302,11 +316,11 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
                  context.returned.load(std::memory_order_acquire),
                  resolverReturned.load(std::memory_order_acquire), roots.empty());
 
-    collector.SetCycleRefHandlerForTest(nullptr);
-    collector.cycleRefWorkStack.clear();
+    Heap::GetHeap().cross_vm().SetCycleRefHandlerForTest(nullptr);
+    RelocationReceiptTestAccess::ClearCycleRoots(collector);
     handlerSafepointContext = nullptr;
     Heap::GetHeap().RemoveExportObject(exportHandle);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 
     // Keep the target ordering assertion first: the deliberate lock-across-
     // handler cut must fail here, not at an earlier setup assertion.
@@ -326,8 +340,8 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    Heap& collector = Heap::GetHeap();
+    RelocationReceiptTestAccess::BindCollector(&collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
 
@@ -336,24 +350,24 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(exportRoot);
     const U32 exportId = ExportRootTable::ExportHandleIndex(exportHandle);
     *reinterpret_cast<U32*>(reinterpret_cast<uintptr_t>(exportRoot) + TYPEINFO_PTR_SIZE) = exportId;
-    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
-    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+    RelocationReceiptTestAccess::AddCycleRoot(collector, exportRoot, externRoot);
+    RelocationReceiptTestAccess::AddCycleRoot(collector, exportRoot, externRoot);
 
     PhaseFlipContext context;
     context.collector = &collector;
     phaseFlipContext = &context;
-    collector.SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    Heap::GetHeap().cross_vm().SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     ThreadLocal::SetMutator(&resolverMutator);
 
-    collector.ResolveCycleRef();
+    Heap::GetHeap().cross_vm().ResolveCycleRef();
     const size_t callsBeforeResume = context.calls.load(std::memory_order_acquire);
-    const auto phaseBeforeResume = collector.GetZGeneration(ZGenerationId::old).GcPhase();
+    const auto phaseBeforeResume = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
 
-    collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
-    collector.ResolveCycleRef();
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
+    Heap::GetHeap().cross_vm().ResolveCycleRef();
     const size_t callsAfterResume = context.calls.load(std::memory_order_acquire);
-    collector.ResolveCycleRef();
+    Heap::GetHeap().cross_vm().ResolveCycleRef();
     const size_t callsAfterDrain = context.calls.load(std::memory_order_acquire);
 
     std::fprintf(stderr,
@@ -362,11 +376,11 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
                  static_cast<unsigned>(phaseBeforeResume));
 
     ThreadLocal::SetMutator(nullptr);
-    collector.SetCycleRefHandlerForTest(nullptr);
+    Heap::GetHeap().cross_vm().SetCycleRefHandlerForTest(nullptr);
     phaseFlipContext = nullptr;
-    collector.cycleRefWorkStack.clear();
+    RelocationReceiptTestAccess::ClearCycleRoots(collector);
     Heap::GetHeap().RemoveExportObject(exportHandle);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::BindCollector(nullptr);
 
     GC_EXPECT_EQ(callsBeforeResume, 1u);
     GC_EXPECT_EQ(static_cast<unsigned>(phaseBeforeResume),

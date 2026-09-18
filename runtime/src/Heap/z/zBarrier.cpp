@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zBarrier.inline.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zGeneration.inline.hpp"
 #include "Base/Macros.h"
 #include "Base/Panic.h"
@@ -13,6 +14,7 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
@@ -32,6 +34,129 @@
 #include <vector>
 
 namespace MapleRuntime {
+std::atomic<size_t> g_minorRefCasFail{ 0 };
+std::atomic<size_t> g_minorRefCasOk{ 0 };
+
+template<bool forward>
+bool ZBarrier::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
+                                       BaseObject*& toObj, const ForwardingProvenance& provenance)
+{
+    RefField<> oldRef(field);
+    if (ZPointer::is_load_bad(oldRef.GetFieldValue())) {
+        fromObj = to_object(oldRef.GetTargetObject());
+        if (forward) {
+            toObj = ZBarrier::remap_generation(oldRef.GetFieldValue())->relocate_or_remap_object(fromObj);
+        } else {
+            toObj = ZRelocate::FindToVersion(fromObj, static_cast<Generation>(ZBarrier::remap_generation(oldRef.GetFieldValue())->id())).GetOrFailClosed(
+                "ZBarrier::TryUpdateRefFieldImpl", provenance);
+        }
+        if (toObj == nullptr) {
+            return false;
+        }
+        // R7：写回必须经规范色单产地，禁 plain RefField<>(toObj)。
+        // expected 仍是 observed-raw（oldRef.GetFieldValue()）；模板 = GetAndTryTagRefField。
+        RefField<> tmpField = ZBarrier::GetAndTryTagRefField(toObj);
+        if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
+            if (obj != nullptr) {
+                DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
+                     obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
+                     raw(tmpField.GetFieldValue()));
+            } else {
+                DLOG(TRACE, "update ref@%p: 0x%zx -> %p", &field, raw(oldRef.GetFieldValue()), toObj);
+            }
+            return true;
+        } else {
+            if (obj != nullptr) {
+                DLOG(TRACE,
+                     "update obj %p<%p>(%zu)+%zu but cas failed ref-field@%p: %#zx(%#zx) -> %#zx but cas failed ", obj,
+                     obj->GetTypeInfo(), obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field,
+                     raw(oldRef.GetFieldValue()), raw(field.GetFieldValue()), raw(tmpField.GetFieldValue()));
+            } else {
+                DLOG(TRACE, "update but cas failed ref@%p: 0x%zx(%zx) -> %p", &field, raw(oldRef.GetFieldValue()),
+                     field.GetFieldValue(), toObj);
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool ZBarrier::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef)
+{
+    BaseObject* oldRef = nullptr;
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
+}
+
+bool ZBarrier::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
+                                          bool allowNull)
+{
+    BaseObject* object = to_object(target);
+    if (object != nullptr) {
+        CHECK_DETAIL(Heap::IsHeapAddress(object),
+                     "resolved heal target must be a heap address target=%p", object);
+        CHECK_DETAIL(ZBarrier::JudgeHandOutTarget(object) == HandVerdict::Usable,
+                     "resolved heal target must be usable target=%p", object);
+    }
+    zpointer desired = is_null(target) ? zpointer::null : RefField<>(ZAddress::store_good(target)).GetFieldValue();
+    if (expected == raw(desired)) {
+        return true;
+    }
+    const zpointer observed = to_zpointer(expected);
+    auto loadGood = [](zpointer value) {
+        RefField<> probe(value);
+        return is_null(probe.GetTargetObject()) || ZPointer::is_load_good(probe.GetFieldValue());
+    };
+    if (loadGood(observed)) {
+        return true;
+    }
+    ZBarrier::self_heal(ZBarrier::is_load_good_or_null_fast_path,
+                        reinterpret_cast<volatile zpointer*>(&field), observed, desired,
+                        allowNull);
+    const bool healed = true;
+    if (healed) {
+        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+BaseObject* ZBarrier::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
+{
+    RefField<> oldField(field);
+    const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
+    BaseObject* latest = nullptr;
+    if (ZPointer::is_mark_good(oldField.GetFieldValue())) {
+        BaseObject* targetObj = to_object(oldField.GetTargetObject());
+        if (!Heap::IsHeapAddress(targetObj)) {
+            return nullptr;
+        }
+        // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
+        CHECK_DETAIL(targetObj->IsValidObject(),
+                     "Invalid object %p is referenced by %s object %p: %s and offset %zd", targetObj, sourceKind, obj,
+                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+        return targetObj;
+    }
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    latest = to_object(ZBarrier::make_load_good(oldField.GetFieldValue(), provenance));
+    // target object could be null or non-heap for some static variable.
+    if (!Heap::IsHeapAddress(latest)) {
+        return nullptr;
+    }
+    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
+                 latest, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+    RefField<> newField = ZBarrier::GetAndTryTagRefField(latest);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
+    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
+            raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
+    }
+    return latest;
+}
+
 #if defined(MRT_TESTABLE_INTERNALS)
 std::function<void(ZBarrier::FieldMarkKind, RefField<>&, zpointer, zaddress)> ZBarrier::testFieldMarkResult;
 #endif
@@ -207,7 +332,7 @@ void ZBarrier::NativeStoreBarrier(RefField<atomic>& field, bool heal)
     const zpointer prev = load_atomic(p);
     auto slow = [](zaddress addr) {
         if (!is_null(addr)) {
-            Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+            Heap::GetHeap().MarkObjectIfActive(to_object(addr));
         }
         return addr;
     };
@@ -233,7 +358,7 @@ BaseObject* ZBarrier::ReadStaticRef(NativeSlot& field)
 // ZZBarrier::mark_from_young_slow_path, zBarrier.cpp:158-183.
 zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 {
-    auto& young = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     ASSERT(young.IsPhaseMark());
     if (is_null(address)) return address;
     if (Heap::page(raw(address))->IsYoungRegion()) {
@@ -241,7 +366,7 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
         return address;
     }
     if (young.IsMajorRoots()) {
-        Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).MarkObject<false, true, true, false>(address);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).MarkObject<false, true, true, false>(address);
         return address;
     }
     return address;
@@ -250,7 +375,7 @@ zaddress ZBarrier::MarkFromYoungSlowPath(zaddress address)
 // ZZBarrier::mark_from_old_slow_path, zBarrier.cpp:185-203.
 zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, false>(address);
@@ -262,8 +387,8 @@ zaddress ZBarrier::MarkFromOldSlowPath(zaddress address)
 // ZZBarrier::mark_finalizable_slow_path, zBarrier.cpp:218-232.
 zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
-    auto& young = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
+    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+    auto& young = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     ASSERT(old.IsPhaseMark() || young.IsPhaseMark());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
@@ -277,8 +402,8 @@ zaddress ZBarrier::MarkFinalizableSlowPath(zaddress address)
 // ZZBarrier::mark_finalizable_from_old_slow_path, zBarrier.cpp:234-250.
 zaddress ZBarrier::MarkFinalizableFromOldSlowPath(zaddress address)
 {
-    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
-    CHECK(old.IsPhaseMark() || Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).IsPhaseMark());
+    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
+    CHECK(old.IsPhaseMark() || Heap::GetHeap().GetZGeneration(ZGenerationId::young).IsPhaseMark());
     if (is_null(address)) return address;
     if (!Heap::page(raw(address))->IsYoungRegion()) {
         old.MarkObject<false, true, true, true>(address);
@@ -320,7 +445,7 @@ zaddress ZBarrier::load_good_slow_path(zaddress addr)
 zaddress ZBarrier::keep_alive_slow_path(zaddress addr)
 {
     if (!is_null(addr)) {
-        Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
     }
     return addr;
 }
@@ -336,7 +461,7 @@ zaddress ZBarrier::blocking_keep_alive_on_weak_slow_path(zaddress addr)
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
     if (region->IsYoungRegion()) {
-        Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
+        Heap::GetHeap().MarkYoungObjectIfActive(target);
         return addr;
     }
     if (!region->is_object_strongly_live(addr)) {
@@ -356,7 +481,7 @@ zaddress ZBarrier::blocking_keep_alive_on_phantom_slow_path(zaddress addr)
     }
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(target));
     if (region->IsYoungRegion()) {
-        Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target);
+        Heap::GetHeap().MarkYoungObjectIfActive(target);
         return addr;
     }
     if (!region->is_object_live(addr)) {
@@ -385,7 +510,7 @@ BaseObject* ZBarrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoi
         return to_object(barrier(is_load_good_or_null_fast_path, &ZBarrier::load_good_slow_path,
                                  ColorLoadGood, p, observed, false));
     }
-    const bool blocked = Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked();
+    const bool blocked = ZResurrection::is_blocked();
     if (!blocked) {
         return to_object(barrier(is_mark_good_fast_path, &ZBarrier::keep_alive_slow_path,
                                  ColorMarkGood, p, observed, false));
@@ -811,7 +936,7 @@ zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer
 
 zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
 {
-    if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
+    if (ZResurrection::is_blocked()) {
         return barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
                        ColorMarkGood, p, o, false);
     }
@@ -820,7 +945,7 @@ zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(vol
 
 bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)
 {
-    CHECK_DETAIL(Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked(),
+    CHECK_DETAIL(ZResurrection::is_blocked(),
                  "phantom clean is only valid when resurrection is blocked");
     const zpointer o = load_atomic(p);
     return is_null(barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
@@ -834,4 +959,162 @@ void ZBarrier::load_barrier_on_oop_array(volatile zpointer* p, size_t length)
     }
 }
 
+namespace {
+HandVerdict ClassifyRawHeader(uint64_t header)
+{
+    if (((header >> 48) & 0x3u) == 3u) {
+        return HandVerdict::Forwarded;
+    }
+    if ((header & 0xffffffffffffull) == 0) {
+        return HandVerdict::ZeroHeader;
+    }
+    return HandVerdict::Usable;
+}
+}
+std::atomic<uint64_t> ZBarrier::colourWhoTotal{0};
+std::atomic<uint64_t> ZBarrier::colourWhoBad{0};
+
+RefField<> ZBarrier::GetAndTryTagRefField(BaseObject* target)
+{
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
+    return ZBarrier::GetAndTryTagRefFieldWithProvenance(target, provenance);
+}
+
+RefField<> ZBarrier::GetAndTryTagRefFieldWithProvenance(BaseObject* target,
+                                              const ForwardingProvenance& provenance)
+{
+    // Null carries no colour (ZGC zAddress: null is never load-bad).
+    if (target == nullptr) {
+        return RefField<>(zpointer::null);
+    }
+    // TypeInfo* / binary constants / immortal metadata are not relocated,
+    // but a non-null HeapSlot word is still coloured.  The load-good mask
+    // fast path peels it without routing through the collector.
+    if (!Heap::IsHeapAddress(target)) {
+        return RefField<>(ZAddress::store_good(from_object(target)));
+    }
+    // ZPointer::uncolor is the sole producer accepted by ZAddress::store_good
+    // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
+    // make-load-good producer: a relocation-set address is looked up or copied
+    // by this thread; an unresolved address never reaches colouring.
+    target = ZBarrier::ValidateCurrentValue(target, provenance);
+    CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
+                 "store-good requires a resolved heap address");
+    ZBarrier::CheckStoreGoodTarget("GetAndTryTagRefField", target, provenance);
+    // colourwho: installed-slot checking sits after Barrier::WriteReference, so it only sees the
+    // mutator store path.  That path now measures ~0 while the read barrier still hands out
+    // load-good slots naming from-versions, which means the writer is on the *collector* side --
+    // preforward/ref_fix/self-heal all colour through here too.  This is the single funnel for
+    // every coloured value in the runtime, so the count belongs here.
+    //
+    // Fires when we are about to paint the current (load-good) colour on a target whose own
+    // header already says FORWARDED, or whose header is zeroed.  Both are the crash families.
+    if (kColourWhoProbe) {
+        ZBarrier::NoteStoreGoodOnBadTarget(target);
+    }
+    return RefField<>(ZAddress::store_good(from_object(target)));
+}
+
+void ZBarrier::NoteStoreGoodOnBadTarget(BaseObject* target)
+{
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
+    const uint64_t typeInfo = hdr & 0xffffffffffffull;
+    const uint64_t seen = colourWhoTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (seen == 1) {
+        // Positive control: a zero below must not be readable as a dead probe.
+        LOG(RTLOG_ERROR, "[COLOURWHO] armed first sc=%u", stateCode);
+    }
+    if (stateCode == 0 && typeInfo != 0) {
+        return;
+    }
+    const uint64_t bad = colourWhoBad.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((bad & (bad - 1)) != 0) {
+        return;
+    }
+    const bool inFrom = ZRelocate::IsFromObject(target);
+    LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
+        bad, seen, static_cast<void*>(target), stateCode, typeInfo, inFrom ? 1 : 0,
+        inFrom ? 1 : 0,
+        ZGeneration::old() != nullptr ? static_cast<int>(ZGeneration::old()->Snapshot().phase) : -1);
+}
+
+BaseObject* ZBarrier::ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance)
+{
+    if (ref == nullptr || !Heap::IsHeapAddress(ref) || ZBarrier::JudgeHandOutTarget(ref) == HandVerdict::Usable) {
+        return ref;
+    }
+    ZBarrier::FailClosedLoad("current raw value required", ref, 0, provenance);
+}
+
+HandVerdict ZBarrier::JudgeHandOutTarget(BaseObject* target)
+{
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return HandVerdict::Usable;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    return ClassifyRawHeader(hdr);
+}
+
+[[noreturn]] void ZBarrier::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
+                                            const ForwardingProvenance& provenance)
+{
+    const HandVerdict verdict = ZBarrier::JudgeHandOutTarget(target);
+    const MAddress from = target != nullptr ? reinterpret_cast<MAddress>(target) : 0;
+    ZPage* region = (from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader)
+        ? Heap::page(from)
+        : nullptr;
+    const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
+    const MAddress lookupTo = canLookup
+        ? forwarding_find(Heap::GetHeap().ObjectGeneration(target), from)
+        : 0;
+    // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
+    // gc_unit other-vm children can enter before the generation cycle is active.
+    const unsigned gcPhase = Heap::GetHeap().IsGcStarted() && ZGeneration::old() != nullptr
+        ? static_cast<unsigned>(ZGeneration::old()->Snapshot().phase)
+        : 0xffu;
+    std::fprintf(stderr,
+                 "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
+                 "consumer=%s holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
+                 "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
+                 "field_type=%s field_offset=%zu from=%p from_region=%p "
+                 "region_type=%u generation=%u in_current_relocation_set=%u "
+                 "table_id=%#zx from_page_epoch=%llu lifeId=%llu "
+                 "lookup_state=%u gc_phase=%u "
+                 "unresolved non-Usable from-address must not be handed out\n",
+                 site != nullptr ? site : "?", static_cast<void*>(target),
+                 static_cast<unsigned>(verdict), slotBits,
+                 site != nullptr ? site : "unknown",
+                 ForwardingProvenance::KindName(provenance.kind),
+                 provenance.holder, provenance.slot,
+                 ForwardingProvenance::StageName(provenance.stage),
+                 ForwardingProvenance::WriterName(provenance.writerKind),
+                 ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
+                 provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
+                 provenance.fieldOffset, static_cast<void*>(target),
+                 static_cast<void*>(region),
+                 region != nullptr ? static_cast<unsigned>(0u) : 0xffu,
+                 region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
+                  lookupTo != 0 ? 1u : 0u,
+                  static_cast<size_t>(0),
+                  0ull,
+                  0ull,
+                  0u,
+                 gcPhase);
+    (void)fflush(stderr);
+    (void)fflush(stdout);
+    std::abort();
+}
+
+void ZBarrier::CheckStoreGoodTarget(const char* consumer, BaseObject* target,
+                                      const ForwardingProvenance& provenance)
+{
+    // zAddress.inline.hpp:store_good consumes an already current address.
+    // The originating load/root operation performed generation-specific remap.
+    (void)consumer;
+    (void)ZBarrier::ValidateCurrentValue(target, provenance);
+}
 } // namespace MapleRuntime

@@ -57,7 +57,7 @@ void StoreBarrierBuffer::install_base_pointers_inner()
         const zpointer ptr = ZAddress::color(pUnsafe, lastProcessedColor);
         ZGeneration* generation = ZBarrier::remap_generation(ptr);
         const Generation gen =
-            (generation == &Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young))
+            (generation == &Heap::GetHeap().GetZGeneration(ZGenerationId::young))
                 ? Generation::Young
                 : Generation::Old;
         ZForwarding* forwarding = (entry.p == 0) ? nullptr : generation_forwarding_table(gen).get(entry.p);
@@ -117,7 +117,7 @@ void StoreBarrierBuffer::on_new_phase_remember(size_t i)
 
 bool StoreBarrierBuffer::is_old_mark() const
 {
-    return Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).IsPhaseMark();
+    return Heap::GetHeap().GetZGeneration(ZGenerationId::old).IsPhaseMark();
 }
 
 bool StoreBarrierBuffer::stored_during_old_mark() const
@@ -136,7 +136,7 @@ void StoreBarrierBuffer::on_new_phase_mark(size_t i)
     if (is_old_mark() && stored_during_old_mark() && Heap::IsHeapAddress(p) &&
         !Heap::page(p)->IsYoungRegion()) {
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
-        Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+        Heap::GetHeap().MarkObjectIfActive(to_object(addr));
     }
 }
 
@@ -157,12 +157,11 @@ void StoreBarrierBuffer::on_new_phase()
 
 void StoreBarrierBuffer::Flush()
 {
-    Collector& collector = Heap::GetHeap().GetCollector();
     for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
         if (!is_null(addr)) {
-            collector.MarkObjectIfActive(to_object(addr));
+            Heap::GetHeap().MarkObjectIfActive(to_object(addr));
         }
         ZBarrier::remember(reinterpret_cast<volatile zpointer*>(entry.p));
         buffer[i] = {};

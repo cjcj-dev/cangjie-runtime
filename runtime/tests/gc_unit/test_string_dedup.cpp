@@ -5,7 +5,7 @@
 #if defined(MRT_TESTABLE_INTERNALS)
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/shared/stringdedup/stringDedup.hpp"
 #include "ObjectModel/MArray.inline.h"
 
 using namespace MapleRuntime;

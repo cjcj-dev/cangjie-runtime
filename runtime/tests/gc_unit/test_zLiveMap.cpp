@@ -7,7 +7,7 @@
 // Port of OpenJDK test/hotspot/gtest/gc/z/test_zLiveMap.cpp onto ZLiveMap
 // (zLiveMap.hpp:35-101), plus the page-level consumers of the livemap
 // (zPage.inline.hpp:223-331) exercised through the product SO:
-// WCollector::MarkObject -> ZPage::mark_object / inc_live,
+// ZMark::MarkEntryObject -> ZPage::mark_object / inc_live,
 // ZPage::CloneForPromotion, ZLiveMap::reset / reset_segment.
 
 #include <atomic>
@@ -17,7 +17,7 @@
 
 // gc_heap_fixture.hpp first: its access-unlocking window must see zPage.hpp.
 #include "gc_heap_fixture.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"
 #include "gc_unittest.hpp"
 
@@ -244,7 +244,7 @@ GC_TEST(ZLiveMapTest, concurrent_first_mark_resets_once)
 
 // ---- page consumers (zPage.inline.hpp:223-331) through the product SO ----
 
-// WCollector::MarkObject (product SO) -> ZPage::mark_object + inc_live.
+// ZMark::MarkEntryObject (product SO) -> ZPage::mark_object + inc_live.
 // The page's live bytes are what ZRelocationSetSelector consumes
 // (zRelocationSetSelector.cpp: liveBytes = is_marked() ? live_bytes() : 0).
 GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
@@ -255,8 +255,8 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_FALSE(region->is_marked());
     GC_EXPECT_FALSE(region->is_object_live(from_object(fx.obj0)));
 
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    GC_EXPECT_FALSE(collector.MarkObject(fx.obj0)); // false = newly marked
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr)); // false = newly marked
     GC_EXPECT_TRUE(region->is_marked());
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
@@ -265,7 +265,8 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
     GC_EXPECT_FALSE(region->IsKnownEmpty());
 
-    GC_EXPECT_TRUE(collector.MarkObject(fx.obj0)); // already marked: no second claim
+    GC_EXPECT_TRUE(ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr)); // already marked: no second claim
     GC_EXPECT_EQ(region->live_objects(), 1u);
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
@@ -274,15 +275,14 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_FALSE(fx.region1->is_object_live(from_object(fx.obj1)));
 }
 
-// WCollector::ResurrectObject (product SO) -> mark_object(finalizable = true):
+// ZMark::MarkEntryObject (product SO) -> mark_object(finalizable = true):
 // the object is live but not strongly live (zPage.inline.hpp:254-260).
 GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 {
     GcHeapFixture fx;
     ZPage* region = fx.region0;
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_FALSE(collector.ResurrectObject(fx.obj0, offset, region));
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, true), nullptr));
     GC_EXPECT_TRUE(region->is_object_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(region->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_TRUE(region->is_object_marked(from_object(fx.obj0), true));
@@ -291,7 +291,8 @@ GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
     GC_EXPECT_EQ(region->live_bytes(), fx.obj0->GetSize());
 
     // The strong mark completes the pair without another live claim.
-    GC_EXPECT_FALSE(collector.MarkObject(fx.obj0));
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(fx.obj0,
+        MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr));
     GC_EXPECT_TRUE(region->is_object_strongly_live(from_object(fx.obj0)));
     GC_EXPECT_FALSE(RegionSpace::IsResurrectedObject(fx.obj0));
     GC_EXPECT_EQ(region->live_objects(), 1u);
@@ -408,7 +409,7 @@ GC_TEST(ZLiveMapPage, initialization_uses_current_page_role)
 }
 
 // ZGeneration.cpp:137 starts at one; ZLiveMap's zero denotes never marked.
-// Read the actual product collector before GcHeapFixture can advance a cycle.
+// Read the product generation before GcHeapFixture can advance a cycle.
 GC_TEST(ZLiveMapTest, initial_generation_does_not_match_unmarked_map)
 {
     ZLiveMap map(1);
@@ -452,10 +453,9 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
     ZPage* region = fx.region0;
     BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     if (initiallyFinalizable) {
-        GC_EXPECT_FALSE(collector.ResurrectObject(object, region->GetAddressOffset(
-            reinterpret_cast<MAddress>(object)), region));
+        GC_EXPECT_FALSE(ZMark::MarkEntryObject(object,
+            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, true), nullptr));
     }
     std::atomic<unsigned> ready{0};
     bool already[2] = {true, true};
@@ -464,7 +464,8 @@ void ConcurrentSameObjectMark(bool large, bool initiallyFinalizable)
         while (ready.load(std::memory_order_acquire) != 2) {
             std::this_thread::yield();
         }
-        already[worker] = collector.MarkObject(object);
+        already[worker] = ZMark::MarkEntryObject(object,
+            MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, false, false), nullptr);
     };
 #if defined(MRT_PRODUCT_TESTABLE_INTERNALS)
     std::atomic<unsigned> loaded{0};
@@ -534,7 +535,7 @@ void PausePartialClear(const volatile BitMap::bm_word_t*)
 
 // The pause is between the real partial-word load and store. With whole-word
 // segments this path is unused, so completion is an equally valid exit. This
-// exercises the page -> collector -> livemap -> bitmap path in the product SO.
+// exercises the mark entry -> page -> livemap -> bitmap path in the product SO.
 void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
 {
     GcHeapFixture fx;
@@ -556,13 +557,15 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     BaseObject* warmOther = fx.PlaceObject(start + neighbourOffset + 16);
     BaseObject* seed = fx.PlaceObject(start + 1024);
     region->SetRegionAllocPtr(start + 1024 + seed->GetSize());
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     // Initialize both old segments through real marks at different starts, so
     // both target bits are known clear before the controlled next-cycle reset.
-    GC_EXPECT_FALSE(collector.MarkObject(warmFirst));
-    GC_EXPECT_FALSE(collector.MarkObject(warmOther));
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(warmFirst,
+        MarkStackEntry(untype(ZAddress::offset(from_object(warmFirst))), true, true, false, false), nullptr));
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(warmOther,
+        MarkStackEntry(untype(ZAddress::offset(from_object(warmOther))), true, true, false, false), nullptr));
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    GC_EXPECT_FALSE(collector.MarkObject(seed));
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(seed,
+        MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), nullptr));
 
     PartialClearSchedule schedule;
     partialClearSchedule = &schedule;
@@ -572,7 +575,8 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     bool otherAlready = true;
     std::thread first([&] {
         markWorker = 0;
-        firstAlready = collector.MarkObject(firstObject);
+        firstAlready = ZMark::MarkEntryObject(firstObject,
+            MarkStackEntry(untype(ZAddress::offset(from_object(firstObject))), true, true, false, false), nullptr);
         firstDone.store(true, std::memory_order_release);
     });
     while (!schedule.paused.load(std::memory_order_acquire) &&
@@ -581,7 +585,8 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     }
     std::thread other([&] {
         markWorker = 1;
-        otherAlready = collector.MarkObject(otherObject);
+        otherAlready = ZMark::MarkEntryObject(otherObject,
+            MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false), nullptr);
     });
     other.join();
     // Observe a completed product mark before releasing the pending clear.
@@ -606,7 +611,8 @@ void SegmentClearPreservesOtherMark(uint32_t units, bool separateWord)
     GC_EXPECT_FALSE(otherAlready);
     GC_EXPECT_EQ(objects, 3u);
     GC_EXPECT_EQ(region->live_bytes(), 3 * firstObject->GetSize());
-    GC_EXPECT_TRUE(collector.MarkObject(otherObject));
+    GC_EXPECT_TRUE(ZMark::MarkEntryObject(otherObject,
+        MarkStackEntry(untype(ZAddress::offset(from_object(otherObject))), true, true, false, false), nullptr));
     GC_EXPECT_EQ(region->live_objects(), 3u);
     std::vector<BaseObject*> visited;
     region->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
@@ -663,8 +669,8 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     BaseObject* other = fx.PlaceObject(region->GetRegionStart() + 256);
     BaseObject* seed = fx.PlaceObject(region->GetRegionStart() + 512);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(seed) + seed->GetSize());
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    GC_EXPECT_FALSE(collector.MarkObject(seed));
+    GC_EXPECT_FALSE(ZMark::MarkEntryObject(seed,
+        MarkStackEntry(untype(ZAddress::offset(from_object(seed))), true, true, false, false), nullptr));
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     ResetSchedule schedule(&region->livemap());
     resetSchedule = &schedule;
@@ -673,14 +679,16 @@ GC_TEST(ZLiveMapPage, reset_publication_preserves_peer_mark)
     std::atomic<bool> peerDone{false};
     std::thread first([&] {
         markWorker = 0;
-        already[0] = collector.MarkObject(fx.obj0);
+        already[0] = ZMark::MarkEntryObject(fx.obj0,
+            MarkStackEntry(untype(ZAddress::offset(from_object(fx.obj0))), true, true, false, false), nullptr);
     });
     while (!schedule.claimed.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
     std::thread peer([&] {
         markWorker = 1;
-        already[1] = collector.MarkObject(other);
+        already[1] = ZMark::MarkEntryObject(other,
+            MarkStackEntry(untype(ZAddress::offset(from_object(other))), true, true, false, false), nullptr);
         peerDone.store(true, std::memory_order_release);
     });
     while (!schedule.peerEntered.load(std::memory_order_acquire) &&

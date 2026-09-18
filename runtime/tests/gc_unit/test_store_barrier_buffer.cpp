@@ -13,9 +13,12 @@
 #include <unistd.h>
 #endif
 
-// Match the existing test_young_conc test-peer shape: this TU alone needs the
-// CollectorProxy friendship to publish a real product TRACE phase.  Product
-// libraries retain their configured macro set.
+// Enable the existing mark-publication test peer after heap layout is fixed.
+// Parse value-owned heap resources with the product macro configuration before
+// enabling the existing test peers; their member offsets must match the SO.
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
+
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1
 #endif
@@ -33,7 +36,7 @@
 #undef private
 
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zBarrier.hpp"
@@ -47,17 +50,6 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace MapleRuntime {
-
-struct RelocationReceiptTestAccess {
-    static void EnsureCollectorProxyBound(CollectorResources& resources)
-    {
-        (void)resources;
-    }
-};
-
-} // namespace MapleRuntime
-
 namespace {
 
 // A store-bad / load-good previous value exercises the ZGC store slow path.
@@ -65,29 +57,6 @@ zpointer StoreBadPointer(BaseObject* object)
 {
     return to_zpointer(raw(StoreGoodPointer(object)) ^ ZPointerMarkedOldMask);
 }
-
-class StoreBufferCollector final : public Collector {
-public:
-    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
-    { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }
-    void MarkYoungObjectIfActive(BaseObject* object) const override
-    { MarkPublicationFixture::Current().collector.MarkYoungObjectIfActive(object); }
-    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const override
-    { return MarkPublicationFixture::Current().collector.GetCycleSnapshot(generation); }
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*, Generation) const override
-    {
-        return FindToVersionResult::NotForwarded();
-    }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>&) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
-    {
-        return RefField<>(obj, ::g_cjStoreGoodMask);
-    }
-};
 
 MAddress SlotAt(GcHeapFixture& fx, size_t i)
 {
@@ -154,7 +123,6 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -163,16 +131,14 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     field.StoreColoured(prev);
 
     Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = heap.GetGCStats().reason;
+    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    heap.GetGCStats().reason = GC_REASON_USER;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     InstalledMutatorScope mutatorScope(mutator);
@@ -201,8 +167,8 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     }
     buf.Flush();
     DrainPublishedMarkObjects(retired);
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     GC_EXPECT_EQ(retired.size(), 1u);
 }
@@ -216,7 +182,6 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -224,16 +189,14 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = heap.GetGCStats().reason;
+    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    heap.GetGCStats().reason = GC_REASON_USER;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -249,8 +212,8 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     mutator.FlushStoreBarrierBuffer();
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
     DrainPublishedMarkObjects(retired);
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     size_t oldCount = 0;
     size_t newCount = 0;
@@ -272,7 +235,6 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     Mutator mutator;
@@ -301,7 +263,6 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     Mutator mutator;
@@ -343,7 +304,6 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -354,16 +314,14 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const zpointer newWord = StoreGoodPointer(newReferent);
 
     Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = heap.GetGCStats().reason;
+    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    heap.GetGCStats().reason = GC_REASON_USER;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -381,8 +339,8 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer->Pending();
     mutator.FlushStoreBarrierBuffer();
     DrainPublishedMarkObjects(retired);
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     size_t oldReceipts = 0;
     size_t newReceipts = 0;
@@ -415,7 +373,6 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -423,16 +380,14 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
-    auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
+    const GCReason reasonBefore = heap.GetGCStats().reason;
+    const ZGenerationPhase phaseBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::old).GcPhase();
+    auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
+    heap.GetGCStats().reason = GC_REASON_USER;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
     ThreadLocal::SetAllocBuffer(&alloc);
@@ -451,8 +406,8 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     mutator.FlushStoreBarrierBuffer(true);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
 
-    heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
+    heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
 }
 
@@ -462,7 +417,6 @@ GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)
     MarkPublicationFixture markFixture;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -530,7 +484,6 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     MarkPublicationFixture markFixture;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -591,7 +544,6 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
     fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -639,7 +591,6 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     MarkPublicationFixture markFixture;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -665,7 +616,6 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
     MarkPublicationFixture markFixture;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -772,14 +722,14 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
     std::thread owner([&] {
         ThreadLocal::SetAllocBuffer(nullptr);
         RegisterCurrentMarkFlushThread();
-        marking.collector.PublishThreadRoot(heap.obj0, true, true);
-        marking.collector.PublishThreadRoot(heap.obj1, false, false);
+        ZMark::PublishThreadRoot(heap.obj0, true, true);
+        ZMark::PublishThreadRoot(heap.obj1, false, false);
         MutatorManager::Instance().UnregisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
     });
     owner.join();
     size_t young = 0;
     size_t old = 0;
-    marking.DrainDomain(*marking.collector.YoungMark(), [&](BaseObject* object, bool follow) {
+    marking.DrainDomain(*Heap::GetHeap().young().MarkPtr(), [&](BaseObject* object, bool follow) {
         GC_EXPECT_TRUE(object == heap.obj0);
         GC_EXPECT_TRUE(follow);
         ++young;
@@ -800,7 +750,6 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
 GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
 {
     GcHeapFixture fx;
-    StoreBufferCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     HeapSlot<true> native(zpointer::null);
@@ -821,7 +770,6 @@ GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
 GC_TEST(StoreBuf, BulkPreservesSourceStorageProtocol)
 {
     GcHeapFixture fx;
-    StoreBufferCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     RootSlot local;
@@ -871,7 +819,6 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     MarkPublicationFixture marking;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const zpointer previous = StoreGoodPointer(fx.obj0);
     field.StoreColoured(StoreGoodPointer(fx.obj1));

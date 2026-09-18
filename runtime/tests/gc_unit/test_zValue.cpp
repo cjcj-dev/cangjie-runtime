@@ -99,7 +99,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     RegionManager manager;
     heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
 
-    auto& allocator = *manager.objectAllocators[untype(PageAge::eden)];
+    auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::eden);
     GC_EXPECT_EQ(allocator.sharedSmallPage.count(), ZCPU::count());
     for (uint32_t cpu = 0; cpu < allocator.sharedSmallPage.count(); ++cpu) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == nullptr);
@@ -107,7 +107,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     GC_EXPECT_TRUE(allocator.shared_small_page_addr() == allocator.sharedSmallPage.addr(ZCPU::id()));
 
     // An allocation installs the current CPU's slot and no other slot.
-    const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
+    const uintptr_t first = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
     const uint32_t cpu = ZCPU::id();
     GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == Heap::page(first));
@@ -118,7 +118,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     }
 
     // retire_pages: every slot of the age is cleared.
-    manager.RetireSharedPages(PageAgeRange::create<PageAge::eden, PageAge::survivor1>());
+    Heap::GetHeap().object_allocator().retire_pages(PageAgeRange::create<PageAge::eden, PageAge::survivor1>());
     for (uint32_t other = 0; other < allocator.sharedSmallPage.count(); ++other) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(other) == nullptr);
     }

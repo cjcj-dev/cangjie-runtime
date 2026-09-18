@@ -207,10 +207,6 @@ public:
 
     void TransitionAllMutatorsToCpuProfile();
 
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-    void DumpForDebug();
-    void DumpAllGcInfos();
-#endif
 
     __attribute__((always_inline)) inline int* GetSyncFutexWord()
     {

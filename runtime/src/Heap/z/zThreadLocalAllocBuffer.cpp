@@ -236,7 +236,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     // unrepresentable TLAB request belongs to the object allocator (eden).
     const size_t tlabSize = ComputeTLABSize(totalSize, manager.GetThreadLocalRegionSize());
     if (tlabSize == 0) {
-        return manager.AllocSharedObject(totalSize, PageAge::eden);
+        return Heap::GetHeap().object_allocator().alloc(totalSize, PageAge::eden);
     }
 
     // allocate from thread local region
@@ -290,7 +290,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     r = manager.AllocateThreadLocalRegion(tlabSize);
     CJThreadPreemptOffCntSub();
     if (UNLIKELY(r == nullptr)) {
-        return manager.AllocSharedObject(totalSize, PageAge::eden);
+        return Heap::GetHeap().object_allocator().alloc(totalSize, PageAge::eden);
     }
     // tlRegion may be set in PreforwardPhase handler while allocating region.
     // Null region means tlRegion is not set.

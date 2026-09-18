@@ -19,10 +19,48 @@
 #include <vector>
 
 #include "Base/TimeUtils.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
+struct YoungCollectionStats {
+    size_t candidateRegions = 0;
+    size_t candidateBytes = 0;
+    size_t reclaimedRegions = 0;
+    size_t reclaimedBytes = 0;
+
+    // candfix: PrepareYoungGarbageCandidates selects regions and mutates region lists;
+    // it does not visit heap objects or reference slots. Keep the input inventory and
+    // skip reasons explicit so a long phase can be classified as "many entries" vs
+    // "expensive per entry" without adding an object walk merely for measurement.
+    size_t fromVisited = 0;
+    size_t fromVisitedUnits = 0;
+    size_t unmovableVisited = 0;
+    size_t unmovableVisitedUnits = 0;
+    size_t unmovableYoung = 0;
+    size_t recentFullVisited = 0;
+    size_t recentFullVisitedUnits = 0;
+    size_t recentFullYoung = 0;
+    size_t objectVisits = 0;
+    size_t slotVisits = 0;
+    uint64_t reparkNs = 0;
+    uint64_t unmovableNs = 0;
+    uint64_t recentFullNs = 0;
+    uint64_t visitorNs = 0;
+    uint64_t listMoveNs = 0;
+};
+
+struct YoungConcWindowStats {
+    uint64_t windowNs = 0;    // world-released → STW2 requested
+    size_t closureCalls = 0;  // TraceYoungClosure invocations inside the window
+    size_t markedAtEntry = 0; // reachableVec.size() at world-release
+    size_t markedAtExit = 0;  // reachableVec.size() at STW2 request
+    size_t remsetSlots = 0;   // remset slots consumed by the in-window rescan
+    size_t reenters = 0;      // ZGC pause_mark_end() == false → concurrent_mark_continue()
+    size_t MarkedInWindow() const { return markedAtExit >= markedAtEntry ? markedAtExit - markedAtEntry : 0; }
+};
+
 // zStat.hpp:449-452
 struct ZStatWorkersStats {
     double _accumulated_time;
@@ -321,6 +359,8 @@ class RegionManager;
 
 class ZStat final : public ZThread {
 public:
+    static void UpdateGCStats();
+public:
     ZStat();
     ~ZStat() override = default;
     void run_thread() override;
@@ -347,6 +387,53 @@ public:
     static void set_final(size_t encountered, size_t discovered, size_t enqueued);
     static void set_phantom(size_t encountered, size_t discovered, size_t enqueued);
 };
+
+class GCStats {
+public:
+    GCStats() = default;
+    ~GCStats() = default;
+    void Init();
+    size_t GetThreshold() const { return heapThreshold.load(std::memory_order_acquire); }
+    void Dump() const;
+    static uint64_t GetPrevGCStartTime() { return prevGcStartTime.load(std::memory_order_acquire); }
+    static void SetPrevGCStartTime(uint64_t timestamp)
+    {
+        prevGcStartTime.store(timestamp, std::memory_order_release);
+    }
+    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime.load(std::memory_order_acquire); }
+    static void SetPrevGCFinishTime(uint64_t timestamp)
+    {
+        prevGcFinishTime.store(timestamp, std::memory_order_release);
+    }
+    void RecordMajorGCFinish(uint64_t timestamp) { RecordMajorGCFinish(timestamp, 0, 0, 0); }
+    void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter, size_t collectedBytes);
+    static std::atomic<uint64_t> prevGcStartTime;
+    static std::atomic<uint64_t> prevGcFinishTime;
+    GCReason reason = GC_REASON_USER;
+    bool isConcurrentMark;
+    bool async;
+    uint64_t gcStartTime;
+    uint64_t gcEndTime;
+    size_t liveBytesBeforeGC;
+    size_t liveBytesAfterGC;
+    size_t fromSpaceSize;
+    size_t smallGarbageSize;
+    size_t pinnedSpaceSize;
+    size_t pinnedGarbageSize;
+    size_t largeSpaceSize;
+    size_t largeGarbageSize;
+    size_t collectedBytes;
+    size_t collectedObjects;
+    size_t youngCandidateBytes;
+    size_t youngPromotedBytes;
+    uint32_t tenuringThreshold;
+    size_t liveByAge[16];
+    double garbageRatio;
+    double collectionRate;
+    std::atomic<size_t> heapThreshold{ 0 };
+};
+extern std::atomic<uint64_t> g_gcTotalTimeUs;
+extern std::atomic<size_t> g_gcCollectedTotalBytes;
 
 } // namespace MapleRuntime
 #endif // MRT_ZSTAT_H

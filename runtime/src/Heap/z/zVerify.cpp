@@ -7,6 +7,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -111,9 +112,8 @@ void PlainRoot(ObjectRef& root)
 void ZVerify::RootsStrong(bool afterOldMark)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
-    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
-    collector.VisitStrongColoredRoots([&](NativeSlot& root) { ColoredRoot(root, afterOldMark); });
-    collector.VisitStrongPlainRoots(PlainRoot, [](Mutator& mutator) {
+    RootsIteratorStrongColored().Apply([&](NativeSlot& root) { ColoredRoot(root, afterOldMark); });
+    ZMark::VisitStrongPlainRoots(PlainRoot, [](Mutator& mutator) {
         mutator.VisitProcessedRoots([&](ObjectRef& root) {
             mutator.VisitHeapRootSlots(root, PlainRoot);
         });
@@ -122,9 +122,8 @@ void ZVerify::RootsStrong(bool afterOldMark)
 void ZVerify::RootsWeak()
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
-    DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
-    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
-    collector.VisitWeakColoredRoots([](NativeSlot& root) { ColoredRoot(root, true); });
+    DCHECK(!ZResurrection::is_blocked());
+    RootsIteratorWeakColored().Apply([](NativeSlot& root) { ColoredRoot(root, true); });
 }
 
 
@@ -159,7 +158,6 @@ void ZVerify::Object(BaseObject* object, const void* slot)
 void ZVerify::Oop(BaseObject* base, RefField<>& field, bool verifyWeaks)
 {
     const zpointer value = field.GetFieldValue(std::memory_order_acquire);
-    auto& collector = Heap::GetHeap().GetCollector();
     if (!verifyWeaks && value == zpointer::null) {
         // zVerify.cpp:133-136: raw null is only possible when flip promoting.
         CHECK_DETAIL(ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark_complete(),
@@ -224,7 +222,7 @@ void ZVerify::threads_start_processing()
 void ZVerify::Objects(bool verifyWeaks)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
-    DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
+    DCHECK(!ZResurrection::is_blocked());
     if (ZAbort::should_abort()) { return; }
     DCHECK((ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark_complete()) ||
            (ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark_complete()));
@@ -287,7 +285,7 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
         forwarding->table_generation() != static_cast<uint8_t>(Generation::Old)) { return; }
     ZPage* page = forwarding->page();
     if (page == nullptr) { return; }
-    const bool activeCurrent = Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent();
+    const bool activeCurrent = Heap::GetHeap().OldActiveRemsetIsCurrent();
     CHECK_DETAIL(activeCurrent ? page->is_remset_cleared_previous() : page->is_remset_cleared_current(),
                  "Inactive remembered set is not empty for %p", page);
     // zVerify.cpp:601 forwarding->object_iterate: the source page livemap.

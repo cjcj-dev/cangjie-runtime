@@ -17,7 +17,7 @@
 #include <thread>
 #include "Heap/z/zIterator.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zHeap.hpp"
 #endif
 
@@ -25,6 +25,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
@@ -136,9 +137,9 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
     const bool isRefArray = arrayClass.GetComponentTypeInfo()->IsRef();
     // zObjArrayAllocator.cpp:132-141: a safepoint may change either
     // generation sequence before its collection has completed.
-    Collector& collector = Heap::GetHeap().GetCollector();
-    const uint64_t youngSequenceBefore = collector.GetCycleSnapshot(ZGenerationId::young).sequence;
-    const uint64_t oldSequenceBefore = collector.GetCycleSnapshot(ZGenerationId::old).sequence;
+    Heap& heap = Heap::GetHeap();
+    const uint64_t youngSequenceBefore = heap.GetCycleSnapshot(ZGenerationId::young).sequence;
+    const uint64_t oldSequenceBefore = heap.GetCycleSnapshot(ZGenerationId::old).sequence;
     const uintptr_t colorBefore = ::g_cjStoreGoodMask;
     bool seenGcSafepoint = false;
     // ZObjArrayAllocator::initialize (zObjArrayAllocator.cpp:140-200):
@@ -186,21 +187,21 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                                  managedIteratorVisits[2], managedIteratorVisits[3]);
                     const ZGenerationId generation = managedTestGc == ManagedSegmentedGc::YOUNG
                         ? ZGenerationId::young : ZGenerationId::old;
-                    const uint64_t sequenceBefore = collector.GetCycleSnapshot(generation).sequence;
+                    const uint64_t sequenceBefore = heap.GetCycleSnapshot(generation).sequence;
                     if (managedTestGc == ManagedSegmentedGc::YOUNG) {
-                        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+                        Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
                     } else {
-                        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
+                        Heap::GetHeap().RequestGC(GC_REASON_FORCE, false);
                     }
-                    CHECK_DETAIL(collector.GetCycleSnapshot(generation).sequence != sequenceBefore,
+                    CHECK_DETAIL(heap.GetCycleSnapshot(generation).sequence != sequenceBefore,
                                  "language-level segmented-array GC did not advance the epoch");
                 }
 #endif
             }
 
             if (isRefArray && !seenGcSafepoint &&
-                (collector.GetCycleSnapshot(ZGenerationId::young).sequence != youngSequenceBefore ||
-                 collector.GetCycleSnapshot(ZGenerationId::old).sequence != oldSequenceBefore ||
+                (heap.GetCycleSnapshot(ZGenerationId::young).sequence != youngSequenceBefore ||
+                 heap.GetCycleSnapshot(ZGenerationId::old).sequence != oldSequenceBefore ||
                  static_cast<uintptr_t>(::g_cjStoreGoodMask) != colorBefore)) {
                 seenGcSafepoint = true;
                 return false;
