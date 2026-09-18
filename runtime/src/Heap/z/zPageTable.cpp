@@ -13,20 +13,14 @@
 #include <memory>
 
 namespace MapleRuntime {
-
-namespace {
-std::unique_ptr<ZPageTable> g_heap_table;
-}
-
 void ZPageTable::install(MAddress base, size_t heapSize, size_t granule)
 {
-    g_heap_table.reset(new ZPageTable(heapSize, base, granule));
+    Heap::GetHeap().install_page_table(base, heapSize, granule);
 }
 
 ZPageTable& ZPageTable::heap_table()
 {
-    CHECK(g_heap_table != nullptr);
-    return *g_heap_table;
+    return Heap::GetHeap().page_table();
 }
 
 int ZPageTable::count() const

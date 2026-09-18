@@ -56,7 +56,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/z/zCollectorInternal.hpp"
+#include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
 bool Collector::MarkObject(BaseObject* obj) const

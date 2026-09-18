@@ -53,7 +53,6 @@ set(COLLECTOR_SRC
     "z/zReferenceProcessor.cpp"
     "z/zStringDedup.cpp"
     "z/zUncommitter.cpp"
-    "z/zCopyCollector.cpp"
     "z/zForwarding.cpp"
 )
 add_library(Collector STATIC ${COLLECTOR_SRC})
@@ -63,7 +62,7 @@ endif()
 
 set(WCOLLECTOR_SRC
     "z/zGenerationCycle.cpp"
-    "z/zWCollector.cpp"
+    "z/zCrossVM.cpp"
     "z/zGeneration.cpp"
     "z/zMark.cpp"
     "z/zRelocate.cpp"

@@ -48,7 +48,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/z/zCollectorInternal.hpp"
+#include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
 #include "Heap/z/zExportOwnershipTestObservations.hpp"

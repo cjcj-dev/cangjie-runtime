@@ -54,7 +54,7 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zRemembered.hpp"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/z/zCollectorInternal.hpp"
+#include "Heap/z/zRelocate.hpp"
 
 #include "Heap/z/zPageAllocator.hpp"
 

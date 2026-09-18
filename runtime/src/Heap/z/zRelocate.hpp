@@ -146,6 +146,24 @@ private:
     ZRelocateQueue relocateQueue;
 };
 
+namespace CopyCollectorInternal {
+bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
+bool HolderObjectIsLive(BaseObject* holder);
+bool SlotHeldByLiveObject(const void* slot);
+template <typename SetT, typename KeyT>
+bool LedgerInsert(SetT& set, const KeyT& key)
+{
+    return set.insert(key).second;
+}
+template <typename SetT, typename KeyT>
+size_t LedgerCount(const SetT& set, const KeyT& key)
+{
+    return set.count(key);
+}
+}
+
+using namespace CopyCollectorInternal;
+
 } // namespace MapleRuntime
 
 #endif // MRT_Z_RELOCATE_HPP

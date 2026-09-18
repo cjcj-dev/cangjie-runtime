@@ -20,7 +20,7 @@
 #include "Heap/z/zTask.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zWorkers.hpp"
-#include "Heap/z/zCollectorInternal.hpp"
+#include "Heap/z/zRelocate.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/BaseObject.h"
 #include "Common/SuspendibleThreadSet.h"

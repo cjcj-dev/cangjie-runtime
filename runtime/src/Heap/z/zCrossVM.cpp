@@ -37,7 +37,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/z/zCollectorInternal.hpp"
+#include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");

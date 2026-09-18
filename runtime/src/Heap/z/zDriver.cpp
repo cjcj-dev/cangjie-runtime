@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zStringDedup.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
@@ -116,8 +117,8 @@ void CollectorResources::Init()
     const uint64_t now = TimeUtil::NanoSeconds();
     collector.GetZGeneration(ZGenerationId::young).CycleStats().Initialize(now);
     collector.GetZGeneration(ZGenerationId::old).CycleStats().Initialize(now);
-    // zHeap.cpp: ZHeap owns _stat; its constructor starts the thread.
     statistics = new ZStat();
+    ZCollectedHeap::heap()->_stat = statistics;
     StartGCThreads();
     finalizerProcessor.Start();
     StringDedup::Instance().Start();
@@ -442,11 +443,16 @@ void CollectorResources::StartGCThreads()
             collector.GetZGeneration(ZGenerationId::old).Workers());
     }
 
-    // zHeap.cpp / zCollectedHeap.cpp:65-71: the two drivers and the director
-    // are ZThreads that start in their constructors.
-    minorDriver = new ZDriverMinor(*this);
-    majorDriver = new ZDriverMajor(*this);
-    director = new ZDirector(*this);
+    // zCollectedHeap.cpp:62-70: drivers and director start in ZCollectedHeap().
+    // Cangjie Heap lives in ImmortalWrapper constructed at load; threads start
+    // here after Heap::Init so capacity/workers exist (ZGC constructs later).
+    ZCollectedHeap* collected = ZCollectedHeap::heap();
+    collected->_driver_minor = new ZDriverMinor(*this);
+    collected->_driver_major = new ZDriverMajor(*this);
+    collected->_director = new ZDirector(*this);
+    minorDriver = collected->_driver_minor;
+    majorDriver = collected->_driver_major;
+    director = collected->_director;
 }
 
 

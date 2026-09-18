@@ -8,40 +8,52 @@
 #ifndef MRT_COLLECTOR_H
 #define MRT_COLLECTOR_H
 
-#include "Heap/z/zAddress.hpp"
-#include "Heap/z/zAddress.inline.hpp"
-#include <atomic>
-#include <cstdint>
-#include <cstdlib>
-#include <functional>
-#include <mutex>
-#include <set>
-#include <unordered_set>
-#include <vector>
+#include "Heap/z/zHeap.hpp"
 
-#include "Base/Macros.h"
-#include "Heap/z/zDriverPort.hpp"
-#include "Heap/z/zStat.hpp"
-
-#include "Heap/z/zGeneration.hpp"
-#include "Heap/z/zForwardingLookup.hpp"
 namespace MapleRuntime {
 enum class Generation : uint8_t;
 enum CollectorType {
-    NO_COLLECTOR = 0, // No Collector
-    PROXY_COLLECTOR,  // Proxy of Collector
-    COPY_COLLECTOR,   // Regional-Copying GC
-    SMOOTH_COLLECTOR, // wgc
+    NO_COLLECTOR = 0,
+    PROXY_COLLECTOR,
+    COPY_COLLECTOR,
+    SMOOTH_COLLECTOR,
     COLLECTOR_TYPE_COUNT,
 };
 
 class Collector;
+class ZDirector;
+class ZDriverMajor;
+class ZDriverMinor;
+class ZStat;
 
+class ZRuntimeWorkers {
+public:
+    ZRuntimeWorkers() = default;
+};
 
 class ZCollectedHeap {
 public:
+    static ZCollectedHeap* heap();
+    ZCollectedHeap();
     static void stop();
+
+    Heap& collected_heap() { return _heap; }
+    const Heap& collected_heap() const { return _heap; }
+    ZDriverMinor* driver_minor() const { return _driver_minor; }
+    ZDriverMajor* driver_major() const { return _driver_major; }
+    ZDirector* director() const { return _director; }
+    ZStat* stat() const { return _stat; }
+
+    friend class CollectorResources;
+
+private:
+    Heap _heap;
+    ZDriverMinor* _driver_minor;
+    ZDriverMajor* _driver_major;
+    ZDirector* _director;
+    ZStat* _stat;
+    ZRuntimeWorkers _runtime_workers;
 };
 } // namespace MapleRuntime
 
-#endif // MRT_COLLECTOR_H
+#endif

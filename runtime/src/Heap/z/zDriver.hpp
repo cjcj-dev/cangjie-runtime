@@ -373,6 +373,7 @@ public:
 #endif
     friend class ZDirector;
     friend class ZDriver;
+    friend class ZCollectedHeap;
     friend struct RelocationReceiptTestAccess;
     friend struct MarkPort203TestAccess;
 public:

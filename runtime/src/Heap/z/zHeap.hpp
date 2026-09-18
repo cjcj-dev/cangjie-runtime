@@ -19,8 +19,9 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zGeneration.hpp"
-#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGenerationId.hpp"
+#include "Heap/z/zPageTable.hpp"
+#include <memory>
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
 #include "Heap/Allocator/RegionListTypes.hpp"
@@ -54,11 +55,13 @@ class ExportRootTable;
 class StaticRootTable;
 
 class Heap {
+    friend class ZCollectedHeap;
 public:
     static Heap& GetHeap();
     static Heap* heap() { return _heap; }
     Heap();
     ~Heap();
+    void install_page_table(MAddress base, size_t heapSize, size_t granule);
     ZRemembered& remembered();
     void Init(const HeapParam& vmHeapParam);
     void Fini();
@@ -242,6 +245,11 @@ public:
 
 private:
     static Heap* _heap;
+    // zHeap.hpp:48-56: page_table / serviceability / _old / _young as value
+    // members. page_table is unique_ptr because Cangjie constructs Heap before
+    // heapSize is known (Init(param)); ZGC constructs ZHeap after VM args.
+    std::unique_ptr<ZPageTable> _page_table;
+    ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;
     Allocator* theSpace { nullptr };

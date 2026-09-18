@@ -125,7 +125,7 @@ Heap::~Heap()
     staticRootTable = nullptr;
 }
 
-static ImmortalWrapper<Heap> g_heapInstance;
+
 
 
 
@@ -226,7 +226,12 @@ MAddress Heap::GetStartAddress() const { return theSpace->GetSpaceStartAddress()
 
 MAddress Heap::GetSpaceEndAddress() const { return theSpace->GetSpaceEndAddress(); }
 
-Heap& Heap::GetHeap() { return *g_heapInstance; }
+Heap& Heap::GetHeap() { return *_heap; }
+
+void Heap::install_page_table(MAddress base, size_t heapSize, size_t granule)
+{
+    _page_table.reset(new ZPageTable(heapSize, base, granule));
+}
 
 ZRemembered& Heap::remembered()
 {
@@ -426,7 +431,7 @@ void RegionManager::StampCensusBoundaries()
 namespace MapleRuntime {
 ZPage* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr); }
 
-ZPageTable& Heap::page_table() { return ZPageTable::heap_table(); }
+ZPageTable& Heap::page_table() { return *_page_table; }
 
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age)
