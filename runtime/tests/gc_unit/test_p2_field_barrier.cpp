@@ -99,7 +99,7 @@ extern "C" int p2FieldBarrierExercise()
     }
     // Advance a real young epoch before overwriting the old slot. Its previous
     // non-null word must go through the store barrier and remember the slot.
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     auto* child = MObject::NewObject(edgeType, 24, AllocType::MOVEABLE_OBJECT);
     auto* sentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     auto* oldViaYoung = MObject::NewPinnedObject(leafType, 16);
@@ -207,7 +207,7 @@ extern "C" int p2FieldBarrierExercise()
         Expect(controlPage->is_strong_bit_set(from_object(rootedControl)),
                "independent_young_root_control");
     };
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     HeapGcState::testYoungMarkCompleted = nullptr;
     if (failures.load() != 0) {
         // The target state has been observed. Do not dereference an object
@@ -234,7 +234,7 @@ extern "C" int p2FieldBarrierExercise()
         Expect(sentinelPage->is_strong_bit_set(from_object(sentinelBeforeNext)),
                "remset_retains_sentinel_next_cycle");
     };
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     HeapGcState::testYoungMarkCompleted = nullptr;
     Expect(completed != 0, "young_completion_observation_reached");
     if (!minorOnly) {
@@ -247,7 +247,7 @@ extern "C" int p2FieldBarrierExercise()
         ZBarrier::WriteReference(currentChild, Slot(currentChild, 1), oldViaYoung);
         ZBarrier::WriteReference(holder, Slot(holder), currentChild);
         if (finalizableCase) ZBarrier::WriteReference(finalHolder, Slot(finalHolder), currentChild);
-        collector.RequestGC(GC_REASON_HEU_SYNC, false);
+        Heap::GetHeap().RequestGC(GC_REASON_HEU_SYNC, false);
     }
     ZBarrier::testFieldMarkResult = nullptr;
     if (finalizableCase && !minorOnly) {
@@ -372,7 +372,7 @@ extern "C" int p2FinalizerRegistrationExercise()
             std::_Exit(failures.load());
         }
     };
-    collector.RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     HeapGcState::testYoungMarkCompleted = nullptr;
     HeapGcState::testOldMarkStarted = nullptr;
     dumpRegistrations("next-complete");
@@ -467,7 +467,7 @@ extern "C" int p2ArrayFieldExercise()
     auto* holder = MObject::NewPinnedObject(holderType, 16);
     ZBarrier::WriteReference(holder, Slot(holder), control);
     if (finalizable) holder->OnFinalizerCreated();
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     const size_t length = 2 * MarkPartialArray::MIN_LENGTH + 17;
     const size_t fieldCount = length * (structArray ? 2 : 1);
     MArray* array = structArray ? MCC_NewArray(arrayType, length) : MCC_NewObjArray(arrayType, length);
@@ -571,7 +571,7 @@ extern "C" int p2SlowFieldInputExercise()
     ZBarrier::WriteStaticRef(strongRoot, strongHolder);
     NativeSlot* roots[] = { &strongRoot };
     heap.RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     auto* young = MObject::NewObject(edgeType, 16, AllocType::MOVEABLE_OBJECT);
     auto* youngSentinel = MObject::NewObject(leafType, 16, AllocType::MOVEABLE_OBJECT);
     ZBarrier::WriteReference(young, Slot(young), youngSentinel);
@@ -646,7 +646,7 @@ extern "C" int p2SlowFieldInputExercise()
             std::_Exit(failures.load());
         }
     };
-    collector.RequestGC(GC_REASON_HEU_SYNC, false);
+    Heap::GetHeap().RequestGC(GC_REASON_HEU_SYNC, false);
     HeapGcState::testYoungMarkStarted = nullptr;
     ZBarrier::testFieldMarkResult = nullptr;
     Expect(started == 1, "slow_input_real_major_roots_phase_reached");

@@ -357,7 +357,6 @@ class HeapGcState {
     friend class ZMarkTask;
 
 public:
-    void RequestGC(GCReason reason, bool async);
     ZGeneration& GetZGeneration(ZGenerationId generation);
     const ZGeneration& GetZGeneration(ZGenerationId generation) const;
     ZGeneration& GetZGeneration(Generation generation)
@@ -576,10 +575,6 @@ protected:
     void ForwardFromSpace(ZGenerationId generation);
     void RefineFromSpace();
 
-    void RequestGCInternal(GCReason reason, bool async)
-    {
-        Heap::GetHeap().GetCollectorResources().RequestGC(reason, async);
-    }
     U32 snapshotFinalizerNum = 0;
 
 

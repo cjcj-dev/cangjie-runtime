@@ -168,7 +168,7 @@ void Heap::Fini()
 HeapGcState& Heap::GetCollector() { return *collectorImpl; }
 const HeapGcState& Heap::GetCollector() const { return *collectorImpl; }
 
-void Heap::RequestGC(GCReason reason, bool async) { GetCollector().RequestGC(reason, async); }
+void Heap::RequestGC(GCReason reason, bool async) { ZCollectedHeap::heap()->collect(reason, async); }
 
 void Heap::ResolveCycleRef() { GetCollector().ResolveCycleRef(); }
 

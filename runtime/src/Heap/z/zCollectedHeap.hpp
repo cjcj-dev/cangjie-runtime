@@ -31,6 +31,7 @@ public:
     ZCollectedHeap();
     ~ZCollectedHeap();
     static void stop();
+    void collect(GCReason reason, bool async);
     CollectorResources& resources() { return *_resources; }
     const CollectorResources& resources() const { return *_resources; }
 

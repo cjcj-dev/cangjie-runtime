@@ -814,7 +814,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     MarkAllocationWindow::timedOut = false;
     SetMarkClosureObserverForTest(MarkAllocationWindow::Observe);
     mutator->SetManagedContext(false);
-    collector.RequestGC(GC_REASON_YOUNG, true);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, true);
     bool entered;
     {
         ScopedEnterSaferegion safe(false);
@@ -884,7 +884,7 @@ void* RunMarkAllocationCase(void* rawExisting)
     }
     // Wait through the real driver's acknowledgement, then check next-cycle
     // watermark resampling using the same rooted holder.
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     SetMarkClosureObserverForTest(nullptr);
     HeapGcState::testYoungMarkCompleted = nullptr;
     holder = static_cast<MArray*>(heap.GetExportObject(holderRoot));
@@ -948,7 +948,7 @@ void* RunPinnedPublicationCase(void*)
     // Retire any existing shortcut through the real collector before acquiring
     // the new page. The hook only schedules a second real collection.
     mutator->SetManagedContext(false);
-    collector.RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     mutator->SetManagedContext(true);
     MarkAllocationWindow::entered = false;
     MarkAllocationWindow::released = false;
@@ -980,7 +980,7 @@ void* RunPinnedPublicationCase(void*)
         ScopedEnterSaferegion safe(false);
         MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
     }
-    collector.RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     HeapGcState::testOldMarkStarted = nullptr;
     const bool retained = heap.GetExportObject(root) == fresh;
     heap.RemoveExportObject(root);
@@ -1007,7 +1007,7 @@ void* RunPinnedMarkStartCase(void*)
     MarkAllocationWindow::timedOut = false;
     HeapGcState::testOldMarkStarted = ObservePinnedAllocationWindow;
     mutator->SetManagedContext(false);
-    collector.RequestGC(GC_REASON_USER, true);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, true);
     bool entered;
     {
         ScopedEnterSaferegion safe(false);
@@ -1036,7 +1036,7 @@ void* RunPinnedMarkStartCase(void*)
         ScopedEnterSaferegion safe(false);
         MarkAllocationWindow::Wait(MarkAllocationWindow::completed);
     }
-    collector.RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     HeapGcState::testOldMarkStarted = nullptr;
     const bool retained = heap.GetExportObject(root) == first;
     heap.RemoveExportObject(root);

@@ -61,9 +61,9 @@ void HeapGcState::MarkObjectIfActive(BaseObject* object) const
     }
 }
 
-void HeapGcState::RequestGC(GCReason reason, bool async)
+void ZCollectedHeap::collect(GCReason reason, bool async)
 {
-    RequestGCInternal(reason, async);
+    _resources->RequestGC(reason, async);
 }
 
 void ZCollectedHeap::stop()

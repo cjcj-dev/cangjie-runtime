@@ -93,7 +93,7 @@ void* RunMajorCycle(void*)
                     static_cast<void*>(current), static_cast<unsigned>(found));
         std::fflush(stdout);
     };
-    collector.RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     collector.testOldMarkStarted = nullptr;
     ZGenerationRootTestAccess::Clear(collector);
     Heap::GetHeap().RemoveExportObject(handle);

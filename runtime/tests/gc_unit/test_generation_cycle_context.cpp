@@ -250,7 +250,7 @@ void* Exercise(void*)
 #endif
     auto y0 = collector.GetCycleSnapshot(ZGenerationId::young);
     auto o0 = collector.GetCycleSnapshot(ZGenerationId::old);
-    collector.RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     Expect(youngWorkers.active_workers() == concurrent && oldWorkers.active_workers() == concurrent,
            "worker_major_phase_budget");
     Expect(!youngWorkers.is_active() && !oldWorkers.is_active(), "worker_major_completion");
@@ -262,7 +262,7 @@ void* Exercise(void*)
     Expect(y1.sequence == y0.sequence + 1, "major_prelude_young_sequence");
     Expect(o1.sequence == o0.sequence + 1, "major_old_sequence");
     Expect(o1.reason == GC_REASON_USER && !o1.active, "major_reason_completion");
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     Expect(youngWorkers.active_workers() == concurrent && !youngWorkers.is_active(), "worker_minor_phase_budget");
     const auto oldWorkerStats2 = collector.GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
     Expect(oldWorkerStats2._accumulated_duration == oldWorkerStats1._accumulated_duration &&

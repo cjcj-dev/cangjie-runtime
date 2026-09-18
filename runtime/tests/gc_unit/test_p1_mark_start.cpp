@@ -123,9 +123,9 @@ extern "C" int p1MarkStartExercise()
     };
     const auto youngBefore = collector.GetCycleSnapshot(ZGenerationId::young);
     const auto oldBefore = collector.GetCycleSnapshot(ZGenerationId::old);
-    collector.RequestGC(GC_REASON_USER, false);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, false);
     const auto oldAfterMajor = collector.GetCycleSnapshot(ZGenerationId::old);
-    collector.RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     const auto youngAfter = collector.GetCycleSnapshot(ZGenerationId::young);
     const auto oldAfter = collector.GetCycleSnapshot(ZGenerationId::old);
     HeapGcState::testMarkStartState = nullptr;
