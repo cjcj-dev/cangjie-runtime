@@ -832,25 +832,25 @@ public:
     void do_thread(ThreadLocalData*) override {}
 };
 
-void HeapGcState::ProcessOldNonStrongReferences(WorkStack& workStack)
+void ZGenerationOld::process_non_strong_references()
 {
     ZBreakpoint::AtAfterReferenceProcessingStarted();
     CHECK_DETAIL(Heap::GetHeap().old().is_phase_mark_complete(),
                  "non-strong references require completed old marking");
     {
         MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
-        FindUselessExternObjects();
+        Heap::GetHeap().GetCollector().FindUselessExternObjects();
     }
     // Finalizable graphs were followed during mark discovery. This phase
     // only classifies the final strong/live state (zReferenceProcessor.cpp:285).
-    ProcessFinalizers();
+    Heap::GetHeap().GetCollector().ProcessFinalizers();
     if (Heap::GetHeap().old().WeakRootsProcessor() != nullptr) {
         Heap::GetHeap().old().WeakRootsProcessor()->process_weak_roots();
     }
     SyncRetireDead();
     StringDedup::Instance().Clean([this](BaseObject* object) {
         ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-        return region->IsYoungRegion() || IsMarkedObject<Generation::Old>(object);
+        return region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Old>(object);
     });
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     ZRendezvousHandshakeClosure rendezvous;
@@ -859,6 +859,11 @@ void HeapGcState::ProcessOldNonStrongReferences(WorkStack& workStack)
     gcRendezvous.doit();
     ZResurrection::unblock();
     Heap::GetHeap().GetFinalizerProcessor().EnqueueReferences();
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    ObserveMarkClosureForTest(nullptr);
+#endif
+    VLOG(REPORT, "mark %zu objects", Heap::GetHeap().GetCollector().markedObjectCount.load(std::memory_order_relaxed));
 }
 
 bool HeapGcState::FlushMarkProducers(ZMark* domain)
@@ -1274,27 +1279,79 @@ void ZGenerationOld::collect()
 
 void ZGenerationOld::concurrent_mark()
 {
-    TheCollector().TraceHeap();
+    ZBreakpoint::AtAfterMarkingStarted();
+    oldMarkWorkStack.clear();
+    oldMarkForeignRoots.clear();
+    WorkStack& workStack = oldMarkWorkStack;
+    WorkStack& foreignStack = oldMarkForeignRoots;
+    MarkingStacks::VerifyEmpty(workStack.size());
+    MarkingStacks::VerifyEmpty(foreignStack.size());
+    const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
+    uint64_t stackScanEpoch = 0;
+
+    // Old mark-start belongs to the preceding young pause. The old body
+    // begins with concurrent roots/follow (zGeneration.cpp:1015-1020).
+    // ZGC old concurrent_mark has no extra stack-scan STW (zGeneration.cpp:1015-1020).
+    if (concurrentStackScan) {
+        stackScanEpoch = StackWatermark::epoch_id();
+    }
+
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PEnumRootsUpdateOldPointersWithin);
+        if (concurrentStackScan) {
+            MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
+                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                    (void)mutator.GcPhaseEnum(false, stackScanEpoch, false);
+                }
+                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                    (void)mutator.GcPhaseEnum(false);
+                }
+#if defined(MRT_GC_UNIT_TESTS)
+                NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
+                                            mutator.GetStackWatermark().IsDone(stackScanEpoch));
+#endif
+            });
+            TheCollector().DoEnumeration(workStack, foreignStack);
+        } else {
+            TheCollector().DoEnumeration(workStack, foreignStack);
+        }
+    }
+
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PTraceLiveObjectsUpdateOldPointersInRefFields);
+        TheCollector().markedObjectCount.store(0, std::memory_order_relaxed);
+        reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).PrepareTrace();
+#if defined(MRT_TESTABLE_INTERNALS)
+        if (HeapGcState::testOldMarkStarted) HeapGcState::testOldMarkStarted();
+#endif
+        Mark().MarkFollow(false);
+        ZBreakpoint::AtBeforeMarkingCompleted();
+        if (ZAbort::should_abort()) {
+            return;
+        }
+
+        MarkingStacks::VerifyEmpty(workStack.size());
+        MarkingStacks::VerifyEmpty(foreignStack.size());
+
+    }
+
 }
 
 bool ZGenerationOld::pause_mark_end()
 {
-    if (is_phase_mark_complete()) {
-        return true;
-    }
     VM_ZMarkEndOld op;
     return op.pause();
 }
 
 void ZGenerationOld::concurrent_mark_continue()
 {
-    HeapGcState& collector = TheCollector();
-    collector.TracingImpl(oldMarkWorkStack);
+    Mark().MarkFollow(false);
 }
 void ZGenerationOld::concurrent_mark_free() {}
 
 void ZGenerationOld::concurrent_process_non_strong_references()
 {
+    process_non_strong_references();
     TheCollector().PostTrace();
 }
 
@@ -1465,48 +1522,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
 }
 
 namespace MapleRuntime {
-void HeapGcState::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
-{
-    ScopedEntryTrace trace("CJRT_GC_TRACE");
-    MRT_PHASE_TIMER(ZStatPhases::PDoTracing);
-    VLOG(REPORT, "roots size: %zu", workStack.size());
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testOldMarkStarted) {
-        testOldMarkStarted();
-    }
-#endif
 
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
-        TracingImpl(workStack);
-    }
-
-    ZBreakpoint::AtBeforeMarkingCompleted();
-
-    // ZGenerationOld::collect (zGeneration.cpp:1020-1030): mark-follow
-    // returns to the phase owner before any mark-end retry consumes stripes.
-    if (ZAbort::should_abort()) {
-        return;
-    }
-    while (!VM_ZMarkEndOld().pause()) {
-        if (ZAbort::should_abort()) {
-            return;
-        }
-        MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
-        TracingImpl(workStack);
-        if (ZAbort::should_abort()) {
-            return;
-        }
-    }
-    ProcessOldNonStrongReferences(workStack);
-
-#if defined(MRT_TESTABLE_INTERNALS)
-    // All major tasks and finalizer work have flushed before page selection.
-    // Major has no reachableVec carrier; observers read the actual page state.
-    ObserveMarkClosureForTest(nullptr);
-#endif
-    VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
-}
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)

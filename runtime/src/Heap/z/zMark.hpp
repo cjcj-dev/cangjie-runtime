@@ -600,13 +600,10 @@ protected:
 
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
-    void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool FlushMarkProducers(ZMark* domain);
-    void ProcessOldNonStrongReferences(WorkStack& workStack);
     void ProcessExportRoots(WorkStack& foreignRootsSet);
 
     // concurrent marking.
-    void TracingImpl(WorkStack& workStack);
 
     void FindUselessExternObjects();
 
@@ -1202,7 +1199,6 @@ private:
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef,
                                const ForwardingProvenance& provenance) const;
-    void TraceHeap();
     void PostTrace();
     // OpenJDK ZGenerationOld::remap_young_roots (zGeneration.cpp:1503-1523):
     // before old relocate-start flip, remap young roots + remset so none carry

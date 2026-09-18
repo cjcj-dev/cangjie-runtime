@@ -109,7 +109,10 @@ struct RelocationReceiptTestAccess {
         if (!cycle.Snapshot().active) cycle.Begin(1);
         collector.StartOldMarkWork();
 
-        collector.TraceHeap();
+        auto& old = Heap::GetHeap().old();
+        old.concurrent_mark();
+        while (!old.pause_mark_end()) old.concurrent_mark_continue();
+        old.process_non_strong_references();
     }
 
     static void RunPostTrace(HeapGcState& collector) { collector.PostTrace(); }
@@ -119,7 +122,10 @@ struct RelocationReceiptTestAccess {
         // The major-roots young prelude already began and prepared old marking
         // (zGeneration.cpp:118-124). Do not select/restart that active cycle.
         PrepareMajorRoots(collector);
-        collector.TraceHeap();
+        auto& old = Heap::GetHeap().old();
+        old.concurrent_mark();
+        while (!old.pause_mark_end()) old.concurrent_mark_continue();
+        old.process_non_strong_references();
     }
 
     static void SeedValueRoots(HeapGcState& collector, BaseObject* value)

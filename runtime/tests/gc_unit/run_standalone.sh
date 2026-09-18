@@ -598,7 +598,9 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   YOUNG_WEAK_PRODUCT_CONSUMERS=(
     'MapleRuntime::HeapGcState::DoGarbageCollection(MapleRuntime::ZGenerationId)'
-    'MapleRuntime::HeapGcState::TraceHeap()'
+    'MapleRuntime::ZGenerationOld::concurrent_mark()'
+    'MapleRuntime::ZGenerationOld::pause_mark_end()'
+    'MapleRuntime::ZGenerationOld::process_non_strong_references()'
   )
   for consumer in "${YOUNG_WEAK_PRODUCT_CONSUMERS[@]}"; do
     if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then

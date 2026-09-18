@@ -347,61 +347,7 @@ BaseObject* HeapGcState::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefF
     }
     return latest;
 }
-void HeapGcState::TraceHeap()
-{
-    ZBreakpoint::AtAfterMarkingStarted();
-    Heap::GetHeap().old().oldMarkWorkStack.clear();
-    Heap::GetHeap().old().oldMarkForeignRoots.clear();
-    WorkStack& workStack = Heap::GetHeap().old().oldMarkWorkStack;
-    WorkStack& foreignStack = Heap::GetHeap().old().oldMarkForeignRoots;
-    MarkingStacks::VerifyEmpty(workStack.size());
-    MarkingStacks::VerifyEmpty(foreignStack.size());
-    const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
-    uint64_t stackScanEpoch = 0;
 
-    // Old mark-start belongs to the preceding young pause. The old body
-    // begins with concurrent roots/follow (zGeneration.cpp:1015-1020).
-    // ZGC old concurrent_mark has no extra stack-scan STW (zGeneration.cpp:1015-1020).
-    if (concurrentStackScan) {
-        stackScanEpoch = StackWatermark::epoch_id();
-    }
-
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PEnumRootsUpdateOldPointersWithin);
-        if (concurrentStackScan) {
-            MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
-                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                    (void)mutator.GcPhaseEnum(false, stackScanEpoch, false);
-                }
-                if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                    (void)mutator.GcPhaseEnum(false);
-                }
-#if defined(MRT_GC_UNIT_TESTS)
-                NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
-                                            mutator.GetStackWatermark().IsDone(stackScanEpoch));
-#endif
-            });
-            DoEnumeration(workStack, foreignStack);
-        } else {
-            DoEnumeration(workStack, foreignStack);
-        }
-    }
-
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PTraceLiveObjectsUpdateOldPointersInRefFields);
-        markedObjectCount.store(0, std::memory_order_relaxed);
-        reinterpret_cast<RegionSpace&>(GetAllocator()).PrepareTrace();
-        DoTracing(workStack, foreignStack);
-        if (ZAbort::should_abort()) {
-            return;
-        }
-
-        MarkingStacks::VerifyEmpty(workStack.size());
-        MarkingStacks::VerifyEmpty(foreignStack.size());
-
-    }
-
-}
 namespace {
 // gcbadroot: tag which root family is currently being walked so PushYoungObject
 // can attribute invalid headers without threading origin through every visitor.
@@ -1131,13 +1077,7 @@ size_t HeapGcState::RunMajorStripeMark(WorkStack& workStack, bool partial)
     return 0;
 }
 
-void HeapGcState::TracingImpl(WorkStack& workStack)
-{
-    // ZMark::mark_follow (zMark.cpp:944-952): join workers, check abort,
-    // then flush producers. Stopped stripes never start another follow pass.
-    (void)workStack;
-    Heap::GetHeap().old().Mark().MarkFollow(false);
-}
+
 
 void HeapGcState::ProcessExportRoots(WorkStack& foreignRootsSet)
 {

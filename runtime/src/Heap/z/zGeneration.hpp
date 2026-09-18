@@ -264,6 +264,7 @@ public:
     void concurrent_mark_continue();
     void concurrent_mark_free();
     void concurrent_process_non_strong_references();
+    void process_non_strong_references();
     void concurrent_reset_relocation_set();
     void pause_verify();
     void concurrent_select_relocation_set();

@@ -68,7 +68,10 @@ struct RelocationReceiptTestAccess {
         // (ZGC zGeneration.cpp:1212-1237).
         GcUnit::GcHeapFixture::AdvanceGeneration(Generation::Old);
         collector.StartOldMarkWork();
-        collector.TraceHeap();
+        auto& old = Heap::GetHeap().old();
+        old.concurrent_mark();
+        while (!old.pause_mark_end()) old.concurrent_mark_continue();
+        old.process_non_strong_references();
     }
     static void RunOldRoots(HeapGcState& collector)
     {
