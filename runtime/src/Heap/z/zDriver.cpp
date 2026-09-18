@@ -59,7 +59,18 @@ ZDriver::ZDriver(CollectorResources& resources, GCDriverKind kind, ZDriverPort& 
 
 void ZDriver::run_thread()
 {
-    resources.RunDriverLoop(kind, port);
+    for (;;) {
+        const ZDriverRequest request = port.receive();
+        if (request.cause() == GC_REASON_INVALID) {
+            return;
+        }
+        ZCollectedHeap::heap()->director()->set_busy(kind == GCDriverKind::MINOR, true);
+        abortpoint();
+        (void)resources.ProcessDriverRequest(port, request);
+        abortpoint();
+        auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        regions.SatisfyStalledAllocations();
+    }
 }
 
 void ZDriver::terminate()
@@ -183,22 +194,6 @@ void CollectorResources::StopGCThreads()
     Heap::GetHeap().young().StopWorkers();
     Heap::GetHeap().old().StopWorkers();
     gcThreadRunning.store(false, std::memory_order_release);
-}
-
-void CollectorResources::RunDriverLoop(GCDriverKind kind, ZDriverPort& port)
-{
-    for (;;) {
-        const ZDriverRequest request = port.receive();
-        if (request.cause() == GC_REASON_INVALID) {
-            return;
-        }
-        ZCollectedHeap::heap()->director()->set_busy(kind == GCDriverKind::MINOR, true);
-        abortpoint();
-        (void)ProcessDriverRequest(port, request);
-        abortpoint();
-        auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        regions.SatisfyStalledAllocations();
-    }
 }
 
 void CollectorResources::CompleteDriverRequest(ZDriverPort& port)
