@@ -495,7 +495,9 @@ void HeapGcState::RunYoungCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
-    Heap::GetHeap().GetCollectorResources().NoteYoungMarkStart(Heap::GetHeap().young().YoungType());
+    const ZYoungType type = Heap::GetHeap().young().YoungType();
+    ZStat::Collections().AtYoungMarkStart(type == ZYoungType::major_full_roots ||
+                                         type == ZYoungType::major_partial_roots);
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
     YoungCollectionStats stats = Heap::GetHeap().young().StartYoungMark(*this);

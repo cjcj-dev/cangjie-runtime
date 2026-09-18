@@ -399,16 +399,6 @@ public:
 
     ZWorkers& GetWorkers(ZGenerationId generation) const;
 
-    // ZYoungType::major_full_roots selects the combined mark-start pause.
-
-    // Called once in the young mark-start pause, for both minor and
-    // combined young/old starts (zGeneration.cpp:600-602,637).
-    void NoteYoungMarkStart(ZYoungType type)
-    {
-        ZStat::Collections().AtYoungMarkStart(type == ZYoungType::major_full_roots ||
-                                             type == ZYoungType::major_partial_roots);
-    }
-
     bool IsGcStarted() const;
 
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }
