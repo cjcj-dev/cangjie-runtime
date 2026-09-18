@@ -21,6 +21,7 @@
 #include "Base/TimeUtils.h"
 #include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zGenerationId.hpp"
+#include "Heap/z/zMetronome.hpp"
 #include "Heap/z/zThread.hpp"
 
 namespace MapleRuntime {
@@ -226,6 +227,41 @@ private:
     const ZStatSampler sampler;
 };
 
+// zStat.hpp:174-207, zStat.cpp:513-591: Minimum Mutator Utilization over a
+// ring of the last 200 pauses, tracked at six window sizes. Host infra
+// difference: Ticks has no counterpart; pauses are registered in nanoseconds
+// and stored as milliseconds (double), the same datum as ZGC.
+class ZStatMMUPause {
+public:
+    ZStatMMUPause();
+    ZStatMMUPause(uint64_t startNs, uint64_t endNs);
+    double End() const;
+    double Overlap(double startMs, double endMs) const;
+private:
+    double start;
+    double end;
+};
+
+class ZStatMMU {
+public:
+    static void RegisterPause(uint64_t startNs, uint64_t endNs);
+    static void Print();
+private:
+    static constexpr size_t RingSize = 200; // Record the last 200 pauses
+    static size_t next;
+    static size_t npauses;
+    static ZStatMMUPause pauses[RingSize];
+    static double mmu2ms;
+    static double mmu5ms;
+    static double mmu10ms;
+    static double mmu20ms;
+    static double mmu50ms;
+    static double mmu100ms;
+
+    static const ZStatMMUPause& PauseAt(size_t index);
+    static double CalculateMMU(double timeSliceMs);
+};
+
 // zStat.cpp:600-875: phase group and generation are properties of the
 // static phase object; neither the observed name nor a cycle table owns it.
 class ZStatPhase {
@@ -374,9 +410,9 @@ public:
     static void ExitStwScope();
     static bool WorldStoppedNow();
 private:
-    std::mutex lock;
-    std::condition_variable condition;
-    bool stopped = false;
+    // zStat.hpp:387-389: the sampling thread ticks off a ZMetronome.
+    static constexpr uint64_t SampleHz = 1;
+    ZMetronome metronome;
     static std::atomic<int> stwDepth;
 };
 

@@ -404,7 +404,7 @@ static void Print(const std::vector<ZStatSamplerHistory>& history)
 }
 
 // zStat.cpp:1022-1027
-ZStat::ZStat()
+ZStat::ZStat() : metronome(SampleHz)
 {
     Initialize();
     set_name("ZStat");
@@ -414,23 +414,17 @@ ZStat::ZStat()
 // zStat.cpp:1093-1095: terminate wakes the sampling wait.
 void ZStat::terminate()
 {
-    std::lock_guard<std::mutex> guard(lock);
-    stopped = true;
-    condition.notify_all();
+    metronome.stop();
 }
 
 // zStat.cpp:1070-1091
 void ZStat::run_thread()
 {
     std::vector<ZStatSamplerHistory> history(ZStatSampler::Count());
-    const auto interval = std::chrono::seconds(1); // zStat.hpp: SampleHz = 1
-    auto deadline = std::chrono::steady_clock::now() + interval;
     uint64_t ticks = 0;
-    std::unique_lock<std::mutex> guard(lock);
-    while (!condition.wait_until(guard, deadline, [this] { return stopped; })) {
+    while (metronome.wait_for_tick()) {
         SampleAndCollect(history);
         if (++ticks % 10 == 0) Print(history); // ZStatisticsInterval default: 10 seconds
-        do { deadline += interval; } while (deadline <= std::chrono::steady_clock::now());
     }
     Print(history);
 }
@@ -763,6 +757,88 @@ uint32_t ZStatValue::Id() const { return id; }
 namespace MapleRuntime {
 ZStatPhase::ZStatPhase(const char* group, const char* name) : sampler(group, name, ZStatUnit::TIME) {}
 }
+
+// zStat.cpp:513-591
+namespace MapleRuntime {
+ZStatMMUPause::ZStatMMUPause() : start(0.0), end(0.0) {}
+
+ZStatMMUPause::ZStatMMUPause(uint64_t startNs, uint64_t endNs)
+    : start(static_cast<double>(startNs) / MILLI_SECOND_TO_NANO_SECOND),
+      end(static_cast<double>(endNs) / MILLI_SECOND_TO_NANO_SECOND)
+{}
+
+double ZStatMMUPause::End() const { return end; }
+
+double ZStatMMUPause::Overlap(double startMs, double endMs) const
+{
+    const double startMax = std::max(startMs, start);
+    const double endMin = std::min(endMs, end);
+    if (endMin > startMax) {
+        // Overlap found
+        return endMin - startMax;
+    }
+    // No overlap
+    return 0.0;
+}
+
+size_t ZStatMMU::next = 0;
+size_t ZStatMMU::npauses = 0;
+ZStatMMUPause ZStatMMU::pauses[ZStatMMU::RingSize];
+double ZStatMMU::mmu2ms = 100.0;
+double ZStatMMU::mmu5ms = 100.0;
+double ZStatMMU::mmu10ms = 100.0;
+double ZStatMMU::mmu20ms = 100.0;
+double ZStatMMU::mmu50ms = 100.0;
+double ZStatMMU::mmu100ms = 100.0;
+
+const ZStatMMUPause& ZStatMMU::PauseAt(size_t index)
+{
+    return pauses[(next - index - 1) % RingSize];
+}
+
+double ZStatMMU::CalculateMMU(double timeSliceMs)
+{
+    const double end = PauseAt(0).End();
+    const double start = end - timeSliceMs;
+    double timePaused = 0.0;
+
+    // Find all overlapping pauses
+    for (size_t i = 0; i < npauses; i++) {
+        const double overlap = PauseAt(i).Overlap(start, end);
+        if (overlap == 0.0) {
+            // No overlap
+            break;
+        }
+        timePaused += overlap;
+    }
+
+    // Calculate MMU
+    const double timeMutator = timeSliceMs - timePaused;
+    return timeMutator / timeSliceMs * 100.0;
+}
+
+void ZStatMMU::RegisterPause(uint64_t startNs, uint64_t endNs)
+{
+    // Add pause
+    const size_t index = next++ % RingSize;
+    pauses[index] = ZStatMMUPause(startNs, endNs);
+    npauses = std::min(npauses + 1, RingSize);
+
+    // Recalculate MMUs
+    mmu2ms = std::min(mmu2ms, CalculateMMU(2));
+    mmu5ms = std::min(mmu5ms, CalculateMMU(5));
+    mmu10ms = std::min(mmu10ms, CalculateMMU(10));
+    mmu20ms = std::min(mmu20ms, CalculateMMU(20));
+    mmu50ms = std::min(mmu50ms, CalculateMMU(50));
+    mmu100ms = std::min(mmu100ms, CalculateMMU(100));
+}
+
+void ZStatMMU::Print()
+{
+    LOG(RTLOG_INFO, "MMU: 2ms/%.1f%%, 5ms/%.1f%%, 10ms/%.1f%%, 20ms/%.1f%%, 50ms/%.1f%%, 100ms/%.1f%%",
+        mmu2ms, mmu5ms, mmu10ms, mmu20ms, mmu50ms, mmu100ms);
+}
+} // namespace MapleRuntime
 
 namespace MapleRuntime {
 const char* ZStatPhase::Name() const { return sampler.Name(); }
