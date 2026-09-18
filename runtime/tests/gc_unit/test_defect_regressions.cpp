@@ -141,10 +141,7 @@ struct ExportHandleFixture {
 };
 
 struct CompilerStoreFixture {
-    CompilerStoreFixture()
-        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()) {}
     GcHeapFixture heap;
-    CopyCollector collector;
 };
 
 } // namespace
