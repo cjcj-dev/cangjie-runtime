@@ -40,7 +40,13 @@ struct RelocationReceiptTestAccess {
 #if defined(MRT_TESTABLE_INTERNALS)
     static void BindCollector(CollectorResources& resources, HeapGcState& collector)
     {
-        resources.testCollector = &collector;
+        (void)resources;
+        CHECK(&collector == &Heap::GetHeap().GetCollector());
+    }
+    static void ForwardYoungFromRuntimeEntry(HeapGcState& collector)
+    {
+        collector.GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+        collector.ForwardFromSpace(ZGenerationId::young);
     }
 #endif
 };
@@ -155,18 +161,6 @@ bool RunSerialProductEntryClosesGeneration()
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-class YoungForwardRuntimeCollector : public CopyCollector {
-public:
-    YoungForwardRuntimeCollector(Allocator& allocator, CollectorResources& resources)
-        : HeapGcState(allocator, resources) {}
-
-    void ForwardYoungFromRuntimeEntry()
-    {
-        GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
-        ForwardFromSpace(ZGenerationId::young);
-    }
-};
-
 class YoungForwardTestRuntime : public Runtime {
 public:
     explicit YoungForwardTestRuntime(MutatorManager& manager)
@@ -196,13 +190,13 @@ bool RunYoungRuntimeProductEntry()
 
     ZRelocateQueue& queue = manager.GetZRelocateQueue();
 
-    YoungForwardRuntimeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
 #if defined(MRT_TESTABLE_INTERNALS)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), collector);
 #endif
     collector.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
     ZStat::Initialize();
-    collector.ForwardYoungFromRuntimeEntry();
+    RelocationReceiptTestAccess::ForwardYoungFromRuntimeEntry(collector);
 
     return !queue.IsActive() && queue.PendingCount() == 0;
 }
