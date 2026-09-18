@@ -680,7 +680,7 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
             } else
 #endif
             {
-                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_OOM, false);
+                Heap::GetHeap().RequestGC(GC_REASON_OOM, false);
             }
             SatisfyStalledAllocations();
             anotherWave = allocationStallQueue.CompleteWave(waveBoundary);

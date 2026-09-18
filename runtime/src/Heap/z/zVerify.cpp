@@ -287,7 +287,7 @@ void ZVerify::BeforeRelocation(ZForwarding* forwarding)
         forwarding->table_generation() != static_cast<uint8_t>(Generation::Old)) { return; }
     ZPage* page = forwarding->page();
     if (page == nullptr) { return; }
-    const bool activeCurrent = Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent();
+    const bool activeCurrent = Heap::GetHeap().OldActiveRemsetIsCurrent();
     CHECK_DETAIL(activeCurrent ? page->is_remset_cleared_previous() : page->is_remset_cleared_current(),
                  "Inactive remembered set is not empty for %p", page);
     // zVerify.cpp:601 forwarding->object_iterate: the source page livemap.

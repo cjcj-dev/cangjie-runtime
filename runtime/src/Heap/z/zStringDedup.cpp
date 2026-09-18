@@ -62,7 +62,7 @@ void StringDedup::RequestString(const uint8_t* data, size_t length)
 BaseObject* StringDedup::Resolve(WeakSlot& slot)
 {
     RefField<> reference(slot.value);
-    BaseObject* object = Heap::GetHeap().GetCollector().make_load_good(reference, {});
+    BaseObject* object = Heap::GetHeap().make_load_good(reference, {});
     slot.value = ZAddress::store_good_or_null(from_object(object));
     return object;
 }

@@ -179,6 +179,7 @@ void Heap::Fini()
 }
 
 Collector& Heap::GetCollector() { return collectorResources->ActiveCollector(); }
+const Collector& Heap::GetCollector() const { return collectorResources->ActiveCollector(); }
 
 void Heap::RequestGC(GCReason reason, bool async) { GetCollector().RequestGC(reason, async); }
 
@@ -187,6 +188,25 @@ void Heap::ResolveCycleRef() { GetCollector().ResolveCycleRef(); }
 void Heap::MarkYoungRootObject(BaseObject* object) { GetCollector().MarkYoungRootObject(object); }
 
 void Heap::MarkObjectIfActive(BaseObject* object) { GetCollector().MarkObjectIfActive(object); }
+
+void Heap::MarkYoungObjectIfActive(BaseObject* object) { GetCollector().MarkYoungObjectIfActive(object); }
+
+void Heap::MarkNewObject(BaseObject* object) { GetCollector().MarkNewObject(object); }
+
+BaseObject* Heap::make_load_good(RefField<>& ref, const ForwardingProvenance& provenance)
+{
+    return GetCollector().make_load_good(ref, provenance);
+}
+
+void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
+{
+    GetCollector().PublishGenerationPhase(generation, value);
+}
+
+Generation Heap::ObjectGeneration(BaseObject* object) const
+{
+    return GetCollector().ObjectGeneration(object);
+}
 
 BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
 {
@@ -235,7 +255,7 @@ void Heap::install_page_table(MAddress base, size_t heapSize, size_t granule)
 
 ZRemembered& Heap::remembered()
 {
-    return *GetCollector().GetZGeneration(ZGenerationId::young).remembered();
+    return *young().remembered();
 }
 
 void Heap::RegisterStaticRoots(Uptr addr, U32 size)

@@ -1020,7 +1020,7 @@ bool Collector::FlushMarkProducers(ZMark* domain)
 namespace MapleRuntime {
 void Collector::Init() {}
 
-void Collector::Fini() { Collector::Fini(); }
+void Collector::Fini() {}
 
 BaseObject* Collector::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
                                                       ForwardingStage stage) const
@@ -1390,7 +1390,7 @@ void Collector::PreGarbageCollection(ZGenerationId generation, bool isConcurrent
     ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s",
          g_gcRequests[GetCycleSnapshot(generation).reason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
-         Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str());
+         Pretty(Heap::GetHeap().GetGCStats().GetThreshold()).Str());
 
     // zDriver.cpp:183,399-400: generation workers use their concurrent
     // budget for both pause and concurrent work. Parallel workers are separate.

@@ -158,7 +158,7 @@ void ZRemembered::oops_do_forwarded_via_containing(const std::vector<ZRemembered
     for (const ZRememberedSetContaining containing : *array) {
         if (from_addr != containing._addr) {
             from_addr = containing._addr;
-            BaseObject* to = Heap::GetHeap().GetCollector().relocate_or_remap_object(
+            BaseObject* to = Heap::GetHeap().relocate_or_remap_object(
                 reinterpret_cast<BaseObject*>(from_addr), ZGenerationId::old);
             to_addr = reinterpret_cast<MAddress>(to);
             object_size = to != nullptr ? RegionSpace::GetAllocSize(*to) : 0;
@@ -384,7 +384,7 @@ void ZRemembered::scan_and_follow(ZMark* mark)
 {
     {
         ZRememberedScanMarkFollowTask task(this, mark);
-        ZWorkers* workers = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).Workers();
+        ZWorkers* workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers();
         if (workers != nullptr) {
             workers->run(&task);
         } else {

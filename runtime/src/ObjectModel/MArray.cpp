@@ -189,9 +189,9 @@ MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex n
                         ? ZGenerationId::young : ZGenerationId::old;
                     const uint64_t sequenceBefore = collector.GetCycleSnapshot(generation).sequence;
                     if (managedTestGc == ManagedSegmentedGc::YOUNG) {
-                        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+                        Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
                     } else {
-                        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
+                        Heap::GetHeap().RequestGC(GC_REASON_FORCE, false);
                     }
                     CHECK_DETAIL(collector.GetCycleSnapshot(generation).sequence != sequenceBefore,
                                  "language-level segmented-array GC did not advance the epoch");

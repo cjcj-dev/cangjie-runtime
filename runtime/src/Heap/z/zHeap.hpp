@@ -50,6 +50,7 @@ class AllocBuffer;
 class FinalizerProcessor;
 class CollectorResources;
 class Collector;
+struct ForwardingProvenance;
 class ZRemembered;
 class ExportRootTable;
 class StaticRootTable;
@@ -76,12 +77,31 @@ public:
     MAddress Allocate(size_t size, AllocType allocType);
 
     Collector& GetCollector();
+    const Collector& GetCollector() const;
     void RequestGC(GCReason reason, bool async);
     void ResolveCycleRef();
     Allocator& GetAllocator();
     void MarkYoungRootObject(BaseObject* object);
     void MarkObjectIfActive(BaseObject* object);
+    void MarkYoungObjectIfActive(BaseObject* object);
+    void MarkNewObject(BaseObject* object);
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId generation);
+    BaseObject* make_load_good(RefField<>& ref, const ForwardingProvenance& provenance);
+    Generation ObjectGeneration(BaseObject* object) const;
+    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
+    {
+        return GetZGeneration(generation).Stats();
+    }
+    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
+    {
+        return GetZGeneration(generation).Snapshot();
+    }
+    bool OldActiveRemsetIsCurrent() const
+    {
+        return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
+            GetZGeneration(ZGenerationId::young).Sequence());
+    }
+    void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
     ZGenerationYoung& young() { return _young; }
     const ZGenerationYoung& young() const { return _young; }
     ZGenerationOld& old() { return _old; }

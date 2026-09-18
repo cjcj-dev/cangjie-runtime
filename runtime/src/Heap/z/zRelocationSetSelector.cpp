@@ -398,7 +398,7 @@ bool ClaimFromRegion(RegionList& fromList, ZPage* del, const char* site)
 // Semi-sort by per-page live fraction, then select the last profitable prefix.
 size_t RegionManager::ExemptFromRegions()
 {
-    auto& old = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
+    auto& old = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
     old.select_relocation_set(false);
     ZRelocationSetIterator rs_iter(&old.relocation_set());
     for (ZForwarding* forwarding; rs_iter.next(&forwarding);) {

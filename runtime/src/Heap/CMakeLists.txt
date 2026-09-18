@@ -39,7 +39,6 @@ set(COLLECTOR_SRC
     "z/zHeapIterator.cpp"
     "z/zIterator.cpp"
     "z/zCollectedHeap.cpp"
-    "z/zCollectorSupport.cpp"
     "z/zDriver.cpp"
     "z/zDirector.cpp"
     "z/zDriverPort.cpp"

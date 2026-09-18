@@ -170,7 +170,7 @@ size_t BaseObject::GetSize() const
 void BaseObject::OnFinalizerCreated()
 {
     Heap& heap = Heap::GetHeap();
-    heap.GetCollector().MarkNewObject(this);
+    heap.MarkNewObject(this);
     Mutator* mutator = Mutator::GetMutator();
     if (mutator != nullptr) {
         mutator->AddLocalFinalizer(this);

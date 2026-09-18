@@ -790,7 +790,7 @@ public:
         if (address == 0) {
             return ZGenerationId::old;
         }
-        if (Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).forwarding_table().get(address) != nullptr) {
+        if (Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(address) != nullptr) {
             return ZGenerationId::young;
         }
         return ZGenerationId::old;
@@ -820,7 +820,7 @@ public:
         const MAddress from = reinterpret_cast<MAddress>(obj);
         const Generation ownerGeneration = generation == ZGenerationId::young
             ? Generation::Young : Generation::Old;
-        ZForwarding* forwarding = Heap::GetHeap().GetCollector().GetZGeneration(ownerGeneration).forwarding_table().get(from);
+        ZForwarding* forwarding = Heap::GetHeap().GetZGeneration(ownerGeneration).forwarding_table().get(from);
         if (forwarding == nullptr) return obj;
 
         // zRelocate.cpp:383-415: lookup, retain/copy/release, then wait/find.

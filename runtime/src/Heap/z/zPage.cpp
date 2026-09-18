@@ -272,7 +272,7 @@ uint64_t ZPage::GetSnapshotEpoch() const
 {
     const ZGenerationId generation = GetOwnerGeneration() == Generation::Young
         ? ZGenerationId::young : ZGenerationId::old;
-    return Heap::GetHeap().GetCollector().GetCycleSnapshot(generation).sequence;
+    return Heap::GetHeap().GetCycleSnapshot(generation).sequence;
 }
 } // namespace MapleRuntime
 

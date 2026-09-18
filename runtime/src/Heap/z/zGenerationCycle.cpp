@@ -160,7 +160,7 @@ void PublishMarkBeforeMarkEndTestReceipt()
     BaseObject* second = g_markBeforeMarkEndSecond.load(std::memory_order_acquire);
     BaseObject* object = remaining == 2 ? first : (second != nullptr ? second : first);
     CHECK_DETAIL(producer != nullptr && object != nullptr, "armed mark-end receipt without producer/object");
-    Heap::GetHeap().GetCollector().MarkObjectIfActive(object);
+    Heap::GetHeap().MarkObjectIfActive(object);
     producer->FlushStoreBarrierBuffer();
 }
 

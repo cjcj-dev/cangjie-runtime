@@ -829,7 +829,7 @@ void Collector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVe
     auto liveStw = [stw]() -> const ScopedStopTheWorld* {
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
     };
-    const bool doYoungFlip = !Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young).is_phase_relocate();
+    const bool doYoungFlip = !Heap::GetHeap().GetZGeneration(ZGenerationId::young).is_phase_relocate();
     ZWorkers& workers = GetWorkers(ZGenerationId::young);
 
     std::vector<MAddress> remsetVec;
@@ -1917,7 +1917,7 @@ void RegionManager::CompactRegion(ZPage* region)
 
     const bool fromYoung = region->IsYoungRegion();
     const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats(ZGenerationId::young).tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), 0u);
@@ -2073,7 +2073,7 @@ bool StayYoungThisCycle(ZPage* region)
     if (!kPageAgeAdaptiveTenuring) {
         return false;
     }
-    const uint32_t thr = Heap::GetHeap().GetCollector().GetGCStats(ZGenerationId::young).tenuringThreshold;
+    const uint32_t thr = Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold;
     return !ShouldPromoteAge(region->GetYoungAge(), thr);
 }
 
@@ -2632,7 +2632,7 @@ size_t ZRelocateQueue::SynchronizedWorkerCount() const
 
 PageAge ZRelocate::compute_to_age(PageAge fromAge)
 {
-    const uint32_t threshold = Heap::GetHeap().GetCollector().GetGCStats(ZGenerationId::young).tenuringThreshold;
+    const uint32_t threshold = Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold;
     return ComputeToAge(fromAge, threshold);
 }
 
@@ -2662,7 +2662,7 @@ void ZRelocate::flip_age_pages(ZWorkers& workers, const ZArray<ZPage*>* pages)
                     promoted.append(prev);
                 }
             }
-            Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young)
+            Heap::GetHeap().GetZGeneration(ZGenerationId::young)
                 .relocation_set().register_flip_promoted(promoted);
         }
     private:
