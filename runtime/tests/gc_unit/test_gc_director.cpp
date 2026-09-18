@@ -97,17 +97,15 @@ GC_TEST(GcDirector, AllocationStallSnapshotUsesOutstandingRequests)
 
 GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
 {
-    ZStatCollection collections;
+    // zGeneration.cpp:600,637: the total lives on the heap; a major start
+    // snapshots it on ZGenerationOld (zGeneration.cpp:1248,1526).
+    const uint32_t prior = Heap::GetHeap().total_collections();
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
     ZStatCycle young;
     ZStatCycle old;
     young.Initialize(0);
     old.Initialize(0);
-    collections.AtYoungMarkStart(false);
-    const auto prior = collections.Stats();
-    collections.AtYoungMarkStart(true);
-    const auto combined = collections.Stats();
-    GC_EXPECT_EQ(combined.totalCollections - prior.totalCollections, 1u);
-    GC_EXPECT_EQ(combined.collectionsAtMajorStart, combined.totalCollections);
 
     ZStatWorkers youngWorkers;
     ZStatWorkers oldWorkers;

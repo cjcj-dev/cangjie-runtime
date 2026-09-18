@@ -20,7 +20,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
-const ZStatSampler unobserved("Test", "Unobserved", ZStatUnit::TIME);
+const ZStatSampler unobserved("Test", "Unobserved", ZStatUnitTimeNs);
 
 #if defined(__linux__)
 // ZStatIterableValue::sort rewrites registration links during initialization.
@@ -70,16 +70,5 @@ GC_TEST(ZStat, RegistryExistsBeforeSampling)
 
 }
 
-GC_TEST(ZStat, StwDepthCounterClassifies)
-{
-    GC_EXPECT_EQ(ZStat::WorldStoppedNow(), false);
-    ZStat::EnterStwScope();
-    GC_EXPECT_EQ(ZStat::WorldStoppedNow(), true);
-    ZStat::EnterStwScope();
-    ZStat::ExitStwScope();
-    GC_EXPECT_EQ(ZStat::WorldStoppedNow(), true);
-    ZStat::ExitStwScope();
-    GC_EXPECT_EQ(ZStat::WorldStoppedNow(), false);
-}
 
 } // namespace

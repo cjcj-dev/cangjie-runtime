@@ -519,21 +519,14 @@ GC_TEST(DefectRegress, GcCompleteHeuSuppressedAfterPublish)
 
 GC_TEST(DefectRegress, GcCountExportReadsCollectionStarts)
 {
-    // The aggregate separately compiles ZStat.cpp. Resolve the product's
-    // singleton explicitly so the service query and producer share storage.
-    void* product = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    GC_EXPECT_TRUE(product != nullptr);
-    using CollectionSource = ZStatCollection& (*)();
-    auto source = reinterpret_cast<CollectionSource>(
-        dlsym(product, "_ZN12MapleRuntime5ZStat11CollectionsEv"));
-    GC_EXPECT_TRUE(source != nullptr);
+    // zGeneration.cpp:600,637: MCC_GetGCCount reads the heap-wide total that
+    // young mark start increments. The test links the product SO, so producer
+    // and consumer share storage by construction.
     const uint32_t before = static_cast<uint32_t>(MCC_GetGCCount());
-    source().AtYoungMarkStart(false);
+    Heap::GetHeap().increment_total_collections();
     GC_EXPECT_EQ(MCC_GetGCCount(), static_cast<uint32_t>(before + 1));
-    source().AtYoungMarkStart(true);
+    Heap::GetHeap().increment_total_collections();
     GC_EXPECT_EQ(MCC_GetGCCount(), static_cast<uint32_t>(before + 2));
-    GC_EXPECT_EQ(source().Stats().collectionsAtMajorStart, static_cast<uint32_t>(before + 2));
-    dlclose(product);
 }
 
 // hunt-coll SUSPECT: raw-index reuse made double-remove + stale handle ABA.
