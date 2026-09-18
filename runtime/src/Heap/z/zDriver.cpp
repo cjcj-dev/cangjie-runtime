@@ -65,8 +65,21 @@ void ZDriver::run_thread()
             return;
         }
         ZCollectedHeap::heap()->director()->set_busy(kind == GCDriverKind::MINOR, true);
-        abortpoint();
-        (void)resources.ProcessDriverRequest(port, request);
+        {
+            DriverLocker locker;
+            const bool major = kind == GCDriverKind::MAJOR;
+            ZAbort::reset();
+            if (major) ZBreakpoint::AtBeforeGC();
+            abortpoint();
+            const bool completed = !ZAbort::should_abort() && resources.ExecuteDriverRequest(request);
+            port.ack();
+#if defined(MRT_GC_UNIT_TESTS)
+            if (completed) resources.testCompletionCount.fetch_add(1, std::memory_order_relaxed);
+#endif
+            if (major) ZBreakpoint::AtAfterGC();
+            ZCollectedHeap::heap()->director()->set_busy(!major, false);
+            if (completed && !major) ZDirector::evaluate_rules();
+        }
         abortpoint();
         auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         regions.SatisfyStalledAllocations();
@@ -196,11 +209,6 @@ void CollectorResources::StopGCThreads()
     gcThreadRunning.store(false, std::memory_order_release);
 }
 
-void CollectorResources::CompleteDriverRequest(ZDriverPort& port)
-{
-    ZCollectedHeap::heap()->director()->set_busy(&port == &GetMinorDriverPort(), false);
-}
-
 void CollectorResources::RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup)
 {
     const bool isYoung = reason == GC_REASON_YOUNG;
@@ -309,30 +317,6 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     GcLog::Cycle(GCIdMark::Current(), request.cause() == GC_REASON_YOUNG ? "minor" : "major",
                  g_gcRequests[request.cause()].name, collectionStart, TimeUtil::NanoSeconds() - collectionStart,
                  liveBefore, liveAfter, collected, Heap::GetHeap().GetUsedPageSize(), threshold);
-    return true;
-}
-
-bool CollectorResources::ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request)
-{
-    DriverLocker locker;
-    const bool major = &port == &GetMajorDriverPort();
-    ZAbort::reset();
-    if (major) ZBreakpoint::AtBeforeGC();
-    if (ZAbort::should_abort() || !ExecuteDriverRequest(request)) {
-        if (major) ZBreakpoint::AtAfterGC();
-        port.ack();
-        CompleteDriverRequest(port);
-        return false;
-    }
-    port.ack();
-#if defined(MRT_GC_UNIT_TESTS)
-    testCompletionCount.fetch_add(1, std::memory_order_relaxed);
-#endif
-    if (major) ZBreakpoint::AtAfterGC();
-    CompleteDriverRequest(port);
-    if (!major) {
-        ZDirector::evaluate_rules();
-    }
     return true;
 }
 

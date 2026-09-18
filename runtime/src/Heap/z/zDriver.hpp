@@ -445,7 +445,6 @@ private:
 
     void StartGCThreads();
     void StopGCThreads();
-    void CompleteDriverRequest(ZDriverPort& port);
     void RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup);
     void RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup);
     bool ShouldPrecleanYoung(GCReason reason) const;
@@ -454,7 +453,6 @@ private:
     // Called by mutator.
     // reason: The reason for this GC.
     bool ExecuteDriverRequest(const ZDriverRequest& request);
-    bool ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request);
     void CancelDriverRequestLifecycle(GCDriverKind kind);
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 private:
