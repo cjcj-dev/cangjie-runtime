@@ -56,7 +56,7 @@ GC_TEST(ForwardingNoGeometry, RelocateInnerFindHitSkipsCopy)
 {
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     GC_EXPECT_TRUE(MutatorPublishTestAccess::RelocateInner(collector, heap.obj0, heap.region0) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
@@ -65,7 +65,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
 {
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     GC_EXPECT_TRUE(MutatorPublishTestAccess::ForwardImpl(collector, heap.obj0, heap.region0) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
@@ -74,7 +74,7 @@ GC_TEST(ForwardingNoGeometry, ExclusiveVtableFindHitSkipsCopy)
 {
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     GC_EXPECT_TRUE(collector.ForwardObjectExclusive(heap.obj0) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }

@@ -60,8 +60,7 @@ int RunIsUnmovableChild(bool armRetireHook)
     (void)armRetireHook;
 #endif
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     const bool unmovable = collector.IsUnmovableFromObject(fx.obj0);
 #if defined(MRT_GC_UNIT_TESTS)
     const bool oneLookup = !armRetireHook || ZPage::GhostLookupTestHookCalls() == 1;

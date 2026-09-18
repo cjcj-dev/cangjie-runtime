@@ -25,8 +25,8 @@ struct ZGenerationRootTestAccess {
     static void Seed(HeapGcState& collector, BaseObject* object)
     {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
-        collector.cycleRefWorkStack.emplace(HeapGcState::ValueRoot(object),
-                                            HeapGcState::ValueRootList{});
+        collector.cycleRefWorkStack.emplace(ValueRoot(object),
+                                            ValueRootList{});
     }
 
     static void Clear(HeapGcState& collector)
