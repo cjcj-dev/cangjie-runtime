@@ -106,6 +106,7 @@ Heap::Heap()
     _allocation_adapter.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
+    ZStat::NotifyHeapConstructed();
 }
 
 Heap::~Heap()
@@ -133,6 +134,10 @@ void Heap::Init(const HeapParam& param)
     ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
     _page_allocator.Init(param);
+    // zHeap.cpp:89-90: capacity bounds open both generations' heap accounts.
+    // Host difference: HeapParam has no min-heap-size, min reports 0.
+    young().StatHeap()->AtInitialize(0, _page_allocator.GetHeapCapacity());
+    old().StatHeap()->AtInitialize(0, _page_allocator.GetHeapCapacity());
     Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
     {
         const auto& heapMap = page_table().map();

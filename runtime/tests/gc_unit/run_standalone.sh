@@ -302,6 +302,7 @@ MAIN_SOURCES=(
   "$SRC/test_zValue.cpp"
   "$SRC/test_zUtils.cpp"
   "$SRC/test_zstat.cpp"
+  "$SRC/test_zstat_heap.cpp"
   "$SRC/test_zserviceability.cpp"
   "$SRC/test_trustp1_phase1.cpp"
 

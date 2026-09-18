@@ -117,16 +117,23 @@ public:
     void StopWorkers();
     ZWorkers* Workers() const { return workers.get(); }
     ZWeakRootsProcessor* WeakRootsProcessor() const { return weakRootsProcessor.get(); }
-    GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
+    // zGeneration.hpp: stat_heap() — per-generation heap account.
+    ZStatHeap* StatHeap() { return &statHeap; }
+    // zGeneration.hpp:137 stat_mark() — per-generation mark account.
+    ZStatMark* StatMark() { return &statMark; }
+    // zGeneration.hpp:138 stat_relocation() — per-generation relocation account.
+    ZStatRelocation* StatRelocation() { return &statRelocation; }
     ZGenerationPhase GcPhase() const { return _phase; }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value, uint64_t index = 0);
+    // GCStats.reason write counterpart: tests override the reason of an
+    // already-active cycle without the !active constraint.
+    MRT_EXPORT void SetReasonForTest(GCReason value) { reason.store(value, std::memory_order_release); }
     ZYoungType YoungType() const { return youngType.load(std::memory_order_acquire); }
     void SetYoungType(ZYoungType type);
-    void SelectTenuringThreshold(const TenuringInputs& inputs);
     bool IsMajorRoots() const
     {
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
@@ -159,7 +166,11 @@ protected:
     const ZGenerationId _cycle;
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
-    GCStats stats;
+    ZStatHeap statHeap;
+    // zGeneration.hpp:84 — mark statistics for this generation's mark domain.
+    ZStatMark statMark;
+    // zGeneration.hpp:85 — relocation statistics (selector snapshot + in-place).
+    ZStatRelocation statRelocation;
     ZStatCycle cycleStats;
     // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
     ZStatWorkers statWorkers;
@@ -219,6 +230,11 @@ private:
 class ZGenerationYoung : public ZGeneration {
 public:
     ZGenerationYoung();
+    // zGeneration.hpp:199,244-246 — tenuring threshold is young-generation
+    // state, selected after select_relocation_set (zGeneration.cpp:250).
+    uint32_t tenuring_threshold() { return _tenuring_threshold; }
+    MRT_EXPORT void SetTenuringThresholdForTest(uint32_t value) { _tenuring_threshold = value; }
+    void SelectTenuringThreshold(const TenuringInputs& inputs);
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
         const std::unordered_set<MAddress>& rememberedSlots, bool refFixSlotsCoveredByReachable,
         const std::unordered_map<MAddress, BaseObject*>& interiorBases,
@@ -243,6 +259,7 @@ private:
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
+    uint32_t _tenuring_threshold = 0;
     uint64_t minorTotalRuns = 0;
     MinorRegionSet minorCandidateRegions;
     std::unique_ptr<ScopedStopTheWorld> youngStw;
@@ -265,6 +282,8 @@ private:
 class ZGenerationOld : public ZGeneration {
 public:
     ZGenerationOld();
+    // zGeneration.cpp:1248,1526: young-count snapshot at major start.
+    uint32_t total_collections_at_start() const { return _total_collections_at_start; }
     void PostTrace();
     void CollectSmallSpace();
     void CollectLargeGarbage();
@@ -287,6 +306,7 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    uint32_t _total_collections_at_start = 0;
     WorkStack oldMarkWorkStack;
     WorkStack oldMarkForeignRoots;
     ZGenerationOld* previousOld { nullptr };

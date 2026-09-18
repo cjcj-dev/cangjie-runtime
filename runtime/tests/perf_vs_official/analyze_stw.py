@@ -11,7 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gclog_schema import build_phase_leaf_ledger, parse_gclog
+from gclog_schema import parse_gclog, pillar_for
 
 STW_OFFICIAL = re.compile(r"(?:stw time|light sync time) (\d+) us")
 BEGIN = re.compile(r"Begin GC log\. GCReason: ([^,]+),")
@@ -90,10 +90,15 @@ def pillars(text: str):
     wait = 0
     records = parse_gclog(text)
     if records.cycles:
-        ledger = build_phase_leaf_ledger(records)
-        for row in ledger["cycles"]:
-            for key, ns in row["pillars_ns"].items():
-                acc[key] += ns / 1000.0
+        # P15: rec=phase_leaf is gone (no ZGC counterpart). Pillar totals now
+        # come from owned rec=phase records; the work-level phase population
+        # is the same one the retired Timer observed.
+        for record in records.phases:
+            if record.seq == 0:
+                continue
+            key = pillar_for(record.name)
+            if key is not None:
+                acc[key] += record.ns / 1000.0
     elif records.any():
         raise ValueError("structured GCLOG records appeared without a cycle master record")
     for record in records.phases:

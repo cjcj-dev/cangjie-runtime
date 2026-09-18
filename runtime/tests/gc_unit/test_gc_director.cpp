@@ -1,4 +1,5 @@
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zPageAllocator.hpp"
@@ -97,17 +98,15 @@ GC_TEST(GcDirector, AllocationStallSnapshotUsesOutstandingRequests)
 
 GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
 {
-    ZStatCollection collections;
+    // zGeneration.cpp:600,637: the total lives on the heap; a major start
+    // snapshots it on ZGenerationOld (zGeneration.cpp:1248,1526).
+    const uint32_t prior = Heap::GetHeap().total_collections();
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
     ZStatCycle young;
     ZStatCycle old;
     young.Initialize(0);
     old.Initialize(0);
-    collections.AtYoungMarkStart(false);
-    const auto prior = collections.Stats();
-    collections.AtYoungMarkStart(true);
-    const auto combined = collections.Stats();
-    GC_EXPECT_EQ(combined.totalCollections - prior.totalCollections, 1u);
-    GC_EXPECT_EQ(combined.collectionsAtMajorStart, combined.totalCollections);
 
     ZStatWorkers youngWorkers;
     ZStatWorkers oldWorkers;
@@ -115,23 +114,15 @@ GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
     young.AtEnd(2, &youngWorkers, true, true);
     old.AtStart(2);
     old.AtEnd(3, &oldWorkers, true, true);
-    const auto completed = collections.Stats();
-    GC_EXPECT_EQ(completed.totalCollections, combined.totalCollections);
-    GC_EXPECT_EQ(completed.collectionsAtMajorStart, combined.collectionsAtMajorStart);
+    // Cycle/worker accounting does not move the collection count.
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 1);
 
-    collections.AtYoungMarkStart(false);
-    const auto next = collections.Stats();
-    GC_EXPECT_EQ(next.totalCollections - completed.totalCollections, 1u);
-    GC_EXPECT_EQ(next.collectionsAtMajorStart, completed.collectionsAtMajorStart);
-    collections.AtYoungMarkStart(false);
-    const auto second = collections.Stats();
-    GC_EXPECT_EQ(second.totalCollections - next.totalCollections, 1u);
-    GC_EXPECT_EQ(second.collectionsAtMajorStart, next.collectionsAtMajorStart);
-
-    collections.AtYoungMarkStart(true);
-    const auto nextMajor = collections.Stats();
-    GC_EXPECT_EQ(nextMajor.totalCollections - second.totalCollections, 1u);
-    GC_EXPECT_EQ(nextMajor.collectionsAtMajorStart, nextMajor.totalCollections);
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 2);
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 3);
+    Heap::GetHeap().increment_total_collections();
+    GC_EXPECT_EQ(Heap::GetHeap().total_collections(), prior + 4);
 }
 
 GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
@@ -163,7 +154,7 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     GC_EXPECT_TRUE(after.active);
     GC_EXPECT_EQ(young.Workers()->active_workers(), 1u);
     GC_EXPECT_EQ(old.Workers()->active_workers(), 2u);
-    GC_EXPECT_TRUE(&young.Stats() != &old.Stats());
+    GC_EXPECT_TRUE(young.StatHeap() != old.StatHeap());
     GC_EXPECT_TRUE(&young.CycleStats() != &old.CycleStats());
 
     old.End();
@@ -173,12 +164,11 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
 
 GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
 {
-    class Probe : public ZGeneration {
+    class Probe : public ZGenerationYoung {
     public:
-        using ZGeneration::ZGeneration;
         bool should_record_stats() override { return false; }
     };
-    Probe young(ZGenerationId::young);
+    Probe young;
     TenuringInputs inputs;
     inputs.softMaxCapacity = 64 * 1024 * 1024;
     inputs.youngAllocated = 4096;
@@ -187,14 +177,14 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
     {
         YoungTypeSetter type(young, ZYoungType::major_full_preclean);
         young.SelectTenuringThreshold(inputs);
-        GC_EXPECT_EQ(young.Stats().tenuringThreshold, 0u);
+        GC_EXPECT_EQ(young.tenuring_threshold(), 0u);
         GC_EXPECT_FALSE(young.IsMajorRoots());
     }
     GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
     {
         YoungTypeSetter type(young, ZYoungType::major_full_roots);
         young.SelectTenuringThreshold(inputs);
-        GC_EXPECT_TRUE(young.Stats().tenuringThreshold > 0u);
+        GC_EXPECT_TRUE(young.tenuring_threshold() > 0u);
         GC_EXPECT_TRUE(young.IsMajorRoots());
     }
     GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);

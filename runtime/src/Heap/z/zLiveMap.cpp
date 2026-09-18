@@ -24,9 +24,9 @@ void (*ZLiveMap::testReset)(const ZLiveMap*, bool) = nullptr;
 
 // ZGC zLiveMap.cpp:34-35.
 static const ZStatCounter ZCounterMarkSeqNumResetContention("Contention", "Mark SeqNum Reset Contention",
-                                                            ZStatUnit::OPS_PER_SECOND);
+                                                            ZStatUnitOpsPerSecond);
 static const ZStatCounter ZCounterMarkSegmentResetContention("Contention", "Mark Segment Reset Contention",
-                                                             ZStatUnit::OPS_PER_SECOND);
+                                                             ZStatUnitOpsPerSecond);
 
 // ZGeneration::generation(id)->seqnum(): the per-generation cycle sequence.
 uint64_t ZLiveMap::generation_seqnum(ZGenerationId id)
@@ -142,7 +142,7 @@ void ZLiveMap::reset(ZGenerationId id)
         // Mark reset contention
         if (!contention) {
             // Count contention once
-            ZCounterMarkSeqNumResetContention.Increment();
+            ZStatInc(ZCounterMarkSeqNumResetContention, 1);
             contention = true;
 
             DLOG(TRACE, "Mark seqnum reset contention, map: %p", static_cast<void*>(this));
@@ -164,7 +164,7 @@ void ZLiveMap::reset_segment(BitMap::idx_t segment)
             // Mark reset contention
             if (!contention) {
                 // Count contention once
-                ZCounterMarkSegmentResetContention.Increment();
+                ZStatInc(ZCounterMarkSegmentResetContention, 1);
                 contention = true;
 
                 DLOG(TRACE, "Mark segment reset contention, map: %p, segment: %zu", static_cast<void*>(this),

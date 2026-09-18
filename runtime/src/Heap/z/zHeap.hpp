@@ -104,10 +104,6 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId generation);
     BaseObject* make_load_good(RefField<>& ref, const ForwardingProvenance& provenance);
     Generation ObjectGeneration(BaseObject* object) const;
-    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
-    {
-        return GetZGeneration(generation).Stats();
-    }
     GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
     {
         return GetZGeneration(generation).Snapshot();
@@ -128,6 +124,10 @@ public:
     const ZGenerationYoung& young() const { return _young; }
     ZGenerationOld& old() { return _old; }
     const ZGenerationOld& old() const { return _old; }
+    // zGeneration.cpp:600,637 (ZCollectedHeap::increment_total_collections)
+    uint32_t total_collections() const { return _total_collections.load(std::memory_order_acquire); }
+    void increment_total_collections() { _total_collections.fetch_add(1, std::memory_order_release); }
+
     ZGeneration& GetZGeneration(ZGenerationId generation)
     {
         if (generation == ZGenerationId::young) {
@@ -278,6 +278,7 @@ public:
 
 private:
     static Heap* _heap;
+    std::atomic<uint32_t> _total_collections{0};
     // zHeap.hpp:48-56: the heap directly owns the page allocator; its
     // mapped caches and backing resources outlive both generation members.
     RegionManager _page_allocator;

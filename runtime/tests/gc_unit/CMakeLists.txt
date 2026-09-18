@@ -22,6 +22,7 @@ set(GC_UNIT_SOURCES
     test_zValue.cpp
     test_zUtils.cpp
     test_zstat.cpp
+    test_zstat_heap.cpp
     test_zserviceability.cpp
     test_trustp1_phase1.cpp
 

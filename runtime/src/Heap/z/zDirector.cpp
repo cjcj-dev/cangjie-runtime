@@ -614,8 +614,7 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
         stats.heap.soft_max_heap_size = stats.max_capacity;
     }
     stats.heap.used = Heap::GetHeap().GetAllocator().AllocatedBytes();
-    const auto collectionStats = ZStat::Collections().Stats();
-    stats.heap.total_collections = collectionStats.totalCollections;
+    stats.heap.total_collections = Heap::GetHeap().total_collections();
     stats.young_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young).CycleStats().Stats(now);
     stats.old_stats.cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old).CycleStats().Stats(now);
     stats.young_stats.workers = Heap::GetHeap().GetZGeneration(ZGenerationId::young).StatWorkers()->stats();
@@ -624,11 +623,11 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
         Heap::GetHeap().young().Workers());
     stats.old_stats.resize = sample_worker_resize_stats(stats.old_stats.cycle, stats.old_stats.workers,
         Heap::GetHeap().old().Workers());
-    stats.young_stats.stat_heap = ZStat::YoungHeap().Stats();
-    stats.old_stats.stat_heap = ZStat::OldHeap().Stats();
+    stats.young_stats.stat_heap = Heap::GetHeap().GetZGeneration(ZGenerationId::young).StatHeap()->Stats();
+    stats.old_stats.stat_heap = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatHeap()->Stats();
     stats.young_stats.general.used = regions.GetYoungAllocatedSize();
     stats.old_stats.general.used = stats.heap.used - std::min(stats.heap.used, stats.young_stats.general.used);
-    stats.old_stats.general.total_collections_at_start = collectionStats.collectionsAtMajorStart;
+    stats.old_stats.general.total_collections_at_start = Heap::GetHeap().old().total_collections_at_start();
     stats.minor_busy = minorBusy || ZCollectedHeap::heap()->driver_minor()->port().is_busy();
     stats.major_busy = majorBusy || ZCollectedHeap::heap()->driver_major()->port().is_busy();
     stats.allocation_stalling = regions.IsAllocationStalling();

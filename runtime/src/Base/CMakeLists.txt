@@ -12,6 +12,7 @@ set(SRC_LIST
     "TimeUtils.cpp"
     "LogFile.cpp"
     "MemUtils.cpp"
+    "../Heap/z/zMetronome.cpp"
     "../Heap/z/zStat.cpp"
     "../Heap/z/zServiceability.cpp"
 )

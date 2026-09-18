@@ -104,27 +104,28 @@
 
 namespace MapleRuntime {
 
+static const ZStatPhasePause POldRelocateStart("old.relocate_start", ZGenerationId::old);
+static const ZStatSubPhase PPreforward("Preforward", ZGenerationId::old);
+static const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
+
 void ZRelocate::ForwardFromSpace(ZGenerationId generation)
 {
-    ScopedEntryTrace trace("CJRT_GC_FORWARD");
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    GCStats& stats = Heap::GetHeap().GetGCStats(generation);
-    stats.liveBytesBeforeGC = space.AllocatedBytes();
-    stats.fromSpaceSize = space.FromSpaceSize();
     if (generation == ZGenerationId::young) {
         space.ForwardFromSpace<Generation::Young>(*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers());
     } else {
         space.ForwardFromSpace<Generation::Old>(*Heap::GetHeap().GetZGeneration(ZGenerationId::old).Workers());
     }
-
+    // zRelocate.cpp:1121: in-place counts close the relocation account.
+    const auto inPlace = space.GetRegionManager().InPlaceRelocatedCounts();
+    Heap::GetHeap().GetZGeneration(generation).StatRelocation()->AtRelocateEnd(inPlace.first, inPlace.second);
 }
 
 void ZRelocate::RefineFromSpace()
 {
-    GCStats& stats = Heap::GetHeap().GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    stats.smallGarbageSize = space.RefineFromSpace();
+    ZGeneration::old()->increase_freed(space.RefineFromSpace());
 }
 
 bool ZRelocate::IsFromObject(BaseObject* obj)
@@ -180,7 +181,7 @@ bool ZRelocate::IsUnmovableFromObject(BaseObject* obj)
 void ZRelocate::RemapYoungRoots()
 {
     SuspendibleThreadSetJoiner joiner;
-    MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
+    ZStatTimerYoung zstatTimer(PRemapYoungRoots);
     // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
     ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
     Heap::GetHeap().remembered().remap_current(&remsetIter);
@@ -237,8 +238,7 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 
 bool ZRelocate::Preforward()
 {
-    ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
-    MRT_PHASE_TIMER(ZStatPhases::PPreforward);
+    ZStatTimerOld zstatTimer(PPreforward);
     {
         // Caller holds DriverLocker (ZGenerationOld::collect zGeneration.cpp:1054-1063).
         RemapYoungRoots();
@@ -254,7 +254,7 @@ bool ZRelocate::Preforward()
         // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
-        MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
+        ZStatTimerOld zstatTimer(POldRelocateStart);
         ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
             data.storeBarrierBuffer->install_base_pointers();
         });
@@ -1237,7 +1237,7 @@ BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, ZGeneration::young()->tenuring_threshold());
     auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
     if (toObj == nullptr) return nullptr;
@@ -1299,6 +1299,7 @@ void RegionManager::StartForwardFromRegions(ZWorkers& workers)
     relocationStarted = true;
     relocationDrained = false;
     relocationWorkers = &workers;
+    ResetInPlaceRelocatedCounts();
     relocateQueue.BeginWorkers(workers.active_workers());
 }
 
@@ -1334,12 +1335,19 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
 {
     if (!owner || (!claimed && !owner->claim())) return;
     ZForwarding::PageWorkScope work(owner);
+    // zRelocate.cpp:437-441,1010: relocation accounts on the owning
+    // generation — freed for the from-page, compacted for in-place.
+    const ZGenerationId statId = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
+    ZGeneration& statGeneration = Heap::GetHeap().GetZGeneration(statId);
     if (inPlace) {
         (void)fromRegionList.TryDeleteRegion(region);
         owner->set_in_place();
+        NoteInPlaceRelocated(region);
         CompactRegion(region);
+        statGeneration.increase_compacted(region->GetRegionAllocatedSize());
     } else {
         ForwardRegion<G>(region);
+        statGeneration.increase_freed(region->GetRegionSize());
     }
     // All page metadata and legacy helper work is finished. A nested drain
     // may already have consumed the construction token; otherwise drop it now.
@@ -1550,6 +1558,7 @@ void RegionManager::CollectFromSpaceGarbage()
 template<Generation G>
 void RegionManager::ForwardFromRegions()
 {
+    ResetInPlaceRelocatedCounts();
     detail::ExecuteForwardTask<G>(*this, fromRegionList);
 
     VLOG(REPORT, "forward %zu from-region units", fromRegionList.GetUnitCount());
@@ -1581,6 +1590,7 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
     });
     if (allocFailed) {
         forwarding_for_page(region)->set_in_place();
+        NoteInPlaceRelocated(region);
         CompactRegion(region);
         return false;
     }
@@ -1599,7 +1609,7 @@ void RegionManager::CompactRegion(ZPage* region)
 
     const bool fromYoung = region->IsYoungRegion();
     const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, ZGeneration::young()->tenuring_threshold());
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         (region->is_marked() ? region->live_bytes() : 0), region->GetRegionEnd(), 0u);
@@ -1755,7 +1765,7 @@ bool StayYoungThisCycle(ZPage* region)
     if (!kPageAgeAdaptiveTenuring) {
         return false;
     }
-    const uint32_t thr = Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold;
+    const uint32_t thr = ZGeneration::young()->tenuring_threshold();
     return !ShouldPromoteAge(region->GetYoungAge(), thr);
 }
 
@@ -2314,7 +2324,7 @@ size_t ZRelocateQueue::SynchronizedWorkerCount() const
 
 PageAge ZRelocate::compute_to_age(PageAge fromAge)
 {
-    const uint32_t threshold = Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold;
+    const uint32_t threshold = ZGeneration::young()->tenuring_threshold();
     return ComputeToAge(fromAge, threshold);
 }
 
@@ -2718,6 +2728,8 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "Sync/Sync.h"
+
+
 
 
 namespace MapleRuntime {

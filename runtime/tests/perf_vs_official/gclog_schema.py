@@ -18,6 +18,12 @@ RECORD_TOKENS = re.compile(r"(?:^| )rec=([^ ]+)")
 GC_CYCLE = re.compile(
     rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
     r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
+    r"heap_used=(\S+) rss_kb=(\S+)$"
+)
+# v=4 layout (historical logs): threshold= field between heap_used= and rss_kb=.
+GC_CYCLE_V4 = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
+    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
     r"heap_used=(\S+) threshold=(\S+) rss_kb=(\S+)$"
 )
 GC_PHASE = re.compile(
@@ -62,7 +68,6 @@ class CycleRecord:
     live_after: int
     collected: int
     heap_used: int
-    threshold: int
     rss_kb: int
 
 
@@ -144,6 +149,12 @@ def _u64(value: str, field_name: str, line: str) -> int:
     return number
 
 
+def _version_any(value: str, expected: tuple[int, ...], family: str, line: str) -> None:
+    version = _u64(value, "v", line)
+    if version not in expected:
+        raise ValueError(f"unsupported {family} schema v={version}; expected one of {expected}")
+
+
 def _version(value: str, expected: int, family: str, line: str) -> None:
     version = _u64(value, "v", line)
     if version != expected:
@@ -171,7 +182,7 @@ def parse_gclog(text: str) -> GcLogRecords:
             family = phase_candidates[0]
             if family == "phase":
                 match = _exact(GC_PHASE, line, "GCLOG phase")
-                _version(match.group(1), 4, "GCLOG phase", line)
+                _version_any(match.group(1), (4, 5), "GCLOG phase", line)
                 records.phases.append(PhaseRecord(
                     _u64(match.group(2), "seq", line), match.group(3), match.group(4), match.group(5),
                     _u64(match.group(6), "start_ns", line),
@@ -204,20 +215,32 @@ def parse_gclog(text: str) -> GcLogRecords:
             raise ValueError(f"unknown GCLOG phase-family record rec={family}")
 
         if "cycle" in rec_tokens:
-            match = _exact(GC_CYCLE, line, "GCLOG cycle")
+            match = GC_CYCLE.fullmatch(line)
+            if match is not None:
+                _version(match.group(1), 5, "GCLOG cycle", line)
+                seq = _u64(match.group(2), "seq", line)
+                if seq == 0:
+                    raise ValueError("GCLOG cycle seq must be greater than zero")
+                numbers = [_u64(match.group(index), name, line) for index, name in zip(
+                    range(6, 12),
+                    ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used"))]
+                rss_kb = _u64(match.group(12), "rss_kb", line)
+                records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5),
+                                                  *numbers, rss_kb))
+                continue
+            match = _exact(GC_CYCLE_V4, line, "GCLOG cycle")
             _version(match.group(1), 4, "GCLOG cycle", line)
             seq = _u64(match.group(2), "seq", line)
             if seq == 0:
                 raise ValueError("GCLOG cycle seq must be greater than zero")
             numbers = [_u64(match.group(index), name, line) for index, name in zip(
-                range(6, 13),
-                ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used", "threshold"))]
-            rss_kb = _u64(match.group(13), "rss_kb", line)
-            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5), *numbers, rss_kb))
+                (6, 7, 8, 9, 10, 11, 13),
+                ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used", "rss_kb"))]
+            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5), *numbers))
             continue
         if "stw" in rec_tokens:
             match = _exact(GC_STW, line, "GCLOG stw")
-            _version(match.group(1), 4, "GCLOG stw", line)
+            _version_any(match.group(1), (4, 5), "GCLOG stw", line)
             records.stw.append(StwRecord(
                 _u64(match.group(2), "seq", line), match.group(3), match.group(4),
                 _u64(match.group(5), "start_ns", line),
@@ -268,95 +291,3 @@ def pillar_for(path: str) -> str | None:
         if pattern.search(path):
             return pillar
     return None
-
-
-def build_phase_leaf_ledger(records: GcLogRecords) -> dict[str, object]:
-    """Left-join all owned structural leaves to cycles and enforce bound ①."""
-    cycles: dict[int, CycleRecord] = {}
-    for cycle in records.cycles:
-        if cycle.seq in cycles:
-            raise ValueError(f"duplicate cycle seq={cycle.seq}")
-        cycles[cycle.seq] = cycle
-    if not cycles:
-        raise ValueError("no rec=cycle records")
-
-    for family, sequence in (("phase", records.phases), ("stw", records.stw)):
-        for record in sequence:
-            if record.seq > 0 and record.seq not in cycles:
-                raise ValueError(f"positive seq orphan: rec={family} seq={record.seq}")
-
-    values = {seq: {name: 0 for name, _pattern in PILLARS} for seq in cycles}
-    structural_values = {seq: 0 for seq in cycles}
-    owned_structural_records = 0
-    matched = 0
-    excluded_count = 0
-    excluded_ns = 0
-    unowned_count = 0
-    unowned_ns = 0
-    unowned_names: list[str] = []
-    for leaf in records.phase_leaves:
-        if leaf.seq > 0 and leaf.seq not in cycles:
-            raise ValueError(f"positive seq orphan: rec=phase_leaf seq={leaf.seq}")
-        pillar = pillar_for(leaf.path)
-        if leaf.seq == 0:
-            if pillar is not None:
-                raise ValueError(f"unowned five-pillar leaf: seq=0 name={leaf.name} pillar={pillar}")
-            unowned_count += 1
-            unowned_ns += leaf.ns
-            unowned_names.append(leaf.name)
-            excluded_count += 1
-            excluded_ns += leaf.ns
-            continue
-        structural_values[leaf.seq] += leaf.ns
-        owned_structural_records += 1
-        if pillar is None:
-            excluded_count += 1
-            excluded_ns += leaf.ns
-            continue
-        values[leaf.seq][pillar] += leaf.ns
-        matched += 1
-
-    rows: list[dict[str, object]] = []
-    for seq, cycle in sorted(cycles.items()):
-        pillar_values = values[seq]
-        pillar_sum = sum(pillar_values.values())
-        structural_sum = structural_values[seq]
-        if structural_sum > cycle.dur_ns:
-            raise ValueError(
-                f"inequality_1 structural leaf sum exceeds cycle: "
-                f"seq={seq} sum_ns={structural_sum} dur_ns={cycle.dur_ns}")
-        rows.append({
-            "seq": seq,
-            "pillars_ns": pillar_values,
-            "leaf_pillar_ns": pillar_sum,
-            "structural_leaf_ns": structural_sum,
-            "cycle_dur_ns": cycle.dur_ns,
-            "bound_ok": True,
-        })
-    owned_kinds = {"pause": 0, "conc": 0, "unknown": 0}
-    for leaf in records.phase_leaves:
-        if leaf.seq > 0:
-            owned_kinds[leaf.kind] += 1
-    if owned_kinds["unknown"]:
-        kind_classification = "unavailable"
-    elif owned_structural_records:
-        kind_classification = "available"
-    else:
-        kind_classification = "not_applicable"
-    return {
-        "matched_leaf_records": matched,
-        "structural_leaf_records": len(records.phase_leaves),
-        "owned_structural_leaf_records": owned_structural_records,
-        "owned_phase_leaf_kind_counts": owned_kinds,
-        "phase_leaf_kind_classification": kind_classification,
-        "excluded_nonpillar_leaf_records": excluded_count,
-        "excluded_nonpillar_leaf_ns": excluded_ns,
-        "unowned_nonpillar_leaf_records": unowned_count,
-        "unowned_nonpillar_leaf_ns": unowned_ns,
-        "unowned_nonpillar_names": sorted(unowned_names),
-        "cycles": rows,
-    }
-
-
-def phase_leaf_ledger(text: str) -> dict[str, object]:
-    return build_phase_leaf_ledger(parse_gclog(text))

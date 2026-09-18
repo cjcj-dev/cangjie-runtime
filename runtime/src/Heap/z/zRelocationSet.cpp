@@ -50,11 +50,16 @@
 #include "TypeInfoManager.h"
 #include "Heap/z/zRelocate.hpp"
 
+
+
 namespace MapleRuntime {
+
+static const ZStatSubPhase PCollectFromSpaceGarbage("CollectFromSpaceGarbage", ZGenerationId::old);
+static const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
 
 void ZGenerationOld::PostTrace()
 {
-    MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
+    ZStatTimerOld zstatTimer(PPostTrace);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
@@ -83,24 +88,11 @@ void ZGenerationOld::PostTrace()
 }
 void ZGenerationOld::CollectSmallSpace()
 {
-    GCStats& stats = Heap::GetHeap().GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     {
-        MRT_PHASE_TIMER(ZStatPhases::PCollectFromSpaceGarbage);
-        stats.collectedBytes += stats.smallGarbageSize;
+        ZStatTimerOld zstatTimer(PCollectFromSpaceGarbage);
         space.CollectFromSpaceGarbage();
     }
-
-    size_t candidateBytes = stats.fromSpaceSize + stats.pinnedSpaceSize + stats.largeSpaceSize;
-    stats.garbageRatio = (candidateBytes > 0) ? static_cast<float>(stats.collectedBytes) / candidateBytes : 0;
-
-    stats.liveBytesAfterGC = space.AllocatedBytes();
-
-    VLOG(REPORT,
-         "collect %zu B: old small %zu - %zu B, old pinned %zu - %zu B, old large %zu - %zu B. garbage ratio %.2f%%",
-         stats.collectedBytes, stats.fromSpaceSize, stats.smallGarbageSize, stats.pinnedSpaceSize,
-         stats.pinnedGarbageSize, stats.largeSpaceSize, stats.largeGarbageSize,
-         stats.garbageRatio * 100); // The base of the percentage is 100
 
     VLOG(REPORT, "start to release heap garbage memory");
 #if defined(__EULER__)
@@ -219,6 +211,10 @@ void ZRelocationSet::install(const ZRelocationSetSelector* selector)
     }
     _forwardings = task.forwardings();
     _nforwardings = task.nforwardings();
+    // zRelocationSet.cpp:179: forwarding-allocator usage after install.
+    if (_generation != nullptr) {
+        _generation->StatRelocation()->AtInstallRelocationSet(_allocator.size());
+    }
 }
 
 void ZRelocationSet::install_from_regions(RegionList& regions)

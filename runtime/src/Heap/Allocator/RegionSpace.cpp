@@ -25,7 +25,14 @@
 #include "Heap/z/zForwardingTable.hpp"
 #include "Mutator/Mutator.h"
 
+
+
 namespace MapleRuntime {
+
+const ZStatSubPhase OldForwardFromRegions("ForwardFromRegions", ZGenerationId::old);
+const ZStatSubPhase PExemptFromRegions("ExemptFromRegions", ZGenerationId::old);
+const ZStatCriticalPhase PReclaimGarbageRegions("ReclaimGarbageRegions");
+const ZStatSubPhase YoungForwardFromRegions("ForwardFromRegions", ZGenerationId::young);
 RegionManager& RegionSpace::GetRegionManager() const noexcept
 {
     return Heap::GetHeap().page_allocator();

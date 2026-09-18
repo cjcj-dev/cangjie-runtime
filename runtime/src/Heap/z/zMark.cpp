@@ -59,6 +59,8 @@
 #include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
+
+static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
 // "the pre-pause test was right every time" rather than "nobody is counting".
 std::atomic<size_t> g_markTerminateContinue{ 0 };
@@ -663,7 +665,7 @@ bool ZMark::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
                                      std::unordered_set<MAddress>& weakSlots,
                                      YoungConcWindowStats* windowStats)
 {
-    MRT_PHASE_TIMER(ZStatPhases::PYoungMarkFollow);
+    ZStatTimerWorker zstatTimer(PYoungMarkFollow);
     // Follow explicit roots and allocation work; young has no SATB queue.
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();
@@ -1062,6 +1064,10 @@ void ZMark::Start()
     stripes.SetNStripes(targetNStripes);
     EnsureWorkers(nworkers);
     terminate.Reset(nworkers);
+    // zMark.cpp:118-123: stripe count goes to the generation's mark account.
+    const ZGenerationId statId =
+        generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+    Heap::GetHeap().GetZGeneration(statId).StatMark()->AtMarkStart(targetNStripes);
 }
 
 void ZMark::PrepareWork()
@@ -1410,6 +1416,11 @@ bool ZMark::TryEnd()
     if (!stripes.IsEmpty()) {
         return false;
     }
+    // zMark.cpp:983-987: completed mark publishes its flush/continue counters.
+    const ZGenerationId statId =
+        generation == MarkingStacks::MarkingGeneration::YOUNG ? ZGenerationId::young : ZGenerationId::old;
+    Heap::GetHeap().GetZGeneration(statId).StatMark()->AtMarkEnd(nproactiveflush, nterminateflush,
+                                                                 ntrycomplete, ncontinue);
     return true;
 }
 
@@ -1557,3 +1568,5 @@ namespace MapleRuntime {
 }
 
 #include "Heap/z/zMark.inline.hpp"
+
+

@@ -77,7 +77,7 @@ class GcLogSchemaTest(unittest.TestCase):
         bad = (
             "[GCLOG] v=-1 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",
             "[GCLOG] v=4 v=4 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",
-            "[GCLOG] v=5 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=6 rec=phase seq=1 gc_tag=- name=p kind=conc start_ns=1 ns=1",
         )
         for line in bad:
             with self.subTest(line=line), self.assertRaises(ValueError):
