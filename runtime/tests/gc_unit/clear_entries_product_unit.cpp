@@ -2389,7 +2389,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     // The real major driver prepares the mark engine before entering its body.
     collector.StartOldMarkWork();
     {
-        DriverLocker driver(resources);
+        DriverLocker driver;
         collector.RunGarbageCollection(1, GC_REASON_USER);
     }
 
@@ -2506,7 +2506,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     GenerationSequenceFixture::Advance(oldCycle);
     collector.StartOldMarkWork();
     {
-        DriverLocker driver(resources);
+        DriverLocker driver;
         collector.RunGarbageCollection(1, GC_REASON_USER);
     }
     const auto receipt = ReadRemapYoungRootsTestReceipt();

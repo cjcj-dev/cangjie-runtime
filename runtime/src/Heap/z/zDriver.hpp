@@ -401,14 +401,7 @@ public:
 
     bool IsGcStarted() const;
 
-    bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }
-
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
-
-    void RequestAbort(GCDriverKind kind)
-    {
-        ZAbort::abort();
-    }
 
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
@@ -435,7 +428,6 @@ private:
 class DriverLocker {
 public:
     DriverLocker() { ZDriver::lock(); }
-    explicit DriverLocker(CollectorResources&) : DriverLocker() {}
     ~DriverLocker() { ZDriver::unlock(); }
     DriverLocker(const DriverLocker&) = delete;
     DriverLocker& operator=(const DriverLocker&) = delete;
@@ -444,7 +436,6 @@ public:
 class DriverUnlocker {
 public:
     DriverUnlocker() { ZDriver::unlock(); }
-    explicit DriverUnlocker(CollectorResources&) : DriverUnlocker() {}
     ~DriverUnlocker() { ZDriver::lock(); }
     DriverUnlocker(const DriverUnlocker&) = delete;
     DriverUnlocker& operator=(const DriverUnlocker&) = delete;
