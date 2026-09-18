@@ -30,17 +30,17 @@ inline zaddress ZUncoloredRoot::make_load_good(zaddress_unsafe addr, uintptr_t c
 
 inline void ZUncoloredRoot::mark_object(zaddress addr)
 {
-    Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+    Heap::GetHeap().MarkObjectIfActive(to_object(addr));
 }
 
 inline void ZUncoloredRoot::mark_invisible_object(zaddress addr)
 {
-    Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+    Heap::GetHeap().MarkObjectIfActive(to_object(addr));
 }
 
 inline void ZUncoloredRoot::keep_alive_object(zaddress addr)
 {
-    Heap::GetHeap().GetCollector().MarkObjectIfActive(to_object(addr));
+    Heap::GetHeap().MarkObjectIfActive(to_object(addr));
 }
 
 inline void ZUncoloredRoot::mark_young_object(zaddress addr)

@@ -10,12 +10,13 @@
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
     template<Generation G>
 inline void RegionManager::PrepareFromRegionList()
     {
-        Heap::GetHeap().GetCollector().GetZGeneration(
+        Heap::GetHeap().GetZGeneration(
             G == Generation::Young ? ZGenerationId::young : ZGenerationId::old)
             .relocation_set().install_from_regions(fromRegionList);
     }

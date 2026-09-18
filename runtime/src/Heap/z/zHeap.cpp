@@ -180,6 +180,15 @@ void Heap::Fini()
 
 Collector& Heap::GetCollector() { return collectorResources->ActiveCollector(); }
 
+void Heap::MarkYoungRootObject(BaseObject* object) { GetCollector().MarkYoungRootObject(object); }
+
+void Heap::MarkObjectIfActive(BaseObject* object) { GetCollector().MarkObjectIfActive(object); }
+
+BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
+{
+    return GetCollector().relocate_or_remap_object(object, generation);
+}
+
 bool Heap::IsSurvivedObject(const BaseObject* obj) const
 {
     return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));

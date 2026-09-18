@@ -46,7 +46,7 @@ inline ZForwarding* ZPage::GetFromPageCarrier() const
         if (start == 0) {
             return nullptr;
         }
-        ZForwarding* carrier = Heap::GetHeap().GetCollector().GetZGeneration(GetOwnerGeneration()).forwarding_table().get(start);
+        ZForwarding* carrier = Heap::GetHeap().GetZGeneration(GetOwnerGeneration()).forwarding_table().get(start);
         return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
     }
 

@@ -75,6 +75,9 @@ public:
 
     Collector& GetCollector();
     Allocator& GetAllocator();
+    void MarkYoungRootObject(BaseObject* object);
+    void MarkObjectIfActive(BaseObject* object);
+    BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId generation);
     ZGenerationYoung& young() { return _young; }
     const ZGenerationYoung& young() const { return _young; }
     ZGenerationOld& old() { return _old; }
@@ -92,6 +95,14 @@ public:
             return _young;
         }
         return _old;
+    }
+    ZGeneration& GetZGeneration(Generation generation)
+    {
+        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
+    }
+    const ZGeneration& GetZGeneration(Generation generation) const
+    {
+        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
     }
     /* to avoid misunderstanding, variant types of heap size are defined as followed:
      * |------------------------------ max capacity ---------------------------------|
