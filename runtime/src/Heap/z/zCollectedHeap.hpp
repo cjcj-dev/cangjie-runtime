@@ -10,6 +10,7 @@
 
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingLookup.hpp"
+#include "Heap/z/zReferenceProcessor.hpp"
 #include <atomic>
 
 namespace MapleRuntime {
@@ -45,6 +46,7 @@ public:
     ZDriverMajor* driver_major() const { return _driver_major; }
     ZDirector* director() const { return _director; }
     ZStat* stat() const { return _stat; }
+    FinalizerProcessor& finalizer_processor() { return _finalizer_processor; }
     int32_t concurrent_gc_threads() const { return _concurrent_gc_threads; }
 #if defined(MRT_TESTABLE_INTERNALS)
     void set_concurrent_gc_threads_for_test(int32_t count) { _concurrent_gc_threads = count; }
@@ -59,6 +61,7 @@ private:
     ZDirector* _director;
     ZStat* _stat;
     ZRuntimeWorkers _runtime_workers;
+    FinalizerProcessor _finalizer_processor;
     int32_t _concurrent_gc_threads = 1;
     std::atomic<bool> _gc_thread_running { false };
     CollectorResources* _resources;

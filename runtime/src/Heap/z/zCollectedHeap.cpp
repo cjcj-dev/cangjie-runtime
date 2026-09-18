@@ -71,7 +71,7 @@ void ZCollectedHeap::initialize_gc()
     _heap.old().CycleStats().Initialize(now);
     _stat = new ZStat();
     start_gc_threads();
-    _resources->finalizerProcessor.Start();
+    _finalizer_processor.Start();
     StringDedup::Instance().Start();
     if (Uncommitter::Enabled()) {
         LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus",
@@ -83,7 +83,7 @@ void ZCollectedHeap::initialize_gc()
 
 void ZCollectedHeap::finalize_gc()
 {
-    MRT_ASSERT(!_resources->finalizerProcessor.IsRunning(), "Invalid finalizerProcessor status");
+    MRT_ASSERT(!_finalizer_processor.IsRunning(), "Invalid finalizerProcessor status");
     MRT_ASSERT(!_gc_thread_running.load(std::memory_order_relaxed), "Invalid GC thread status");
 }
 
@@ -125,7 +125,7 @@ void ZCollectedHeap::start_gc_threads()
 
         _heap.young().InitializeWorkers(_concurrent_gc_threads);
         _heap.old().InitializeWorkers(_concurrent_gc_threads);
-        _resources->finalizerProcessor.GetReferenceProcessor().set_workers(_heap.old().Workers());
+        _finalizer_processor.GetReferenceProcessor().set_workers(_heap.old().Workers());
     }
 
     // The ImmortalWrapper constructs the heap before its size is known; start
@@ -175,8 +175,8 @@ void ZCollectedHeap::stop()
     ZAbort::abort();
     ZCollectedHeap* collected = heap();
     CollectorResources& resources = collected->resources();
-    if (resources.finalizerProcessor.IsRunning()) {
-        resources.finalizerProcessor.Stop();
+    if (collected->_finalizer_processor.IsRunning()) {
+        collected->_finalizer_processor.Stop();
     }
     if (collected->_gc_thread_running.load(std::memory_order_acquire)) {
         for (ZThread* thread : { static_cast<ZThread*>(collected->_director),

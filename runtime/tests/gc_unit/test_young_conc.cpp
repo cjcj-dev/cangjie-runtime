@@ -78,7 +78,7 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
     GC_EXPECT_TRUE(workStack.empty());
     GC_EXPECT_FALSE(fx.region1->is_object_strongly_live(from_object(fx.obj1)));
     ReferenceProcessor& processor =
-        Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor();
+        Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
     processor.ProcessReferences([](BaseObject*) { return true; });
     processor.EnqueueReferences([](BaseObject*) { return true; });
 }

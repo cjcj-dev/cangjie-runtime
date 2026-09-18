@@ -161,12 +161,12 @@ void HeapGcState::VisitExportColoredRoots(const NativeSlotVisitor& visitor) cons
 
 OopStorage& HeapGcState::StrongRootStorage() const
 {
-    return Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().StrongRootStorage();
+    return Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
 }
 
 OopStorage& HeapGcState::WeakFinalizerRootStorage() const
 {
-    return Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().WeakRootStorage();
+    return Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage();
 }
 
 OopStorage& HeapGcState::SyncWeakRootStorage() const
@@ -294,7 +294,7 @@ void HeapGcState::VisitStaticRoots(const NativeSlotVisitor& visitor) const
 
 void HeapGcState::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
 {
-    Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().VisitGCRoots(visitor);
+    Heap::GetHeap().GetFinalizerProcessor().VisitGCRoots(visitor);
 }
 
 

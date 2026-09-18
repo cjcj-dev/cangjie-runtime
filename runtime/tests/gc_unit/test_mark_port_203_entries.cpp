@@ -330,7 +330,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     AllocBuffer* invisibleBuffer = nullptr;
     bool ownsInvisibleBuffer = false;
     if (finalizable) {
-        resources.GetFinalizerProcessor().RegisterFinalizer(finalizerRoot);
+        Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizer(finalizerRoot);
     } else if (markOnly || duplicateRootOrder != 0) {
         ownsInvisibleBuffer = AllocBuffer::GetAllocBuffer() == nullptr;
         invisibleBuffer = AllocBuffer::GetOrCreateAllocBuffer();
@@ -392,7 +392,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     const size_t expectedBytes = arrayBytes + expectedChildren * children[0]->GetSize() +
         (finalizable ? finalizerRoot->GetSize() : 0);
     if (finalizable) {
-        resources.GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
+        Heap::GetHeap().GetFinalizerProcessor().VisitNativePointers([](NativeSlot& root) {
             root.StoreColoured(StoreGoodPointer(nullptr));
         });
     } else if (markOnly || duplicateRootOrder != 0) {

@@ -531,7 +531,7 @@ public:
 
     bool DiscoverReference(BaseObject* reference, ReferenceType type)
     {
-        return Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor()
+        return Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor()
             .DiscoverReference(reference, type);
     }
     void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);

@@ -15,7 +15,6 @@
 #include "Base/Panic.h"
 #include "Common/OopStorage.h"
 #include "Common/PageAllocator.h"
-#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zValue.hpp"
 #include "Heap/z/zValue.inline.hpp"
 

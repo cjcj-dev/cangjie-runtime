@@ -368,7 +368,7 @@ ssize_t Heap::GetHeapPhysicalMemorySize() const
 }
 #endif
 
-FinalizerProcessor& Heap::GetFinalizerProcessor() { return GetCollectorResources().GetFinalizerProcessor(); }
+FinalizerProcessor& Heap::GetFinalizerProcessor() { return ZCollectedHeap::heap()->finalizer_processor(); }
 
 CollectorResources& Heap::GetCollectorResources() { return ZCollectedHeap::heap()->resources(); }
 

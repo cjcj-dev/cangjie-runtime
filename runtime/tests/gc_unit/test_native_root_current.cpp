@@ -364,7 +364,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     GC_EXPECT_FALSE(fixture.region0->is_object_strongly_live(from_object(fixture.obj0)));
     // Seed the real scheduling input through its existing fixture operation.
     // The root task and marker below are the product TraceHeap implementation.
-    resources.GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
+    Heap::GetHeap().GetFinalizerProcessor().EnqueueFinalizableForTest(fixture.obj0);
     bool published = false;
     collector.testOldMarkStarted = [&]() {
         published |= RootPublicationSnapshot::Contains(*collector.MajorMark(), fixture.obj0);
@@ -393,7 +393,7 @@ void CheckRootStorageSegments(unsigned family)
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     fixture.region0->reset(family != 0 ? PageAge::eden : PageAge::old);
-    auto& finalizers = resources.GetFinalizerProcessor();
+    auto& finalizers = Heap::GetHeap().GetFinalizerProcessor();
     // More than two maximum-sized segments: oopStorage.cpp:1101 max_step=10.
     constexpr size_t count = 24 * sizeof(uintptr_t) * CHAR_BIT;
     for (size_t i = 0; i < count; ++i) {

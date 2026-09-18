@@ -488,7 +488,7 @@ void HeapGcState::DiscoverFinalizableRoot(NativeSlot& slot) const
     if (object == nullptr) return;
     auto* page = Heap::page(reinterpret_cast<MAddress>(object));
     if (page->IsYoungRegion() || page->is_object_strongly_live(from_object(object))) return;
-    auto& processor = Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor();
+    auto& processor = Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor();
     (void)processor.DiscoverReference(object, ReferenceType::FINAL);
     ZBarrier::MarkFinalizableBarrierOnRoot(slot);
 }
@@ -954,7 +954,7 @@ void HeapGcState::MarkNewObject(BaseObject* obj)
 
 void HeapGcState::ProcessFinalizers()
 {
-    FinalizerProcessor& fp = Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor();
+    FinalizerProcessor& fp = Heap::GetHeap().GetFinalizerProcessor();
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
 }
 

@@ -247,7 +247,7 @@ void ZGeneration::StartOldMark(HeapGcState& collector)
         HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
     }
 #endif
-    Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
+    Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     collector.StartOldMarkWork();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (HeapGcState::testMarkStartState) {
@@ -944,7 +944,7 @@ void HeapGcState::ProcessOldNonStrongReferences(WorkStack& workStack)
     ZRendezvousGCThreads gcRendezvous;
     gcRendezvous.doit();
     ZResurrection::unblock();
-    Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().EnqueueReferences();
+    Heap::GetHeap().GetFinalizerProcessor().EnqueueReferences();
 }
 
 bool HeapGcState::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)

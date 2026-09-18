@@ -403,7 +403,6 @@ public:
 
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }
 
-    FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
 
     void RequestAbort(GCDriverKind kind)
@@ -431,7 +430,6 @@ private:
     std::atomic<size_t> testCompletionCount { 0 };
 #endif
 
-    FinalizerProcessor finalizerProcessor;
 };
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.
 class DriverLocker {
