@@ -29,7 +29,7 @@ namespace MapleRuntime {
 #include "Mutator/MutatorManager.h"
 #include "Signal/SignalUtils.h"
 #include "Inspector/CjHeapData.h"
-#include "Heap/Collector/TaskQueue.h"
+#include "Heap/z/zDriver.hpp"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);

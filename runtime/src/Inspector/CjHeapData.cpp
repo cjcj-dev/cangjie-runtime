@@ -12,7 +12,7 @@
 #include <Common/BaseObject.h>
 #include <Common/Runtime.h>
 #include <Common/ScopedObjectAccess.h>
-#include <Heap/Collector/TaskQueue.h>
+#include "Heap/z/zDriver.hpp"
 #include <Heap/z/zMark.hpp>
 #include <sys/time.h>
 
