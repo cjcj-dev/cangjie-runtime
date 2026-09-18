@@ -424,8 +424,8 @@ public:
 
     // ZGC-style per-generation request ports.  Requests on one port never
     // consume or coalesce requests from the other generation.
-    ZDriverPort& GetMinorDriverPort() { return minorDriver->port(); }
-    ZDriverPort& GetMajorDriverPort() { return majorDriver->port(); }
+    ZDriverPort& GetMinorDriverPort();
+    ZDriverPort& GetMajorDriverPort();
     ZDriverPort& GetYoungDriverPort();
     void RequestAbort(GCDriverKind kind)
     {
@@ -445,7 +445,6 @@ private:
     void StartGCThreads();
     void StopGCThreads();
     void RunDriverLoop(GCDriverKind kind, ZDriverPort& port);
-    void RunDirectorLoop();
     void EvaluateDirector(uint64_t now);
     bool start_gc(uint64_t now);
     void CompleteDriverRequest(ZDriverPort& port);
@@ -469,16 +468,12 @@ private:
 
     // zCollectedHeap.cpp:65-71 / zHeap.hpp: the concurrent GC threads are
     // created when GC starts and stopped through ConcurrentGCThread::stop.
-    ZDirector* director = nullptr;
-    ZDriverMinor* minorDriver = nullptr;
-    ZDriverMajor* majorDriver = nullptr;
     std::mutex directorMutex;
     std::condition_variable directorCondition;
     bool directorStopped = false;
     bool directorReevaluate = false;
     bool minorBusy = false;
     bool majorBusy = false;
-    ZStat* statistics = nullptr;
     int32_t concurrentGcThreadCount = 1;
     std::atomic<bool> gcThreadRunning = { false };
     FinalizerProcessor finalizerProcessor;

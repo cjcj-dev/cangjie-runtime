@@ -116,8 +116,7 @@ void CollectorResources::Init()
     const uint64_t now = TimeUtil::NanoSeconds();
     Heap::GetHeap().young().CycleStats().Initialize(now);
     Heap::GetHeap().old().CycleStats().Initialize(now);
-    statistics = new ZStat();
-    ZCollectedHeap::heap()->_stat = statistics;
+    ZCollectedHeap::heap()->_stat = new ZStat();
     StartGCThreads();
     finalizerProcessor.Start();
     StringDedup::Instance().Start();
@@ -146,10 +145,11 @@ void CollectorResources::StopGCWork()
     // zCollectedHeap.cpp:314-319 gc_threads_do order: director, major driver,
     // minor driver, stat. StringDedup is not a ZGC thread and stops last.
     StopGCThreads();
-    if (statistics != nullptr) {
-        statistics->stop();
-        delete statistics;
-        statistics = nullptr;
+    ZCollectedHeap* collected = ZCollectedHeap::heap();
+    if (collected->_stat != nullptr) {
+        collected->_stat->stop();
+        delete collected->_stat;
+        collected->_stat = nullptr;
     }
     StringDedup::Instance().Stop();
 }
@@ -162,16 +162,17 @@ void CollectorResources::StopGCThreads()
     if (gcThreadRunning.load(std::memory_order_acquire) == false) {
         return;
     }
-    for (ZThread* thread : { static_cast<ZThread*>(director), static_cast<ZThread*>(majorDriver),
-                             static_cast<ZThread*>(minorDriver) }) {
+    ZCollectedHeap* collected = ZCollectedHeap::heap();
+    for (ZThread* thread : { static_cast<ZThread*>(collected->_director), static_cast<ZThread*>(collected->_driver_major),
+                             static_cast<ZThread*>(collected->_driver_minor) }) {
         thread->stop();
     }
-    delete director;
-    delete minorDriver;
-    delete majorDriver;
-    director = nullptr;
-    minorDriver = nullptr;
-    majorDriver = nullptr;
+    delete collected->_director;
+    delete collected->_driver_minor;
+    delete collected->_driver_major;
+    collected->_director = nullptr;
+    collected->_driver_minor = nullptr;
+    collected->_driver_major = nullptr;
     // Drivers have terminated; no worker task can be submitted any more.
     Heap::GetHeap().young().StopWorkers();
     Heap::GetHeap().old().StopWorkers();
@@ -404,17 +405,24 @@ void CollectorResources::StartGCThreads()
     collected->_driver_minor = new ZDriverMinor(*this);
     collected->_driver_major = new ZDriverMajor(*this);
     collected->_director = new ZDirector(*this);
-    minorDriver = collected->_driver_minor;
-    majorDriver = collected->_driver_major;
-    director = collected->_director;
-    minorDriver->start();
-    majorDriver->start();
+    collected->_driver_minor->start();
+    collected->_driver_major->start();
 }
 
 
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
+ZDriverPort& CollectorResources::GetMinorDriverPort()
+{
+    return ZCollectedHeap::heap()->driver_minor()->port();
+}
+
+ZDriverPort& CollectorResources::GetMajorDriverPort()
+{
+    return ZCollectedHeap::heap()->driver_major()->port();
+}
+
 ZWorkers& CollectorResources::GetWorkers(ZGenerationId generation) const
 {
     return *Heap::GetHeap().GetZGeneration(generation).Workers();

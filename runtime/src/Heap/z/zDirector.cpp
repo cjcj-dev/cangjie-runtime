@@ -632,13 +632,6 @@ void ZDirector::terminate()
     resources.directorCondition.notify_all();
 }
 
-void CollectorResources::RunDirectorLoop()
-{
-    if (director != nullptr) {
-        director->run_thread();
-    }
-}
-
 bool CollectorResources::start_gc(uint64_t now)
 {
     EvaluateDirector(now);
