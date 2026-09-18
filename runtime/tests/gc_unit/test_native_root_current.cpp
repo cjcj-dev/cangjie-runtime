@@ -29,13 +29,13 @@
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
-    static void PreparePlainRoots(WCollector& collector)
+    static void PreparePlainRoots(CopyCollector& collector)
     {
         // Match the eager product ordering before the direct TraceHeap fixture.
         // Full driver-entry coverage lives in RawRemapYoungProduct.
         collector.RemapYoungRoots();
     }
-    static void BindNativeRootFixture(CollectorResources& resources, WCollector& collector, uint32_t workers = 1)
+    static void BindNativeRootFixture(CollectorResources& resources, CopyCollector& collector, uint32_t workers = 1)
     {
         if (resources.testCollector != nullptr) {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.testCollector);
@@ -57,15 +57,15 @@ struct RelocationReceiptTestAccess {
         }
         ZGlobalsPointers::initialize();
     }
-    static void FlipNativeRootYoung(WCollector& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
-    static void NativeRootMajorPrelude(WCollector& collector)
+    static void FlipNativeRootYoung(CopyCollector& collector) { ZGlobalsPointers::flip_young_relocate_start(); }
+    static void NativeRootMajorPrelude(CopyCollector& collector)
     {
         collector.GetZGeneration(ZGenerationId::old).End();
         auto& young = collector.GetZGeneration(ZGenerationId::young);
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
         collector.RunGarbageCollection(1, GC_REASON_YOUNG);
     }
-    static void NativeRootTrace(WCollector& collector)
+    static void NativeRootTrace(CopyCollector& collector)
     {
         // This fixture enters tracing directly after in-place promotion. Match
         // the old mark-start sequence advance before consuming the new page
@@ -74,21 +74,21 @@ struct RelocationReceiptTestAccess {
         collector.StartOldMarkWork();
         collector.TraceHeap();
     }
-    static void RunOldRoots(WCollector& collector)
+    static void RunOldRoots(CopyCollector& collector)
     {
         collector.EnumAllCommonRoots(collector.GetWorkers(ZGenerationId::old));
     }
-    static size_t PendingYoungRootWork(WCollector& collector)
+    static size_t PendingYoungRootWork(CopyCollector& collector)
     {
         return ThreadLocal::GetMarkStacks(*collector.YoungMark()).Population();
     }
-    static void DrainYoungRootWork(WCollector& collector)
+    static void DrainYoungRootWork(CopyCollector& collector)
     {
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *collector.YoungMark());
         WorkStack work;
         std::vector<BaseObject*> reachable;
-        WCollector::MinorSlotSet slots;
-        WCollector::MinorSlotSet weak;
+        CopyCollector::MinorSlotSet slots;
+        CopyCollector::MinorSlotSet weak;
         collector.TraceYoungClosure(work, false, reachable, slots, weak);
     }
 };
@@ -118,7 +118,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
+    CopyCollector collector(heap.GetAllocator(), resources);
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
@@ -262,7 +262,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
+    CopyCollector collector(heap.GetAllocator(), resources);
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     BaseObject* held = fx.obj0;
 
@@ -302,7 +302,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
+    CopyCollector collector(heap.GetAllocator(), resources);
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     NativeSlot slot(zpointer::null);
     ZBarrier::WriteStaticRef(slot, fx.obj0);
@@ -318,7 +318,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
+    CopyCollector collector(heap.GetAllocator(), resources);
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     Heap::OnHeapCreated(fx.heapStart);
@@ -360,7 +360,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
+    CopyCollector collector(heap.GetAllocator(), resources);
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
@@ -392,7 +392,7 @@ void CheckRootStorageSegments(unsigned family)
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
+    CopyCollector collector(heap.GetAllocator(), resources);
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, 2);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
@@ -468,7 +468,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    WCollector collector(heap.GetAllocator(), resources);
+    CopyCollector collector(heap.GetAllocator(), resources);
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);

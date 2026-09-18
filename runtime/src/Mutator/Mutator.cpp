@@ -190,7 +190,7 @@ void Mutator::ResetMutator()
     }
     // Exit publishes the logical owner's private work before scheduler
     // unbinding can expose another owner through this OS TLS binding.
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     gcData.storeBarrierBuffer->Flush();
     (void)collector.FlushGCDataMarkProducers(gcData);
     uwContext.Reset();
@@ -794,7 +794,7 @@ static bool PushHeapRoot(RootSlot& root, bool young, bool follow = true)
     if (!Heap::IsHeapAddress(object)) {
         return false;
     }
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // The eager relocation handshake makes saved uncolored roots current
     // before this mark pass (ZUncoloredRoot::make_load_good's current-color arm).
     BaseObject* current = object;

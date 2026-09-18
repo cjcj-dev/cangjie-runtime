@@ -13,7 +13,7 @@ struct MarkPublicationFixture {
     MarkPublicationFixture* previousFixture = current;
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector { Heap::GetHeap().GetAllocator(), resources };
+    CopyCollector collector { Heap::GetHeap().GetAllocator(), resources };
     Collector* previousCollector;
     MarkPublicationFixture()
         : previousCollector(resources.testCollector)
@@ -64,8 +64,8 @@ struct MarkPublicationFixture {
     }
     bool FollowYoung(WorkStack& work, std::vector<BaseObject*>& reached)
     {
-        WCollector::MinorSlotSet slots;
-        WCollector::MinorSlotSet weakSlots;
+        CopyCollector::MinorSlotSet slots;
+        CopyCollector::MinorSlotSet weakSlots;
         return collector.FollowYoungMark(work, false, reached, slots, weakSlots);
     }
     void CompleteOldMarkForAdmissionTest()
@@ -82,11 +82,11 @@ struct MarkPublicationFixture {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
     size_t YoungPending() const {
-        auto* mark = const_cast<WCollector&>(collector).YoungMark();
+        auto* mark = const_cast<CopyCollector&>(collector).YoungMark();
         return mark->Stripes().Population() + mark->Stacks().Population();
     }
     size_t OldPending() const {
-        auto* mark = const_cast<WCollector&>(collector).MajorMark();
+        auto* mark = const_cast<CopyCollector&>(collector).MajorMark();
         return mark->Stripes().Population() + mark->Stacks().Population();
     }
 };

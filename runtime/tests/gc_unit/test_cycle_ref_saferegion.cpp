@@ -103,7 +103,7 @@ void SafepointingCycleRefHandler(BaseObject* exportObj, BaseObject* externObj)
 }
 
 struct PhaseFlipContext {
-    WCollector* collector = nullptr;
+    CopyCollector* collector = nullptr;
     std::atomic<size_t> calls{ 0 };
 };
 
@@ -124,7 +124,7 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
 {
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
     resolverMutator.SetSuspensionFlag(Mutator::SUSPENSION_FOR_SYNC);
@@ -194,7 +194,7 @@ GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
 {
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
 
     auto* exportRoot = reinterpret_cast<BaseObject*>(0x1000);
     auto* externRoot = reinterpret_cast<BaseObject*>(0x2000);
@@ -229,7 +229,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
@@ -326,7 +326,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     MutatorManager manager;
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);

@@ -38,11 +38,11 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 struct MutatorPublishTestAccess {
-    static BaseObject* RelocateInner(WCollector& collector, BaseObject* from, ZPage* page)
+    static BaseObject* RelocateInner(CopyCollector& collector, BaseObject* from, ZPage* page)
     {
         return collector.RelocateObjectInner(from, page);
     }
-    static BaseObject* ForwardImpl(WCollector& collector, BaseObject* from, ZPage* page)
+    static BaseObject* ForwardImpl(CopyCollector& collector, BaseObject* from, ZPage* page)
     {
         collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         ZPage::RetainScope lease(page);
@@ -56,7 +56,7 @@ GC_TEST(ForwardingNoGeometry, RelocateInnerFindHitSkipsCopy)
 {
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     GC_EXPECT_TRUE(MutatorPublishTestAccess::RelocateInner(collector, heap.obj0, heap.region0) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
@@ -65,7 +65,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
 {
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     GC_EXPECT_TRUE(MutatorPublishTestAccess::ForwardImpl(collector, heap.obj0, heap.region0) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }
@@ -74,7 +74,7 @@ GC_TEST(ForwardingNoGeometry, ExclusiveVtableFindHitSkipsCopy)
 {
     GcHeapFixture heap;
     InstallReceipt(heap, reinterpret_cast<MAddress>(heap.obj0), reinterpret_cast<MAddress>(heap.obj1));
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     GC_EXPECT_TRUE(collector.ForwardObjectExclusive(heap.obj0) == heap.obj1);
     GC_EXPECT_FALSE(heap.obj0->IsForwarded());
 }

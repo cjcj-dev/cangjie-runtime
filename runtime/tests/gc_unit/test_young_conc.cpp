@@ -71,7 +71,7 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
     referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     WorkStack workStack;
     collector.DiscoverWeakReference(fx.obj0, workStack);
 
@@ -113,17 +113,17 @@ struct RelocationReceiptTestAccess {
         }
     }
 
-    static void FlipYoungMarkForNativeBarrier(WCollector& collector)
+    static void FlipYoungMarkForNativeBarrier(CopyCollector& collector)
     {
         ZGlobalsPointers::flip_young_mark_start();
     }
 
-    static void StartYoungRelocate(WCollector& collector)
+    static void StartYoungRelocate(CopyCollector& collector)
     {
         ZGlobalsPointers::flip_young_relocate_start();
     }
 
-    static void RunCollectionDispatch(WCollector& collector)
+    static void RunCollectionDispatch(CopyCollector& collector)
     {
         auto& cycle = collector.GetZGeneration(ZGenerationId::young);
         if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
@@ -212,7 +212,7 @@ GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
 }
 
 // Paint-then-claim-skip: already-marked MarkObject returns true; without grey ledger
-// TraceYoungClosure would drop reachableVec/fields (WCollector.cpp:8110-8136).
+// TraceYoungClosure would drop reachableVec/fields (CopyCollector.cpp:8110-8136).
 // A mutator publishes ordinary SATB work after coordinated mark workers have
 // terminated but before pause-mark-end starts. Each pause is allowed exactly
 // one flush. Two publications therefore require two continue edges followed by
@@ -232,7 +232,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + 64);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -286,7 +286,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -336,7 +336,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -395,7 +395,7 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     y2yField->StoreColoured(GcUnit::StoreGoodPointer(y2yChild));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -441,7 +441,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj1) + 64);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());

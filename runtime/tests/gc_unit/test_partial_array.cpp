@@ -38,13 +38,13 @@ using namespace MapleRuntime::GcUnit;
 namespace MapleRuntime {
 
 struct PartialArrayTestAccess {
-    static void Push(const WCollector& collector, RefField<>* addr, size_t length,
+    static void Push(const CopyCollector& collector, RefField<>* addr, size_t length,
                      WorkStack& workStack)
     {
         collector.PushPartialArray(addr, length, workStack);
     }
 
-    static void StartFieldMark(WCollector& collector)
+    static void StartFieldMark(CopyCollector& collector)
     {
         auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
         GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
@@ -61,7 +61,7 @@ struct PartialArrayTestAccess {
         arm(heap);
     }
 
-    static void ReadPublished(WCollector& collector, WorkStack& result)
+    static void ReadPublished(CopyCollector& collector, WorkStack& result)
     {
         auto& heap = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
         auto& domain = heap.MajorMark() != nullptr ? *heap.MajorMark()
@@ -74,7 +74,7 @@ struct PartialArrayTestAccess {
         }
     }
 
-    static void StoreTarget(const WCollector& collector, RefField<>& field, BaseObject* target)
+    static void StoreTarget(const CopyCollector& collector, RefField<>& field, BaseObject* target)
     {
         const RefField<> coloured = collector.GetAndTryTagRefField(target);
         field.StoreColoured(coloured.GetFieldValue());
@@ -203,7 +203,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     SlotBuf buf(MarkPartialArray::MIN_LENGTH);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     WorkStack workStack;
     RefField<>* const chunk = reinterpret_cast<RefField<>*>(buf.slots);
     for (size_t i = 0; i < MarkPartialArray::MIN_LENGTH; ++i) {

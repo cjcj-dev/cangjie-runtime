@@ -50,7 +50,6 @@ class FinalizerProcessor;
 class CollectorResources;
 class Collector;
 class CopyCollector;
-using WCollector = CopyCollector;
 class ZRemembered;
 class ExportRootTable;
 class StaticRootTable;
@@ -235,7 +234,7 @@ private:
     ZGenerationYoung _young;
     Allocator* theSpace { nullptr };
     CollectorResources* collectorResources { nullptr };
-    WCollector* collectorImpl { nullptr };
+    CopyCollector* collectorImpl { nullptr };
     ExportRootTable* exportRootsTable { nullptr };
     StaticRootTable* staticRootTable { nullptr };
     std::atomic<bool> isGCEnabled { true };

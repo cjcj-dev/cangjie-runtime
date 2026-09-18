@@ -59,12 +59,12 @@
 #include "Heap/z/zCollectorInternal.hpp"
 
 namespace MapleRuntime {
-bool WCollector::MarkObject(BaseObject* obj) const
+bool CopyCollector::MarkObject(BaseObject* obj) const
 {
     return MarkObjectImpl(obj, false);
 }
 
-bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache* liveCache) const
+bool CopyCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache* liveCache) const
 {
     (void)youngClaim;
     ZPage* region = Heap::page(reinterpret_cast<MAddress>(obj));
@@ -89,7 +89,7 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     return marked;
 }
 
-bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, ZPage* region)
+bool CopyCollector::ResurrectObject(BaseObject* obj, size_t offset, ZPage* region)
 {
     (void)offset;
     // ZPage::mark_object(addr, finalizable = true) + inc_live on the first claim.
@@ -105,7 +105,7 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, ZPage* region)
     return resurrected;
 }
 // RefFieldRoot is root in tagged pointer format.
-void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
+void CopyCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 {
     RefField<> oldField(field);
     // The major root iterator bypasses ReadStaticRef. Enforce the same
@@ -171,7 +171,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     rootSet.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(latest))), true, true, true, false));
 }
 
-void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const
+void CopyCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const
 {
     zaddress_unsafe observed = ref.LoadPlain();
     if (is_null(observed)) {
@@ -186,7 +186,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
     if (IsGhostFromObject(root)) {
         const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &ref };
         BaseObject* to = FindToVersion(root, generation).GetOrFailClosed(
-            "WCollector::MarkStackRoots", provenance);
+            "CopyCollector::MarkStackRoots", provenance);
         if (to != nullptr) {
             root = to;
         }
@@ -198,20 +198,20 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation 
 
 // ZMarkOopClosure::do_oop, zMark.cpp:198-205. The field barrier owns
 // remapping and generation routing; the original colored slot is authoritative.
-void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack&, bool finalizable) const
+void CopyCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack&, bool finalizable) const
 {
     ZBarrier::MarkBarrierOnOldOopField(obj, field, finalizable);
 }
 
 // Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196): the heap
 // offset is bounded, so the descriptor always fits one entry word.
-void WCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable) const
+void CopyCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable) const
 {
     workStack.push_back(MarkPartialArray::Encode(addr, length, finalizable));
 }
 
 // zMark.cpp:208-214 (follow_array_elements_small).
-void WCollector::FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, size_t length,
+void CopyCollector::FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, size_t length,
                                           WorkStack& workStack, bool finalizable) const
 {
     for (size_t i = 0; i < length; ++i) {
@@ -220,7 +220,7 @@ void WCollector::FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, 
 }
 
 // zMark.cpp:216-255 (follow_array_elements_large), transcribed.
-void WCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, size_t length,
+void CopyCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, size_t length,
                                           WorkStack& workStack, bool finalizable) const
 {
     RefField<>* const start = addr;
@@ -255,7 +255,7 @@ void WCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, 
 }
 
 // zMark.cpp:257-263 (follow_array_elements).
-void WCollector::FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
+void CopyCollector::FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
                                      WorkStack& workStack, bool finalizable) const
 {
     MarkPartialArray::FollowElements(reinterpret_cast<MAddress>(addr), length, finalizable,
@@ -265,7 +265,7 @@ void WCollector::FollowArrayElements(BaseObject* holder, RefField<>* addr, size_
 }
 
 // zMark.cpp:265-270 (follow_partial_array).
-void WCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
+void CopyCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
 {
     MAddress chunkStart = 0;
     size_t length = 0;
@@ -273,7 +273,7 @@ void WCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& work
     FollowArrayElements(nullptr, &HeapSlotAt<>(chunkStart), length, workStack, entry.finalizable());
 }
 
-void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable)
+void CopyCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable)
 {
 
     auto visitor = [this, obj, &workStack, finalizable](RefField<>& field) {
@@ -314,7 +314,7 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, boo
     ZIterator::oop_iterate(obj, &closure);
 }
 
-BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
+BaseObject* CopyCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
 {
     RefField<> oldField(field);
     const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
@@ -347,7 +347,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     }
     return latest;
 }
-void WCollector::TraceHeap()
+void CopyCollector::TraceHeap()
 {
     ZBreakpoint::AtAfterMarkingStarted();
     oldMarkWorkStack.clear();
@@ -408,7 +408,7 @@ namespace {
 thread_local const char* gMinorRootOrigin = "unknown";
 } // namespace
 
-void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
+void CopyCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
                                      uint64_t stackScanEpoch)
 {
 #if defined(MRT_GC_UNIT_TESTS)
@@ -449,7 +449,7 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
     gMinorRootOrigin = "unknown";
 }
 
-void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor)
+void CopyCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor)
 {
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
@@ -640,7 +640,7 @@ private:
 };
 } // namespace
 
-void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
+void CopyCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
                                  const std::function<void(BaseObject*)>& invisibleVisitor,
                                  uint64_t stackScanEpoch)
 {
@@ -664,12 +664,12 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
 
 }
 
-void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
+void CopyCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
 {
     PushYoungObject(object, workStack, origin, false);
 }
 
-void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin,
+void CopyCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin,
                                   bool finalizable) const
 {
     if (!Heap::IsHeapAddress(object)) {
@@ -750,8 +750,8 @@ BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void*
 
 } // namespace
 
-namespace WCollectorInternal {
-} // namespace WCollectorInternal
+namespace CopyCollectorInternal {
+} // namespace CopyCollectorInternal
 
 namespace {
 size_t MarkStripeCount(size_t workers)
@@ -766,7 +766,7 @@ size_t MarkStripeCount(size_t workers)
 
 } // namespace
 
-namespace WCollectorInternal {
+namespace CopyCollectorInternal {
 // h3seed3 乙: live-holder slot → free|garbage target → CAS null.
 // Criterion fields (RegionInfo state word): IsFreeRegion() / IsGarbageRegion()
 // via TryGetRegionInfoAt(target) at the call site (closure edge or Fix).
@@ -795,11 +795,11 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
     // coverage completed; fail closed instead of manufacturing a null heal.
     (void)field.CompareExchange(oldField.GetFieldValue(), zpointer::null);
     Collector::FailClosedLoad(
-        "WCollector::ScrubMinorFreeTarget.unresolved", target, oldVal,
+        "CopyCollector::ScrubMinorFreeTarget.unresolved", target, oldVal,
         ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
 }
 
-} // namespace WCollectorInternal
+} // namespace CopyCollectorInternal
 
 
 class ZMarkTask : public ZRestartableTask {
@@ -824,7 +824,7 @@ private:
     const bool partial;
 };
 
-void WCollector::StartYoungMarkWork()
+void CopyCollector::StartYoungMarkWork()
 {
     ZWorkers& workers = GetWorkers(ZGenerationId::young);
     Heap::GetHeap().young().Mark().BindWorkers(&workers);
@@ -832,7 +832,7 @@ void WCollector::StartYoungMarkWork()
     MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
 }
 
-void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
+void CopyCollector::MarkYoungObjectIfActive(BaseObject* object) const
 {
     if (!Heap::IsHeapAddress(object)) {
         return;
@@ -841,7 +841,7 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object) const
         .MarkObjectIfActive<false, false, true, false>(from_object(object));
 }
 
-void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
+void CopyCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                           MinorSlotSet& weakSlots,
                                           const MinorSlotSet* reachableSlotDomain)
@@ -872,7 +872,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
                  dispelAtExit);
 }
 
-void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
+void CopyCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
                                    std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                    MinorSlotSet& weakSlots,
                                    const MinorSlotSet* reachableSlotDomain)
@@ -901,7 +901,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
 
 // ZGenerationYoung::concurrent_mark_continue follows the generation's
 // published mark work. Young marking has no SATB queue (zBarrier.cpp:160-180).
-bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
+bool CopyCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
                                      std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                      MinorSlotSet& weakSlots,
                                      YoungConcWindowStats* windowStats)
@@ -929,7 +929,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
     return true;
 }
 
-bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)
+bool CopyCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)
 {
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
@@ -944,7 +944,7 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     MarkingStacks::VerifyAllEmpty(Heap::GetHeap().young().Mark());
     return true;
 }
-void WCollector::MarkNewObject(BaseObject* obj)
+void CopyCollector::MarkNewObject(BaseObject* obj)
 {
     // Registration follows object initialization (BaseObject::RegisterFinalizer).
     // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
@@ -952,13 +952,13 @@ void WCollector::MarkNewObject(BaseObject* obj)
     cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
 }
 
-void WCollector::ProcessFinalizers()
+void CopyCollector::ProcessFinalizers()
 {
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
 }
 
-bool WCollector::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
+bool CopyCollector::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
 {
     if (domain == nullptr || work.empty()) {
         return false;
@@ -988,7 +988,7 @@ bool WCollector::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
     return published;
 }
 
-void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young)
+void CopyCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young)
 {
     if (buffer == nullptr) {
         return;
@@ -1006,7 +1006,7 @@ void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& w
     });
 }
 
-void WCollector::PublishThreadRoot(BaseObject* object, bool young, bool follow)
+void CopyCollector::PublishThreadRoot(BaseObject* object, bool young, bool follow)
 {
     ZMark* domain = young ? Heap::GetHeap().young().MarkPtr() : Heap::GetHeap().old().MarkPtr();
     CHECK_DETAIL(domain != nullptr, "root publication requires an active mark domain");
@@ -1016,24 +1016,24 @@ void WCollector::PublishThreadRoot(BaseObject* object, bool young, bool follow)
         MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, follow, false), true);
 }
 
-bool WCollector::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
+bool CopyCollector::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
 {
     return domain != nullptr && data.FlushMarkStacks(*domain);
 }
 
-bool WCollector::FlushGCDataMarkProducers(ThreadGCData& data)
+bool CopyCollector::FlushGCDataMarkProducers(ThreadGCData& data)
 {
     const bool young = FlushGCDataMarkProducers(data, Heap::GetHeap().young().MarkPtr());
     return FlushGCDataMarkProducers(data, Heap::GetHeap().old().MarkPtr()) || young;
 }
 
-bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls)
+bool CopyCollector::FlushThreadMarkProducers(ThreadLocalData* tls)
 {
     bool published = FlushThreadMarkProducers(tls, Heap::GetHeap().young().MarkPtr());
     return FlushThreadMarkProducers(tls, Heap::GetHeap().old().MarkPtr()) || published;
 }
 
-bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain)
+bool CopyCollector::FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain)
 {
     if (tls == nullptr || domain == nullptr) {
         return false;
@@ -1463,7 +1463,7 @@ void ZMark::MarkAndFollow(MarkContext& ctx, const MarkStackEntry& entry)
 {
     auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     if (generation == MarkingStacks::MarkingGeneration::YOUNG) {
-        auto& w = static_cast<WCollector&>(collector);
+        auto& w = static_cast<CopyCollector&>(collector);
         auto visitSlot = [](MAddress slot) {
             auto& field = HeapSlotAt<>(slot);
             ZBarrier::MarkBarrierOnYoungOopField(field);
@@ -1605,7 +1605,7 @@ bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
     if (!HeapMarkReady()) {
         return domain != nullptr ? data.FlushMarkStacks(*domain) : false;
     }
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     return domain == nullptr ? collector.FlushGCDataMarkProducers(data)
                              : collector.FlushGCDataMarkProducers(data, domain);
 }
@@ -1627,7 +1627,7 @@ bool ZMark::FlushThreadLocal(ThreadLocalData* tls, ZMark* domain)
     if (!HeapMarkReady()) {
         return published;
     }
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     return (domain == nullptr ? collector.FlushThreadMarkProducers(tls)
                               : collector.FlushThreadMarkProducers(tls, domain)) || published;
 }

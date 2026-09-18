@@ -263,7 +263,7 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 // PrepareFromRegionList, immediately after the ghost dispel walk and before the next
 // generation's destinations are enrolled — placing it there rather than at the three
 // PrepareForwardTable call sites is what makes it immune to a missed site, and there are
-// three, two of them inside a single minor (WCollector.cpp:5117 and :5570) plus the major
+// three, two of them inside a single minor (CopyCollector.cpp:5117 and :5570) plus the major
 // PostTrace one (:2124).
 //
 // Walks the same eleven lists as ClearNotRelocatableThisCycleFlags, and reports the gauge

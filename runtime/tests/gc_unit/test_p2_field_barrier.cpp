@@ -525,7 +525,7 @@ extern "C" int p2ArrayFieldExercise()
 namespace {
 class P2FieldInputTask final : public ZTask {
 public:
-    P2FieldInputTask(WCollector& collector, std::function<void()> exercise)
+    P2FieldInputTask(CopyCollector& collector, std::function<void()> exercise)
         : ZTask("P2FieldInputTask"), collector(collector), exercise(std::move(exercise)) {}
     void work() override
     {
@@ -536,7 +536,7 @@ public:
         Expect(collector.MajorMark()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
     }
 private:
-    WCollector& collector;
+    CopyCollector& collector;
     std::function<void()> exercise;
     std::atomic<bool> claimed{false};
 };
@@ -553,7 +553,7 @@ extern "C" int p2SlowFieldInputExercise()
     auto* edgeType = Type(types[1], true, 1);
     auto* leafType = Type(types[2], false, 1);
     auto& heap = Heap::GetHeap();
-    auto& collector = static_cast<WCollector&>(heap.GetCollector());
+    auto& collector = static_cast<CopyCollector&>(heap.GetCollector());
     auto* strongHolder = MObject::NewPinnedObject(holderType, 24);
     auto* finalHolder = MObject::NewPinnedObject(holderType, 24);
     auto* oldChild = MObject::NewPinnedObject(edgeType, 16);

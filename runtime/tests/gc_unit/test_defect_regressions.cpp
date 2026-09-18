@@ -48,7 +48,7 @@ namespace {
 constexpr Uptr kAddrMask = (Uptr(1) << 48) - 1u;
 
 // Model of FixOldTagged / ResolveMinor non-heap arm: recolour (or keep) — never install 0.
-// Product: WCollector.cpp FixOldTaggedRefField (nullslot 2da28bee / 6a6cf3d8) and
+// Product: CopyCollector.cpp FixOldTaggedRefField (nullslot 2da28bee / 6a6cf3d8) and
 // ResolveMinorReference non-heap early return (zcdnull / B-4 ③).
 Uptr ModelRecolourNonHeapNeverNull(Uptr /*slotVal*/, Uptr nonHeapTarget, bool isHeapTarget)
 {
@@ -162,7 +162,7 @@ struct CompilerStoreFixture {
     CompilerStoreFixture()
         : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources()) {}
     GcHeapFixture heap;
-    WCollector collector;
+    CopyCollector collector;
 };
 
 } // namespace
@@ -239,7 +239,7 @@ GC_TEST(DefectRegress, StaticRootHealDoesNotClobberConcurrentStore)
 }
 
 // ⑤ minor ResolveMinor non-heap arm (same contract as ② on the minor side).
-// Product: ResolveMinorReference — non-heap returns as-is, never CAS-null (WCollector.cpp:1935).
+// Product: ResolveMinorReference — non-heap returns as-is, never CAS-null (CopyCollector.cpp:1935).
 GC_TEST(DefectRegress, MinorNonHeapResolveNeverCasNull)
 {
     GcHeapFixture fx;

@@ -6,7 +6,7 @@
 //
 // Companion of run_generation_cycle_context.sh. Its fixtures reach product
 // internals through MRT_TESTABLE_INTERNALS friend access (MarkPublicationFixture
-// in WCollector.h/CollectorProxy.h/zMark.hpp/zDriver.hpp), so it only exists in
+// in CopyCollector.h/CollectorProxy.h/zMark.hpp/zDriver.hpp), so it only exists in
 // the testable configuration; the runner builds it only against a testable
 // product SO and reports SATB_RC=NOT_RUN otherwise. The process entry is
 // gc_unit_main.cpp, the same one as cj_gc_unit, so --gtest_filter= /

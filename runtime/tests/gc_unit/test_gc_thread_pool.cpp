@@ -155,10 +155,10 @@ bool RunSerialProductEntryClosesGeneration()
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-class YoungForwardRuntimeCollector : public WCollector {
+class YoungForwardRuntimeCollector : public CopyCollector {
 public:
     YoungForwardRuntimeCollector(Allocator& allocator, CollectorResources& resources)
-        : WCollector(allocator, resources) {}
+        : CopyCollector(allocator, resources) {}
 
     void ForwardYoungFromRuntimeEntry()
     {

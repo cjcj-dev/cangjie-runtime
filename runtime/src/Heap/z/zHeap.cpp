@@ -105,15 +105,15 @@ Heap::Heap()
     theSpace = Allocator::NewAllocator();
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
-    collectorImpl = static_cast<WCollector*>(::operator new(sizeof(WCollector)));
+    collectorImpl = static_cast<CopyCollector*>(::operator new(sizeof(CopyCollector)));
     collectorResources = new CollectorResources(*collectorImpl);
-    new (collectorImpl) WCollector(*theSpace, *collectorResources);
+    new (collectorImpl) CopyCollector(*theSpace, *collectorResources);
 }
 
 Heap::~Heap()
 {
     if (collectorImpl != nullptr) {
-        collectorImpl->~WCollector();
+        collectorImpl->~CopyCollector();
         ::operator delete(collectorImpl);
         collectorImpl = nullptr;
     }

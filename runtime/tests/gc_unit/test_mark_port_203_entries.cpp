@@ -17,11 +17,11 @@ namespace {
 // Bind the existing product implementation, never instantiate a second copy
 // of the mark claim in the test ELF. The runtime entry arms are separate from
 // these focused accounting checks.
-using ProductMark = bool (*)(const WCollector*, BaseObject*, bool, MarkLiveCache*);
+using ProductMark = bool (*)(const CopyCollector*, BaseObject*, bool, MarkLiveCache*);
 ProductMark CachedMark()
 {
     auto fn = reinterpret_cast<ProductMark>(dlsym(RTLD_DEFAULT,
-        "_ZNK12MapleRuntime10WCollector14MarkObjectImplEPNS_10BaseObjectEbPNS_13MarkLiveCacheE"));
+        "_ZNK12MapleRuntime10CopyCollector14MarkObjectImplEPNS_10BaseObjectEbPNS_13MarkLiveCacheE"));
     GC_EXPECT_TRUE(fn != nullptr);
     return fn;
 }
@@ -35,7 +35,7 @@ void CheckCachedClaim(bool finalizable, bool repeat, bool large = false)
         fx.obj0 = fx.PlaceObject(fx.region0->GetRegionStart());
         fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + fx.obj0->GetSize());
     }
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     const size_t size = fx.obj0->GetSize();
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     if (finalizable) {
@@ -92,7 +92,7 @@ GC_TEST(MarkPort203Entries, LargeFinalizableUpgradeDoesNotAccountTwice)
 GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 {
     GcHeapFixture fx;
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     // Choose a legal power-of-two shift from actual fixture addresses rather
     // than assuming that mmap placed both pages below one bucket boundary.
     size_t stripes = 1;
@@ -144,7 +144,7 @@ struct MarkPort203TestAccess {
         resources.testCollector = collector;
         resources.concurrentGcThreadCount = count;
     }
-    static void Collect(WCollector& collector, bool major)
+    static void Collect(CopyCollector& collector, bool major)
     {
         // The major driver normally initializes old marking in its young prelude.
         // This focused old-body fixture supplies the same product initialization.
@@ -314,7 +314,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     GC_EXPECT_TRUE(next <= fx.region1->GetRegionEnd());
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    CopyCollector collector(Heap::GetHeap().GetAllocator(), resources);
     MarkPort203TestAccess::Bind(resources, &collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {

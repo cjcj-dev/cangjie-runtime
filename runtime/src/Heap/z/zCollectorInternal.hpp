@@ -17,7 +17,7 @@
 #endif
 
 namespace MapleRuntime {
-namespace WCollectorInternal {
+namespace CopyCollectorInternal {
 
 WCOLLECTOR_INTERNAL_HIDDEN bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
 
@@ -35,9 +35,9 @@ size_t LedgerCount(const SetT& set, const KeyT& key)
     return set.count(key);
 }
 
-} // namespace WCollectorInternal
+} // namespace CopyCollectorInternal
 
-using namespace WCollectorInternal;
+using namespace CopyCollectorInternal;
 } // namespace MapleRuntime
 
 #undef WCOLLECTOR_INTERNAL_HIDDEN

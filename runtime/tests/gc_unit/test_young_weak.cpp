@@ -86,7 +86,7 @@ struct RelocationReceiptTestAccess {
         resources.concurrentGcThreadCount = threadCount;
     }
 
-    static void RunYoungCollection(WCollector& collector)
+    static void RunYoungCollection(CopyCollector& collector)
     {
         auto& cycle = collector.GetZGeneration(ZGenerationId::young);
         if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
@@ -94,7 +94,7 @@ struct RelocationReceiptTestAccess {
         collector.DoGarbageCollection(ZGenerationId::young);
     }
 
-    static void PrepareMajorRoots(WCollector& collector)
+    static void PrepareMajorRoots(CopyCollector& collector)
     {
         auto& young = collector.GetZGeneration(ZGenerationId::young);
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
@@ -110,7 +110,7 @@ struct RelocationReceiptTestAccess {
         collector.RunGarbageCollection(1, GC_REASON_YOUNG);
     }
 
-    static void RunMajorMark(WCollector& collector)
+    static void RunMajorMark(CopyCollector& collector)
     {
         PrepareMajorRoots(collector);
         auto& cycle = collector.GetZGeneration(ZGenerationId::old);
@@ -121,9 +121,9 @@ struct RelocationReceiptTestAccess {
         collector.TraceHeap();
     }
 
-    static void RunPostTrace(WCollector& collector) { collector.PostTrace(); }
+    static void RunPostTrace(CopyCollector& collector) { collector.PostTrace(); }
 
-    static void RunExportMajorMark(WCollector& collector)
+    static void RunExportMajorMark(CopyCollector& collector)
     {
         // The major-roots young prelude already began and prepared old marking
         // (zGeneration.cpp:118-124). Do not select/restart that active cycle.
@@ -131,7 +131,7 @@ struct RelocationReceiptTestAccess {
         collector.TraceHeap();
     }
 
-    static void SeedValueRoots(WCollector& collector, BaseObject* value)
+    static void SeedValueRoots(CopyCollector& collector, BaseObject* value)
     {
         {
             std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
@@ -146,7 +146,7 @@ struct RelocationReceiptTestAccess {
         collector.cycleRefWorkStack[value].push_back(value);
     }
 
-    static bool AllValueRootsEqual(WCollector& collector, BaseObject* value)
+    static bool AllValueRootsEqual(CopyCollector& collector, BaseObject* value)
     {
         {
             std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
@@ -163,7 +163,7 @@ struct RelocationReceiptTestAccess {
             it->second.size() == 1 && it->second.front() == value;
     }
 
-    static bool CycleHandoffEquals(WCollector& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
+    static bool CycleHandoffEquals(CopyCollector& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
     {
         std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
         auto it = collector.cycleRefWorkStack.find(key);
@@ -171,7 +171,7 @@ struct RelocationReceiptTestAccess {
             it != collector.cycleRefWorkStack.end() && it->second.size() == 1 && it->second.front() == value;
     }
 
-    static bool DiscoveredCarrierEquals(WCollector& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
+    static bool DiscoveredCarrierEquals(CopyCollector& collector, BaseObject* key, BaseObject* value, size_t owners = 1)
     {
         std::lock_guard<std::mutex> lock(collector.externMtx);
         auto it = collector.discoveredExternObjects.find(key);
@@ -180,7 +180,7 @@ struct RelocationReceiptTestAccess {
             it->second.front() == value;
     }
 
-    static bool MinorFinishedValueRootsEqual(WCollector& collector, BaseObject* value)
+    static bool MinorFinishedValueRootsEqual(CopyCollector& collector, BaseObject* value)
     {
         {
             std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
@@ -196,7 +196,7 @@ struct RelocationReceiptTestAccess {
             it->second.size() == 1 && it->second.front() == value;
     }
 
-    static void RunMajorCollection(WCollector& collector)
+    static void RunMajorCollection(CopyCollector& collector)
     {
         PrepareMajorRoots(collector);
         auto& cycle = collector.GetZGeneration(ZGenerationId::old);
@@ -405,7 +405,7 @@ void RunYoungWeakVariant(size_t helpers)
     WeakGraph graph(fx, fx.region1);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // zGeneration.cpp: each generation owns its worker pool before collection.
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     {
@@ -476,7 +476,7 @@ void RunYoungWeakRemsetFlow()
     TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::young).set_phase(ZGenerationPhase::MarkComplete);
     RememberedSet& rememberedSet = HeapTestRemset();
@@ -538,7 +538,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     WeakGraph graph(fx, fx.region0);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // zGeneration.cpp: each generation owns its worker pool before collection.
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     {
@@ -739,7 +739,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     WeakGraph::Field(graph.weak).StoreColoured(zpointer::null);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
@@ -771,7 +771,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     ValueRootRoute route = PrepareValueRootRoute(fx, true);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     {
         auto& young = collector.GetZGeneration(ZGenerationId::young);
@@ -838,7 +838,7 @@ void RunMajorExportOwnership(bool sharedCycle, bool fullDriver = false)
     const size_t owners = sharedCycle ? 2 : 1;
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
@@ -959,7 +959,7 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     GcHeapFixture fx;
     WeakGraph graph(fx, fx.region0);
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     NativeSlot root(StoreGoodPointer(graph.weak));
@@ -998,7 +998,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     GcHeapFixture fx;
     WeakGraph graph(fx, fx.region0);
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    CopyCollector& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);

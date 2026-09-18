@@ -54,12 +54,12 @@ bool NoHigherPriorityTask()
     return false;
 }
 
-class PostResolveProbeCollector final : public WCollector {
+class PostResolveProbeCollector final : public CopyCollector {
 public:
-    using WCollector::DoGarbageCollection;
+    using CopyCollector::DoGarbageCollection;
 
     PostResolveProbeCollector(Allocator& allocator, CollectorResources& resources)
-        : WCollector(allocator, resources)
+        : CopyCollector(allocator, resources)
     {
     }
 
@@ -85,7 +85,7 @@ void* RunMajorCycle(void*)
     // ZHeap owns both generations (zHeap.cpp:60-70); a major request runs
     // its young prelude before the old body (zDriver.cpp:443-451). Use the
     // initialized heap collector and driver instead of a second collector.
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
     auto* type = reinterpret_cast<TypeInfo*>(typeStorage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
