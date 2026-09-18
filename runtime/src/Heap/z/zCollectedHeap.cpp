@@ -19,6 +19,7 @@
 #include "Common/BaseObject.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Common/StateWord.h"
+#include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
@@ -63,7 +64,22 @@ void HeapGcState::MarkObjectIfActive(BaseObject* object) const
 
 void ZCollectedHeap::collect(GCReason reason, bool async)
 {
-    _resources->RequestGC(reason, async);
+    CHECK(reason < GC_REASON_MAX);
+    if (!_heap.IsGCEnabled()) return;
+    if (reason == GC_REASON_WB_BREAKPOINT) {
+        _driver_major->collect(ZDriverRequest(reason, 0, 0));
+        return;
+    }
+    ZDriverPort& port = reason == GC_REASON_YOUNG
+        ? _resources->GetMinorDriverPort() : _resources->GetMajorDriverPort();
+    const ZDriverRequest request(reason, 0, 0);
+    if (async) {
+        CHECK(!g_gcRequests[reason].IsSyncGC());
+        port.send_async(request);
+    } else {
+        ScopedEnterSaferegion enterSaferegion(false);
+        port.send_sync(request);
+    }
 }
 
 void ZCollectedHeap::stop()

@@ -56,7 +56,7 @@ bool ConcurrentGCBreakpoints::RunTo(const char* name)
     condition.notify_all();
     if (idle) {
         lock.unlock();
-        Heap::GetHeap().GetCollectorResources().RequestGC(GC_REASON_WB_BREAKPOINT, true);
+        Heap::GetHeap().RequestGC(GC_REASON_WB_BREAKPOINT, true);
         lock.lock();
     }
     for (;;) {

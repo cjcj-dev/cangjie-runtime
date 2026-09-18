@@ -384,7 +384,6 @@ public:
     void StopGCWork();
     void LockDriver() { driverLock.lock(); }
     void UnlockDriver() { driverLock.unlock(); }
-    void RequestGC(GCReason reason, bool async);
 
     ZWorkers& GetWorkers(ZGenerationId generation) const;
 
@@ -446,8 +445,6 @@ private:
     // Notify the GC thread to start GC, and doesn't wait.
     // Called by mutator.
     // reason: The reason for this GC.
-    void RequestAsyncGC(GCReason reason);
-    void RequestGCAndWait(GCReason reason);
     bool ExecuteDriverRequest(const ZDriverRequest& request);
     bool ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request);
     void CancelDriverRequestLifecycle(GCDriverKind kind);

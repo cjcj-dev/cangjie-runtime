@@ -348,46 +348,6 @@ void CollectorResources::CancelDriverRequestLifecycle(GCDriverKind kind)
         ? ZGenerationId::young : ZGenerationId::old).End();
 }
 
-void CollectorResources::RequestAsyncGC(GCReason reason)
-{
-    CHECK(reason < GC_REASON_MAX);
-    // Static synchronous reasons have no legal non-blocking completion
-    // contract. Keep the pre-driver fail-closed boundary before selecting a
-    // generation port; USER remains legal because its mode is per request.
-    CHECK(!g_gcRequests[reason].IsSyncGC());
-    ZDriverPort& port = reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
-    port.send_async(ZDriverRequest(reason, 0, 0));
-}
-
-void CollectorResources::RequestGCAndWait(GCReason reason)
-{
-    CHECK(reason < GC_REASON_MAX);
-    ScopedEnterSaferegion enterSaferegion(false);
-    ZDriverPort& port = reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
-    port.send_sync(ZDriverRequest(reason, 0, 0));
-}
-
-void CollectorResources::RequestGC(GCReason reason, bool async)
-{
-    CHECK(reason < GC_REASON_MAX);
-    if (!IsGCActive()) {
-        return;
-    }
-
-    if (reason == GC_REASON_WB_BREAKPOINT) {
-        ZBreakpoint::StartGC();
-        majorDriverPort.send_async(ZDriverRequest(reason, 0, 0));
-        return;
-    }
-
-    // zDriver.cpp:141-160/337-371: every accepted request goes to its port.
-    if (async) {
-        RequestAsyncGC(reason);
-    } else {
-        RequestGCAndWait(reason);
-    }
-}
-
 void CollectorResources::StartGCThreads()
 {
     bool expected = false;
