@@ -50,6 +50,21 @@ extern uintptr_t g_cjHeapRangeEnd[kCjHeapRangeCap];
 #define ZPointerStoreBadMask g_cjStoreBadMask
 namespace MapleRuntime {
 class BaseObject;
+
+inline bool is_heap_address(uintptr_t addr)
+{
+    const unsigned n = static_cast<unsigned>(g_cjHeapRangeCount);
+    for (unsigned i = 0; i < n; ++i) {
+        if (addr >= g_cjHeapRangeStart[i] && addr < g_cjHeapRangeEnd[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+inline bool is_heap_address(const void* addr)
+{
+    return is_heap_address(reinterpret_cast<uintptr_t>(addr));
+}
 size_t ZPlatformAddressOffsetBits();
 size_t ZPlatformAddressHeapBaseShift();
 extern const bool ZVerifyOops;

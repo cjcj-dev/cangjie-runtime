@@ -11,7 +11,7 @@
 #include "AllocBufferManager.h"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zWorkers.hpp"
-#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zAddress.hpp"
 
 namespace MapleRuntime {
 // Allocator abstract class
@@ -66,7 +66,7 @@ public:
     // IsHeapAddress is a range-based check, used to quickly identify heap address,
     // non-heap address never falls into this address range.
     // for more accurate check, use IsHeapObject().
-    ALWAYS_INLINE bool IsHeapAddress(MAddress addr) const { return Heap::IsHeapAddress(addr); }
+    ALWAYS_INLINE bool IsHeapAddress(MAddress addr) const { return is_heap_address(addr); }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     virtual bool IsHeapObject(MAddress) const = 0;

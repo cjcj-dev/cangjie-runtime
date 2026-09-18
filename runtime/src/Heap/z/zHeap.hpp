@@ -163,17 +163,9 @@ public:
 
     // Only reserved payload ranges are heap addresses. The outer address
     // envelope sizes offset tables, but its holes are never managed memory.
-    static bool IsHeapAddress(MAddress addr)
-    {
-        for (const auto& range : heapReservations) {
-            if (addr >= range.start && addr < range.end) {
-                return true;
-            }
-        }
-        return false;
-    }
+    static bool IsHeapAddress(MAddress addr) { return is_heap_address(addr); }
 
-    static bool IsHeapAddress(const void* addr) { return IsHeapAddress(reinterpret_cast<MAddress>(addr)); }
+    static bool IsHeapAddress(const void* addr) { return is_heap_address(addr); }
 
     static ZPage* page(MAddress addr);
     static bool is_in(MAddress addr);
