@@ -22,7 +22,7 @@ CONTROLS = ['ColourAddress.UncolorRoundTripAllRemapOneHot',
             'RelocationPageQueue.TwoObjectsShareOnePageClaim',
             'ForwardingPublicationProduct.PartialCompactFirstDestinationKeepsReceipt']
 CUTS = {
-    'entry': ('runtime/src/Heap/WCollector/WCollector.cpp',
+    'entry': ('runtime/src/Heap/z/WCollector.cpp',
               '        DoYoungGarbageCollection();', '        (void)0;', 1),
     'claim': ('runtime/src/Heap/z/zRelocate.cpp',
               '    if (!owner || (!claimed && !owner->claim())) return;',

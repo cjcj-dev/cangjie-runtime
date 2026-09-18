@@ -17,9 +17,9 @@ import shutil
 import subprocess
 import time
 
-HEADER = "runtime/src/Heap/WCollector/WCollector.h"
+HEADER = "runtime/src/Heap/z/WCollector.h"
 PRODUCER = "runtime/src/Heap/z/zRelocate.cpp"
-ENTRY = "runtime/src/Heap/WCollector/WCollector.cpp"
+ENTRY = "runtime/src/Heap/z/WCollector.cpp"
 COPY = "runtime/src/Heap/Collector/CopyCollector.cpp"
 TESTS = (
     "YoungConc.KeptIdentityAtWaitRoutedGuard",
