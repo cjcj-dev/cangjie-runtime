@@ -13,6 +13,7 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
@@ -385,7 +386,7 @@ BaseObject* ZBarrier::LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpoi
         return to_object(barrier(is_load_good_or_null_fast_path, &ZBarrier::load_good_slow_path,
                                  ColorLoadGood, p, observed, false));
     }
-    const bool blocked = Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked();
+    const bool blocked = ZResurrection::is_blocked();
     if (!blocked) {
         return to_object(barrier(is_mark_good_fast_path, &ZBarrier::keep_alive_slow_path,
                                  ColorMarkGood, p, observed, false));
@@ -811,7 +812,7 @@ zaddress ZBarrier::load_barrier_on_phantom_oop_field_preloaded(volatile zpointer
 
 zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(volatile zpointer* p, zpointer o)
 {
-    if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
+    if (ZResurrection::is_blocked()) {
         return barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,
                        ColorMarkGood, p, o, false);
     }
@@ -820,7 +821,7 @@ zaddress ZBarrier::no_keep_alive_load_barrier_on_phantom_oop_field_preloaded(vol
 
 bool ZBarrier::clean_barrier_on_phantom_oop_field(volatile zpointer* p)
 {
-    CHECK_DETAIL(Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked(),
+    CHECK_DETAIL(ZResurrection::is_blocked(),
                  "phantom clean is only valid when resurrection is blocked");
     const zpointer o = load_atomic(p);
     return is_null(barrier(is_mark_good_fast_path, &ZBarrier::blocking_load_barrier_on_phantom_slow_path,

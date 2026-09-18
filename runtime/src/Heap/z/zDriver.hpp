@@ -409,13 +409,6 @@ public:
                                              type == ZYoungType::major_partial_roots);
     }
 
-    // ZResurrection (zResurrection.cpp:35-47): shared by both generations.
-    // Block only in the successful old mark-end pause; unblock after the
-    // non-strong reference rendezvous, before finalizer enqueue.
-    void BlockResurrection() { ZResurrection::block(); }
-    void UnblockResurrection() { ZResurrection::unblock(); }
-    bool IsResurrectionBlocked() const { return ZResurrection::is_blocked(); }
-
     bool IsGcStarted() const;
 
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }

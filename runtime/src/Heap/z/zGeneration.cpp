@@ -9,6 +9,7 @@
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zStringDedup.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zMark.hpp"
 
 #include <array>
@@ -940,7 +941,7 @@ void HeapGcState::ProcessOldNonStrongReferences(WorkStack& workStack)
     Handshake::execute(&rendezvous);
     ZRendezvousGCThreads gcRendezvous;
     gcRendezvous.doit();
-    Heap::GetHeap().GetCollectorResources().UnblockResurrection();
+    ZResurrection::unblock();
     Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().EnqueueReferences();
 }
 
@@ -969,7 +970,7 @@ bool HeapGcState::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet
     MarkingStacks::VerifyAllEmpty(Heap::GetHeap().old().Mark());
     Heap::GetHeap().old().set_phase(ZGeneration::Phase::MarkComplete);
     ZVerify::AfterMark();
-    Heap::GetHeap().GetCollectorResources().BlockResurrection();
+    ZResurrection::block();
     ReportMarkTerminateContinue();
     return true;
 }

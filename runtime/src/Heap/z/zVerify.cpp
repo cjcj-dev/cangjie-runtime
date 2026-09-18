@@ -7,6 +7,7 @@
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Heap/z/zGeneration.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -122,7 +123,7 @@ void ZVerify::RootsStrong(bool afterOldMark)
 void ZVerify::RootsWeak()
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
-    DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
+    DCHECK(!ZResurrection::is_blocked());
     auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     collector.VisitWeakColoredRoots([](NativeSlot& root) { ColoredRoot(root, true); });
 }
@@ -224,7 +225,7 @@ void ZVerify::threads_start_processing()
 void ZVerify::Objects(bool verifyWeaks)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
-    DCHECK(!Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked());
+    DCHECK(!ZResurrection::is_blocked());
     if (ZAbort::should_abort()) { return; }
     DCHECK((ZGeneration::young() != nullptr && ZGeneration::young()->is_phase_mark_complete()) ||
            (ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_mark_complete()));
