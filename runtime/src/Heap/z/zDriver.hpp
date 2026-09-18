@@ -350,6 +350,7 @@ public:
     bool is_busy() const;
     void RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup);
     void RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup);
+    bool ExecuteDriverRequest(const ZDriverRequest& request);
 protected:
     CollectorResources& resources;
     const GCDriverKind kind;
@@ -451,7 +452,6 @@ private:
     // Notify the GC thread to start GC, and doesn't wait.
     // Called by mutator.
     // reason: The reason for this GC.
-    bool ExecuteDriverRequest(GCDriverKind kind, const ZDriverRequest& request);
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 private:
     std::function<void()> testAfterYoungPrelude;

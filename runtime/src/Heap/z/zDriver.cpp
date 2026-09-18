@@ -73,7 +73,7 @@ void ZDriver::run_thread()
             ZAbort::reset();
             if (major) ZBreakpoint::AtBeforeGC();
             abortpoint();
-            const bool completed = !ZAbort::should_abort() && resources.ExecuteDriverRequest(kind, request);
+            const bool completed = !ZAbort::should_abort() && ExecuteDriverRequest(request);
             port.ack();
 #if defined(MRT_GC_UNIT_TESTS)
             if (completed) resources.testCompletionCount.fetch_add(1, std::memory_order_relaxed);
@@ -229,7 +229,7 @@ void ZDriver::RunCollection(HeapGcState& collector, uint64_t index, GCReason rea
     (isYoung ? ZStatPhases::YoungGeneration : ZStatPhases::OldGeneration).RegisterEnd(end - start);
 }
 
-bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRequest& request)
+bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
     HeapGcState* activeCollector = &Heap::GetHeap().GetCollector();
@@ -256,8 +256,8 @@ bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRe
 
     // Set the request's generation budgets before mark-start can consume
     // them, including the old mark domain prepared by the young prelude.
-    const uint32_t youngCount = request.young_nworkers() == 0 ? concurrentGcThreadCount : request.young_nworkers();
-    const uint32_t oldCount = request.old_nworkers() == 0 ? concurrentGcThreadCount : request.old_nworkers();
+    const uint32_t youngCount = request.young_nworkers() == 0 ? resources.concurrentGcThreadCount : request.young_nworkers();
+    const uint32_t oldCount = request.old_nworkers() == 0 ? resources.concurrentGcThreadCount : request.old_nworkers();
     const bool warmup = request.cause() == GC_REASON_WARMUP;
     // zDriver.cpp:166-176 / zGeneration.cpp:154: the request carries the
     // selected worker counts into each generation's ZWorkers.
@@ -287,8 +287,8 @@ bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRe
             preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
         accumulate(ZGenerationId::young);
 #if defined(MRT_GC_UNIT_TESTS)
-        if (testAfterYoungPrelude) {
-            testAfterYoungPrelude();
+        if (resources.testAfterYoungPrelude) {
+            resources.testAfterYoungPrelude();
         }
 #endif
         if (ZAbort::should_abort()) {
