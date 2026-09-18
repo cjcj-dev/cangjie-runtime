@@ -112,7 +112,6 @@ void ZRelocate::ForwardFromSpace(ZGenerationId generation)
 {
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    Heap::GetHeap().GetZGeneration(generation).StatHeap()->AtCollectionStart(space.AllocatedBytes());
     if (generation == ZGenerationId::young) {
         space.ForwardFromSpace<Generation::Young>(*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers());
     } else {
@@ -126,7 +125,7 @@ void ZRelocate::ForwardFromSpace(ZGenerationId generation)
 void ZRelocate::RefineFromSpace()
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    ZGeneration::old()->StatHeap()->AddReclaimed(space.RefineFromSpace());
+    ZGeneration::old()->increase_freed(space.RefineFromSpace());
 }
 
 bool ZRelocate::IsFromObject(BaseObject* obj)
@@ -1336,13 +1335,19 @@ void RegionManager::ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool c
 {
     if (!owner || (!claimed && !owner->claim())) return;
     ZForwarding::PageWorkScope work(owner);
+    // zRelocate.cpp:437-441,1010: relocation accounts on the owning
+    // generation — freed for the from-page, compacted for in-place.
+    const ZGenerationId statId = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
+    ZGeneration& statGeneration = Heap::GetHeap().GetZGeneration(statId);
     if (inPlace) {
         (void)fromRegionList.TryDeleteRegion(region);
         owner->set_in_place();
         NoteInPlaceRelocated(region);
         CompactRegion(region);
+        statGeneration.increase_compacted(region->GetRegionAllocatedSize());
     } else {
         ForwardRegion<G>(region);
+        statGeneration.increase_freed(region->GetRegionSize());
     }
     // All page metadata and legacy helper work is finished. A nested drain
     // may already have consumed the construction token; otherwise drop it now.

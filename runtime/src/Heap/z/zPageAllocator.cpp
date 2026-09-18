@@ -638,6 +638,8 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, ZVirtualM
 
 void RegionManager::ReclaimRegion(ZPage* region)
 {
+    // zPageAllocator.cpp:2263,2280: per-generation used, region-granular.
+    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(region->GetRegionSize()));
     ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
 }
 
@@ -739,6 +741,7 @@ void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory, bool allow
     const size_t bytes = memory.units * ZPage::UNIT_SIZE;
     CHECK(pageAllocatorUsed >= bytes);
     pageAllocatorUsed -= bytes;
+    TrackUsedPeakLocked();
     allocationStallQueue.SatisfyAvailableLocked([this](AllocationStallRequest& request) {
         return ClaimAllocationLocked(request);
     });
@@ -762,11 +765,13 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     PageMemory& memory = request.Memory();
     if (!freeRegionManager.ClaimPageMemory(num, memory)) { return false; }
     pageAllocatorUsed += size;
+    TrackUsedPeakLocked();
     return true;
 }
 
 void RegionManager::ReclaimRegionToMarkQuarantine(ZPage* region)
 {
+    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(region->GetRegionSize()));
     ZPage::RetirePage(region, [this, region] { ReclaimRetiredRegionToMarkQuarantine(region); });
 }
 
@@ -786,11 +791,13 @@ void RegionManager::ReclaimRetiredRegionToMarkQuarantine(ZPage* region)
     freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
     CHECK(pageAllocatorUsed >= num * ZPage::UNIT_SIZE);
     pageAllocatorUsed -= num * ZPage::UNIT_SIZE;
+    TrackUsedPeakLocked();
 }
 
 size_t RegionManager::ReleaseRegion(ZPage* region)
 {
     const size_t size = region->GetRegionSize();
+    NoteUsedGenerationDelta(region->GetOwnerGeneration(), -static_cast<ssize_t>(size));
     ZPage::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
     return size;
 }
@@ -881,6 +888,7 @@ retry:
             freeRegionManager.FreeMemoryAllocFailed(request.Memory());
             CHECK(pageAllocatorUsed >= size);
             pageAllocatorUsed -= size;
+            TrackUsedPeakLocked();
             allocationStallQueue.SatisfyAvailableLocked([this](ZPageAllocation& pending) {
                 return ClaimAllocationLocked(pending);
             });
@@ -891,6 +899,8 @@ retry:
         }
         ZStatInc(ZStatMutatorAllocRate::counter(), size);
     ZStatMutatorAllocRate::sample_allocation(size);
+        // zPageAllocator.cpp:2065: per-generation used, region-granular.
+        NoteUsedGenerationDelta(region->GetOwnerGeneration(), static_cast<ssize_t>(size));
         return region;
     }
 
@@ -1291,8 +1301,40 @@ void RegionManager::RemoveRawPointerObject(BaseObject* obj)
         region->DecRawPointerObjectCount();
     }
 
+// zPageAllocator.cpp:1332-1373 — the allocator account feeding ZStatHeap.
+void RegionManager::UpdateCollectionStats(ZGenerationId id)
+{
+    const size_t i = id == ZGenerationId::young ? 0 : 1;
+    collectionUsedHigh[i] = pageAllocatorUsed;
+    collectionUsedLow[i] = pageAllocatorUsed;
+}
+
+ZPageAllocatorStats RegionManager::Stats(const ZGeneration* generation) const
+{
+    const ZGenerationId id = generation->id();
+    const size_t i = id == ZGenerationId::young ? 0 : 1;
+    return ZPageAllocatorStats(0 /* min_capacity: host HeapParam has no min-heap-size */,
+                               GetHeapCapacity(),
+                               ZStatMutatorAllocRate::soft_max_heap_size(),
+                               GetCommittedCapacity(),
+                               GetAllocatedSize(),
+                               collectionUsedHigh[i],
+                               collectionUsedLow[i],
+                               UsedGeneration(id),
+                               generation->freed(),
+                               generation->promoted(),
+                               generation->compacted(),
+                               allocationStallQueue.Pending());
+}
+
+ZPageAllocatorStats RegionManager::UpdateAndStats(const ZGeneration* generation)
+{
+    UpdateCollectionStats(generation->id());
+    return Stats(generation);
+}
+
 size_t RegionManager::GetAllocatedSize() const
-    {
+{
         size_t threadLocalSize = 0;
         AllocBufferVisitor visitor = [&threadLocalSize](AllocBuffer& regionBuffer) {
             ZPage* region = regionBuffer.GetRegion();

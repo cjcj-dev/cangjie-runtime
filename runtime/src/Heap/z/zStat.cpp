@@ -18,6 +18,7 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zPageAllocator.hpp"
+#include "Heap/z/zRelocationSetSelector.inline.hpp"
 namespace MapleRuntime {
 // zStat.cpp:65-240: rolling ten-second, ten-minute and ten-hour windows.
 struct ZStatSamplerData {
@@ -116,7 +117,7 @@ private:
 };
 
 
-void ZStatCycle::Sequence::Add(double value)
+void ZStatNumberSeq::Add(double value)
 {
     if (!initialized) {
         average = value;
@@ -711,6 +712,8 @@ ZStatMutatorAllocRateStats ZStatMutatorAllocRate::stats()
     return out;
 }
 
+double ZStatNumberSeq::Sd() const { return std::sqrt(variance); }
+
 size_t ZStatMutatorAllocRate::soft_max_heap_size()
 {
     size_t soft = g_softMaxHeapSize.load(std::memory_order_acquire);
@@ -723,73 +726,209 @@ size_t ZStatMutatorAllocRate::soft_max_heap_size()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-void ZStatHeap::AtCollectionStart(size_t used)
+// zStat.cpp:1703-2036 — per-generation heap account. The sampler-based
+// reclaimed tracker of the interim version is replaced by ZGC's NumberSeq
+// (alpha=0.7); lastReclaimed/AddReclaimed fold into the freed/promoted/
+// compacted counters of the stats feed.
+ZStatHeap::ZStatHeap() = default;
+
+ZStatHeap::ZAtInitialize ZStatHeap::_atInitialize;
+
+size_t ZStatHeap::CapacityHigh() const
 {
-    std::lock_guard<std::mutex> guard(lock);
-    usedAtCollectionStart = used;
-    lastReclaimed = 0;
+    return std::max(std::max(_atMarkStart.capacity, _atMarkEnd.capacity),
+                    std::max(_atRelocateStart.capacity, _atRelocateEnd.capacity));
 }
 
-void ZStatHeap::AtMarkEnd(size_t live)
+size_t ZStatHeap::CapacityLow() const
 {
-    std::lock_guard<std::mutex> guard(lock);
-    stats.liveAtMarkEnd = live;
+    return std::min(std::min(_atMarkStart.capacity, _atMarkEnd.capacity),
+                    std::min(_atRelocateStart.capacity, _atRelocateEnd.capacity));
 }
 
-void ZStatHeap::AddReclaimed(size_t bytes)
+size_t ZStatHeap::Free(size_t used) const
 {
-    std::lock_guard<std::mutex> guard(lock);
-    lastReclaimed += bytes;
+    return _atInitialize.maxCapacity - used;
 }
 
-void ZStatHeap::AtRelocateEnd(size_t used, size_t live, size_t reclaimedBytes)
+size_t ZStatHeap::MutatorAllocated(size_t usedGeneration, size_t freed, size_t relocated) const
 {
-    std::lock_guard<std::mutex> guard(lock);
-    stats.usedAtRelocateEnd = used;
-    stats.liveAtMarkEnd = live;
-    lastReclaimed = reclaimedBytes;
-    stats.reclaimedAverage = initialized ?
-        stats.reclaimedAverage + 0.7 * (static_cast<double>(reclaimedBytes) - stats.reclaimedAverage) :
-        static_cast<double>(reclaimedBytes);
-    initialized = true;
-    ZStatSample(reclaimed, reclaimedBytes);
+    const size_t usedGenerationDelta = usedGeneration - _atMarkStart.usedGeneration;
+    return usedGenerationDelta + freed - relocated;
 }
 
-size_t ZStatHeap::UsedAtCollectionStart() const
+size_t ZStatHeap::Garbage(size_t freed, size_t relocated, size_t promoted) const
 {
-    std::lock_guard<std::mutex> guard(lock);
-    return usedAtCollectionStart;
+    return _atMarkEnd.garbage - (freed - promoted - relocated);
 }
 
-size_t ZStatHeap::LiveAtMarkEnd() const
+size_t ZStatHeap::Reclaimed(size_t freed, size_t relocated, size_t promoted) const
 {
-    std::lock_guard<std::mutex> guard(lock);
-    return stats.liveAtMarkEnd;
+    return freed - relocated - promoted;
 }
 
-size_t ZStatHeap::UsedAtRelocateEnd() const
+void ZStatHeap::AtInitialize(size_t minCapacity, size_t maxCapacity)
 {
-    std::lock_guard<std::mutex> guard(lock);
-    return stats.usedAtRelocateEnd;
+    std::lock_guard<std::mutex> locker(_statLock);
+    _atInitialize.minCapacity = minCapacity;
+    _atInitialize.maxCapacity = maxCapacity;
 }
 
-size_t ZStatHeap::LastReclaimed() const
+void ZStatHeap::AtCollectionStart(const ZPageAllocatorStats& stats)
 {
-    std::lock_guard<std::mutex> guard(lock);
-    return lastReclaimed;
+    std::lock_guard<std::mutex> locker(_statLock);
+    _atCollectionStart.softMaxCapacity = stats.soft_max_capacity();
+    _atCollectionStart.capacity = stats.capacity();
+    _atCollectionStart.free = Free(stats.used());
+    _atCollectionStart.used = stats.used();
+    _atCollectionStart.usedGeneration = stats.used_generation();
 }
+
+void ZStatHeap::AtMarkStart(const ZPageAllocatorStats& stats)
+{
+    std::lock_guard<std::mutex> locker(_statLock);
+    _atMarkStart.softMaxCapacity = stats.soft_max_capacity();
+    _atMarkStart.capacity = stats.capacity();
+    _atMarkStart.free = Free(stats.used());
+    _atMarkStart.used = stats.used();
+    _atMarkStart.usedGeneration = stats.used_generation();
+    _atMarkStart.allocationStalls = stats.allocation_stalls();
+}
+
+void ZStatHeap::AtMarkEnd(const ZPageAllocatorStats& stats)
+{
+    std::lock_guard<std::mutex> locker(_statLock);
+    _atMarkEnd.capacity = stats.capacity();
+    _atMarkEnd.free = Free(stats.used());
+    _atMarkEnd.used = stats.used();
+    _atMarkEnd.usedGeneration = stats.used_generation();
+    _atMarkEnd.mutatorAllocated = MutatorAllocated(stats.used_generation(), 0, 0);
+    _atMarkEnd.allocationStalls = stats.allocation_stalls();
+}
+
+void ZStatHeap::AtSelectRelocationSet(const ZRelocationSetSelectorStats& stats)
+{
+    std::lock_guard<std::mutex> locker(_statLock);
+    size_t live = 0;
+    for (PageAge age : kPageAgeRangeAll) {
+        live += stats.small(age).live() + stats.medium(age).live() + stats.large(age).live();
+    }
+    _atMarkEnd.live = live;
+    _atMarkEnd.garbage = _atMarkStart.usedGeneration - live;
+}
+
+void ZStatHeap::AtRelocateStart(const ZPageAllocatorStats& stats)
+{
+    std::lock_guard<std::mutex> locker(_statLock);
+    _atRelocateStart.capacity = stats.capacity();
+    _atRelocateStart.free = Free(stats.used());
+    _atRelocateStart.used = stats.used();
+    _atRelocateStart.usedGeneration = stats.used_generation();
+    _atRelocateStart.live = _atMarkEnd.live - stats.promoted();
+    _atRelocateStart.garbage = Garbage(stats.freed(), stats.compacted(), stats.promoted());
+    _atRelocateStart.mutatorAllocated = MutatorAllocated(stats.used_generation(), stats.freed(), stats.compacted());
+    _atRelocateStart.reclaimed = Reclaimed(stats.freed(), stats.compacted(), stats.promoted());
+    _atRelocateStart.promoted = stats.promoted();
+    _atRelocateStart.compacted = stats.compacted();
+    _atRelocateStart.allocationStalls = stats.allocation_stalls();
+}
+
+void ZStatHeap::AtRelocateEnd(const ZPageAllocatorStats& stats, bool recordStats)
+{
+    std::lock_guard<std::mutex> locker(_statLock);
+    _atRelocateEnd.capacity = stats.capacity();
+    _atRelocateEnd.capacityHigh = CapacityHigh();
+    _atRelocateEnd.capacityLow = CapacityLow();
+    _atRelocateEnd.free = Free(stats.used());
+    _atRelocateEnd.freeHigh = Free(stats.used_low());
+    _atRelocateEnd.freeLow = Free(stats.used_high());
+    _atRelocateEnd.used = stats.used();
+    _atRelocateEnd.usedHigh = stats.used_high();
+    _atRelocateEnd.usedLow = stats.used_low();
+    _atRelocateEnd.usedGeneration = stats.used_generation();
+    _atRelocateEnd.live = _atMarkEnd.live - stats.promoted();
+    _atRelocateEnd.garbage = Garbage(stats.freed(), stats.compacted(), stats.promoted());
+    _atRelocateEnd.mutatorAllocated = MutatorAllocated(stats.used_generation(), stats.freed(), stats.compacted());
+    _atRelocateEnd.reclaimed = Reclaimed(stats.freed(), stats.compacted(), stats.promoted());
+    _atRelocateEnd.promoted = stats.promoted();
+    _atRelocateEnd.compacted = stats.compacted();
+    _atRelocateEnd.allocationStalls = stats.allocation_stalls();
+    if (recordStats) {
+        _reclaimedBytes.Add(static_cast<double>(_atRelocateEnd.reclaimed));
+    }
+}
+
+size_t ZStatHeap::MaxCapacity() { return _atInitialize.maxCapacity; }
+
+size_t ZStatHeap::UsedAtCollectionStart() const { return _atCollectionStart.used; }
+size_t ZStatHeap::UsedAtMarkStart() const { return _atMarkStart.used; }
+size_t ZStatHeap::UsedGenerationAtMarkStart() const { return _atMarkStart.usedGeneration; }
+size_t ZStatHeap::LiveAtMarkEnd() const { return _atMarkEnd.live; }
+size_t ZStatHeap::AllocatedAtMarkEnd() const { return _atMarkEnd.mutatorAllocated; }
+size_t ZStatHeap::GarbageAtMarkEnd() const { return _atMarkEnd.garbage; }
+size_t ZStatHeap::UsedAtRelocateEnd() const { return _atRelocateEnd.used; }
+size_t ZStatHeap::UsedAtCollectionEnd() const { return UsedAtRelocateEnd(); }
+size_t ZStatHeap::ReclaimedAtRelocateEnd() const { return _atRelocateEnd.reclaimed; }
+size_t ZStatHeap::StallsAtMarkStart() const { return _atMarkStart.allocationStalls; }
+size_t ZStatHeap::StallsAtMarkEnd() const { return _atMarkEnd.allocationStalls; }
+size_t ZStatHeap::StallsAtRelocateStart() const { return _atRelocateStart.allocationStalls; }
+size_t ZStatHeap::StallsAtRelocateEnd() const { return _atRelocateEnd.allocationStalls; }
 
 double ZStatHeap::ReclaimedAvg()
 {
-    std::lock_guard<std::mutex> guard(lock);
-    return stats.reclaimedAverage + std::numeric_limits<double>::denorm_min();
+    std::lock_guard<std::mutex> locker(_statLock);
+    return _reclaimedBytes.Average() + std::numeric_limits<double>::denorm_min();
 }
-ZStatHeapStats ZStatHeap::Stats() const
+
+ZStatHeapStats ZStatHeap::Stats()
 {
-    std::lock_guard<std::mutex> guard(lock);
-    auto result = stats;
-    result.reclaimedAverage += std::numeric_limits<double>::denorm_min();
-    return result;
+    std::lock_guard<std::mutex> locker(_statLock);
+    return { UsedAtRelocateEnd(), LiveAtMarkEnd(),
+             _reclaimedBytes.Average() + std::numeric_limits<double>::denorm_min() };
+}
+
+void ZStatHeap::Print(const ZGeneration* generation) const
+{
+    LOG(RTLOG_INFO, "Min Capacity: %zuM", _atInitialize.minCapacity / MB);
+    LOG(RTLOG_INFO, "Max Capacity: %zuM", _atInitialize.maxCapacity / MB);
+    LOG(RTLOG_INFO, "Soft Max Capacity: %zuM", _atMarkStart.softMaxCapacity / MB);
+    LOG(RTLOG_INFO, "Heap Statistics:");
+    LOG(RTLOG_INFO, "%-12s %12s %12s %14s %12s %12s %12s", "", "Mark Start", "Mark End", "Relocate Start",
+        "Relocate End", "High", "Low");
+    LOG(RTLOG_INFO, "%-12s %11zuM %11zuM %13zuM %11zuM %11zuM %11zuM", "Capacity:", _atMarkStart.capacity / MB,
+        _atMarkEnd.capacity / MB, _atRelocateStart.capacity / MB, _atRelocateEnd.capacity / MB,
+        _atRelocateEnd.capacityHigh / MB, _atRelocateEnd.capacityLow / MB);
+    LOG(RTLOG_INFO, "%-12s %11zuM %11zuM %13zuM %11zuM %11zuM %11zuM", "Free:", _atMarkStart.free / MB,
+        _atMarkEnd.free / MB, _atRelocateStart.free / MB, _atRelocateEnd.free / MB,
+        _atRelocateEnd.freeHigh / MB, _atRelocateEnd.freeLow / MB);
+    LOG(RTLOG_INFO, "%-12s %11zuM %11zuM %13zuM %11zuM %11zuM %11zuM", "Used:", _atMarkStart.used / MB,
+        _atMarkEnd.used / MB, _atRelocateStart.used / MB, _atRelocateEnd.used / MB,
+        _atRelocateEnd.usedHigh / MB, _atRelocateEnd.usedLow / MB);
+    LOG(RTLOG_INFO, "%s Generation Statistics:", generation->is_young() ? "Young" : "Old");
+    LOG(RTLOG_INFO, "%-12s %12s %12s %14s %12s", "", "Mark Start", "Mark End", "Relocate Start", "Relocate End");
+    LOG(RTLOG_INFO, "%-12s %11zuM %11zuM %13zuM %11zuM", "Used:", _atMarkStart.usedGeneration / MB,
+        _atMarkEnd.usedGeneration / MB, _atRelocateStart.usedGeneration / MB, _atRelocateEnd.usedGeneration / MB);
+    LOG(RTLOG_INFO, "%-12s %12s %11zuM %13zuM %11zuM", "Live:", "N/A", _atMarkEnd.live / MB,
+        _atRelocateStart.live / MB, _atRelocateEnd.live / MB);
+    LOG(RTLOG_INFO, "%-12s %12s %11zuM %13zuM %11zuM", "Garbage:", "N/A", _atMarkEnd.garbage / MB,
+        _atRelocateStart.garbage / MB, _atRelocateEnd.garbage / MB);
+    LOG(RTLOG_INFO, "%-12s %12s %11zuM %13zuM %11zuM", "Allocated:", "N/A", _atMarkEnd.mutatorAllocated / MB,
+        _atRelocateStart.mutatorAllocated / MB, _atRelocateEnd.mutatorAllocated / MB);
+    LOG(RTLOG_INFO, "%-12s %12s %12s %13zuM %11zuM", "Reclaimed:", "N/A", "N/A", _atRelocateStart.reclaimed / MB,
+        _atRelocateEnd.reclaimed / MB);
+    if (generation->is_young()) {
+        LOG(RTLOG_INFO, "%-12s %12s %12s %13zuM %11zuM", "Promoted:", "N/A", "N/A",
+            _atRelocateStart.promoted / MB, _atRelocateEnd.promoted / MB);
+    }
+    LOG(RTLOG_INFO, "%-12s %12s %12s %13s %11zuM", "Compacted:", "N/A", "N/A", "N/A",
+        _atRelocateEnd.compacted / MB);
+}
+
+void ZStatHeap::PrintStalls() const
+{
+    LOG(RTLOG_INFO, "%-18s %12s %12s %14s %12s", "", "Mark Start", "Mark End", "Relocate Start", "Relocate End");
+    LOG(RTLOG_INFO, "%-18s %12zu %12zu %14zu %12zu", "Allocation Stalls:", _atMarkStart.allocationStalls,
+        _atMarkEnd.allocationStalls, _atRelocateStart.allocationStalls, _atRelocateEnd.allocationStalls);
 }
 } // namespace MapleRuntime
 
@@ -1161,9 +1300,9 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
         return;
     }
     ZStatDurationSample(sampler, endNs - startNs);
-    // zStat.cpp:724-735 — the one-shot per-collection report; stalls and the
-    // heap table join with the ZStatHeap feeders (this branch).
+    // zStat.cpp:719-741 — the one-shot per-collection report.
     ZGeneration& generation = Heap::GetHeap().GetZGeneration(id);
+    generation.StatHeap()->PrintStalls();
     ZStatLoad::Print();
     ZStatMMU::Print();
     generation.StatMark()->Print();
@@ -1175,6 +1314,10 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     if (id == ZGenerationId::young) {
         generation.StatRelocation()->PrintAgeTable();
     }
+    generation.StatHeap()->Print(&generation);
+    // zStat.cpp:737-741 — closing used-before/after line.
+    LOG(RTLOG_INFO, "%s %zuM->%zuM %.3fs", Name(), generation.StatHeap()->UsedAtCollectionStart() / MB,
+        generation.StatHeap()->UsedAtCollectionEnd() / MB, (endNs - startNs) / 1e9);
 }
 
 uint64_t ZStatPhasePause::maxNs;
@@ -1256,10 +1399,6 @@ void ZStatCriticalPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     EmitPhaseRecord(*this, "conc", startNs, endNs);
 }
 } // namespace MapleRuntime
-
-namespace MapleRuntime {
-ZStatHeap::ZStatHeap(const char* group) : reclaimed(group, "Reclaimed", ZStatUnitBytes) {}
-}
 
 namespace MapleRuntime {
 std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };

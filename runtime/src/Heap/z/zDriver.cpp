@@ -181,7 +181,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
         if (firstGeneration) liveBefore = statHeap->UsedAtCollectionStart();
         firstGeneration = false;
         liveAfter = statHeap->UsedAtRelocateEnd();
-        collected += statHeap->LastReclaimed();
+        collected += statHeap->ReclaimedAtRelocateEnd();
     };
 
     // Set the request's generation budgets before mark-start can consume
@@ -309,7 +309,7 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     GcLog::Phase(GCIdMark::Current(), phaseName, "unknown", gcStartTimeNs, gcEndTimeNs - gcStartTimeNs);
     uint64_t gcTimeNs = gcEndTimeNs - gcStartTimeNs;
     ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);
-    const size_t reclaimedThisCollection = statHeap->LastReclaimed();
+    const size_t reclaimedThisCollection = statHeap->ReclaimedAtRelocateEnd();
     double rate = (static_cast<double>(reclaimedThisCollection) / gcTimeNs) * (static_cast<double>(NS_PER_S) / MB);
     VLOG(REPORT, "total gc time: %s us, collection rate %.3lf MB/s\n", Pretty(gcTimeNs / NS_PER_US).Str(), rate);
     g_gcTotalTimeUs.fetch_add(gcTimeNs / NS_PER_US, std::memory_order_release);
@@ -317,14 +317,13 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     if (reason != GC_REASON_YOUNG) {
         ZStat::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
     }
-    // zStatHeap::at_relocate_end: publish only to the generation being collected.
+    // zStatHeap::at_relocate_end (zGeneration.cpp:935-940): publish only to
+    // the generation being collected; the account reads the allocator stats.
     const bool young = reason == GC_REASON_YOUNG;
     const size_t usedAfter = Heap::GetHeap().GetAllocatedSize();
-    // A12a scope ruling: preserve the old-generation baseline scalar until
-    // A07's mark-end livemap aggregation replaces it. Do not infer live bytes
-    // from candidate minus reclaimed capacity. Young has an actual mark result.
-    const size_t liveBytes = young ? statHeap->LiveAtMarkEnd() : usedAfter;
-    statHeap->AtRelocateEnd(usedAfter, liveBytes, reclaimedThisCollection);
+    statHeap->AtRelocateEnd(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(&cycle),
+        cycle.should_record_stats());
     if (!young) {
         // RegionManager's allocation pacing reads the post-major baseline.
         static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager()

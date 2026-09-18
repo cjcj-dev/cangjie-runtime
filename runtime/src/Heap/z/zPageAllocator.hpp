@@ -421,6 +421,51 @@ public:
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 namespace GcUnit { struct GcHeapFixture; }
 
+class ZGeneration;
+
+// zPageAllocator.hpp:291-330 — point-in-time allocator account feeding
+// ZStatHeap's sample points. Host differences (PLAN §5): the host heap has no
+// min-heap-size parameter (min_capacity() reports 0); used is region-granular
+// committed-used, matching ZGC's page-granular _used.
+class ZPageAllocatorStats {
+public:
+    ZPageAllocatorStats(size_t minCapacity, size_t maxCapacity, size_t softMaxCapacity, size_t capacity,
+                        size_t used, size_t usedHigh, size_t usedLow, size_t usedGeneration, size_t freed,
+                        size_t promoted, size_t compacted, size_t allocationStalls)
+        : _minCapacity(minCapacity), _maxCapacity(maxCapacity), _softMaxCapacity(softMaxCapacity),
+          _capacity(capacity), _used(used), _usedHigh(usedHigh), _usedLow(usedLow),
+          _usedGeneration(usedGeneration), _freed(freed), _promoted(promoted), _compacted(compacted),
+          _allocationStalls(allocationStalls)
+    {}
+
+    size_t min_capacity() const { return _minCapacity; }
+    size_t max_capacity() const { return _maxCapacity; }
+    size_t soft_max_capacity() const { return _softMaxCapacity; }
+    size_t capacity() const { return _capacity; }
+    size_t used() const { return _used; }
+    size_t used_high() const { return _usedHigh; }
+    size_t used_low() const { return _usedLow; }
+    size_t used_generation() const { return _usedGeneration; }
+    size_t freed() const { return _freed; }
+    size_t promoted() const { return _promoted; }
+    size_t compacted() const { return _compacted; }
+    size_t allocation_stalls() const { return _allocationStalls; }
+
+private:
+    const size_t _minCapacity;
+    const size_t _maxCapacity;
+    const size_t _softMaxCapacity;
+    const size_t _capacity;
+    const size_t _used;
+    const size_t _usedHigh;
+    const size_t _usedLow;
+    const size_t _usedGeneration;
+    const size_t _freed;
+    const size_t _promoted;
+    const size_t _compacted;
+    const size_t _allocationStalls;
+};
+
 class RegionManager {
     friend struct GcUnit::GcHeapFixture;
     friend class ZObjectAllocator;
@@ -695,6 +740,28 @@ public:
 
     size_t GetAllocatedSize() const;
 
+    // zPageAllocator.cpp:1363-1373 — snapshot feeding ZStatHeap. Stats reads;
+    // UpdateAndStats first resets the per-collection used high/low trackers
+    // (zPageAllocator.cpp:1332-1346 update_collection_stats, called at mark
+    // start). Generation is needed for the per-generation used/freed/promoted/
+    // compacted fields.
+    ZPageAllocatorStats Stats(const ZGeneration* generation) const;
+    ZPageAllocatorStats UpdateAndStats(const ZGeneration* generation);
+    void UpdateCollectionStats(ZGenerationId id);
+    void NoteUsedGenerationDelta(Generation generation, ssize_t delta)
+    {
+        const size_t i = generation == Generation::Young ? 0 : 1;
+        if (delta >= 0) {
+            usedPerGeneration[i].fetch_add(static_cast<size_t>(delta), std::memory_order_relaxed);
+        } else {
+            usedPerGeneration[i].fetch_sub(static_cast<size_t>(-delta), std::memory_order_relaxed);
+        }
+    }
+    size_t UsedGeneration(ZGenerationId id) const
+    {
+        return usedPerGeneration[id == ZGenerationId::young ? 0 : 1].load(std::memory_order_relaxed);
+    }
+
     inline size_t GetFromSpaceSize() const { return fromRegionList.GetAllocatedSize(); }
 
     inline size_t GetPinnedSpaceSize() const
@@ -830,6 +897,19 @@ private:
     // RelocateClaimedPage, so the counters live with that driver.
     std::atomic<size_t> inPlaceSmallCount{ 0 };
     std::atomic<size_t> inPlaceMediumCount{ 0 };
+    // zPageAllocator.hpp:157-162 shape: per-generation used (region-granular)
+    // and per-collection used high/low, updated at the pageAllocatorUsed
+    // mutation points.
+    std::atomic<size_t> usedPerGeneration[2]{};
+    size_t collectionUsedHigh[2]{ 0, 0 };
+    size_t collectionUsedLow[2]{ 0, 0 };
+    void TrackUsedPeakLocked()
+    {
+        for (size_t i = 0; i < 2; ++i) {
+            if (pageAllocatorUsed > collectionUsedHigh[i]) { collectionUsedHigh[i] = pageAllocatorUsed; }
+            if (pageAllocatorUsed < collectionUsedLow[i]) { collectionUsedLow[i] = pageAllocatorUsed; }
+        }
+    }
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
     friend class Uncommitter;
     std::mutex flipPromotedMutex;

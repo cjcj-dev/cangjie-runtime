@@ -114,6 +114,17 @@ struct ZStatCycleStats {
     double parallelDurationSd = 0;
 };
 
+// utilities/numberSeq.cpp:35-49,79-94: exponentially decaying mean
+// and variance, alpha=0.7 as used by ZStatCycle and ZStatHeap.
+struct ZStatNumberSeq {
+    void Add(double value);
+    double Average() const { return average; }
+    double Sd() const;
+    bool initialized = false;
+    double average = 0;
+    double variance = 0;
+};
+
 class ZStatCycle {
 public:
     void Initialize(uint64_t now);
@@ -125,14 +136,7 @@ public:
     ZStatCycleStats Stats(uint64_t now) const;
 
 private:
-    // utilities/numberSeq.cpp:35-49,79-94: exponentially decaying mean
-    // and variance, alpha=0.7 as used by ZStatCycle.
-    struct Sequence {
-        void Add(double value);
-        bool initialized = false;
-        double average = 0;
-        double variance = 0;
-    };
+    using Sequence = ZStatNumberSeq;
     mutable std::mutex lock;
     uint64_t start = 0;
     uint64_t end = 0;
@@ -467,37 +471,132 @@ private:
 
 
 // zStatHeap (zStat.hpp:596-707): one synchronized heap account per
-// generation, sampled at the collection points. The full ZGC account is fed
-// by ZPageAllocatorStats; the fields below are the ones the host allocator
-// can source today (used/live/reclaimed), at the same sampling points.
+// generation, fed by ZPageAllocatorStats at the six sample points
+// (zGeneration.cpp:382,883,910,928,938 and the old-generation counterparts).
+class ZPageAllocatorStats;
+class ZGeneration;
+
 struct ZStatHeapStats {
     size_t usedAtRelocateEnd = 0;
     size_t liveAtMarkEnd = 0;
     double reclaimedAverage = 0;
 };
+
 class ZStatHeap {
 public:
-    explicit ZStatHeap(const char* group);
+    ZStatHeap();
 
-    void AtCollectionStart(size_t used);
-    void AtMarkEnd(size_t live);
-    void AddReclaimed(size_t bytes);
-    void AtRelocateEnd(size_t used, size_t live, size_t reclaimedBytes);
+    void AtInitialize(size_t minCapacity, size_t maxCapacity);
+    void AtCollectionStart(const ZPageAllocatorStats& stats);
+    void AtMarkStart(const ZPageAllocatorStats& stats);
+    void AtMarkEnd(const ZPageAllocatorStats& stats);
+    void AtSelectRelocationSet(const ZRelocationSetSelectorStats& stats);
+    void AtRelocateStart(const ZPageAllocatorStats& stats);
+    void AtRelocateEnd(const ZPageAllocatorStats& stats, bool recordStats);
 
+    static size_t MaxCapacity();
     size_t UsedAtCollectionStart() const;
+    size_t UsedAtMarkStart() const;
+    size_t UsedGenerationAtMarkStart() const;
     size_t LiveAtMarkEnd() const;
+    size_t AllocatedAtMarkEnd() const;
+    size_t GarbageAtMarkEnd() const;
     size_t UsedAtRelocateEnd() const;
-    size_t LastReclaimed() const;
+    size_t UsedAtCollectionEnd() const;
+    // Host pacing/readback (zDriver epilogue, rec=cycle): the reclaimed
+    // figure of the finished collection.
+    size_t ReclaimedAtRelocateEnd() const;
+    size_t StallsAtMarkStart() const;
+    size_t StallsAtMarkEnd() const;
+    size_t StallsAtRelocateStart() const;
+    size_t StallsAtRelocateEnd() const;
+
     double ReclaimedAvg();
-    ZStatHeapStats Stats() const;
+    ZStatHeapStats Stats();
+
+    void Print(const ZGeneration* generation) const;
+    void PrintStalls() const;
 
 private:
-    const ZStatSampler reclaimed;
-    mutable std::mutex lock;
-    ZStatHeapStats stats;
-    size_t usedAtCollectionStart = 0;
-    size_t lastReclaimed = 0;
-    bool initialized = false;
+    mutable std::mutex _statLock;
+
+    struct ZAtInitialize {
+        size_t minCapacity = 0;
+        size_t maxCapacity = 0;
+    };
+    static ZAtInitialize _atInitialize;
+
+    struct ZAtCollectionStart {
+        size_t softMaxCapacity = 0;
+        size_t capacity = 0;
+        size_t free = 0;
+        size_t used = 0;
+        size_t usedGeneration = 0;
+    } _atCollectionStart;
+
+    struct ZAtMarkStart {
+        size_t softMaxCapacity = 0;
+        size_t capacity = 0;
+        size_t free = 0;
+        size_t used = 0;
+        size_t usedGeneration = 0;
+        size_t allocationStalls = 0;
+    } _atMarkStart;
+
+    struct ZAtMarkEnd {
+        size_t capacity = 0;
+        size_t free = 0;
+        size_t used = 0;
+        size_t usedGeneration = 0;
+        size_t live = 0;
+        size_t garbage = 0;
+        size_t mutatorAllocated = 0;
+        size_t allocationStalls = 0;
+    } _atMarkEnd;
+
+    struct ZAtRelocateStart {
+        size_t capacity = 0;
+        size_t free = 0;
+        size_t used = 0;
+        size_t usedGeneration = 0;
+        size_t live = 0;
+        size_t garbage = 0;
+        size_t mutatorAllocated = 0;
+        size_t reclaimed = 0;
+        size_t promoted = 0;
+        size_t compacted = 0;
+        size_t allocationStalls = 0;
+    } _atRelocateStart;
+
+    struct ZAtRelocateEnd {
+        size_t capacity = 0;
+        size_t capacityHigh = 0;
+        size_t capacityLow = 0;
+        size_t free = 0;
+        size_t freeHigh = 0;
+        size_t freeLow = 0;
+        size_t used = 0;
+        size_t usedHigh = 0;
+        size_t usedLow = 0;
+        size_t usedGeneration = 0;
+        size_t live = 0;
+        size_t garbage = 0;
+        size_t mutatorAllocated = 0;
+        size_t reclaimed = 0;
+        size_t promoted = 0;
+        size_t compacted = 0;
+        size_t allocationStalls = 0;
+    } _atRelocateEnd;
+
+    // utilities/numberSeq.cpp alpha=0.7, same decay as ZStatCycle.
+    ZStatNumberSeq _reclaimedBytes;
+
+    size_t CapacityHigh() const;
+    size_t CapacityLow() const;
+    size_t Free(size_t used) const;
+    size_t MutatorAllocated(size_t usedGeneration, size_t freed, size_t relocated) const;
+    size_t Garbage(size_t freed, size_t relocated, size_t promoted) const;
+    size_t Reclaimed(size_t freed, size_t relocated, size_t promoted) const;
 };
 
 class ZWorkers;

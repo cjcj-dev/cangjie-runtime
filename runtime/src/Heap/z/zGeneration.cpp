@@ -129,7 +129,7 @@ ZGeneration::ZGeneration(ZGenerationId generation)
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
       _id(generation == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old),
       _cycle(generation),
-      statHeap(generation == ZGenerationId::young ? "Young Generation" : "Old Generation"),
+      statHeap(),
       _relocation_set(this),
       _relocate(std::make_unique<ZRelocate>(this))
 {
@@ -236,6 +236,9 @@ public:
         ZGlobalsPointers::flip_young_relocate_start();
         ZVerify::OnColorFlip();
         ZGeneration::young()->set_phase(ZGeneration::Phase::Relocate);
+        ZGeneration::young()->StatHeap()->AtRelocateStart(
+            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(
+                ZGeneration::young()));
         return true;
     }
     bool block_jni_critical() const override { return true; }
@@ -254,6 +257,9 @@ public:
         ZVerify::OnColorFlip();
         ZGeneration::old()->set_phase(ZGeneration::Phase::Relocate);
         ZGeneration::old()->RecordYoungSequenceAtRelocateStart(ZGeneration::young()->Sequence());
+        ZGeneration::old()->StatHeap()->AtRelocateStart(
+            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(
+                ZGeneration::old()));
         return true;
     }
     bool block_jni_critical() const override { return true; }
@@ -276,6 +282,9 @@ void ZGeneration::at_collection_start(void* timer)
 {
     set_gc_timer(timer);
     reset_statistics();
+    // zGeneration.cpp:380-385: the heap account opens at collection start.
+    statHeap.AtCollectionStart(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
 }
 
 void ZGeneration::at_collection_end()
@@ -407,6 +416,10 @@ void ZGenerationYoung::mark_start()
 #endif
     Mark().BindWorkers(Workers());
     Mark().Start();
+    // zGeneration.cpp:880-885: mark-start sample (also resets the
+    // collection's used high/low trackers, zPageAllocator.cpp:1332-1346).
+    statHeap.AtMarkStart(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
     MarkingStacks::VerifyEmpty(Mark().Stripes().Population());
 #if defined(MRT_TESTABLE_INTERNALS)
     if (ZGeneration::testMarkStartState) {
@@ -636,6 +649,9 @@ bool ZGenerationYoung::mark_end()
 #endif
         ReportMarkTerminateContinue();
         Heap::GetHeap().young().set_phase(ZGeneration::Phase::MarkComplete);
+        // zGeneration.cpp:906-911: mark-end sample.
+        statHeap.AtMarkEnd(
+            static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
         return true;
     }
     NoteMarkTerminateContinue(workStack.size());
@@ -686,7 +702,6 @@ void ZGenerationYoung::concurrent_mark_free()
         tenuringIn.liveByAge[age] += live;
     }
     tenuringIn.youngGarbage = youngStats.candidateBytes > liveBytes ? (youngStats.candidateBytes - liveBytes) : 0;
-    statHeap.AtMarkEnd(liveBytes);
     Heap::GetHeap().young().SelectTenuringThreshold(tenuringIn);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
@@ -767,7 +782,7 @@ void ZGenerationYoung::concurrent_relocate()
     size_t allocatedAfter = space.AllocatedBytes();
     youngStats.reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    ZGeneration::young()->StatHeap()->AddReclaimed(youngStats.reclaimedBytes);
+    ZGeneration::young()->increase_freed(youngStats.reclaimedBytes);
 
     if (youngStw != nullptr) {
         youngStw.reset();
@@ -1109,6 +1124,9 @@ void ZGenerationOld::mark_start()
     Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
     Mark().BindWorkers(Workers());
     Mark().Start();
+    // zGeneration.cpp:1238-1242: old mark-start sample.
+    statHeap.AtMarkStart(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().UpdateAndStats(this));
 #if defined(MRT_TESTABLE_INTERNALS)
     if (ZGeneration::testMarkStartState) {
         ZGeneration::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
@@ -1139,6 +1157,9 @@ bool ZGenerationOld::mark_end()
     }
     MarkingStacks::VerifyAllEmpty(Mark());
     set_phase(ZGeneration::Phase::MarkComplete);
+    // zGeneration.cpp:1275-1278: old mark-end sample.
+    statHeap.AtMarkEnd(
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager().Stats(this));
     ZVerify::AfterMark();
     ZResurrection::block();
     ReportMarkTerminateContinue();
@@ -1394,6 +1415,7 @@ void ZGeneration::select_relocation_set(bool promote_all)
     // zGeneration.cpp:268-269: the selector snapshot feeds both the
     // relocation and the heap accounts before the set is installed.
     statRelocation.AtSelectRelocationSet(selector.stats());
+    statHeap.AtSelectRelocationSet(selector.stats());
     _relocation_set.install(&selector);
     if (_cycle == ZGenerationId::young) {
         ZWorkers* w = Workers();
@@ -1509,13 +1531,13 @@ void ZGenerationOld::CollectLargeGarbage()
 {
     ZStatTimerOld zstatTimer(PCollectLargeGarbage);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    ZGeneration::old()->StatHeap()->AddReclaimed(space.CollectLargeGarbage());
+    ZGeneration::old()->increase_freed(space.CollectLargeGarbage());
 }
 
 void ZGenerationOld::CollectPinnedGarbage()
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    ZGeneration::old()->StatHeap()->AddReclaimed(space.CollectPinnedGarbage());
+    ZGeneration::old()->increase_freed(space.CollectPinnedGarbage());
 }
 
 void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
@@ -1706,6 +1728,10 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                     }
                     continue;
                 }
+                // zGeneration.cpp:941-948: flip promotion leaves young
+                // (freed) and joins old (promoted) without a copy.
+                ZGeneration::young()->increase_freed(region->GetRegionSize());
+                ZGeneration::young()->increase_promoted(region->live_bytes());
                 manager.AddFlipPromotedPage(region);
             }
         }
