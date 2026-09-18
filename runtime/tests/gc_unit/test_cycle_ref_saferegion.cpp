@@ -46,6 +46,19 @@ struct RelocationReceiptTestAccess {
         (void)resources;
         if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
     }
+    static void AddCycleRoot(HeapGcState& collector, BaseObject* owner, BaseObject* target)
+    {
+        collector.cycleRefWorkStack[owner].push_back(target);
+    }
+    static void ClearCycleRoots(HeapGcState& collector) { collector.cycleRefWorkStack.clear(); }
+    static void VisitCycleRoots(HeapGcState& collector, const std::function<void(BaseObject*)>& visitor)
+    {
+        collector.VisitSurrectedExportRoots(visitor);
+    }
+    static void VisitMinorRoots(HeapGcState& collector, const std::function<void(BaseObject*)>& visitor)
+    {
+        collector.VisitMinorValueRoots(visitor);
+    }
 };
 } // namespace MapleRuntime
 
@@ -153,7 +166,7 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
     bool consumerReturned = false;
     std::vector<BaseObject*> roots;
     std::thread consumer([&] {
-        collector.VisitSurrectedExportRoots([&](BaseObject* object) { roots.push_back(object); });
+        RelocationReceiptTestAccess::VisitCycleRoots(collector, [&](BaseObject* object) { roots.push_back(object); });
         {
             std::lock_guard<std::mutex> lock(completionMutex);
             consumerReturned = true;
@@ -199,10 +212,10 @@ GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
 
     auto* exportRoot = reinterpret_cast<BaseObject*>(0x1000);
     auto* externRoot = reinterpret_cast<BaseObject*>(0x2000);
-    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+    RelocationReceiptTestAccess::AddCycleRoot(collector, exportRoot, externRoot);
 
     std::vector<BaseObject*> roots;
-    collector.VisitSurrectedExportRoots([&](BaseObject* object) { roots.push_back(object); });
+    RelocationReceiptTestAccess::VisitCycleRoots(collector, [&](BaseObject* object) { roots.push_back(object); });
     BaseObject* observedExtern = roots.empty() ? nullptr : roots.back();
     roots.pop_back();
     const bool ownerPresentAfterExtern = !roots.empty();
@@ -210,7 +223,7 @@ GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
     if (ownerPresentAfterExtern) {
         roots.pop_back();
     }
-    collector.cycleRefWorkStack.clear();
+    RelocationReceiptTestAccess::ClearCycleRoots(collector);
 
     std::fprintf(stderr,
                  "CYCLE_REF_CONSUMER_TARGET_ASSERT reached owner_after_extern=%d drained=%d\n",
@@ -240,7 +253,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(exportRoot);
     const U32 exportId = ExportRootTable::ExportHandleIndex(exportHandle);
     *reinterpret_cast<U32*>(reinterpret_cast<uintptr_t>(exportRoot) + TYPEINFO_PTR_SIZE) = exportId;
-    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+    RelocationReceiptTestAccess::AddCycleRoot(collector, exportRoot, externRoot);
 
     HandlerSafepointContext context;
     handlerSafepointContext = &context;
@@ -267,7 +280,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     bool consumerReturned = false;
     std::vector<BaseObject*> roots;
     std::thread consumer([&] {
-        collector.VisitMinorValueRoots([&](BaseObject* object) { roots.push_back(object); });
+        RelocationReceiptTestAccess::VisitMinorRoots(collector, [&](BaseObject* object) { roots.push_back(object); });
         {
             std::lock_guard<std::mutex> lock(completionMutex);
             consumerReturned = true;
@@ -304,7 +317,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
                  resolverReturned.load(std::memory_order_acquire), roots.empty());
 
     collector.SetCycleRefHandlerForTest(nullptr);
-    collector.cycleRefWorkStack.clear();
+    RelocationReceiptTestAccess::ClearCycleRoots(collector);
     handlerSafepointContext = nullptr;
     Heap::GetHeap().RemoveExportObject(exportHandle);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -337,8 +350,8 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(exportRoot);
     const U32 exportId = ExportRootTable::ExportHandleIndex(exportHandle);
     *reinterpret_cast<U32*>(reinterpret_cast<uintptr_t>(exportRoot) + TYPEINFO_PTR_SIZE) = exportId;
-    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
-    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+    RelocationReceiptTestAccess::AddCycleRoot(collector, exportRoot, externRoot);
+    RelocationReceiptTestAccess::AddCycleRoot(collector, exportRoot, externRoot);
 
     PhaseFlipContext context;
     context.collector = &collector;
@@ -365,7 +378,7 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     ThreadLocal::SetMutator(nullptr);
     collector.SetCycleRefHandlerForTest(nullptr);
     phaseFlipContext = nullptr;
-    collector.cycleRefWorkStack.clear();
+    RelocationReceiptTestAccess::ClearCycleRoots(collector);
     Heap::GetHeap().RemoveExportObject(exportHandle);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 
