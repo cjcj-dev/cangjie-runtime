@@ -9,6 +9,7 @@
 #define MRT_COLLECTOR_H
 
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zForwardingLookup.hpp"
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;

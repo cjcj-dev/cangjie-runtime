@@ -431,7 +431,7 @@ void RegionManager::StampCensusBoundaries()
 namespace MapleRuntime {
 ZPage* Heap::page(MAddress addr) { return ZPageTable::heap_table().get(addr); }
 
-ZPageTable& Heap::page_table() { return *_page_table; }
+ZPageTable& Heap::page_table() { return *GetHeap()._page_table; }
 
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age)
