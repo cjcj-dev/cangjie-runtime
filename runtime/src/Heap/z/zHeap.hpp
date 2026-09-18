@@ -266,14 +266,14 @@ public:
 
 private:
     static Heap* _heap;
-    // zHeap.hpp:48-56: page_table / serviceability / _old / _young as value
-    // members. page_table is unique_ptr because Cangjie constructs Heap before
-    // heapSize is known (Init(param)); ZGC constructs ZHeap after VM args.
+    // Cangjie constructs Heap before heapSize is known (Init(param)); the page
+    // allocator and table therefore need deferred construction. Both outlive
+    // the generation members, as in ZGC zHeap.hpp:48-56.
+    std::unique_ptr<RegionSpace> _page_allocator;
     std::unique_ptr<ZPageTable> _page_table;
     ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;
-    std::unique_ptr<RegionSpace> _page_allocator;
     CollectorResources* collectorResources { nullptr };
     HeapGcState* collectorImpl { nullptr };
     ExportRootTable* exportRootsTable { nullptr };
