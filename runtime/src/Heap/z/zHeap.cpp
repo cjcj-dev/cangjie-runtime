@@ -208,6 +208,30 @@ Generation Heap::ObjectGeneration(BaseObject* object) const
     return GetCollector().ObjectGeneration(object);
 }
 
+bool Heap::FlushGCDataMarkProducers(ThreadGCData& data)
+{
+    return GetCollector().FlushGCDataMarkProducers(data);
+}
+
+bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
+{
+    return GetCollector().FlushThreadMarkProducers(tls);
+}
+
+void Heap::PublishThreadRoot(BaseObject* object, bool young, bool follow)
+{
+    GetCollector().PublishThreadRoot(object, young, follow);
+}
+
+bool Heap::IsGhostFromObject(BaseObject* obj) const { return GetCollector().IsGhostFromObject(obj); }
+
+bool Heap::IsUnmovableFromObject(BaseObject* obj) const { return GetCollector().IsUnmovableFromObject(obj); }
+
+BaseObject* Heap::ForwardObject(BaseObject* fromVersion, Generation generation)
+{
+    return GetCollector().ForwardObject(fromVersion, generation);
+}
+
 BaseObject* Heap::relocate_or_remap_object(BaseObject* object, ZGenerationId generation)
 {
     return GetCollector().relocate_or_remap_object(object, generation);

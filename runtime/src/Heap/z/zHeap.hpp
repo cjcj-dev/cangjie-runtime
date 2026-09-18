@@ -51,6 +51,8 @@ class FinalizerProcessor;
 class CollectorResources;
 class Collector;
 struct ForwardingProvenance;
+struct ThreadLocalData;
+struct ThreadGCData;
 class ZRemembered;
 class ExportRootTable;
 class StaticRootTable;
@@ -102,6 +104,12 @@ public:
             GetZGeneration(ZGenerationId::young).Sequence());
     }
     void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
+    bool FlushGCDataMarkProducers(ThreadGCData& data);
+    bool FlushThreadMarkProducers(ThreadLocalData* tls);
+    void PublishThreadRoot(BaseObject* object, bool young, bool follow);
+    bool IsGhostFromObject(BaseObject* obj) const;
+    bool IsUnmovableFromObject(BaseObject* obj) const;
+    BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
     ZGenerationYoung& young() { return _young; }
     const ZGenerationYoung& young() const { return _young; }
     ZGenerationOld& old() { return _old; }
