@@ -209,8 +209,10 @@ public:
     ~ZGenerationYoung();
     bool should_record_stats() override;
     void collect();
+    void mark_start();
     void pause_mark_start();
     void concurrent_mark();
+    bool mark_end();
     bool pause_mark_end();
     void concurrent_mark_continue();
     void concurrent_mark_free();
@@ -228,7 +230,9 @@ public:
     ~ZGenerationOld();
     bool should_record_stats() override;
     void collect();
+    void mark_start();
     void concurrent_mark();
+    bool mark_end();
     bool pause_mark_end();
     void concurrent_mark_continue();
     void concurrent_mark_free();

@@ -321,36 +321,28 @@ public:
 
 class VM_ZMarkStartYoung : public VM_ZOperation {
 public:
-    explicit VM_ZMarkStartYoung(Collector& collector) : collector(collector) {}
     bool do_operation() override
     {
-        collector.RunYoungCollection();
+        ZGeneration::young()->mark_start();
         return true;
     }
     bool block_jni_critical() const override { return true; }
-private:
-    Collector& collector;
 };
 
 class VM_ZMarkStartYoungAndOld : public VM_ZOperation {
 public:
-    explicit VM_ZMarkStartYoungAndOld(Collector& collector) : collector(collector) {}
     bool do_operation() override
     {
-        collector.RunYoungCollection();
+        ZGeneration::young()->mark_start();
+        ZGeneration::old()->mark_start();
         return true;
     }
     bool block_jni_critical() const override { return true; }
-private:
-    Collector& collector;
 };
 
 class VM_ZMarkEndYoung : public VM_ZOperation {
 public:
-    explicit VM_ZMarkEndYoung(Collector& collector) : collector(collector) {}
-    bool do_operation() override { return collector.YoungMarkEndPause(); }
-private:
-    Collector& collector;
+    bool do_operation() override { return ZGeneration::young()->mark_end(); }
 };
 
 class VM_ZRelocateStartYoung : public VM_ZOperation {
@@ -367,11 +359,7 @@ public:
 
 class VM_ZMarkEndOld : public VM_ZOperation {
 public:
-    bool do_operation() override
-    {
-        Collector& collector = static_cast<Collector&>(Heap::GetHeap().GetCollector());
-        return collector.TryEndOldMark(collector.oldMarkWorkStack, collector.oldMarkForeignRoots);
-    }
+    bool do_operation() override { return ZGeneration::old()->mark_end(); }
 };
 
 class VM_ZRelocateStartOld : public VM_ZOperation {
@@ -463,14 +451,18 @@ void ZGenerationYoung::collect()
     concurrent_relocate();
 }
 
+void ZGenerationYoung::mark_start()
+{
+    TheCollector().RunYoungCollection();
+}
+
 void ZGenerationYoung::pause_mark_start()
 {
-    Collector& collector = TheCollector();
     if (IsMajorRoots()) {
-        VM_ZMarkStartYoungAndOld op(collector);
+        VM_ZMarkStartYoungAndOld op;
         (void)op.pause();
     } else {
-        VM_ZMarkStartYoung op(collector);
+        VM_ZMarkStartYoung op;
         (void)op.pause();
     }
 }
@@ -479,9 +471,14 @@ void ZGenerationYoung::concurrent_mark()
 {
     TheCollector().ConcurrentYoungMark();
 }
+bool ZGenerationYoung::mark_end()
+{
+    return TheCollector().YoungMarkEndPause();
+}
+
 bool ZGenerationYoung::pause_mark_end()
 {
-    VM_ZMarkEndYoung op(TheCollector());
+    VM_ZMarkEndYoung op;
     return op.pause();
 }
 void ZGenerationYoung::concurrent_mark_continue()
@@ -501,10 +498,6 @@ void Collector::RunYoungCollection()
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
     YoungCollectionStats stats = Heap::GetHeap().young().StartYoungMark(*this);
-    if (Heap::GetHeap().young().IsMajorRoots()) {
-        Heap::GetHeap().old().Begin(Heap::GetHeap().old().Snapshot().requestIndex);
-        Heap::GetHeap().old().StartOldMark(*this);
-    }
     RegionSpace& space = static_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
     MinorSlotSet rememberedSlots;
@@ -1287,6 +1280,18 @@ void Collector::DoGarbageCollection(ZGenerationId generation)
         return;
     }
     Heap::GetHeap().old().collect();
+}
+
+void ZGenerationOld::mark_start()
+{
+    Begin(Snapshot().requestIndex);
+    StartOldMark(TheCollector());
+}
+
+bool ZGenerationOld::mark_end()
+{
+    Collector& collector = TheCollector();
+    return collector.TryEndOldMark(collector.oldMarkWorkStack, collector.oldMarkForeignRoots);
 }
 
 void ZGenerationOld::collect()
