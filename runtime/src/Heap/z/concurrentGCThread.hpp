@@ -42,6 +42,9 @@ public:
 
     virtual bool is_ConcurrentGC_thread() const { return true; }
 
+    // runtime/init.cpp:245-258: publish only after runtime initialization.
+    static void NotifyRuntimeInitialized();
+
     virtual void run();
     virtual void stop();
 

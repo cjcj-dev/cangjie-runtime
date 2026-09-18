@@ -564,7 +564,7 @@ void HeapGcState::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungS
     ZWorkers& workersSet = GetWorkers(ZGenerationId::young);
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
     ZMark& domain = Heap::GetHeap().young().Mark();
-    (void)PublishHandshakeMarkWork(workStack, &domain);
+    (void)ZMark::PublishHandshakeMarkWork(workStack, &domain);
     (void)domain.Stacks().Flush(domain.Stripes(), true);
     ZMarkTask task(&domain, false);
     workersSet.run(&task);
@@ -620,7 +620,7 @@ bool HeapGcState::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
 #endif
     (void)Heap::GetHeap().young().Mark().Flush();
     (void)Heap::GetHeap().young().Mark().Flush(ThreadLocal::GetThreadLocalData());
-    (void)PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
+    (void)ZMark::PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
     do {
         if (!workStack.empty() || !Heap::GetHeap().young().Mark().Stripes().IsEmpty() ||
             !Heap::GetHeap().young().Mark().Stacks().IsEmpty()) {
@@ -641,7 +641,7 @@ bool HeapGcState::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* wi
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
     const size_t before = Heap::GetHeap().young().Mark().Stripes().Population();
-    (void)PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
+    (void)ZMark::PublishHandshakeMarkWork(workStack, &Heap::GetHeap().young().Mark());
     const bool ended = Heap::GetHeap().young().Mark().TryEnd();
     const size_t after = Heap::GetHeap().young().Mark().Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
@@ -659,7 +659,7 @@ void HeapGcState::ProcessFinalizers()
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
 }
 
-bool HeapGcState::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
+bool ZMark::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
 {
     if (domain == nullptr || work.empty()) {
         return false;
@@ -689,7 +689,7 @@ bool HeapGcState::PublishHandshakeMarkWork(WorkStack& work, ZMark* domain)
     return published;
 }
 
-void HeapGcState::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young)
+void ZMark::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young)
 {
     if (buffer == nullptr) {
         return;
@@ -698,16 +698,16 @@ void HeapGcState::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& 
         return;
     }
     buffer->MergeY2yDirtyHolders(work);
-    buffer->MergeY2yDirtySlots([this, &work](MAddress slot) {
+    buffer->MergeY2yDirtySlots([&work](MAddress slot) {
         RefField<>& field = HeapSlotAt<>(slot);
-        BaseObject* target = ResolveMinorReference(field);
+        BaseObject* target = Heap::GetHeap().GetCollector().ResolveMinorReference(field);
         if (target != nullptr && Heap::IsHeapAddress(target)) {
             work.push_back(MarkStackEntry(untype(ZAddress::offset(from_object(target))), true, true, true, false));
         }
     });
 }
 
-void HeapGcState::PublishThreadRoot(BaseObject* object, bool young, bool follow)
+void ZMark::PublishThreadRoot(BaseObject* object, bool young, bool follow)
 {
     ZMark* domain = young ? Heap::GetHeap().young().MarkPtr() : Heap::GetHeap().old().MarkPtr();
     CHECK_DETAIL(domain != nullptr, "root publication requires an active mark domain");
@@ -717,32 +717,32 @@ void HeapGcState::PublishThreadRoot(BaseObject* object, bool young, bool follow)
         MarkStackEntry(untype(ZAddress::offset(from_object(object))), true, true, follow, false), true);
 }
 
-bool HeapGcState::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
+bool ZMark::FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain)
 {
     return domain != nullptr && data.FlushMarkStacks(*domain);
 }
 
-bool HeapGcState::FlushGCDataMarkProducers(ThreadGCData& data)
+bool ZMark::FlushGCDataMarkProducers(ThreadGCData& data)
 {
-    const bool young = FlushGCDataMarkProducers(data, Heap::GetHeap().young().MarkPtr());
-    return FlushGCDataMarkProducers(data, Heap::GetHeap().old().MarkPtr()) || young;
+    const bool young = ZMark::FlushGCDataMarkProducers(data, Heap::GetHeap().young().MarkPtr());
+    return ZMark::FlushGCDataMarkProducers(data, Heap::GetHeap().old().MarkPtr()) || young;
 }
 
-bool HeapGcState::FlushThreadMarkProducers(ThreadLocalData* tls)
+bool ZMark::FlushThreadMarkProducers(ThreadLocalData* tls)
 {
-    bool published = FlushThreadMarkProducers(tls, Heap::GetHeap().young().MarkPtr());
-    return FlushThreadMarkProducers(tls, Heap::GetHeap().old().MarkPtr()) || published;
+    bool published = ZMark::FlushThreadMarkProducers(tls, Heap::GetHeap().young().MarkPtr());
+    return ZMark::FlushThreadMarkProducers(tls, Heap::GetHeap().old().MarkPtr()) || published;
 }
 
-bool HeapGcState::FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain)
+bool ZMark::FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain)
 {
     if (tls == nullptr || domain == nullptr) {
         return false;
     }
     WorkStack work;
     const bool young = domain->Generation() == MarkingStacks::MarkingGeneration::YOUNG;
-    DrainAllocBufferMarkProducers(tls->buffer, work, young);
-    const bool published = PublishHandshakeMarkWork(work, domain);
+    ZMark::DrainAllocBufferMarkProducers(tls->buffer, work, young);
+    const bool published = ZMark::PublishHandshakeMarkWork(work, domain);
     return ThreadLocal::FlushMarkStacks(tls, *domain) || published;
 }
 } // namespace MapleRuntime
@@ -1213,9 +1213,8 @@ bool FlushTargetGCData(ThreadGCData& data, ZMark* domain)
     if (!HeapMarkReady()) {
         return domain != nullptr ? data.FlushMarkStacks(*domain) : false;
     }
-    auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
-    return domain == nullptr ? collector.FlushGCDataMarkProducers(data)
-                             : collector.FlushGCDataMarkProducers(data, domain);
+    return domain == nullptr ? ZMark::FlushGCDataMarkProducers(data)
+                             : ZMark::FlushGCDataMarkProducers(data, domain);
 }
 
 } // namespace
@@ -1235,9 +1234,8 @@ bool ZMark::FlushThreadLocal(ThreadLocalData* tls, ZMark* domain)
     if (!HeapMarkReady()) {
         return published;
     }
-    auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
-    return (domain == nullptr ? collector.FlushThreadMarkProducers(tls)
-                              : collector.FlushThreadMarkProducers(tls, domain)) || published;
+    return (domain == nullptr ? ZMark::FlushThreadMarkProducers(tls)
+                              : ZMark::FlushThreadMarkProducers(tls, domain)) || published;
 }
 
 bool ZMark::HandshakeFlush(ZMark* domain)

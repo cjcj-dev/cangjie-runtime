@@ -30,6 +30,7 @@
 // Parse value-owned heap resources with the product macro configuration before
 // enabling the existing test peers; their member offsets must match the SO.
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
 
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1

@@ -332,15 +332,15 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
             // Two snapshots of one root use the actual private producers.
             // The TLS stack and GC decide the consumer order.
             if (duplicateRootOrder < 0) {
-                collector.PublishThreadRoot(array, true, true);
+                ZMark::PublishThreadRoot(array, true, true);
             }
-            collector.PublishThreadRoot(array, true, false);
+            ZMark::PublishThreadRoot(array, true, false);
             if (duplicateRootOrder > 0) {
-                collector.PublishThreadRoot(array, true, true);
+                ZMark::PublishThreadRoot(array, true, true);
             }
         } else {
             array->SetInvisibleObject(true);
-            collector.PublishThreadRoot(array, true, false);
+            ZMark::PublishThreadRoot(array, true, false);
         }
     } else if (commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {

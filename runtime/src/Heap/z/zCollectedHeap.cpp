@@ -54,10 +54,10 @@ ZCollectedHeap* ZCollectedHeap::heap()
 
 ZCollectedHeap::ZCollectedHeap()
     : _heap(),
-      _driver_minor(nullptr),
-      _driver_major(nullptr),
-      _director(nullptr),
-      _stat(nullptr),
+      _driver_minor(new ZDriverMinor()),
+      _driver_major(new ZDriverMajor()),
+      _director(new ZDirector()),
+      _stat(new ZStat()),
       _runtime_workers()
 {
 }
@@ -74,8 +74,7 @@ void ZCollectedHeap::initialize_gc()
     const uint64_t now = TimeUtil::NanoSeconds();
     _heap.young().CycleStats().Initialize(now);
     _heap.old().CycleStats().Initialize(now);
-    _stat = new ZStat();
-    start_gc_threads();
+    initialize_gc_workers();
     _finalizer_processor.Start();
     StringDedup::Instance().Start();
     if (Uncommitter::Enabled()) {
@@ -92,12 +91,8 @@ void ZCollectedHeap::finalize_gc()
     MRT_ASSERT(!_gc_thread_running.load(std::memory_order_relaxed), "Invalid GC thread status");
 }
 
-void ZCollectedHeap::start_gc_threads()
+void ZCollectedHeap::initialize_gc_workers()
 {
-    bool expected = false;
-    if (!_gc_thread_running.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
-        return;
-    }
     if (_heap.young().Workers() == nullptr) {
         unsigned int activeProcessorCount = std::thread::hardware_concurrency();
         bool affinityDetected = false;
@@ -133,13 +128,7 @@ void ZCollectedHeap::start_gc_threads()
         _finalizer_processor.GetReferenceProcessor().set_workers(_heap.old().Workers());
     }
 
-    // The ImmortalWrapper constructs the heap before its size is known; start
-    // drivers only after Heap::Init has installed the page table and workers.
-    _driver_minor = new ZDriverMinor();
-    _driver_major = new ZDriverMajor();
-    _director = new ZDirector();
-    _driver_minor->start();
-    _driver_major->start();
+
 }
 
 

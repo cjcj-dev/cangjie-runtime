@@ -28,7 +28,7 @@ public:
     ZCollectedHeap();
     ~ZCollectedHeap();
     static void stop();
-    void start_gc_threads();
+    void initialize_gc_workers();
     void initialize_gc();
     void finalize_gc();
     void collect(GCReason reason, bool async);
@@ -55,7 +55,7 @@ private:
     ZRuntimeWorkers _runtime_workers;
     FinalizerProcessor _finalizer_processor;
     int32_t _concurrent_gc_threads = 1;
-    std::atomic<bool> _gc_thread_running { false };
+    std::atomic<bool> _gc_thread_running { true };
 };
 } // namespace MapleRuntime
 

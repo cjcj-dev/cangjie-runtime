@@ -42,6 +42,7 @@ void VerifyAllEmpty(ZMark& domain);
 #include "Heap/z/zForwardingTable.hpp"
 
 #include "Heap/z/zMarkStack.hpp"
+#include "Common/MarkWorkStack.h"
 #include "Heap/z/zCrossVM.hpp"
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBarrier.hpp"
@@ -56,6 +57,8 @@ namespace MapleRuntime {
 class MarkStripeSet;
 class ZWorkers;
 class MarkContext;
+class AllocBuffer;
+struct ThreadGCData;
 struct ThreadLocalData;
 class Mutator;
 
@@ -63,6 +66,13 @@ class Mutator;
 class ZMark {
     friend class ZMarkTask;
 public:
+    static bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
+    static void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
+    static void PublishThreadRoot(BaseObject* object, bool young, bool follow);
+    static bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
+    static bool FlushThreadMarkProducers(ThreadLocalData* tls);
+    static bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);
+    static bool FlushGCDataMarkProducers(ThreadGCData& data);
     static constexpr bool Resurrect = true;
     static constexpr bool DontResurrect = false;
     static constexpr bool GCThread = true;
@@ -303,6 +313,7 @@ class MarkingWork;
 
 
 class HeapGcState {
+    friend class ZMark;
     friend class ZMarkTask;
 
 public:
@@ -463,13 +474,6 @@ public:
 
 #endif
 
-    void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
-    bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
-    void PublishThreadRoot(BaseObject* object, bool young, bool follow);
-    bool FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain);
-    bool FlushThreadMarkProducers(ThreadLocalData* tls);
-    bool FlushGCDataMarkProducers(ThreadGCData& data, ZMark* domain);
-    bool FlushGCDataMarkProducers(ThreadGCData& data);
     ZMark* YoungMark() { return Heap::GetHeap().young().MarkPtr(); }
     const ZMark* YoungMark() const { return Heap::GetHeap().young().MarkPtr(); }
 

@@ -17,6 +17,7 @@
 // Parse value-owned heap resources with the product macro configuration before
 // enabling the existing test peers; their member offsets must match the SO.
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zBarrier.inline.hpp"
 
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1
@@ -721,8 +722,8 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
     std::thread owner([&] {
         ThreadLocal::SetAllocBuffer(nullptr);
         RegisterCurrentMarkFlushThread();
-        marking.collector.PublishThreadRoot(heap.obj0, true, true);
-        marking.collector.PublishThreadRoot(heap.obj1, false, false);
+        ZMark::PublishThreadRoot(heap.obj0, true, true);
+        ZMark::PublishThreadRoot(heap.obj1, false, false);
         MutatorManager::Instance().UnregisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
     });
     owner.join();

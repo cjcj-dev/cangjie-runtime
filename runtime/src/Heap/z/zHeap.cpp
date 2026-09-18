@@ -234,17 +234,17 @@ Generation Heap::ObjectGeneration(BaseObject* object) const
 
 bool Heap::FlushGCDataMarkProducers(ThreadGCData& data)
 {
-    return GetCollector().FlushGCDataMarkProducers(data);
+    return ZMark::FlushGCDataMarkProducers(data);
 }
 
 bool Heap::FlushThreadMarkProducers(ThreadLocalData* tls)
 {
-    return GetCollector().FlushThreadMarkProducers(tls);
+    return ZMark::FlushThreadMarkProducers(tls);
 }
 
 void Heap::PublishThreadRoot(BaseObject* object, bool young, bool follow)
 {
-    GetCollector().PublishThreadRoot(object, young, follow);
+    ZMark::PublishThreadRoot(object, young, follow);
 }
 
 bool Heap::IsGhostFromObject(BaseObject* obj) const { return GetCollector().IsGhostFromObject(obj); }
