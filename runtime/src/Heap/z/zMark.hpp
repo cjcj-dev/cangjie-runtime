@@ -349,14 +349,11 @@ public:
     {
         return GetZGeneration(generation).Snapshot();
     }
-    void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
     bool OldActiveRemsetIsCurrent() const
     {
         return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
             GetZGeneration(ZGenerationId::young).Sequence());
     }
-    Generation ObjectGeneration(BaseObject* object) const;
-    void MarkObjectIfActive(BaseObject* object) const;
     [[noreturn]] static void AbortUnimplemented(const char* method);
     static HandVerdict JudgeHandOutTarget(BaseObject* target);
     static uint64_t EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
@@ -470,19 +467,19 @@ public:
 
     void ResurrectExportObject(BaseObject* obj)
     {
-        ZGeneration* generation = ObjectGeneration(obj) == Generation::Young ?
+        ZGeneration* generation = Heap::GetHeap().ObjectGeneration(obj) == Generation::Young ?
             static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old());
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
         if (generation == nullptr || !generation->is_phase_relocate()) {
             resurrectedExportObjectes.erase(obj);
             resurrectedExportObjectes.insert(ValueRoot(ResolveCurrentValueRoot(
-                obj, &resurrectedExportObjectes, ObjectGeneration(obj), ForwardingStage::IncomingNew),
+                obj, &resurrectedExportObjectes, Heap::GetHeap().ObjectGeneration(obj), ForwardingStage::IncomingNew),
                 ForwardingStage::IncomingNew));
         } else {
             resurrectedExportObjectesForwardPhase.erase(obj);
             resurrectedExportObjectesForwardPhase.insert(ValueRoot(
                 ResolveCurrentValueRoot(
-                    obj, &resurrectedExportObjectesForwardPhase, ObjectGeneration(obj), ForwardingStage::IncomingNew),
+                    obj, &resurrectedExportObjectesForwardPhase, Heap::GetHeap().ObjectGeneration(obj), ForwardingStage::IncomingNew),
                 ForwardingStage::IncomingNew));
         }
     }
@@ -649,7 +646,6 @@ public:
 
 #endif
 
-    void MarkNewObject(BaseObject* obj);
     void StartYoungMarkWork();
     void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
     bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
@@ -660,8 +656,6 @@ public:
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     ZMark* YoungMark() { return Heap::GetHeap().young().MarkPtr(); }
     const ZMark* YoungMark() const { return Heap::GetHeap().young().MarkPtr(); }
-    void MarkYoungObjectIfActive(BaseObject* object) const;
-    void MarkYoungRootObject(BaseObject* object) const;
 
     bool ShouldIgnoreRequest(GCRequest& request);
     bool MarkObject(BaseObject* obj) const;

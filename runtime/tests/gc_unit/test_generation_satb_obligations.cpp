@@ -59,8 +59,8 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     MarkPublicationFixture mark;
     fx.region0->reset(PageAge::old);
     fx.region1->reset(PageAge::eden);
-    mark.collector.MarkObjectIfActive(fx.obj0);
-    mark.collector.MarkObjectIfActive(fx.obj1);
+    Heap::GetHeap().MarkObjectIfActive(fx.obj0);
+    Heap::GetHeap().MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     GC_EXPECT_EQ(mark.YoungPending(), 1u);
     WorkStack work;
@@ -86,10 +86,10 @@ GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    mark.collector.MarkObjectIfActive(fx.obj0);
+    Heap::GetHeap().MarkObjectIfActive(fx.obj0);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     mark.CompleteOldMarkForAdmissionTest();
-    mark.collector.MarkObjectIfActive(fx.obj1);
+    Heap::GetHeap().MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     std::vector<BaseObject*> oldObjects;
     mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });

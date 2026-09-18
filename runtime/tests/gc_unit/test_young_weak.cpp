@@ -785,7 +785,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     GC_EXPECT_TRUE(closure.calls > 0);
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
-    Heap::GetHeap().GetCollector().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::MarkComplete);
+    Heap::GetHeap().PublishGenerationPhase(ZGenerationId::old, ZGenerationPhase::MarkComplete);
     Heap::GetHeap().GetCollector().GetZGeneration(Generation::Young).reset_relocation_set();
     const auto afterCoverage = LookupTo(reinterpret_cast<MAddress>(route.from), Generation::Young);
     const bool independentAfterCoverage =

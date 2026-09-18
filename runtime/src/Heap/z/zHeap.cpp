@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zGeneration.inline.hpp"
 #include "Common/RunType.h"
 #include "Common/OopStorage.h"
 #include "Heap/z/zHeuristics.hpp"
@@ -170,13 +171,43 @@ void Heap::RequestGC(GCReason reason, bool async) { ZCollectedHeap::heap()->coll
 
 void Heap::ResolveCycleRef() { GetCollector().ResolveCycleRef(); }
 
-void Heap::MarkYoungRootObject(BaseObject* object) { GetCollector().MarkYoungRootObject(object); }
+void Heap::MarkYoungRootObject(BaseObject* object)
+{
+    // #596's barrier already established current and selected young. Keep the
+    // generation mark-phase assertion at ZGeneration::mark_object's entry.
+    auto& cycle = GetZGeneration(ZGenerationId::young);
+    cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
+}
 
-void Heap::MarkObjectIfActive(BaseObject* object) { GetCollector().MarkObjectIfActive(object); }
+void Heap::MarkObjectIfActive(BaseObject* object)
+{
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
+    if (region->IsYoungRegion()) {
+        MarkYoungObjectIfActive(object);
+    } else {
+        old().MarkObjectIfActive<false, false, true, false>(from_object(object));
+    }
+}
 
-void Heap::MarkYoungObjectIfActive(BaseObject* object) { GetCollector().MarkYoungObjectIfActive(object); }
+void Heap::MarkYoungObjectIfActive(BaseObject* object)
+{
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    GetZGeneration(ZGenerationId::young)
+        .MarkObjectIfActive<false, false, true, false>(from_object(object));
+}
 
-void Heap::MarkNewObject(BaseObject* object) { GetCollector().MarkNewObject(object); }
+void Heap::MarkNewObject(BaseObject* obj)
+{
+    // Registration follows object initialization (BaseObject::RegisterFinalizer).
+    // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
+    ZGeneration& cycle = GetZGeneration(ObjectGeneration(obj));
+    cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
+}
 
 BaseObject* Heap::make_load_good(RefField<>& ref, const ForwardingProvenance& provenance)
 {
@@ -185,12 +216,20 @@ BaseObject* Heap::make_load_good(RefField<>& ref, const ForwardingProvenance& pr
 
 void Heap::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
 {
-    GetCollector().PublishGenerationPhase(generation, value);
+    ZGeneration& cycle = GetZGeneration(generation);
+    const ZGenerationPhase before = cycle.GcPhase();
+    if (generation == ZGenerationId::old &&
+        value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
+        Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(Heap::GetHeap().young().Sequence());
+    }
+    cycle.PublishPhase(value);
 }
 
 Generation Heap::ObjectGeneration(BaseObject* object) const
 {
-    return GetCollector().ObjectGeneration(object);
+    const MAddress address = reinterpret_cast<MAddress>(object);
+    // ZHeap::is_young uses the current page, including after promotion.
+    return Heap::page(address)->GetOwnerGeneration();
 }
 
 bool Heap::FlushGCDataMarkProducers(ThreadGCData& data)

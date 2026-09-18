@@ -136,18 +136,7 @@ void ZCollectedHeap::start_gc_threads()
     _driver_major->start();
 }
 
-void HeapGcState::MarkObjectIfActive(BaseObject* object) const
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-    if (region->IsYoungRegion()) {
-        MarkYoungObjectIfActive(object);
-    } else {
-        MarkOldObjectIfActive(object);
-    }
-}
+
 
 void ZCollectedHeap::collect(GCReason reason, bool async)
 {
@@ -330,12 +319,7 @@ BaseObject* HeapGcState::ValidateCurrentValue(BaseObject* ref, const ForwardingP
     FailClosedLoad("current raw value required", ref, 0, provenance);
 }
 
-Generation HeapGcState::ObjectGeneration(BaseObject* object) const
-{
-    const MAddress address = reinterpret_cast<MAddress>(object);
-    // ZHeap::is_young uses the current page, including after promotion.
-    return Heap::page(address)->GetOwnerGeneration();
-}
+
 
 BaseObject* HeapGcState::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const
 {

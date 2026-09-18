@@ -162,7 +162,7 @@ void StoreBarrierBuffer::Flush()
         const StoreBarrierEntry& entry = buffer[i];
         const zaddress addr = ZBarrier::make_load_good(entry.prev);
         if (!is_null(addr)) {
-            collector.MarkObjectIfActive(to_object(addr));
+            Heap::GetHeap().MarkObjectIfActive(to_object(addr));
         }
         ZBarrier::remember(reinterpret_cast<volatile zpointer*>(entry.p));
         buffer[i] = {};

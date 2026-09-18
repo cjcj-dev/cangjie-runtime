@@ -775,14 +775,7 @@ void HeapGcState::StartYoungMarkWork()
     MarkingStacks::VerifyEmpty(Heap::GetHeap().young().Mark().Stripes().Population());
 }
 
-void HeapGcState::MarkYoungObjectIfActive(BaseObject* object) const
-{
-    if (!Heap::IsHeapAddress(object)) {
-        return;
-    }
-    const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young))
-        .MarkObjectIfActive<false, false, true, false>(from_object(object));
-}
+
 
 void HeapGcState::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
@@ -887,13 +880,7 @@ bool HeapGcState::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* wi
     MarkingStacks::VerifyAllEmpty(Heap::GetHeap().young().Mark());
     return true;
 }
-void HeapGcState::MarkNewObject(BaseObject* obj)
-{
-    // Registration follows object initialization (BaseObject::RegisterFinalizer).
-    // ZMark::AnyThread / DontFollow: publish mark-only work for this current object.
-    ZGeneration& cycle = GetZGeneration(ObjectGeneration(obj));
-    cycle.MarkObjectIfActive<false, false, false, false>(from_object(obj));
-}
+
 
 void HeapGcState::ProcessFinalizers()
 {

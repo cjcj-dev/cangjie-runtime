@@ -831,7 +831,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Heap& collector, std:
         collector.IsUnmovableFromObject(oldObj)) {
         return;
     }
-    BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
+    BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
     CHECK_DETAIL(toObj != nullptr, "preforward headerless missing winner oldObj=%p", oldObj);
     if (oldObj != toObj) {
         ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&field), ZPointerLoadGoodMask);
@@ -910,7 +910,7 @@ inline void Mutator::GCPhasePreForward()
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
-            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
+            BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward stack field missing winner oldObj=%p", oldObj);
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&rootField), ZPointerLoadGoodMask);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
@@ -942,7 +942,7 @@ inline void Mutator::GCPhasePreForward()
             // and the refusal below is the honest report of that.  ZGC's counterpart assert
             // (zRelocate.cpp:412-416) encodes the same invariant: an address a root names is a
             // live object start, or the collector is already wrong.
-            BaseObject* toObj = collector.ForwardObject(oldObj, collector.ObjectGeneration(oldObj));
+            BaseObject* toObj = collector.ForwardObject(oldObj, Heap::GetHeap().ObjectGeneration(oldObj));
             CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
         } else if (oldObj != nullptr) {

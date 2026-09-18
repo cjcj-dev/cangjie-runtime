@@ -151,26 +151,11 @@ bool ZGeneration::ActiveRemsetIsCurrent(uint64_t youngSequence) const
     return ((youngSequence - youngSequenceAtRelocateStart.load(std::memory_order_acquire)) & 1U) == 0;
 }
 
-void HeapGcState::PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value)
-{
-    ZGeneration& cycle = GetZGeneration(generation);
-    const ZGenerationPhase before = cycle.GcPhase();
-    if (generation == ZGenerationId::old &&
-        value == ZGenerationPhase::Relocate && before != ZGenerationPhase::Relocate) {
-        Heap::GetHeap().old().RecordYoungSequenceAtRelocateStart(Heap::GetHeap().young().Sequence());
-    }
-    cycle.PublishPhase(value);
-}
+
 
 
 // ZGeneration::mark_object, zGeneration.inline.hpp:119-123.
-void HeapGcState::MarkYoungRootObject(BaseObject* object) const
-{
-    // #596's barrier already established current and selected young. Keep the
-    // generation mark-phase assertion at ZGeneration::mark_object's entry.
-    auto& cycle = const_cast<ZGeneration&>(GetZGeneration(ZGenerationId::young));
-    cycle.MarkObjectIfActive<false, true, true, false>(from_object(object));
-}
+
 
 void HeapGcState::FlushAllocationRegions()
 {

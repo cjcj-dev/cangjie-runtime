@@ -683,7 +683,7 @@ GC_TEST(YoungConc, MarkEndDomainContainsPublishedYoungWork)
     MarkPublicationFixture markFixture;
     fx.region0->reset(PageAge::eden);
     GC_EXPECT_EQ(markFixture.YoungPending(), 0u);
-    markFixture.collector.MarkYoungObjectIfActive(fx.obj0);
+    Heap::GetHeap().MarkYoungObjectIfActive(fx.obj0);
     GC_EXPECT_EQ(markFixture.YoungPending(), 1u);
     GC_EXPECT_EQ(markFixture.OldPending(), 0u);
 }

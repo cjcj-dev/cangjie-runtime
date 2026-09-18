@@ -464,7 +464,7 @@ void PinOwnerGeneration(ZPage* region, Generation gen)
 
 void PublishGenerationMarkComplete(Generation gen)
 {
-    Heap::GetHeap().GetCollector().PublishGenerationPhase(
+    Heap::GetHeap().PublishGenerationPhase(
         gen == Generation::Old ? ZGenerationId::old : ZGenerationId::young, ZGenerationPhase::MarkComplete);
 }
 
@@ -2782,10 +2782,10 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     auto* forwarding = generation_forwarding_table(Generation::Young).get(from);
     GC_EXPECT_EQ(forwarding->insert(from, to), to);
     auto& collector = Heap::GetHeap().GetCollector();
-    GC_EXPECT_TRUE(collector.ObjectGeneration(fixture.obj0) == Generation::Young);
+    GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Young);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
     auto original = region->CloneForPromotion();
-    const Generation current = collector.ObjectGeneration(fixture.obj0);
+    const Generation current = Heap::GetHeap().ObjectGeneration(fixture.obj0);
     std::fprintf(stderr, "PAGE579 promotion current=%u id=%u\n",
                  static_cast<unsigned>(current), static_cast<unsigned>(region->generation_id()));
     GC_EXPECT_TRUE(current == Generation::Old);
@@ -2800,7 +2800,7 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     // The old source table still exists: clearing the carrier must not recover
     // its generation from stale page metadata or search both maps.
     GC_EXPECT_EQ(forwarding_find(Generation::Young, from), to);
-    GC_EXPECT_TRUE(collector.ObjectGeneration(fixture.obj0) == Generation::Old);
+    GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
 }
 
 GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
@@ -2813,7 +2813,7 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
         region->reset(young ? PageAge::eden : PageAge::old);
         const Generation expected = young ? Generation::Young : Generation::Old;
         const ZGenerationId expectedId = young ? ZGenerationId::young : ZGenerationId::old;
-        const Generation current = collector.ObjectGeneration(fixture.obj0);
+        const Generation current = Heap::GetHeap().ObjectGeneration(fixture.obj0);
         std::fprintf(stderr, "PAGE579 reset young=%u current=%u id=%u\n", young,
                      static_cast<unsigned>(current), static_cast<unsigned>(region->generation_id()));
         GC_EXPECT_TRUE(current == expected);
@@ -2824,7 +2824,7 @@ GC_TEST(PageGeneration579, ResetAndReuseCurrentGeneration)
     region = ZPage::InitRegion(0, 1, ZPageType::small);
     GC_EXPECT_TRUE(region->GetRegionLifeId() != oldLife);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
-    GC_EXPECT_TRUE(collector.ObjectGeneration(fixture.obj0) == Generation::Old);
+    GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Old);
 }
 
 GC_OTHER_VM_TEST(ValueRootCurrentization, ExportEntryCurrentCompactDestinationKeepsIdentity)
