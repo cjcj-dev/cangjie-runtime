@@ -364,11 +364,10 @@ void ReferenceProcessor::process_references()
 {
     ZStatTimerOld timer(ZSubPhaseConcurrentReferencesProcess);
     ZReferenceProcessorTask task(this);
-    if (workers != nullptr) {
-        workers->run(&task);
-    } else {
-        work();
-    }
+    // zReferenceProcessor.cpp:443-453: processing always runs as a worker
+    // task; the per-worker discovered lists require a real worker id.
+    CHECK_DETAIL(workers != nullptr, "reference processing requires old workers");
+    workers->run(&task);
     soft_reference_update_clock();
     collect_statistics();
 }

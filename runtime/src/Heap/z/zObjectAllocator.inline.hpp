@@ -33,7 +33,9 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
 #if defined(__EULER__)
     needUnitCount = maxUnitCountPerPinnedRegion;
 #endif
-    ZPage* region = Heap::alloc_page(needUnitCount, ZPageType::small);
+    // zObjectAllocator.cpp:55-57 PerAge::alloc_page: a page owned by the old
+    // allocator (pinnedPage below) is created with the owner's age.
+    ZPage* region = Heap::alloc_page(needUnitCount, ZPageType::small, false, true, true, PageAge::old);
     if (region == nullptr) {
         return 0;
     }
