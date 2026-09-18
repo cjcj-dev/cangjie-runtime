@@ -38,7 +38,7 @@ void VerifyAllEmpty(ZMark& domain);
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include "Allocator/RegionSpace.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zForwardingTable.hpp"
 
 #include "Heap/z/zMarkStack.hpp"
@@ -646,16 +646,16 @@ public:
     void MarkYoungRootObject(BaseObject* object) const override;
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
-    bool MarkObject(BaseObject* obj) const override;
-    bool ResurrectObject(BaseObject* obj, size_t offset, ZPage* regionInfo) override;
+    bool MarkObject(BaseObject* obj) const;
+    bool ResurrectObject(BaseObject* obj, size_t offset, ZPage* regionInfo);
 
-    void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
+    void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const;
     void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack, bool finalizable = false) const;
-    void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false) override;
-    void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;
-    BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
+    void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false);
+    void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack);
+    BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field);
     BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation) override;
-    BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
+    BaseObject* ForwardObjectExclusive(BaseObject* obj);
     BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
                                   Generation generation) const override;
     void PostResolveCycleTask();
@@ -1143,9 +1143,9 @@ protected:
 
     void CollectSmallSpace();
 
-    void DoGarbageCollection(ZGenerationId generation) override;
-    void ProcessFinalizers() override;
-    void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const override;
+    void DoGarbageCollection(ZGenerationId generation);
+    void ProcessFinalizers();
+    void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const;
 
 private:
     using MinorObjectSet = std::unordered_set<BaseObject*>;
@@ -1270,6 +1270,5 @@ private:
     MinorSlotSet youngWeakSlots;
 
 };
-using WCollector = CopyCollector;
 } // namespace MapleRuntime
 #endif // MRT_COLLECTOR_TRACING_H

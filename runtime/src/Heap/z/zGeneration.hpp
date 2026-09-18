@@ -36,7 +36,8 @@ struct GCCycleSnapshot {
     ZGenerationPhase phase;
     bool active;
 };
-class WCollector;
+class CopyCollector;
+using WCollector = CopyCollector;
 struct YoungCollectionStats;
 class ZGeneration;
 class ZGenerationYoung;

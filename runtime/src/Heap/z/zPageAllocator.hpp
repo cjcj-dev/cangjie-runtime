@@ -386,7 +386,8 @@ private:
 namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
-class WCollector;
+class CopyCollector;
+using WCollector = CopyCollector;
 template<Generation G>
 class ForwardTask;
 
