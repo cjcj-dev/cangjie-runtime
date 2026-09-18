@@ -13,37 +13,36 @@ struct MarkPublicationFixture {
     MarkPublicationFixture* previousFixture = current;
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    CopyCollector collector { Heap::GetHeap().GetAllocator(), resources };
-    HeapGcState* previousCollector;
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     MarkPublicationFixture()
-        : previousCollector(resources.testCollector)
     {
         current = this;
-        collector.youngCycle.InitializeWorkers(1);
-        collector.oldCycle.InitializeWorkers(1);
-        if (previousCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *previousCollector);
+        if (collector.GetZGeneration(ZGenerationId::young).Workers() == nullptr) {
+            collector.GetZGeneration(ZGenerationId::young).InitializeWorkers(1);
         }
-        resources.testCollector = &collector;
-        resources.BindCollector(&collector);
-        collector.youngCycle.SelectReason(GC_REASON_YOUNG);
-        collector.youngCycle.Begin(1);
+        if (collector.GetZGeneration(ZGenerationId::old).Workers() == nullptr) {
+            collector.GetZGeneration(ZGenerationId::old).InitializeWorkers(1);
+        }
+        auto& young = collector.GetZGeneration(ZGenerationId::young);
+        auto& old = collector.GetZGeneration(ZGenerationId::old);
+        if (young.Snapshot().active) young.End();
+        if (old.Snapshot().active) old.End();
+        young.SelectReason(GC_REASON_YOUNG);
+        young.Begin(1);
         // ZGenerationYoung::mark_start advances the sequence with the remset
         // flip (zGeneration.cpp:855-881), before mark work can be published.
-        GenerationSequenceFixture::AdvanceYoung(collector.youngCycle);
+        GenerationSequenceFixture::AdvanceYoung(young);
         collector.StartYoungMarkWork();
-        collector.youngCycle.PublishPhase(ZGenerationPhase::Mark);
-        collector.oldCycle.SelectReason(GC_REASON_USER);
-        collector.oldCycle.Begin(2);
-        GenerationSequenceFixture::Advance(collector.oldCycle);
+        young.PublishPhase(ZGenerationPhase::Mark);
+        old.SelectReason(GC_REASON_USER);
+        old.Begin(2);
+        GenerationSequenceFixture::Advance(old);
         collector.StartOldMarkWork();
-        collector.oldCycle.PublishPhase(ZGenerationPhase::Mark);
+        old.PublishPhase(ZGenerationPhase::Mark);
     }
     ~MarkPublicationFixture()
     {
         Drain([](BaseObject*, bool) {});
-        resources.testCollector = previousCollector;
-        resources.BindCollector(previousCollector);
         current = previousFixture;
     }
     template<class Visitor> void DrainDomain(ZMark& domain, Visitor&& visitor)
@@ -70,7 +69,7 @@ struct MarkPublicationFixture {
     }
     void CompleteOldMarkForAdmissionTest()
     {
-        collector.oldCycle.PublishPhase(ZGenerationPhase::MarkComplete);
+        collector.GetZGeneration(ZGenerationId::old).PublishPhase(ZGenerationPhase::MarkComplete);
     }
     template<class Visitor> void Drain(Visitor&& visitor)
     {
