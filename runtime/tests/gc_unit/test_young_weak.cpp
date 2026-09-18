@@ -419,7 +419,7 @@ void RunYoungWeakVariant(size_t helpers)
     space.GetRegionManager().AddRawPointerObject(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
@@ -493,7 +493,7 @@ void RunYoungWeakRemsetFlow()
     space.GetRegionManager().AddRawPointerObject(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
@@ -784,7 +784,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     space.GetRegionManager().AddRawPointerObject(route.to);
     RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
 
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;

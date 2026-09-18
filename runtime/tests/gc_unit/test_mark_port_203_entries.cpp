@@ -364,7 +364,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
             space.GetRegionManager().AddRawPointerObject(child);
         }
     }
-    const bool wasStarted = resources.IsGcStarted();
+    const bool wasStarted = Heap::GetHeap().IsGcStarted();
     const GCReason oldReason = resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;

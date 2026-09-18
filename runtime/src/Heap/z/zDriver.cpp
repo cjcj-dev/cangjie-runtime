@@ -270,11 +270,6 @@ GCStats& CollectorResources::GetGCStats(ZGenerationId generation)
 }
 
 namespace MapleRuntime {
-bool CollectorResources::IsGcStarted() const
-{
-    return Heap::GetHeap().GetCycleSnapshot(ZGenerationId::young).active ||
-           Heap::GetHeap().GetCycleSnapshot(ZGenerationId::old).active;
-}
 }
 
 namespace MapleRuntime {

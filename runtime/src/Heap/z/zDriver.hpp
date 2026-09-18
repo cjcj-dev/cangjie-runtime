@@ -399,8 +399,6 @@ public:
 
     ZWorkers& GetWorkers(ZGenerationId generation) const;
 
-    bool IsGcStarted() const;
-
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
 
 #if defined(MRT_TESTABLE_INTERNALS)

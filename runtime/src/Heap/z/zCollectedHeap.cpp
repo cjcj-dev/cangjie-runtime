@@ -456,7 +456,7 @@ uint64_t HeapGcState::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t
         : 0;
     // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
     // gc_unit other-vm children, have CollectorResources but no bound collector to query.
-    const unsigned gcPhase = Heap::GetHeap().GetCollectorResources().IsGcStarted() && ZGeneration::old() != nullptr
+    const unsigned gcPhase = Heap::GetHeap().IsGcStarted() && ZGeneration::old() != nullptr
         ? static_cast<unsigned>(ZGeneration::old()->Snapshot().phase)
         : 0xffu;
     std::fprintf(stderr,

@@ -209,7 +209,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     space.GetRegionManager().AddRawPointerObject(first);
     space.GetRegionManager().AddRawPointerObject(second);
     Mutator producer;
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
@@ -261,7 +261,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
@@ -311,7 +311,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
@@ -371,7 +371,7 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     space.GetRegionManager().AddRawPointerObject(y2yHolder);
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
@@ -416,7 +416,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;

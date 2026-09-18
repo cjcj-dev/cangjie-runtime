@@ -99,7 +99,7 @@ private:
 class MarkWindowScope final {
 public:
     MarkWindowScope()
-        : resources(Heap::GetHeap().GetCollectorResources()), started(resources.IsGcStarted()),
+        : resources(Heap::GetHeap().GetCollectorResources()), started(Heap::GetHeap().IsGcStarted()),
           reason(resources.GetGCStats().reason)
     {
         RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);

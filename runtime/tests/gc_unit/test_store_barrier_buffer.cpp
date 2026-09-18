@@ -141,7 +141,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
@@ -201,7 +201,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
@@ -328,7 +328,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
@@ -396,7 +396,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
+    const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);

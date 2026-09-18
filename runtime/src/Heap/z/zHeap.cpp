@@ -229,7 +229,10 @@ bool Heap::IsSurvivedObject(const BaseObject* obj) const
     return Heap::page(reinterpret_cast<MAddress>(obj))->is_object_live(from_object(obj));
 }
 
-bool Heap::IsGcStarted() const { return ZCollectedHeap::heap()->resources().IsGcStarted(); }
+bool Heap::IsGcStarted() const
+{
+    return GetCycleSnapshot(ZGenerationId::young).active || GetCycleSnapshot(ZGenerationId::old).active;
+}
 
 bool Heap::IsGCEnabled() const { return isGCEnabled.load(); }
 
