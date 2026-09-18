@@ -510,14 +510,11 @@ namespace {
 // mark barrier; this adapter consumes the existing old publication producer.
 class MarkOopClosure {
 public:
-    explicit MarkOopClosure(const HeapGcState& collector) : collector(collector) {}
     void DoOop(NativeSlot& slot) const
     {
         BaseObject* object = ZBarrier::ReadStaticRef(slot);
         ZBarrier::MarkBarrierOnOldOopField(nullptr, slot, false);
     }
-private:
-    const HeapGcState& collector;
 };
 
 class MarkThreadClosure {
@@ -543,11 +540,11 @@ public:
 // generation mark domain by closures, then flushed by each participating worker.
 class MarkOldRootsTask final : public ZTask {
 public:
-    MarkOldRootsTask(const HeapGcState& collector, ZMark& domain,
+    MarkOldRootsTask(ZMark& domain,
                      NativeSlotVisitor finalizable, std::function<void()> uncolored, unsigned workers)
-        : ZTask("ZMarkOldRootsTask"), rootsColored(collector, workers),
+        : ZTask("ZMarkOldRootsTask"), rootsColored(workers),
           finalizerRoots(Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers),
-          finalizable(std::move(finalizable)), coloredClosure(collector), domain(domain), uncolored(std::move(uncolored)) {}
+          finalizable(std::move(finalizable)), domain(domain), uncolored(std::move(uncolored)) {}
     void work() override
     {
         finalizerRoots.OopsDo(finalizable);
@@ -586,7 +583,7 @@ private:
 void HeapGcState::EnumAllCommonRoots(ZWorkers& workers)
 {
     CHECK_DETAIL(Heap::GetHeap().old().MarkPtr() != nullptr, "old mark domain must start before roots");
-    MarkOldRootsTask task(*this, Heap::GetHeap().old().Mark(),
+    MarkOldRootsTask task(Heap::GetHeap().old().Mark(),
                          [this](NativeSlot& slot) { DiscoverFinalizableRoot(slot); }, [&] {
         VisitStrongPlainRoots([&](ObjectRef& root) {
             MarkOldObjectIfActive(to_object(safe(root.LoadPlain())));
@@ -610,8 +607,8 @@ public:
 // Cangjie's stack/value-root scanner replaces HotSpot thread/nmethod closures.
 class MarkYoungRootsTask final : public ZTask {
 public:
-    MarkYoungRootsTask(const HeapGcState& collector, std::function<void()> uncolored, unsigned workers)
-        : ZTask("ZMarkYoungRootsTask"), rootsColored(collector, workers), uncolored(std::move(uncolored)) {}
+    MarkYoungRootsTask(std::function<void()> uncolored, unsigned workers)
+        : ZTask("ZMarkYoungRootsTask"), rootsColored(workers), uncolored(std::move(uncolored)) {}
 
     void work() override
     {
@@ -652,11 +649,11 @@ void HeapGcState::VisitMinorRoots(const std::function<void(BaseObject*)>& visito
         BaseObject* obj = ResolveMinorReference(root);
         invisibleVisitor(obj);
     };
-    MarkYoungRootsTask task(*this, [&] {
+    MarkYoungRootsTask task([&] {
         VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
         VisitMinorValueRoots(visitor);
         gMinorRootOrigin = "export";
-        VisitExportColoredRoots([&](NativeSlot& slot) { visitor(ZBarrier::ReadStaticRef(slot)); });
+        Heap::GetHeap().VisitAllExportRoots([&](NativeSlot& slot) { visitor(ZBarrier::ReadStaticRef(slot)); });
         gMinorRootOrigin = "unknown";
     }, GetWorkers(ZGenerationId::young).active_workers());
     SuspendibleThreadSetJoiner joiner;

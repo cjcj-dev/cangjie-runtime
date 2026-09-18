@@ -24,9 +24,9 @@ class ZProcessWeakRootsTask : public ZTask {
 private:
     RootsIteratorWeakColored rootsWeakColored;
 public:
-    explicit ZProcessWeakRootsTask(const HeapGcState& collector, unsigned nworkers)
+    explicit ZProcessWeakRootsTask(unsigned nworkers)
         : ZTask("ZProcessWeakRootsTask"),
-          rootsWeakColored(collector, nworkers, ZGenerationIdOptional::old) {}
+          rootsWeakColored(nworkers, ZGenerationIdOptional::old) {}
 
     ~ZProcessWeakRootsTask() override
     {
@@ -43,8 +43,7 @@ public:
 
 void ZWeakRootsProcessor::process_weak_roots()
 {
-    auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
-    ZProcessWeakRootsTask task(collector, workers->active_workers());
+    ZProcessWeakRootsTask task(workers->active_workers());
     workers->run(&task);
     SyncRetireDead();
 }

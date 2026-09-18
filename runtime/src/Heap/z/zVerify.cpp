@@ -113,7 +113,7 @@ void ZVerify::RootsStrong(bool afterOldMark)
 {
     DCHECK(MutatorManager::Instance().WorldStopped());
     auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
-    collector.VisitStrongColoredRoots([&](NativeSlot& root) { ColoredRoot(root, afterOldMark); });
+    RootsIteratorStrongColored().Apply([&](NativeSlot& root) { ColoredRoot(root, afterOldMark); });
     collector.VisitStrongPlainRoots(PlainRoot, [](Mutator& mutator) {
         mutator.VisitProcessedRoots([&](ObjectRef& root) {
             mutator.VisitHeapRootSlots(root, PlainRoot);
@@ -125,7 +125,7 @@ void ZVerify::RootsWeak()
     DCHECK(MutatorManager::Instance().WorldStopped());
     DCHECK(!ZResurrection::is_blocked());
     auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
-    collector.VisitWeakColoredRoots([](NativeSlot& root) { ColoredRoot(root, true); });
+    RootsIteratorWeakColored().Apply([](NativeSlot& root) { ColoredRoot(root, true); });
 }
 
 

@@ -178,7 +178,7 @@ void HeapGcState::DumpRoots(LogType logType)
     };
 
     DLOG(logType, "static fields");
-    VisitFinalizerRoots(rootSlotVisitor);
+    Heap::GetHeap().GetFinalizerProcessor().VisitGCRoots(rootSlotVisitor);
     VisitStaticRoots(rootSlotVisitor);
 
     DLOG(logType, "Dump GCRoots end");

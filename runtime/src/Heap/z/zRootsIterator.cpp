@@ -120,10 +120,6 @@ void HeapGcState::Process(const RootVisitor& visitor, const DerivedPtrVisitor* d
     heapMap.RecordCalleeSaved(regSlotsMap);
 }
 
-
-
-
-
 void HeapGcState::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
 {
     RegRoot::RecordStubCalleeSaved(regSlotsMap, fp);
@@ -146,69 +142,18 @@ void HeapGcState::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
     RegRoot::RecordStubAllRegister(regSlotsMap, fp);
 }
 
-
-
-
-
-
-
-
-
-void HeapGcState::VisitExportColoredRoots(const NativeSlotVisitor& visitor) const
-{
-    Heap::GetHeap().VisitAllExportRoots(visitor);
-}
-
-OopStorage& HeapGcState::StrongRootStorage() const
-{
-    return Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage();
-}
-
-OopStorage& HeapGcState::WeakFinalizerRootStorage() const
-{
-    return Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage();
-}
-
-OopStorage& HeapGcState::SyncWeakRootStorage() const
-{
-    return SyncWeakOopStorage();
-}
-
-void HeapGcState::VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const
-{
-    VisitStaticRoots(visitor);
-}
-
-void HeapGcState::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
-{
-    RootsIteratorStrongColored roots(*this);
-    roots.Apply(visitor);
-}
-
-void HeapGcState::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
-{
-    RootsIteratorWeakColored roots(*this);
-    roots.Apply(visitor);
-}
-
-void HeapGcState::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
-{
-    RootsIteratorAllColored roots(*this);
-    roots.Apply(visitor);
-}
-
-OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(const HeapGcState& collector, unsigned workers,
+OopStorageSetIteratorStrong::OopStorageSetIteratorStrong(unsigned workers,
                                                          ZGenerationIdOptional generation)
-    : states{{{collector.StrongRootStorage(), workers}}}, generation(generation)
+    : states{{{Heap::GetHeap().GetFinalizerProcessor().StrongRootStorage(), workers}}}, generation(generation)
 {
     (void)this->generation;
 }
 
-OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(const HeapGcState& collector, unsigned workers,
+OopStorageSetIteratorWeak::OopStorageSetIteratorWeak(unsigned workers,
                                                      ZGenerationIdOptional generation)
-    : states{{{collector.WeakFinalizerRootStorage(), workers},
+    : states{{{Heap::GetHeap().GetFinalizerProcessor().WeakRootStorage(), workers},
               {Heap::GetHeap().GetExportRootStorage(), workers},
-              {collector.SyncWeakRootStorage(), workers}}}, generation(generation) {}
+              {SyncWeakOopStorage(), workers}}}, generation(generation) {}
 
 void OopStorageSetIteratorWeak::report_num_dead()
 {
@@ -236,7 +181,7 @@ void OopStorageSetIteratorWeak::Apply(const NativeSlotVisitor& visitor)
 void StaticRootsAdapterIterator::Apply(const NativeSlotVisitor& visitor)
 {
     if (!claimed.exchange(true, std::memory_order_relaxed)) {
-        collector.VisitStaticAdapterRoots(visitor);
+        Heap::GetHeap().VisitStaticRoots(visitor);
     }
 }
 
@@ -291,13 +236,6 @@ void HeapGcState::VisitStaticRoots(const NativeSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
-
-void HeapGcState::VisitFinalizerRoots(const NativeSlotVisitor& visitor) const
-{
-    Heap::GetHeap().GetFinalizerProcessor().VisitGCRoots(visitor);
-}
-
-
 
 void HeapGcState::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                        Mutator& mutator)
@@ -385,7 +323,7 @@ void HeapGcState::MergeMutatorRoots(WorkStack& workStack)
 
 void HeapGcState::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
-    VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
+    Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet, this](NativeSlot& root) {
 
         EnumRefFieldRoot(root, foreignRootsSet);
     });

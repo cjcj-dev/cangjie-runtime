@@ -457,14 +457,6 @@ public:
 
 
     // zRootsIterator.cpp:159-220. The language has no weak plain code-cache roots.
-    void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
-    OopStorage& StrongRootStorage() const;
-    OopStorage& WeakFinalizerRootStorage() const;
-    OopStorage& SyncWeakRootStorage() const;
-    void VisitStaticAdapterRoots(const NativeSlotVisitor& visitor) const;
-    void VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const;
-    void VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const;
-    void VisitAllColoredRoots(const NativeSlotVisitor& visitor) const;
     void VisitStrongPlainRoots(const RootVisitor& visitor,
                               const std::function<void(Mutator&)>& threadVisitor) const;
 
@@ -627,7 +619,6 @@ private:
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
 
     void VisitStaticRoots(const NativeSlotVisitor& visitor) const;
-    void VisitFinalizerRoots(const NativeSlotVisitor& visitor) const;
     friend class ZGeneration;
     friend class ZGenerationYoung;
     friend class ZGenerationOld;

@@ -247,7 +247,7 @@ void HeapGcState::RemapYoungRoots()
     // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
     ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
     Heap::GetHeap().remembered().remap_current(&remsetIter);
-    VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
+    RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
     RootVisitor visitor = [this](ObjectRef& root) {
         const zaddress_unsafe observed = root.LoadPlain();
         // ZGeneration::remap_object (zGeneration.inline.hpp:142-151): only
@@ -341,7 +341,7 @@ bool HeapGcState::Preforward()
     manager.DrainForwardFromRegions<Generation::Old>();
     ZWorkers& workers = GetWorkers(ZGenerationId::old);
     const std::function<void()> families[] = {
-        [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
+        [&] { RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); }); },
         [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
             const zaddress_unsafe observed = root.LoadPlain();
             BaseObject* oldObj = to_object(safe(observed));
@@ -790,7 +790,7 @@ void HeapGcState::FixMinorRootSlots(const ScopedStopTheWorld* stw)
         (void)FixMinorEvacuatedSlot(root, stw);
     };
     VisitStrongPlainRoots(rawRootVisitor, {});
-    VisitAllColoredRoots([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
+    RootsIteratorAllColored().Apply([](NativeSlot& root) { (void)ZBarrier::ReadStaticRef(root); });
 
 }
 

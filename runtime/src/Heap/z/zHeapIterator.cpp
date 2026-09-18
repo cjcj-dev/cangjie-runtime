@@ -162,7 +162,7 @@ void HeapIterator::push_strong_roots(const HeapIteratorContext& context)
 {
     auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     ColoredRootOopClosure<false> colored(*this, context);
-    collector.VisitStrongColoredRoots([&](NativeSlot& root) { colored.do_root(root); });
+    RootsIteratorStrongColored().Apply([&](NativeSlot& root) { colored.do_root(root); });
     UncoloredRootOopClosure uncolored(*this, context);
     collector.VisitStrongPlainRoots([&](ObjectRef& root) { uncolored.do_root(root); }, [&](Mutator& mutator) {
         mutator.VisitMutatorRoots([&](ObjectRef& root) { mutator.VisitHeapRootSlots(root, [&](ObjectRef& slot) {
@@ -178,7 +178,7 @@ void HeapIterator::push_weak_roots(const HeapIteratorContext& context)
     }
     auto& collector = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
     ColoredRootOopClosure<true> colored(*this, context);
-    collector.VisitWeakColoredRoots([&](NativeSlot& root) { colored.do_root(root); });
+    RootsIteratorWeakColored().Apply([&](NativeSlot& root) { colored.do_root(root); });
 }
 
 void HeapIterator::drain(const HeapIteratorContext& context)
