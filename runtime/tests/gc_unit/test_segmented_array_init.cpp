@@ -254,9 +254,9 @@ struct SegmentedArrayContext {
             }
             mutator->SetManagedContext(false);
             if (ctx.gc == YieldGc::YOUNG) {
-                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+                Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
             } else {
-                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
+                Heap::GetHeap().RequestGC(GC_REASON_FORCE, false);
             }
             mutator->SetManagedContext(true);
             if (youngSeedRoot != 0) {
@@ -754,7 +754,7 @@ void* RunLargeYoungClosureCase(void*)
     SetMarkClosureObserverForTest(LargeYoungClosureResult::Observe);
     Mutator* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+    Heap::GetHeap().RequestGC(GC_REASON_YOUNG, false);
     SetMarkClosureObserverForTest(nullptr);
     LargeYoungClosureResult::target = nullptr;
     std::fprintf(stderr, "LARGE_YOUNG_TARGET_LIVE_ASSERT_EXECUTED holder_young=%d observations=%zu live=%d followed=%d\n",
@@ -932,7 +932,7 @@ void PausePinnedPageBeforeInstall(ZPage* page)
     pinnedAcquiredBirth = page->BirthSequence();
     auto* mutator = Mutator::GetMutator();
     mutator->SetManagedContext(false);
-    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_USER, true);
+    Heap::GetHeap().RequestGC(GC_REASON_USER, true);
     {
         ScopedEnterSaferegion safe(false);
         pinnedAcquiredWindow = MarkAllocationWindow::Wait(MarkAllocationWindow::entered);
@@ -1058,7 +1058,7 @@ void* RunPinnedBirthCase(void*)
     const bool shared = Heap::page(reinterpret_cast<uintptr_t>(survivor)) == oldPage;
     const U64 root = heap.RegisterExportRoot(survivor);
     mutator->SetManagedContext(false);
-    heap.GetCollector().RequestGC(GC_REASON_USER, false);
+    heap.RequestGC(GC_REASON_USER, false);
     mutator->SetManagedContext(true);
     MObject* fresh = MObject::NewPinnedObject(type, size);
     ZPage* page = Heap::page(reinterpret_cast<uintptr_t>(fresh));
