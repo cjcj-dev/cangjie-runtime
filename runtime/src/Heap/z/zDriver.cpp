@@ -258,6 +258,16 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
+ZWorkers& CollectorResources::GetWorkers(ZGenerationId generation) const
+{
+    return *Heap::GetHeap().GetZGeneration(generation).Workers();
+}
+
+GCStats& CollectorResources::GetGCStats(ZGenerationId generation)
+{
+    return Heap::GetHeap().GetZGeneration(generation).Stats();
+}
+
 void HeapGcState::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
     ScopedEntryTrace trace("CJRT_GC_START");
