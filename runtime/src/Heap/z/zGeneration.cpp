@@ -137,75 +137,7 @@ void ResetSkippedStackMapCounts();
 void ReportSkippedStackMapCounts();
 // ZGenerationYoung::mark_start (zGeneration.cpp:855-880). The collector
 // supplies the existing allocator/mark domain; this cycle owns phase and seq.
-YoungCollectionStats ZGeneration::StartYoungMark(HeapGcState& collector)
-{
-    CHECK(_cycle == ZGenerationId::young);
-    CHECK(Snapshot().active);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
-    }
-#endif
-    ZGlobalsPointers::flip_young_mark_start();
-    ZVerify::OnColorFlip();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
-    }
-#endif
 
-    auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
-    auto& manager = space.GetRegionManager();
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
-        manager.ResetTLABUsage();
-        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
-        collector.FlushAllocationRegions();
-    }
-    // Cangjie keeps allocation lists and candidate statistics in RegionManager.
-    // Preparing those lists retires the young shared/pinned allocation pages.
-    collector.minorCandidateRegions.clear();
-    YoungCollectionStats stats;
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
-        stats = manager.PrepareYoungGarbageCandidates(
-            [&collector](ZPage* region) { collector.minorCandidateRegions.insert(region); });
-    }
-    // Flush pre-flip producers before invalidating their generation sequence.
-    (void)ZMark::FlushAllGenerations();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
-    }
-#endif
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CHECK(sequence != UINT64_MAX);
-        ++sequence;
-    }
-    set_phase(Phase::Mark);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
-    }
-#endif
-    collector.StartYoungMarkWork();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
-    }
-#endif
-    {
-        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
-        Heap::GetHeap().remembered().flip();
-    }
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
-    }
-#endif
-    return stats;
-}
 
 // ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
 void ZGeneration::StartOldMark(HeapGcState& collector)
@@ -452,10 +384,7 @@ void ZGenerationYoung::collect()
     concurrent_relocate();
 }
 
-void ZGenerationYoung::mark_start()
-{
-    TheCollector().RunYoungCollection();
-}
+
 
 void ZGenerationYoung::pause_mark_start()
 {
@@ -468,30 +397,18 @@ void ZGenerationYoung::pause_mark_start()
     }
 }
 
-void ZGenerationYoung::concurrent_mark()
-{
-    TheCollector().ConcurrentYoungMark();
-}
-bool ZGenerationYoung::mark_end()
-{
-    return TheCollector().YoungMarkEndPause();
-}
+
+
 
 bool ZGenerationYoung::pause_mark_end()
 {
     VM_ZMarkEndYoung op;
     return op.pause();
 }
-void ZGenerationYoung::concurrent_mark_continue()
-{
-    TheCollector().ConcurrentYoungMarkContinue();
-}
-void ZGenerationYoung::concurrent_mark_free()
-{
-    TheCollector().FinishYoungMarkHandoff();
-}
 
-void HeapGcState::RunYoungCollection()
+
+
+void ZGenerationYoung::mark_start()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
@@ -500,17 +417,74 @@ void HeapGcState::RunYoungCollection()
                                          type == ZYoungType::major_partial_roots);
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
-    YoungCollectionStats stats = Heap::GetHeap().young().StartYoungMark(*this);
-    RegionSpace& space = static_cast<RegionSpace&>(GetAllocator());
-    RegionManager& manager = space.GetRegionManager();
-    MinorSlotSet rememberedSlots;
-    MinorSlotSet liveRememberedSlots;
-    MinorSlotSet consumedSlots;
-    MinorInteriorBaseMap remsetInteriorBases;
-    size_t liveRememberedCount = 0;
+    CHECK(_cycle == ZGenerationId::young);
+    CHECK(Snapshot().active);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (testYoungMarkStarted) {
-        testYoungMarkStarted();
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
+    }
+#endif
+    ZGlobalsPointers::flip_young_mark_start();
+    ZVerify::OnColorFlip();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
+    }
+#endif
+
+    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    auto& manager = space.GetRegionManager();
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
+        manager.ResetTLABUsage();
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
+        Heap::GetHeap().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
+    }
+    // Cangjie keeps allocation lists and candidate statistics in RegionManager.
+    // Preparing those lists retires the young shared/pinned allocation pages.
+    minorCandidateRegions.clear();
+    YoungCollectionStats stats;
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
+        stats = manager.PrepareYoungGarbageCandidates(
+            [this](ZPage* region) { minorCandidateRegions.insert(region); });
+    }
+    // Flush pre-flip producers before invalidating their generation sequence.
+    (void)ZMark::FlushAllGenerations();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
+    }
+#endif
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        CHECK(sequence != UINT64_MAX);
+        ++sequence;
+    }
+    set_phase(Phase::Mark);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
+    }
+#endif
+    TheCollector().StartYoungMarkWork();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
+    }
+#endif
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
+        Heap::GetHeap().remembered().flip();
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
+    }
+#endif
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testYoungMarkStarted) {
+        HeapGcState::testYoungMarkStarted();
     }
 #endif
 
@@ -557,7 +531,7 @@ void HeapGcState::RunYoungCollection()
     youngStartNs = start;
 }
 
-void HeapGcState::ConcurrentYoungMark()
+void ZGenerationYoung::concurrent_mark()
 {
     uint64_t stackScanEpoch = youngStackScanEpoch;
     WorkStack& workStack = youngWorkStack;
@@ -570,19 +544,19 @@ void HeapGcState::ConcurrentYoungMark()
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
     auto mergeY2yDirtyWork = [&](WorkStack& destination) {
-        GetAllocator().VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
+        TheCollector().GetAllocator().VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
             buffer.MergeY2yDirtyHolders(destination);
             buffer.MergeY2yDirtySlots([this, &destination](MAddress slot) {
                 RefField<>& field = HeapSlotAt<>(slot);
-                BaseObject* target = ResolveMinorReference(field);
-                PushYoungObject(target, destination, "y2y_slot");
+                BaseObject* target = TheCollector().ResolveMinorReference(field);
+                TheCollector().PushYoungObject(target, destination, "y2y_slot");
             });
         });
     };
 #if defined(MRT_TESTABLE_INTERNALS)
     auto pendingY2yDirtyWorkCount = [&]() {
         size_t pending = 0;
-        GetAllocator().VisitAllocBuffers([&pending](AllocBuffer& buffer) {
+        TheCollector().GetAllocator().VisitAllocBuffers([&pending](AllocBuffer& buffer) {
             pending += buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount();
         });
         return pending;
@@ -597,14 +571,14 @@ void HeapGcState::ConcurrentYoungMark()
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER(ZStatPhases::PYoungRootEnum);
         (void)Heap::GetHeap().young().Mark().Flush();
-        VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
+        TheCollector().VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
                 if (region != nullptr && !region->IsYoungRegion()) {
                     currentMinorRoots.insert(object);
                 }
             }
-            PushYoungObject(object, workStack, "minor_root");
+            TheCollector().PushYoungObject(object, workStack, "minor_root");
         }, [this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (!Heap::IsHeapAddress(object)) {
                 return;
@@ -613,7 +587,7 @@ void HeapGcState::ConcurrentYoungMark()
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
             }
-            PushYoungObject(object, workStack, "minor_root");
+            TheCollector().PushYoungObject(object, workStack, "minor_root");
         }, stackScanEpoch);
         // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
         (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), Heap::GetHeap().young().Mark());
@@ -639,7 +613,7 @@ void HeapGcState::ConcurrentYoungMark()
         CHECK_DETAIL(stackScanEpoch != 0,
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
-        reinterpret_cast<RegionSpace&>(GetAllocator()).PrepareTrace();
+        reinterpret_cast<RegionSpace&>(TheCollector().GetAllocator()).PrepareTrace();
         mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyWorkCount());
@@ -656,7 +630,7 @@ void HeapGcState::ConcurrentYoungMark()
         // The release above makes this ZGC mark_roots()+mark_follow work concurrent.
         MRT_PHASE_TIMER(ZStatPhases::PYoungMarkClosure);
         ++concWindow.closureCalls;
-        TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
+        TheCollector().TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
                           reachableSlotDomain);
     }
     if (ZAbort::should_abort()) {
@@ -674,7 +648,7 @@ void HeapGcState::ConcurrentYoungMark()
     if (ZAbort::should_abort()) {
         return;
     }
-    (void)FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots, &concWindow);
+    (void)TheCollector().FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots, &concWindow);
 #if defined(MRT_TESTABLE_INTERNALS)
     FlushExportRootAfterT1TestReceipt();
     PublishMarkBeforeMarkEndTestReceipt();
@@ -688,7 +662,7 @@ void HeapGcState::ConcurrentYoungMark()
     youngFullScan = fullYoungScan;
 }
 
-bool HeapGcState::YoungMarkEndPause()
+bool ZGenerationYoung::mark_end()
 {
     WorkStack& workStack = youngWorkStack;
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -696,22 +670,22 @@ bool HeapGcState::YoungMarkEndPause()
     const size_t y2yBatchAtMarkEnd = 0;
     (void)y2yBatchAtMarkEnd;
 #endif
-    GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) {
+    TheCollector().GetAllocator().VisitAllocBuffers([](AllocBuffer& buffer) {
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteMarkTerminatePauseProducers(buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
 #else
         (void)buffer;
 #endif
     });
-    GetAllocator().VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
+    TheCollector().GetAllocator().VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
         buffer.MergeY2yDirtyHolders(workStack);
         buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
             RefField<>& field = HeapSlotAt<>(slot);
-            BaseObject* target = ResolveMinorReference(field);
-            PushYoungObject(target, workStack, "y2y_slot");
+            BaseObject* target = TheCollector().ResolveMinorReference(field);
+            TheCollector().PushYoungObject(target, workStack, "y2y_slot");
         });
     });
-    const bool markEndSucceeded = TryEndYoungMark(workStack, &youngConcWindow);
+    const bool markEndSucceeded = TheCollector().TryEndYoungMark(workStack, &youngConcWindow);
 #if defined(MRT_TESTABLE_INTERNALS)
     NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
 #endif
@@ -719,8 +693,8 @@ bool HeapGcState::YoungMarkEndPause()
         MarkingStacks::VerifyEmpty(workStack.size());
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteExportRootPublicationAtT2TestReceipt();
-        if (testYoungMarkCompleted) {
-            testYoungMarkCompleted();
+        if (HeapGcState::testYoungMarkCompleted) {
+            HeapGcState::testYoungMarkCompleted();
         }
 #endif
         ReportMarkTerminateContinue();
@@ -732,19 +706,19 @@ bool HeapGcState::YoungMarkEndPause()
     return false;
 }
 
-void HeapGcState::ConcurrentYoungMarkContinue()
+void ZGenerationYoung::concurrent_mark_continue()
 {
     MinorSlotSet reachableSlots;
-    (void)FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
+    (void)TheCollector().FollowYoungMark(youngWorkStack, youngFullScan, youngReachableVec, reachableSlots, youngWeakSlots,
                           &youngConcWindow);
 }
 
-void HeapGcState::FinishYoungMarkHandoff()
+void ZGenerationYoung::concurrent_mark_free()
 {
     if (ZAbort::should_abort()) {
         return;
     }
-    RegionSpace& space = static_cast<RegionSpace&>(GetAllocator());
+    RegionSpace& space = static_cast<RegionSpace&>(TheCollector().GetAllocator());
     {
         youngConcWindow.markedAtExit = youngReachableVec.size();
         if (youngConcWindowStartNs != 0) {
@@ -775,7 +749,7 @@ void HeapGcState::FinishYoungMarkHandoff()
         tenuringIn.liveByAge[age] += live;
     }
     tenuringIn.youngGarbage = youngStats.candidateBytes > liveBytes ? (youngStats.candidateBytes - liveBytes) : 0;
-    GCStats& gcStats = GetGCStats(ZGenerationId::young);
+    GCStats& gcStats = Stats();
     gcStats.youngCandidateBytes = youngStats.candidateBytes;
     gcStats.youngPromotedBytes = liveBytes;
     for (uint32_t i = 0; i < kPageAgeCount; ++i) {
@@ -804,7 +778,7 @@ void HeapGcState::FinishYoungMarkHandoff()
         // the previous young relocation set. Independent of old remap.
         StringDedup::Instance().Clean([this](BaseObject* object) {
             ZPage* region = Heap::page(reinterpret_cast<MAddress>(object));
-            return !region->IsYoungRegion() || IsMarkedObject<Generation::Young>(object);
+            return !region->IsYoungRegion() || RegionSpace::IsMarkedObject<Generation::Young>(object);
         });
     }
 
@@ -853,33 +827,33 @@ void ZGenerationYoung::concurrent_relocate()
     // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
     // Concurrent mark force-admits slots without that proof.
     const bool refFixSlotsCoveredByReachable = false;
-    collector.EvacuateYoungRegions(collector.youngReachableVec, collector.youngConsumedSlots,
-                                   refFixSlotsCoveredByReachable, collector.youngRemsetInteriorBases,
-                                   &collector.youngStw);
+    collector.EvacuateYoungRegions(youngReachableVec, youngConsumedSlots,
+                                   refFixSlotsCoveredByReachable, youngRemsetInteriorBases,
+                                   &youngStw);
     if (ZAbort::should_abort()) {
         return;
     }
     size_t allocatedAfter = space.AllocatedBytes();
-    collector.youngStats.reclaimedBytes =
+    youngStats.reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    collector.GetGCStats(ZGenerationId::young).collectedBytes = collector.youngStats.reclaimedBytes;
+    collector.GetGCStats(ZGenerationId::young).collectedBytes = youngStats.reclaimedBytes;
 
-    if (collector.youngStw != nullptr) {
-        collector.youngStw.reset();
+    if (youngStw != nullptr) {
+        youngStw.reset();
     }
 
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungPostEvacFinish);
         collector.MergeResurrectExportObjects(Generation::Young);
     }
-    ++collector.minorTotalRuns;
-    uint64_t pauseUs = (TimeUtil::NanoSeconds() - collector.youngStartNs) / NS_PER_US;
+    ++minorTotalRuns;
+    uint64_t pauseUs = (TimeUtil::NanoSeconds() - youngStartNs) / NS_PER_US;
     VLOG(REPORT,
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu liveBytes=%zu "
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
-         collector.minorTotalRuns, static_cast<unsigned>(collector.youngFullScan),
-         collector.youngStats.candidateRegions, collector.youngStats.candidateBytes,
-         collector.youngLiveBytes, collector.youngLiveRememberedCount, collector.youngStats.reclaimedBytes,
+         minorTotalRuns, static_cast<unsigned>(youngFullScan),
+         youngStats.candidateRegions, youngStats.candidateBytes,
+         youngLiveBytes, youngLiveRememberedCount, youngStats.reclaimedBytes,
          pauseUs);
 }
 

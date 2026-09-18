@@ -983,7 +983,7 @@ void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachable
         MRT_PHASE_TIMER(ZStatPhases::PYoungEvacFinish);
         {
         // Select flip-promoted pages; field iteration runs after world release.
-        for (ZPage* region : minorCandidateRegions) {
+        for (ZPage* region : Heap::GetHeap().young().minorCandidateRegions) {
             if (region->IsYoungRegion()) {
                 // markwater2: allocating pages never entered the route plan
                 // (zGeneration.cpp:211-213). Leave them young on unmovableFrom.

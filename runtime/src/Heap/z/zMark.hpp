@@ -283,15 +283,7 @@ ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt();
 // pause_mark_start and pause_mark_end runs with mutators alive.
 // Every field below counts GC work performed while the world is running. A
 // Duration alone does not establish that the concurrent window performed marking work.
-struct YoungConcWindowStats {
-    uint64_t windowNs = 0;    // world-released → STW2 requested
-    size_t closureCalls = 0;  // TraceYoungClosure invocations inside the window
-    size_t markedAtEntry = 0; // reachableVec.size() at world-release
-    size_t markedAtExit = 0;  // reachableVec.size() at STW2 request
-    size_t remsetSlots = 0;   // remset slots consumed by the in-window rescan
-    size_t reenters = 0;      // ZGC pause_mark_end() == false → concurrent_mark_continue()
-    size_t MarkedInWindow() const { return markedAtExit >= markedAtEntry ? markedAtExit - markedAtEntry : 0; }
-};
+
 
 #if defined(MRT_TESTABLE_INTERNALS)
 
@@ -1278,11 +1270,6 @@ private:
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void DoYoungGarbageCollection();
-    void RunYoungCollection();
-    void ConcurrentYoungMark();
-    bool YoungMarkEndPause();
-    void ConcurrentYoungMarkContinue();
-    void FinishYoungMarkHandoff();
     void RunOldCollection();
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
@@ -1308,23 +1295,7 @@ private:
 #endif
 
     ForwardTable fwdTable;
-    // gc index 0 or 1 is used to distinguish previous gc and current gc.
-    uint64_t minorTotalRuns = 0;
-    MinorRegionSet minorCandidateRegions;
-    std::unique_ptr<ScopedStopTheWorld> youngStw;
-    std::vector<BaseObject*> youngReachableVec;
-    MinorSlotSet youngConsumedSlots;
-    MinorInteriorBaseMap youngRemsetInteriorBases;
-    YoungCollectionStats youngStats;
-    uint64_t youngStartNs = 0;
-    size_t youngLiveBytes = 0;
-    size_t youngLiveRememberedCount = 0;
-    bool youngFullScan = false;
-    WorkStack youngWorkStack;
-    uint64_t youngStackScanEpoch = 0;
-    YoungConcWindowStats youngConcWindow;
-    uint64_t youngConcWindowStartNs = 0;
-    MinorSlotSet youngWeakSlots;
+
 
 };
 } // namespace MapleRuntime

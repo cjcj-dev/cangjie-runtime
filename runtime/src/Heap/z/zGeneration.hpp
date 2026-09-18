@@ -8,6 +8,10 @@
 #include <atomic>
 #include <mutex>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include "Common/MarkWorkStack.h"
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zWeakRootsProcessor.hpp"
 #include "Heap/z/zStat.hpp"
@@ -37,7 +41,7 @@ struct GCCycleSnapshot {
     bool active;
 };
 class HeapGcState;
-struct YoungCollectionStats;
+class ScopedStopTheWorld;
 class ZGeneration;
 class ZGenerationYoung;
 class ZGenerationOld;
@@ -119,7 +123,6 @@ public:
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
     void Begin(uint64_t index);
-    YoungCollectionStats StartYoungMark(HeapGcState& collector);
     void StartOldMark(HeapGcState& collector);
     void PublishPhase(ZGenerationPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
@@ -137,7 +140,7 @@ public:
     void free_empty_pages(ZRelocationSetSelector* selector, int bulk);
     void flip_age_pages(const ZRelocationSetSelector* selector);
     void select_relocation_set(bool promote_all);
-    private:
+protected:
 #if defined(MRT_GENERATION_SEQUENCE_FIXTURE)
     friend struct GenerationSequenceFixture;
 #endif
@@ -221,6 +224,28 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    friend class HeapGcState;
+    using MinorObjectSet = std::unordered_set<BaseObject*>;
+    using MinorRegionSet = std::unordered_set<ZPage*>;
+    using MinorSlotSet = std::unordered_set<MAddress>;
+    using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
+    // gc index 0 or 1 is used to distinguish previous gc and current gc.
+    uint64_t minorTotalRuns = 0;
+    MinorRegionSet minorCandidateRegions;
+    std::unique_ptr<ScopedStopTheWorld> youngStw;
+    std::vector<BaseObject*> youngReachableVec;
+    MinorSlotSet youngConsumedSlots;
+    MinorInteriorBaseMap youngRemsetInteriorBases;
+    YoungCollectionStats youngStats;
+    uint64_t youngStartNs = 0;
+    size_t youngLiveBytes = 0;
+    size_t youngLiveRememberedCount = 0;
+    bool youngFullScan = false;
+    WorkStack youngWorkStack;
+    uint64_t youngStackScanEpoch = 0;
+    YoungConcWindowStats youngConcWindow;
+    uint64_t youngConcWindowStartNs = 0;
+    MinorSlotSet youngWeakSlots;
     ZGenerationYoung* previousYoung { nullptr };
 };
 
