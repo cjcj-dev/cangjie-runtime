@@ -16,7 +16,7 @@
 #include "Exception/Exception.h"
 #include "Heap/Allocator/Allocator.h"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Collector/GcInfos.h"
+#include "Heap/z/zGcInfos.hpp"
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"
 #include "schedule.h"

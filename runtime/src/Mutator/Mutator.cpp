@@ -13,11 +13,11 @@
 #define NOGDI
 #include <windows.h>
 #endif
-#include "Collector/CopyCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zReferenceProcessor.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "ObjectModel/RefField.inline.h"
 #if defined(MRT_GC_UNIT_TESTS)

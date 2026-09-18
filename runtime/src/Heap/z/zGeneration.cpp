@@ -8,8 +8,8 @@
 #include "Heap/z/zAbort.hpp"
 #include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zStringDedup.hpp"
+#include "Heap/z/zMark.hpp"
 
 #include <array>
 #include <atomic>
@@ -54,7 +54,7 @@
 #include "ObjectModel/RefField.inline.h"
 #include "Mutator/Handshake.h"
 #include "TypeInfoManager.h"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/zCollectorInternal.hpp"
 
 #include "Heap/z/z_globals.hpp"
 namespace MapleRuntime {
@@ -896,7 +896,7 @@ void ZGenerationYoung::concurrent_relocate()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zStringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1001,7 +1001,7 @@ bool CopyCollector::FlushMarkProducers(ZMark* domain)
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zStringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1123,7 +1123,7 @@ void CopyCollector::VisitSurrectedExportRoots(const std::function<void(BaseObjec
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zStringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"

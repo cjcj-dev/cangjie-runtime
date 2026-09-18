@@ -30,7 +30,7 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/CopyCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"

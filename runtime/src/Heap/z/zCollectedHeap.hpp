@@ -24,7 +24,7 @@
 #include "Heap/z/zStat.hpp"
 
 #include "Heap/z/zGeneration.hpp"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zForwardingLookup.hpp"
 namespace MapleRuntime {
 enum class Generation : uint8_t;
 enum CollectorType {

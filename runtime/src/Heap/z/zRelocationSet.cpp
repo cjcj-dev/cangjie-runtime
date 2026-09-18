@@ -6,7 +6,7 @@
 
 
 #include "Heap/z/zAbort.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/Allocator/RegionList.h"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -48,10 +48,10 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/zCollectorInternal.hpp"
 
 namespace MapleRuntime {
-#include "Heap/Collector/ExportOwnershipTestObservations.h"
+#include "Heap/z/zExportOwnershipTestObservations.hpp"
 
 void WCollector::PostTrace()
 {

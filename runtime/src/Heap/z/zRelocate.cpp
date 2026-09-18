@@ -9,8 +9,8 @@
 #include "Heap/z/zVerify.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zIterator.inline.hpp"
-#include "Heap/Collector/StringDedup.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zStringDedup.hpp"
+#include "Heap/z/zMark.hpp"
 
 #include <array>
 #include <atomic>
@@ -54,7 +54,7 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zRemembered.hpp"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/zCollectorInternal.hpp"
 
 #include "Heap/z/zPageAllocator.hpp"
 
@@ -79,7 +79,7 @@
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwarding.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/CopyCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zStat.hpp"

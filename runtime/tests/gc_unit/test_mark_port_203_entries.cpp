@@ -8,7 +8,7 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/z/zMarkStack.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -125,7 +125,7 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 #if defined(MRT_TESTABLE_INTERNALS)
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MArray.inline.h"

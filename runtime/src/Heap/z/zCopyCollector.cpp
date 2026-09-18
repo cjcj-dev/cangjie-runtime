@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "CopyCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Common/PagePool.h"
 
 #include <algorithm>

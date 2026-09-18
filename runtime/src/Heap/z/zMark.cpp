@@ -9,7 +9,7 @@
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zVerify.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 
 #include <array>
 #include <atomic>
@@ -56,7 +56,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/zCollectorInternal.hpp"
 
 namespace MapleRuntime {
 bool WCollector::MarkObject(BaseObject* obj) const
@@ -1053,7 +1053,7 @@ bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls, ZMark* domain)
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zStringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1079,7 +1079,7 @@ namespace MapleRuntime {
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zStringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1210,7 +1210,7 @@ void CopyCollector::FindUselessExternObjects()
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zStringDedup.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
@@ -1899,37 +1899,11 @@ void FollowPartialReferences(const MarkStackEntry& entry,
 
 namespace MapleRuntime {
 CopyCollector::CopyCollector(Allocator& allocator, CollectorResources& resources)
-        : Collector(), theAllocator(allocator), collectorResources(resources)
+        : Collector(), theAllocator(allocator), collectorResources(resources),
+          fwdTable(reinterpret_cast<RegionSpace&>(allocator))
     {
-        collectorType = CollectorType::COPY_COLLECTOR;
-    }
-}
-
-namespace MapleRuntime {
-void CopyCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
-    {
-        Collector::AbortUnimplemented("CopyCollector::FollowPartialArray");
+        collectorType = CollectorType::SMOOTH_COLLECTOR;
     }
 }
 
 #include "Heap/z/zMark.inline.hpp"
-
-namespace MapleRuntime {
-bool CopyCollector::MarkObject(BaseObject* obj) const
-    {
-        ZPage* regionInfo = Heap::page(reinterpret_cast<MAddress>(obj));
-        // ZPage::mark_object + inc_live on the first live claim (zMark.cpp:405-425).
-        bool incLive = false;
-        bool marked = !regionInfo->mark_object(from_object(obj), false, incLive);
-        if (incLive) {
-            regionInfo->inc_live(1, obj->GetSize());
-        }
-        if (!marked) {
-            size_t objSize = obj->GetSize();
-            if (!fixReferences && regionInfo->IsFromRegion()) {
-                DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
-            }
-        }
-        return marked;
-    }
-}

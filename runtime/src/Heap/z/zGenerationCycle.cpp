@@ -6,8 +6,8 @@
 
 
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/StringDedup.h"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zStringDedup.hpp"
+#include "Heap/z/zMark.hpp"
 
 #include <array>
 #include <atomic>
@@ -40,7 +40,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/WCollector/WCollectorInternal.h"
+#include "Heap/z/zCollectorInternal.hpp"
 
 namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)

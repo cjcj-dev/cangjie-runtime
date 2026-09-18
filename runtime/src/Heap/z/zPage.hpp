@@ -40,7 +40,7 @@
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/Collector/GcInfos.h"
+#include "Heap/z/zGcInfos.hpp"
 #include "Heap/z/zSafeDelete.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zForwardingTable.hpp"

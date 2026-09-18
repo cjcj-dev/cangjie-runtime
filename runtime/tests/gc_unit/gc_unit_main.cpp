@@ -20,7 +20,7 @@
 #ifndef MRT_TESTABLE_INTERNALS
 #define MRT_TESTABLE_INTERNALS 1
 #endif
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zCPU.hpp"

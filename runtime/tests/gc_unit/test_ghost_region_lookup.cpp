@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 #include "Heap/z/zDriver.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

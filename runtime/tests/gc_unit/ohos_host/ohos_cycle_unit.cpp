@@ -9,7 +9,7 @@
 
 #include "Cangjie.h"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"

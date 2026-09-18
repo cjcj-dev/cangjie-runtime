@@ -17,7 +17,7 @@
 #include "Heap/z/zReferenceProcessor.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/WCollector/WCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Handshake.h"
 #include "Mutator.inline.h"
 #include "Heap/z/zStackWatermark.hpp"

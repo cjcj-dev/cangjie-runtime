@@ -29,9 +29,50 @@ else()
 endif()
 add_subdirectory(Allocator)
 add_subdirectory(Barrier)
-add_subdirectory(Collector)
-add_subdirectory(WCollector)
 add_subdirectory(Verify)
+
+set(COLLECTOR_SRC
+    "z/zBreakpoint.cpp"
+    "z/concurrentGCBreakpoints.cpp"
+    "z/zAbort.cpp"
+    "z/zRelocateSupport.cpp"
+    "z/zHeapIterator.cpp"
+    "z/zIterator.cpp"
+    "z/zCollectedHeap.cpp"
+    "z/zCollectorSupport.cpp"
+    "z/zDriver.cpp"
+    "z/zDirector.cpp"
+    "z/zDriverPort.cpp"
+    "z/zTracing.cpp"
+    "z/zRootsIterator.cpp"
+    "z/zWeakRootsProcessor.cpp"
+    "z/zResurrection.cpp"
+    "z/zMarkStack.cpp"
+    "z/zMarkingSMR.cpp"
+    "z/zMarkCache.cpp"
+    "z/zReferenceProcessor.cpp"
+    "z/zStringDedup.cpp"
+    "z/zUncommitter.cpp"
+    "z/zCopyCollector.cpp"
+    "z/zForwarding.cpp"
+)
+add_library(Collector STATIC ${COLLECTOR_SRC})
+if (MRT_GC_UNIT_TESTS)
+    target_compile_definitions(Collector PRIVATE MRT_TESTABLE_INTERNALS=1)
+endif()
+
+set(WCOLLECTOR_SRC
+    "z/zGenerationCycle.cpp"
+    "z/zWCollector.cpp"
+    "z/zGeneration.cpp"
+    "z/zMark.cpp"
+    "z/zRelocate.cpp"
+    "z/zJNICritical.cpp"
+    "z/zRemembered.cpp"
+    "z/zRelocationSet.cpp"
+)
+add_library(WCollector STATIC ${WCOLLECTOR_SRC})
+
 add_library(Heap STATIC ${SRC_LIST})
 if (MRT_GC_UNIT_TESTS)
     target_compile_definitions(Heap PRIVATE MRT_TESTABLE_INTERNALS=1)
