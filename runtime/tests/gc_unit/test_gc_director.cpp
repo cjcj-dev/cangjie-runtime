@@ -187,14 +187,14 @@ GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
     {
         YoungTypeSetter type(young, ZYoungType::major_full_preclean);
         young.SelectTenuringThreshold(inputs);
-        GC_EXPECT_EQ(young.Stats().tenuringThreshold, 0u);
+        GC_EXPECT_EQ(young.tenuring_threshold(), 0u);
         GC_EXPECT_FALSE(young.IsMajorRoots());
     }
     GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
     {
         YoungTypeSetter type(young, ZYoungType::major_full_roots);
         young.SelectTenuringThreshold(inputs);
-        GC_EXPECT_TRUE(young.Stats().tenuringThreshold > 0u);
+        GC_EXPECT_TRUE(young.tenuring_threshold() > 0u);
         GC_EXPECT_TRUE(young.IsMajorRoots());
     }
     GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);

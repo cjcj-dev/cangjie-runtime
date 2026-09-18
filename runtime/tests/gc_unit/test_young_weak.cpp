@@ -419,11 +419,11 @@ void RunYoungWeakVariant(size_t helpers)
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
+    const GCReason reasonBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Snapshot().reason;
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
 
     YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
@@ -437,7 +437,7 @@ void RunYoungWeakVariant(size_t helpers)
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
     RelocationReceiptTestAccess::BindWorkerBudget();
 
     // The producer-to-consumer bearing point must deliver the field closure.
@@ -491,11 +491,11 @@ void RunYoungWeakRemsetFlow()
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
+    const GCReason reasonBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Snapshot().reason;
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
     YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
     GC_EXPECT_TRUE(closure.Calls() > 0);
@@ -507,7 +507,7 @@ void RunYoungWeakRemsetFlow()
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
     RelocationReceiptTestAccess::BindWorkerBudget();
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
@@ -776,11 +776,11 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
+    const GCReason reasonBefore = Heap::GetHeap().GetZGeneration(ZGenerationId::young).Snapshot().reason;
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
     bool currentMarked = false;
     ValueRootMarkObservation closure([&] { currentMarked |= IsValueRootMarked(route); });
     RelocationReceiptTestAccess::RunYoungCollection(collector);
@@ -800,7 +800,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
                  static_cast<unsigned>(afterCoverage.answer));
 
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
     RelocationReceiptTestAccess::BindWorkerBudget();
     GC_EXPECT_TRUE(currentMarked);
     GC_EXPECT_TRUE(carrierCurrent);
