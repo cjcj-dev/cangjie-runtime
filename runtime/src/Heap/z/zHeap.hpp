@@ -19,6 +19,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "Base/ImmortalWrapper.h"
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"

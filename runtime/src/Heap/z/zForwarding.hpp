@@ -253,7 +253,7 @@ public:
     static uint32_t young_seqnum()
     {
         return static_cast<uint32_t>(
-            Heap::GetHeap().GetCollector().GetCycleSnapshot(ZGenerationId::young).sequence);
+            Heap::GetHeap().young().Snapshot().sequence);
     }
 
     static bool young_marking()
