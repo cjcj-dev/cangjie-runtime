@@ -71,7 +71,7 @@ void ZDriver::run_thread()
             ZAbort::reset();
             if (major) ZBreakpoint::AtBeforeGC();
             abortpoint();
-            const bool completed = !ZAbort::should_abort() && resources.ExecuteDriverRequest(request);
+            const bool completed = !ZAbort::should_abort() && resources.ExecuteDriverRequest(kind, request);
             port.ack();
 #if defined(MRT_GC_UNIT_TESTS)
             if (completed) resources.testCompletionCount.fetch_add(1, std::memory_order_relaxed);
@@ -227,11 +227,10 @@ void CollectorResources::RunCollection(HeapGcState& collector, uint64_t index, G
     (isYoung ? ZStatPhases::YoungGeneration : ZStatPhases::OldGeneration).RegisterEnd(end - start);
 }
 
-bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
+bool CollectorResources::ExecuteDriverRequest(GCDriverKind kind, const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
     HeapGcState* activeCollector = &Heap::GetHeap().GetCollector();
-    ZDriverPort& port = request.cause() == GC_REASON_YOUNG ? GetMinorDriverPort() : GetMajorDriverPort();
     if (ZAbort::should_abort()) {
         return false;
     }
@@ -276,7 +275,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
             RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
             accumulate(ZGenerationId::young);
             if (ZAbort::should_abort()) {
-                CancelDriverRequestLifecycle(&port == &GetMinorDriverPort() ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+                CancelDriverRequestLifecycle(kind);
                 return false;
             }
         }
@@ -289,7 +288,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
         }
 #endif
         if (ZAbort::should_abort()) {
-            CancelDriverRequestLifecycle(&port == &GetMinorDriverPort() ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+            CancelDriverRequestLifecycle(kind);
             return false;
         }
     }
@@ -311,7 +310,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.
     if (ZAbort::should_abort()) {
-        CancelDriverRequestLifecycle(&port == &GetMinorDriverPort() ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+        CancelDriverRequestLifecycle(kind);
         return false;
     }
     GcLog::Cycle(GCIdMark::Current(), request.cause() == GC_REASON_YOUNG ? "minor" : "major",
