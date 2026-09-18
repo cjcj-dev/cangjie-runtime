@@ -440,7 +440,6 @@ private:
     friend class CollectorResourcesTestPeer;
 #endif
 
-    void StartGCThreads();
 
     // Notify the GC thread to start GC, and doesn't wait.
     // Called by mutator.

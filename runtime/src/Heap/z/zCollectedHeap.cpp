@@ -11,6 +11,11 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
+#include <thread>
+#if defined(__linux__) || defined(hongmeng)
+#include <sched.h>
+#endif
 
 #include "Base/ImmortalWrapper.h"
 #include "Base/Log.h"
@@ -28,6 +33,8 @@
 #include "Heap/z/zDriver.hpp"
 #include "Heap/z/zStringDedup.hpp"
 #include "Heap/z/zThread.hpp"
+#include "Heap/z/zGlobals.hpp"
+#include "Heap/z/zUncommitter.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Mutator/Mutator.h"
@@ -50,6 +57,56 @@ ZCollectedHeap::ZCollectedHeap()
 }
 
 ZCollectedHeap::~ZCollectedHeap() { delete _resources; }
+
+void ZCollectedHeap::start_gc_threads()
+{
+    bool expected = false;
+    if (!_resources->gcThreadRunning.compare_exchange_strong(expected, true, std::memory_order_acquire)) {
+        return;
+    }
+    if (_heap.young().Workers() == nullptr) {
+        unsigned int activeProcessorCount = std::thread::hardware_concurrency();
+        bool affinityDetected = false;
+#if defined(__linux__) || defined(hongmeng)
+        cpu_set_t cpuSet;
+        CPU_ZERO(&cpuSet);
+        if (sched_getaffinity(0, sizeof(cpuSet), &cpuSet) == 0) {
+            int affinityProcessorCount = CPU_COUNT(&cpuSet);
+            if (affinityProcessorCount > 0) {
+                activeProcessorCount = static_cast<unsigned int>(affinityProcessorCount);
+                affinityDetected = true;
+            }
+        }
+#endif
+        activeProcessorCount = std::max(activeProcessorCount, 1U);
+        const size_t maxHeap = _heap.GetMaxCapacity();
+        const auto& regions = static_cast<RegionSpace&>(_heap.GetAllocator()).GetRegionManager();
+        const size_t regionBytes = regions.GetThreadLocalRegionSize();
+        CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
+        const size_t heapWorkers = maxHeap / 50 / regionBytes;
+        const uint64_t cpus = activeProcessorCount;
+        _resources->concurrentGcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
+            std::min<size_t>((cpus + 3) / 4, heapWorkers)));
+        ConcGCThreads = static_cast<uint32_t>(_resources->concurrentGcThreadCount);
+        ZYoungGCThreads = ConcGCThreads;
+        ZOldGCThreads = ConcGCThreads;
+        VLOG(REPORT,
+             "concurrent gc thread count %d, active processor count %u, affinity detected %d, region bytes %zu",
+             _resources->concurrentGcThreadCount, activeProcessorCount, affinityDetected, regionBytes);
+
+        _heap.young().InitializeWorkers(_resources->concurrentGcThreadCount);
+        _heap.old().InitializeWorkers(_resources->concurrentGcThreadCount);
+        _resources->finalizerProcessor.GetReferenceProcessor().set_workers(_heap.old().Workers());
+    }
+
+    // The ImmortalWrapper constructs the heap before its size is known; start
+    // drivers only after Heap::Init has installed the page table and workers.
+    _driver_minor = new ZDriverMinor();
+    _driver_major = new ZDriverMajor();
+    _director = new ZDirector();
+    _driver_minor->start();
+    _driver_major->start();
+}
 
 void HeapGcState::MarkObjectIfActive(BaseObject* object) const
 {

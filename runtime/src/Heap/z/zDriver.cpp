@@ -149,7 +149,7 @@ void CollectorResources::Init()
     Heap::GetHeap().young().CycleStats().Initialize(now);
     Heap::GetHeap().old().CycleStats().Initialize(now);
     ZCollectedHeap::heap()->_stat = new ZStat();
-    StartGCThreads();
+    ZCollectedHeap::heap()->start_gc_threads();
     finalizerProcessor.Start();
     StringDedup::Instance().Start();
     if (Uncommitter::Enabled()) {
@@ -280,68 +280,6 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
                  g_gcRequests[request.cause()].name, collectionStart, TimeUtil::NanoSeconds() - collectionStart,
                  liveBefore, liveAfter, collected, Heap::GetHeap().GetUsedPageSize(), threshold);
     return true;
-}
-
-void CollectorResources::StartGCThreads()
-{
-    bool expected = false;
-    if (gcThreadRunning.compare_exchange_strong(expected, true, std::memory_order_acquire) == false) {
-        return;
-    }
-    // Initialize both generation worker sets.
-    if (Heap::GetHeap().young().Workers() == nullptr) {
-        unsigned int activeProcessorCount = std::thread::hardware_concurrency();
-        bool affinityDetected = false;
-#if defined(__linux__) || defined(hongmeng)
-        cpu_set_t cpuSet;
-        CPU_ZERO(&cpuSet);
-        if (sched_getaffinity(0, sizeof(cpuSet), &cpuSet) == 0) {
-            int affinityProcessorCount = CPU_COUNT(&cpuSet);
-            if (affinityProcessorCount > 0) {
-                activeProcessorCount = static_cast<unsigned int>(affinityProcessorCount);
-                affinityDetected = true;
-            }
-        }
-#endif
-        activeProcessorCount = std::max(activeProcessorCount, 1U);
-        // zHeuristics.cpp:77-107: CPU shares are rounded up, while the
-        // relocation-buffer budget is capped at 2% of the maximum heap.
-        // Dividing before multiplying avoids overflow at the size_t boundary.
-        const size_t maxHeap = Heap::GetHeap().GetMaxCapacity();
-        const auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-        const size_t regionBytes = regions.GetThreadLocalRegionSize();
-        CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
-        const size_t heapWorkers = maxHeap / 50 / regionBytes;
-        const uint64_t cpus = activeProcessorCount;
-        concurrentGcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
-            std::min<size_t>((cpus + 3) / 4, heapWorkers)));
-        // zArguments.cpp:67-81: ConcGCThreads is the per-generation maximum and
-        // sizes every ZPerWorker (zValue.inline.hpp:108-110); set before workers.
-        ConcGCThreads = static_cast<uint32_t>(concurrentGcThreadCount);
-        ZYoungGCThreads = ConcGCThreads;
-        ZOldGCThreads = ConcGCThreads;
-        VLOG(REPORT,
-             "concurrent gc thread count %d, active processor count %u, affinity detected %d, region bytes %zu",
-             concurrentGcThreadCount, activeProcessorCount, affinityDetected, regionBytes);
-
-        // zArguments.cpp:67-99, zWorkers.cpp:45-64: each generation uses
-        // the concurrent budget as its maximum and initial active count.
-        // ZWorkers counts participants, excluding the coordinating driver.
-        Heap::GetHeap().young().InitializeWorkers(concurrentGcThreadCount);
-        Heap::GetHeap().old().InitializeWorkers(concurrentGcThreadCount);
-        finalizerProcessor.GetReferenceProcessor().set_workers(
-            Heap::GetHeap().old().Workers());
-    }
-
-    // zCollectedHeap.cpp:62-70: drivers and director start in ZCollectedHeap().
-    // Cangjie Heap lives in ImmortalWrapper constructed at load; threads start
-    // here after Heap::Init so capacity/workers exist (ZGC constructs later).
-    ZCollectedHeap* collected = ZCollectedHeap::heap();
-    collected->_driver_minor = new ZDriverMinor();
-    collected->_driver_major = new ZDriverMajor();
-    collected->_director = new ZDirector();
-    collected->_driver_minor->start();
-    collected->_driver_major->start();
 }
 
 
