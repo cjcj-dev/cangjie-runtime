@@ -40,14 +40,14 @@ namespace MapleRuntime {
 struct MutatorPublishTestAccess {
     static BaseObject* RelocateInner(HeapGcState& collector, BaseObject* from, ZPage* page)
     {
-        return collector.RelocateObjectInner(from, page);
+        return ZGeneration::generation(page->generation_id())->relocate().relocate_object_inner(from, page);
     }
     static BaseObject* ForwardImpl(HeapGcState& collector, BaseObject* from, ZPage* page)
     {
         collector.GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Relocate);
         ZPage::RetainScope lease(page);
         GC_EXPECT_TRUE(lease.ok());
-        return collector.RelocateObjectInner(from, page);
+        return ZGeneration::generation(page->generation_id())->relocate().relocate_object_inner(from, page);
     }
 };
 }

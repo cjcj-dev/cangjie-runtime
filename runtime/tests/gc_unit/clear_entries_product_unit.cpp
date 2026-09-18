@@ -148,7 +148,7 @@ struct RelocationReceiptTestAccess {
     {
         (void)to;
         ZPage::RetainScope lease(forwarding);
-        return collector.RelocateObjectInner(from, forwarding);
+        return ZGeneration::generation(forwarding->generation_id())->relocate().relocate_object_inner(from, forwarding);
     }
 
     static bool TryUpdateRefField(HeapGcState& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
@@ -191,7 +191,7 @@ struct RelocationReceiptTestAccess {
     static BaseObject* ForwardImpl(HeapGcState& collector, BaseObject* from, ZPage* copyPage)
     {
         ZPage::RetainScope lease(copyPage);
-        return lease.ok() ? collector.RelocateObjectInner(from, copyPage) : nullptr;
+        return lease.ok() ? ZGeneration::generation(copyPage->generation_id())->relocate().relocate_object_inner(from, copyPage) : nullptr;
     }
 
     static void RemapYoungRoots(HeapGcState& collector) { collector.RemapYoungRoots(); }

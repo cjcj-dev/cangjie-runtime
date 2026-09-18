@@ -17,6 +17,7 @@
 #include "Heap/z/zArray.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zForwarding.hpp"
+#include "Heap/z/zPage.hpp"
 #include "Heap/z/zPageAge.hpp"
 
 namespace MapleRuntime {
@@ -145,6 +146,15 @@ public:
     static void barrier_promoted_pages(ZWorkers& workers, const ZArray<ZPage*>* flipPromoted,
                                        const ZArray<ZPage*>* relocatePromoted);
 private:
+    friend class HeapGcState;
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RelocationReceiptTestAccess;
+    friend struct MutatorPublishTestAccess;
+#endif
+    BaseObject* relocate_object_inner(BaseObject* obj, ZPage* copyPage);
+    static void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
+    BaseObject* TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease);
+    BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     ZGeneration* const generation;
     ZRelocateQueue relocateQueue;
 };

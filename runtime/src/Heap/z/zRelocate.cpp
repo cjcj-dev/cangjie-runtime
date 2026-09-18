@@ -1255,14 +1255,14 @@ static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
 // nullptr means the current thread did not acquire the page. The caller may
 // consume a receipt installed by the owning copier, but may not use the from
 // address as an alternate result.
-BaseObject* HeapGcState::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const
+BaseObject* ZRelocate::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const
 {
     if (!owner || ZForwarding::CurrentPageWork() == owner) return nullptr;
     const MAddress from = reinterpret_cast<MAddress>(obj);
     if (const MAddress found = owner->find(from)) {
         return reinterpret_cast<BaseObject*>(found);
     }
-    auto& manager = static_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
+    auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     if (MutatorManager::Instance().WorldStopped() && !owner->is_done()) {
         // #498: without return barriers roots are completed eagerly. There is
         // no concurrent page worker in this pause; reuse its in-place task.
@@ -1281,11 +1281,11 @@ BaseObject* HeapGcState::WaitForPageForwarding(BaseObject* obj, ZForwarding* own
     return reinterpret_cast<BaseObject*>(owner->find(from));
 }
 
-BaseObject* HeapGcState::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease) const
+BaseObject* ZRelocate::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease)
 {
     // RelocateObjectInner is for relocate phase only. relocate_or_remap
     // is reachable from barriers in other phases, so screen here.
-    ZGeneration* generation = ObjectGeneration(obj) == Generation::Young ?
+    ZGeneration* generation = Heap::GetHeap().ObjectGeneration(obj) == Generation::Young ?
         static_cast<ZGeneration*>(ZGeneration::young()) : static_cast<ZGeneration*>(ZGeneration::old());
     if (generation == nullptr || !generation->is_phase_relocate()) {
         return nullptr;
@@ -1306,8 +1306,8 @@ BaseObject* HeapGcState::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope&
     // A mutator can publish a previously white from-object after young mark
     // terminated. Admit it before copying; a next-minor remset entry is too late.
     // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
-    EnsureRouteDomainMembership(const_cast<HeapGcState*>(this), obj);
-    BaseObject* toVersion = const_cast<HeapGcState*>(this)->RelocateObjectInner(
+    EnsureRouteDomainMembership(&Heap::GetHeap().GetCollector(), obj);
+    BaseObject* toVersion = relocate_object_inner(
         obj, lease.forwarding()->page());
     lease.Release(); // release_page
     if (toVersion == nullptr) {
@@ -1484,7 +1484,8 @@ BaseObject* HeapGcState::ForwardObject(BaseObject* obj, Generation generation)
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
         ZPage* region = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-        BaseObject* waited = WaitForPageForwarding(obj, forwarding_for_page(region));
+        BaseObject* waited = ZGeneration::generation(static_cast<ZGenerationId>(generation))->relocate()
+            .WaitForPageForwarding(obj, forwarding_for_page(region));
         if (waited != nullptr) {
             return waited;
         }
@@ -1511,10 +1512,10 @@ BaseObject* HeapGcState::ForwardObjectExclusive(BaseObject* obj)
     if (page == nullptr) {
         return nullptr;
     }
-    return RelocateObjectInner(obj, page);
+    return ZGeneration::generation(page->generation_id())->relocate().relocate_object_inner(obj, page);
 }
 
-void HeapGcState::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
+void ZRelocate::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
 {
     if (from == nullptr || to == nullptr || from == to) {
         return;
@@ -1542,7 +1543,7 @@ void HeapGcState::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
 
 }
 
-BaseObject* HeapGcState::RelocateObjectInner(BaseObject* obj, ZPage* copyPage)
+BaseObject* ZRelocate::relocate_object_inner(BaseObject* obj, ZPage* copyPage)
 {
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = (forwarding_for_page(copyPage) != nullptr ? forwarding_for_page(copyPage)->find(fromAddr) : 0)) {
@@ -1553,8 +1554,8 @@ BaseObject* HeapGcState::RelocateObjectInner(BaseObject* obj, ZPage* copyPage)
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, GetGCStats(ZGenerationId::young).tenuringThreshold);
-    auto& manager = reinterpret_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
+    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold);
+    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
     if (toObj == nullptr) return nullptr;
     BaseObject* result = nullptr;
@@ -2713,13 +2714,12 @@ BaseObject* ZRelocate::relocate_object(ZForwarding* forwarding, BaseObject* obje
     if (const MAddress to = forwarding->find(from)) {
         return reinterpret_cast<BaseObject*>(to);
     }
-    auto& collector = Heap::GetHeap().GetCollector();
     ZPage::RetainScope lease{forwarding};
     if (lease.ok()) {
-        if (BaseObject* to = collector.TryMutatorRelocate(object, lease)) return to;
+        if (BaseObject* to = TryMutatorRelocate(object, lease)) return to;
     }
     lease.Release();
-    BaseObject* to = collector.WaitForPageForwarding(object, lease.HoldForwarding());
+    BaseObject* to = WaitForPageForwarding(object, lease.HoldForwarding());
     if (to == nullptr) {
         HeapGcState::FailClosedLoad("ZRelocate::forward_object requires a forwarding entry", object, 0, provenance);
     }

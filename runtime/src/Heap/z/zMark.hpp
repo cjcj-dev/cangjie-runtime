@@ -333,7 +333,6 @@ using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>
 
 class HeapGcState {
     friend class ZMarkTask;
-    friend class ZRelocate;
 
 public:
     ZGeneration& GetZGeneration(ZGenerationId generation);
@@ -905,13 +904,10 @@ protected:
                               const ForwardingProvenance& provenance) const;
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
-    BaseObject* RelocateObjectInner(BaseObject* obj, ZPage* copyPage);
-    void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
     // retain the from-region, relocate the object on this thread, release. Returns the
     // to-version, or nullptr when the owning copier must supply the receipt.
-    BaseObject* TryMutatorRelocate(BaseObject* from, ZPage::RetainScope& lease) const;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const;
 
@@ -1223,7 +1219,6 @@ private:
     void RemapYoungRoots();
     bool Preforward();
     void StartRelocationTasks(ZGenerationId generation);
-    BaseObject* WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const;
     void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);
