@@ -1899,7 +1899,7 @@ void FollowPartialReferences(const MarkStackEntry& entry,
 
 namespace MapleRuntime {
 CopyCollector::CopyCollector(Allocator& allocator, CollectorResources& resources)
-        : Collector(), theAllocator(allocator), collectorResources(resources),
+        : theAllocator(allocator), collectorResources(resources),
           fwdTable(reinterpret_cast<RegionSpace&>(allocator))
     {
         collectorType = CollectorType::SMOOTH_COLLECTOR;
