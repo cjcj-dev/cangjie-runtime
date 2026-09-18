@@ -407,15 +407,6 @@ private:
 #endif
 
 
-    // Notify the GC thread to start GC, and doesn't wait.
-    // Called by mutator.
-    // reason: The reason for this GC.
-#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
-private:
-    std::function<void()> testAfterYoungPrelude;
-    std::atomic<size_t> testCompletionCount { 0 };
-#endif
-
 };
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.
 class DriverLocker {

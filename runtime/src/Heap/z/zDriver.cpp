@@ -75,9 +75,6 @@ void ZDriver::run_thread()
             abortpoint();
             const bool completed = !ZAbort::should_abort() && ExecuteDriverRequest(request);
             port.ack();
-#if defined(MRT_GC_UNIT_TESTS)
-            if (completed) ZCollectedHeap::heap()->resources().testCompletionCount.fetch_add(1, std::memory_order_relaxed);
-#endif
             if (major) ZBreakpoint::AtAfterGC();
             ZCollectedHeap::heap()->director()->set_busy(!major, false);
             if (completed && !major) ZDirector::evaluate_rules();
@@ -215,11 +212,6 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
         ZCollectedHeap::heap()->driver_major()->RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX,
             preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
         accumulate(ZGenerationId::young);
-#if defined(MRT_GC_UNIT_TESTS)
-        if (ZCollectedHeap::heap()->resources().testAfterYoungPrelude) {
-            ZCollectedHeap::heap()->resources().testAfterYoungPrelude();
-        }
-#endif
         if (ZAbort::should_abort()) {
             Heap::GetHeap().GetZGeneration(kind == GCDriverKind::MINOR
                 ? ZGenerationId::young : ZGenerationId::old).End();
