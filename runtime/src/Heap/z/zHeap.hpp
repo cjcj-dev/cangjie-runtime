@@ -104,10 +104,6 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId generation);
     BaseObject* make_load_good(RefField<>& ref, const ForwardingProvenance& provenance);
     Generation ObjectGeneration(BaseObject* object) const;
-    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
-    {
-        return GetZGeneration(generation).Stats();
-    }
     GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
     {
         return GetZGeneration(generation).Snapshot();

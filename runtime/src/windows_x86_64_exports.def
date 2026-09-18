@@ -1763,9 +1763,6 @@ EXPORTS
     _ZN12MapleRuntime7EHTable11ReadSLEB128EPPKh @2094
     _ZN12MapleRuntime7EHTable11ReadULEB128EPPKh @2095
     _ZN12MapleRuntime7EHTable12BuildEHTableEPKh @2096
-    _ZN12MapleRuntime7GCStats15prevGcStartTimeE @2097 DATA
-    _ZN12MapleRuntime7GCStats16prevGcFinishTimeE @2098 DATA
-    _ZN12MapleRuntime7GCStats4InitEv @2099
     _ZN12MapleRuntime7ILoader12CreateLoaderEv @2106
     _ZN12MapleRuntime7LogFile13CloseLogFilesEv @2107
     _ZN12MapleRuntime7LogFile14SetFlagWithEnvEPKcNS_7LogTypeE @2108
@@ -2180,7 +2177,6 @@ EXPORTS
     _ZNK12MapleRuntime7EHTable16MatchActionTableEyRKPNS_7MObjectEh @2722
     _ZNK12MapleRuntime7EHTable20ReadIndirPcRelSData4EPKh @2723
     _ZNK12MapleRuntime7EHTable20ReadIndirPcRelSData8EPKh @2724
-    _ZNK12MapleRuntime7GCStats4DumpEv @2725
     _ZNK12MapleRuntime7Mutator16StackGuardExpandEv @2726
     _ZNK12MapleRuntime7Mutator17StackGuardRecoverEv @2727
     _ZNK12MapleRuntime8BaseFile11GetBaseNameEv @2728

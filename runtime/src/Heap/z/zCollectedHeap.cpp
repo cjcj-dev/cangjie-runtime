@@ -68,8 +68,6 @@ void ZCollectedHeap::initialize_gc()
 {
     ZAbort::reset();
     ZStat::Initialize();
-    _heap.GetGCStats(ZGenerationId::young).Init();
-    _heap.GetGCStats(ZGenerationId::old).Init();
     ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();
     _heap.young().CycleStats().Initialize(now);

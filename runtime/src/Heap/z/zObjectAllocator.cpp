@@ -285,11 +285,12 @@ void RegionManager::RequestForRegion(size_t size)
     }
 
     Heap& heap = Heap::GetHeap();
-    GCStats& gcstats = heap.GetGCStats();
-    size_t allocatedBytes = GetAllocatedSize() - gcstats.liveBytesAfterGC;
+    const size_t liveAfterGC = lastLiveBytesAfterGC.load(std::memory_order_acquire);
+    size_t allocatedBytes = GetAllocatedSize() - liveAfterGC;
     constexpr double pi = 3.14;
-    size_t availableBytesAfterGC = heap.GetMaxCapacity() - gcstats.liveBytesAfterGC;
-    double heuAllocRate = std::cos((pi / 2.0) * allocatedBytes / availableBytesAfterGC) * gcstats.collectionRate;
+    size_t availableBytesAfterGC = heap.GetMaxCapacity() - liveAfterGC;
+    double heuAllocRate = std::cos((pi / 2.0) * allocatedBytes / availableBytesAfterGC) *
+        lastCollectionRate.load(std::memory_order_acquire);
     // for maximum performance, choose the larger one.
     double allocRate = std::max(
         static_cast<double>(CangjieRuntime::GetHeapParam().allocationRate) * MB / SECOND_TO_NANO_SECOND, heuAllocRate);

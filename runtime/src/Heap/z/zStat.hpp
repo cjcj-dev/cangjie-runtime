@@ -454,7 +454,10 @@ private:
 };
 
 
-// zStatHeap::stats / at_relocate_end: one synchronized heap account per generation.
+// zStatHeap (zStat.hpp:596-707): one synchronized heap account per
+// generation, sampled at the collection points. The full ZGC account is fed
+// by ZPageAllocatorStats; the fields below are the ones the host allocator
+// can source today (used/live/reclaimed), at the same sampling points.
 struct ZStatHeapStats {
     size_t usedAtRelocateEnd = 0;
     size_t liveAtMarkEnd = 0;
@@ -463,12 +466,25 @@ struct ZStatHeapStats {
 class ZStatHeap {
 public:
     explicit ZStatHeap(const char* group);
+
+    void AtCollectionStart(size_t used);
+    void AtMarkEnd(size_t live);
+    void AddReclaimed(size_t bytes);
     void AtRelocateEnd(size_t used, size_t live, size_t reclaimedBytes);
+
+    size_t UsedAtCollectionStart() const;
+    size_t LiveAtMarkEnd() const;
+    size_t UsedAtRelocateEnd() const;
+    size_t LastReclaimed() const;
+    double ReclaimedAvg();
     ZStatHeapStats Stats() const;
+
 private:
     const ZStatSampler reclaimed;
     mutable std::mutex lock;
     ZStatHeapStats stats;
+    size_t usedAtCollectionStart = 0;
+    size_t lastReclaimed = 0;
     bool initialized = false;
 };
 
@@ -477,20 +493,23 @@ class RegionManager;
 
 class ZStat final : public ZThread {
 public:
-    static void UpdateGCStats();
-public:
+    static uint64_t GetPrevGCStartTime() { return prevGcStartTime.load(std::memory_order_acquire); }
+    static void SetPrevGCStartTime(uint64_t timestamp) { prevGcStartTime.store(timestamp, std::memory_order_release); }
+    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime.load(std::memory_order_acquire); }
+    static void SetPrevGCFinishTime(uint64_t timestamp) { prevGcFinishTime.store(timestamp, std::memory_order_release); }
+
     ZStat();
     ~ZStat() override = default;
     void run_thread() override;
     void terminate() override;
     static void Initialize();
     static ZStatCollection& Collections();
-    static ZStatHeap& YoungHeap();
-    static ZStatHeap& OldHeap();
 private:
     // zStat.hpp:387-389: the sampling thread ticks off a ZMetronome.
     static constexpr uint64_t SampleHz = 1;
     ZMetronome metronome;
+    static std::atomic<uint64_t> prevGcStartTime;
+    static std::atomic<uint64_t> prevGcFinishTime;
 };
 
 // zStat.hpp:484-487, zStat.cpp:1410-1420: system load average, printed as
@@ -543,50 +562,6 @@ private:
     static void Set(ZCount* count, size_t encountered, size_t discovered, size_t enqueued);
 };
 
-class GCStats {
-public:
-    GCStats() = default;
-    ~GCStats() = default;
-    void Init();
-    size_t GetThreshold() const { return heapThreshold.load(std::memory_order_acquire); }
-    void Dump() const;
-    static uint64_t GetPrevGCStartTime() { return prevGcStartTime.load(std::memory_order_acquire); }
-    static void SetPrevGCStartTime(uint64_t timestamp)
-    {
-        prevGcStartTime.store(timestamp, std::memory_order_release);
-    }
-    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime.load(std::memory_order_acquire); }
-    static void SetPrevGCFinishTime(uint64_t timestamp)
-    {
-        prevGcFinishTime.store(timestamp, std::memory_order_release);
-    }
-    void RecordMajorGCFinish(uint64_t timestamp) { RecordMajorGCFinish(timestamp, 0, 0, 0); }
-    void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter, size_t collectedBytes);
-    static std::atomic<uint64_t> prevGcStartTime;
-    static std::atomic<uint64_t> prevGcFinishTime;
-    GCReason reason = GC_REASON_USER;
-    bool isConcurrentMark;
-    bool async;
-    uint64_t gcStartTime;
-    uint64_t gcEndTime;
-    size_t liveBytesBeforeGC;
-    size_t liveBytesAfterGC;
-    size_t fromSpaceSize;
-    size_t smallGarbageSize;
-    size_t pinnedSpaceSize;
-    size_t pinnedGarbageSize;
-    size_t largeSpaceSize;
-    size_t largeGarbageSize;
-    size_t collectedBytes;
-    size_t collectedObjects;
-    size_t youngCandidateBytes;
-    size_t youngPromotedBytes;
-    uint32_t tenuringThreshold;
-    size_t liveByAge[16];
-    double garbageRatio;
-    double collectionRate;
-    std::atomic<size_t> heapThreshold{ 0 };
-};
 extern std::atomic<uint64_t> g_gcTotalTimeUs;
 extern std::atomic<size_t> g_gcCollectedTotalBytes;
 

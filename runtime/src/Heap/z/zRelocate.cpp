@@ -108,9 +108,7 @@ void ZRelocate::ForwardFromSpace(ZGenerationId generation)
 {
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    GCStats& stats = Heap::GetHeap().GetGCStats(generation);
-    stats.liveBytesBeforeGC = space.AllocatedBytes();
-    stats.fromSpaceSize = space.FromSpaceSize();
+    Heap::GetHeap().GetZGeneration(generation).StatHeap()->AtCollectionStart(space.AllocatedBytes());
     if (generation == ZGenerationId::young) {
         space.ForwardFromSpace<Generation::Young>(*Heap::GetHeap().GetZGeneration(ZGenerationId::young).Workers());
     } else {
@@ -121,9 +119,8 @@ void ZRelocate::ForwardFromSpace(ZGenerationId generation)
 
 void ZRelocate::RefineFromSpace()
 {
-    GCStats& stats = Heap::GetHeap().GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    stats.smallGarbageSize = space.RefineFromSpace();
+    ZGeneration::old()->StatHeap()->AddReclaimed(space.RefineFromSpace());
 }
 
 bool ZRelocate::IsFromObject(BaseObject* obj)

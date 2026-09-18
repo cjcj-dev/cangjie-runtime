@@ -24,10 +24,9 @@ namespace MapleRuntime {
 // record is one line, `key=value` separated by spaces, with a stable field order and a schema
 // version so a reader can refuse a record it does not understand.
 //
-//   [GCLOG] v=4 rec=cycle seq= gc_tag= kind= reason= start_ns= dur_ns= live_before= live_after=
-//           collected= heap_used= threshold= rss_kb=
+//   [GCLOG] v=5 rec=cycle seq= gc_tag= kind= reason= start_ns= dur_ns= live_before= live_after=
+//           collected= heap_used= rss_kb=     (v=5: threshold= dropped with the heapThreshold heuristic)
 //   [GCLOG] v=4 rec=phase seq= gc_tag= name= kind= start_ns= ns=
-//   [GCLOG] v=4 rec=phase_leaf seq= gc_tag= name= ns= kind= depth= path_ok= path=  (removed: no ZGC counterpart)
 //   [GCLOG] v=4 rec=stw   seq= gc_tag= reason= start_ns= wait_ns= held_ns=
 //   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
@@ -39,7 +38,7 @@ namespace MapleRuntime {
 // MRT_GC_LOG so a crash before GcLog init still emits.
 class GcLog {
 public:
-    static constexpr uint32_t SCHEMA_VERSION = 4;
+    static constexpr uint32_t SCHEMA_VERSION = 5;
     // Crash records remain independently emitted and parsed at v3.
     static constexpr uint32_t CRASH_SCHEMA_VERSION = 3;
     // 128: longest phase name in the tree is well under this; longer ones are truncated.
@@ -57,7 +56,7 @@ public:
     static uint64_t CurrentSeq() { return GCIdMark::Current(); }
 
     static void Cycle(uint64_t seq, const char* kind, const char* reason, uint64_t startNs, uint64_t durNs,
-                      size_t liveBefore, size_t liveAfter, size_t collected, size_t heapUsed, size_t threshold)
+                      size_t liveBefore, size_t liveAfter, size_t collected, size_t heapUsed)
     {
         if (seq == 0) {
             std::abort();
@@ -74,10 +73,10 @@ public:
         FoldToToken(kind, safeKind);
         FoldToToken(reason, safeReason);
         EmitLine("[GCLOG] v=%u rec=cycle seq=%llu gc_tag=%c kind=%s reason=%s start_ns=%llu dur_ns=%llu "
-                 "live_before=%zu live_after=%zu collected=%zu heap_used=%zu threshold=%zu rss_kb=%zu",
+                 "live_before=%zu live_after=%zu collected=%zu heap_used=%zu rss_kb=%zu",
                  SCHEMA_VERSION, static_cast<unsigned long long>(seq), ZGCIdPrinter::Tag(seq), safeKind, safeReason,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
-                 liveAfter, collected, heapUsed, threshold, ResidentKB());
+                 liveAfter, collected, heapUsed, ResidentKB());
     }
 
     static void Phase(uint64_t seq, const char* name, const char* kind, uint64_t startNs, uint64_t ns)

@@ -184,7 +184,7 @@ inline bool GCRequest::IsFrequentGC() const
 inline bool GCRequest::IsFrequentAsyncGC() const
 {
     int64_t now = static_cast<int64_t>(TimeUtil::NanoSeconds());
-    return (now - GCStats::GetPrevGCFinishTime() < minIntervelNs.load(std::memory_order_acquire));
+    return (now - ZStat::GetPrevGCFinishTime() < minIntervelNs.load(std::memory_order_acquire));
 }
 
 inline bool GCRequest::IsFrequentHeuristicGC() const { return IsFrequentAsyncGC(); }

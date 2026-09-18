@@ -624,8 +624,8 @@ static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
         Heap::GetHeap().young().Workers());
     stats.old_stats.resize = sample_worker_resize_stats(stats.old_stats.cycle, stats.old_stats.workers,
         Heap::GetHeap().old().Workers());
-    stats.young_stats.stat_heap = ZStat::YoungHeap().Stats();
-    stats.old_stats.stat_heap = ZStat::OldHeap().Stats();
+    stats.young_stats.stat_heap = Heap::GetHeap().GetZGeneration(ZGenerationId::young).StatHeap()->Stats();
+    stats.old_stats.stat_heap = Heap::GetHeap().GetZGeneration(ZGenerationId::old).StatHeap()->Stats();
     stats.young_stats.general.used = regions.GetYoungAllocatedSize();
     stats.old_stats.general.used = stats.heap.used - std::min(stats.heap.used, stats.young_stats.general.used);
     stats.old_stats.general.total_collections_at_start = collectionStats.collectionsAtMajorStart;

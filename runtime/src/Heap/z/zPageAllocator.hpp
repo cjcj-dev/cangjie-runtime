@@ -689,6 +689,14 @@ public:
     // wait for a period of time to allocate region which will avoid harm to gc
     void RequestForRegion(size_t size);
 
+    // Pacing inputs of RequestForRegion, published at the end of each
+    // non-young collection (post-major live bytes and collection rate).
+    void SetLastCollectionStats(size_t liveBytes, double rate)
+    {
+        lastLiveBytesAfterGC.store(liveBytes, std::memory_order_release);
+        lastCollectionRate.store(rate, std::memory_order_release);
+    }
+
     void MergeRawPointerRegions(RegionList& smallSizeRegionList, RegionList& largeSizeRegionList);
 
     void SetMaxUnitCountForRegion(size_t regionSize);
@@ -843,6 +851,8 @@ private:
 
     // the time when previous region was allocated, which is assigned with returned value by timeutil::NanoSeconds().
     std::atomic<uint64_t> prevRegionAllocTime = { 0 };
+    std::atomic<size_t> lastLiveBytesAfterGC{ 0 };
+    std::atomic<double> lastCollectionRate{ 0.0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only

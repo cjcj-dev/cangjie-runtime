@@ -108,6 +108,7 @@ ZGeneration::ZGeneration(ZGenerationId generation)
                                                  : MarkingStacks::MarkingGeneration::MAJOR)),
       _id(generation == ZGenerationId::young ? ZGenerationId::young : ZGenerationId::old),
       _cycle(generation),
+      statHeap(generation == ZGenerationId::young ? "Young Generation" : "Old Generation"),
       _relocation_set(this),
       _relocate(std::make_unique<ZRelocate>(this))
 {
@@ -664,9 +665,7 @@ void ZGenerationYoung::concurrent_mark_free()
         tenuringIn.liveByAge[age] += live;
     }
     tenuringIn.youngGarbage = youngStats.candidateBytes > liveBytes ? (youngStats.candidateBytes - liveBytes) : 0;
-    GCStats& gcStats = Stats();
-    gcStats.youngCandidateBytes = youngStats.candidateBytes;
-    gcStats.youngPromotedBytes = liveBytes;
+    statHeap.AtMarkEnd(liveBytes);
     Heap::GetHeap().young().SelectTenuringThreshold(tenuringIn);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
@@ -747,7 +746,7 @@ void ZGenerationYoung::concurrent_relocate()
     size_t allocatedAfter = space.AllocatedBytes();
     youngStats.reclaimedBytes =
         allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
-    Heap::GetHeap().GetGCStats(ZGenerationId::young).collectedBytes = youngStats.reclaimedBytes;
+    ZGeneration::young()->StatHeap()->AddReclaimed(youngStats.reclaimedBytes);
 
     if (youngStw != nullptr) {
         youngStw.reset();
@@ -1268,9 +1267,9 @@ void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
         Heap::GetHeap().GetZGeneration(generation).Begin(gcIndex);
     }
     ResetSkippedStackMapCounts();
-    VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s",
-         g_gcRequests[Heap::GetHeap().GetCycleSnapshot(generation).reason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
-         Pretty(Heap::GetHeap().GetGCStats().GetThreshold()).Str());
+    VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s",
+         g_gcRequests[Heap::GetHeap().GetCycleSnapshot(generation).reason].name,
+         Pretty(Heap::GetHeap().GetAllocatedSize()).Str());
 
     // zDriver.cpp:183,399-400: generation workers use their concurrent
     // budget for both pause and concurrent work. Parallel workers are separate.
@@ -1278,9 +1277,6 @@ void ZGeneration::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     (*Workers()).set_active();
     VLOG(REPORT, "GC generation active workers: %d", threadCount);
 
-    Heap::GetHeap().GetGCStats(generation).reason = Heap::GetHeap().GetCycleSnapshot(generation).reason;
-    Heap::GetHeap().GetGCStats(generation).async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
-    Heap::GetHeap().GetGCStats(generation).isConcurrentMark = isConcurrent;
 #if defined(MRT_TESTABLE_INTERNALS)
     if (testCyclePrepared) {
         testCyclePrepared();
@@ -1487,19 +1483,13 @@ void ZGenerationOld::CollectLargeGarbage()
 {
     ZStatTimerOld zstatTimer(ZStatPhases::PCollectLargeGarbage);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    GCStats& stats = Heap::GetHeap().GetGCStats();
-    stats.largeSpaceSize = space.LargeObjectBytes();
-    stats.largeGarbageSize = space.CollectLargeGarbage();
-    stats.collectedBytes += stats.largeGarbageSize;
+    ZGeneration::old()->StatHeap()->AddReclaimed(space.CollectLargeGarbage());
 }
 
 void ZGenerationOld::CollectPinnedGarbage()
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    GCStats& stats = Heap::GetHeap().GetGCStats();
-    stats.pinnedSpaceSize = space.PinnedSpaceSize();
-    stats.pinnedGarbageSize = space.CollectPinnedGarbage();
-    stats.collectedBytes += stats.pinnedGarbageSize;
+    ZGeneration::old()->StatHeap()->AddReclaimed(space.CollectPinnedGarbage());
 }
 
 void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,

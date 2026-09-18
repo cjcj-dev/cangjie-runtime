@@ -117,9 +117,10 @@ public:
     void StopWorkers();
     ZWorkers* Workers() const { return workers.get(); }
     ZWeakRootsProcessor* WeakRootsProcessor() const { return weakRootsProcessor.get(); }
-    GCStats& Stats() { return stats; }
     ZStatCycle& CycleStats() { return cycleStats; }
     ZStatWorkers* StatWorkers() { return &statWorkers; }
+    // zGeneration.hpp: stat_heap() — per-generation heap account.
+    ZStatHeap* StatHeap() { return &statHeap; }
     ZGenerationPhase GcPhase() const { return _phase; }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
@@ -158,7 +159,7 @@ protected:
     const ZGenerationId _cycle;
     std::unique_ptr<ZWorkers> workers;
     std::unique_ptr<ZWeakRootsProcessor> weakRootsProcessor;
-    GCStats stats;
+    ZStatHeap statHeap;
     ZStatCycle cycleStats;
     // zGeneration.hpp:_stat_workers, constructed before _workers points at it.
     ZStatWorkers statWorkers;

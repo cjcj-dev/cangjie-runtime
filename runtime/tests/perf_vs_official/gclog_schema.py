@@ -18,6 +18,12 @@ RECORD_TOKENS = re.compile(r"(?:^| )rec=([^ ]+)")
 GC_CYCLE = re.compile(
     rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
     r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
+    r"heap_used=(\S+) rss_kb=(\S+)$"
+)
+# v=4 layout (historical logs): threshold= field between heap_used= and rss_kb=.
+GC_CYCLE_V4 = re.compile(
+    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
+    r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
     r"heap_used=(\S+) threshold=(\S+) rss_kb=(\S+)$"
 )
 GC_PHASE = re.compile(
@@ -62,7 +68,6 @@ class CycleRecord:
     live_after: int
     collected: int
     heap_used: int
-    threshold: int
     rss_kb: int
 
 
@@ -144,6 +149,12 @@ def _u64(value: str, field_name: str, line: str) -> int:
     return number
 
 
+def _version_any(value: str, expected: tuple[int, ...], family: str, line: str) -> None:
+    version = _u64(value, "v", line)
+    if version not in expected:
+        raise ValueError(f"unsupported {family} schema v={version}; expected one of {expected}")
+
+
 def _version(value: str, expected: int, family: str, line: str) -> None:
     version = _u64(value, "v", line)
     if version != expected:
@@ -171,7 +182,7 @@ def parse_gclog(text: str) -> GcLogRecords:
             family = phase_candidates[0]
             if family == "phase":
                 match = _exact(GC_PHASE, line, "GCLOG phase")
-                _version(match.group(1), 4, "GCLOG phase", line)
+                _version_any(match.group(1), (4, 5), "GCLOG phase", line)
                 records.phases.append(PhaseRecord(
                     _u64(match.group(2), "seq", line), match.group(3), match.group(4), match.group(5),
                     _u64(match.group(6), "start_ns", line),
@@ -204,20 +215,32 @@ def parse_gclog(text: str) -> GcLogRecords:
             raise ValueError(f"unknown GCLOG phase-family record rec={family}")
 
         if "cycle" in rec_tokens:
-            match = _exact(GC_CYCLE, line, "GCLOG cycle")
+            match = GC_CYCLE.fullmatch(line)
+            if match is not None:
+                _version(match.group(1), 5, "GCLOG cycle", line)
+                seq = _u64(match.group(2), "seq", line)
+                if seq == 0:
+                    raise ValueError("GCLOG cycle seq must be greater than zero")
+                numbers = [_u64(match.group(index), name, line) for index, name in zip(
+                    range(6, 12),
+                    ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used"))]
+                rss_kb = _u64(match.group(12), "rss_kb", line)
+                records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5),
+                                                  *numbers, rss_kb))
+                continue
+            match = _exact(GC_CYCLE_V4, line, "GCLOG cycle")
             _version(match.group(1), 4, "GCLOG cycle", line)
             seq = _u64(match.group(2), "seq", line)
             if seq == 0:
                 raise ValueError("GCLOG cycle seq must be greater than zero")
             numbers = [_u64(match.group(index), name, line) for index, name in zip(
-                range(6, 13),
-                ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used", "threshold"))]
-            rss_kb = _u64(match.group(13), "rss_kb", line)
-            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5), *numbers, rss_kb))
+                (6, 7, 8, 9, 10, 11, 13),
+                ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used", "rss_kb"))]
+            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5), *numbers))
             continue
         if "stw" in rec_tokens:
             match = _exact(GC_STW, line, "GCLOG stw")
-            _version(match.group(1), 4, "GCLOG stw", line)
+            _version_any(match.group(1), (4, 5), "GCLOG stw", line)
             records.stw.append(StwRecord(
                 _u64(match.group(2), "seq", line), match.group(3), match.group(4),
                 _u64(match.group(5), "start_ns", line),

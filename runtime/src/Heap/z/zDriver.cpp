@@ -164,17 +164,17 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
     size_t liveBefore = 0;
     size_t liveAfter = 0;
     size_t collected = 0;
-    size_t threshold = 0;
     bool firstGeneration = true;
     // ZServiceabilityCycleTracer spans the request, including all young
     // prelude phases of a major. Capture existing generation stats before reuse.
     const auto accumulate = [&](ZGenerationId generation) {
-        GCStats& stats = Heap::GetHeap().GetGCStats(generation);
-        if (firstGeneration) liveBefore = stats.liveBytesBeforeGC;
+        // rec=cycle fields are read from the generation's ZStatHeap account
+        // (zStat.cpp:1703-2036 sampling points).
+        ZStatHeap* statHeap = Heap::GetHeap().GetZGeneration(generation).StatHeap();
+        if (firstGeneration) liveBefore = statHeap->UsedAtCollectionStart();
         firstGeneration = false;
-        liveAfter = stats.liveBytesAfterGC;
-        collected += stats.collectedBytes;
-        threshold = stats.GetThreshold();
+        liveAfter = statHeap->UsedAtRelocateEnd();
+        collected += statHeap->LastReclaimed();
     };
 
     // Set the request's generation budgets before mark-start can consume
@@ -241,7 +241,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
     }
     GcLog::Cycle(GCIdMark::Current(), request.cause() == GC_REASON_YOUNG ? "minor" : "major",
                  g_gcRequests[request.cause()].name, collectionStart, TimeUtil::NanoSeconds() - collectionStart,
-                 liveBefore, liveAfter, collected, Heap::GetHeap().GetUsedPageSize(), threshold);
+                 liveBefore, liveAfter, collected, Heap::GetHeap().GetUsedPageSize());
     return true;
 }
 
@@ -261,12 +261,8 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     cycle.PreGarbageCollection(reason != GC_REASON_YOUNG, gcIndex);
     ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
     VLOG(REPORT, "[GC] Start ZGC %s gcIndex= %lu", g_gcRequests[reason].name, gcIndex);
-    GCStats& gcStats = Heap::GetHeap().GetGCStats(generation);
-    gcStats.collectedBytes = 0;
-    gcStats.youngCandidateBytes = 0;
-    gcStats.youngPromotedBytes = 0;
-    gcStats.tenuringThreshold = 0;
-    gcStats.gcStartTime = TimeUtil::NanoSeconds();
+    ZStatHeap* statHeap = cycle.StatHeap();
+    const uint64_t gcStartTimeNs = TimeUtil::NanoSeconds();
 
     // One GC cycle is the roots verification scene: it covers both the minor
     // and major root visitors, including concurrent stack enumeration.  Close
@@ -290,7 +286,7 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     }
 
     cycle.PostGarbageCollection(gcIndex);
-    gcStats.gcEndTime = TimeUtil::NanoSeconds();
+    const uint64_t gcEndTimeNs = TimeUtil::NanoSeconds();
     const char* phaseName = "major.old";
     if (generation == ZGenerationId::young) {
         switch (cycle.YoungType()) {
@@ -303,21 +299,16 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     }
     // A generation span includes pauses and concurrent work. Its start and
     // duration distinguish multiple Y spans without inventing another GC ID.
-    GcLog::Phase(GCIdMark::Current(), phaseName, "unknown", gcStats.gcStartTime,
-                 gcStats.gcEndTime - gcStats.gcStartTime);
-    if (reason != GC_REASON_YOUNG) {
-        ZStat::UpdateGCStats();
-    }
-    uint64_t gcTimeNs = gcStats.gcEndTime - gcStats.gcStartTime;
+    GcLog::Phase(GCIdMark::Current(), phaseName, "unknown", gcStartTimeNs, gcEndTimeNs - gcStartTimeNs);
+    uint64_t gcTimeNs = gcEndTimeNs - gcStartTimeNs;
     ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);
-    double rate = (static_cast<double>(gcStats.collectedBytes) / gcTimeNs) * (static_cast<double>(NS_PER_S) / MB);
+    const size_t reclaimedThisCollection = statHeap->LastReclaimed();
+    double rate = (static_cast<double>(reclaimedThisCollection) / gcTimeNs) * (static_cast<double>(NS_PER_S) / MB);
     VLOG(REPORT, "total gc time: %s us, collection rate %.3lf MB/s\n", Pretty(gcTimeNs / NS_PER_US).Str(), rate);
     g_gcTotalTimeUs.fetch_add(gcTimeNs / NS_PER_US, std::memory_order_release);
-    g_gcCollectedTotalBytes.fetch_add(gcStats.collectedBytes, std::memory_order_release);
-    gcStats.collectionRate = rate;
+    g_gcCollectedTotalBytes.fetch_add(reclaimedThisCollection, std::memory_order_release);
     if (reason != GC_REASON_YOUNG) {
-        gcStats.RecordMajorGCFinish(TimeUtil::NanoSeconds(), gcTimeNs, Heap::GetHeap().GetAllocatedSize(),
-                                    gcStats.collectedBytes);
+        ZStat::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
     }
     // zStatHeap::at_relocate_end: publish only to the generation being collected.
     const bool young = reason == GC_REASON_YOUNG;
@@ -325,9 +316,13 @@ void ZDriver::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // A12a scope ruling: preserve the old-generation baseline scalar until
     // A07's mark-end livemap aggregation replaces it. Do not infer live bytes
     // from candidate minus reclaimed capacity. Young has an actual mark result.
-    const size_t liveBytes = young ? gcStats.youngPromotedBytes : usedAfter;
-    (young ? ZStat::YoungHeap() : ZStat::OldHeap()).AtRelocateEnd(
-        usedAfter, liveBytes, gcStats.collectedBytes);
+    const size_t liveBytes = young ? statHeap->LiveAtMarkEnd() : usedAfter;
+    statHeap->AtRelocateEnd(usedAfter, liveBytes, reclaimedThisCollection);
+    if (!young) {
+        // RegionManager's allocation pacing reads the post-major baseline.
+        static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager()
+            .SetLastCollectionStats(usedAfter, rate);
+    }
     cycle.End();
 }
 }
@@ -379,14 +374,14 @@ bool GCExecutor::Execute(void* owner)
         }
         case GCTask::TaskType::TASK_TYPE_TIMEOUT_GC: {
             uint64_t curTime = TimeUtil::NanoSeconds();
-            if ((curTime - GCStats::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval) {
-                GCStats::SetPrevGCStartTime(curTime);
+            if ((curTime - ZStat::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval) {
+                ZStat::SetPrevGCStartTime(curTime);
                 ZDriver::RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
             }
             break;
         }
         case GCTask::TaskType::TASK_TYPE_INVOKE_GC: {
-            GCStats::SetPrevGCStartTime(TimeUtil::NanoSeconds());
+            ZStat::SetPrevGCStartTime(TimeUtil::NanoSeconds());
             ZDriver::RunGarbageCollection(taskIndex, gcReason);
             break;
         }
