@@ -136,7 +136,7 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct MarkPort203TestAccess {
-    static void Bind(CollectorResources& resources, HeapGcState* collector, int32_t count = 1)
+    static void Bind(HeapGcState* collector, int32_t count = 1)
     {
         if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
         ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(count);
@@ -310,9 +310,8 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     fx.region1->SetRegionAllocPtr(next);
     GC_EXPECT_TRUE(next <= fx.region1->GetRegionEnd());
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    MarkPort203TestAccess::Bind(resources, &collector, static_cast<int32_t>(helpers + 1));
+    MarkPort203TestAccess::Bind(&collector, static_cast<int32_t>(helpers + 1));
     // ZGeneration owns its worker set (zGeneration.cpp:124-129).
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
         collector.GetZGeneration(generation).InitializeWorkers(helpers + 1);
@@ -416,7 +415,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
         collector.GetZGeneration(generation).StopWorkers();
     }
-    MarkPort203TestAccess::Bind(resources, nullptr);
+    MarkPort203TestAccess::Bind(nullptr);
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",
                  variant, arrayMarked, markedChildren, objects, static_cast<size_t>(bytes), expectedBytes);
     GC_EXPECT_EQ(markedChildren, expectedChildren);
