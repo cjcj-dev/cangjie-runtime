@@ -166,7 +166,7 @@ private:
     // RefField<>(obj) as CompareExchange desired is a compile error.
     explicit HeapSlot(const BaseObject* obj)
         : fieldVal(raw(ZAddress::store_good(from_object(obj)))) {}
-    friend     friend class CopyCollector;
+    friend class CopyCollector;
     using RefFieldValue = MAddress;
     RefFieldValue fieldVal;
 };
@@ -220,7 +220,7 @@ private:
     zaddress_unsafe rootValue;
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);
-    friend     friend class CopyCollector;
+    friend class CopyCollector;
 };
 
 // Read-only root capability. This is intentionally const-qualified rather than a

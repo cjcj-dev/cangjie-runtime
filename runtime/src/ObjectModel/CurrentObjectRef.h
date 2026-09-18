@@ -66,7 +66,7 @@ private:
     BaseObject* ptr = nullptr;
 
     friend class Collector;
-    friend     friend class CopyCollector;
+    friend class CopyCollector;
 };
 
 static_assert(sizeof(CurrentObjectRef) == sizeof(void*), "CurrentObjectRef must remain one machine word");
