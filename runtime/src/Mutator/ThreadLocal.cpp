@@ -78,7 +78,7 @@ void ThreadLocal::FlushCurrentThreadMarkStacks()
     if (tls->buffer == nullptr && empty(tls->gcData) && empty(tls->nativeGCData)) {
         return;
     }
-    auto& collector = static_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    auto& collector = static_cast<Collector&>(Heap::GetHeap().GetCollector());
     (void)collector.FlushThreadMarkProducers(tls);
     if (tls->nativeGCData != nullptr && tls->nativeGCData != tls->gcData) {
         (void)collector.FlushGCDataMarkProducers(*tls->nativeGCData);

@@ -119,7 +119,7 @@ std::atomic<size_t> g_installDomainGrant{ 0 };
 std::atomic<size_t> g_installDomainAlready{ 0 };
 std::atomic<size_t> g_installDomainTooLate{ 0 };
 std::atomic<size_t> g_installDomainSkip{ 0 };
-bool CopyCollector::IsUnmovableFromObject(BaseObject* obj) const
+bool Collector::IsUnmovableFromObject(BaseObject* obj) const
 {
     // filter const string object.
     if (!Heap::IsHeapAddress(obj)) {
@@ -137,7 +137,7 @@ bool CopyCollector::IsUnmovableFromObject(BaseObject* obj) const
     return regionInfo->IsUnmovableFromRegion();
 }
 
-void CopyCollector::CheckStoreGoodTarget(const char* consumer, BaseObject* target,
+void Collector::CheckStoreGoodTarget(const char* consumer, BaseObject* target,
                                       const ForwardingProvenance& provenance) const
 {
     // zAddress.inline.hpp:store_good consumes an already current address.
@@ -147,18 +147,18 @@ void CopyCollector::CheckStoreGoodTarget(const char* consumer, BaseObject* targe
 }
 
 template<bool forward>
-bool CopyCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
+bool Collector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
                                        BaseObject*& toObj, const ForwardingProvenance& provenance) const
 {
     RefField<> oldRef(field);
     if (IsLoadBad(oldRef)) {
         fromObj = to_object(oldRef.GetTargetObject());
         if (forward) {
-            toObj = const_cast<CopyCollector*>(this)->relocate_or_remap_object(
+            toObj = const_cast<Collector*>(this)->relocate_or_remap_object(
                 fromObj, static_cast<ZGenerationId>(remap_generation(oldRef)));
         } else {
             toObj = FindToVersion(fromObj, static_cast<Generation>(remap_generation(oldRef))).GetOrFailClosed(
-                "CopyCollector::TryUpdateRefFieldImpl", provenance);
+                "Collector::TryUpdateRefFieldImpl", provenance);
         }
         if (toObj == nullptr) {
             return false;
@@ -191,28 +191,28 @@ bool CopyCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, Ba
 
     return false;
 }
-bool CopyCollector::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
+bool Collector::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
 {
     BaseObject* oldRef = nullptr;
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
     return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
 }
 
-bool CopyCollector::TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
+bool Collector::TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
                                                   const ForwardingProvenance& provenance) const
 {
     BaseObject* oldRef = nullptr;
     return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
 }
 
-bool CopyCollector::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
+bool Collector::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
 {
     BaseObject* oldRef = nullptr;
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
     return TryUpdateRefFieldImpl<true>(obj, field, oldRef, newRef, provenance);
 }
 // this api untags current pointer as well as old pointer, caller should take care of this.
-bool CopyCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
+bool Collector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
 {
     for (;;) {
         RefField<> oldRef(field);
@@ -241,7 +241,7 @@ bool CopyCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObj
     return false;
 }
 
-void CopyCollector::RemapYoungRoots()
+void Collector::RemapYoungRoots()
 {
     SuspendibleThreadSetJoiner joiner;
     MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
@@ -287,20 +287,20 @@ void CopyCollector::RemapYoungRoots()
 
 
 
-void CopyCollector::PreforwardDiscoveredExternObjects(Generation generation)
+void Collector::PreforwardDiscoveredExternObjects(Generation generation)
 {
     std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
     CHECK(discoveredExternObjects.empty());
     CurrentizeValueRootMap(cycleRefWorkStack, generation);
 }
 
-void CopyCollector::PreforwardAllResurrectExportFromObjects(Generation generation)
+void Collector::PreforwardAllResurrectExportFromObjects(Generation generation)
 {
     std::lock_guard<std::mutex> lg(resurrectExportMtx);
     CurrentizeValueRootSet(resurrectedExportObjectes, generation);
     CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
 }
-void CopyCollector::StartRelocationTasks(ZGenerationId generation)
+void Collector::StartRelocationTasks(ZGenerationId generation)
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
@@ -309,7 +309,7 @@ void CopyCollector::StartRelocationTasks(ZGenerationId generation)
     else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
 
-bool CopyCollector::Preforward()
+bool Collector::Preforward()
 {
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
     MRT_PHASE_TIMER(ZStatPhases::PPreforward);
@@ -407,7 +407,7 @@ static ZLiveMap* RouteLiveMap(ZPage* region, ZGenerationId& id)
     return &region->livemap();
 }
 
-void EnsureRouteDomainMembership(CopyCollector* collector, BaseObject* obj)
+void EnsureRouteDomainMembership(Collector* collector, BaseObject* obj)
 {
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
@@ -488,7 +488,7 @@ void EnsureRouteDomainMembership(CopyCollector* collector, BaseObject* obj)
 // statresid: force ghost livemap paint while still FORWARDABLE (before any Route
 // freezes geometry). Used by the root grant pass and as last-chance before Forward.
 // Returns true when AdmitForRoute would accept `obj` after the paint attempt.
-bool ForceRootRouteDomainWhileForwardable(CopyCollector* collector, BaseObject* obj)
+bool ForceRootRouteDomainWhileForwardable(Collector* collector, BaseObject* obj)
 {
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return false;
@@ -526,7 +526,7 @@ bool ForceRootRouteDomainWhileForwardable(CopyCollector* collector, BaseObject* 
 // Install a logical resolved target into a heap field. Callers cannot supply a
 // pre-encoded RefField: this controlled entry applies the current heap colour here.
 // On CAS fail, accept the peer's update (major TryUpdateRefFieldImpl shape).
-bool CopyCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
+bool Collector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
                                           bool allowNull) const
 {
     BaseObject* object = to_object(target);
@@ -560,7 +560,7 @@ bool CopyCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expecte
     return true;
 }
 
-BaseObject* CopyCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
+BaseObject* Collector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
 {
     (void)stw;
 
@@ -583,7 +583,7 @@ BaseObject* CopyCollector::ResolveMinorReference(RefField<>& field, const Scoped
     (void)CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), false);
     return resolved;
 }
-BaseObject* CopyCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
+BaseObject* Collector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     (void)stw;
     zaddress_unsafe observed = root.LoadPlain();
@@ -604,7 +604,7 @@ BaseObject* CopyCollector::ResolveMinorReference(RootSlot& root, const ScopedSto
     ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
     return resolved;
 }
-bool CopyCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
+bool Collector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
                                       const ScopedStopTheWorld* stw) const
 {
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
@@ -670,8 +670,8 @@ bool CopyCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBa
     const bool hasForwardingFace = targetRegion != nullptr && targetRegion->FromPageLiveMap() != nullptr;
     if (!alreadyTo && hasForwardingFace && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         // installdomain: route-domain grant before ForwardObject → GetRoute.
-        EnsureRouteDomainMembership(const_cast<CopyCollector*>(this), target);
-        current = const_cast<CopyCollector*>(this)->ForwardObject(target, Generation::Young);
+        EnsureRouteDomainMembership(const_cast<Collector*>(this), target);
+        current = const_cast<Collector*>(this)->ForwardObject(target, Generation::Young);
     }
     // ForwardObject null = movable ghost with no to-version (survivor-gate miss).
     // Drop the edge; do not reinstall the from address that is about to be reclaimed.
@@ -682,7 +682,7 @@ bool CopyCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBa
         // substitute for an unresolved product.
         (void)field.CompareExchange(field.GetFieldValue(), zpointer::null);
         Collector::FailClosedLoad(
-            "CopyCollector::FixMinorEvacuatedSlot.unresolved", target,
+            "Collector::FixMinorEvacuatedSlot.unresolved", target,
             static_cast<uintptr_t>(raw(field.GetFieldValue())),
             ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
     }
@@ -714,7 +714,7 @@ bool CopyCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBa
     return true;
 }
 
-bool CopyCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw) const
+bool Collector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     MAddress oldValue = raw(root.LoadPlain());
     BaseObject* target = ResolveMinorReference(root, stw);
@@ -733,14 +733,14 @@ bool CopyCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWor
     if (!alreadyTo && hasForwardingFace && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         // Last-chance domain paint while FORWARDABLE (grant pass covers the bulk case;
         // this catches roots dirtied after the grant pass or parallel races).
-        (void)ForceRootRouteDomainWhileForwardable(const_cast<CopyCollector*>(this), target);
-        current = const_cast<CopyCollector*>(this)->ForwardObject(target, Generation::Young);
+        (void)ForceRootRouteDomainWhileForwardable(const_cast<Collector*>(this), target);
+        current = const_cast<Collector*>(this)->ForwardObject(target, Generation::Young);
         // Third disposition (statresid): if still null and region still FORWARDABLE,
         // force-paint once more and retry Forward — never HealRoot(null), never leave
         // a reclaimable from named by a live root without a second attempt.
         if (current == nullptr) {
-            if (ForceRootRouteDomainWhileForwardable(const_cast<CopyCollector*>(this), target)) {
-                current = const_cast<CopyCollector*>(this)->ForwardObject(target, Generation::Young);
+            if (ForceRootRouteDomainWhileForwardable(const_cast<Collector*>(this), target)) {
+                current = const_cast<Collector*>(this)->ForwardObject(target, Generation::Young);
             }
         }
     }
@@ -751,14 +751,14 @@ bool CopyCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWor
         // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
         const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &root };
         BaseObject* viaTable = FindToVersion(target, Generation::Young).GetOrFailClosed(
-            "CopyCollector::FixMinorEvacuatedSlot", provenance);
+            "Collector::FixMinorEvacuatedSlot", provenance);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
             ZUncoloredRoot::process_no_keepalive(reinterpret_cast<zaddress_unsafe*>(&root), ZPointerLoadGoodMask);
             return true;
         }
         Collector::FailClosedLoad(
-            "CopyCollector::FixMinorEvacuatedSlot.unresolved", target,
+            "Collector::FixMinorEvacuatedSlot.unresolved", target,
             reinterpret_cast<uintptr_t>(&root),
             ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &root });
     }
@@ -770,7 +770,7 @@ bool CopyCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWor
     return true;
 }
 
-bool CopyCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase,
+bool Collector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase,
                                       const ScopedStopTheWorld* stw) const
 {
     const zaddress_unsafe observed = derived.LoadDerived();
@@ -783,7 +783,7 @@ bool CopyCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* know
     return raw(observed) != raw(derived.LoadDerived());
 }
 
-void CopyCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
+void Collector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 {
     // The phase handshake has already completed each stack watermark. Only
     // non-frame plain carriers and colored storage remain at this entry.
@@ -795,7 +795,7 @@ void CopyCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 
 }
 
-void CopyCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorld* stw)
+void Collector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorld* stw)
 {
     // secondclass ②: belt-and-braces — refuse null tip before HasRefField.
     if (object == nullptr || !object->IsValidObject()) {
@@ -813,7 +813,7 @@ void CopyCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheW
 
 }
 
-void CopyCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
+void Collector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
                                        const MinorSlotSet& rememberedSlots,
                                        bool refFixSlotsCoveredByReachable,
                                        const MinorInteriorBaseMap& interiorBases,
@@ -1256,7 +1256,7 @@ static CompactedMissClass ClassifyCompactedMiss(ZPage* region, BaseObject* obj)
 // nullptr means the current thread did not acquire the page. The caller may
 // consume a receipt installed by the owning copier, but may not use the from
 // address as an alternate result.
-BaseObject* CopyCollector::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const
+BaseObject* Collector::WaitForPageForwarding(BaseObject* obj, ZForwarding* owner) const
 {
     if (!owner || ZForwarding::CurrentPageWork() == owner) return nullptr;
     const MAddress from = reinterpret_cast<MAddress>(obj);
@@ -1282,7 +1282,7 @@ BaseObject* CopyCollector::WaitForPageForwarding(BaseObject* obj, ZForwarding* o
     return reinterpret_cast<BaseObject*>(owner->find(from));
 }
 
-BaseObject* CopyCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease) const
+BaseObject* Collector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScope& lease) const
 {
     // RelocateObjectInner is for relocate phase only. relocate_or_remap
     // is reachable from barriers in other phases, so screen here.
@@ -1307,8 +1307,8 @@ BaseObject* CopyCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScop
     // A mutator can publish a previously white from-object after young mark
     // terminated. Admit it before copying; a next-minor remset entry is too late.
     // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
-    EnsureRouteDomainMembership(const_cast<CopyCollector*>(this), obj);
-    BaseObject* toVersion = const_cast<CopyCollector*>(this)->RelocateObjectInner(
+    EnsureRouteDomainMembership(const_cast<Collector*>(this), obj);
+    BaseObject* toVersion = const_cast<Collector*>(this)->RelocateObjectInner(
         obj, lease.forwarding()->page());
     lease.Release(); // release_page
     if (toVersion == nullptr) {
@@ -1320,7 +1320,7 @@ BaseObject* CopyCollector::TryMutatorRelocate(BaseObject* obj, ZPage::RetainScop
     return toVersion;
 }
 
-BaseObject* CopyCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+BaseObject* Collector::ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
                                          Generation generation) const
 {
     // zBarrier.inline.hpp:695-716 store_barrier_on_heap_oop_field:
@@ -1409,7 +1409,7 @@ BaseObject* CopyCollector::ResolveStoreValue(BaseObject* ref, const ForwardingPr
             }
             const MAddress lookupTo = forwarding_find(generation, currentAddr);
             LOG(RTLOG_ERROR,
-                "[FWDTABLE][resolve-miss] site=no-forwarding consumer=CopyCollector::ResolveStoreValue "
+                "[FWDTABLE][resolve-miss] site=no-forwarding consumer=Collector::ResolveStoreValue "
                 "holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
                 "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
                 "field_type=%s field_offset=%zu "
@@ -1436,7 +1436,7 @@ BaseObject* CopyCollector::ResolveStoreValue(BaseObject* ref, const ForwardingPr
                 live != nullptr ? live->RelocateObserve() : 0u,
                 reinterpret_cast<void*>(lookupTo),
                 static_cast<unsigned>(Collector::JudgeHandOutTarget(current)));
-            FailClosedLoad("CopyCollector::ResolveStoreValue.no-forwarding", current, 0, provenance);
+            FailClosedLoad("Collector::ResolveStoreValue.no-forwarding", current, 0, provenance);
         }
         // A pointer with ghost membership belongs to a published forwarding
         // generation. Even after its route state changes it cannot be
@@ -1448,7 +1448,7 @@ BaseObject* CopyCollector::ResolveStoreValue(BaseObject* ref, const ForwardingPr
         }
         BaseObject* resolved = relocate_or_remap_object(current, static_cast<ZGenerationId>(generation), provenance);
         if (resolved == nullptr) {
-            FailClosedLoad("CopyCollector::ResolveStoreValue.unresolved", current, 0, provenance);
+            FailClosedLoad("Collector::ResolveStoreValue.unresolved", current, 0, provenance);
         }
         if (resolved == current) {
             // In-place completion must have published its identity receipt;
@@ -1467,13 +1467,13 @@ BaseObject* CopyCollector::ResolveStoreValue(BaseObject* ref, const ForwardingPr
                 ZPage::GetGhostFromRegionAt(currentAddr) == nullptr) {
                 return current;
             }
-            FailClosedLoad("CopyCollector::ResolveStoreValue.missing-identity", current, 0, provenance);
+            FailClosedLoad("Collector::ResolveStoreValue.missing-identity", current, 0, provenance);
         }
         current = resolved;
     }
 }
 
-BaseObject* CopyCollector::ForwardObject(BaseObject* obj, Generation generation)
+BaseObject* Collector::ForwardObject(BaseObject* obj, Generation generation)
 {
     BaseObject* to = relocate_or_remap_object(obj, static_cast<ZGenerationId>(generation));
     if (to != nullptr && to != obj) {
@@ -1503,7 +1503,7 @@ BaseObject* CopyCollector::ForwardObject(BaseObject* obj, Generation generation)
     return obj;
 }
 
-BaseObject* CopyCollector::ForwardObjectExclusive(BaseObject* obj)
+BaseObject* Collector::ForwardObjectExclusive(BaseObject* obj)
 {
     ZPage* page = ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (page == nullptr) {
@@ -1515,7 +1515,7 @@ BaseObject* CopyCollector::ForwardObjectExclusive(BaseObject* obj)
     return RelocateObjectInner(obj, page);
 }
 
-void CopyCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
+void Collector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
 {
     if (from == nullptr || to == nullptr || from == to) {
         return;
@@ -1543,7 +1543,7 @@ void CopyCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
 
 }
 
-BaseObject* CopyCollector::RelocateObjectInner(BaseObject* obj, ZPage* copyPage)
+BaseObject* Collector::RelocateObjectInner(BaseObject* obj, ZPage* copyPage)
 {
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = (forwarding_for_page(copyPage) != nullptr ? forwarding_for_page(copyPage)->find(fromAddr) : 0)) {
@@ -1883,7 +1883,7 @@ bool RegionManager::RelocateClaimedPage(ZPage* region)
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
     MAddress regionStart = region->GetRegionStart();
     MAddress regionLimit = region->GetRegionAllocPtr();
-    CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    Collector& collector = reinterpret_cast<Collector&>(Heap::GetHeap().GetCollector());
     bool allocFailed = false;
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t) {
         if (allocFailed) {
