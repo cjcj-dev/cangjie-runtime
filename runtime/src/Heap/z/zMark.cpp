@@ -9,7 +9,7 @@
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/z/zVerify.hpp"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 
 #include <array>
 #include <atomic>
@@ -56,7 +56,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/z/WCollectorInternal.h"
+#include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
 bool WCollector::MarkObject(BaseObject* obj) const

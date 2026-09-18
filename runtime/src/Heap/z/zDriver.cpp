@@ -21,7 +21,7 @@
 
 #include "Base/SysCall.h"
 #include "CangjieRuntime.h"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "Heap/z/zStat.hpp"

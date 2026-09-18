@@ -40,7 +40,7 @@
 #include "Heap/z/zBarrier.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
 #include "Mutator/ThreadLocal.h"
 

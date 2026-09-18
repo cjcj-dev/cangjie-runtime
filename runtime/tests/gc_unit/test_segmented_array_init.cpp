@@ -40,7 +40,7 @@
 #include "TypeInfoManager.h"
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 
 namespace MapleRuntime {
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems);

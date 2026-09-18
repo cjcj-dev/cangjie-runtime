@@ -8,7 +8,7 @@
 // answers from its entries; an empty entry does not manufacture a destination.
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

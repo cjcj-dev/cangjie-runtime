@@ -18,7 +18,7 @@
 #include "gc_unittest.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Heap/z/zUtils.inline.hpp"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

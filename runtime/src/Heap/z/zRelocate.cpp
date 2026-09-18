@@ -10,7 +10,7 @@
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zIterator.inline.hpp"
 #include "Heap/Collector/StringDedup.h"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 
 #include <array>
 #include <atomic>
@@ -54,7 +54,7 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zRemembered.hpp"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/z/WCollectorInternal.h"
+#include "Heap/WCollector/WCollectorInternal.h"
 
 #include "Heap/z/zPageAllocator.hpp"
 

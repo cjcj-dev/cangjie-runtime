@@ -17,7 +17,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Heap/z/zUncoloredRoot.hpp"
 #include "ObjectModel/RefField.inline.h"
 #if defined(MRT_GC_UNIT_TESTS)

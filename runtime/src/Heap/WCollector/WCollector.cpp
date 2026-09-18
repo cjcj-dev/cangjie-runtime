@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#include "Heap/z/WCollector.h"
+#include "WCollector.h"
 
 #include <array>
 #include <atomic>
@@ -37,7 +37,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#include "Heap/z/WCollectorInternal.h"
+#include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");

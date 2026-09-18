@@ -14,7 +14,7 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/Handshake.h"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 
 namespace MapleRuntime {
 RwLock ThreadLocal::tlEnableLock;

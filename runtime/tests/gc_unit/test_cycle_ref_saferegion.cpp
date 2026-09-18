@@ -30,10 +30,10 @@
 // methods remain out-of-line symbols supplied by libcangjie-runtime.so.
 #define private public
 #define protected public
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 #undef protected
 #undef private
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Heap/z/zDriver.hpp"
 
 using namespace MapleRuntime;

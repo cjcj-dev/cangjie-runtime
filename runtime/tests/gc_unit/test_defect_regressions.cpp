@@ -33,7 +33,7 @@ extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const Maple
 #include "gc_unittest.hpp"
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zMark.hpp"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"

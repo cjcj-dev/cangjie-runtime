@@ -17,7 +17,7 @@
 
 // gc_heap_fixture.hpp first: its access-unlocking window must see zPage.hpp.
 #include "gc_heap_fixture.hpp"
-#include "Heap/z/WCollector.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Heap/z/zLiveMap.inline.hpp"
 #include "gc_unittest.hpp"
 
