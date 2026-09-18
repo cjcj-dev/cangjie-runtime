@@ -228,7 +228,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     GC_EXPECT_EQ(ZCPU::id(), cpuA);
     const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
-    GC_EXPECT_TRUE(manager.objectAllocators[untype(PageAge::eden)]->sharedSmallPage.get(static_cast<uint32_t>(cpuA)) ==
+    GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(static_cast<uint32_t>(cpuA)) ==
                    Heap::page(first));
 
     affinity.Select(cpuB);
@@ -252,7 +252,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     const uintptr_t second = manager.AllocSharedObject(16, PageAge::eden, true);
     GC_EXPECT_TRUE(second != 0);
     GC_EXPECT_TRUE(Heap::page(first) != Heap::page(second));
-    GC_EXPECT_TRUE(manager.objectAllocators[untype(PageAge::eden)]->sharedSmallPage.get(static_cast<uint32_t>(cpuB)) ==
+    GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(static_cast<uint32_t>(cpuB)) ==
                    Heap::page(second));
 }
 #endif

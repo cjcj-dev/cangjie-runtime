@@ -99,7 +99,7 @@ GC_OTHER_VM_TEST(ZValue, shared_small_page_is_per_cpu_storage)
     RegionManager manager;
     heap.reset(new ZTestRegionHeap(units, manager, params, 0.5));
 
-    auto& allocator = *manager.objectAllocators[untype(PageAge::eden)];
+    auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::eden);
     GC_EXPECT_EQ(allocator.sharedSmallPage.count(), ZCPU::count());
     for (uint32_t cpu = 0; cpu < allocator.sharedSmallPage.count(); ++cpu) {
         GC_EXPECT_TRUE(allocator.sharedSmallPage.get(cpu) == nullptr);

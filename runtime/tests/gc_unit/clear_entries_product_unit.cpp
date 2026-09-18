@@ -501,7 +501,7 @@ public:
         // Heap::Init normally supplies this limit. The synthetic heap has one-unit pages.
         manager.SetLargeObjectThreshold(ZPage::UNIT_SIZE / KB);
         // zObjectAllocator.hpp:41 ZPerCPU<ZPage*>: every CPU slot names the page.
-        auto& allocator = *manager.objectAllocators[untype(PageAge::old)];
+        auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::old);
         ZPerCPUIterator<ZPage*> slots(&allocator.sharedSmallPage);
         for (ZPage** slot; slots.next(&slot);) {
             previous.push_back(__atomic_exchange_n(slot, page, __ATOMIC_ACQ_REL));
@@ -509,7 +509,7 @@ public:
     }
     ~DeliverySharedPageScope()
     {
-        auto& allocator = *manager.objectAllocators[untype(PageAge::old)];
+        auto& allocator = *Heap::GetHeap().object_allocator().allocator(PageAge::old);
         for (uint32_t cpu = 0; cpu < previous.size(); ++cpu) {
             allocator.sharedSmallPage.set(previous[cpu], cpu);
         }
