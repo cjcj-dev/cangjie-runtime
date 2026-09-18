@@ -1556,7 +1556,7 @@ BaseObject* HeapGcState::RelocateObjectInner(BaseObject* obj, ZPage* copyPage)
     const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
     const PageAge toAge = ComputeToAge(fromAge, GetGCStats(ZGenerationId::young).tenuringThreshold);
     auto& manager = reinterpret_cast<RegionSpace&>(GetAllocator()).GetRegionManager();
-    BaseObject* toObj = reinterpret_cast<BaseObject*>(manager.AllocSharedObject(size, toAge, true));
+    BaseObject* toObj = reinterpret_cast<BaseObject*>(Heap::GetHeap().object_allocator().alloc(size, toAge, true));
     if (toObj == nullptr) return nullptr;
     BaseObject* result = nullptr;
     ZForwarding* publication = forwarding_for_page(copyPage);

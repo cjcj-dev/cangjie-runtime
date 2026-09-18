@@ -137,7 +137,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     ZPage* pages[kPageAgeCount]{};
     for (PageAge age : kPageAgeRangeAll) {
-        const uintptr_t address = manager.AllocSharedObject(16, age, true);
+        const uintptr_t address = Heap::GetHeap().object_allocator().alloc(16, age, true);
         GC_EXPECT_TRUE(address != 0);
         ZPage* page = Heap::page(address);
         pages[untype(age)] = page;
@@ -148,20 +148,20 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
         GC_EXPECT_EQ(page->IsYoungRegion(), age != PageAge::old);
         GC_EXPECT_EQ(page->GetYoungAge(), age == PageAge::old ? uint8_t{0} : static_cast<uint8_t>(untype(age)));
         GC_EXPECT_TRUE(!page->IsThreadLocalRegion());
-        GC_EXPECT_EQ(manager.AllocSharedObject(16, age, true), address + 16);
+        GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, age, true), address + 16);
         for (uint32_t previous = 0; previous < untype(age); ++previous) {
             GC_EXPECT_TRUE(pages[previous] != page);
         }
     }
     ZPage* eden = pages[untype(PageAge::eden)];
     const size_t remaining = eden->GetRegionSize() - 32;
-    GC_EXPECT_EQ(manager.AllocSharedObject(remaining, PageAge::eden, true), eden->GetRegionStart() + 32);
-    const uintptr_t refilled = manager.AllocSharedObject(16, PageAge::eden, true);
+    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(remaining, PageAge::eden, true), eden->GetRegionStart() + 32);
+    const uintptr_t refilled = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(refilled != 0);
     GC_EXPECT_TRUE(Heap::page(refilled) != eden);
-    manager.RetireSharedPages(kPageAgeRangeYoung);
+    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
-    const uintptr_t retired = manager.AllocSharedObject(16, PageAge::eden, true);
+    const uintptr_t retired = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(retired != 0);
     auto* retiredPage = Heap::page(retired);
     std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=young birth=%llu owner=%llu\n",
@@ -170,11 +170,11 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     GC_EXPECT_TRUE(retiredPage->IsAllocating());
     GC_EXPECT_TRUE(Heap::page(retired) != Heap::page(refilled));
     ZPage* old = pages[untype(PageAge::old)];
-    GC_EXPECT_EQ(manager.AllocSharedObject(16, PageAge::old, true), old->GetRegionStart() + 32);
+    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, PageAge::old, true), old->GetRegionStart() + 32);
     GC_EXPECT_TRUE(old->IsAllocating());
-    manager.RetireSharedPages(kPageAgeRangeOld);
+    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
-    const uintptr_t newOld = manager.AllocSharedObject(16, PageAge::old, true);
+    const uintptr_t newOld = Heap::GetHeap().object_allocator().alloc(16, PageAge::old, true);
     GC_EXPECT_TRUE(newOld != 0);
     auto* newOldPage = Heap::page(newOld);
     std::fprintf(stderr, "P1_SHARED_BIRTH_ASSERT generation=old birth=%llu owner=%llu\n",
@@ -193,13 +193,13 @@ GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
     auto& manager = fixture.manager;
     size_t expected = 0;
     for (PageAge age : kPageAgeRangeAll) {
-        const uintptr_t address = manager.AllocSharedObject(16, age, true);
+        const uintptr_t address = Heap::GetHeap().object_allocator().alloc(16, age, true);
         GC_EXPECT_TRUE(address != 0);
         if (age == PageAge::eden) {
             expected += Heap::page(address)->GetRegionSize();
         }
     }
-    const uintptr_t large = manager.AllocSharedObject(manager.GetLargeObjectThreshold() + 16,
+    const uintptr_t large = Heap::GetHeap().object_allocator().alloc(manager.GetLargeObjectThreshold() + 16,
                                                       PageAge::eden, true);
     GC_EXPECT_TRUE(large != 0);
     GC_EXPECT_TRUE(!Heap::page(large)->IsSmallRegion());
@@ -226,7 +226,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     affinity.Select(cpuA);
     // Fresh thread state: the first id() takes the slow path and reads cpuA.
     GC_EXPECT_EQ(ZCPU::id(), cpuA);
-    const uintptr_t first = manager.AllocSharedObject(16, PageAge::eden, true);
+    const uintptr_t first = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(first != 0);
     GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(static_cast<uint32_t>(cpuA)) ==
                    Heap::page(first));
@@ -234,7 +234,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     affinity.Select(cpuB);
     // Fast path: the affinity entry for cpuA still names this thread.
     GC_EXPECT_EQ(ZCPU::id(), cpuA);
-    GC_EXPECT_EQ(manager.AllocSharedObject(16, PageAge::eden, true), first + 16);
+    GC_EXPECT_EQ(Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true), first + 16);
 
     // Another thread pinned to cpuA claims cpuA's entry (zCPU.cpp:62-64) ...
     std::thread claimer([&] {
@@ -249,7 +249,7 @@ GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
     claimer.join();
     // ... so this thread's next id() falls to the slow path and reads cpuB.
     GC_EXPECT_EQ(ZCPU::id(), cpuB);
-    const uintptr_t second = manager.AllocSharedObject(16, PageAge::eden, true);
+    const uintptr_t second = Heap::GetHeap().object_allocator().alloc(16, PageAge::eden, true);
     GC_EXPECT_TRUE(second != 0);
     GC_EXPECT_TRUE(Heap::page(first) != Heap::page(second));
     GC_EXPECT_TRUE(Heap::GetHeap().object_allocator().allocator(PageAge::eden)->sharedSmallPage.get(static_cast<uint32_t>(cpuB)) ==

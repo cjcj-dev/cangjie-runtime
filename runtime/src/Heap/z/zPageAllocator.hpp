@@ -455,6 +455,7 @@ public:
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 class RegionManager {
+    friend class ZObjectAllocator;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
     friend struct IsFromRegTestAccess;
@@ -506,8 +507,6 @@ public:
 
     // ZObjectAllocator::alloc / alloc_for_relocation. These pages never belong
     // to an AllocBuffer: a thread's TLAB and a CPU's shared page are distinct.
-    uintptr_t AllocSharedObject(size_t size, PageAge age, bool nonBlocking = false);
-    void RetireSharedPages(PageAgeRange ages);
     // P14: the handshake pause must serialize pinned installation with retirement/seqnum.
     std::mutex& PinnedAllocationMutex() { return recentPinnedRegionList.GetListMutex(); }
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -789,6 +788,7 @@ private:
 
     ZPage* AllocateSharedPage(size_t units, ZPageType role, PageAge age, bool nonBlocking);
     void UndoSharedPage(ZPage* page);
+    size_t SharedPageUnitCount() const { return maxUnitCountPerRegion; }
 
     FreeRegionManager freeRegionManager;
 

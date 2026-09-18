@@ -158,7 +158,7 @@ YoungCollectionStats ZGeneration::StartYoungMark(HeapGcState& collector)
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
         manager.ResetTLABUsage();
-        manager.RetireSharedPages(kPageAgeRangeYoung);
+        Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeYoung);
         collector.FlushAllocationRegions();
     }
     // Cangjie keeps allocation lists and candidate statistics in RegionManager.
@@ -228,7 +228,7 @@ void ZGeneration::StartOldMark(HeapGcState& collector)
     // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
     // explicitly because our handshake pause permits safe native threads.
     std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
-    space.GetRegionManager().RetireSharedPages(kPageAgeRangeOld);
+    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
 #if defined(MRT_TESTABLE_INTERNALS)
     if (HeapGcState::testMarkStartState) {
         HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());

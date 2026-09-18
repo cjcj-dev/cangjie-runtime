@@ -164,10 +164,11 @@ void RegionManager::UndoSharedPage(ZPage* page)
     });
 }
 
-uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlocking)
+uintptr_t ZObjectAllocator::alloc(size_t size, PageAge age, bool nonBlocking)
 {
     CHECK(untype(age) < kPageAgeCount);
-    ZObjectAllocator::PerAge& allocator = *Heap::GetHeap().object_allocator().allocator(age);
+    RegionManager& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    PerAge& allocator = *this->allocator(age);
     if (size > ZObjectSizeLimitSmall) {
         if (ZPageSizeMediumEnabled && size <= ZObjectSizeLimitMedium) {
             std::lock_guard<ZLock> mediumLock(allocator.mediumPageAllocLock);
@@ -176,7 +177,7 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
             uintptr_t addr = page == nullptr ? 0 : page->AtomicAlloc(size);
             if (addr != 0) { return addr; }
             const size_t units = AlignUp(ZPageSizeMediumMin, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
-            ZPage* fresh = AllocateSharedPage(units, ZPageType::medium, allocator.age, nonBlocking);
+            ZPage* fresh = manager.AllocateSharedPage(units, ZPageType::medium, allocator.age, nonBlocking);
             if (fresh == nullptr) { return 0; }
             addr = fresh->Alloc(size);
             CHECK(addr != 0);
@@ -187,12 +188,12 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
                 if (page == nullptr) { continue; }
                 const uintptr_t previous = page->AtomicAlloc(size);
                 if (previous == 0) { continue; }
-                UndoSharedPage(fresh);
+                manager.UndoSharedPage(fresh);
                 return previous;
             }
         }
         const size_t units = AlignUp(size, ZPage::UNIT_SIZE) / ZPage::UNIT_SIZE;
-        ZPage* page = AllocateSharedPage(units, ZPageType::large, allocator.age, nonBlocking);
+        ZPage* page = manager.AllocateSharedPage(units, ZPageType::large, allocator.age, nonBlocking);
         return page == nullptr ? 0 : page->Alloc(size);
     }
     ZPage** const shared = allocator.shared_small_page_addr();
@@ -200,7 +201,7 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
     uintptr_t addr = page == nullptr ? 0 : page->AtomicAlloc(size);
     if (addr != 0) { return addr; }
 
-    ZPage* fresh = AllocateSharedPage(maxUnitCountPerRegion, ZPageType::small,
+    ZPage* fresh = manager.AllocateSharedPage(manager.SharedPageUnitCount(), ZPageType::small,
                                            allocator.age, nonBlocking);
     if (fresh == nullptr) { return 0; }
     addr = fresh->Alloc(size);
@@ -212,7 +213,7 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
         if (page == nullptr) { continue; }
         const uintptr_t previous = page->AtomicAlloc(size);
         if (previous == 0) { continue; }
-        UndoSharedPage(fresh);
+        manager.UndoSharedPage(fresh);
         return previous;
     }
 }
@@ -220,11 +221,11 @@ uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlo
 // ZObjectAllocator::retire_pages / PerAge::retire_pages (cpp:208-237).
 // Called in the corresponding generation's mark-start pause. The lifecycle
 // lists retain pages; retirement only removes allocation shortcuts.
-void RegionManager::RetireSharedPages(PageAgeRange ages)
+void ZObjectAllocator::retire_pages(PageAgeRange ages)
 {
     // zObjectAllocator.cpp:198-203 PerAge::retire_pages: set_all(nullptr).
     for (PageAge age : ages) {
-        auto* perAge = Heap::GetHeap().object_allocator().allocator(age);
+        auto* perAge = allocator(age);
         perAge->pinnedPage.store(nullptr, std::memory_order_release);
         perAge->sharedSmallPage.set_all(nullptr);
         perAge->sharedMediumPage.set(nullptr);
@@ -342,7 +343,7 @@ MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
         return regionManager.AllocPinned(allocSize);
     }
     if (allocSize > ZObjectSizeLimitSmall) {
-        return regionManager.AllocSharedObject(allocSize, PageAge::eden);
+        return Heap::GetHeap().object_allocator().alloc(allocSize, PageAge::eden);
     }
     if (UNLIKELY(allocSize >= regionManager.GetLargeObjectThreshold())) {
         return regionManager.AllocLarge(
