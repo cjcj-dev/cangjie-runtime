@@ -509,7 +509,7 @@ static ZWorkerCounts select_worker_threads(const ZDirectorStats& stats, uint32_t
     return {young_workers, old_workers};
 }
 
-static void adjust_gc(CollectorResources& resources, const ZDirectorStats& stats)
+static void adjust_gc(const ZDirectorStats& stats)
 {
     if (!UseDynamicNumberOfGCThreads) {
         return;
@@ -533,10 +533,10 @@ static void adjust_gc(CollectorResources& resources, const ZDirectorStats& stats
     const ZWorkerCounts selection = select_worker_threads(stats, desired_young_workers, type);
     if (stats.old_stats.resize.is_active &&
         stats.old_stats.resize.nworkers_current != selection.old_workers) {
-        resources.GetWorkers(ZGenerationId::old).request_resize_workers(selection.old_workers);
+        Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
     }
     if (stats.young_stats.resize.nworkers_current != selection.young_workers) {
-        resources.GetWorkers(ZGenerationId::young).request_resize_workers(selection.young_workers);
+        Heap::GetHeap().young().Workers()->request_resize_workers(selection.young_workers);
     }
 }
 
@@ -552,36 +552,37 @@ static ZWorkerCounts initial_workers(const ZDirectorStats& stats, ZWorkerSelecti
     return select_worker_threads(stats, young_workers, type);
 }
 
-static void start_major_gc(CollectorResources& resources, const ZDirectorStats& stats, GCReason cause)
+static void start_major_gc(const ZDirectorStats& stats, GCReason cause)
 {
     const ZWorkerCounts selection = initial_workers(stats, ZWorkerSelectionType::start_major);
-    resources.GetMajorDriverPort().send_async(ZDriverRequest(cause, selection.young_workers, selection.old_workers));
+    ZCollectedHeap::heap()->driver_major()->port().send_async(
+        ZDriverRequest(cause, selection.young_workers, selection.old_workers));
 }
 
-static void start_minor_gc(CollectorResources& resources, const ZDirectorStats& stats, GCReason cause)
+static void start_minor_gc(const ZDirectorStats& stats, GCReason cause)
 {
     const ZWorkerSelectionType type =
         stats.major_busy ? ZWorkerSelectionType::minor_during_old : ZWorkerSelectionType::normal;
     const ZWorkerCounts selection = initial_workers(stats, type);
     if (stats.major_busy && stats.old_stats.resize.nworkers_current != selection.old_workers) {
-        resources.GetWorkers(ZGenerationId::old).request_resize_workers(selection.old_workers);
+        Heap::GetHeap().old().Workers()->request_resize_workers(selection.old_workers);
     }
-    resources.GetMinorDriverPort().send_async(ZDriverRequest(cause, selection.young_workers, 0));
+    ZCollectedHeap::heap()->driver_minor()->port().send_async(ZDriverRequest(cause, selection.young_workers, 0));
 }
 
-static bool start_gc(CollectorResources& resources, const ZDirectorStats& stats)
+static bool start_gc(const ZDirectorStats& stats)
 {
     const GCReason major_cause = make_major_gc_decision(stats);
     if (major_cause != GC_REASON_INVALID) {
-        start_major_gc(resources, stats, major_cause);
+        start_major_gc(stats, major_cause);
         return true;
     }
     const GCReason minor_cause = make_minor_gc_decision(stats);
     if (minor_cause != GC_REASON_INVALID) {
         if (!stats.major_busy && rule_major_allocation_rate(stats)) {
-            start_major_gc(resources, stats, GC_REASON_HEU);
+            start_major_gc(stats, GC_REASON_HEU);
         } else {
-            start_minor_gc(resources, stats, minor_cause);
+            start_minor_gc(stats, minor_cause);
         }
         return true;
     }
@@ -601,7 +602,7 @@ static ZWorkerResizeStats sample_worker_resize_stats(const ZStatCycleStats& cycl
     return {true, serial_gc_time_passed, parallel_gc_time_passed, workers->active_workers()};
 }
 
-static ZDirectorStats sample_stats(CollectorResources& resources, uint64_t now, bool minorBusy, bool majorBusy,
+static ZDirectorStats sample_stats(uint64_t now, bool minorBusy, bool majorBusy,
     int32_t concurrentGcThreadCount)
 {
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
@@ -621,16 +622,16 @@ static ZDirectorStats sample_stats(CollectorResources& resources, uint64_t now, 
     stats.young_stats.workers = collector.GetZGeneration(ZGenerationId::young).StatWorkers()->stats();
     stats.old_stats.workers = collector.GetZGeneration(ZGenerationId::old).StatWorkers()->stats();
     stats.young_stats.resize = sample_worker_resize_stats(stats.young_stats.cycle, stats.young_stats.workers,
-        &resources.GetWorkers(ZGenerationId::young));
+        Heap::GetHeap().young().Workers());
     stats.old_stats.resize = sample_worker_resize_stats(stats.old_stats.cycle, stats.old_stats.workers,
-        &resources.GetWorkers(ZGenerationId::old));
+        Heap::GetHeap().old().Workers());
     stats.young_stats.stat_heap = ZStat::YoungHeap().Stats();
     stats.old_stats.stat_heap = ZStat::OldHeap().Stats();
     stats.young_stats.general.used = regions.GetYoungAllocatedSize();
     stats.old_stats.general.used = stats.heap.used - std::min(stats.heap.used, stats.young_stats.general.used);
     stats.old_stats.general.total_collections_at_start = collectionStats.collectionsAtMajorStart;
-    stats.minor_busy = minorBusy || resources.GetMinorDriverPort().is_busy();
-    stats.major_busy = majorBusy || resources.GetMajorDriverPort().is_busy();
+    stats.minor_busy = minorBusy || ZCollectedHeap::heap()->driver_minor()->port().is_busy();
+    stats.major_busy = majorBusy || ZCollectedHeap::heap()->driver_major()->port().is_busy();
     stats.allocation_stalling = regions.IsAllocationStalling();
     stats.conc_gc_threads = static_cast<uint32_t>(std::max(concurrentGcThreadCount, 1));
     stats.collection_interval_sec =
@@ -646,10 +647,10 @@ void ZDirector::run_thread()
         if (Runtime::CurrentRef() == nullptr || !resources.IsGCActive()) {
             continue;
         }
-        const ZDirectorStats stats = sample_stats(resources, TimeUtil::NanoSeconds(),
+        const ZDirectorStats stats = sample_stats(TimeUtil::NanoSeconds(),
             busy(true), busy(false), resources.concurrentGcThreadCount);
-        if (!MapleRuntime::start_gc(resources, stats)) {
-            adjust_gc(resources, stats);
+        if (!MapleRuntime::start_gc(stats)) {
+            adjust_gc(stats);
         }
     }
 }
