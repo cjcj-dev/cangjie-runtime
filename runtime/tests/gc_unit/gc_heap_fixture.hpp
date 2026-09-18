@@ -34,6 +34,7 @@
 #include "Heap/z/zLiveMap.inline.hpp"
 #include "Heap/z/zAddress.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
 #include "TypeInfoManager.h"

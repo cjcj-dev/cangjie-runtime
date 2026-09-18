@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zMark.hpp"
 
 namespace MapleRuntime {
 
