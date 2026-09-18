@@ -28,7 +28,7 @@
 namespace MapleRuntime {
 enum class Generation : uint8_t;
 enum CollectorType {
-    NO_COLLECTOR, // No Collector
+    NO_COLLECTOR = 0, // No Collector
     PROXY_COLLECTOR,  // Proxy of Collector
     COPY_COLLECTOR,   // Regional-Copying GC
     SMOOTH_COLLECTOR, // wgc
@@ -38,14 +38,14 @@ enum CollectorType {
 class Collector {
 public:
     Collector();
-    ~Collector();
+    virtual ~Collector();
 
     // Initializer and finalizer.
-    void Init();
-    void Fini() {}
+    virtual void Init() = 0;
+    virtual void Fini() {}
     const char* GetCollectorName() const;
 
-    // This pure function implements the trigger of GC.
+    // This pure virtual function implements the trigger of GC.
     // reason: Reason for GC.
     // async:  Trigger from unsafe context, e.g., holding a lock, in the middle of an allocation.
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
@@ -62,11 +62,11 @@ public:
         return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
     }
 
-    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
+    virtual GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
     {
         return GetZGeneration(generation).Snapshot();
     }
-    void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
+    virtual void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
     bool OldActiveRemsetIsCurrent() const
     {
         return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
@@ -75,26 +75,26 @@ public:
     Generation ObjectGeneration(BaseObject* object) const;
 
     // determine how we treat new object during gc.
-    void MarkNewObject(BaseObject*) {}
+    virtual void MarkNewObject(BaseObject*) {}
     void MarkObjectIfActive(BaseObject* object) const;
-    void MarkYoungObjectIfActive(BaseObject*) const
+    virtual void MarkYoungObjectIfActive(BaseObject*) const
     {
         AbortUnimplemented("Collector::MarkYoungObjectIfActive");
     }
-    void MarkYoungRootObject(BaseObject*) const
+    virtual void MarkYoungRootObject(BaseObject*) const
     {
         AbortUnimplemented("Collector::MarkYoungRootObject");
     }
-    void MarkOldObjectIfActive(BaseObject*, bool = false) const
+    virtual void MarkOldObjectIfActive(BaseObject*, bool = false) const
     {
         AbortUnimplemented("Collector::MarkOldObjectIfActive");
     }
 
-    void FixObject(BaseObject&) const {}
+    virtual void FixObject(BaseObject&) const {}
 
-    void RunGarbageCollection(uint64_t, GCReason);
+    virtual void RunGarbageCollection(uint64_t, GCReason) = 0;
 
-    // Named aborts: defaults for collectors that do not implement this method.
+    // Named aborts: virtual defaults for collectors that do not implement this method.
     // Bodies live in Collector.cpp so headers stay free of FormatLog / string literals.
     [[noreturn]] static void AbortUnimplemented(const char* method);
 
@@ -111,60 +111,60 @@ public:
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
                                             const ForwardingProvenance& provenance);
 
-    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
+    virtual GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
     {
         return GetZGeneration(generation).Stats();
     }
 
-    BaseObject* ForwardObject(BaseObject*, Generation) { AbortUnimplemented("Collector::ForwardObject"); }
+    virtual BaseObject* ForwardObject(BaseObject*, Generation) { AbortUnimplemented("Collector::ForwardObject"); }
 
-    bool ShouldIgnoreRequest(GCRequest& quest);
-    bool IsFromObject(BaseObject*) const { AbortUnimplemented("Collector::IsFromObject"); }
-    bool IsGhostFromObject(BaseObject*) const { AbortUnimplemented("Collector::IsGhostFromObject"); }
-    bool IsUnmovableFromObject(BaseObject*) const
+    virtual bool ShouldIgnoreRequest(GCRequest& quest) = 0;
+    virtual bool IsFromObject(BaseObject*) const { AbortUnimplemented("Collector::IsFromObject"); }
+    virtual bool IsGhostFromObject(BaseObject*) const { AbortUnimplemented("Collector::IsGhostFromObject"); }
+    virtual bool IsUnmovableFromObject(BaseObject*) const
     {
         AbortUnimplemented("Collector::IsUnmovableFromObject");
     }
     // Every miss has a public state. Consumers may treat NotManaged and
     // NotForwarded as their existing soft misses; Unavailable must never fall
     // through to object-field access.
-    FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const;
+    virtual FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const = 0;
 
     // OpenJDK zBarrier.inline.hpp:695-716 store_barrier / color_store_good:
     // a stored reference must already be the current version (remap included).
     // New raw values are already current; validate without selecting a forwarding map.
     BaseObject* ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const;
 
-    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+    virtual BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
                                           Generation generation) const
     {
         return relocate_or_remap_object(ref, static_cast<ZGenerationId>(generation), provenance);
     }
 
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const
+    virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const
     {
         AbortUnimplemented("Collector::TryUpdateRefField");
     }
-    bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& to,
+    virtual bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& to,
                                                  const ForwardingProvenance&) const
     {
         return TryUpdateRefField(obj, field, to);
     }
-    bool TryForwardRefField(BaseObject*, RefField<>&, BaseObject*&) const
+    virtual bool TryForwardRefField(BaseObject*, RefField<>&, BaseObject*&) const
     {
         AbortUnimplemented("Collector::TryForwardRefField");
     }
-    bool TryUntagRefField(BaseObject*, RefField<>&, BaseObject*&) const
+    virtual bool TryUntagRefField(BaseObject*, RefField<>&, BaseObject*&) const
     {
         AbortUnimplemented("Collector::TryUntagRefField");
     }
-    bool TryTagRefField(BaseObject*, RefField<>&, BaseObject*) const
+    virtual bool TryTagRefField(BaseObject*, RefField<>&, BaseObject*) const
     {
         AbortUnimplemented("Collector::TryTagRefField");
     }
-    Uptr CurrentRemapColourForProbe() const { return 0; }
+    virtual Uptr CurrentRemapColourForProbe() const { return 0; }
 
-    bool IsMarkedObjectForProbe(BaseObject*) const { return false; }
+    virtual bool IsMarkedObjectForProbe(BaseObject*) const { return false; }
 
     // healfp: lossy fingerprint of "this slot address was healed by the mark walk this process".
     // Volume alone cannot answer whether a *particular* stale slot was ever visited -- TraceRefField
@@ -195,11 +195,11 @@ public:
         return (__atomic_load_n(&HealFpTable()[i / 64], __ATOMIC_RELAXED) & (uint64_t(1) << (i % 64))) != 0;
     }
 
-    RefField<> GetAndTryTagRefField(BaseObject*) const
+    virtual RefField<> GetAndTryTagRefField(BaseObject*) const
     {
         AbortUnimplemented("Collector::GetAndTryTagRefField");
     }
-    RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* obj,
+    virtual RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* obj,
                                                           const ForwardingProvenance&) const
     {
         return GetAndTryTagRefField(obj);
@@ -208,7 +208,7 @@ public:
     // "Does this reference need the barrier before use?" -- the question every consumer of the
     // two predicates below is actually asking. Today a reference carries no colour unless it is
     // being evacuated, so the answer was a pointer tag bit; phase C of the colouring work
-    // (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6) makes it a mask test. Non-and phase
+    // (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6) makes it a mask test. Non-virtual and phase
     // independent: the encoding is a property of RefField, not of the collector's phase.
     // Phase C: the value now says whether it may be stale. A reference is good when it carries
     // the colour the collector is currently handing out and is not mid-evacuation; anything else
@@ -229,15 +229,15 @@ public:
     // ZPointer::is_load_good (zAddress.inline.hpp:631-633). Keep the product
     // predicate in the collector domain; diagnostic mode selection must not own it.
 
-    ZGenerationId remap_generation(RefField<>&) const
+    virtual ZGenerationId remap_generation(RefField<>&) const
     {
         AbortUnimplemented("Collector::remap_generation");
     }
-    BaseObject* relocate_or_remap_object(BaseObject*, ZGenerationId) const
+    virtual BaseObject* relocate_or_remap_object(BaseObject*, ZGenerationId) const
     {
         AbortUnimplemented("Collector::relocate_or_remap_object");
     }
-    BaseObject* relocate_or_remap_object(
+    virtual BaseObject* relocate_or_remap_object(
         BaseObject* object, ZGenerationId generation, const ForwardingProvenance&) const
     {
         return relocate_or_remap_object(object, generation);
@@ -282,24 +282,24 @@ public:
     // mark-good plus the current Remembered epoch bit. Fast path for write barrier.
 
 
-    bool IsOldPointer(RefField<>&) const { AbortUnimplemented("Collector::IsOldPointer"); }
-    bool IsCurrentPointer(RefField<>&) const { AbortUnimplemented("Collector::IsCurrentPointer"); }
-    void AddRawPointerObject(BaseObject*) { AbortUnimplemented("Collector::AddRawPointerObject"); }
+    virtual bool IsOldPointer(RefField<>&) const { AbortUnimplemented("Collector::IsOldPointer"); }
+    virtual bool IsCurrentPointer(RefField<>&) const { AbortUnimplemented("Collector::IsCurrentPointer"); }
+    virtual void AddRawPointerObject(BaseObject*) { AbortUnimplemented("Collector::AddRawPointerObject"); }
     // Pin for callers that hand the pinned payload out (MCC_AcquireRawData): the pin may
     // resolve a movable from-copy to its to-version first, and the caller MUST adopt the
     // returned pointer — Inc lands on the resolved object's region, so releasing through
     // the original from payload would Dec a region that was never Inc'd (underflow) and
     // hand C a payload the collector is about to relocate.
-    BaseObject* PinRawPointerObject(BaseObject* obj)
+    virtual BaseObject* PinRawPointerObject(BaseObject* obj)
     {
         AddRawPointerObject(obj);
         return obj;
     }
-    void RemoveRawPointerObject(BaseObject*)
+    virtual void RemoveRawPointerObject(BaseObject*)
     {
         AbortUnimplemented("Collector::RemoveRawPointerObject");
     }
-    void ResolveCycleRef() { AbortUnimplemented("Collector::ResolveCycleRef"); }
+    virtual void ResolveCycleRef() { AbortUnimplemented("Collector::ResolveCycleRef"); }
 
     // F5: to==nullptr must not silently return a dead/zeroed from (REPORT-tagaba F5).
     // Implementation in Collector.cpp — needs complete BaseObject + CHECK_DETAIL.
@@ -307,7 +307,7 @@ public:
     BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const;
 
 protected:
-    void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
+    virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
 
     CollectorType collectorType = CollectorType::NO_COLLECTOR;
 };

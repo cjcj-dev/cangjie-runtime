@@ -343,11 +343,11 @@ public:
 
     explicit CopyCollector(Allocator& allocator, CollectorResources& resources);
 
-    ~CopyCollector() = default;
+    ~CopyCollector() override = default;
     ZMark* MajorMark() { return Heap::GetHeap().old().MarkPtr(); }
     const ZMark* MajorMark() const { return Heap::GetHeap().old().MarkPtr(); }
-    void PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex);
-    void PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex);
+    virtual void PreGarbageCollection(ZGenerationId generation, bool isConcurrent, uint64_t gcIndex);
+    virtual void PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex);
 
     static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                 Mutator& mutator);
@@ -383,8 +383,8 @@ public:
     static std::function<void(Mutator&)> testOldMarkThreadResult;
 #endif
 
-    void Init();
-    void Fini();
+    void Init() override;
+    void Fini() override;
 
     // zRootsIterator.cpp:159-220. The language has no weak plain code-cache roots.
     void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
@@ -454,7 +454,7 @@ public:
             (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
     void StartOldMarkWork();
-    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const;
+    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override;
     // Consume one object entry. Partial arrays must be decoded before this
     // entry point; mark=false carries an already-owned accounting obligation.
     bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
@@ -466,21 +466,21 @@ public:
     Allocator& GetAllocator() const { return theAllocator; }
 
 
-    MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason);
+    MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
 
-    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
+    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old) override
     {
         return GetZGeneration(generation).Stats();
     }
 
-    void UpdateGCStats();
+    virtual void UpdateGCStats();
 
 
 protected:
-    void ForwardFromSpace(ZGenerationId generation);
-    void RefineFromSpace();
+    virtual void ForwardFromSpace(ZGenerationId generation);
+    virtual void RefineFromSpace();
 
-    void RequestGCInternal(GCReason reason, bool async) { collectorResources.RequestGC(reason, async); }
+    void RequestGCInternal(GCReason reason, bool async) override { collectorResources.RequestGC(reason, async); }
 
     Allocator& theAllocator;
 
@@ -631,7 +631,7 @@ public:
 
 #endif
 
-    void MarkNewObject(BaseObject* obj);
+    void MarkNewObject(BaseObject* obj) override;
     void StartYoungMarkWork();
     void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
     bool PublishHandshakeMarkWork(WorkStack& work, ZMark* domain);
@@ -642,10 +642,10 @@ public:
     bool FlushGCDataMarkProducers(ThreadGCData& data);
     ZMark* YoungMark() { return Heap::GetHeap().young().MarkPtr(); }
     const ZMark* YoungMark() const { return Heap::GetHeap().young().MarkPtr(); }
-    void MarkYoungObjectIfActive(BaseObject* object) const;
-    void MarkYoungRootObject(BaseObject* object) const;
+    void MarkYoungObjectIfActive(BaseObject* object) const override;
+    void MarkYoungRootObject(BaseObject* object) const override;
 
-    bool ShouldIgnoreRequest(GCRequest& request);
+    bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const;
     bool ResurrectObject(BaseObject* obj, size_t offset, ZPage* regionInfo);
 
@@ -654,10 +654,10 @@ public:
     void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false);
     void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack);
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field);
-    BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation);
+    BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation) override;
     BaseObject* ForwardObjectExclusive(BaseObject* obj);
     BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
-                                  Generation generation) const;
+                                  Generation generation) const override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
     {
@@ -693,11 +693,11 @@ public:
 
     // note this api is not atomic, caller should take care of this.
     // Stale remap colour (ZGC: the value itself says it may be stale). No pointer tagID.
-    bool IsOldPointer(RefField<>& ref) const { return IsLoadBad(ref); }
+    bool IsOldPointer(RefField<>& ref) const override { return IsLoadBad(ref); }
 
     // note this api is not atomic, caller should take care of this.
     // Current colour: has the remap bit being handed out now. Plain (no colour) is neither.
-    bool IsCurrentPointer(RefField<>& ref) const { return ZPointer::is_load_good(ref.GetFieldValue()); }
+    bool IsCurrentPointer(RefField<>& ref) const override { return ZPointer::is_load_good(ref.GetFieldValue()); }
 
     // OpenJDK ZPointer::is_young_load_good/is_old_load_good
     // (zAddress.inline.hpp:648-655): the conceptual generation epoch is represented by the two
@@ -706,7 +706,7 @@ public:
 
     // OpenJDK ZBarrier::remap_generation (zBarrier.inline.hpp:110-137): one generation-good
     // bit identifies the other generation; a double-bad colour consults the forwarding side table.
-    ZGenerationId remap_generation(RefField<>& ref) const
+    ZGenerationId remap_generation(RefField<>& ref) const override
     {
         CHECK_DETAIL(!ZPointer::is_load_good(ref.GetFieldValue()), "load-good reference does not need remap");
         if (ZPointer::is_old_load_good(ref.GetFieldValue())) return ZGenerationId::young;
@@ -736,7 +736,7 @@ public:
     // forward_object (zRelocate.cpp:412-416) asserts find()!=null. There is no
     // "return from". non-heap / no-ghost are "not in this forwarding table"
     // (zGeneration.inline.hpp:131-140), not a fourth relocate exit.
-    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const
+    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
         return relocate_or_remap_object(
             obj, generation,
@@ -744,7 +744,7 @@ public:
     }
 
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
-                                         const ForwardingProvenance& provenance) const
+                                         const ForwardingProvenance& provenance) const override
     {
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) return obj;
         const MAddress from = reinterpret_cast<MAddress>(obj);
@@ -771,7 +771,7 @@ public:
         return to;
     }
 
-    void AddRawPointerObject(BaseObject* obj)
+    void AddRawPointerObject(BaseObject* obj) override
     {
         (void)PinRawPointerObject(obj);
         // ⚠ Callers of this void form (Sync futures/mutexes) keep using the pointer they
@@ -781,7 +781,7 @@ public:
         // adopting the resolved pointer there is a tracked follow-up, not done here.
     }
 
-    BaseObject* PinRawPointerObject(BaseObject* obj)
+    BaseObject* PinRawPointerObject(BaseObject* obj) override
     {
         // oracle R4 / RegionManager.h:507: do not pin a movable from-copy
         // during PREFORWARD/FORWARD (CHECK would fire). Resolve to `to` first;
@@ -808,13 +808,13 @@ public:
         return obj;
     }
 
-    void RemoveRawPointerObject(BaseObject* obj)
+    void RemoveRawPointerObject(BaseObject* obj) override
     {
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         space.RemoveRawPointerObject(obj);
     }
 
-    void ResolveCycleRef();
+    void ResolveCycleRef() override;
 
     // BaseObject* ForwardFixRefField(RefField<>& field) const;
     // lonefrom: "is this object being relocated in this cycle" must not be asked as
@@ -851,7 +851,7 @@ public:
     // An address either is in the set or is not.
     static constexpr bool kMembershipFromTable = true;
 
-    bool IsFromObject(BaseObject* obj) const
+    bool IsFromObject(BaseObject* obj) const override
     {
         if (kMembershipFromTable) {
             if (!Heap::IsHeapAddress(obj)) {
@@ -879,12 +879,12 @@ public:
         return false;
     }
 
-    bool IsGhostFromObject(BaseObject* obj) const
+    bool IsGhostFromObject(BaseObject* obj) const override
     {
         return IsFromObject(obj);
     }
 
-    bool IsUnmovableFromObject(BaseObject* obj) const;
+    bool IsUnmovableFromObject(BaseObject* obj) const override;
 
     // Refuses a non-heap address the way FindToVersion does below, and for the same reason:
     // GetGhostFromRegionAt -> GetUnitIdxAt has no heap range
@@ -904,7 +904,7 @@ public:
     // 0x6282f2... is the compiler's own image, the same range as start_ip in that run's stack-map
     // lines.  Gating only the first site moved the abort to the second, which is what showed the
     // population was the old-tag paths rather than one call site.
-    FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const
+    FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return FindToVersionResult::NotManaged();
@@ -927,12 +927,12 @@ protected:
     // to-version, or nullptr when the owning copier must supply the receipt.
     BaseObject* TryMutatorRelocate(BaseObject* from, ZPage::RetainScope& lease) const;
 
-    bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const;
+    bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
 
-    bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const;
+    bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
     bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
-                                         const ForwardingProvenance& provenance) const;
-    bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const;
+                                         const ForwardingProvenance& provenance) const override;
+    bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
 
     // ── store value side: typed, mirroring ZGC ────────────────────────────────────────────
     //
@@ -1012,14 +1012,14 @@ protected:
         return RefField<>(ZAddress::store_good(from_object(target)));
     }
 
-    RefField<> GetAndTryTagRefField(BaseObject* target) const
+    RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
         const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
         return GetAndTryTagRefFieldWithProvenance(target, provenance);
     }
 
     RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* target,
-                                                  const ForwardingProvenance& provenance) const
+                                                  const ForwardingProvenance& provenance) const override
     {
         // Null carries no colour (ZGC zAddress: null is never load-bad).
         if (target == nullptr) {
@@ -1054,13 +1054,13 @@ protected:
     }
 
     // holdermark: probe-only view of the old-generation mark bit.
-    bool IsMarkedObjectForProbe(BaseObject* obj) const
+    bool IsMarkedObjectForProbe(BaseObject* obj) const override
     {
         return IsMarkedObject<Generation::Old>(obj);
     }
 
     // flipwitness: the probe needs the colour currently handed out, without reaching into members.
-    Uptr CurrentRemapColourForProbe() const { return ZPointerRemapped; }
+    Uptr CurrentRemapColourForProbe() const override { return ZPointerRemapped; }
 
     // colourwho: compile-time gated -- this is the funnel every coloured write goes through.
     static constexpr bool kColourWhoProbe = true;
