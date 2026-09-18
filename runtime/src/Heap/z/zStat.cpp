@@ -321,6 +321,12 @@ ZStatValue::ZStatValue(const char* group, const char* name, uint32_t id, size_t 
     stride += size;
 }
 
+void ZStatValue::EnsureStorage()
+{
+    static std::once_flag storageOnce;
+    std::call_once(storageOnce, [] { InitializeStorage(); });
+}
+
 // zStat.cpp:362-369: one cache-line aligned, unfreeable block of
 // ZCPU::count() * stride bytes.
 void ZStatValue::InitializeStorage()
@@ -458,7 +464,7 @@ void ZStat::Initialize()
 {
     static std::once_flag initialized;
     std::call_once(initialized, [] {
-        ZStatValue::InitializeStorage();
+        ZStatValue::EnsureStorage();
         ZStatSampler::Sort();
         for (const auto* sampler = ZStatSampler::First(); sampler != nullptr; sampler = sampler->Next()) {
             sampler->Initialize();

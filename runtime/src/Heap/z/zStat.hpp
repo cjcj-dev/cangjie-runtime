@@ -188,11 +188,16 @@ public:
     ZStatValue& operator=(const ZStatValue&) = delete;
 protected:
     ZStatValue(const char* group, const char* name, uint32_t id, size_t size);
+    // Host infra difference: product entry points (e.g. the livemap
+    // contention counters) can be reached before ZStat::Initialize in
+    // embedding/test contexts; allocate the per-CPU block lazily.
     template<typename T> T* CpuLocal(size_t cpu) const
     {
+        EnsureStorage();
         return reinterpret_cast<T*>(base + stride * cpu + offset);
     }
     static void InitializeStorage();
+    static void EnsureStorage();
     friend class ZStat;
 private:
     const char* const group;
