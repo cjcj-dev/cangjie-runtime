@@ -473,7 +473,7 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber() { return ScheduleCJThreadCount
 
 extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCount(); }
 
-extern "C" size_t MCC_GetGCCount() { return ZStat::Collections().Stats().totalCollections; }
+extern "C" size_t MCC_GetGCCount() { return Heap::GetHeap().total_collections(); }
 
 extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
 

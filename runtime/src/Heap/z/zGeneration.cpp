@@ -329,9 +329,9 @@ void ZGenerationYoung::mark_start()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     // VM_ZOperation::pause owns the STW (zGeneration.cpp:474-485).
-    const ZYoungType type = Heap::GetHeap().young().YoungType();
-    ZStat::Collections().AtYoungMarkStart(type == ZYoungType::major_full_roots ||
-                                         type == ZYoungType::major_partial_roots);
+    // zGeneration.cpp:600,637: VM op increments the heap-wide count before
+    // young mark start, for both minor and major collections.
+    Heap::GetHeap().increment_total_collections();
     // VM_ZMarkStartYoungAndOld starts the complete young event before old
     // (zGeneration.cpp:601-602); a minor only enters the young event.
     CHECK(_cycle == ZGenerationId::young);
@@ -1045,6 +1045,8 @@ namespace MapleRuntime {
 
 void ZGenerationOld::mark_start()
 {
+    // zGeneration.cpp:1248
+    _total_collections_at_start = Heap::GetHeap().total_collections();
     Begin(Snapshot().requestIndex);
     CHECK(_cycle == ZGenerationId::old);
     CHECK(Snapshot().active);

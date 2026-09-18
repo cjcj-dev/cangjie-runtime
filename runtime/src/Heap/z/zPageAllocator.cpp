@@ -889,7 +889,8 @@ retry:
             }
             return nullptr;
         }
-        ZStatMutatorAllocRate::sample_allocation(size);
+        ZStatInc(ZStatMutatorAllocRate::counter(), size);
+    ZStatMutatorAllocRate::sample_allocation(size);
         return region;
     }
 

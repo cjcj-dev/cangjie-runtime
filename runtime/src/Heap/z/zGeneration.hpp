@@ -271,6 +271,8 @@ private:
 class ZGenerationOld : public ZGeneration {
 public:
     ZGenerationOld();
+    // zGeneration.cpp:1248,1526: young-count snapshot at major start.
+    uint32_t total_collections_at_start() const { return _total_collections_at_start; }
     void PostTrace();
     void CollectSmallSpace();
     void CollectLargeGarbage();
@@ -293,6 +295,7 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    uint32_t _total_collections_at_start = 0;
     WorkStack oldMarkWorkStack;
     WorkStack oldMarkForeignRoots;
     ZGenerationOld* previousOld { nullptr };

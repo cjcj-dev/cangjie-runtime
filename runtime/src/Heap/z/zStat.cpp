@@ -76,6 +76,38 @@ public:
         all.Add(seconds.Accumulated());
         return {seconds.Total(), minute, hour, all};
     }
+
+    // zStat.cpp:173-243 — the eight accessors.
+    uint64_t avg_10_seconds() const { return seconds.Total().Average(); }
+    uint64_t avg_10_minutes() const
+    {
+        const auto sum = minutes.Total().sum + seconds.Accumulated().sum;
+        const auto n = minutes.Total().nsamples + seconds.Accumulated().nsamples;
+        return n == 0 ? 0 : sum / n;
+    }
+    uint64_t avg_10_hours() const
+    {
+        const auto sum = hours.Total().sum + minutes.Accumulated().sum + seconds.Accumulated().sum;
+        const auto n = hours.Total().nsamples + minutes.Accumulated().nsamples + seconds.Accumulated().nsamples;
+        return n == 0 ? 0 : sum / n;
+    }
+    uint64_t avg_total() const
+    {
+        const auto sum = total.sum + hours.Accumulated().sum + minutes.Accumulated().sum + seconds.Accumulated().sum;
+        const auto n = total.nsamples + hours.Accumulated().nsamples + minutes.Accumulated().nsamples +
+                       seconds.Accumulated().nsamples;
+        return n == 0 ? 0 : sum / n;
+    }
+    uint64_t max_10_seconds() const { return seconds.Total().max; }
+    uint64_t max_10_minutes() const { return std::max(seconds.Accumulated().max, minutes.Total().max); }
+    uint64_t max_10_hours() const
+    {
+        return std::max(std::max(seconds.Accumulated().max, minutes.Accumulated().max), hours.Total().max);
+    }
+    uint64_t max_total() const
+    {
+        return std::max(max_10_hours(), std::max(hours.Accumulated().max, total.max));
+    }
 private:
     ZStatSamplerHistoryInterval<10> seconds;
     ZStatSamplerHistoryInterval<60> minutes;
@@ -181,6 +213,10 @@ void ZStatCycle::Initialize(uint64_t now)
     lastActiveWorkers = 1;
     serial = Sequence{};
     parallel = Sequence{};
+    parallelDuration = Sequence{};
+    cycleIntervals = Sequence{};
+    endOfLast = 0;
+    hasEnded = false;
 }
 
 // zStat.cpp:1237-1240
@@ -194,7 +230,11 @@ void ZStatCycle::AtStart(uint64_t now)
 void ZStatCycle::AtEnd(uint64_t now, ZStatWorkers* statWorkers, bool warmup, bool recordStats)
 {
     std::lock_guard<std::mutex> guard(lock);
+    // zStat.cpp:1242-1268
+    const uint64_t previousEnd = hasEnded ? endOfLast : 0;
     end = now;
+    endOfLast = now;
+    hasEnded = true;
     if (warmup && warmupCycles < 3) {
         ++warmupCycles;
     }
@@ -202,42 +242,39 @@ void ZStatCycle::AtEnd(uint64_t now, ZStatWorkers* statWorkers, bool warmup, boo
     const double duration = static_cast<double>(now - start) / SECOND_TO_NANO_SECOND;
     const double workersDuration = statWorkers->get_and_reset_duration();
     const double workersTime = statWorkers->get_and_reset_time();
-    const double serialTime = duration - std::min(duration, workersDuration);
+    const double serialTime = duration - workersDuration;
     lastActiveWorkers = workersDuration > 0.0 ? workersTime / workersDuration : 1.0;
     if (recordStats) {
         serial.Add(serialTime);
         parallel.Add(workersTime);
+        parallelDuration.Add(workersDuration);
+        if (previousEnd != 0) {
+            cycleIntervals.Add(static_cast<double>(now - previousEnd) / SECOND_TO_NANO_SECOND);
+        }
     }
 }
 
 ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
 {
     std::lock_guard<std::mutex> guard(lock);
-    return {warmupCycles, static_cast<double>(now - std::min(now, end)) / SECOND_TO_NANO_SECOND,
-            serial.average, std::sqrt(serial.variance), parallel.average, std::sqrt(parallel.variance),
-            lastActiveWorkers, static_cast<double>(now - start) / SECOND_TO_NANO_SECOND};
+    ZStatCycleStats out;
+    out.warmupCycles = warmupCycles;
+    out.timeSinceLast = static_cast<double>(now - std::min(now, end)) / SECOND_TO_NANO_SECOND;
+    out.serialTime = serial.average;
+    out.serialTimeSd = std::sqrt(serial.variance);
+    out.parallelTime = parallel.average;
+    out.parallelTimeSd = std::sqrt(parallel.variance);
+    out.lastActiveWorkers = lastActiveWorkers;
+    out.durationSinceStart = static_cast<double>(now - start) / SECOND_TO_NANO_SECOND;
+    out.isWarm = warmupCycles >= 3;
+    out.isTimeTrustable = warmupCycles > 0;
+    out.avgCycleInterval = cycleIntervals.average;
+    out.parallelDuration = parallelDuration.average;
+    out.parallelDurationSd = std::sqrt(parallelDuration.variance);
+    return out;
 }
 
-ZStatCollection& ZStat::Collections()
-{
-    static ZStatCollection collections;
-    return collections;
-}
 
-void ZStatCollection::AtYoungMarkStart(bool startsOld)
-{
-    std::lock_guard<std::mutex> guard(lock);
-    ++counts.totalCollections;
-    if (startsOld) {
-        counts.collectionsAtMajorStart = counts.totalCollections;
-    }
-}
-
-ZStatCollectionStats ZStatCollection::Stats() const
-{
-    std::lock_guard<std::mutex> guard(lock);
-    return counts;
-}
 
 } // namespace MapleRuntime
 
@@ -254,6 +291,22 @@ ZStatCollectionStats ZStatCollection::Stats() const
 #include "Heap/z/zUtils.inline.hpp"
 
 namespace MapleRuntime {
+void ZTracer::report_stat_sampler(const ZStatSampler& sampler, uint64_t value)
+{
+    // zStat.cpp:133-152: route to Cangjie events once they exist (#626 D4-A).
+    (void)sampler; (void)value;
+}
+
+void ZTracer::report_stat_counter(const ZStatValue& counter, uint64_t increment, uint64_t value)
+{
+    (void)counter; (void)increment; (void)value;
+}
+
+void ZTracer::report_stat_phase(const char* name, uint64_t durationNs)
+{
+    (void)name; (void)durationNs;
+}
+
 ZStatSampler* ZStatSampler::first = nullptr;
 uint32_t ZStatSampler::count = 0;
 ZStatCounter* ZStatCounter::first = nullptr;
@@ -276,8 +329,8 @@ void ZStatValue::InitializeStorage()
     base = reinterpret_cast<char*>(ZUtils::alloc_aligned_unfreeable(ZCacheLineSize, stride * ZCPU::count()));
 }
 
-ZStatSampler::ZStatSampler(const char* group, const char* name, ZStatUnit unit)
-    : ZStatValue(group, name, count++, sizeof(CpuData)), next(first), unit(unit)
+ZStatSampler::ZStatSampler(const char* group, const char* name, ZStatUnitPrinter printer)
+    : ZStatValue(group, name, count++, sizeof(CpuData)), next(first), printer(printer)
 {
     first = this;
 }
@@ -306,15 +359,6 @@ void ZStatSampler::Initialize() const
     for (uint32_t i = 0; i < ZCPU::count(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
 }
 
-void ZStatSampler::Sample(uint64_t value) const
-{
-    auto& data = *CpuLocal<CpuData>(ZCPU::id());
-    data.nsamples.fetch_add(1, std::memory_order_relaxed);
-    data.sum.fetch_add(value, std::memory_order_relaxed);
-    uint64_t maximum = data.max.load(std::memory_order_relaxed);
-    while (maximum < value && !data.max.compare_exchange_weak(maximum, value, std::memory_order_relaxed)) {}
-}
-
 ZStatSamplerData ZStatSampler::CollectAndReset() const
 {
     ZStatSamplerData result;
@@ -329,8 +373,22 @@ ZStatSamplerData ZStatSampler::CollectAndReset() const
     return result;
 }
 
-ZStatCounter::ZStatCounter(const char* group, const char* name, ZStatUnit unit)
-    : ZStatValue(group, name, count++, sizeof(CpuData)), next(first), sampler(group, name, unit)
+void ZStatSampler::Sample(uint64_t value) const
+{
+    auto& data = *CpuLocal<CpuData>(ZCPU::id());
+    data.nsamples.fetch_add(1, std::memory_order_relaxed);
+    data.sum.fetch_add(value, std::memory_order_relaxed);
+    uint64_t maximum = data.max.load(std::memory_order_relaxed);
+    while (maximum < value && !data.max.compare_exchange_weak(maximum, value, std::memory_order_relaxed)) {}
+}
+
+void ZStatCounter::Increment(uint64_t value) const
+{
+    CpuLocal<CpuData>(ZCPU::id())->value.fetch_add(value, std::memory_order_relaxed);
+}
+
+ZStatCounter::ZStatCounter(const char* group, const char* name, ZStatUnitPrinter printer)
+    : ZStatValue(group, name, count++, sizeof(CpuData)), next(first), sampler(group, name, printer)
 {
     first = this;
 }
@@ -340,18 +398,60 @@ void ZStatCounter::Initialize() const
     for (uint32_t i = 0; i < ZCPU::count(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
 }
 
-void ZStatCounter::Increment(uint64_t value) const
-{
-    CpuLocal<CpuData>(ZCPU::id())->value.fetch_add(value, std::memory_order_relaxed);
-}
-
 void ZStatCounter::SampleAndReset() const
 {
     uint64_t value = 0;
     for (uint32_t i = 0; i < ZCPU::count(); ++i) {
         value += CpuLocal<CpuData>(i)->value.exchange(0, std::memory_order_relaxed);
     }
-    sampler.Sample(value);
+    ZStatSample(sampler, value);
+}
+
+ZStatUnsampledCounter* ZStatUnsampledCounter::first = nullptr;
+uint32_t ZStatUnsampledCounter::count = 0;
+
+ZStatUnsampledCounter::ZStatUnsampledCounter(const char* name)
+    : ZStatValue("Unsampled", name, count++, sizeof(CpuData)), next(first)
+{
+    first = this;
+}
+
+ZStatCounterData* ZStatUnsampledCounter::Get() const
+{
+    return reinterpret_cast<ZStatCounterData*>(CpuLocal<CpuData>(ZCPU::id()));
+}
+
+ZStatCounterData ZStatUnsampledCounter::GetAndReset() const
+{
+    ZStatCounterData all;
+    for (uint32_t i = 0; i < ZCPU::count(); ++i) {
+        all.counter += CpuLocal<CpuData>(i)->value.exchange(0, std::memory_order_relaxed);
+    }
+    return all;
+}
+
+// zStat.cpp:892-930
+void ZStatSample(const ZStatSampler& sampler, uint64_t value)
+{
+    ZStatSample(sampler, value);
+    ZTracer::report_stat_sampler(sampler, value);
+}
+
+void ZStatDurationSample(const ZStatSampler& sampler, uint64_t durationNs)
+{
+    ZStatSample(sampler, durationNs);
+}
+
+void ZStatInc(const ZStatCounter& counter, uint64_t increment)
+{
+    counter.Increment(increment);
+    ZTracer::report_stat_counter(counter, increment, 0);
+}
+
+void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment)
+{
+    reinterpret_cast<ZStatUnsampledCounter::CpuData*>(counter.Get())->value.fetch_add(
+        increment, std::memory_order_relaxed);
 }
 
 void ZStat::Initialize()
@@ -385,22 +485,48 @@ static void Print(const std::vector<ZStatSamplerHistory>& history)
     if (Logger::GetLogger().GetMinimumLogLevel() > RTLOG_INFO) return;
     LOG(RTLOG_INFO, "GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)");
     for (const auto* sampler = ZStatSampler::First(); sampler != nullptr; sampler = sampler->Next()) {
-        const auto windows = history[sampler->Id()].Windows();
-        const char* unit = "ns";
-        switch (sampler->Unit()) {
-            case ZStatUnit::TIME: unit = "ns"; break;
-            case ZStatUnit::BYTES: unit = "B"; break;
-            case ZStatUnit::THREADS: unit = "threads"; break;
-            case ZStatUnit::BYTES_PER_SECOND: unit = "B/s"; break;
-            case ZStatUnit::OPS_PER_SECOND: unit = "ops/s"; break;
-        }
-        LOG(RTLOG_INFO, "%s: %s %llu/%llu %llu/%llu %llu/%llu %llu/%llu %s",
-            sampler->Group(), sampler->Name(),
-            static_cast<unsigned long long>(windows[0].Average()), static_cast<unsigned long long>(windows[0].max),
-            static_cast<unsigned long long>(windows[1].Average()), static_cast<unsigned long long>(windows[1].max),
-            static_cast<unsigned long long>(windows[2].Average()), static_cast<unsigned long long>(windows[2].max),
-            static_cast<unsigned long long>(windows[3].Average()), static_cast<unsigned long long>(windows[3].max), unit);
+        sampler->Printer()(*sampler, history[sampler->Id()]);
     }
+}
+
+// zStat.cpp:246-335
+static void PrintUnit(const ZStatSampler& sampler, const ZStatSamplerHistory& history, const char* unit)
+{
+    LOG(RTLOG_INFO, "%s: %s %llu/%llu %llu/%llu %llu/%llu %llu/%llu %s",
+        sampler.Group(), sampler.Name(),
+        static_cast<unsigned long long>(history.avg_10_seconds()),
+        static_cast<unsigned long long>(history.max_10_seconds()),
+        static_cast<unsigned long long>(history.avg_10_minutes()),
+        static_cast<unsigned long long>(history.max_10_minutes()),
+        static_cast<unsigned long long>(history.avg_10_hours()),
+        static_cast<unsigned long long>(history.max_10_hours()),
+        static_cast<unsigned long long>(history.avg_total()),
+        static_cast<unsigned long long>(history.max_total()), unit);
+}
+
+void ZStatUnitTimeNs(const ZStatSampler& sampler, const ZStatSamplerHistory& history)
+{
+    PrintUnit(sampler, history, "ns");
+}
+
+void ZStatUnitBytes(const ZStatSampler& sampler, const ZStatSamplerHistory& history)
+{
+    PrintUnit(sampler, history, "B");
+}
+
+void ZStatUnitBytesPerSecond(const ZStatSampler& sampler, const ZStatSamplerHistory& history)
+{
+    PrintUnit(sampler, history, "B/s");
+}
+
+void ZStatUnitCount(const ZStatSampler& sampler, const ZStatSamplerHistory& history)
+{
+    PrintUnit(sampler, history, "threads");
+}
+
+void ZStatUnitOpsPerSecond(const ZStatSampler& sampler, const ZStatSamplerHistory& history)
+{
+    PrintUnit(sampler, history, "ops/s");
 }
 
 // zStat.cpp:1022-1027
@@ -485,7 +611,7 @@ const ZStatPhaseCollection MajorCollection("Major Collection", false);
 
 namespace MapleRuntime {
 namespace {
-const ZStatCounter mutatorAllocated("Memory", "Allocation Rate", ZStatUnit::BYTES_PER_SECOND);
+const ZStatCounter mutatorAllocated("Memory", "Allocation Rate", ZStatUnitBytesPerSecond);
 AtomicSpinLock g_statLock;
 uint64_t g_lastSampleTimeNs = 0;
 std::atomic<size_t> g_samplingGranule{ 1 };
@@ -541,7 +667,7 @@ void ZStatMutatorAllocRate::initialize()
 
 void ZStatMutatorAllocRate::sample_allocation(size_t allocationBytes)
 {
-    mutatorAllocated.Increment(allocationBytes);
+    ZStatInc(mutatorAllocated, allocationBytes);
     // zStat.cpp:957-1012
     const size_t allocated = g_allocatedSinceSample.fetch_add(allocationBytes, std::memory_order_relaxed) +
         allocationBytes;
@@ -577,6 +703,13 @@ void ZStatMutatorAllocRate::sample_allocation(size_t allocationBytes)
     // zStat.cpp:1008 — rule evaluation is triggered at the end of every
     // allocation-rate sample, not only on the director's own tick.
     ZDirector::evaluate_rules();
+}
+
+static const ZStatUnsampledCounter mutatorAllocRateCounter("Allocation Rate");
+
+const ZStatUnsampledCounter& ZStatMutatorAllocRate::counter()
+{
+    return mutatorAllocRateCounter;
 }
 
 ZStatMutatorAllocRateStats ZStatMutatorAllocRate::stats()
@@ -631,7 +764,7 @@ void ZStatHeap::AtRelocateEnd(size_t used, size_t live, size_t reclaimedBytes)
         stats.reclaimedAverage + 0.7 * (static_cast<double>(reclaimedBytes) - stats.reclaimedAverage) :
         static_cast<double>(reclaimedBytes);
     initialized = true;
-    reclaimed.Sample(reclaimedBytes);
+    ZStatSample(reclaimed, reclaimedBytes);
 }
 
 size_t ZStatHeap::UsedAtCollectionStart() const
@@ -731,7 +864,7 @@ uint32_t ZStatValue::Id() const { return id; }
 
 
 namespace MapleRuntime {
-ZStatPhase::ZStatPhase(const char* group, const char* name) : sampler(group, name, ZStatUnit::TIME) {}
+ZStatPhase::ZStatPhase(const char* group, const char* name) : sampler(group, name, ZStatUnitTimeNs) {}
 }
 
 // zStat.cpp:513-591
@@ -930,7 +1063,7 @@ void ZStatPhaseCollection::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     // rec=cycle is the collection-level structured record; rec=phase covers
     // pause/concurrent/subphase/critical work (same population the retired
     // Timer observed).
-    sampler.Sample(endNs - startNs);
+    ZStatDurationSample(sampler, endNs - startNs);
 }
 
 ZStatPhaseGeneration::ZStatPhaseGeneration(const char* name, ZGenerationId id)
@@ -947,7 +1080,7 @@ void ZStatPhaseGeneration::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     if (ZAbort::should_abort()) {
         return;
     }
-    sampler.Sample(endNs - startNs);
+    ZStatDurationSample(sampler, endNs - startNs);
     // zStat.cpp:724-735 — the one-shot per-collection report. The stalls,
     // mark, relocation and heap units join as their per-generation stat
     // objects land on this branch.
@@ -973,7 +1106,7 @@ void ZStatPhasePause::RegisterStart(uint64_t startNs) const { (void)startNs; }
 void ZStatPhasePause::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
     const uint64_t duration = endNs - startNs;
-    sampler.Sample(duration);
+    ZStatDurationSample(sampler, duration);
 
     // Track max pause time
     if (maxNs < duration) {
@@ -997,7 +1130,7 @@ void ZStatPhaseConcurrent::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     if (ZAbort::should_abort()) {
         return;
     }
-    sampler.Sample(endNs - startNs);
+    ZStatDurationSample(sampler, endNs - startNs);
     EmitPhaseRecord(*this, "conc", startNs, endNs);
 }
 
@@ -1014,12 +1147,12 @@ void ZStatSubPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
     if (ZAbort::should_abort()) {
         return;
     }
-    sampler.Sample(endNs - startNs);
+    ZStatDurationSample(sampler, endNs - startNs);
     EmitPhaseRecord(*this, "conc", startNs, endNs);
 }
 
 ZStatCriticalPhase::ZStatCriticalPhase(const char* name, bool verbose)
-    : ZStatPhase("Critical", name), counter("Critical", name, ZStatUnit::OPS_PER_SECOND), verbose(verbose)
+    : ZStatPhase("Critical", name), counter("Critical", name, ZStatUnitOpsPerSecond), verbose(verbose)
 {}
 
 void ZStatCriticalPhase::RegisterStart(uint64_t startNs) const
@@ -1032,14 +1165,14 @@ void ZStatCriticalPhase::RegisterStart(uint64_t startNs) const
 // zStat.cpp:862-876
 void ZStatCriticalPhase::RegisterEnd(uint64_t startNs, uint64_t endNs) const
 {
-    sampler.Sample(endNs - startNs);
-    counter.Increment();
+    ZStatDurationSample(sampler, endNs - startNs);
+    ZStatInc(counter, 1);
     EmitPhaseRecord(*this, "conc", startNs, endNs);
 }
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-ZStatHeap::ZStatHeap(const char* group) : reclaimed(group, "Reclaimed", ZStatUnit::BYTES) {}
+ZStatHeap::ZStatHeap(const char* group) : reclaimed(group, "Reclaimed", ZStatUnitBytes) {}
 }
 
 namespace MapleRuntime {

@@ -105,6 +105,12 @@ struct ZStatCycleStats {
     double parallelTimeSd = 0;
     double lastActiveWorkers = 1;
     double durationSinceStart = 0;
+    // zStat.hpp:403-417 — the remaining ZGC cycle statistics.
+    bool isWarm = false;
+    bool isTimeTrustable = false;
+    double avgCycleInterval = 0;
+    double parallelDuration = 0;
+    double parallelDurationSd = 0;
 };
 
 class ZStatCycle {
@@ -133,31 +139,43 @@ private:
     double lastActiveWorkers = 1;
     Sequence serial;
     Sequence parallel;
+    Sequence parallelDuration;
+    Sequence cycleIntervals;
+    uint64_t endOfLast = 0;
+    bool hasEnded = false;
 };
-
-// zGeneration.cpp:600-602,637,1248: total collections count young
-// mark starts, including the young part of a major. Old completion is
-// not another collection start. Keep the total and old baseline together
-// so a director sample cannot combine opposite sides of a major start.
-struct ZStatCollectionStats {
-    uint32_t totalCollections = 0;
-    uint32_t collectionsAtMajorStart = 0;
-};
-
-class ZStatCollection {
-public:
-    void AtYoungMarkStart(bool startsOld);
-    ZStatCollectionStats Stats() const;
-
-private:
-    mutable std::mutex lock;
-    ZStatCollectionStats counts;
-};
-
 
 struct ZStatSamplerData;
+struct ZStatSamplerHistory;
+class ZStatValue;
+class ZStatSampler;
 
-enum class ZStatUnit { TIME, BYTES, THREADS, BYTES_PER_SECOND, OPS_PER_SECOND };
+// zStat.hpp:77-84
+struct ZStatCounterData {
+    uint64_t counter = 0;
+    void Add(const ZStatCounterData& other) { counter += other.counter; }
+};
+
+// zStat.hpp:255: print format is a property of the sampler, selected at
+// construction. The five printers live in zStat.cpp with ZStatSamplerHistory.
+typedef void (*ZStatUnitPrinter)(const ZStatSampler& sampler, const ZStatSamplerHistory& history);
+
+// zStat.cpp:246-335 — the five printers.
+void ZStatUnitTimeNs(const ZStatSampler& sampler, const ZStatSamplerHistory& history);
+void ZStatUnitBytes(const ZStatSampler& sampler, const ZStatSamplerHistory& history);
+void ZStatUnitBytesPerSecond(const ZStatSampler& sampler, const ZStatSamplerHistory& history);
+void ZStatUnitCount(const ZStatSampler& sampler, const ZStatSamplerHistory& history);
+void ZStatUnitOpsPerSecond(const ZStatSampler& sampler, const ZStatSamplerHistory& history);
+
+// zStat.hpp:124-141, zStat.cpp:133-152: tracer routing point. Cangjie events
+// are not wired yet (issue #626 D4: infra difference A); every
+// ZStatSample/ZStatInc passes through these stubs so the routing points exist.
+class ZTracer {
+public:
+    static void report_stat_sampler(const ZStatSampler& sampler, uint64_t value);
+    static void report_stat_counter(const ZStatValue& counter, uint64_t increment, uint64_t value);
+    static void report_stat_phase(const char* name, uint64_t durationNs);
+};
 
 // Identity and list membership are fixed by static construction, before startup.
 class ZStatValue {
@@ -185,13 +203,15 @@ private:
     static char* base;
 };
 
+// zStat.hpp:252-277. Sampling goes through the free ZStatSample (with the
+// ZTracer routing point), matching zStat.cpp:892-916.
 class ZStatSampler : public ZStatValue {
 public:
-    ZStatSampler(const char* group, const char* name, ZStatUnit unit);
+    ZStatSampler(const char* group, const char* name, ZStatUnitPrinter printer);
     void Initialize() const;
-    void Sample(uint64_t value) const;
     ZStatSamplerData CollectAndReset() const;
-    ZStatUnit Unit() const { return unit; }
+    friend void ZStatSample(const ZStatSampler& sampler, uint64_t value);
+    ZStatUnitPrinter Printer() const { return printer; }
     static ZStatSampler* First() { return first; }
     const ZStatSampler* Next() const { return next; }
     static uint32_t Count() { return count; }
@@ -207,15 +227,17 @@ private:
     // zStat.cpp:405-428 sorts registry links even in const phase/counter samplers.
     // Keep that link writable when constant initialization places its owner in RELRO.
     mutable ZStatSampler* next;
-    const ZStatUnit unit;
+    const ZStatUnitPrinter printer;
+    void Sample(uint64_t value) const;
 };
 
+// zStat.hpp:285-303, zStat.cpp:460-487
 class ZStatCounter : public ZStatValue {
 public:
-    ZStatCounter(const char* group, const char* name, ZStatUnit unit);
+    ZStatCounter(const char* group, const char* name, ZStatUnitPrinter printer);
     void Initialize() const;
-    void Increment(uint64_t value = 1) const;
     void SampleAndReset() const;
+    friend void ZStatInc(const ZStatCounter& counter, uint64_t increment);
     static ZStatCounter* First() { return first; }
     const ZStatCounter* Next() const { return next; }
     const ZStatSampler& Sampler() const { return sampler; }
@@ -225,7 +247,30 @@ private:
     static uint32_t count;
     ZStatCounter* const next;
     const ZStatSampler sampler;
+    void Increment(uint64_t value) const;
 };
+
+// zStat.hpp:305-320, zStat.cpp:489-511: sampled into nothing; read directly.
+class ZStatUnsampledCounter : public ZStatValue {
+public:
+    ZStatUnsampledCounter(const char* name);
+    ZStatCounterData* Get() const;
+    ZStatCounterData GetAndReset() const;
+    friend void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment);
+    static ZStatUnsampledCounter* First() { return first; }
+    const ZStatUnsampledCounter* Next() const { return next; }
+private:
+    struct alignas(64) CpuData { std::atomic<uint64_t> value {0}; };
+    static ZStatUnsampledCounter* first;
+    static uint32_t count;
+    ZStatUnsampledCounter* const next;
+};
+
+// zStat.cpp:892-930 — every sample/inc passes the ZTracer routing point.
+void ZStatSample(const ZStatSampler& sampler, uint64_t value);
+void ZStatDurationSample(const ZStatSampler& sampler, uint64_t durationNs);
+void ZStatInc(const ZStatCounter& counter, uint64_t increment);
+void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment);
 
 // zStat.hpp:174-207, zStat.cpp:513-591: Minimum Mutator Utilization over a
 // ring of the last 200 pauses, tracked at six window sizes. Host infra
@@ -445,6 +490,9 @@ public:
     static void initialize();
     static void sample_allocation(size_t allocationBytes);
     static ZStatMutatorAllocRateStats stats();
+
+    // zStat.hpp:372-375: unsampled byte counter incremented at the allocation site.
+    static const ZStatUnsampledCounter& counter();
     // zDirector.cpp:867 / zHeap.cpp:61 — SoftMaxHeapSize. Trigger denominator
     // only; allocation failure still uses hard capacity.
     static size_t soft_max_heap_size();
@@ -503,8 +551,7 @@ public:
     void run_thread() override;
     void terminate() override;
     static void Initialize();
-    static ZStatCollection& Collections();
-private:
+    private:
     // zStat.hpp:387-389: the sampling thread ticks off a ZMetronome.
     static constexpr uint64_t SampleHz = 1;
     ZMetronome metronome;
