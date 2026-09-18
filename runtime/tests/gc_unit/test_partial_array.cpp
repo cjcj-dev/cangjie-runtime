@@ -46,26 +46,16 @@ struct PartialArrayTestAccess {
 
     static void StartFieldMark(HeapGcState& collector)
     {
-        auto& heap = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
-        GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, heap);
-        auto arm = [](HeapGcState& c) {
-            auto& old = c.GetZGeneration(ZGenerationId::old);
-            old.InitializeWorkers(1);
-            if (!old.Snapshot().active) {
-                old.Begin(0);
-            }
-            c.StartOldMarkWork();
-            old.PublishPhase(ZGenerationPhase::Mark);
-        };
-        arm(collector);
-        arm(heap);
+        auto& old = collector.GetZGeneration(ZGenerationId::old);
+        if (old.Workers() == nullptr) old.InitializeWorkers(1);
+        if (!old.Snapshot().active) old.Begin(0);
+        collector.StartOldMarkWork();
+        old.PublishPhase(ZGenerationPhase::Mark);
     }
 
     static void ReadPublished(HeapGcState& collector, WorkStack& result)
     {
-        auto& heap = static_cast<HeapGcState&>(Heap::GetHeap().GetCollector());
-        auto& domain = heap.MajorMark() != nullptr ? *heap.MajorMark()
-                                                         : *collector.MajorMark();
+        auto& domain = *collector.MajorMark();
         for (size_t stripe = 0; stripe < domain.Stripes().NStripes(); ++stripe) {
             if (auto* stack = domain.Stacks().StealLocal(stripe)) {
                 while (!stack->IsEmpty()) result.push_back(stack->Pop());
@@ -203,7 +193,7 @@ GC_OTHER_VM_TEST(PartialArray, ProductPushFollowRoundtrips)
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
     SlotBuf buf(MarkPartialArray::MIN_LENGTH);
-    CopyCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    HeapGcState& collector = Heap::GetHeap().GetCollector();
     WorkStack workStack;
     RefField<>* const chunk = reinterpret_cast<RefField<>*>(buf.slots);
     for (size_t i = 0; i < MarkPartialArray::MIN_LENGTH; ++i) {
