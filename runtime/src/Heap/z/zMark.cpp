@@ -1902,7 +1902,6 @@ HeapGcState::HeapGcState(Allocator& allocator, CollectorResources& resources)
         : theAllocator(allocator), collectorResources(resources),
           fwdTable(reinterpret_cast<RegionSpace&>(allocator))
     {
-        collectorType = CollectorType::SMOOTH_COLLECTOR;
     }
 }
 

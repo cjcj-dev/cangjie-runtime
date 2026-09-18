@@ -357,7 +357,6 @@ class HeapGcState {
     friend class ZMarkTask;
 
 public:
-    const char* GetCollectorName() const;
     void RequestGC(GCReason reason, bool async);
     ZGeneration& GetZGeneration(ZGenerationId generation);
     const ZGeneration& GetZGeneration(ZGenerationId generation) const;
@@ -423,7 +422,6 @@ public:
         return relocate_or_remap_object(target, remap_generation(ref), provenance);
     }
     BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const;
-    CollectorType collectorType = CollectorType::SMOOTH_COLLECTOR;
 
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;

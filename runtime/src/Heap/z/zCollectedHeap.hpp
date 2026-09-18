@@ -13,14 +13,6 @@
 
 namespace MapleRuntime {
 enum class Generation : uint8_t;
-enum CollectorType {
-    NO_COLLECTOR = 0,
-    PROXY_COLLECTOR,
-    COPY_COLLECTOR,
-    SMOOTH_COLLECTOR,
-    COLLECTOR_TYPE_COUNT,
-};
-
 class HeapGcState;
 class ZDirector;
 class ZDriverMajor;

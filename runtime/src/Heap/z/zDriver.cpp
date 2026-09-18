@@ -495,7 +495,7 @@ void HeapGcState::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     }
     PreGarbageCollection(generation, reason != GC_REASON_YOUNG, gcIndex);
     ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
-    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[reason].name, gcIndex);
+    VLOG(REPORT, "[GC] Start ZGC %s gcIndex= %lu", g_gcRequests[reason].name, gcIndex);
     GCStats& gcStats = GetGCStats(generation);
     gcStats.collectedBytes = 0;
     gcStats.youngCandidateBytes = 0;

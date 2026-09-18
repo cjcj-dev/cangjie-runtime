@@ -31,11 +31,6 @@
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
-namespace {
-const char* const COLLECTOR_NAME[] = { "No HeapGcState", "Proxy HeapGcState", "Regional-Copying HeapGcState",
-                                       "Smooth HeapGcState" };
-}
-
 static ImmortalWrapper<ZCollectedHeap> g_collectedHeap;
 
 ZCollectedHeap* ZCollectedHeap::heap() { return &*g_collectedHeap; }
@@ -62,8 +57,6 @@ void HeapGcState::MarkObjectIfActive(BaseObject* object) const
         MarkOldObjectIfActive(object);
     }
 }
-
-const char* HeapGcState::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
 
 void HeapGcState::RequestGC(GCReason reason, bool async)
 {
