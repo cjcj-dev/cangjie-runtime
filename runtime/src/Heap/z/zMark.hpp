@@ -506,7 +506,6 @@ public:
     Allocator& GetAllocator() const { return Heap::GetHeap().GetAllocator(); }
 
 
-    MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason);
 
     GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old)
     {

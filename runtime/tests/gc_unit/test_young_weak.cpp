@@ -98,7 +98,7 @@ struct RelocationReceiptTestAccess {
         }
         // ZDriver::gc_major runs the young roots collection before old marking.
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
-        collector.RunGarbageCollection(1, GC_REASON_YOUNG);
+        ZDriver::RunGarbageCollection(1, GC_REASON_YOUNG);
     }
 
     static void RunMajorMark(HeapGcState& collector)

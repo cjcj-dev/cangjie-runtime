@@ -625,7 +625,7 @@ LOADHEAL_PRODUCT_CONSUMERS=(
 )
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   LOADHEAL_PRODUCT_CONSUMERS+=(
-    'MapleRuntime::HeapGcState::RunGarbageCollection('
+    'MapleRuntime::ZDriver::RunGarbageCollection('
     'MapleRuntime::ResetRemapYoungRootsTestReceipt('
     'MapleRuntime::ReadRemapYoungRootsTestReceipt()'
   )

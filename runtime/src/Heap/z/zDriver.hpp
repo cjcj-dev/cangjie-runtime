@@ -343,8 +343,9 @@ public:
     void run_thread() override;
     void terminate() override;
     bool is_busy() const;
-    void RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup);
-    void RunYoungCollection(HeapGcState& collector, uint64_t index, ZYoungType type, bool warmup);
+    MRT_EXPORT static void RunGarbageCollection(uint64_t gcIndex, GCReason reason);
+    void RunCollection(uint64_t index, GCReason reason, bool warmup);
+    void RunYoungCollection(uint64_t index, ZYoungType type, bool warmup);
     bool ExecuteDriverRequest(const ZDriverRequest& request);
 protected:
     const GCDriverKind kind;

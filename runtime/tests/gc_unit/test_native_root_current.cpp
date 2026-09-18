@@ -59,7 +59,7 @@ struct RelocationReceiptTestAccess {
         collector.GetZGeneration(ZGenerationId::old).End();
         auto& young = collector.GetZGeneration(ZGenerationId::young);
         YoungTypeSetter type(young, ZYoungType::major_partial_roots);
-        collector.RunGarbageCollection(1, GC_REASON_YOUNG);
+        ZDriver::RunGarbageCollection(1, GC_REASON_YOUNG);
     }
     static void NativeRootTrace(HeapGcState& collector)
     {

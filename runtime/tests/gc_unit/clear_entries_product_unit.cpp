@@ -2387,7 +2387,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     collector.StartOldMarkWork();
     {
         DriverLocker driver;
-        collector.RunGarbageCollection(1, GC_REASON_USER);
+        ZDriver::RunGarbageCollection(1, GC_REASON_USER);
     }
 
     const RemapYoungRootsTestReceipt receipt = ReadRemapYoungRootsTestReceipt();
@@ -2503,7 +2503,7 @@ void RunMajorRawRemap(bool promoted, bool managed, bool oldPending = false, bool
     collector.StartOldMarkWork();
     {
         DriverLocker driver;
-        collector.RunGarbageCollection(1, GC_REASON_USER);
+        ZDriver::RunGarbageCollection(1, GC_REASON_USER);
     }
     const auto receipt = ReadRemapYoungRootsTestReceipt();
     const uintptr_t expected = oldPending
