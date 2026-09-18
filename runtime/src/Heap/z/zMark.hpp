@@ -290,21 +290,7 @@ ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt();
 
 #endif
 
-class ForwardTable {
-public:
-    explicit ForwardTable(RegionSpace& space) : theSpace(space) {}
 
-    // if region is compacted, return false.
-
-    template<Generation G>
-    void PrepareForwardTable()
-    {
-        DLOG(FORWARD, "reset fwd table");
-        theSpace.PrepareFromSpace<G>();
-    }
-
-    RegionSpace& theSpace;
-};
 
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 
@@ -427,7 +413,7 @@ public:
         WEAK_REFERENT,
     };
 
-    HeapGcState();
+    HeapGcState() = default;
 
     ~HeapGcState() = default;
     ZMark* MajorMark() { return Heap::GetHeap().old().MarkPtr(); }
@@ -469,8 +455,6 @@ public:
     static std::function<void(Mutator&)> testOldMarkThreadResult;
 #endif
 
-    void Init();
-    void Fini();
 
     // zRootsIterator.cpp:159-220. The language has no weak plain code-cache roots.
     void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
@@ -625,9 +609,6 @@ protected:
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
-    WorkStack oldMarkWorkStack;
-    WorkStack oldMarkForeignRoots;
     bool FlushMarkProducers(ZMark* domain);
     void ProcessOldNonStrongReferences(WorkStack& workStack);
     void ProcessExportRoots(WorkStack& foreignRootsSet);
@@ -1294,7 +1275,6 @@ private:
     CrossRefHandler cycleRefHandlerForTest = nullptr;
 #endif
 
-    ForwardTable fwdTable;
 
 
 };

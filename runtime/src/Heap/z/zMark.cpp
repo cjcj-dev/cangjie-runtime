@@ -350,10 +350,10 @@ BaseObject* HeapGcState::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefF
 void HeapGcState::TraceHeap()
 {
     ZBreakpoint::AtAfterMarkingStarted();
-    oldMarkWorkStack.clear();
-    oldMarkForeignRoots.clear();
-    WorkStack& workStack = oldMarkWorkStack;
-    WorkStack& foreignStack = oldMarkForeignRoots;
+    Heap::GetHeap().old().oldMarkWorkStack.clear();
+    Heap::GetHeap().old().oldMarkForeignRoots.clear();
+    WorkStack& workStack = Heap::GetHeap().old().oldMarkWorkStack;
+    WorkStack& foreignStack = Heap::GetHeap().old().oldMarkForeignRoots;
     MarkingStacks::VerifyEmpty(workStack.size());
     MarkingStacks::VerifyEmpty(foreignStack.size());
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
@@ -1898,10 +1898,7 @@ void FollowPartialReferences(const MarkStackEntry& entry,
 }
 
 namespace MapleRuntime {
-HeapGcState::HeapGcState()
-        : fwdTable(reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()))
-    {
-    }
+
 }
 
 #include "Heap/z/zMark.inline.hpp"

@@ -135,58 +135,6 @@ double ZGeneration::FragmentationLimit() const
 
 void ResetSkippedStackMapCounts();
 void ReportSkippedStackMapCounts();
-// ZGenerationYoung::mark_start (zGeneration.cpp:855-880). The collector
-// supplies the existing allocator/mark domain; this cycle owns phase and seq.
-
-
-// ZGenerationOld::mark_start (zGeneration.cpp:1212-1237).
-void ZGeneration::StartOldMark(HeapGcState& collector)
-{
-    CHECK(_cycle == ZGenerationId::old);
-    CHECK(Snapshot().active);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
-    }
-#endif
-    ZGlobalsPointers::flip_old_mark_start();
-    ZVerify::OnColorFlip();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
-    }
-#endif
-    auto& space = static_cast<RegionSpace&>(collector.GetAllocator());
-    // ZGC holds the VM mark-start pause across retirement and seqnum advance
-    // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
-    // explicitly because our handshake pause permits safe native threads.
-    std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
-    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
-    }
-#endif
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        CHECK(sequence != UINT64_MAX);
-        ++sequence;
-    }
-    pinnedLock.unlock();
-    set_phase(Phase::Mark);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
-    }
-#endif
-    Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
-    collector.StartOldMarkWork();
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (HeapGcState::testMarkStartState) {
-        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
-    }
-#endif
-}
 
 // ZGenerationOld::relocate_start (zGeneration.cpp:1379-1397) captures the
 // young sequence once for the whole old relocation, not once per forwarding.
@@ -384,8 +332,6 @@ void ZGenerationYoung::collect()
     concurrent_relocate();
 }
 
-
-
 void ZGenerationYoung::pause_mark_start()
 {
     if (IsMajorRoots()) {
@@ -397,16 +343,11 @@ void ZGenerationYoung::pause_mark_start()
     }
 }
 
-
-
-
 bool ZGenerationYoung::pause_mark_end()
 {
     VM_ZMarkEndYoung op;
     return op.pause();
 }
-
-
 
 void ZGenerationYoung::mark_start()
 {
@@ -467,7 +408,9 @@ void ZGenerationYoung::mark_start()
         HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
     }
 #endif
-    TheCollector().StartYoungMarkWork();
+    Mark().BindWorkers(Workers());
+    Mark().Start();
+    MarkingStacks::VerifyEmpty(Mark().Stripes().Population());
 #if defined(MRT_TESTABLE_INTERNALS)
     if (HeapGcState::testMarkStartState) {
         HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeRemembered, mark.get());
@@ -513,9 +456,6 @@ void ZGenerationYoung::mark_start()
     // idleedge: census remset-miss old→young BEFORE pinned stamp fills those gaps.
 
     // fysaudit: full non-young O→Y vs mutator remset (D1/D2/D3). Observe only.
-
-
-
 
     // promodomain: reset last cycle's flip-promoted table (CHECK registered==discharged).
     // Corresponds to ZGC reset_relocation_set before the new young collection.
@@ -921,36 +861,6 @@ void HeapGcState::ProcessOldNonStrongReferences(WorkStack& workStack)
     Heap::GetHeap().GetFinalizerProcessor().EnqueueReferences();
 }
 
-bool HeapGcState::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
-{
-    // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
-    MarkStripeSet& stripes = Heap::GetHeap().old().Mark().Stripes();
-    NoteMarkTerminatePause();
-    const size_t before = stripes.Population();
-    (void)workStack;
-    const bool ended = Heap::GetHeap().old().Mark().TryEnd();
-    const size_t after = stripes.Population();
-    NoteMarkTerminateFlushed(after >= before ? after - before : 0);
-    if (!ended) {
-        NoteMarkTerminateContinue(workStack.size() + stripes.Population());
-        return false;
-    }
-    // Preserve export ownership discovery after the ordinary root closure,
-    // while the mark-end pause excludes new mutator publication.
-    ProcessExportRoots(foreignRootsSet);
-    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
-    // to the phase owner before verification or publishing mark completion.
-    if (ZAbort::should_abort()) {
-        return false;
-    }
-    MarkingStacks::VerifyAllEmpty(Heap::GetHeap().old().Mark());
-    Heap::GetHeap().old().set_phase(ZGeneration::Phase::MarkComplete);
-    ZVerify::AfterMark();
-    ZResurrection::block();
-    ReportMarkTerminateContinue();
-    return true;
-}
-
 bool HeapGcState::FlushMarkProducers(ZMark* domain)
 {
     bool flushed = domain != nullptr ? domain->TryTerminateFlush() : ZMark::FlushAllGenerations();
@@ -959,8 +869,6 @@ bool HeapGcState::FlushMarkProducers(ZMark* domain)
     }
     return flushed;
 }
-
-
 
 } // namespace MapleRuntime
 
@@ -988,9 +896,6 @@ bool HeapGcState::FlushMarkProducers(ZMark* domain)
 
 
 namespace MapleRuntime {
-void HeapGcState::Init() {}
-
-void HeapGcState::Fini() {}
 
 BaseObject* HeapGcState::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
                                                       ForwardingStage stage) const
@@ -1262,13 +1167,80 @@ void HeapGcState::DoGarbageCollection(ZGenerationId generation)
 void ZGenerationOld::mark_start()
 {
     Begin(Snapshot().requestIndex);
-    StartOldMark(TheCollector());
+    CHECK(_cycle == ZGenerationId::old);
+    CHECK(Snapshot().active);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::Begin, mark.get());
+    }
+#endif
+    ZGlobalsPointers::flip_old_mark_start();
+    ZVerify::OnColorFlip();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeRetire, mark.get());
+    }
+#endif
+    auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    // ZGC holds the VM mark-start pause across retirement and seqnum advance
+    // (zGeneration.cpp:1213-1231). Serialize the pinned publication adapter
+    // explicitly because our handshake pause permits safe native threads.
+    std::unique_lock<std::mutex> pinnedLock(space.GetRegionManager().PinnedAllocationMutex());
+    Heap::GetHeap().object_allocator().retire_pages(kPageAgeRangeOld);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeSequence, mark.get());
+    }
+#endif
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        CHECK(sequence != UINT64_MAX);
+        ++sequence;
+    }
+    pinnedLock.unlock();
+    set_phase(Phase::Mark);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::BeforeDomain, mark.get());
+    }
+#endif
+    Heap::GetHeap().GetFinalizerProcessor().GetReferenceProcessor().reset_statistics();
+    Mark().BindWorkers(Workers());
+    Mark().Start();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (HeapGcState::testMarkStartState) {
+        HeapGcState::testMarkStartState(_cycle, MarkStartPoint::Complete, mark.get());
+    }
+#endif
 }
 
 bool ZGenerationOld::mark_end()
 {
-    HeapGcState& collector = TheCollector();
-    return collector.TryEndOldMark(collector.oldMarkWorkStack, collector.oldMarkForeignRoots);
+    // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
+    MarkStripeSet& stripes = Mark().Stripes();
+    NoteMarkTerminatePause();
+    const size_t before = stripes.Population();
+    const bool ended = Mark().TryEnd();
+    const size_t after = stripes.Population();
+    NoteMarkTerminateFlushed(after >= before ? after - before : 0);
+    if (!ended) {
+        NoteMarkTerminateContinue(oldMarkWorkStack.size() + stripes.Population());
+        return false;
+    }
+    // Preserve export ownership discovery after the ordinary root closure,
+    // while the mark-end pause excludes new mutator publication.
+    TheCollector().ProcessExportRoots(oldMarkForeignRoots);
+    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
+    // to the phase owner before verification or publishing mark completion.
+    if (ZAbort::should_abort()) {
+        return false;
+    }
+    MarkingStacks::VerifyAllEmpty(Mark());
+    set_phase(ZGeneration::Phase::MarkComplete);
+    ZVerify::AfterMark();
+    ZResurrection::block();
+    ReportMarkTerminateContinue();
+    return true;
 }
 
 void ZGenerationOld::collect()
@@ -1317,7 +1289,7 @@ bool ZGenerationOld::pause_mark_end()
 void ZGenerationOld::concurrent_mark_continue()
 {
     HeapGcState& collector = TheCollector();
-    collector.TracingImpl(collector.oldMarkWorkStack);
+    collector.TracingImpl(oldMarkWorkStack);
 }
 void ZGenerationOld::concurrent_mark_free() {}
 

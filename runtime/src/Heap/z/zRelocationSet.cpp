@@ -76,7 +76,7 @@ void HeapGcState::PostTrace()
         return;
     }
     RefineFromSpace();
-    fwdTable.PrepareForwardTable<Generation::Old>();
+    space.PrepareFromSpace<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.

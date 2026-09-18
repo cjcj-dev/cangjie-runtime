@@ -123,7 +123,6 @@ public:
         return YoungType() == ZYoungType::major_full_roots || YoungType() == ZYoungType::major_partial_roots;
     }
     void Begin(uint64_t index);
-    void StartOldMark(HeapGcState& collector);
     void PublishPhase(ZGenerationPhase value);
     void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
     bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
@@ -269,6 +268,9 @@ public:
     void pause_relocate_start();
     void concurrent_relocate();
 private:
+    friend class HeapGcState;
+    WorkStack oldMarkWorkStack;
+    WorkStack oldMarkForeignRoots;
     ZGenerationOld* previousOld { nullptr };
 };
 

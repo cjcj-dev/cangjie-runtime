@@ -893,7 +893,7 @@ void HeapGcState::EvacuateYoungRegions(const std::vector<BaseObject*>& reachable
             // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
-            fwdTable.PrepareForwardTable<Generation::Young>();
+            static_cast<RegionSpace&>(GetAllocator()).PrepareFromSpace<Generation::Young>();
             // ZGenerationYoung::collect: last abortpoint after selection,
             // before relocate-start. Once flipped, finish every remaining page.
             if (ZAbort::should_abort()) {

@@ -134,7 +134,6 @@ void Heap::Init(const HeapParam& param)
     ZInitialize::initialize();
     _page_allocator->Init(param);
     Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
-    collectorImpl->Init();
     {
         const auto& heapMap = page_table().map();
         const size_t heapSpan = heapMap.size() * heapMap.granule();
@@ -162,7 +161,6 @@ void Heap::Fini()
     ZCollectedHeap::heap()->finalize_gc();
     young().StopWorkers();
     old().StopWorkers();
-    collectorImpl->Fini();
 }
 
 HeapGcState& Heap::GetCollector() { return *collectorImpl; }
