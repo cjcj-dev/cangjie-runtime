@@ -125,6 +125,9 @@ public:
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value, uint64_t index = 0);
+    // GCStats.reason write counterpart: tests override the reason of an
+    // already-active cycle without the !active constraint.
+    MRT_EXPORT void SetReasonForTest(GCReason value) { reason.store(value, std::memory_order_release); }
     ZYoungType YoungType() const { return youngType.load(std::memory_order_acquire); }
     void SetYoungType(ZYoungType type);
     bool IsMajorRoots() const

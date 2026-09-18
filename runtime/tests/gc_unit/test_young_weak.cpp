@@ -81,7 +81,7 @@ struct RelocationReceiptTestAccess {
     static void RunYoungCollection(Heap& collector)
     {
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
+        if (!cycle.Snapshot().active) cycle.SetReasonForTest(GC_REASON_YOUNG);
         YoungTypeSetter type(cycle, ZYoungType::minor);
         Heap::GetHeap().young().collect();
     }
@@ -92,7 +92,7 @@ struct RelocationReceiptTestAccess {
         if (young.Workers() == nullptr) young.InitializeWorkers(1);
         auto& oldCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         if (oldCycle.Snapshot().active) oldCycle.End();
-        oldCycle.SelectReason(GC_REASON_USER);
+        oldCycle.SetReasonForTest(GC_REASON_USER);
         auto& remembered = HeapTestRemset();
         if (!remembered.IsInitialized()) {
             remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
@@ -106,7 +106,7 @@ struct RelocationReceiptTestAccess {
     {
         PrepareMajorRoots(collector);
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-        if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_USER);
+        if (!cycle.Snapshot().active) cycle.SetReasonForTest(GC_REASON_USER);
         if (!cycle.Snapshot().active) cycle.Begin(1);
         Heap::GetHeap().old().Mark().BindWorkers(Heap::GetHeap().old().Workers());
         Heap::GetHeap().old().Mark().Start();
@@ -199,7 +199,7 @@ struct RelocationReceiptTestAccess {
     {
         PrepareMajorRoots(collector);
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::old);
-        if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_USER);
+        if (!cycle.Snapshot().active) cycle.SetReasonForTest(GC_REASON_USER);
         Heap::GetHeap().old().collect();
     }
 };
@@ -423,7 +423,7 @@ void RunYoungWeakVariant(size_t helpers)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
 
     YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
@@ -437,7 +437,7 @@ void RunYoungWeakVariant(size_t helpers)
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
     RelocationReceiptTestAccess::BindWorkerBudget();
 
     // The producer-to-consumer bearing point must deliver the field closure.
@@ -495,7 +495,7 @@ void RunYoungWeakRemsetFlow()
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
     YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
     GC_EXPECT_TRUE(closure.Calls() > 0);
@@ -507,7 +507,7 @@ void RunYoungWeakRemsetFlow()
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
     RelocationReceiptTestAccess::BindWorkerBudget();
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
@@ -780,7 +780,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
     bool currentMarked = false;
     ValueRootMarkObservation closure([&] { currentMarked |= IsValueRootMarked(route); });
     RelocationReceiptTestAccess::RunYoungCollection(collector);
@@ -800,7 +800,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
                  static_cast<unsigned>(afterCoverage.answer));
 
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
     RelocationReceiptTestAccess::BindWorkerBudget();
     GC_EXPECT_TRUE(currentMarked);
     GC_EXPECT_TRUE(carrierCurrent);

@@ -313,7 +313,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         Heap::GetHeap().GetZGeneration(generation).InitializeWorkers(helpers + 1);
     }
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
-        .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
+        .SetReasonForTest(major ? GC_REASON_USER : GC_REASON_YOUNG);
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young).set_phase(major ? ZGenerationPhase::Relocate : ZGenerationPhase::MarkComplete);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
@@ -368,7 +368,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
-        .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
+        .SetReasonForTest(major ? GC_REASON_USER : GC_REASON_YOUNG);
     ArrayClosureResult result;
     result.region = fx.region1;
     result.array = array;
@@ -408,7 +408,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
     }
     if (!ownerWasActive) activityCycle.End();
     Heap::GetHeap().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young)
-        .SelectReason(oldReason);
+        .SetReasonForTest(oldReason);
 
     // Worker TLS cleanup must finish while the heap generation owns publication.
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {

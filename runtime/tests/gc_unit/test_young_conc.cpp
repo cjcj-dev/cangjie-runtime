@@ -117,7 +117,7 @@ struct RelocationReceiptTestAccess {
     static void RunCollectionDispatch(Heap& collector)
     {
         auto& cycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
-        if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
+        if (!cycle.Snapshot().active) cycle.SetReasonForTest(GC_REASON_YOUNG);
         YoungTypeSetter type(cycle, ZYoungType::minor);
         Heap::GetHeap().young().collect();
     }
@@ -212,7 +212,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
     ResetMarkTerminateTestReceipt();
     ArmMarkBeforeMarkEndTestReceipt(&producer, first);
 
@@ -232,7 +232,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     (void)second;
 
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
     RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
@@ -263,7 +263,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
     ResetMarkTerminateTestReceipt();
     ArmY2yDuringConcurrentTestReceipt(fx.obj1);
 
@@ -280,7 +280,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     GC_EXPECT_TRUE(closure.Saw(child));
 
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
     RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
@@ -312,7 +312,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
     ResetMarkTerminateTestReceipt();
     ResetY2yHandoffTestReceipt();
     Mutator producer;
@@ -338,7 +338,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     GC_EXPECT_TRUE(closure.Saw(child));
 
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
     RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
@@ -371,7 +371,7 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
     ResetMarkTerminateTestReceipt();
     ArmLeftoverBeforePauseTestReceipt(y2yHolder);
 
@@ -389,7 +389,7 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverY2yAfterWorkerForcesContinue)
     GC_EXPECT_TRUE(closure.Saw(y2yChild));
 
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
     RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 
@@ -415,7 +415,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     auto& activityCycle = Heap::GetHeap().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(GC_REASON_YOUNG);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(GC_REASON_YOUNG);
     ResetMarkTerminateTestReceipt();
 
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
@@ -426,7 +426,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
 
     if (!ownerWasActive) activityCycle.End();
-    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SelectReason(reasonBefore);
+    Heap::GetHeap().GetZGeneration(ZGenerationId::young).SetReasonForTest(reasonBefore);
     RelocationReceiptTestAccess::BindCollector(nullptr);
 }
 

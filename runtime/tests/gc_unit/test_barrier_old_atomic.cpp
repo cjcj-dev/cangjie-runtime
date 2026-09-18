@@ -98,13 +98,13 @@ public:
         activityCycle = &Heap::GetHeap().GetZGeneration(ZGenerationId::old);
         ownerWasActive = activityCycle->Snapshot().active;
         if (!ownerWasActive) activityCycle->Begin(1);
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).SelectReason(GC_REASON_USER);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).SetReasonForTest(GC_REASON_USER);
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     }
     ~MarkWindowScope()
     {
         Heap::GetHeap().GetZGeneration(ZGenerationId::old).set_phase(phase);
-        Heap::GetHeap().GetZGeneration(ZGenerationId::old).SelectReason(reason);
+        Heap::GetHeap().GetZGeneration(ZGenerationId::old).SetReasonForTest(reason);
         if (!ownerWasActive) activityCycle->End();
     }
 
