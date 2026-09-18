@@ -558,50 +558,6 @@ void ZStat::run_thread()
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-namespace ZStatPhases {
-const ZStatSubPhase PCollectFromSpaceGarbage("CollectFromSpaceGarbage", ZGenerationId::old);
-const ZStatSubPhase PCollectLargeGarbage("Collect large garbage", ZGenerationId::old);
-const ZStatSubPhase PConcurrentMarking("Concurrent marking", ZGenerationId::old);
-const ZStatSubPhase PConcurrentReMarking("Concurrent re-marking", ZGenerationId::old);
-const ZStatSubPhase PConcurrentResurrection("concurrent resurrection", ZGenerationId::old);
-const ZStatSubPhase PDoTracing("DoTracing", ZGenerationId::old);
-const ZStatSubPhase PEnumRootsUpdateOldPointersWithin("enum roots & update old pointers within", ZGenerationId::old);
-const ZStatSubPhase PExemptFromRegions("ExemptFromRegions", ZGenerationId::old);
-const ZStatCriticalPhase PFinalizer("Finalizer");
-const ZStatCriticalPhase PFinalizerProcessorWaittingTime("finalizerProcessor waitting time");
-const ZStatSubPhase YoungForwardFromRegions("ForwardFromRegions", ZGenerationId::young);
-const ZStatSubPhase OldForwardFromRegions("ForwardFromRegions", ZGenerationId::old);
-const ZStatSubPhase PIdentifyUselessExternRef("identify useless extern ref", ZGenerationId::old);
-const ZStatPhasePause POldRelocateStart("old.relocate_start", ZGenerationId::old);
-const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
-const ZStatSubPhase PPreforward("Preforward", ZGenerationId::old);
-const ZStatCriticalPhase PReclaimGarbageRegions("ReclaimGarbageRegions");
-const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
-const ZStatSubPhase PTraceLiveObjectsUpdateOldPointersInRefFields("trace live objects & update old pointers in ref-fields", ZGenerationId::old);
-const ZStatSubPhase PYoungConcPromoteWalk("young.conc_promote_walk", ZGenerationId::young);
-const ZStatSubPhase PYoungConcurrentRelocate("young.concurrent_relocate", ZGenerationId::young);
-const ZStatSubPhase PYoungEvacFinish("young.evac_finish", ZGenerationId::young);
-const ZStatSubPhase PYoungEvacRetire("young.evac_retire", ZGenerationId::young);
-const ZStatSubPhase PYoungFlushAlloc("young.flush_alloc", ZGenerationId::young);
-const ZStatSubPhase PYoungMarkClosure("young.mark_closure", ZGenerationId::young);
-const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
-const ZStatSubPhase PYoungMarkFromRemset("young.mark_from_remset", ZGenerationId::young);
-const ZStatSubPhase PYoungPinnedScan("young.pinned_scan", ZGenerationId::young);
-const ZStatSubPhase PYoungPostEvacFinish("young.post_evac_finish", ZGenerationId::young);
-const ZStatSubPhase PYoungPreEvacClear("young.pre_evac_clear", ZGenerationId::young);
-const ZStatSubPhase PYoungPrepareCandidates("young.prepare_candidates", ZGenerationId::young);
-const ZStatSubPhase PYoungRefFix("young.ref_fix", ZGenerationId::young);
-const ZStatSubPhase PYoungRefFixBulk("young.ref_fix_bulk", ZGenerationId::young);
-const ZStatSubPhase PYoungRefFixPrepare("young.ref_fix_prepare", ZGenerationId::young);
-const ZStatSubPhase PYoungRefFixRootPass1("young.ref_fix_root_pass1", ZGenerationId::young);
-const ZStatSubPhase PYoungRemsetDrain("young.remset_drain", ZGenerationId::young);
-const ZStatSubPhase PYoungRemsetRescan("young.remset_rescan", ZGenerationId::young);
-const ZStatSubPhase PYoungRootEnum("young.root_enum", ZGenerationId::young);
-const ZStatPhaseGeneration YoungGeneration("Young Generation", ZGenerationId::young);
-const ZStatPhaseGeneration OldGeneration("Old Generation", ZGenerationId::old);
-const ZStatPhaseCollection MinorCollection("Minor Collection", true);
-const ZStatPhaseCollection MajorCollection("Major Collection", false);
-} // namespace ZStatPhases
 } // namespace MapleRuntime
 
 #include "Base/AtomicSpinLock.h"

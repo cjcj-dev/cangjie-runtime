@@ -433,51 +433,6 @@ public:
     explicit ZStatTimerWorker(const ZStatPhase& phase) : ZStatTimer(phase) {}
 };
 
-namespace ZStatPhases {
-extern const ZStatSubPhase PCollectFromSpaceGarbage;
-extern const ZStatSubPhase PCollectLargeGarbage;
-extern const ZStatSubPhase PConcurrentMarking;
-extern const ZStatSubPhase PConcurrentReMarking;
-extern const ZStatSubPhase PConcurrentResurrection;
-extern const ZStatSubPhase PDoTracing;
-extern const ZStatSubPhase PEnumRootsUpdateOldPointersWithin;
-extern const ZStatSubPhase PExemptFromRegions;
-extern const ZStatCriticalPhase PFinalizer;
-extern const ZStatCriticalPhase PFinalizerProcessorWaittingTime;
-extern const ZStatSubPhase YoungForwardFromRegions;
-extern const ZStatSubPhase OldForwardFromRegions;
-extern const ZStatSubPhase PIdentifyUselessExternRef;
-extern const ZStatPhasePause POldRelocateStart;
-extern const ZStatSubPhase PPostTrace;
-extern const ZStatSubPhase PPreforward;
-extern const ZStatCriticalPhase PReclaimGarbageRegions;
-extern const ZStatSubPhase PRemapYoungRoots;
-extern const ZStatSubPhase PTraceLiveObjectsUpdateOldPointersInRefFields;
-extern const ZStatSubPhase PYoungConcPromoteWalk;
-extern const ZStatSubPhase PYoungConcurrentRelocate;
-extern const ZStatSubPhase PYoungEvacFinish;
-extern const ZStatSubPhase PYoungEvacRetire;
-extern const ZStatSubPhase PYoungFlushAlloc;
-extern const ZStatSubPhase PYoungMarkClosure;
-extern const ZStatSubPhase PYoungMarkFollow;
-extern const ZStatSubPhase PYoungMarkFromRemset;
-extern const ZStatSubPhase PYoungPinnedScan;
-extern const ZStatSubPhase PYoungPostEvacFinish;
-extern const ZStatSubPhase PYoungPreEvacClear;
-extern const ZStatSubPhase PYoungPrepareCandidates;
-extern const ZStatSubPhase PYoungRefFix;
-extern const ZStatSubPhase PYoungRefFixBulk;
-extern const ZStatSubPhase PYoungRefFixPrepare;
-extern const ZStatSubPhase PYoungRefFixRootPass1;
-extern const ZStatSubPhase PYoungRemsetDrain;
-extern const ZStatSubPhase PYoungRemsetRescan;
-extern const ZStatSubPhase PYoungRootEnum;
-extern const ZStatPhaseGeneration YoungGeneration;
-extern const ZStatPhaseGeneration OldGeneration;
-extern const ZStatPhaseCollection MinorCollection;
-extern const ZStatPhaseCollection MajorCollection;
-}
-
 // zStat.cpp:935-1017 — ZStatMutatorAllocRate.
 struct ZStatMutatorAllocRateStats {
     double avg = 0.0;

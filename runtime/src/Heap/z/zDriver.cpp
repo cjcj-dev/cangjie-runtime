@@ -35,7 +35,14 @@
 #include "LoaderManager.h"
 #include "Mutator/MutatorManager.h"
 
+
+
 namespace MapleRuntime {
+
+static const ZStatPhaseCollection ZPhaseCollectionMajor("Major Collection", false);
+static const ZStatPhaseCollection ZPhaseCollectionMinor("Minor Collection", true);
+static const ZStatPhaseGeneration ZPhaseGenerationOld("Old Generation", ZGenerationId::old);
+static const ZStatPhaseGeneration ZPhaseGenerationYoung("Young Generation", ZGenerationId::young);
 std::mutex ZDriver::driverLock;
 
 static bool ShouldPrecleanYoung(GCReason reason);
@@ -150,7 +157,7 @@ void ZDriver::RunCollection(uint64_t index, GCReason reason, bool warmup)
     ZDriver::RunGarbageCollection(index, reason);
     const uint64_t end = TimeUtil::NanoSeconds();
     cycle.AtEnd(end, generation.StatWorkers(), warmup, recordStats);
-    (isYoung ? ZStatPhases::YoungGeneration : ZStatPhases::OldGeneration).RegisterEnd(start, end);
+    (isYoung ? ZPhaseGenerationYoung : ZPhaseGenerationOld).RegisterEnd(start, end);
 }
 
 bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
@@ -230,7 +237,7 @@ bool ZDriver::ExecuteDriverRequest(const ZDriverRequest& request)
         ZCollectedHeap::heap()->driver_major()->RunCollection(index, request.cause(), warmup);
         accumulate(ZGenerationId::old);
     }
-    (request.cause() == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
+    (request.cause() == GC_REASON_YOUNG ? ZPhaseCollectionMinor : ZPhaseCollectionMajor)
         .RegisterEnd(collectionStart, TimeUtil::NanoSeconds());
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.

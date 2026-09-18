@@ -27,7 +27,12 @@
 #include "ObjectModel/MObject.h"
 #include "CjScheduler.h"
 
+
+
 namespace MapleRuntime {
+
+static const ZStatCriticalPhase PFinalizer("Finalizer");
+static const ZStatCriticalPhase PFinalizerProcessorWaittingTime("finalizerProcessor waitting time");
 
 static const ZStatSubPhase ZSubPhaseConcurrentReferencesProcess("Concurrent References Process",
                                                                 ZGenerationId::old);
@@ -548,7 +553,7 @@ void FinalizerProcessor::Run()
         bool hasPendingReclaimHeapGarbage = false;
         bool hasPendingFeedHungryBuffers = false;
         {
-            ZStatTimer zstatTimer(ZStatPhases::PFinalizerProcessorWaittingTime);
+            ZStatTimer zstatTimer(PFinalizerProcessorWaittingTime);
             while (running.load(std::memory_order_acquire)) {
                 hasPendingFinalizableJob = HasFinalizableJob();
                 hasPendingReclaimHeapGarbage =
@@ -802,7 +807,7 @@ void FinalizerProcessor::ProcessFinalizableList()
 
 void FinalizerProcessor::ProcessFinalizables()
 {
-    ZStatTimer zstatTimer(ZStatPhases::PFinalizer);
+    ZStatTimer zstatTimer(PFinalizer);
     {
         // we leave saferegion to avoid GC visit those changing queues.
         ScopedObjectAccess soa;

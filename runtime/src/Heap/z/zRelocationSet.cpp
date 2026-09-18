@@ -50,11 +50,16 @@
 #include "TypeInfoManager.h"
 #include "Heap/z/zRelocate.hpp"
 
+
+
 namespace MapleRuntime {
+
+static const ZStatSubPhase PCollectFromSpaceGarbage("CollectFromSpaceGarbage", ZGenerationId::old);
+static const ZStatSubPhase PPostTrace("PostTrace", ZGenerationId::old);
 
 void ZGenerationOld::PostTrace()
 {
-    ZStatTimerOld zstatTimer(ZStatPhases::PPostTrace);
+    ZStatTimerOld zstatTimer(PPostTrace);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
@@ -85,7 +90,7 @@ void ZGenerationOld::CollectSmallSpace()
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     {
-        ZStatTimerOld zstatTimer(ZStatPhases::PCollectFromSpaceGarbage);
+        ZStatTimerOld zstatTimer(PCollectFromSpaceGarbage);
         space.CollectFromSpaceGarbage();
     }
 

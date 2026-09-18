@@ -22,8 +22,17 @@
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
 #include "Heap/z/zPageAllocator.hpp"
+namespace MapleRuntime {
+extern const ZStatSubPhase OldForwardFromRegions;
+extern const ZStatSubPhase PExemptFromRegions;
+extern const ZStatCriticalPhase PReclaimGarbageRegions;
+extern const ZStatSubPhase YoungForwardFromRegions;
+}
+
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
+
+
 #endif
 
 namespace MapleRuntime {
@@ -110,7 +119,7 @@ public:
     size_t ReclaimGarbageMemory(bool /* releaseAll */) override
     {
         const size_t cachedBefore = GetRegionManager().GetDirtyUnitCount() * ZPage::UNIT_SIZE;
-        ZStatTimerWorker zstatTimer(ZStatPhases::PReclaimGarbageRegions);
+        ZStatTimerWorker zstatTimer(PReclaimGarbageRegions);
         // zPageAllocator.cpp: free pages return to the mapped cache. Physical
         // uncommit belongs to zUncommitter.cpp:367-421, including OOM reclaim.
         GetRegionManager().ReclaimGarbageRegions();
@@ -136,7 +145,7 @@ public:
     // Return the garbage size of from space.
     size_t RefineFromSpace()
     {
-        ZStatTimerWorker zstatTimer(ZStatPhases::PExemptFromRegions);
+        ZStatTimerWorker zstatTimer(PExemptFromRegions);
         return GetRegionManager().ExemptFromRegions();
     }
 
@@ -149,8 +158,8 @@ public:
     template<Generation G>
     void ForwardFromSpace(ZWorkers& workers)
     {
-        ZStatTimerWorker zstatTimer(G == Generation::Young ? ZStatPhases::YoungForwardFromRegions :
-                                    ZStatPhases::OldForwardFromRegions);
+        ZStatTimerWorker zstatTimer(G == Generation::Young ? YoungForwardFromRegions :
+                                    OldForwardFromRegions);
         GetRegionManager().ForwardFromRegions<G>(workers);
     }
 

@@ -104,6 +104,10 @@
 
 namespace MapleRuntime {
 
+static const ZStatPhasePause POldRelocateStart("old.relocate_start", ZGenerationId::old);
+static const ZStatSubPhase PPreforward("Preforward", ZGenerationId::old);
+static const ZStatSubPhase PRemapYoungRoots("RemapYoungRoots", ZGenerationId::old);
+
 void ZRelocate::ForwardFromSpace(ZGenerationId generation)
 {
 
@@ -176,7 +180,7 @@ bool ZRelocate::IsUnmovableFromObject(BaseObject* obj)
 void ZRelocate::RemapYoungRoots()
 {
     SuspendibleThreadSetJoiner joiner;
-    ZStatTimerYoung zstatTimer(ZStatPhases::PRemapYoungRoots);
+    ZStatTimerYoung zstatTimer(PRemapYoungRoots);
     // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
     ZRemsetTableIterator remsetIter(&Heap::GetHeap().remembered(), false);
     Heap::GetHeap().remembered().remap_current(&remsetIter);
@@ -233,7 +237,7 @@ void ZRelocate::StartRelocationTasks(ZGenerationId generation)
 
 bool ZRelocate::Preforward()
 {
-    ZStatTimerOld zstatTimer(ZStatPhases::PPreforward);
+    ZStatTimerOld zstatTimer(PPreforward);
     {
         // Caller holds DriverLocker (ZGenerationOld::collect zGeneration.cpp:1054-1063).
         RemapYoungRoots();
@@ -249,7 +253,7 @@ bool ZRelocate::Preforward()
         // GCLOG samples pause/concurrent kind when the timer is constructed, so enter
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
-        ZStatTimerOld zstatTimer(ZStatPhases::POldRelocateStart);
+        ZStatTimerOld zstatTimer(POldRelocateStart);
         ThreadGCData::VisitOwners([](ThreadGCData& data, Mutator*, ThreadLocalData*) {
             data.storeBarrierBuffer->install_base_pointers();
         });
@@ -2713,6 +2717,8 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "Sync/Sync.h"
+
+
 
 
 namespace MapleRuntime {

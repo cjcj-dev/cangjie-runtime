@@ -59,6 +59,8 @@
 #include "Heap/z/zRelocate.hpp"
 
 namespace MapleRuntime {
+
+static const ZStatSubPhase PYoungMarkFollow("young.mark_follow", ZGenerationId::young);
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
 // "the pre-pause test was right every time" rather than "nobody is counting".
 std::atomic<size_t> g_markTerminateContinue{ 0 };
@@ -663,7 +665,7 @@ bool ZMark::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
                                      std::unordered_set<MAddress>& weakSlots,
                                      YoungConcWindowStats* windowStats)
 {
-    ZStatTimerWorker zstatTimer(ZStatPhases::PYoungMarkFollow);
+    ZStatTimerWorker zstatTimer(PYoungMarkFollow);
     // Follow explicit roots and allocation work; young has no SATB queue.
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();
@@ -1557,3 +1559,5 @@ namespace MapleRuntime {
 }
 
 #include "Heap/z/zMark.inline.hpp"
+
+
