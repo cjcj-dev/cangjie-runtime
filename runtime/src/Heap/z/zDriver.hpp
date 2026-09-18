@@ -355,12 +355,20 @@ class ZDriverMinor final : public ZDriver {
 public:
     explicit ZDriverMinor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MINOR) {}
     void collect(const ZDriverRequest& request);
+    ZDriverPort& port() { return _port; }
+    const ZDriverPort& port() const { return _port; }
+private:
+    ZDriverPort _port;
 };
 
 class ZDriverMajor final : public ZDriver {
 public:
     explicit ZDriverMajor(CollectorResources& resources) : ZDriver(resources, GCDriverKind::MAJOR) {}
     void collect(const ZDriverRequest& request);
+    ZDriverPort& port() { return _port; }
+    const ZDriverPort& port() const { return _port; }
+private:
+    ZDriverPort _port;
 };
 
 // CollectorResources provides the resources that a functional collector need,
@@ -413,8 +421,8 @@ public:
 
     // ZGC-style per-generation request ports.  Requests on one port never
     // consume or coalesce requests from the other generation.
-    ZDriverPort& GetMinorDriverPort() { return minorDriverPort; }
-    ZDriverPort& GetMajorDriverPort() { return majorDriverPort; }
+    ZDriverPort& GetMinorDriverPort() { return minorDriver->port(); }
+    ZDriverPort& GetMajorDriverPort() { return majorDriver->port(); }
     ZDriverPort& GetYoungDriverPort();
     void RequestAbort(GCDriverKind kind)
     {
@@ -448,8 +456,6 @@ private:
     bool ExecuteDriverRequest(const ZDriverRequest& request);
     bool ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request);
     void CancelDriverRequestLifecycle(GCDriverKind kind);
-    ZDriverPort minorDriverPort;
-    ZDriverPort majorDriverPort;
     // zDriver.cpp:59-72: held by young; old releases it for its body.
     std::mutex driverLock;
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)

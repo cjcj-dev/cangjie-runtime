@@ -642,7 +642,7 @@ void CollectorResources::RunDirectorLoop()
 bool CollectorResources::start_gc(uint64_t now)
 {
     EvaluateDirector(now);
-    return minorBusy || majorBusy || minorDriverPort.is_busy() || majorDriverPort.is_busy();
+    return minorBusy || majorBusy || GetMinorDriverPort().is_busy() || GetMajorDriverPort().is_busy();
 }
 
 void CollectorResources::EvaluateDirector(uint64_t now)

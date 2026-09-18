@@ -58,13 +58,13 @@ void ZDriver::run_thread()
 
 void ZDriver::terminate()
 {
-    (kind == GCDriverKind::MINOR ? resources.minorDriverPort : resources.majorDriverPort)
+    (kind == GCDriverKind::MINOR ? resources.GetMinorDriverPort() : resources.GetMajorDriverPort())
         .send_async(ZDriverRequest(GC_REASON_INVALID, 0, 0));
 }
 
 bool ZDriver::is_busy() const
 {
-    return (kind == GCDriverKind::MINOR ? resources.minorDriverPort : resources.majorDriverPort).is_busy();
+    return (kind == GCDriverKind::MINOR ? resources.GetMinorDriverPort() : resources.GetMajorDriverPort()).is_busy();
 }
 
 void ZDriverMinor::collect(const ZDriverRequest& request)
@@ -181,7 +181,7 @@ void CollectorResources::StopGCThreads()
 
 void CollectorResources::RunDriverLoop(GCDriverKind kind)
 {
-    ZDriverPort& port = kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort;
+    ZDriverPort& port = kind == GCDriverKind::MINOR ? GetMinorDriverPort() : GetMajorDriverPort();
     for (;;) {
         const ZDriverRequest request = port.receive();
         if (request.cause() == GC_REASON_INVALID) {
@@ -202,7 +202,7 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
 void CollectorResources::CompleteDriverRequest(ZDriverPort& port)
 {
     std::lock_guard<std::mutex> lock(directorMutex);
-    (&port == &minorDriverPort ? minorBusy : majorBusy) = false;
+    (&port == &GetMinorDriverPort() ? minorBusy : majorBusy) = false;
     directorReevaluate = true;
     directorCondition.notify_one();
 }
@@ -229,7 +229,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 {
     CHECK(request.cause() < GC_REASON_MAX);
     HeapGcState* activeCollector = &Heap::GetHeap().GetCollector();
-    ZDriverPort& port = request.cause() == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
+    ZDriverPort& port = request.cause() == GC_REASON_YOUNG ? GetMinorDriverPort() : GetMajorDriverPort();
     if (ZAbort::should_abort()) {
         return false;
     }
@@ -274,7 +274,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
             RunYoungCollection(*activeCollector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
             accumulate(ZGenerationId::young);
             if (ZAbort::should_abort()) {
-                CancelDriverRequestLifecycle(&port == &minorDriverPort ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+                CancelDriverRequestLifecycle(&port == &GetMinorDriverPort() ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
                 return false;
             }
         }
@@ -287,7 +287,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
         }
 #endif
         if (ZAbort::should_abort()) {
-            CancelDriverRequestLifecycle(&port == &minorDriverPort ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+            CancelDriverRequestLifecycle(&port == &GetMinorDriverPort() ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
             return false;
         }
     }
@@ -309,7 +309,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.
     if (ZAbort::should_abort()) {
-        CancelDriverRequestLifecycle(&port == &minorDriverPort ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
+        CancelDriverRequestLifecycle(&port == &GetMinorDriverPort() ? GCDriverKind::MINOR : GCDriverKind::MAJOR);
         return false;
     }
     GcLog::Cycle(GCIdMark::Current(), request.cause() == GC_REASON_YOUNG ? "minor" : "major",
@@ -321,7 +321,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 bool CollectorResources::ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request)
 {
     DriverLocker locker(*this);
-    const bool major = &port == &majorDriverPort;
+    const bool major = &port == &GetMajorDriverPort();
     ZAbort::reset();
     if (major) ZBreakpoint::AtBeforeGC();
     if (ZAbort::should_abort() || !ExecuteDriverRequest(request)) {
@@ -554,7 +554,7 @@ bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
 ZDriverPort& CollectorResources::GetYoungDriverPort()
 {
     return Heap::GetHeap().young().YoungType() == ZYoungType::minor
-        ? minorDriverPort : majorDriverPort;
+        ? GetMinorDriverPort() : GetMajorDriverPort();
 }
 
 #ifdef COV_SIGNALHANDLE
