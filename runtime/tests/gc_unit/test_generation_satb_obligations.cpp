@@ -19,6 +19,7 @@
 #include "Common/Runtime.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zAddress.hpp"
+#include "Heap/z/zResurrection.hpp"
 #include "Concurrency/Concurrency.h"
 #include "gc_unittest.hpp"
 #include "mark_publication_fixture.hpp"
@@ -103,11 +104,9 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     struct RestoreBlock {
-        CollectorResources& resources;
-        ~RestoreBlock() { resources.UnblockResurrection(); }
-    } restore { resources };
+        ~RestoreBlock() { ZResurrection::unblock(); }
+    } restore;
     RestoreMarkFlips flips;
     const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, false, true);
     GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
@@ -115,7 +114,7 @@ GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
                  ZPointer::is_mark_bad(stored) ? 1 : 0);
     RefField<> field(stored);
     mark.CompleteOldMarkForAdmissionTest();
-    resources.BlockResurrection();
+    ZResurrection::block();
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
     (void)GcHeapFixture::MarkFinalizable(fx.region0, fx.obj0);
     GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
@@ -127,13 +126,11 @@ GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
 {
     GcHeapFixture fx;
     MarkPublicationFixture mark;
-    auto& resources = Heap::GetHeap().GetCollectorResources();
     struct RestoreBlock {
-        CollectorResources& resources;
-        ~RestoreBlock() { resources.UnblockResurrection(); }
-    } restore { resources };
+        ~RestoreBlock() { ZResurrection::unblock(); }
+    } restore;
     fx.region0->reset(PageAge::eden);
-    resources.BlockResurrection();
+    ZResurrection::block();
     RestoreMarkFlips flips;
     const zpointer stored = CaptureStoreGoodThenFlipMark(fx.obj0, flips, true, false);
     GC_EXPECT_TRUE(ZPointer::is_mark_bad(stored));
