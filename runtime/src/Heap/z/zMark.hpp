@@ -343,27 +343,6 @@ public:
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
                                             const ForwardingProvenance& provenance);
     BaseObject* ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const;
-    static constexpr size_t kHealFpBits = 1u << 22;
-    static uint64_t* HealFpTable()
-    {
-        static uint64_t table[kHealFpBits / 64] = {};
-        return table;
-    }
-    static size_t HealFpIndex(uintptr_t slot)
-    {
-        const uintptr_t h = (slot >> 3) ^ (slot >> 23) ^ (slot >> 41);
-        return static_cast<size_t>(h) & (kHealFpBits - 1);
-    }
-    static void HealFpMark(uintptr_t slot)
-    {
-        const size_t i = HealFpIndex(slot);
-        __atomic_fetch_or(&HealFpTable()[i / 64], uint64_t(1) << (i % 64), __ATOMIC_RELAXED);
-    }
-    static bool HealFpTest(uintptr_t slot)
-    {
-        const size_t i = HealFpIndex(slot);
-        return (__atomic_load_n(&HealFpTable()[i / 64], __ATOMIC_RELAXED) & (uint64_t(1) << (i % 64))) != 0;
-    }
     bool IsLoadBad(RefField<>& ref) const
     {
         return (raw(ref.GetFieldValue()) & ::g_cjLoadBadMask) != 0;
@@ -495,13 +474,6 @@ public:
 protected:
     void ForwardFromSpace(ZGenerationId generation);
     void RefineFromSpace();
-
-    U32 snapshotFinalizerNum = 0;
-
-
-    // indicate whether to fix references (including global roots and reference fields).
-    // this member field is useful for optimizing concurrent copying gc.
-    bool fixReferences = false;
 
     std::atomic<size_t> markedObjectCount = { 0 };
     std::mutex externMtx;
@@ -739,67 +711,16 @@ public:
 
     void ResolveCycleRef();
 
-    // BaseObject* ForwardFixRefField(RefField<>& field) const;
-    // lonefrom: "is this object being relocated in this cycle" must not be asked as
-    // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
-    // from-list with TakeHeadRegion() (RegionManager.cpp:1638), so a
-    // region is retyped the moment relocation of it starts.  IsFromRegion() tests FROM_REGION
-    // alone -- IsLoneFromRegion() is a separate predicate -- so for the whole window in which a
-    // region is actually being evacuated, its objects answer "not from".
-    //
-    // What that produces: an object in a LONE_FROM region that has not been copied yet answers
-    // false to all three staleness authorities (IsFromObject, IsGhostFromObject, IsForwarded --
-    // the last only becomes true after the copy), so GetAndTryTagRefField paints it the *current*
-    // remap colour.  The slot is then load-good; the object is copied a moment later; and the read
-    // barrier's fast path hands the from-version straight to the mutator, which reads its header
-    // as one 64-bit word and gets ObjectState::FORWARDED in bits 48-49.
-    //
-    // afterFlip=1 (slot colour == current good colour, i.e. painted after the relocate-start flip),
-    // slotGood=1, hasTo=1 (a to-version exists), unmov=0 -- and unmov=0 is itself explained here,
-    // since IsUnmovableFromObject covers UNMOVABLE_FROM/RAW_POINTER_PINNED and not LONE_FROM.
-    //
-    // OpenJDK never asks a page-type enum this question.  Relocation-set membership is decided once
-    // when the set is installed (zGeneration.cpp:254) and answered per address through
-    // ZForwardingTable, so it cannot change under a concurrent reader the way a region type does.
-    static constexpr bool kLoneFromIsFrom = true;
-    mutable std::atomic<uint64_t> loneFromHits{ 0 };
-
-    // PORT_ZFORWARDING step 2: membership answered by address, the way ZGC answers it
-    // (ZGeneration::relocate_or_remap_object -> _forwarding_table.get(addr)).  Step 1 established
-    // the two answers are equivalent: 1.68e8 comparisons across 10 runs, tableOnly=0 legacyOnly=0.
-    //
-    // The old path stays as the control arm.  What changes is *which* answer is authoritative: a
-    // region type is rewritten as relocation progresses, and a predicate reading it can be right
-    // one instant and wrong the next -- that shape produced several of this session's dead ends.
-    // An address either is in the set or is not.
-    static constexpr bool kMembershipFromTable = true;
-
+    // Relocation membership comes from the installed forwarding tables, as in
+    // ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp).
     bool IsFromObject(BaseObject* obj) const
     {
-        if (kMembershipFromTable) {
-            if (!Heap::IsHeapAddress(obj)) {
-                return false;
-            }
-            const MAddress addr = reinterpret_cast<MAddress>(obj);
-            return Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
-                   Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
+        if (!Heap::IsHeapAddress(obj)) {
+            return false;
         }
-        // filter const string object.
-        if (Heap::IsHeapAddress(obj)) {
-            auto regionInfo = Heap::page(reinterpret_cast<uintptr_t>(obj));
-            if (kLoneFromIsFrom && regionInfo->IsLoneFromRegion()) {
-                // Arm self-check: a null result from this change is only readable if the branch is
-                // known to fire.  Powers of two, so a hot predicate cannot flood the log.
-                const uint64_t n = loneFromHits.fetch_add(1, std::memory_order_relaxed) + 1;
-                if ((n & (n - 1)) == 0) {
-                    LOG(RTLOG_ERROR, "[LONEFROM] trigger n=%lu", n);
-                }
-                return true;
-            }
-            return regionInfo->IsFromRegion();
-        }
-
-        return false;
+        const MAddress addr = reinterpret_cast<MAddress>(obj);
+        return Heap::GetHeap().GetZGeneration(Generation::Young).forwarding_table().get(addr) != nullptr ||
+               Heap::GetHeap().GetZGeneration(Generation::Old).forwarding_table().get(addr) != nullptr;
     }
 
     bool IsGhostFromObject(BaseObject* obj) const

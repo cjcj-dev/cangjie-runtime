@@ -77,7 +77,7 @@ GC_TEST(StayYoung, AgeClampsAtSurvivor14)
     GC_EXPECT_EQ(r->GetYoungAge(), static_cast<unsigned>(untype(PageAge::survivor14)));
 }
 
-// Product EnlistStayYoungSurvivor must not leave LONE_FROM (kLoneFromIsFrom).
+// Product EnlistStayYoungSurvivor must not leave LONE_FROM.
 GC_TEST(StayYoung, EnlistTypeMustNotStayLoneFrom)
 {
     GC_EXPECT_TRUE(true);
