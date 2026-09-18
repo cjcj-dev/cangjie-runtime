@@ -326,6 +326,33 @@ class VM_ZVerifyOld;
 
 
 class MarkingWork;
+
+struct ValueRoot {
+    BaseObject* object;
+    ForwardingStage stage;
+    uintptr_t color;
+    Generation generation;
+    ValueRoot(BaseObject* value, ForwardingStage source = ForwardingStage::OverwritePrevious)
+        : object(value), stage(source), color(::g_cjLoadGoodMask),
+          generation(source == ForwardingStage::IncomingNew && Heap::IsHeapAddress(value)
+              ? Heap::page(reinterpret_cast<MAddress>(value))->GetOwnerGeneration()
+              : Generation::Old) {}
+    operator BaseObject*() const { return object; }
+    ForwardingStage Stage() const
+    {
+        const uintptr_t mask = generation == Generation::Young
+            ? ZPointerRemappedYoungMask
+            : ZPointerRemappedOldMask;
+        return (ZPointer::remap_bits(color) & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
+    }
+};
+struct ValueRootHash {
+    size_t operator()(const ValueRoot& root) const { return std::hash<BaseObject*>{}(root.object); }
+};
+using ValueRootSet = std::unordered_set<ValueRoot, ValueRootHash>;
+using ValueRootList = std::list<ValueRoot>;
+using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>;
+
 class HeapGcState {
     friend class ZMarkTask;
 
@@ -568,35 +595,6 @@ protected:
 
     std::atomic<size_t> markedObjectCount = { 0 };
     std::mutex externMtx;
-    // ZGC zUncoloredRoot.hpp:46-49: uncolored roots keep their color in
-    // the container. A current address must not be interpreted as a from-key.
-    struct ValueRoot {
-        BaseObject* object;
-        ForwardingStage stage;
-        uintptr_t color;
-        Generation generation;
-        ValueRoot(BaseObject* value, ForwardingStage source = ForwardingStage::OverwritePrevious)
-            : object(value), stage(source), color(::g_cjLoadGoodMask),
-              generation(source == ForwardingStage::IncomingNew && Heap::IsHeapAddress(value)
-                  ? Heap::page(reinterpret_cast<MAddress>(value))->GetOwnerGeneration()
-                  : Generation::Old) {}
-        operator BaseObject*() const { return object; }
-        ForwardingStage Stage() const
-        {
-            // ZGC zUncoloredRoot.inline.hpp:64-65 selects the remap generation.
-            // An unrelated generation flip cannot invalidate this current root.
-            const uintptr_t mask = generation == Generation::Young
-                ? ZPointerRemappedYoungMask
-                : ZPointerRemappedOldMask;
-            return (ZPointer::remap_bits(color) & mask) != 0 ? stage : ForwardingStage::OverwritePrevious;
-        }
-    };
-    struct ValueRootHash {
-        size_t operator()(const ValueRoot& root) const { return std::hash<BaseObject*>{}(root.object); }
-    };
-    using ValueRootSet = std::unordered_set<ValueRoot, ValueRootHash>;
-    using ValueRootList = std::list<ValueRoot>;
-    using ValueRootMap = std::unordered_map<ValueRoot, ValueRootList, ValueRootHash>;
     ValueRootMap discoveredExternObjects;
 #if defined(MRT_TESTABLE_INTERNALS)
     void ObserveExportOwnershipForTest(bool afterHandoff);
