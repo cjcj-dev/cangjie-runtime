@@ -25,8 +25,7 @@ inline void HeapManager::RequestGC(GCReason reason, bool async)
     if (!Heap::GetHeap().IsGCEnabled()) {
         return;
     }
-    Collector& collector = Heap::GetHeap().GetCollector();
-    collector.RequestGC(reason, async);
+    Heap::GetHeap().RequestGC(reason, async);
 }
 } // namespace MapleRuntime
 

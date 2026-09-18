@@ -15,6 +15,7 @@
 #include "ExceptionManager.inline.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "securec.h"
 #include "Interpreter/RTInterface.h"
 #include "LoaderManager.h"

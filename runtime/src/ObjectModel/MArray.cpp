@@ -25,6 +25,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {

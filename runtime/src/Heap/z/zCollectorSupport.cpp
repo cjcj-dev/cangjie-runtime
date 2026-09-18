@@ -6,6 +6,7 @@
 
 
 #include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zMark.hpp"
 
 #include <atomic>
 #include <cstdarg>

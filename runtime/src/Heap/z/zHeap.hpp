@@ -73,6 +73,7 @@ public:
     MAddress Allocate(size_t size, AllocType allocType);
 
     Collector& GetCollector();
+    void RequestGC(GCReason reason, bool async);
     Allocator& GetAllocator();
     void MarkYoungRootObject(BaseObject* object);
     void MarkObjectIfActive(BaseObject* object);

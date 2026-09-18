@@ -5,6 +5,7 @@
 #include <cstring>
 #include <random>
 #include "Heap/z/zHeap.hpp"
+#include "Heap/z/zMark.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 
