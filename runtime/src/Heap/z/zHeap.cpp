@@ -102,12 +102,12 @@ Heap::Heap()
 {
     _heap = this;
     RunType::InitRunTypeMap();
-    theSpace = Allocator::NewAllocator();
+    _page_allocator.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
     collectorImpl = static_cast<HeapGcState*>(::operator new(sizeof(HeapGcState)));
     collectorResources = new CollectorResources(*collectorImpl);
-    new (collectorImpl) HeapGcState(*theSpace, *collectorResources);
+    new (collectorImpl) HeapGcState(*_page_allocator, *collectorResources);
 }
 
 Heap::~Heap()
@@ -129,11 +129,11 @@ Heap::~Heap()
 
 
 
-MAddress Heap::Allocate(size_t size, AllocType allocType) { return theSpace->Allocate(size, allocType); }
+MAddress Heap::Allocate(size_t size, AllocType allocType) { return _page_allocator->Allocate(size, allocType); }
 
 bool Heap::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
 {
-    return theSpace->ForEachObj(visitor, safe);
+    return _page_allocator->ForEachObj(visitor, safe);
 }
 
 void Heap::Init(const HeapParam& param)
@@ -141,7 +141,7 @@ void Heap::Init(const HeapParam& param)
     ZArguments::initialize();
     ZHeuristics::set_max_heap_size(param.heapSize * 1024);
     ZInitialize::initialize();
-    theSpace->Init(param);
+    _page_allocator->Init(param);
     Heap::GetHeap().EnableGC(ZArguments::gc_enabled());
     collectorImpl->Init();
     {
@@ -155,7 +155,7 @@ void Heap::Init(const HeapParam& param)
     young().remembered()->bind(
         &ZPageTable::heap_table(),
         &old().forwarding_table(),
-        &static_cast<RegionSpace*>(theSpace)->GetRegionManager());
+        &_page_allocator->GetRegionManager());
     if (young().Workers() == nullptr) {
         young().InitializeWorkers(1);
     }
@@ -172,10 +172,6 @@ void Heap::Fini()
     young().StopWorkers();
     old().StopWorkers();
     collectorImpl->Fini();
-    if (theSpace != nullptr) {
-        delete theSpace;
-        theSpace = nullptr;
-    }
 }
 
 HeapGcState& Heap::GetCollector() { return collectorResources->ActiveCollector(); }
@@ -250,25 +246,25 @@ void Heap::EnableGC(bool val) { isGCEnabled.store(val); }
 
 OopStorage& Heap::GetExportRootStorage() { return exportRootsTable->RootStorage(); }
 
-Allocator& Heap::GetAllocator() { return *theSpace; }
+Allocator& Heap::GetAllocator() { return *_page_allocator; }
 
-size_t Heap::GetMaxCapacity() const { return theSpace->GetMaxCapacity(); }
+size_t Heap::GetMaxCapacity() const { return _page_allocator->GetMaxCapacity(); }
 
 ZMemoryUsageInfo Heap::GetMemoryUsage() const
 {
-    return static_cast<RegionSpace*>(theSpace)->GetMemoryUsage();
+    return _page_allocator->GetMemoryUsage();
 }
 
 
-size_t Heap::GetCurrentCapacity() const { return theSpace->GetCurrentCapacity(); }
+size_t Heap::GetCurrentCapacity() const { return _page_allocator->GetCurrentCapacity(); }
 
-size_t Heap::GetUsedPageSize() const { return theSpace->GetUsedPageSize(); }
+size_t Heap::GetUsedPageSize() const { return _page_allocator->GetUsedPageSize(); }
 
-size_t Heap::GetAllocatedSize() const { return theSpace->AllocatedBytes(); }
+size_t Heap::GetAllocatedSize() const { return _page_allocator->AllocatedBytes(); }
 
-MAddress Heap::GetStartAddress() const { return theSpace->GetSpaceStartAddress(); }
+MAddress Heap::GetStartAddress() const { return _page_allocator->GetSpaceStartAddress(); }
 
-MAddress Heap::GetSpaceEndAddress() const { return theSpace->GetSpaceEndAddress(); }
+MAddress Heap::GetSpaceEndAddress() const { return _page_allocator->GetSpaceEndAddress(); }
 
 Heap& Heap::GetHeap() { return *_heap; }
 

@@ -46,6 +46,7 @@ class OopStorage;
 class ObjectClosure;
 enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
+class RegionSpace;
 class AllocBuffer;
 class FinalizerProcessor;
 class CollectorResources;
@@ -272,7 +273,7 @@ private:
     ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;
-    Allocator* theSpace { nullptr };
+    std::unique_ptr<RegionSpace> _page_allocator;
     CollectorResources* collectorResources { nullptr };
     HeapGcState* collectorImpl { nullptr };
     ExportRootTable* exportRootsTable { nullptr };
