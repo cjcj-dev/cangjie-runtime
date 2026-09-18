@@ -483,6 +483,7 @@ const ZStatPhase MajorCollection("Major Collection", "Major Collection");
 
 #include "Base/AtomicSpinLock.h"
 #include "Base/TruncatedSeq.h"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/z/zPage.hpp"
 
 namespace MapleRuntime {
@@ -575,6 +576,10 @@ void ZStatMutatorAllocRate::sample_allocation(size_t allocationBytes)
     update_sampling_granule();
     g_lastSampleTimeNs = now;
     g_statLock.Unlock();
+
+    // zStat.cpp:1008 — rule evaluation is triggered at the end of every
+    // allocation-rate sample, not only on the director's own tick.
+    ZDirector::evaluate_rules();
 }
 
 ZStatMutatorAllocRateStats ZStatMutatorAllocRate::stats()

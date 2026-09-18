@@ -10,6 +10,8 @@
 
 #include <chrono>
 
+#include "Heap/z/zLock.inline.hpp"
+
 namespace MapleRuntime {
 static uint64_t NowMillis()
 {
