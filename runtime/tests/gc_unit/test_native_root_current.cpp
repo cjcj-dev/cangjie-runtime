@@ -37,11 +37,7 @@ struct RelocationReceiptTestAccess {
     }
     static void BindNativeRootFixture(CollectorResources& resources, HeapGcState& collector, uint32_t workers = 1)
     {
-        if (resources.testCollector != nullptr) {
-            GcUnit::GcHeapFixture::AdoptGenerationIdentity(collector, *resources.testCollector);
-        }
-        resources.testCollector = &collector;
-        resources.BindCollector(&collector);
+        CHECK(&collector == &Heap::GetHeap().GetCollector());
         resources.concurrentGcThreadCount = workers;
         for (auto gen : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = collector.GetZGeneration(gen);
@@ -118,7 +114,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    CopyCollector collector(heap.GetAllocator(), resources);
+    HeapGcState& collector = heap.GetCollector();
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
@@ -262,7 +258,7 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    CopyCollector collector(heap.GetAllocator(), resources);
+    HeapGcState& collector = heap.GetCollector();
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     BaseObject* held = fx.obj0;
 
@@ -302,7 +298,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    CopyCollector collector(heap.GetAllocator(), resources);
+    HeapGcState& collector = heap.GetCollector();
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     NativeSlot slot(zpointer::null);
     ZBarrier::WriteStaticRef(slot, fx.obj0);
@@ -318,7 +314,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    CopyCollector collector(heap.GetAllocator(), resources);
+    HeapGcState& collector = heap.GetCollector();
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     Heap::OnHeapCreated(fx.heapStart);
@@ -360,7 +356,7 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    CopyCollector collector(heap.GetAllocator(), resources);
+    HeapGcState& collector = heap.GetCollector();
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
@@ -392,7 +388,7 @@ void CheckRootStorageSegments(unsigned family)
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    CopyCollector collector(heap.GetAllocator(), resources);
+    HeapGcState& collector = heap.GetCollector();
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, 2);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
@@ -468,7 +464,7 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
     auto& resources = heap.GetCollectorResources();
-    CopyCollector collector(heap.GetAllocator(), resources);
+    HeapGcState& collector = heap.GetCollector();
     RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
