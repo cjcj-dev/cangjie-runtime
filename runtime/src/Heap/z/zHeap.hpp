@@ -274,7 +274,7 @@ private:
     ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;
-    HeapGcState* collectorImpl { nullptr };
+    std::unique_ptr<HeapGcState> collectorImpl;
     ExportRootTable* exportRootsTable { nullptr };
     StaticRootTable* staticRootTable { nullptr };
     std::atomic<bool> isGCEnabled { true };

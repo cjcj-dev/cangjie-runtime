@@ -105,15 +105,11 @@ Heap::Heap()
     _page_allocator.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
-    collectorImpl = new HeapGcState();
+    collectorImpl.reset(new HeapGcState());
 }
 
 Heap::~Heap()
 {
-    if (collectorImpl != nullptr) {
-        delete collectorImpl;
-        collectorImpl = nullptr;
-    }
     delete exportRootsTable;
     exportRootsTable = nullptr;
     delete staticRootTable;
