@@ -787,27 +787,8 @@ private:
     static const size_t MAX_UNIT_COUNT_PER_REGION;
     inline void CheckRegionWhetherCreatedInFixPhase(ZPage* region);
 
-    // ZObjectAllocator::PerAge (zObjectAllocator.hpp:37-71): per-CPU shared
-    // small page in ZPerCPU storage (zValue.hpp), one PerAge per page age
-    // constructed in place (zObjectAllocator.hpp:73 ZDeferredConstructed).
-    struct PerAgeObjectAllocator {
-        explicit PerAgeObjectAllocator(PageAge pageAge);
-        const PageAge age;
-        const bool usePerCpuSharedSmallPages;
-        ZPerCPU<ZPage*> sharedSmallPage;
-        ZContended<ZPage*> sharedMediumPage;
-        ZLock mediumPageAllocLock;
-        std::atomic<ZPage*> pinnedPage{nullptr};
-
-        ZPage** shared_small_page_addr();
-        ZPage* const* shared_small_page_addr() const;
-        ZPage** shared_medium_page_addr();
-        ZPage* const* shared_medium_page_addr() const;
-    };
     ZPage* AllocateSharedPage(size_t units, ZPageType role, PageAge age, bool nonBlocking);
     void UndoSharedPage(ZPage* page);
-    ZDeferredConstructed<PerAgeObjectAllocator> objectAllocators[kPageAgeCount];
-    PerAgeObjectAllocator* allocator(PageAge age);
 
     FreeRegionManager freeRegionManager;
 
@@ -906,7 +887,7 @@ private:
 
 } // namespace MapleRuntime
 
-#include "Heap/z/zObjectAllocator.hpp"
+#include "Heap/z/zObjectAllocator.inline.hpp"
 #include "Heap/z/zPageAllocator.inline.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/z/zRelocationSet.inline.hpp"

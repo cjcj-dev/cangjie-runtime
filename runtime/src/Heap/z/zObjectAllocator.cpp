@@ -111,7 +111,7 @@ void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
 }
 
 // zObjectAllocator.cpp:40-45
-RegionManager::PerAgeObjectAllocator::PerAgeObjectAllocator(PageAge pageAge)
+ZObjectAllocator::PerAge::PerAge(PageAge pageAge)
     : age(pageAge),
       usePerCpuSharedSmallPages(ZHeuristics::use_per_cpu_shared_small_pages()),
       sharedSmallPage(nullptr),
@@ -167,7 +167,7 @@ void RegionManager::UndoSharedPage(ZPage* page)
 uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlocking)
 {
     CHECK(untype(age) < kPageAgeCount);
-    PerAgeObjectAllocator& allocator = *this->allocator(age);
+    ZObjectAllocator::PerAge& allocator = *Heap::GetHeap().object_allocator().allocator(age);
     if (size > ZObjectSizeLimitSmall) {
         if (ZPageSizeMediumEnabled && size <= ZObjectSizeLimitMedium) {
             std::lock_guard<ZLock> mediumLock(allocator.mediumPageAllocLock);
@@ -224,9 +224,10 @@ void RegionManager::RetireSharedPages(PageAgeRange ages)
 {
     // zObjectAllocator.cpp:198-203 PerAge::retire_pages: set_all(nullptr).
     for (PageAge age : ages) {
-        allocator(age)->pinnedPage.store(nullptr, std::memory_order_release);
-        allocator(age)->sharedSmallPage.set_all(nullptr);
-        allocator(age)->sharedMediumPage.set(nullptr);
+        auto* perAge = Heap::GetHeap().object_allocator().allocator(age);
+        perAge->pinnedPage.store(nullptr, std::memory_order_release);
+        perAge->sharedSmallPage.set_all(nullptr);
+        perAge->sharedMediumPage.set(nullptr);
     }
 }
 
@@ -391,11 +392,14 @@ RegionManager::RegionManager()
           oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
           largeTraceRegions("large trace regions")
     {
-        // zObjectAllocator.cpp:211-215: construct every PerAge in place.
-        for (PageAge age : kPageAgeRangeAll) {
-            objectAllocators[untype(age)].initialize(age);
-        }
         tlabAllocatingThreads.Sample(1);
         tlabRequestedFraction.Sample(0.1);
     }
+
+ZObjectAllocator::ZObjectAllocator()
+{
+    for (PageAge age : kPageAgeRangeAll) {
+        objectAllocators[untype(age)].initialize(age);
+    }
+}
 }

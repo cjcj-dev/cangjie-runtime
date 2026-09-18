@@ -21,6 +21,7 @@
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zPageTable.hpp"
+#include "Heap/z/zObjectAllocator.hpp"
 #include <memory>
 #include "Heap/z/zPageAge.hpp"
 #include "Heap/z/zPageType.hpp"
@@ -84,6 +85,7 @@ public:
     void RequestGC(GCReason reason, bool async);
     void ResolveCycleRef();
     Allocator& GetAllocator();
+    ZObjectAllocator& object_allocator() { return _object_allocator; }
     void MarkYoungRootObject(BaseObject* object);
     void MarkObjectIfActive(BaseObject* object);
     void MarkYoungObjectIfActive(BaseObject* object);
@@ -271,6 +273,7 @@ private:
     // the generation members, as in ZGC zHeap.hpp:48-56.
     std::unique_ptr<RegionSpace> _page_allocator;
     std::unique_ptr<ZPageTable> _page_table;
+    ZObjectAllocator _object_allocator;
     ZServiceability _serviceability;
     ZGenerationOld _old;
     ZGenerationYoung _young;
