@@ -264,7 +264,7 @@ Heap& Heap::GetHeap() { return *_heap; }
 
 void Heap::install_page_table(MAddress base, size_t heapSize, size_t granule)
 {
-    _page_table.reset(new ZPageTable(heapSize, base, granule));
+    _page_table = ZPageTable(heapSize, base, granule);
 }
 
 ZRemembered& Heap::remembered()
@@ -463,7 +463,7 @@ void RegionManager::StampCensusBoundaries()
 namespace MapleRuntime {
 ZPage* Heap::page(MAddress addr) { return page_table().get(addr); }
 
-ZPageTable& Heap::page_table() { return *GetHeap()._page_table; }
+ZPageTable& Heap::page_table() { return GetHeap()._page_table; }
 
 ZPage* Heap::alloc_page(size_t num, ZPageType role, bool expectPhysicalMem, bool allowSaferegion,
                              bool clearPayload, PageAge age)

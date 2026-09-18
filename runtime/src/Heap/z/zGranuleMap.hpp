@@ -29,6 +29,8 @@ namespace MapleRuntime {
 template <typename T>
 class ZGranuleMap {
 public:
+    ZGranuleMap() : _size(0), _map(nullptr), _base(0), _heapSize(0), _granule(0) {}
+
     ZGranuleMap(size_t max_offset, MAddress base, size_t granule)
         : _size(0), _map(nullptr), _base(base), _heapSize(max_offset), _granule(granule)
     {

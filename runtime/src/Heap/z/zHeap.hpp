@@ -267,10 +267,10 @@ public:
 private:
     static Heap* _heap;
     // Cangjie constructs Heap before heapSize is known (Init(param)); the page
-    // allocator and table therefore need deferred construction. Both outlive
+    // allocator and table storage therefore need deferred initialization. Both outlive
     // the generation members, as in ZGC zHeap.hpp:48-56.
     std::unique_ptr<RegionSpace> _page_allocator;
-    std::unique_ptr<ZPageTable> _page_table;
+    ZPageTable _page_table;
     ZObjectAllocator _object_allocator;
     ZServiceability _serviceability;
     ZGenerationOld _old;
