@@ -76,21 +76,26 @@ void ZDirector::evaluate_rules()
     if (_director == nullptr) {
         return;
     }
-    std::lock_guard<std::mutex> lock(_director->resources.directorMutex);
-    _director->resources.directorReevaluate = true;
-    _director->resources.directorCondition.notify_one();
+    _director->notify_reevaluate();
+}
+
+void ZDirector::notify_reevaluate()
+{
+    std::lock_guard<std::mutex> lock(monitor);
+    reevaluate = true;
+    condition.notify_one();
 }
 
 bool ZDirector::wait_for_tick()
 {
     const uint64_t interval_ms = 1000 / DecisionHz;
-    std::unique_lock<std::mutex> lock(resources.directorMutex);
-    if (resources.directorStopped) {
+    std::unique_lock<std::mutex> lock(monitor);
+    if (stopped) {
         return false;
     }
-    resources.directorCondition.wait_for(lock, std::chrono::milliseconds(interval_ms),
-        [this] { return resources.directorStopped || resources.directorReevaluate; });
-    return !resources.directorStopped;
+    condition.wait_for(lock, std::chrono::milliseconds(interval_ms),
+        [this] { return stopped || reevaluate; });
+    return !stopped;
 }
 
 static uint32_t young_gc_threads(const ZDirectorStats&)
@@ -620,16 +625,16 @@ static ZDirectorStats sample_stats(CollectorResources& resources, uint64_t now, 
 void ZDirector::run_thread()
 {
     while (wait_for_tick()) {
-        resources.directorReevaluate = false;
+        reevaluate = false;
         resources.EvaluateDirector(TimeUtil::NanoSeconds());
     }
 }
 
 void ZDirector::terminate()
 {
-    std::lock_guard<std::mutex> locker(resources.directorMutex);
-    resources.directorStopped = true;
-    resources.directorCondition.notify_all();
+    std::lock_guard<std::mutex> locker(monitor);
+    stopped = true;
+    condition.notify_all();
 }
 
 bool CollectorResources::start_gc(uint64_t now)

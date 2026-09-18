@@ -469,9 +469,6 @@ private:
     // zCollectedHeap.cpp:65-71 / zHeap.hpp: the concurrent GC threads are
     // created when GC starts and stopped through ConcurrentGCThread::stop.
     std::mutex directorMutex;
-    std::condition_variable directorCondition;
-    bool directorStopped = false;
-    bool directorReevaluate = false;
     bool minorBusy = false;
     bool majorBusy = false;
     int32_t concurrentGcThreadCount = 1;

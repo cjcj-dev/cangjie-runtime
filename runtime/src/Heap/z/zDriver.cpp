@@ -208,8 +208,7 @@ void CollectorResources::CompleteDriverRequest(ZDriverPort& port)
 {
     std::lock_guard<std::mutex> lock(directorMutex);
     (&port == &GetMinorDriverPort() ? minorBusy : majorBusy) = false;
-    directorReevaluate = true;
-    directorCondition.notify_one();
+    ZDirector::evaluate_rules();
 }
 
 void CollectorResources::RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup)
