@@ -27,7 +27,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zMarkPartialArray.hpp"
 #include "Heap/z/zIterator.hpp"
 #include "Heap/z/zHeapIterator.hpp"

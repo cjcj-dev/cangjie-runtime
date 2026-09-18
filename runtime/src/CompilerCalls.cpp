@@ -33,7 +33,7 @@
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/GcStats.h"
+#include "Heap/z/zStat.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zJNICritical.hpp"
 #include "Heap/z/zAddress.inline.hpp"

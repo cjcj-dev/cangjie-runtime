@@ -42,7 +42,7 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "CpuProfiler/CpuProfiler.h"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Common/ColourEncoding.h"
 #include "HeapManager.h"

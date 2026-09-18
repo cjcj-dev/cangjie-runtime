@@ -8,7 +8,7 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/Collector/TaskQueue.h"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Inspector/FileStream.h"
 #include "Inspector/CjAllocData.h"
 #include "Heap/z/zPage.hpp"

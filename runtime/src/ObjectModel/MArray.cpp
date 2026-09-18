@@ -17,7 +17,7 @@
 #include <thread>
 #include "Heap/z/zIterator.hpp"
 #include "Heap/z/zDriver.hpp"
-#include "Heap/Collector/GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zHeap.hpp"
 #endif
 

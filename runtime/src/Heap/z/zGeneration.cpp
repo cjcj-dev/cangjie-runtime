@@ -1158,7 +1158,7 @@ namespace MapleRuntime {
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Heap/Collector/GcStats.h"
+#include "Heap/z/zStat.hpp"
 #include "Common/BaseObject.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zGeneration.inline.hpp"

@@ -12,8 +12,6 @@ set(SRC_LIST
 
     "../z/zHeapIterator.cpp"
     "../z/zIterator.cpp"
-    "GcRequest.cpp"
-    "GcStats.cpp"
     "../z/zCollectedHeap.cpp"
     "Collector.cpp"
 

@@ -21,7 +21,7 @@
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
-#include "Heap/Collector/GcStats.h"
+#include "Heap/z/zStat.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "ObjectModel/RefField.h"
 

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "Base/TimeUtils.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zGenerationId.hpp"
 #include "Heap/z/zThread.hpp"
 
@@ -347,6 +348,53 @@ public:
     static void set_final(size_t encountered, size_t discovered, size_t enqueued);
     static void set_phantom(size_t encountered, size_t discovered, size_t enqueued);
 };
+
+class GCStats {
+public:
+    GCStats() = default;
+    ~GCStats() = default;
+    void Init();
+    size_t GetThreshold() const { return heapThreshold.load(std::memory_order_acquire); }
+    void Dump() const;
+    static uint64_t GetPrevGCStartTime() { return prevGcStartTime.load(std::memory_order_acquire); }
+    static void SetPrevGCStartTime(uint64_t timestamp)
+    {
+        prevGcStartTime.store(timestamp, std::memory_order_release);
+    }
+    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime.load(std::memory_order_acquire); }
+    static void SetPrevGCFinishTime(uint64_t timestamp)
+    {
+        prevGcFinishTime.store(timestamp, std::memory_order_release);
+    }
+    void RecordMajorGCFinish(uint64_t timestamp) { RecordMajorGCFinish(timestamp, 0, 0, 0); }
+    void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter, size_t collectedBytes);
+    static std::atomic<uint64_t> prevGcStartTime;
+    static std::atomic<uint64_t> prevGcFinishTime;
+    GCReason reason = GC_REASON_USER;
+    bool isConcurrentMark;
+    bool async;
+    uint64_t gcStartTime;
+    uint64_t gcEndTime;
+    size_t liveBytesBeforeGC;
+    size_t liveBytesAfterGC;
+    size_t fromSpaceSize;
+    size_t smallGarbageSize;
+    size_t pinnedSpaceSize;
+    size_t pinnedGarbageSize;
+    size_t largeSpaceSize;
+    size_t largeGarbageSize;
+    size_t collectedBytes;
+    size_t collectedObjects;
+    size_t youngCandidateBytes;
+    size_t youngPromotedBytes;
+    uint32_t tenuringThreshold;
+    size_t liveByAge[16];
+    double garbageRatio;
+    double collectionRate;
+    std::atomic<size_t> heapThreshold{ 0 };
+};
+extern std::atomic<uint64_t> g_gcTotalTimeUs;
+extern std::atomic<size_t> g_gcCollectedTotalBytes;
 
 } // namespace MapleRuntime
 #endif // MRT_ZSTAT_H

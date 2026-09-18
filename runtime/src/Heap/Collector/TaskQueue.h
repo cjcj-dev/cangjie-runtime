@@ -14,7 +14,7 @@
 
 #include "Base/Panic.h"
 #include "Common/PageAllocator.h"
-#include "GcRequest.h"
+#include "Heap/z/zDriverPort.hpp"
 #include "Heap/z/zHeap.hpp"
 #include "Inspector/CjHeapData.h"
 #include "Inspector/HeapSnapshotJsonSerializer.h"

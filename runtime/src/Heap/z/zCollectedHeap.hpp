@@ -20,8 +20,8 @@
 #include <vector>
 
 #include "Base/Macros.h"
-#include "Heap/Collector/GcRequest.h"
-#include "Heap/Collector/GcStats.h"
+#include "Heap/z/zDriverPort.hpp"
+#include "Heap/z/zStat.hpp"
 
 #include "Heap/z/zGeneration.hpp"
 #include "Heap/Collector/Collector.h"
