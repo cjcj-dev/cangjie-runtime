@@ -60,7 +60,7 @@ extern "C" int p1MarkStartExercise()
 
     std::array<StartState, 2> state {};
     bool youngComplete = false;
-    Collector::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point,
+    CopyCollector::testMarkStartState = [&](ZGenerationId generation, MarkStartPoint point,
                                                const ZMark* domain) {
         const size_t index = generation == ZGenerationId::young ? 0 : 1;
         auto& before = state[index];
@@ -128,7 +128,7 @@ extern "C" int p1MarkStartExercise()
     collector.RequestGC(GC_REASON_YOUNG, false);
     const auto youngAfter = collector.GetCycleSnapshot(ZGenerationId::young);
     const auto oldAfter = collector.GetCycleSnapshot(ZGenerationId::old);
-    Collector::testMarkStartState = nullptr;
+    CopyCollector::testMarkStartState = nullptr;
     Expect(oldAfterMajor.sequence > oldBefore.sequence, "major_request_started_old");
     Expect(oldAfter.sequence == oldAfterMajor.sequence, "minor_preserves_old_identity");
     Expect(state[0].starts == youngAfter.sequence - youngBefore.sequence && state[0].starts != 0,

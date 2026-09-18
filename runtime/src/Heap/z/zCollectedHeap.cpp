@@ -34,6 +34,8 @@ const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regio
                                        "Smooth Collector" };
 }
 
+Collector::~Collector() = default;
+
 void Collector::MarkObjectIfActive(BaseObject* object) const
 {
     if (!Heap::IsHeapAddress(object)) {
@@ -54,6 +56,8 @@ void Collector::MarkObjectIfActive(BaseObject* object) const
 // reader comparing two reports could not tell. Switching on the enum keeps the
 // name attached to the value, so adding a phase is a compile error here rather
 // than a silent relabelling of the phases after it.
+Collector::Collector() {}
+
 const char* Collector::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
 
 void Collector::RequestGC(GCReason reason, bool async)

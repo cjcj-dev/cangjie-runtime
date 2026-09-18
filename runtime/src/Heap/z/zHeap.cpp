@@ -105,15 +105,15 @@ Heap::Heap()
     theSpace = Allocator::NewAllocator();
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
-    collectorImpl = static_cast<Collector*>(::operator new(sizeof(Collector)));
+    collectorImpl = static_cast<CopyCollector*>(::operator new(sizeof(CopyCollector)));
     collectorResources = new CollectorResources(*collectorImpl);
-    new (collectorImpl) Collector(*theSpace, *collectorResources);
+    new (collectorImpl) CopyCollector(*theSpace, *collectorResources);
 }
 
 Heap::~Heap()
 {
     if (collectorImpl != nullptr) {
-        collectorImpl->~Collector();
+        collectorImpl->~CopyCollector();
         ::operator delete(collectorImpl);
         collectorImpl = nullptr;
     }
@@ -362,7 +362,7 @@ void Heap::CrossAccessBarrier(I64 id)
     // Preserve that current identity, including an in-place destination whose
     // address is also another object's from-key (ZUncoloredRoot::make_load_good,
     // zUncoloredRoot.inline.hpp:62-69). Page ownership cannot reclassify it.
-    reinterpret_cast<Collector&>(GetCollector()).ResurrectExportObject(recordObj);
+    reinterpret_cast<CopyCollector&>(GetCollector()).ResurrectExportObject(recordObj);
     SetExportObjActiveState(id, true);
 }
 

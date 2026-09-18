@@ -75,7 +75,7 @@ struct RelocationReceiptTestAccess {
         GC_EXPECT_TRUE(region == nullptr || region->GetRegionListOwner() == nullptr);
     }
 
-    static void BindCollector(CollectorResources& resources, Collector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector != nullptr && resources.testCollector != nullptr) {
             GcUnit::GcHeapFixture::AdoptGenerationIdentity(*collector, *resources.testCollector);
@@ -103,24 +103,24 @@ struct RelocationReceiptTestAccess {
         manager.ExemptFromRegion(region);
     }
 
-    static RefField<> QualifyStoreValue(Collector& collector, BaseObject* value)
+    static RefField<> QualifyStoreValue(CopyCollector& collector, BaseObject* value)
     {
         return collector.GetAndTryTagRefField(value);
     }
 
-    static BaseObject* ResolveStoreValue(Collector& collector, BaseObject* value)
+    static BaseObject* ResolveStoreValue(CopyCollector& collector, BaseObject* value)
     {
         const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, value, &value };
         return collector.ResolveStoreValue(value, provenance, Generation::Old);
     }
 
-    static void CheckStoreGoodTarget(Collector& collector, BaseObject* value)
+    static void CheckStoreGoodTarget(CopyCollector& collector, BaseObject* value)
     {
         collector.CheckStoreGoodTarget("ForwardingLookupWitness", value,
             ForwardingProvenance{ ForwardingHolderKind::HeapRef, value, &value });
     }
 
-    static BaseObject* ForwardUpdateRawRef(Collector& collector, ObjectRef& root)
+    static BaseObject* ForwardUpdateRawRef(CopyCollector& collector, ObjectRef& root)
     {
         const zaddress_unsafe observed = root.LoadPlain();
         BaseObject* oldObj = to_object(safe(observed));
@@ -132,37 +132,37 @@ struct RelocationReceiptTestAccess {
         return mapped;
     }
 
-    static bool FixMinorField(Collector& collector, RefField<>& field, BaseObject* knownBase = nullptr)
+    static bool FixMinorField(CopyCollector& collector, RefField<>& field, BaseObject* knownBase = nullptr)
     {
         return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr);
     }
 
-    static bool FixMinorRoot(Collector& collector, RootSlot& root)
+    static bool FixMinorRoot(CopyCollector& collector, RootSlot& root)
     {
         return collector.FixMinorEvacuatedSlot(root, nullptr);
     }
 
-    static BaseObject* TryForward(Collector& collector, BaseObject* object)
+    static BaseObject* TryForward(CopyCollector& collector, BaseObject* object)
     {
         return collector.relocate_or_remap_object(object, ZGenerationId::old);
     }
 
     static BaseObject* WaitRoutedTipReady(
-        Collector& collector, BaseObject* from, BaseObject* to, ZPage* forwarding)
+        CopyCollector& collector, BaseObject* from, BaseObject* to, ZPage* forwarding)
     {
         (void)to;
         ZPage::RetainScope lease(forwarding);
         return collector.RelocateObjectInner(from, forwarding);
     }
 
-    static bool TryUpdateRefField(Collector& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
+    static bool TryUpdateRefField(CopyCollector& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
     {
         return collector.TryUpdateRefField(obj, field, newRef);
     }
 
-    static FindToVersionResult ProductFindToVersion(Collector& collector, BaseObject* from, Generation generation)
+    static FindToVersionResult ProductFindToVersion(CopyCollector& collector, BaseObject* from, Generation generation)
     {
-        using ProductFn = FindToVersionResult (*)(const Collector*, BaseObject*, Generation);
+        using ProductFn = FindToVersionResult (*)(const CopyCollector*, BaseObject*, Generation);
         void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
         GC_EXPECT_TRUE(handle != nullptr);
         void* symbol = handle == nullptr ? nullptr : dlsym(
@@ -184,9 +184,9 @@ struct RelocationReceiptTestAccess {
     }
 
     static BaseObject* ProductRelocateOrRemap(
-        Collector& collector, BaseObject* from, ZGenerationId generation)
+        CopyCollector& collector, BaseObject* from, ZGenerationId generation)
     {
-        using ProductFn = BaseObject* (*)(const Collector*, BaseObject*, ZGenerationId);
+        using ProductFn = BaseObject* (*)(const CopyCollector*, BaseObject*, ZGenerationId);
         void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
         GC_EXPECT_TRUE(handle != nullptr);
         void* symbol = handle == nullptr ? nullptr : dlsym(
@@ -205,20 +205,20 @@ struct RelocationReceiptTestAccess {
     }
 
     static BaseObject* ForwardExclusive(
-        Collector& collector, BaseObject* from)
+        CopyCollector& collector, BaseObject* from)
     {
         return collector.ForwardObjectExclusive(from);
     }
 
-    static BaseObject* ForwardImpl(Collector& collector, BaseObject* from, ZPage* copyPage)
+    static BaseObject* ForwardImpl(CopyCollector& collector, BaseObject* from, ZPage* copyPage)
     {
         ZPage::RetainScope lease(copyPage);
         return lease.ok() ? collector.RelocateObjectInner(from, copyPage) : nullptr;
     }
 
-    static void RemapYoungRoots(Collector& collector) { collector.RemapYoungRoots(); }
+    static void RemapYoungRoots(CopyCollector& collector) { collector.RemapYoungRoots(); }
 
-    static void SeedValueRoots(Collector& collector, BaseObject* value)
+    static void SeedValueRoots(CopyCollector& collector, BaseObject* value)
     {
         {
             std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
@@ -232,7 +232,7 @@ struct RelocationReceiptTestAccess {
         collector.cycleRefWorkStack[value].push_back(value);
     }
 
-    static bool AllValueRootCarriersEqual(Collector& collector, BaseObject* value)
+    static bool AllValueRootCarriersEqual(CopyCollector& collector, BaseObject* value)
     {
         bool resurrected = false;
         {
@@ -249,7 +249,7 @@ struct RelocationReceiptTestAccess {
             it->second.front() == value;
     }
 
-    static bool BothResurrectionSetsEqual(Collector& collector, BaseObject* value)
+    static bool BothResurrectionSetsEqual(CopyCollector& collector, BaseObject* value)
     {
         std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
         return collector.resurrectedExportObjectes.size() == 1 &&
@@ -258,7 +258,7 @@ struct RelocationReceiptTestAccess {
             collector.resurrectedExportObjectesForwardPhase.count(value) == 1;
     }
 
-    static std::vector<BaseObject*> VisitMinorValueRoots(Collector& collector)
+    static std::vector<BaseObject*> VisitMinorValueRoots(CopyCollector& collector)
     {
         std::vector<BaseObject*> visited;
         collector.VisitMinorValueRoots([&visited](BaseObject* value) { visited.push_back(value); });
@@ -267,7 +267,7 @@ struct RelocationReceiptTestAccess {
 
     // The product old-roots task feeds these objects to MarkOldObjectIfActive
     // (zMark.cpp mark_old_roots); observe the same visitor output.
-    static std::vector<BaseObject*> EnumMajorValueRoots(Collector& collector)
+    static std::vector<BaseObject*> EnumMajorValueRoots(CopyCollector& collector)
     {
         std::vector<BaseObject*> visited;
         collector.VisitSurrectedExportRoots([&](BaseObject* object) { visited.push_back(object); });
@@ -275,7 +275,7 @@ struct RelocationReceiptTestAccess {
         return visited;
     }
 
-    static void RunLateValueRootRekey(Collector& collector)
+    static void RunLateValueRootRekey(CopyCollector& collector)
     {
         collector.PreforwardDiscoveredExternObjects(Generation::Old);
         collector.PreforwardAllResurrectExportFromObjects(Generation::Old);
@@ -291,27 +291,27 @@ struct LoadHealDeliveryTestAccess {
         size_t consumed;
     };
 
-    static void PublishColours(Collector& collector) { ZGlobalsPointers::initialize(); }
+    static void PublishColours(CopyCollector& collector) { ZGlobalsPointers::initialize(); }
 
-    static uintptr_t DoubleBadColour(const Collector& collector)
+    static uintptr_t DoubleBadColour(const CopyCollector& collector)
     {
         return ZPointerRemappedMask & ~ZPointerRemappedYoungMask &
             ~ZPointerRemappedOldMask;
     }
 
-    static void RemapYoungRoots(Collector& collector) { collector.RemapYoungRoots(); }
+    static void RemapYoungRoots(CopyCollector& collector) { collector.RemapYoungRoots(); }
 
-    static void FlipYoungRelocateStart(Collector& collector)
+    static void FlipYoungRelocateStart(CopyCollector& collector)
     {
         ZGlobalsPointers::flip_young_relocate_start();
     }
 
-    static void FlipOldRelocateStart(Collector& collector)
+    static void FlipOldRelocateStart(CopyCollector& collector)
     {
         ZGlobalsPointers::flip_old_relocate_start();
     }
 
-    static RemsetConsumeResult ConsumeRemembered(Collector& collector,
+    static RemsetConsumeResult ConsumeRemembered(CopyCollector& collector,
                                                   const std::unordered_set<MAddress>& previous,
                                                   BaseObject* currentMinorRoot)
     {
@@ -325,10 +325,10 @@ struct LoadHealDeliveryTestAccess {
         collector.youngCycle.PublishPhase(ZGenerationPhase::Mark);
         ZGlobalsPointers::flip_young_mark_start();
         WorkStack workStack = collector.NewWorkStack();
-        Collector::MinorSlotSet reachableSlots;
-        Collector::MinorSlotSet weakSlots;
-        Collector::MinorObjectSet currentMinorRoots;
-        Collector::MinorSlotSet consumed;
+        CopyCollector::MinorSlotSet reachableSlots;
+        CopyCollector::MinorSlotSet weakSlots;
+        CopyCollector::MinorObjectSet currentMinorRoots;
+        CopyCollector::MinorSlotSet consumed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
@@ -590,7 +590,7 @@ struct LateBackfillState {
     Generation generation;
 };
 
-LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, Collector& collector,
+LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, CopyCollector& collector,
                                     Generation generation = Generation::Old, bool publishMapping = true)
 {
     ZPage* region = ResetDeliveryUnit(fx, 5);
@@ -640,7 +640,7 @@ struct PartialCompactState {
     size_t objectSize;
 };
 
-PartialCompactState PreparePartialCompact(GcHeapFixture& fx, Collector& collector, bool exhaustDestination)
+PartialCompactState PreparePartialCompact(GcHeapFixture& fx, CopyCollector& collector, bool exhaustDestination)
 {
     ZPage* region = ResetDeliveryUnit(fx, 1);
     ZPage* destination = ResetDeliveryUnit(fx, 2);
@@ -697,7 +697,7 @@ void EmptyBothRememberedFaces(RememberedSet& remembered)
     remembered.DrainForMinor(discarded);
 }
 
-LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, Collector& collector)
+LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, CopyCollector& collector)
 {
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     ZForwarding* publication = forwarding_for_page(
@@ -926,7 +926,7 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
 // A single product-linked construction exercises two distinct Unavailable producers.  It proves
 // the route witness is not a constant formatter: one arm closes an installed publication while
 // keeping its ghost region, and the other uses an unarmed, non-ghost region with a FORWARDED
-// header. Both answers come from Collector::FindToVersion in libcangjie-runtime.so.
+// header. Both answers come from CopyCollector::FindToVersion in libcangjie-runtime.so.
 
 // LookupTo returns the decision record itself.  Change both metadata faces only
 // after the product lookup returns, then prove the record still describes the

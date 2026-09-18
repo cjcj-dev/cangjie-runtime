@@ -196,7 +196,7 @@ extern "C" int p2FieldBarrierExercise()
     const bool minorOnly = std::getenv("P2_MINOR_ONLY") != nullptr;
     // Read the actual bitmap before relocation can make an unmarked target
     // unavailable. These are the target invariants, not existence guards.
-    Collector::testYoungMarkCompleted = [&] {
+    CopyCollector::testYoungMarkCompleted = [&] {
         auto* childPage = Heap::page(reinterpret_cast<MAddress>(child));
         auto* sentinelPage = Heap::page(reinterpret_cast<MAddress>(sentinel));
         auto* controlPage = Heap::page(reinterpret_cast<MAddress>(rootedControl));
@@ -208,7 +208,7 @@ extern "C" int p2FieldBarrierExercise()
                "independent_young_root_control");
     };
     collector.RequestGC(GC_REASON_YOUNG, false);
-    Collector::testYoungMarkCompleted = nullptr;
+    CopyCollector::testYoungMarkCompleted = nullptr;
     if (failures.load() != 0) {
         // The target state has been observed. Do not dereference an object
         // that the faulty product has just classified as unreachable.
@@ -225,7 +225,7 @@ extern "C" int p2FieldBarrierExercise()
     currentChild = childBeforeNext;
     BaseObject* sentinelBeforeNext = ZBarrier::ReadReference(childBeforeNext, Slot(childBeforeNext));
     unsigned completed = 0;
-    Collector::testYoungMarkCompleted = [&] {
+    CopyCollector::testYoungMarkCompleted = [&] {
         ++completed;
         auto* childPage = Heap::page(reinterpret_cast<MAddress>(childBeforeNext));
         auto* sentinelPage = Heap::page(reinterpret_cast<MAddress>(sentinelBeforeNext));
@@ -235,7 +235,7 @@ extern "C" int p2FieldBarrierExercise()
                "remset_retains_sentinel_next_cycle");
     };
     collector.RequestGC(GC_REASON_YOUNG, false);
-    Collector::testYoungMarkCompleted = nullptr;
+    CopyCollector::testYoungMarkCompleted = nullptr;
     Expect(completed != 0, "young_completion_observation_reached");
     if (!minorOnly) {
         // The control was needed only for remset liveness. End its real export
@@ -335,7 +335,7 @@ extern "C" int p2FinalizerRegistrationExercise()
     bool youngSmall = false, youngLarge = false;
     size_t oldCandidates = 0;
     bool pinnedDiscovered = false, delayedDiscovered = false;
-    Collector::testYoungMarkCompleted = [&] {
+    CopyCollector::testYoungMarkCompleted = [&] {
         heap.GetFinalizerProcessor().VisitFinalizers([&](NativeSlot& slot) {
             const auto word = slot.GetFieldValue();
             if (is_null_any(word)) return;
@@ -351,7 +351,7 @@ extern "C" int p2FinalizerRegistrationExercise()
             }
         });
     };
-    Collector::testOldMarkStarted = [&] {
+    CopyCollector::testOldMarkStarted = [&] {
         heap.GetFinalizerProcessor().VisitFinalizers([&](NativeSlot& slot) {
             const auto word = slot.GetFieldValue();
             if (is_null_any(word)) return;
@@ -373,8 +373,8 @@ extern "C" int p2FinalizerRegistrationExercise()
         }
     };
     collector.RequestGC(GC_REASON_USER, false);
-    Collector::testYoungMarkCompleted = nullptr;
-    Collector::testOldMarkStarted = nullptr;
+    CopyCollector::testYoungMarkCompleted = nullptr;
+    CopyCollector::testOldMarkStarted = nullptr;
     dumpRegistrations("next-complete");
     Expect(youngSmall, "late_small_next_young_consumer_reached");
     Expect(youngLarge, "late_large_next_young_consumer_reached");
@@ -525,7 +525,7 @@ extern "C" int p2ArrayFieldExercise()
 namespace {
 class P2FieldInputTask final : public ZTask {
 public:
-    P2FieldInputTask(Collector& collector, std::function<void()> exercise)
+    P2FieldInputTask(CopyCollector& collector, std::function<void()> exercise)
         : ZTask("P2FieldInputTask"), collector(collector), exercise(std::move(exercise)) {}
     void work() override
     {
@@ -536,7 +536,7 @@ public:
         Expect(collector.MajorMark()->Stacks().IsEmpty(), "slow_input_worker_tls_drained");
     }
 private:
-    Collector& collector;
+    CopyCollector& collector;
     std::function<void()> exercise;
     std::atomic<bool> claimed{false};
 };
@@ -553,7 +553,7 @@ extern "C" int p2SlowFieldInputExercise()
     auto* edgeType = Type(types[1], true, 1);
     auto* leafType = Type(types[2], false, 1);
     auto& heap = Heap::GetHeap();
-    auto& collector = static_cast<Collector&>(heap.GetCollector());
+    auto& collector = static_cast<CopyCollector&>(heap.GetCollector());
     auto* strongHolder = MObject::NewPinnedObject(holderType, 24);
     auto* finalHolder = MObject::NewPinnedObject(holderType, 24);
     auto* oldChild = MObject::NewPinnedObject(edgeType, 16);
@@ -611,7 +611,7 @@ extern "C" int p2SlowFieldInputExercise()
         if (&field == &Slot(finalChild) && kind == ZBarrier::FieldMarkKind::Finalizable) ++finalFollow;
     };
     unsigned started = 0;
-    Collector::testYoungMarkStarted = [&] {
+    CopyCollector::testYoungMarkStarted = [&] {
         if (!collector.GetZGeneration(ZGenerationId::young).IsMajorRoots()) return;
         ++started;
         Expect(Slot(strongHolder).GetFieldValue() == stored, "slow_input_original_store_word_preserved");
@@ -647,7 +647,7 @@ extern "C" int p2SlowFieldInputExercise()
         }
     };
     collector.RequestGC(GC_REASON_HEU_SYNC, false);
-    Collector::testYoungMarkStarted = nullptr;
+    CopyCollector::testYoungMarkStarted = nullptr;
     ZBarrier::testFieldMarkResult = nullptr;
     Expect(started == 1, "slow_input_real_major_roots_phase_reached");
     auto* strongPage = Heap::page(reinterpret_cast<MAddress>(oldSentinel));

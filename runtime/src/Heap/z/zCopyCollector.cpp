@@ -26,7 +26,7 @@
 
 namespace MapleRuntime {
 void ReportSkippedStackMapCounts();
-void Collector::PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex)
+void CopyCollector::PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex)
 {
     reinterpret_cast<RegionSpace&>(theAllocator).DumpRegionStats("region statistics when gc ends");
     GetWorkers(generation).set_inactive();
@@ -39,7 +39,7 @@ void Collector::PostGarbageCollection(ZGenerationId generation, uint64_t gcIndex
     MutatorManager::Instance().DestroyExpiredMutators();
 }
 
-void Collector::ForwardFromSpace(ZGenerationId generation)
+void CopyCollector::ForwardFromSpace(ZGenerationId generation)
 {
     ScopedEntryTrace trace("CJRT_GC_FORWARD");
 
@@ -55,7 +55,7 @@ void Collector::ForwardFromSpace(ZGenerationId generation)
 
 }
 
-void Collector::RefineFromSpace()
+void CopyCollector::RefineFromSpace()
 {
     GCStats& stats = GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);

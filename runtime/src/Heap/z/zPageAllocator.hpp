@@ -384,8 +384,9 @@ private:
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-class Collector;
+class CopyCollector;
 class CompactCollector;
+class CopyCollector;
 template<Generation G>
 class ForwardTask;
 

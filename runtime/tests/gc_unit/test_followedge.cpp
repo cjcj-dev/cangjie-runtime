@@ -130,7 +130,7 @@ GC_OTHER_VM_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
     GC_EXPECT_TRUE(bytes->GetSize() > ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD);
 
     // Plant holder.bytes. The holder GCTib has bit 0 set, so the exact major
-    // non-array walk (Collector::TraceObjectRefFields) must yield this slot.
+    // non-array walk (CopyCollector::TraceObjectRefFields) must yield this slot.
     MAddress slotAddress = reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE;
     *reinterpret_cast<MAddress*>(slotAddress) = raw(ZAddress::store_good(from_object(bytes)));
 

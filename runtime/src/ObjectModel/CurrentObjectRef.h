@@ -14,6 +14,7 @@ namespace MapleRuntime {
 
 class BaseObject;
 class Collector;
+class CopyCollector;
 
 // Current-version object pointer. Mirror OpenJDK zaddress (zAddress.hpp): a
 // value that has gone through resolve-or-forward, as opposed to a maybe-from
@@ -65,6 +66,7 @@ private:
     BaseObject* ptr = nullptr;
 
     friend class Collector;
+    friend class CopyCollector;
 };
 
 static_assert(sizeof(CurrentObjectRef) == sizeof(void*), "CurrentObjectRef must remain one machine word");

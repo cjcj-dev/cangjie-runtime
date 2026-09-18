@@ -7,7 +7,7 @@
 // Port of OpenJDK test/hotspot/gtest/gc/z/test_zLiveMap.cpp onto ZLiveMap
 // (zLiveMap.hpp:35-101), plus the page-level consumers of the livemap
 // (zPage.inline.hpp:223-331) exercised through the product SO:
-// Collector::MarkObject -> ZPage::mark_object / inc_live,
+// CopyCollector::MarkObject -> ZPage::mark_object / inc_live,
 // ZPage::CloneForPromotion, ZLiveMap::reset / reset_segment.
 
 #include <atomic>
@@ -244,7 +244,7 @@ GC_TEST(ZLiveMapTest, concurrent_first_mark_resets_once)
 
 // ---- page consumers (zPage.inline.hpp:223-331) through the product SO ----
 
-// Collector::MarkObject (product SO) -> ZPage::mark_object + inc_live.
+// CopyCollector::MarkObject (product SO) -> ZPage::mark_object + inc_live.
 // The page's live bytes are what ZRelocationSetSelector consumes
 // (zRelocationSetSelector.cpp: liveBytes = is_marked() ? live_bytes() : 0).
 GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
@@ -274,7 +274,7 @@ GC_TEST(ZLiveMapPage, collector_mark_object_accounts_live_once)
     GC_EXPECT_FALSE(fx.region1->is_object_live(from_object(fx.obj1)));
 }
 
-// Collector::ResurrectObject (product SO) -> mark_object(finalizable = true):
+// CopyCollector::ResurrectObject (product SO) -> mark_object(finalizable = true):
 // the object is live but not strongly live (zPage.inline.hpp:254-260).
 GC_TEST(ZLiveMapPage, resurrect_is_live_not_strong)
 {

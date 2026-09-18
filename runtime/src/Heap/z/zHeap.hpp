@@ -49,6 +49,7 @@ class AllocBuffer;
 class FinalizerProcessor;
 class CollectorResources;
 class Collector;
+class CopyCollector;
 class ZRemembered;
 class ExportRootTable;
 class StaticRootTable;
@@ -233,7 +234,7 @@ private:
     ZGenerationYoung _young;
     Allocator* theSpace { nullptr };
     CollectorResources* collectorResources { nullptr };
-    Collector* collectorImpl { nullptr };
+    CopyCollector* collectorImpl { nullptr };
     ExportRootTable* exportRootsTable { nullptr };
     StaticRootTable* staticRootTable { nullptr };
     std::atomic<bool> isGCEnabled { true };

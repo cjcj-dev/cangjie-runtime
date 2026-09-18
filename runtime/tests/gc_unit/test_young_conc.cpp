@@ -91,7 +91,7 @@ extern "C" int CJ_ScheduleManagerInit();
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
-    static void BindCollector(CollectorResources& resources, Collector* collector)
+    static void BindCollector(CollectorResources& resources, CopyCollector* collector)
     {
         if (collector == nullptr && resources.testCollector != nullptr) {
             // Worker TLS teardown flushes through the still-bound collector.
@@ -113,17 +113,17 @@ struct RelocationReceiptTestAccess {
         }
     }
 
-    static void FlipYoungMarkForNativeBarrier(Collector& collector)
+    static void FlipYoungMarkForNativeBarrier(CopyCollector& collector)
     {
         ZGlobalsPointers::flip_young_mark_start();
     }
 
-    static void StartYoungRelocate(Collector& collector)
+    static void StartYoungRelocate(CopyCollector& collector)
     {
         ZGlobalsPointers::flip_young_relocate_start();
     }
 
-    static void RunCollectionDispatch(Collector& collector)
+    static void RunCollectionDispatch(CopyCollector& collector)
     {
         auto& cycle = collector.GetZGeneration(ZGenerationId::young);
         if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
