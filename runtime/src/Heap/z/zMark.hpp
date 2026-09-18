@@ -326,78 +326,8 @@ class VM_ZVerifyOld;
 
 
 class MarkingWork;
-class CopyCollector {
-public:
+class CopyCollector : public Collector {
     friend class ZMarkTask;
-
-    const char* GetCollectorName() const;
-    void RequestGC(GCReason reason, bool async);
-    ZGeneration& GetZGeneration(ZGenerationId generation);
-    const ZGeneration& GetZGeneration(ZGenerationId generation) const;
-    ZGeneration& GetZGeneration(Generation generation)
-    {
-        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
-    }
-    const ZGeneration& GetZGeneration(Generation generation) const
-    {
-        return GetZGeneration(generation == Generation::Young ? ZGenerationId::young : ZGenerationId::old);
-    }
-    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const
-    {
-        return GetZGeneration(generation).Snapshot();
-    }
-    void PublishGenerationPhase(ZGenerationId generation, ZGenerationPhase value);
-    bool OldActiveRemsetIsCurrent() const
-    {
-        return GetZGeneration(ZGenerationId::old).ActiveRemsetIsCurrent(
-            GetZGeneration(ZGenerationId::young).Sequence());
-    }
-    Generation ObjectGeneration(BaseObject* object) const;
-    void MarkObjectIfActive(BaseObject* object) const;
-    [[noreturn]] static void AbortUnimplemented(const char* method);
-    static HandVerdict JudgeHandOutTarget(BaseObject* target);
-    static uint64_t EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
-                                                 MAddress witnessStart, uint64_t witnessEpoch,
-                                                 uint64_t witnessLife, bool witnessValid);
-    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
-                                            const ForwardingProvenance& provenance);
-    BaseObject* ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const;
-    static constexpr size_t kHealFpBits = 1u << 22;
-    static uint64_t* HealFpTable()
-    {
-        static uint64_t table[kHealFpBits / 64] = {};
-        return table;
-    }
-    static size_t HealFpIndex(uintptr_t slot)
-    {
-        const uintptr_t h = (slot >> 3) ^ (slot >> 23) ^ (slot >> 41);
-        return static_cast<size_t>(h) & (kHealFpBits - 1);
-    }
-    static void HealFpMark(uintptr_t slot)
-    {
-        const size_t i = HealFpIndex(slot);
-        __atomic_fetch_or(&HealFpTable()[i / 64], uint64_t(1) << (i % 64), __ATOMIC_RELAXED);
-    }
-    static bool HealFpTest(uintptr_t slot)
-    {
-        const size_t i = HealFpIndex(slot);
-        return (__atomic_load_n(&HealFpTable()[i / 64], __ATOMIC_RELAXED) & (uint64_t(1) << (i % 64))) != 0;
-    }
-    bool IsLoadBad(RefField<>& ref) const
-    {
-        return (raw(ref.GetFieldValue()) & ::g_cjLoadBadMask) != 0;
-    }
-    BaseObject* make_load_good(RefField<>& ref, const ForwardingProvenance& provenance) const
-    {
-        BaseObject* target = to_object(ref.GetTargetObject());
-        if (target == nullptr || ZPointer::is_load_good(ref.GetFieldValue())) {
-            return target;
-        }
-        return relocate_or_remap_object(target, remap_generation(ref), provenance);
-    }
-    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const;
-    CollectorType collectorType = CollectorType::SMOOTH_COLLECTOR;
-
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
     friend struct ZGenerationRootTestAccess;
