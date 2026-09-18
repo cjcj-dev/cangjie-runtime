@@ -100,20 +100,20 @@ class MarkWindowScope final {
 public:
     MarkWindowScope()
         : resources(Heap::GetHeap().GetCollectorResources()), started(Heap::GetHeap().IsGcStarted()),
-          reason(resources.GetGCStats().reason)
+          reason(Heap::GetHeap().GetGCStats().reason)
     {
         RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
         phase = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
         activityCycle = &Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
         ownerWasActive = activityCycle->Snapshot().active;
         if (!ownerWasActive) activityCycle->Begin(1);
-        resources.GetGCStats().reason = GC_REASON_USER;
+        Heap::GetHeap().GetGCStats().reason = GC_REASON_USER;
         Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
     }
     ~MarkWindowScope()
     {
         Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phase);
-        resources.GetGCStats().reason = reason;
+        Heap::GetHeap().GetGCStats().reason = reason;
         if (!ownerWasActive) activityCycle->End();
     }
 

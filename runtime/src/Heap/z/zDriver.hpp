@@ -396,11 +396,6 @@ public:
     CollectorResources() = default;
     ~CollectorResources() = default;
 
-    ZWorkers& GetWorkers(ZGenerationId generation) const;
-
-    GCStats& GetGCStats(ZGenerationId generation = ZGenerationId::old);
-
-
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
     friend struct MarkPort203TestAccess;

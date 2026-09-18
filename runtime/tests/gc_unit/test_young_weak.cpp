@@ -420,11 +420,11 @@ void RunYoungWeakVariant(size_t helpers)
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
+    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
 
     YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
@@ -438,7 +438,7 @@ void RunYoungWeakVariant(size_t helpers)
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
@@ -494,11 +494,11 @@ void RunYoungWeakRemsetFlow()
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
+    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
     YoungClosureObservation closure;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
     GC_EXPECT_TRUE(closure.Calls() > 0);
@@ -510,7 +510,7 @@ void RunYoungWeakRemsetFlow()
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
 
@@ -785,11 +785,11 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
 
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats(ZGenerationId::young).reason;
+    const GCReason reasonBefore = Heap::GetHeap().GetGCStats(ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = GC_REASON_YOUNG;
     bool currentMarked = false;
     ValueRootMarkObservation closure([&] { currentMarked |= IsValueRootMarked(route); });
     RelocationReceiptTestAccess::RunYoungCollection(collector);
@@ -809,7 +809,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
                  static_cast<unsigned>(afterCoverage.answer));
 
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(ZGenerationId::young).reason = reasonBefore;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).reason = reasonBefore;
     RelocationReceiptTestAccess::BindWorkerBudget(resources);
     RelocationReceiptTestAccess::StopWeakFixtureWorkersAndUnbind(resources);
     GC_EXPECT_TRUE(currentMarked);

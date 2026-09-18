@@ -142,12 +142,12 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
+    const GCReason reasonBefore = heap.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_USER;
+    heap.GetGCStats().reason = GC_REASON_USER;
     heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
@@ -178,7 +178,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     buf.Flush();
     DrainPublishedMarkObjects(retired);
     heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     GC_EXPECT_EQ(retired.size(), 1u);
 }
@@ -202,12 +202,12 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
+    const GCReason reasonBefore = heap.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_USER;
+    heap.GetGCStats().reason = GC_REASON_USER;
     heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
@@ -225,7 +225,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
     DrainPublishedMarkObjects(retired);
     heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     size_t oldCount = 0;
     size_t newCount = 0;
@@ -329,12 +329,12 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
+    const GCReason reasonBefore = heap.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_USER;
+    heap.GetGCStats().reason = GC_REASON_USER;
     heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     std::vector<BaseObject*> retired;
@@ -354,7 +354,7 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     mutator.FlushStoreBarrierBuffer();
     DrainPublishedMarkObjects(retired);
     heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
     size_t oldReceipts = 0;
     size_t newReceipts = 0;
@@ -397,12 +397,12 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
+    const GCReason reasonBefore = heap.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_USER;
+    heap.GetGCStats().reason = GC_REASON_USER;
     heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::Mark);
 
     Mutator mutator;
@@ -423,7 +423,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer->IsEmpty());
 
     heap.GetCollector().GetZGeneration(ZGenerationId::old).set_phase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    heap.GetGCStats().reason = reasonBefore;
     if (!ownerWasActive) activityCycle.End();
 }
 

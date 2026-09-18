@@ -121,7 +121,7 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     ZPage* region = fx.region0;
     region->reset(PageAge::eden);
     region->reset(PageAge::eden);
-    resources.GetGCStats(ZGenerationId::young).tenuringThreshold = 1;
+    Heap::GetHeap().GetGCStats(ZGenerationId::young).tenuringThreshold = 1;
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + dead->GetSize());
     // Keep a second live object after the root object. In-place compaction

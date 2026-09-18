@@ -103,7 +103,6 @@ bool Same(const GCCycleSnapshot& a, const GCCycleSnapshot& b)
 void* Exercise(void*)
 {
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    auto& resources = Heap::GetHeap().GetCollectorResources();
     cpu_set_t cpus;
     CPU_ZERO(&cpus);
     const int affinityRc = sched_getaffinity(0, sizeof(cpus), &cpus);
@@ -114,8 +113,8 @@ void* Exercise(void*)
         .GetRegionManager().GetThreadLocalRegionSize();
     const size_t heapLimit = heapBytes / regionBytes / 50;
     const size_t concurrent = std::max<size_t>(1, std::min((cpuCount + 3) / 4, heapLimit));
-    ZWorkers& youngWorkers = resources.GetWorkers(ZGenerationId::young);
-    ZWorkers& oldWorkers = resources.GetWorkers(ZGenerationId::old);
+    ZWorkers& youngWorkers = *Heap::GetHeap().young().Workers();
+    ZWorkers& oldWorkers = *Heap::GetHeap().old().Workers();
     // ZWorkers (zWorkers.cpp:60-64) initializes each generation with all
     // concurrent workers active, and no generation is active before a cycle.
     Expect(youngWorkers.active_workers() == concurrent && oldWorkers.active_workers() == concurrent,
@@ -176,8 +175,10 @@ void* Exercise(void*)
         buffer.add(reinterpret_cast<MAddress>(&slot), zpointer::null);
         const auto storedPending = buffer.Pending();
         const bool young = collector.GetCycleSnapshot(ZGenerationId::young).active;
-        ZWorkers& current = resources.GetWorkers(young ? ZGenerationId::young : ZGenerationId::old);
-        ZWorkers& other = resources.GetWorkers(young ? ZGenerationId::old : ZGenerationId::young);
+        ZWorkers& current = *Heap::GetHeap().GetZGeneration(
+            young ? ZGenerationId::young : ZGenerationId::old).Workers();
+        ZWorkers& other = *Heap::GetHeap().GetZGeneration(
+            young ? ZGenerationId::old : ZGenerationId::young).Workers();
         std::printf("WORKER_PREPARED generation=%s active=%u other_active=%u workers=%u\n",
                     young ? "young" : "old", current.is_active(), other.is_active(), current.active_workers());
         Expect(current.active_workers() == concurrent, "worker_prepared_concurrent_budget");

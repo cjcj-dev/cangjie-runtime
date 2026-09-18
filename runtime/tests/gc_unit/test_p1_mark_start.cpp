@@ -44,7 +44,6 @@ extern "C" int p1MarkStartExercise()
 {
     failures = 0;
     HeapGcState& collector = Heap::GetHeap().GetCollector();
-    auto& resources = Heap::GetHeap().GetCollectorResources();
     alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)] {};
     auto* type = reinterpret_cast<TypeInfo*>(storage);
     type->SetType(TypeKind::TYPE_KIND_CLASS);
@@ -68,7 +67,7 @@ extern "C" int p1MarkStartExercise()
         const uintptr_t mask = index == 0 ? ZPointerMarkedYoungMask : ZPointerMarkedOldMask;
         const uintptr_t color = ::g_cjMarkBadMask & mask;
         const unsigned face = ZGenerationRootTestAccess::RemsetFace();
-        const unsigned workers = resources.GetWorkers(generation).ActiveWorkers();
+        const unsigned workers = Heap::GetHeap().GetZGeneration(generation).Workers()->ActiveWorkers();
         std::printf("P1_PRODUCT_STATE gen=%zu point=%u seq=%llu phase=%u color=%zx face=%u domain=%p domain_workers=%zu workers=%u\n",
                     index, static_cast<unsigned>(point), static_cast<unsigned long long>(snapshot.sequence),
                     static_cast<unsigned>(snapshot.phase), color, face, domain,

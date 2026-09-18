@@ -365,11 +365,13 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         }
     }
     const bool wasStarted = Heap::GetHeap().IsGcStarted();
-    const GCReason oldReason = resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason;
+    const GCReason oldReason = Heap::GetHeap().GetGCStats(
+        major ? ZGenerationId::old : ZGenerationId::young).reason;
     auto& activityCycle = Heap::GetHeap().GetCollector().GetZGeneration(major ? ZGenerationId::old : ZGenerationId::young);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason = major ? GC_REASON_USER : GC_REASON_YOUNG;
+    Heap::GetHeap().GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason =
+        major ? GC_REASON_USER : GC_REASON_YOUNG;
     ArrayClosureResult result;
     result.region = fx.region1;
     result.array = array;
@@ -408,7 +410,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool markOnly = fal
         Heap::GetHeap().RemoveExportObject(handle);
     }
     if (!ownerWasActive) activityCycle.End();
-    resources.GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason = oldReason;
+    Heap::GetHeap().GetGCStats(major ? ZGenerationId::old : ZGenerationId::young).reason = oldReason;
 
     // Worker TLS cleanup must finish while its collector still owns publication.
     for (auto generation : {ZGenerationId::young, ZGenerationId::old}) {
