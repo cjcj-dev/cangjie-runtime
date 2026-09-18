@@ -181,6 +181,7 @@ public:
 class ZStatValue {
 public:
     static void initialize() { InitializeStorage(); }
+    static bool StorageReadyPublic();
     const char* Group() const;
     const char* Name() const;
     uint32_t Id() const;
@@ -190,20 +191,22 @@ protected:
     ZStatValue(const char* group, const char* name, uint32_t id, size_t size);
     // Host infra difference: product entry points (e.g. the livemap
     // contention counters) can be reached before ZStat::Initialize in
-    // embedding/test contexts; allocate the per-CPU block lazily.
+    // embedding/test contexts. Samples taken before the per-CPU block
+    // exists are discarded rather than touching unallocated storage.
+    static bool StorageReady() { return base != nullptr; }
     template<typename T> T* CpuLocal(size_t cpu) const
     {
-        EnsureStorage();
         return reinterpret_cast<T*>(base + stride * cpu + offset);
     }
     static void InitializeStorage();
-    static void EnsureStorage();
     friend class ZStat;
 private:
     const char* const group;
     const char* const name;
     const uint32_t id;
+protected:
     const size_t offset;
+private:
     static size_t stride;
     static char* base;
 };
@@ -511,6 +514,11 @@ public:
     void run_thread() override;
     void terminate() override;
     static void Initialize();
+    // Host infra difference (heap is constructed at runtime, after the
+    // harness may have requested init): the per-CPU storage is allocated
+    // once both init was requested and the heap singleton (whose
+    // ZStatHeap counters are runtime-constructed) exists.
+    static void NotifyHeapConstructed();
     private:
     // zStat.hpp:387-389: the sampling thread ticks off a ZMetronome.
     static constexpr uint64_t SampleHz = 1;

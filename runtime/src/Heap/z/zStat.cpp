@@ -291,6 +291,11 @@ ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
 #include "Heap/z/zUtils.inline.hpp"
 
 namespace MapleRuntime {
+bool ZStatValue::StorageReadyPublic()
+{
+    return base != nullptr;
+}
+
 void ZTracer::report_stat_sampler(const ZStatSampler& sampler, uint64_t value)
 {
     // zStat.cpp:133-152: route to Cangjie events once they exist (#626 D4-A).
@@ -319,12 +324,10 @@ ZStatValue::ZStatValue(const char* group, const char* name, uint32_t id, size_t 
 {
     MRT_ASSERT(base == nullptr, "statistics registered after initialization");
     stride += size;
-}
-
-void ZStatValue::EnsureStorage()
-{
-    static std::once_flag storageOnce;
-    std::call_once(storageOnce, [] { InitializeStorage(); });
+    if (base != nullptr) {
+        std::fprintf(stderr, "ZSTAT_LATE_REGISTER group=%s name=%s size=%zu stride=%zu\n",
+                     group, name, size, stride);
+    }
 }
 
 // zStat.cpp:362-369: one cache-line aligned, unfreeable block of
@@ -381,6 +384,7 @@ ZStatSamplerData ZStatSampler::CollectAndReset() const
 
 void ZStatSampler::Sample(uint64_t value) const
 {
+    if (!StorageReady()) return;
     auto& data = *CpuLocal<CpuData>(ZCPU::id());
     data.nsamples.fetch_add(1, std::memory_order_relaxed);
     data.sum.fetch_add(value, std::memory_order_relaxed);
@@ -390,6 +394,7 @@ void ZStatSampler::Sample(uint64_t value) const
 
 void ZStatCounter::Increment(uint64_t value) const
 {
+    if (!StorageReady()) return;
     CpuLocal<CpuData>(ZCPU::id())->value.fetch_add(value, std::memory_order_relaxed);
 }
 
@@ -456,16 +461,23 @@ void ZStatInc(const ZStatCounter& counter, uint64_t increment)
 
 void ZStatInc(const ZStatUnsampledCounter& counter, uint64_t increment)
 {
+    if (!ZStatValue::StorageReadyPublic()) return;
     reinterpret_cast<ZStatUnsampledCounter::CpuData*>(counter.Get())->value.fetch_add(
         increment, std::memory_order_relaxed);
 }
 
-void ZStat::Initialize()
+static std::atomic<bool> zstatInitRequested{false};
+static std::atomic<bool> zstatHeapConstructed{false};
+
+static void TryInitStorage()
 {
-    static std::once_flag initialized;
-    std::call_once(initialized, [] {
-        ZStatValue::EnsureStorage();
-        ZStatSampler::Sort();
+    if (!zstatInitRequested.load(std::memory_order_acquire) ||
+        !zstatHeapConstructed.load(std::memory_order_acquire)) {
+        return;
+    }
+    static std::once_flag storageOnce;
+    std::call_once(storageOnce, [] {
+        ZStatValue::initialize();
         for (const auto* sampler = ZStatSampler::First(); sampler != nullptr; sampler = sampler->Next()) {
             sampler->Initialize();
         }
@@ -473,6 +485,20 @@ void ZStat::Initialize()
             counter->Initialize();
         }
     });
+}
+
+void ZStat::Initialize()
+{
+    static std::once_flag initialized;
+    std::call_once(initialized, [] { ZStatSampler::Sort(); });
+    zstatInitRequested.store(true, std::memory_order_release);
+    TryInitStorage();
+}
+
+void ZStat::NotifyHeapConstructed()
+{
+    zstatHeapConstructed.store(true, std::memory_order_release);
+    TryInitStorage();
 }
 
 static void SampleAndCollect(std::vector<ZStatSamplerHistory>& history)

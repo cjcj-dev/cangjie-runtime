@@ -106,6 +106,7 @@ Heap::Heap()
     _allocation_adapter.reset(new RegionSpace());
     exportRootsTable = new ExportRootTable();
     staticRootTable = new StaticRootTable();
+    ZStat::NotifyHeapConstructed();
 }
 
 Heap::~Heap()
