@@ -434,7 +434,7 @@ void ZGenerationYoung::collect()
 {
     ZGenerationCollectionScopeYoung scope(*this);
     pause_mark_start();
-    DriverUnlocker unlocker(Heap::GetHeap().GetCollectorResources());
+    DriverUnlocker unlocker;
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -1298,7 +1298,7 @@ void ZGenerationOld::collect()
 {
     HeapGcState& collector = TheCollector();
     ZGenerationCollectionScopeOld scope(*this);
-    DriverUnlocker unlocker(Heap::GetHeap().GetCollectorResources());
+    DriverUnlocker unlocker;
     concurrent_mark();
     abortpoint();
     while (!pause_mark_end()) {
@@ -1315,7 +1315,7 @@ void ZGenerationOld::collect()
     concurrent_select_relocation_set();
     abortpoint();
     {
-        DriverLocker locker(Heap::GetHeap().GetCollectorResources());
+        DriverLocker locker;
         concurrent_remap_young_roots();
         abortpoint();
         pause_relocate_start();

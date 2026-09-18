@@ -36,6 +36,12 @@
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
+std::mutex ZDriver::driverLock;
+
+void ZDriver::lock() { driverLock.lock(); }
+
+void ZDriver::unlock() { driverLock.unlock(); }
+
 extern "C" uintptr_t MRT_StopGCWork()
 {
     Heap::GetHeap().StopGCWork();
@@ -319,7 +325,7 @@ bool CollectorResources::ExecuteDriverRequest(const ZDriverRequest& request)
 
 bool CollectorResources::ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request)
 {
-    DriverLocker locker(*this);
+    DriverLocker locker;
     const bool major = &port == &GetMajorDriverPort();
     ZAbort::reset();
     if (major) ZBreakpoint::AtBeforeGC();

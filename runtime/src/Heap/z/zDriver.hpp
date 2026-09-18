@@ -342,6 +342,8 @@ class CollectorResourcesTestPeer;
 // receives requests from their port and whose terminate closes that port.
 class ZDriver : public ZThread {
 public:
+    static void lock();
+    static void unlock();
     ZDriver(CollectorResources& resources, GCDriverKind kind, ZDriverPort& port);
     void run_thread() override;
     void terminate() override;
@@ -350,6 +352,8 @@ protected:
     CollectorResources& resources;
     const GCDriverKind kind;
     ZDriverPort& port;
+private:
+    static std::mutex driverLock;
 };
 
 class ZDriverMinor final : public ZDriver {
@@ -393,8 +397,6 @@ public:
     void Init();
     void Fini();
     void StopGCWork();
-    void LockDriver() { driverLock.lock(); }
-    void UnlockDriver() { driverLock.unlock(); }
 
     ZWorkers& GetWorkers(ZGenerationId generation) const;
 
@@ -458,8 +460,6 @@ private:
     bool ExecuteDriverRequest(const ZDriverRequest& request);
     bool ProcessDriverRequest(ZDriverPort& port, const ZDriverRequest& request);
     void CancelDriverRequestLifecycle(GCDriverKind kind);
-    // zDriver.cpp:59-72: held by young; old releases it for its body.
-    std::mutex driverLock;
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 private:
     std::function<void()> testAfterYoungPrelude;
@@ -481,22 +481,20 @@ private:
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.
 class DriverLocker {
 public:
-    explicit DriverLocker(CollectorResources& resources) : resources(resources) { resources.LockDriver(); }
-    ~DriverLocker() { resources.UnlockDriver(); }
+    DriverLocker() { ZDriver::lock(); }
+    explicit DriverLocker(CollectorResources&) : DriverLocker() {}
+    ~DriverLocker() { ZDriver::unlock(); }
     DriverLocker(const DriverLocker&) = delete;
     DriverLocker& operator=(const DriverLocker&) = delete;
-private:
-    CollectorResources& resources;
 };
 
 class DriverUnlocker {
 public:
-    explicit DriverUnlocker(CollectorResources& resources) : resources(resources) { resources.UnlockDriver(); }
-    ~DriverUnlocker() { resources.LockDriver(); }
+    DriverUnlocker() { ZDriver::unlock(); }
+    explicit DriverUnlocker(CollectorResources&) : DriverUnlocker() {}
+    ~DriverUnlocker() { ZDriver::lock(); }
     DriverUnlocker(const DriverUnlocker&) = delete;
     DriverUnlocker& operator=(const DriverUnlocker&) = delete;
-private:
-    CollectorResources& resources;
 };
 } // namespace MapleRuntime
 #endif // MRT_COLLECTOR_RESOURCES_H
