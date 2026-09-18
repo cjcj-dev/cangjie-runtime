@@ -93,7 +93,7 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(HeapGcState* collector)
     {
-                if (collector != nullptr) {
+        if (collector != nullptr) {
             CHECK(collector == &Heap::GetHeap().GetCollector());
             // Product driver startup owns one worker set per generation
             // (zDriver.cpp:408-409; ZGC zGeneration.cpp:205-215).

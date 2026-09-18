@@ -43,7 +43,7 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void BindCollector(HeapGcState* collector)
     {
-                if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
+        if (collector != nullptr) CHECK(collector == &Heap::GetHeap().GetCollector());
     }
     static void AddCycleRoot(HeapGcState& collector, BaseObject* owner, BaseObject* target)
     {

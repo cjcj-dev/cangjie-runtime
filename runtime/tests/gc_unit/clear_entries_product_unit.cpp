@@ -77,7 +77,7 @@ struct RelocationReceiptTestAccess {
 
     static void BindCollector(HeapGcState* collector)
     {
-                if (collector == nullptr) return;
+        if (collector == nullptr) return;
         CHECK(collector == &Heap::GetHeap().GetCollector());
         for (ZGenerationId generation : {ZGenerationId::young, ZGenerationId::old}) {
             auto& cycle = Heap::GetHeap().GetZGeneration(generation);
