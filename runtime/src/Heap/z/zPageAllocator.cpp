@@ -1324,7 +1324,7 @@ ZPageAllocatorStats RegionManager::Stats(const ZGeneration* generation) const
                                generation->freed(),
                                generation->promoted(),
                                generation->compacted(),
-                               allocationStallQueue.Pending());
+                               AllocationStallsNow());
 }
 
 ZPageAllocatorStats RegionManager::UpdateAndStats(const ZGeneration* generation)

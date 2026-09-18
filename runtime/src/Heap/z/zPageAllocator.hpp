@@ -566,8 +566,9 @@ public:
     MRT_EXPORT size_t DequeuedStalledAllocations() const;
     MRT_EXPORT size_t SatisfiedStalledAllocations() const;
     MRT_EXPORT size_t FailedStalledAllocations() const;
-
+#endif
     // In-place relocation account (feeds ZStatRelocation::AtRelocateEnd).
+    // Not observation-gated: the relocation report reads it in every build.
     void ResetInPlaceRelocatedCounts()
     {
         inPlaceSmallCount.store(0, std::memory_order_relaxed);
@@ -586,7 +587,16 @@ public:
         return { inPlaceSmallCount.load(std::memory_order_relaxed),
                  inPlaceMediumCount.load(std::memory_order_relaxed) };
     }
+    // zPageAllocator.cpp:1362 stats field: currently stalled mutators. Host
+    // difference: the stall queue only counts under MRT_ALLOCATION_STALL_OBSERVE.
+    size_t AllocationStallsNow() const
+    {
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+        return allocationStallQueue.Pending();
+#else
+        return 0;
 #endif
+    }
     template<Generation G>
     void ForwardClaimedPage(ZPage* region, ZForwarding* owner, bool claimed = false,
                             bool inPlace = false);
