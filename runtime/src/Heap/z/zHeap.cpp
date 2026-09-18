@@ -153,13 +153,13 @@ void Heap::Init(const HeapParam& param)
     if (old().Workers() == nullptr) {
         old().InitializeWorkers(1);
     }
-    GetCollectorResources().Init();
+    ZCollectedHeap::heap()->initialize_gc();
     _initialized = true;
 }
 
 void Heap::Fini()
 {
-    GetCollectorResources().Fini();
+    ZCollectedHeap::heap()->finalize_gc();
     young().StopWorkers();
     old().StopWorkers();
     collectorImpl->Fini();

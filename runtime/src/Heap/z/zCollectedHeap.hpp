@@ -32,6 +32,8 @@ public:
     ~ZCollectedHeap();
     static void stop();
     void start_gc_threads();
+    void initialize_gc();
+    void finalize_gc();
     void collect(GCReason reason, bool async);
     CollectorResources& resources() { return *_resources; }
     const CollectorResources& resources() const { return *_resources; }

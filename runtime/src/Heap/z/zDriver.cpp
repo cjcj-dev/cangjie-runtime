@@ -138,34 +138,6 @@ void ZDriverMajor::collect(const ZDriverRequest& request)
     }
 }
 
-void CollectorResources::Init()
-{
-    ZAbort::reset();
-    ZStat::Initialize();
-    GetGCStats(ZGenerationId::young).Init();
-    GetGCStats(ZGenerationId::old).Init();
-    ZStatMutatorAllocRate::initialize();
-    const uint64_t now = TimeUtil::NanoSeconds();
-    Heap::GetHeap().young().CycleStats().Initialize(now);
-    Heap::GetHeap().old().CycleStats().Initialize(now);
-    ZCollectedHeap::heap()->_stat = new ZStat();
-    ZCollectedHeap::heap()->start_gc_threads();
-    finalizerProcessor.Start();
-    StringDedup::Instance().Start();
-    if (Uncommitter::Enabled()) {
-        LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus",
-            static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND));
-    } else {
-        LOG(RTLOG_INFO, "Uncommit: Disabled");
-    }
-}
-
-void CollectorResources::Fini()
-{
-    MRT_ASSERT(!finalizerProcessor.IsRunning(), "Invalid finalizerProcessor status");
-    MRT_ASSERT(!gcThreadRunning.load(std::memory_order_relaxed), "Invalid GC thread status");
-}
-
 void ZDriver::RunCollection(HeapGcState& collector, uint64_t index, GCReason reason, bool warmup)
 {
     const bool isYoung = reason == GC_REASON_YOUNG;

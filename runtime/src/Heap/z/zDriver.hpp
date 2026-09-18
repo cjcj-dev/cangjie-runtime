@@ -396,8 +396,6 @@ public:
     CollectorResources() = default;
     ~CollectorResources() = default;
 
-    void Init();
-    void Fini();
 
     ZWorkers& GetWorkers(ZGenerationId generation) const;
 

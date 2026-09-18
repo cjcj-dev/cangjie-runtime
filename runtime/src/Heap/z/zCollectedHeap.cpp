@@ -35,6 +35,7 @@
 #include "Heap/z/zThread.hpp"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/z/zUncommitter.hpp"
+#include "Base/TimeUtils.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Mutator/Mutator.h"
@@ -57,6 +58,34 @@ ZCollectedHeap::ZCollectedHeap()
 }
 
 ZCollectedHeap::~ZCollectedHeap() { delete _resources; }
+
+void ZCollectedHeap::initialize_gc()
+{
+    ZAbort::reset();
+    ZStat::Initialize();
+    _heap.GetGCStats(ZGenerationId::young).Init();
+    _heap.GetGCStats(ZGenerationId::old).Init();
+    ZStatMutatorAllocRate::initialize();
+    const uint64_t now = TimeUtil::NanoSeconds();
+    _heap.young().CycleStats().Initialize(now);
+    _heap.old().CycleStats().Initialize(now);
+    _stat = new ZStat();
+    start_gc_threads();
+    _resources->finalizerProcessor.Start();
+    StringDedup::Instance().Start();
+    if (Uncommitter::Enabled()) {
+        LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus",
+            static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND));
+    } else {
+        LOG(RTLOG_INFO, "Uncommit: Disabled");
+    }
+}
+
+void ZCollectedHeap::finalize_gc()
+{
+    MRT_ASSERT(!_resources->finalizerProcessor.IsRunning(), "Invalid finalizerProcessor status");
+    MRT_ASSERT(!_resources->gcThreadRunning.load(std::memory_order_relaxed), "Invalid GC thread status");
+}
 
 void ZCollectedHeap::start_gc_threads()
 {
