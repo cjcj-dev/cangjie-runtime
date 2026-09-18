@@ -62,6 +62,13 @@ struct RelocationReceiptTestAccess {
                 if (cycle.Snapshot().active) cycle.End();
                 if (cycle.Workers() == nullptr) cycle.InitializeWorkers(2);
             }
+            collector->GetZGeneration(ZGenerationId::old).set_phase(ZGenerationPhase::MarkComplete);
+            auto& remembered = HeapTestRemset();
+            if (!remembered.IsInitialized()) {
+                remembered.Initialize(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
+            }
+            InitFwdTables(Heap::GetHeapStartAddress(), GcHeapFixture::kUnits * ZPage::UNIT_SIZE,
+                          ZPage::UNIT_SIZE);
         }
     }
 

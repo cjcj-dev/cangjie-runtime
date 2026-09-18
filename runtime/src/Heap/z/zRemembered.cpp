@@ -263,10 +263,11 @@ bool ZRemsetTableIterator::next(ZRemsetTableEntry* entry_addr)
             continue;
         }
         ZForwarding* forwarding = nullptr;
-        if (ZGeneration::old() != nullptr && ZGeneration::old()->is_phase_relocate()) {
+        if (_old_forwarding_table != nullptr && ZGeneration::old() != nullptr &&
+            ZGeneration::old()->is_phase_relocate()) {
             forwarding = _old_forwarding_table->at(page_index);
         }
-        ZPage* page = _page_table->at(page_index);
+        ZPage* page = _page_table != nullptr ? _page_table->at(page_index) : nullptr;
         if (page != nullptr && page->IsYoungRegion()) {
             page = nullptr;
         }
