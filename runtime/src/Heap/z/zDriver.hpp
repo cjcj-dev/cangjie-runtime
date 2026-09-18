@@ -319,7 +319,6 @@ public:
 
 private:
 #if defined(MRT_GC_UNIT_TESTS)
-    friend class CollectorResourcesTestPeer;
 #endif
 
     static constexpr uint64_t DEFAULT_GC_TASK_INTERVAL_TIMEOUT_NS = 1000L * 1000 * 1000; // default 1s
@@ -333,10 +332,6 @@ private:
 enum class GCDriverKind : uint8_t { MINOR, MAJOR };
 
 class HeapGcState;
-class CollectorResources;
-#if defined(MRT_TESTABLE_INTERNALS)
-class CollectorResourcesTestPeer;
-#endif
 
 // zDriver.hpp:48-119: ZDriverMinor/ZDriverMajor are ZThreads whose run_thread
 // receives requests from their port and whose terminate closes that port.
@@ -380,34 +375,6 @@ private:
     ZDriverPort _port;
 };
 
-// CollectorResources provides the resources that a functional collector need,
-// such as GC drivers and workers.
-class CollectorResources {
-public:
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct MarkPublicationFixture;
-#endif
-    friend class ZDirector;
-    friend class ZDriver;
-    friend class ZCollectedHeap;
-    friend struct RelocationReceiptTestAccess;
-    friend struct MarkPort203TestAccess;
-public:
-    CollectorResources() = default;
-    ~CollectorResources() = default;
-
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend struct RelocationReceiptTestAccess;
-    friend struct MarkPort203TestAccess;
-#endif
-
-private:
-#if defined(MRT_TESTABLE_INTERNALS)
-    friend class CollectorResourcesTestPeer;
-#endif
-
-
-};
 // zDriver.cpp:85-107: lock scopes shared by both generation drivers.
 class DriverLocker {
 public:

@@ -373,8 +373,6 @@ ssize_t Heap::GetHeapPhysicalMemorySize() const
 
 FinalizerProcessor& Heap::GetFinalizerProcessor() { return ZCollectedHeap::heap()->finalizer_processor(); }
 
-CollectorResources& Heap::GetCollectorResources() { return ZCollectedHeap::heap()->resources(); }
-
 void Heap::StopGCWork() { ZCollectedHeap::stop(); }
 
 void Heap::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().RegisterAllocBuffer(buffer); }

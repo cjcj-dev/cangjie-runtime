@@ -52,12 +52,11 @@ ZCollectedHeap::ZCollectedHeap()
       _driver_major(nullptr),
       _director(nullptr),
       _stat(nullptr),
-      _runtime_workers(),
-      _resources(new CollectorResources())
+      _runtime_workers()
 {
 }
 
-ZCollectedHeap::~ZCollectedHeap() { delete _resources; }
+ZCollectedHeap::~ZCollectedHeap() = default;
 
 void ZCollectedHeap::initialize_gc()
 {
@@ -174,7 +173,6 @@ void ZCollectedHeap::stop()
 {
     ZAbort::abort();
     ZCollectedHeap* collected = heap();
-    CollectorResources& resources = collected->resources();
     if (collected->_finalizer_processor.IsRunning()) {
         collected->_finalizer_processor.Stop();
     }

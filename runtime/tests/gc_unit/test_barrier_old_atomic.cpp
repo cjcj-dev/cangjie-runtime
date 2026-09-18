@@ -50,17 +50,6 @@ using namespace MapleRuntime::GcUnit;
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicReadReference(
     MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field, MapleRuntime::MemoryOrder order);
 
-namespace MapleRuntime {
-
-struct RelocationReceiptTestAccess {
-    static void EnsureCollectorProxyBound(CollectorResources& resources)
-    {
-        (void)resources;
-    }
-};
-
-} // namespace MapleRuntime
-
 namespace {
 
 class AllocBufferScope final {
@@ -99,10 +88,8 @@ private:
 class MarkWindowScope final {
 public:
     MarkWindowScope()
-        : resources(Heap::GetHeap().GetCollectorResources()), started(Heap::GetHeap().IsGcStarted()),
-          reason(Heap::GetHeap().GetGCStats().reason)
+        : started(Heap::GetHeap().IsGcStarted()), reason(Heap::GetHeap().GetGCStats().reason)
     {
-        RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
         phase = Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
         activityCycle = &Heap::GetHeap().GetCollector().GetZGeneration(ZGenerationId::old);
         ownerWasActive = activityCycle->Snapshot().active;
@@ -118,7 +105,6 @@ public:
     }
 
 private:
-    CollectorResources& resources;
     bool started;
     ZGeneration* activityCycle = nullptr;
     bool ownerWasActive = false;

@@ -35,7 +35,7 @@ struct RelocationReceiptTestAccess {
         // Full driver-entry coverage lives in RawRemapYoungProduct.
         collector.RemapYoungRoots();
     }
-    static void BindNativeRootFixture(CollectorResources& resources, HeapGcState& collector, uint32_t workers = 1)
+    static void BindNativeRootFixture(HeapGcState& collector, uint32_t workers = 1)
     {
         CHECK(&collector == &Heap::GetHeap().GetCollector());
         ZCollectedHeap::heap()->set_concurrent_gc_threads_for_test(workers);
@@ -113,9 +113,8 @@ void CheckNativeRoot(bool minor, unsigned threadKind = 0)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
     HeapGcState& collector = heap.GetCollector();
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     ZPage* region = fx.region0;
@@ -257,9 +256,8 @@ GC_OTHER_VM_TEST(P10OldMarkThread, ParkedMutatorStackRootConsumedByWorker)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
     HeapGcState& collector = heap.GetCollector();
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     BaseObject* held = fx.obj0;
 
     Mutator* parked = MutatorManager::Instance().CreateRuntimeMutator(ThreadType::UNCOMMITTER_THREAD);
@@ -297,9 +295,8 @@ GC_OTHER_VM_TEST(NativeRootCurrent, ColoredAndNullBoundary)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
     HeapGcState& collector = heap.GetCollector();
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     NativeSlot slot(zpointer::null);
     ZBarrier::WriteStaticRef(slot, fx.obj0);
     GC_EXPECT_TRUE(ZBarrier::ReadStaticRef(slot) == fx.obj0);
@@ -313,9 +310,8 @@ GC_OTHER_VM_TEST(NativeRootCurrent, YoungGoodMarksBeforeHealingAndSkipsRepeat)
     B09RuntimeFixture runtime;
     GcHeapFixture fx;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
     HeapGcState& collector = heap.GetCollector();
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     Heap::OnHeapCreated(fx.heapStart);
     Heap::OnHeapExtended(fx.heapStart + GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
@@ -355,9 +351,8 @@ GC_OTHER_VM_TEST(NativeRootCurrent, StrongFinalizerRootPublishesAndMarks)
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
     HeapGcState& collector = heap.GetCollector();
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     fixture.region0->reset(PageAge::old);
@@ -387,9 +382,8 @@ void CheckRootStorageSegments(unsigned family)
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
     HeapGcState& collector = heap.GetCollector();
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector, 2);
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector, 2);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     fixture.region0->reset(family != 0 ? PageAge::eden : PageAge::old);
@@ -463,9 +457,8 @@ GC_OTHER_VM_TEST(RootStorageLifetime, ReleaseAndGrowDuringYoungTask)
     B09RuntimeFixture runtime;
     GcHeapFixture fixture;
     auto& heap = Heap::GetHeap();
-    auto& resources = heap.GetCollectorResources();
     HeapGcState& collector = heap.GetCollector();
-    RelocationReceiptTestAccess::BindNativeRootFixture(resources, collector);
+    RelocationReceiptTestAccess::BindNativeRootFixture(collector);
     GcHeapFixture::AdvanceGeneration(Generation::Young);
     GcHeapFixture::AdvanceGeneration(Generation::Old);
     fixture.region0->reset(PageAge::eden);

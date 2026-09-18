@@ -12,7 +12,6 @@ struct MarkPublicationFixture {
     inline static MarkPublicationFixture* current = nullptr;
     MarkPublicationFixture* previousFixture = current;
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     HeapGcState& collector = Heap::GetHeap().GetCollector();
     MarkPublicationFixture()
     {

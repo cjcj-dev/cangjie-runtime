@@ -16,7 +16,6 @@
 namespace MapleRuntime {
 enum class Generation : uint8_t;
 class HeapGcState;
-class CollectorResources;
 class ZDirector;
 class ZDriverMajor;
 class ZDriverMinor;
@@ -37,8 +36,6 @@ public:
     void initialize_gc();
     void finalize_gc();
     void collect(GCReason reason, bool async);
-    CollectorResources& resources() { return *_resources; }
-    const CollectorResources& resources() const { return *_resources; }
 
     Heap& collected_heap() { return _heap; }
     const Heap& collected_heap() const { return _heap; }
@@ -52,8 +49,6 @@ public:
     void set_concurrent_gc_threads_for_test(int32_t count) { _concurrent_gc_threads = count; }
 #endif
 
-    friend class CollectorResources;
-
 private:
     Heap _heap;
     ZDriverMinor* _driver_minor;
@@ -64,7 +59,6 @@ private:
     FinalizerProcessor _finalizer_processor;
     int32_t _concurrent_gc_threads = 1;
     std::atomic<bool> _gc_thread_running { false };
-    CollectorResources* _resources;
 };
 } // namespace MapleRuntime
 

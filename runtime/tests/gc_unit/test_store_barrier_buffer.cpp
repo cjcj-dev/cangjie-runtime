@@ -47,17 +47,6 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace MapleRuntime {
-
-struct RelocationReceiptTestAccess {
-    static void EnsureCollectorProxyBound(CollectorResources& resources)
-    {
-        (void)resources;
-    }
-};
-
-} // namespace MapleRuntime
-
 namespace {
 
 // A store-bad / load-good previous value exercises the ZGC store slow path.
@@ -139,8 +128,6 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     field.StoreColoured(prev);
 
     Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = heap.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
@@ -199,8 +186,6 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = heap.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
@@ -326,8 +311,6 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
     const zpointer newWord = StoreGoodPointer(newReferent);
 
     Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = heap.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();
@@ -394,8 +377,6 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     field.StoreColoured(StoreBadPointer(fx.obj0));
 
     Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = Heap::GetHeap().IsGcStarted();
     const GCReason reasonBefore = heap.GetGCStats().reason;
     const ZGenerationPhase phaseBefore = heap.GetCollector().GetZGeneration(ZGenerationId::old).GcPhase();

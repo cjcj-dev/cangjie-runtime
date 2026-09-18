@@ -29,7 +29,7 @@ namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
     static void PrepareIsolatedGcUnit()
     {
-        (void)Heap::GetHeap().GetCollectorResources();
+        (void)Heap::GetHeap().GetCollector();
     }
 };
 } // namespace MapleRuntime

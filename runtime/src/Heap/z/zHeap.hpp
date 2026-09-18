@@ -50,7 +50,6 @@ class Allocator;
 class RegionSpace;
 class AllocBuffer;
 class FinalizerProcessor;
-class CollectorResources;
 class HeapGcState;
 struct ForwardingProvenance;
 struct ThreadLocalData;
@@ -208,7 +207,6 @@ public:
 
     FinalizerProcessor& GetFinalizerProcessor();
 
-    CollectorResources& GetCollectorResources();
 
     void RegisterAllocBuffer(AllocBuffer& buffer);
 
