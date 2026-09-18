@@ -77,23 +77,6 @@ bool ModelShouldSelfHealCas(bool loadGoodIsHeap)
     return loadGoodIsHeap;
 }
 
-class ExportHandleTestCollector final : public HeapGcState {
-public:
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*, Generation) const override
-    {
-        return FindToVersionResult::NotForwarded();
-    }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>&) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
-    {
-        return RefField<>(GcUnit::StoreGoodPointer(obj));
-    }
-};
-
 class InstalledExportAllocBuffer final {
 public:
     explicit InstalledExportAllocBuffer(AllocBuffer& allocBuffer)
@@ -155,7 +138,6 @@ struct ExportHandleFixture {
     }
 
     GcHeapFixture heap;
-    ExportHandleTestCollector collector;
 };
 
 struct CompilerStoreFixture {

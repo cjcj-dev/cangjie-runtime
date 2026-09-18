@@ -66,29 +66,6 @@ zpointer StoreBadPointer(BaseObject* object)
     return to_zpointer(raw(StoreGoodPointer(object)) ^ ZPointerMarkedOldMask);
 }
 
-class StoreBufferCollector final : public HeapGcState {
-public:
-    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
-    { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }
-    void MarkYoungObjectIfActive(BaseObject* object) const override
-    { MarkPublicationFixture::Current().collector.MarkYoungObjectIfActive(object); }
-    GCCycleSnapshot GetCycleSnapshot(ZGenerationId generation) const override
-    { return MarkPublicationFixture::Current().collector.GetCycleSnapshot(generation); }
-    void Init() override {}
-    void RunGarbageCollection(uint64_t, GCReason) override {}
-    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    FindToVersionResult FindToVersion(BaseObject*, Generation) const override
-    {
-        return FindToVersionResult::NotForwarded();
-    }
-    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
-    bool IsOldPointer(RefField<>&) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
-    {
-        return RefField<>(obj, ::g_cjStoreGoodMask);
-    }
-};
-
 MAddress SlotAt(GcHeapFixture& fx, size_t i)
 {
     return fx.heapStart + i * sizeof(void*);
@@ -154,7 +131,6 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -216,7 +192,6 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -272,7 +247,6 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     Mutator mutator;
@@ -301,7 +275,6 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     Mutator mutator;
@@ -343,7 +316,6 @@ GC_TEST(StoreBuf, CompilerStoreBadOverwriteHandsObservedOldToMark)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -415,7 +387,6 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -462,7 +433,6 @@ GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)
     MarkPublicationFixture markFixture;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -530,7 +500,6 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     MarkPublicationFixture markFixture;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -591,7 +560,6 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
     fx.region1->reset(PageAge::eden);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -639,7 +607,6 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     MarkPublicationFixture markFixture;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -665,7 +632,6 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
     MarkPublicationFixture markFixture;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -800,7 +766,6 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
 GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
 {
     GcHeapFixture fx;
-    StoreBufferCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     HeapSlot<true> native(zpointer::null);
@@ -821,7 +786,6 @@ GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
 GC_TEST(StoreBuf, BulkPreservesSourceStorageProtocol)
 {
     GcHeapFixture fx;
-    StoreBufferCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * ZPage::UNIT_SIZE);
     RootSlot local;
@@ -871,7 +835,6 @@ GC_TEST(StoreBuf, CompilerStoreGoodOverwriteSkipsMarkAndBuffer)
     MarkPublicationFixture marking;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * ZPage::UNIT_SIZE);
-    StoreBufferCollector collector;
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const zpointer previous = StoreGoodPointer(fx.obj0);
     field.StoreColoured(StoreGoodPointer(fx.obj1));
