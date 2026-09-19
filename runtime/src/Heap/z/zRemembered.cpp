@@ -160,7 +160,7 @@ void ZRemembered::register_found_old(ZPage* page)
     const auto& map = _page_table->map();
     zoffset offset;
     CHECK(map.offset_for_address(page->GetRegionStart(), &offset));
-    _found_old.register_page(offset / map.granule());
+    _found_old.register_page(static_cast<size_t>(untype(offset)) / map.granule());
 }
 
 template<typename Function>
