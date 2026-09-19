@@ -17,6 +17,7 @@
 
 // gc_heap_fixture.hpp first: its access-unlocking window must see zPage.hpp.
 #include "gc_heap_fixture.hpp"
+#include "Heap/z/zGeneration.hpp"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zLiveMap.inline.hpp"
 #include "gc_unittest.hpp"
@@ -352,18 +353,21 @@ GC_TEST(ZLiveMapPage, clone_for_promotion_keeps_original_livemap)
         GC_EXPECT_TRUE(original != nullptr);
         GC_EXPECT_TRUE(GcHeapFixture::MarkStrong(region, object));
         GC_EXPECT_TRUE(region->is_object_live(from_object(object)));
-        auto originalPage = region->CloneForPromotion();
-        GC_EXPECT_FALSE(region->IsYoungRegion());
-        GC_EXPECT_EQ(originalPage->Age(), 1u);
-        GC_EXPECT_FALSE(region->livemap().is_marked(ZGenerationId::old));
+        ZPage* originalPage = region;
+        ZPage* promoted = region->clone_for_promotion();
+        ZGeneration::young()->flip_promote(region, promoted);
+        GC_EXPECT_TRUE(Heap::page(reinterpret_cast<MAddress>(object)) == promoted);
+        GC_EXPECT_TRUE(originalPage->IsYoungRegion());
+        GC_EXPECT_FALSE(promoted->IsYoungRegion());
+        GC_EXPECT_EQ(originalPage->GetYoungAge(), 1u);
+        GC_EXPECT_FALSE(promoted->livemap().is_marked(ZGenerationId::old));
         std::vector<BaseObject*> visited;
-        originalPage->ObjectIterate([&](BaseObject* obj) { visited.push_back(obj); });
+        originalPage->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
         GC_EXPECT_EQ(visited.size(), 1u);
         GC_EXPECT_TRUE(visited[0] == object);
-        // Advancing the young generation retires the original page's marks.
         GcHeapFixture::AdvanceGeneration(Generation::Young);
         visited.clear();
-        originalPage->ObjectIterate([&](BaseObject* obj) { visited.push_back(obj); });
+        originalPage->object_iterate([&](BaseObject* obj) { visited.push_back(obj); });
         GC_EXPECT_EQ(visited.size(), 0u);
     }
 }

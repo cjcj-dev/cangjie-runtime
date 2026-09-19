@@ -380,6 +380,7 @@ public:
     };
 
     static void RetirePage(ZPage* region, std::function<void()> retire);
+    static void RetireDescriptor(ZPage* page);
 
     static size_t IndexedUnitCount(const std::vector<ZVirtualMemory>& ranges);
     static size_t IndexedUnitCount(const std::vector<UnitSegment>& segments);
@@ -401,10 +402,6 @@ public:
 
     static void VisitPageOwners(const std::function<void(ZPage*)>& visitor);
 
-    static ZPage* GetZPage(uint32_t idx);
-
-    static ZPage* GetGhostFromRegionAt(uintptr_t allocAddr);
-
 #if defined(MRT_GC_UNIT_TESTS)
     using GhostLookupTestHook = void (*)(ZPage*);
     MRT_EXPORT static void SetGhostLookupTestHook(GhostLookupTestHook hook);
@@ -417,8 +414,6 @@ public:
 
     static ZPage* InitRegion(size_t unitIdx, size_t nUnit, ZPageType uclass,
                                   PageAge age = PageAge::old);
-
-    static ZPage* InitRegionAt(uintptr_t addr, size_t nUnit, ZPageType uclass);
 
     static void WaitCopiedBeforePayloadWipe(ZPage* region, const char* site);
 
@@ -604,24 +599,6 @@ public:
     // from-page carrier (parked in retiredLivemap); the new Old current metadata
     // starts with a fresh livemap.
     void PromoteYoungRegion();
-
-    // The original young ZPage left by ZPage::clone_for_promotion. The
-    // region slot becomes old; this object owns the original, un-copied map.
-    class PromotionPage {
-    public:
-        PromotionPage(ZLiveMap* live, MAddress start, MAddress top, uint8_t age, bool large)
-            : livemap(live), start(start), top(top), age(age), large(large) {}
-        void ObjectIterate(const std::function<void(BaseObject*)>& visitor) const;
-        uint8_t Age() const { return age; }
-    private:
-        ZLiveMap* livemap;
-        MAddress start;
-        MAddress top;
-        uint8_t age;
-        bool large;
-    };
-
-    std::unique_ptr<PromotionPage> CloneForPromotion();
 
     uint8_t GetYoungAge() const;
 

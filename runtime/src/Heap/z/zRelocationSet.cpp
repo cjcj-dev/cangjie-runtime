@@ -105,18 +105,17 @@ void ZGenerationOld::CollectSmallSpace()
 namespace MapleRuntime {
 void RegionManager::AddFlipPromotedPage(ZPage* region)
 {
-    auto original = region->CloneForPromotion();
-    std::lock_guard<std::mutex> lock(flipPromotedMutex);
-    flipPromotedPages.push_back(std::move(original));
+    ZPage* const to = region->clone_for_promotion();
+    to->reset_livemap();
+    ZGeneration::young()->flip_promote(region, to);
+    ZArray<ZPage*> promoted;
+    promoted.append(region);
+    ZGeneration::young()->register_flip_promoted(promoted);
 }
 
 
-// ZRelocationSet::reset: the original young pages are released with the
-// previous set, after its forwarding entries and remset scan consumers.
 void RegionManager::ResetFlipPromotedPages()
 {
-    std::lock_guard<std::mutex> lock(flipPromotedMutex);
-    flipPromotedPages.clear();
 }
 
 ZRelocationSet::ZRelocationSet(ZGeneration* generation)
@@ -229,15 +228,28 @@ void ZRelocationSet::install_from_regions(RegionList& regions)
     install(&selector);
 }
 
+static void destroy_and_clear(ZPageAllocator* page_allocator, ZArray<ZPage*>* array)
+{
+    for (int i = 0; i < array->length(); ++i) {
+        ZPage* const page = array->at(i);
+        if (page_allocator != nullptr) {
+            page_allocator->safe_destroy_page(page);
+        }
+    }
+    array->clear();
+}
+
 void ZRelocationSet::reset(ZPageAllocator* page_allocator)
 {
-    (void)page_allocator;
     ZRelocationSetIterator iter(this);
     for (ZForwarding* forwarding; iter.next(&forwarding);) {
         forwarding->~ZForwarding();
     }
     _nforwardings = 0;
     _forwardings = nullptr;
+    destroy_and_clear(page_allocator, &_in_place_relocate_promoted_pages);
+    destroy_and_clear(page_allocator, &_flip_promoted_pages);
+    _relocate_promoted_pages.clear();
 }
 
 void ZRelocationSet::register_flip_promoted(const ZArray<ZPage*>& pages)
@@ -268,7 +280,7 @@ void ZGeneration::reset_relocation_set()
     for (ZForwarding* forwarding; iter.next(&forwarding);) {
         _forwarding_table.remove(forwarding);
     }
-    _relocation_set.reset(nullptr);
+    _relocation_set.reset(&Heap::GetHeap().page_allocator());
 }
 
 } // namespace MapleRuntime

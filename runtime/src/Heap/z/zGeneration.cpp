@@ -1354,6 +1354,31 @@ YoungTypeSetter::~YoungTypeSetter()
 }
 
 namespace MapleRuntime {
+void ZGenerationYoung::flip_promote(ZPage* from_page, ZPage* to_page)
+{
+    Heap::page_table().replace(from_page, to_page);
+    Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
+    increase_freed(from_page->size());
+    increase_promoted(from_page->live_bytes());
+    if (RegionList* list = from_page->GetRegionListOwner()) {
+        list->ReplaceRegion(from_page, to_page);
+    }
+}
+
+void ZGenerationYoung::in_place_relocate_promote(ZPage* from_page, ZPage* to_page)
+{
+    Heap::page_table().replace(from_page, to_page);
+    Heap::GetHeap().page_allocator().promote_used(from_page, to_page);
+    if (RegionList* list = from_page->GetRegionListOwner()) {
+        list->ReplaceRegion(from_page, to_page);
+    }
+}
+
+void ZGenerationYoung::register_flip_promoted(const ZArray<ZPage*>& pages)
+{
+    _relocation_set.register_flip_promoted(pages);
+}
+
 void ZGenerationYoung::SelectTenuringThreshold(const TenuringInputs& inputs)
 {
     // zGeneration.cpp:704-715: preclean promotes all, other types compute.
@@ -1728,10 +1753,6 @@ void ZGenerationYoung::EvacuateYoungRegions(const std::vector<BaseObject*>& reac
                     }
                     continue;
                 }
-                // zGeneration.cpp:941-948: flip promotion leaves young
-                // (freed) and joins old (promoted) without a copy.
-                ZGeneration::young()->increase_freed(region->GetRegionSize());
-                ZGeneration::young()->increase_promoted(region->live_bytes());
                 manager.AddFlipPromotedPage(region);
             }
         }

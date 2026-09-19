@@ -127,39 +127,7 @@ const size_t ZPage::LARGE_OBJECT_DEFAULT_THRESHOLD = MapleRuntime::MRT_PAGE_SIZE
 // max size of per region is 128KB.
 const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntime::MRT_PAGE_SIZE;
 
-// ZPage::clone_for_promotion (zPage.cpp:64-71). ZPage is an indexed
-// slot rather than a separately allocated page descriptor, so the original
-// young page is represented by PromotionPage while the slot becomes old.
-std::unique_ptr<ZPage::PromotionPage> ZPage::CloneForPromotion()
-{
-    CHECK(IsYoungRegion());
-    const ZForwarding::FromPageView* from = GetFromPageView();
-    ZLiveMap* original = from == nullptr ? &livemap() : from->livemap;
-    const MAddress originalTop = from == nullptr ? GetRegionAllocPtr() : from->topAtStart;
-    CHECK_DETAIL(original == &livemap(), "promotion source livemap does not belong to region %p", this);
-    const uint8_t age = GetYoungAge();
-    PromoteYoungRegion();
-    return std::make_unique<PromotionPage>(original, GetRegionStart(), originalTop, age,
-                                           IsLargeRegion());
-}
 
-// ZPage::object_iterate (zPage.inline.hpp:320) on the original young page:
-// ZLiveMap::iterate (zLiveMap.inline.hpp:141-158) checks the young
-// generation's current sequence before reading any bits.
-void ZPage::PromotionPage::ObjectIterate(const std::function<void(BaseObject*)>& visitor) const
-{
-    if (livemap == nullptr) {
-        return;
-    }
-    const int shift = large ? ZObjectAlignmentLargeShift : ZObjectAlignmentSmallShift;
-    livemap->iterate(ZGenerationId::young, [&](BitMap::idx_t index) -> bool {
-        const MAddress address = start + ((index / 2) << shift);
-        if (address < top) {
-            visitor(from_region_addr(address));
-        }
-        return true;
-    });
-}
 
 // ZPage::verify_live (zPage.cpp:196-203). The forwarding owner holds the
 // original page livemap when this metadata facade already describes to-space.
@@ -336,7 +304,6 @@ ZPage* ZPage::clone_for_promotion() const
     page->_scratch.allocPtr = _scratch.allocPtr;
     page->_scratch.regionEnd = _scratch.regionEnd;
     page->_top = _top;
-    ZPageTable::heap_table().replace(const_cast<ZPage*>(this), page);
     return page;
 }
 

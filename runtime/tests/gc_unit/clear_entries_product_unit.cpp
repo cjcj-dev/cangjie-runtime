@@ -473,7 +473,7 @@ void PublishGenerationMarkComplete(Generation gen)
 
 ZPage* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
 {
-    ZPage* previous = ZPage::GetZPage(index);
+    ZPage* previous = Heap::page(ZPage::GetUnitAddress(index));
     if (previous != nullptr) {
         RelocationReceiptTestAccess::ReleaseListOwnership(previous);
         if (previous->IsYoungRegion()) {
@@ -938,7 +938,7 @@ GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
 GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTableGone)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionListOwner(nullptr);
@@ -951,7 +951,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
     DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
     if (region->IsYoungRegion() && false) {
             }
-    GC_EXPECT_TRUE(ZPage::GetGhostFromRegionAt(reinterpret_cast<MAddress>(liveObject)) == nullptr);
+    GC_EXPECT_TRUE(Heap::page(reinterpret_cast<MAddress>(liveObject)) == nullptr);
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, liveObject);
     GC_EXPECT_TRUE(resolved == liveObject);
 
@@ -962,7 +962,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueSafeAddrAfterForwardingTa
 GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsNotTlab)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionListOwner(nullptr);
@@ -1443,7 +1443,7 @@ GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWi
 static void CheckForwardingWinner(bool identity)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionListOwner(nullptr);
@@ -1500,7 +1500,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedForwardingMissRejectsOriginalAddr
 {
     GcHeapFixture& fx = ProductFixture();
     AbortCapture captured = CaptureAbort([&]() {
-        RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
+        RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
         ZPage* region = ResetDeliveryUnit(fx, 4);
         GC_EXPECT_TRUE(region != nullptr);
         region->SetRegionListOwner(nullptr);
@@ -1531,7 +1531,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
 {
 #if defined(__linux__)
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionListOwner(nullptr);
@@ -1580,7 +1580,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
 GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionListOwner(nullptr);
@@ -1615,7 +1615,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
 {
 #if defined(__linux__)
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionListOwner(nullptr);
@@ -1641,9 +1641,9 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
 GC_TEST(ForwardingPublicationProduct, ResolveStoreValueFollowsForwardedDestination)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(5));
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(3));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(5)));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(3)));
     ZPage* firstRegion = ResetDeliveryUnit(fx, 5);
     ZPage* secondRegion = ResetDeliveryUnit(fx, 4);
     ZPage* finalRegion = ResetDeliveryUnit(fx, 3);
@@ -1773,8 +1773,8 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
 GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactReceipt)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(3));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(3)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     ZPage* routeDestination =
         ResetDeliveryUnit(fx, 3);
@@ -1846,8 +1846,8 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
 GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTable)
 {
     GcHeapFixture& fx = ProductFixture();
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(4));
-    RelocationReceiptTestAccess::ReleaseListOwnership(ZPage::GetZPage(3));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(4)));
+    RelocationReceiptTestAccess::ReleaseListOwnership(Heap::page(ZPage::GetUnitAddress(3)));
     ZPage* region = ResetDeliveryUnit(fx, 4);
     ZPage* routeDestination =
         ResetDeliveryUnit(fx, 3);
@@ -2789,12 +2789,14 @@ GC_TEST(PageGeneration579, PromotionAndCarrierRouting)
     auto& collector = Heap::GetHeap();
     GC_EXPECT_TRUE(Heap::GetHeap().ObjectGeneration(fixture.obj0) == Generation::Young);
     GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
-    auto original = region->CloneForPromotion();
+    ZPage* promoted = region->clone_for_promotion();
+    ZGeneration::young()->flip_promote(region, promoted);
     const Generation current = Heap::GetHeap().ObjectGeneration(fixture.obj0);
     std::fprintf(stderr, "PAGE579 promotion current=%u id=%u\n",
-                 static_cast<unsigned>(current), static_cast<unsigned>(region->generation_id()));
+                 static_cast<unsigned>(current), static_cast<unsigned>(promoted->generation_id()));
     GC_EXPECT_TRUE(current == Generation::Old);
-    GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::old);
+    GC_EXPECT_TRUE(promoted->generation_id() == ZGenerationId::old);
+    GC_EXPECT_TRUE(region->generation_id() == ZGenerationId::young);
     const auto retained = LookupTo(from, current);
     std::fprintf(stderr, "PAGE579 retained to=%zx expected=%zx\n", retained.to, to);
     GC_EXPECT_EQ(retained.to, to);

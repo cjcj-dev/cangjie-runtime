@@ -234,6 +234,9 @@ public:
     // state, selected after select_relocation_set (zGeneration.cpp:250).
     uint32_t tenuring_threshold() { return _tenuring_threshold; }
     MRT_EXPORT void SetTenuringThresholdForTest(uint32_t value) { _tenuring_threshold = value; }
+    void flip_promote(ZPage* from_page, ZPage* to_page);
+    void in_place_relocate_promote(ZPage* from_page, ZPage* to_page);
+    void register_flip_promoted(const ZArray<ZPage*>& pages);
     void SelectTenuringThreshold(const TenuringInputs& inputs);
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
         const std::unordered_set<MAddress>& rememberedSlots, bool refFixSlotsCoveredByReachable,
