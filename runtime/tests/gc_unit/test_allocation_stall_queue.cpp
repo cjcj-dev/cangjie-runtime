@@ -72,7 +72,7 @@ public:
         heapParam.exemptionThreshold = 0.8;
         heap.reset(new ZTestRegionHeap(units, manager, heapParam, 0.5));
         BindFixturePageTable(manager, units);
-        capacity = manager.TakeRegion(1, ZPageType::small, false, false);
+        capacity = manager.TakeRegion(1, ZPageType::small, false, false, true, PageAge::eden);
         PublishAllocatedPage(capacity);
     }
 
@@ -113,7 +113,7 @@ void RunWaiter(RegionManager& manager, std::atomic<size_t>& claimed)
     Mutator mutator;
     mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     ThreadLocal::SetMutator(&mutator);
-    ZPage* region = manager.TakeRegion(1, ZPageType::small);
+    ZPage* region = manager.TakeRegion(1, ZPageType::small, false, true, true, PageAge::eden);
     PublishAllocatedPage(region);
     claimed.store(region == nullptr ? 0 : region->GetUnitCount(), std::memory_order_release);
     ThreadLocal::SetMutator(nullptr);

@@ -43,9 +43,8 @@ inline void EnsureZAddressDomain() {
   }
 }
 
-// Same insert as Heap::alloc_page (zHeap.cpp:253-257). Fixtures that TakeRegion
-// on a local RegionManager cannot call Heap::alloc_page (that TakeRegions the
-// product allocator); they bind the table then insert here.
+// Same insert as Heap::alloc_page (ZGC zHeap.cpp:253-257). Local RegionManager
+// fixtures cannot call Heap::alloc_page (product allocator).
 inline void PublishAllocatedPage(ZPage* page)
 {
     if (page != nullptr) {
